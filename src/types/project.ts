@@ -162,6 +162,7 @@ export interface ProjectStats {
   max_depth: number;
   station_count: number;
   loop_count: number;
+  penetration_distance: number;
 }
 
 export interface ProjectMetadata {

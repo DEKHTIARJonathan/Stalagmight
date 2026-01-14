@@ -37,7 +37,10 @@ pub fn close_project(state: State<AppState>) -> CommandResult {
 pub fn get_project_state(state: State<AppState>) -> Option<ProjectState> {
     let project = state.get_project_state()?;
     let stations = project.compute_station_coordinates();
-    let stats = project.stats();
+    let mut stats = project.stats();
+
+    // Calculate penetration distance with computed stations
+    stats.penetration_distance = project.calculate_penetration(&stations);
 
     Some(ProjectState {
         project,
