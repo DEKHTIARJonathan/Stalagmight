@@ -3,7 +3,7 @@ import { useUIStore, type Selection } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
-import type { Station, Shot, Section, Project } from '../../types/project';
+import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 
 export default function DetailPanel() {
@@ -102,17 +102,11 @@ interface DetailsContentProps {
 }
 
 function DetailsContent({ selection, project, stations }: DetailsContentProps) {
+  const { stats } = useProjectStore();
+
   if (!selection) {
-    return (
-      <div className="p-4">
-        <div className="text-text-secondary text-center">
-          <p>No selection</p>
-          <p className="text-sm mt-2">
-            Click on a station or shot to view details
-          </p>
-        </div>
-      </div>
-    );
+    // Show project stats when nothing is selected
+    return <ProjectStats project={project} stats={stats} stations={stations} />;
   }
 
   if (selection.type === 'station' && selection.stationRef) {
@@ -428,6 +422,103 @@ function SectionDetail({ section }: { section: Section }) {
           Edit Section
         </Button>
       </div>
+    </div>
+  );
+}
+
+interface ProjectStatsProps {
+  project: Project | null;
+  stats: ProjectStatsType | null;
+  stations: Station[];
+}
+
+function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
+  if (!project || !stats) {
+    return (
+      <div className="p-4 text-center text-text-secondary">
+        <p>No project loaded</p>
+      </div>
+    );
+  }
+
+  // Calculate depth range from stations
+  const depths = stations.map((s) => s.coordinates.z);
+  const minDepth = depths.length > 0 ? Math.min(...depths) : 0;
+  const maxDepth = depths.length > 0 ? Math.max(...depths) : 0;
+
+  // Calculate date range from sections
+  const dates = project.sections
+    .map((s) => s.date)
+    .filter((d): d is string => d !== null && d !== undefined)
+    .sort();
+  const earliestDate = dates.length > 0 ? dates[0] : null;
+  const latestDate = dates.length > 0 ? dates[dates.length - 1] : null;
+
+  return (
+    <div className="h-full bg-panel overflow-auto">
+      <Panel title="Project Statistics">
+        <div className="space-y-4">
+          {/* Survey overview */}
+          <div className="space-y-2">
+            <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+              Survey Overview
+            </h4>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+              <StatCard label="Total Length" value={`${stats.total_length.toFixed(1)} m`} />
+              <StatCard label="Sections" value={String(stats.section_count)} />
+              <StatCard label="Shots" value={String(stats.shot_count)} />
+              <StatCard label="Stations" value={String(stats.station_count)} />
+            </div>
+          </div>
+
+          {/* Depth information */}
+          <div className="space-y-2 pt-2 border-t border-border">
+            <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+              Depth Range
+            </h4>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+              <StatCard label="Shallowest" value={`${minDepth.toFixed(1)} m`} />
+              <StatCard label="Deepest" value={`${maxDepth.toFixed(1)} m`} />
+              <StatCard label="Total Depth" value={`${(maxDepth - minDepth).toFixed(1)} m`} />
+            </div>
+          </div>
+
+          {/* Survey dates */}
+          {(earliestDate || latestDate) && (
+            <div className="space-y-2 pt-2 border-t border-border">
+              <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+                Survey Dates
+              </h4>
+              <div className="space-y-1">
+                {earliestDate && <DetailRow label="First Survey" value={earliestDate} />}
+                {latestDate && earliestDate !== latestDate && (
+                  <DetailRow label="Latest Survey" value={latestDate} />
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Merges and datums */}
+          <div className="space-y-2 pt-2 border-t border-border">
+            <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+              Connections
+            </h4>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+              <StatCard label="Station Merges" value={String(project.station_merges.length)} />
+              <StatCard label="Zero Datums" value={String(project.zero_datums.length)} />
+            </div>
+          </div>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function StatCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="text-sm">
+      <div className="text-text-secondary text-xs">{label}</div>
+      <div className="font-medium">{value}</div>
     </div>
   );
 }
