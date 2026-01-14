@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use usvg::{Options, Tree};
 
 use crate::models::Project;
 
@@ -59,16 +60,44 @@ pub fn export_image(project: &Project, path: &Path, options: &ExportImageOptions
             export_svg(project, &path.with_extension("svg"), options)?;
             anyhow::bail!("PNG export requires frontend rendering. SVG exported instead.")
         }
-        ImageFormat::Pdf => {
-            tracing::warn!("PDF export should be handled by frontend for proper map rendering");
-            export_svg(project, &path.with_extension("svg"), options)?;
-            anyhow::bail!("PDF export requires frontend rendering. SVG exported instead.")
-        }
+        ImageFormat::Pdf => export_pdf(project, path, options),
     }
+}
+
+/// Export project as PDF using svg2pdf
+fn export_pdf(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
+    // First generate SVG content
+    let svg_content = generate_svg_string(project, options)?;
+
+    // Parse SVG using usvg
+    let options_usvg = Options::default();
+    let tree = Tree::from_str(&svg_content, &options_usvg)
+        .context("Failed to parse SVG")?;
+
+    // Convert to PDF
+    let pdf = svg2pdf::to_pdf(
+        &tree,
+        svg2pdf::ConversionOptions::default(),
+        svg2pdf::PageOptions::default(),
+    ).map_err(|e| anyhow::anyhow!("Failed to convert SVG to PDF: {:?}", e))?;
+
+    // Write PDF file
+    std::fs::write(path, pdf).context("Failed to write PDF file")?;
+
+    tracing::info!(path = ?path, "Exported PDF");
+    Ok(())
 }
 
 /// Export project as SVG
 fn export_svg(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
+    let svg = generate_svg_string(project, options)?;
+    std::fs::write(path, svg).context("Failed to write SVG file")?;
+    tracing::info!(path = ?path, "Exported SVG");
+    Ok(())
+}
+
+/// Generate SVG content as string
+fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Result<String> {
     let stations = project.compute_station_coordinates();
 
     // Calculate bounds
@@ -269,10 +298,7 @@ fn export_svg(project: &Project, path: &Path, options: &ExportImageOptions) -> R
 
     svg.push_str("</svg>\n");
 
-    std::fs::write(path, svg).context("Failed to write SVG file")?;
-
-    tracing::info!(path = ?path, "Exported SVG");
-    Ok(())
+    Ok(svg)
 }
 
 /// Escape special XML characters
