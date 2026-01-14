@@ -26,13 +26,5 @@
       "csp": null
     }
   },
-  "plugins": {
-    "fs": {
-      "all": true,
-      "scope": ["$APPDATA/**", "$HOME/**", "$DOCUMENT/**"]
-    },
-    "dialog": {
-      "all": true
-    }
-  }
+  "plugins": {}
 }
