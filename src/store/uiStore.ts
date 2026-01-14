@@ -1,5 +1,7 @@
 import { create } from 'zustand';
+import { invoke } from '@tauri-apps/api/core';
 import type { Coordinates, SectionId, ShotId, StationRef } from '../types/project';
+import type { PanelsConfig } from '../types/config';
 
 export type ViewType = 'global' | 'single';
 
@@ -88,6 +90,12 @@ interface UIStore {
   setSectionsPanelWidth: (width: number) => void;
   setDetailPanelWidth: (width: number) => void;
   setDataTableHeight: (height: number) => void;
+  initPanelSizes: (panels: PanelsConfig) => void;
+  savePanelSizes: (
+    sectionsPanelWidth?: number,
+    detailPanelWidth?: number,
+    dataTableHeight?: number
+  ) => Promise<void>;
 
   // Map state
   mapCenter: [number, number];
@@ -235,6 +243,23 @@ export const useUIStore = create<UIStore>((set) => ({
   setSectionsPanelWidth: (sectionsPanelWidth) => set({ sectionsPanelWidth }),
   setDetailPanelWidth: (detailPanelWidth) => set({ detailPanelWidth }),
   setDataTableHeight: (dataTableHeight) => set({ dataTableHeight }),
+  initPanelSizes: (panels: PanelsConfig) =>
+    set({
+      sectionsPanelWidth: panels.sections_panel_width,
+      detailPanelWidth: panels.detail_panel_width,
+      dataTableHeight: panels.data_table_height,
+    }),
+  savePanelSizes: async (sectionsPanelWidth, detailPanelWidth, dataTableHeight) => {
+    try {
+      await invoke('update_panel_sizes', {
+        sectionsPanelWidth,
+        detailPanelWidth,
+        dataTableHeight,
+      });
+    } catch (e) {
+      console.error('Failed to save panel sizes:', e);
+    }
+  },
 
   // Map state
   mapCenter: [0, 0],

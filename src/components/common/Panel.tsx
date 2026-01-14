@@ -56,6 +56,8 @@ interface ResizablePanelProps {
   maxSize?: number;
   defaultSize?: number;
   onResize?: (size: number) => void;
+  /** Called when resize operation completes (mouse up) */
+  onResizeEnd?: (size: number) => void;
   className?: string;
   /** For horizontal panels: which edge to put the resize handle on */
   handlePosition?: 'start' | 'end';
@@ -68,12 +70,14 @@ export function ResizablePanel({
   maxSize = 600,
   defaultSize = 250,
   onResize,
+  onResizeEnd,
   className = '',
   handlePosition = 'end',
 }: ResizablePanelProps) {
   const [size, setSize] = useState(defaultSize);
   const [isResizing, setIsResizing] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const sizeRef = useRef(size);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -102,14 +106,18 @@ export function ResizablePanel({
 
       newSize = Math.max(minSize, Math.min(maxSize, newSize));
       setSize(newSize);
+      sizeRef.current = newSize;
       onResize?.(newSize);
     },
     [isResizing, direction, handlePosition, minSize, maxSize, onResize]
   );
 
   const handleMouseUp = useCallback(() => {
+    if (isResizing) {
+      onResizeEnd?.(sizeRef.current);
+    }
     setIsResizing(false);
-  }, []);
+  }, [isResizing, onResizeEnd]);
 
   useEffect(() => {
     if (isResizing) {

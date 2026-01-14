@@ -33,6 +33,7 @@ export default function SingleSystemView() {
     setSectionsPanelWidth,
     setDetailPanelWidth,
     setDataTableHeight,
+    savePanelSizes,
   } = useUIStore();
 
   if (!project) {
@@ -67,6 +68,7 @@ export default function SingleSystemView() {
             minSize={150}
             maxSize={400}
             onResize={setSectionsPanelWidth}
+            onResizeEnd={(size) => savePanelSizes(size, undefined, undefined)}
             className="border-r border-border"
           >
             <SectionsPanel sections={project.sections} />
@@ -88,6 +90,7 @@ export default function SingleSystemView() {
               minSize={100}
               maxSize={500}
               onResize={setDataTableHeight}
+              onResizeEnd={(size) => savePanelSizes(undefined, undefined, size)}
               className="border-t border-border"
             >
               <DataTable sections={project.sections} />
@@ -103,6 +106,7 @@ export default function SingleSystemView() {
             minSize={200}
             maxSize={500}
             onResize={setDetailPanelWidth}
+            onResizeEnd={(size) => savePanelSizes(undefined, size, undefined)}
             handlePosition="start"
             className="border-l border-border"
           >

@@ -18,6 +18,8 @@ pub struct Config {
     pub shortcuts: ShortcutsConfig,
     #[serde(default)]
     pub snap: SnapConfig,
+    #[serde(default)]
+    pub panels: PanelsConfig,
 }
 
 /// Snap-to-station configuration for precision tools
@@ -31,6 +33,17 @@ pub struct SnapConfig {
     pub enabled_measure: bool,
     /// Snap threshold in pixels
     pub threshold_pixels: u32,
+}
+
+/// Panel sizes configuration (persisted across sessions)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PanelsConfig {
+    /// Sections panel width in pixels
+    pub sections_panel_width: u32,
+    /// Detail panel width in pixels
+    pub detail_panel_width: u32,
+    /// Data table height in pixels
+    pub data_table_height: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

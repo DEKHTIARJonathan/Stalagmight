@@ -8,13 +8,20 @@ import { ImportDialog, ExportDialog, NewProjectDialog, DmpImportDialog, ConfirmD
 import { ContextMenu } from './components/common';
 
 function App() {
-  const { project, loadConfig, isDirty } = useProjectStore();
-  const { view, activeDialog } = useUIStore();
+  const { project, loadConfig, config, isDirty } = useProjectStore();
+  const { view, activeDialog, initPanelSizes } = useUIStore();
 
   useEffect(() => {
     // Load config on startup
     loadConfig();
   }, [loadConfig]);
+
+  // Initialize panel sizes from config
+  useEffect(() => {
+    if (config?.panels) {
+      initPanelSizes(config.panels);
+    }
+  }, [config, initPanelSizes]);
 
   // Update window title based on project state
   useEffect(() => {

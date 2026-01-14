@@ -13,6 +13,7 @@ impl Default for Config {
             logging: LoggingConfig::default(),
             shortcuts: ShortcutsConfig::default(),
             snap: SnapConfig::default(),
+            panels: PanelsConfig::default(),
         }
     }
 }
@@ -166,6 +167,16 @@ impl Default for SnapConfig {
             enabled_merge: true,
             enabled_measure: true,
             threshold_pixels: 10,
+        }
+    }
+}
+
+impl Default for PanelsConfig {
+    fn default() -> Self {
+        Self {
+            sections_panel_width: 250,
+            detail_panel_width: 300,
+            data_table_height: 200,
         }
     }
 }
