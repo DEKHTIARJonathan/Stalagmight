@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { type Section, type Shot } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { EditableTable } from '../common/Table';
+import type { ProjectWarning } from '../../types/commands';
 
 interface DataTableProps {
   sections: Section[];
@@ -13,8 +14,25 @@ export default function DataTable({ sections }: DataTableProps) {
     sections[0]?.id ?? null
   );
 
-  const { updateShot } = useProjectStore();
+  const { updateShot, warnings } = useProjectStore();
   const { selection, setSelection, dataTableOpen, toggleDataTable, dataTableHeight } = useUIStore();
+
+  // Create a map of shot warnings for quick lookup
+  const shotWarningsMap = useMemo(() => {
+    const map = new Map<string, ProjectWarning[]>();
+    for (const warning of warnings) {
+      const key = `${warning.section_id}:${warning.shot_id}`;
+      if (!map.has(key)) {
+        map.set(key, []);
+      }
+      map.get(key)!.push(warning);
+    }
+    return map;
+  }, [warnings]);
+
+  const getShotWarnings = (sectionId: number, shotId: number): ProjectWarning[] => {
+    return shotWarningsMap.get(`${sectionId}:${shotId}`) ?? [];
+  };
 
   // Update selected section when sections change (e.g., first load)
   useEffect(() => {
@@ -51,6 +69,27 @@ export default function DataTable({ sections }: DataTableProps) {
   };
 
   const columns = [
+    {
+      key: '_warnings',
+      header: '!',
+      width: '30px',
+      align: 'center' as const,
+      render: (shot: Shot) => {
+        if (!selectedSectionId) return null;
+        const shotWarnings = getShotWarnings(selectedSectionId, shot.id);
+        if (shotWarnings.length === 0) return null;
+        const hasError = shotWarnings.some((w) => w.severity === 'error');
+        const tooltipText = shotWarnings.map((w) => w.message).join('\n');
+        return (
+          <span
+            className={hasError ? 'text-red-400' : 'text-yellow-400'}
+            title={tooltipText}
+          >
+            {hasError ? '⛔' : '⚠️'}
+          </span>
+        );
+      },
+    },
     { key: 'id', header: '#', width: '50px' },
     { key: 'length', header: 'Length (m)', width: '80px', align: 'right' as const },
     { key: 'azimuth_in', header: 'Azi In', width: '70px', align: 'right' as const },
