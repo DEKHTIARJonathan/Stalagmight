@@ -2,25 +2,27 @@
 
 This document tracks functionality specified in SPEC.md but not yet implemented.
 
-## Priority 1: Core Functionality
+## Priority 1: Core Functionality ✅ COMPLETE
 
-### DMP Parser
-- [ ] Implement actual DMP file parsing in `src-tauri/src/parsers/dmp.rs`
-- [ ] Currently returns empty sections (stub implementation)
-- [ ] Need to port logic from `pytool_mnemo_lib` Python library
-- [ ] Support DMP versions 2-5
+### DMP Parser ✅
+- [x] Implement actual DMP file parsing in `src-tauri/src/parsers/dmp.rs`
+- [x] Ported logic from `pytool_mnemo_lib` Python library
+- [x] Support DMP versions 2-5
+- [x] IntBuffer for binary reading, section/shot parsing
+- [x] Integration tests with real v2 and v5 test files
 
-### Undo/Redo System
-- [ ] Implement proper state snapshots for undo
-- [ ] Current implementation only tracks command history, doesn't restore state
-- [ ] Add `UndoData` variants: `InverseCommand`, `StateDelta`, `Snapshot`
-- [ ] Persist undo stack to SQLite `undo_stack` table
+### Undo/Redo System ✅
+- [x] Implement hybrid undo with state snapshots and inverse commands
+- [x] `UndoData` variants: `InverseCommand`, `PreviousValues`, `SectionSnapshot`, `ShotSnapshot`, `MergeInfo`, `ZeroDatumInfo`, `ProjectSnapshot`
+- [x] Full undo/redo execution with proper state restoration
+- [ ] Persist undo stack to SQLite `undo_stack` table (deferred)
 
-### File Operations
-- [ ] Wire up Save/Open dialogs to actual file operations
-- [ ] Implement "Save As" functionality
-- [ ] Add file path to window title
-- [ ] Recent projects list in GlobalView
+### File Operations ✅
+- [x] NewProjectDialog for creating projects
+- [x] DmpImportDialog for importing mNemo DMP files with section selection
+- [x] Save/Open dialogs wired to actual file operations
+- [ ] Add file path to window title (minor, deferred)
+- [ ] Recent projects list in GlobalView (minor, deferred)
 
 ## Priority 2: Map Interactions
 
@@ -56,7 +58,7 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 - [ ] GPS coordinates input for zero datum
 - [ ] "From Existing Station" placement option
 - [ ] Manual map placement (click to position)
-- [ ] DMP file loading (once parser implemented)
+- [x] DMP file loading (implemented in DmpImportDialog)
 
 ### ExportDialog Enhancements
 - [ ] PDF export (currently only SVG implemented)
@@ -143,16 +145,19 @@ These are explicitly deferred per SPEC.md:
 
 ## Implementation Notes
 
-### DMP Parser Priority
-The DMP parser is the highest priority item as it's required for the primary use case (importing survey data from mNemo devices). Reference implementation exists in Python (`pytool_mnemo_lib`).
+### DMP Parser ✅ IMPLEMENTED
+Ported from `pytool_mnemo_lib` Python library to Rust. Supports versions 2-5 with:
+- `IntBuffer` struct for sequential binary reading
+- Section splitting by end-of-section markers
+- Version-specific shot parsing (core fields, LRUD, temperature, time)
+- `DmpImportDialog` for file selection and section import
 
-### Undo System Complexity
-Full undo requires either:
-1. State snapshots (memory intensive for large projects)
-2. Inverse commands (complex for some operations)
-3. State deltas (balanced approach)
-
-Recommend starting with inverse commands for simple operations and snapshots for complex ones.
+### Undo System ✅ IMPLEMENTED
+Hybrid approach using:
+- **Inverse commands** for create/toggle operations (CreateSection→DeleteSection)
+- **Previous values** (JSON) for update operations
+- **Snapshots** for delete operations (full section/shot data for restoration)
+- **Project snapshots** for batch operations
 
 ### Map Tool Architecture
 Tools should be implemented as a state machine in `uiStore.ts` with handlers in `MapCanvas.tsx`. Each tool needs:
