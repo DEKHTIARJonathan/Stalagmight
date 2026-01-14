@@ -14,6 +14,7 @@ export interface Config {
   logging: LoggingConfig;
   shortcuts: ShortcutsConfig;
   snap: SnapConfig;
+  panels: PanelsConfig;
 }
 
 export interface GeneralConfig {
@@ -111,6 +112,12 @@ export interface SnapConfig {
   threshold_pixels: number;
 }
 
+export interface PanelsConfig {
+  sections_panel_width: number;
+  detail_panel_width: number;
+  data_table_height: number;
+}
+
 export const defaultConfig: Config = {
   general: {
     auto_save: true,
@@ -201,5 +208,10 @@ export const defaultConfig: Config = {
     enabled_merge: true,
     enabled_measure: true,
     threshold_pixels: 10,
+  },
+  panels: {
+    sections_panel_width: 250,
+    detail_panel_width: 300,
+    data_table_height: 200,
   },
 };

@@ -63,6 +63,7 @@ pub fn run() {
             // Config
             commands::config::get_config,
             commands::config::update_config,
+            commands::config::update_panel_sizes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
