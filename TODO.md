@@ -24,34 +24,34 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 - [ ] Add file path to window title (minor, deferred)
 - [ ] Recent projects list in GlobalView (minor, deferred)
 
-## Priority 2: Map Interactions
+## Priority 2: Map Interactions ✅ COMPLETE
 
-### Tool Implementations
-- [ ] **Draw Tool**: Click station to start new shot, input azimuth/length/depth
-- [ ] **Delete Tool**: Click to delete station/shot with confirmation
-- [ ] **Merge Tool**: Select two stations, show MergeDialog
-- [ ] **Measure Tool**: Click two points to measure distance
-- [ ] **Move Section Tool**: Drag unanchored sections
-- [ ] **Move Station Tool**: Drag unanchored stations
+### Tool Implementations ✅
+- [x] **Draw Tool**: Click station to start new shot, input azimuth/length/depth
+- [x] **Delete Tool**: Click to delete station/shot with confirmation
+- [x] **Merge Tool**: Select two stations, show MergeDialog
+- [x] **Measure Tool**: Click two points to measure distance
+- [x] **Move Section Tool**: Drag unanchored sections
+- [x] **Move Station Tool**: Drag unanchored stations
 
-### Selection
-- [ ] Multi-select with Shift+click (add) and Ctrl+click (toggle)
-- [ ] Box select with drag
-- [ ] Selection state reflected in DetailPanel
+### Selection ✅
+- [x] Multi-select with Shift+click (add) and Ctrl+click (toggle)
+- [x] Box select with drag
+- [x] Selection state reflected in DetailPanel
 
-### Map Features
-- [ ] Context menu on right-click (Edit, Delete, Mark Virtual, etc.)
-- [ ] Snap to station when within threshold
-- [ ] Hover highlighting
-- [ ] Drag preview before release
+### Map Features ✅
+- [x] Context menu on right-click (Edit, Delete, Mark Virtual, etc.)
+- [ ] Snap to station when within threshold (deferred)
+- [x] Hover highlighting
+- [x] Drag preview before release
 
-## Priority 3: Dialogs
+## Priority 3: Dialogs ✅ PARTIAL
 
-### MergeDialog
-- [ ] Create `src/components/Dialogs/MergeDialog.tsx`
-- [ ] Show station details and distance/depth difference
-- [ ] Loop closure error calculation and display
-- [ ] Closure strategy selection (proportional, equal, raw, manual)
+### MergeDialog ✅
+- [x] Create `src/components/Dialogs/MergeDialog.tsx`
+- [x] Show station details and distance/depth difference
+- [x] Loop closure error calculation and display
+- [x] Closure strategy selection (proportional, equal, raw, manual)
 
 ### ImportDialog Enhancements
 - [ ] Live preview rendering as data is edited
@@ -90,10 +90,14 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 - [ ] Empty state message with prominent action buttons
 
 ### Keyboard Shortcuts
-- [ ] Implement all shortcuts from SPEC.md Appendix A
-- [ ] Currently only basic tool shortcuts defined
+- [x] Tool shortcuts (S, P, Z, D, X, M, R, V, T)
+- [x] Delete/Backspace for selected items
+- [x] Escape to clear selection and tool state
+- [x] Ctrl+Z/Y for undo/redo
+- [x] Ctrl+S to save
+- [x] Ctrl+1/2/3 to toggle panels
 - [ ] Add: Ctrl+I (Import), Ctrl+E (Export), Ctrl+0 (Fit to View)
-- [ ] Delete/Backspace for selected items
+- [ ] Ctrl+A (Select All)
 
 ### Validation Warnings
 - [ ] Display validation warnings in UI (currently only logged)
@@ -159,10 +163,11 @@ Hybrid approach using:
 - **Snapshots** for delete operations (full section/shot data for restoration)
 - **Project snapshots** for batch operations
 
-### Map Tool Architecture
-Tools should be implemented as a state machine in `uiStore.ts` with handlers in `MapCanvas.tsx`. Each tool needs:
-- Click handler
-- Drag start/move/end handlers
-- Keyboard modifiers (Shift, Ctrl)
-- Cursor style
-- Cancel (Escape) handling
+### Map Tool Architecture ✅ IMPLEMENTED
+Tools implemented as a state machine in `uiStore.ts` with `useMapTools` hook for handlers:
+- `SurveyLayer.tsx` handles map click/hover events and calls callbacks
+- `useMapTools.ts` dispatches actions based on active tool
+- `MapCanvas.tsx` handles drag operations (box select, move tools)
+- Tool state: `mergeStationA/B`, `measureStart/End`, `drawFromStation`
+- Dialogs: `ConfirmDialog`, `MergeDialog`, `DrawShotDialog`
+- `ContextMenu` for right-click actions on stations/shots
