@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
-use crate::models::{ClosureStrategy, GpsCoordinates, StationRef};
+use crate::models::{ClosureStrategy, Coordinates, GpsCoordinates, StationRef};
 
 /// Merge two stations
 #[tauri::command]
@@ -41,4 +41,17 @@ pub fn set_zero_datum(
 #[tauri::command]
 pub fn remove_zero_datum(state: State<AppState>, station_ref: StationRef) -> CommandResult {
     state.execute(Command::RemoveZeroDatum { station_ref })
+}
+
+/// Move a station to a new position
+#[tauri::command]
+pub fn move_station(
+    state: State<AppState>,
+    station_ref: StationRef,
+    new_position: Coordinates,
+) -> CommandResult {
+    state.execute(Command::MoveStation {
+        station_ref,
+        new_position,
+    })
 }

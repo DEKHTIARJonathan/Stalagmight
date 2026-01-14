@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
-use crate::models::{Section, SectionId, SectionUpdates, ShotData};
+use crate::models::{Coordinates, Section, SectionId, SectionUpdates, ShotData};
 
 /// Create a new section
 #[tauri::command]
@@ -47,4 +47,14 @@ pub fn delete_section(state: State<AppState>, section_id: SectionId) -> CommandR
 pub fn get_section(state: State<AppState>, section_id: SectionId) -> Option<Section> {
     let project = state.get_project_state()?;
     project.get_section(section_id).cloned()
+}
+
+/// Move a section by an offset
+#[tauri::command]
+pub fn move_section(
+    state: State<AppState>,
+    section_id: SectionId,
+    offset: Coordinates,
+) -> CommandResult {
+    state.execute(Command::MoveSection { section_id, offset })
 }

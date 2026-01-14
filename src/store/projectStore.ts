@@ -15,6 +15,7 @@ import type {
   StationRef,
   GpsCoordinates,
   ClosureStrategy,
+  Coordinates,
 } from '../types/project';
 import type { Config } from '../types/config';
 import type { CommandResult, DmpFile, ExportImageOptions } from '../types/commands';
@@ -55,6 +56,8 @@ interface ProjectStore {
   unmergeStations: (stationRef: StationRef) => Promise<CommandResult>;
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
+  moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
+  moveStation: (stationRef: StationRef, newPosition: Coordinates) => Promise<CommandResult>;
 
   undo: () => Promise<CommandResult>;
   redo: () => Promise<CommandResult>;
@@ -264,6 +267,22 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   removeZeroDatum: async (stationRef: StationRef) => {
     const result = await invoke<CommandResult>('remove_zero_datum', { stationRef });
+    if (result.success) {
+      await get().refreshProjectState();
+    }
+    return result;
+  },
+
+  moveSection: async (sectionId: SectionId, offset: Coordinates) => {
+    const result = await invoke<CommandResult>('move_section', { sectionId, offset });
+    if (result.success) {
+      await get().refreshProjectState();
+    }
+    return result;
+  },
+
+  moveStation: async (stationRef: StationRef, newPosition: Coordinates) => {
+    const result = await invoke<CommandResult>('move_station', { stationRef, newPosition });
     if (result.success) {
       await get().refreshProjectState();
     }

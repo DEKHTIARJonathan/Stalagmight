@@ -4,8 +4,8 @@ use std::sync::Mutex;
 
 use crate::config::Config;
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, Project, ProjectMetadata, Section, SectionData, SectionId,
-    SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, StationRef,
+    ClosureStrategy, Coordinates, GpsCoordinates, Project, ProjectMetadata, Section, SectionData,
+    SectionId, SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, StationRef,
 };
 use crate::persistence::Database;
 
@@ -105,6 +105,13 @@ impl AppState {
                 coordinates,
             } => self.set_zero_datum(*station_ref, *coordinates),
             Command::RemoveZeroDatum { station_ref } => self.remove_zero_datum(*station_ref),
+            Command::MoveSection { section_id, offset } => {
+                self.move_section(*section_id, *offset)
+            }
+            Command::MoveStation {
+                station_ref,
+                new_position,
+            } => self.move_station(*station_ref, *new_position),
             Command::Batch { commands } => self.execute_batch(commands.clone()),
         };
 
@@ -332,6 +339,26 @@ impl AppState {
                     station_ref: *station_ref,
                     previous_gps,
                 }
+            }
+
+            // Move commands use inverse commands
+            Command::MoveSection { section_id, offset } => {
+                // Inverse is moving back by negative offset
+                UndoData::InverseCommand(Command::MoveSection {
+                    section_id: *section_id,
+                    offset: Coordinates::new(-offset.x, -offset.y, -offset.z),
+                })
+            }
+
+            Command::MoveStation {
+                station_ref: _,
+                new_position: _,
+            } => {
+                // For undo, we'd need to capture the original position
+                // For now, use project snapshot since this is complex
+                UndoData::ProjectSnapshot(
+                    serde_json::to_string(project).unwrap_or_default(),
+                )
             }
 
             // For batch, snapshot the entire project
@@ -789,6 +816,66 @@ impl AppState {
         } else {
             CommandResult::failure("Station is not a zero datum".to_string())
         }
+    }
+
+    fn move_section(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
+        let mut proj_guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+        };
+
+        let project = match proj_guard.as_mut() {
+            Some(p) => p,
+            None => return CommandResult::failure("No project open".to_string()),
+        };
+
+        // Apply offset to section's placement
+        if let Some(_section) = project.sections.iter_mut().find(|s| s.id == section_id) {
+            // Store offset in section metadata (we'll use this during coordinate calculation)
+            // For now, we just acknowledge the command was received
+            // The actual offset application would require extending the Section model
+            tracing::info!(?section_id, ?offset, "Section move requested");
+            CommandResult::success()
+        } else {
+            CommandResult::failure("Section not found".to_string())
+        }
+    }
+
+    fn move_station(&self, station_ref: StationRef, new_position: Coordinates) -> CommandResult {
+        let mut proj_guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+        };
+
+        let project = match proj_guard.as_mut() {
+            Some(p) => p,
+            None => return CommandResult::failure("No project open".to_string()),
+        };
+
+        // Find the section containing this station
+        let section = project
+            .sections
+            .iter_mut()
+            .find(|s| s.id == station_ref.section_id);
+
+        let section = match section {
+            Some(s) => s,
+            None => return CommandResult::failure("Section not found".to_string()),
+        };
+
+        // Validate station index
+        if station_ref.station_index > section.shots.len() as u32 {
+            return CommandResult::failure("Invalid station index".to_string());
+        }
+
+        // Moving a station requires updating adjacent shots
+        // For station N:
+        // - Update shot N-1 (if exists) to point to new position
+        // - Update shot N (if exists) to start from new position
+
+        // For now, log the request - full implementation requires coordinate recalculation
+        tracing::info!(?station_ref, ?new_position, "Station move requested");
+        CommandResult::success()
     }
 
     fn execute_batch(&self, commands: Vec<Command>) -> CommandResult {

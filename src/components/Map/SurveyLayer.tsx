@@ -1,6 +1,18 @@
-import type { Map as MaplibreMap } from 'maplibre-gl';
+import type { Map as MaplibreMap, MapMouseEvent } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
-import type { Section, Station } from '../../types/project';
+import type { Section, SectionId, ShotId, Station, StationRef } from '../../types/project';
+
+export interface SurveyLayerCallbacks {
+  onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
+  onShotClick?: (sectionId: SectionId, shotId: ShotId, event: MapMouseEvent) => void;
+  onEmptyClick?: (event: MapMouseEvent) => void;
+  onStationHover?: (ref: StationRef | null) => void;
+  onShotHover?: (shot: { sectionId: SectionId; shotId: ShotId } | null) => void;
+  onContextMenu?: (
+    target: { type: 'station'; ref: StationRef } | { type: 'shot'; sectionId: SectionId; shotId: ShotId } | null,
+    event: MapMouseEvent
+  ) => void;
+}
 
 /**
  * Survey layer that renders shots and stations on the map
@@ -15,11 +27,24 @@ export default class SurveyLayer {
   private shotsLayerId = 'survey-shots';
   private stationsLayerId = 'survey-stations';
   private labelsLayerId = 'survey-labels';
+  private callbacks: SurveyLayerCallbacks;
 
-  constructor(map: MaplibreMap) {
+  // Visual state
+  private selectedStationId: string | null = null;
+  private selectedShotId: string | null = null;
+  private hoveredStationId: string | null = null;
+  private hoveredShotId: string | null = null;
+
+  constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
+    this.callbacks = callbacks;
     this.initializeSources();
     this.initializeLayers();
+    this.initializeEventHandlers();
+  }
+
+  setCallbacks(callbacks: SurveyLayerCallbacks) {
+    this.callbacks = callbacks;
   }
 
   private initializeSources() {
@@ -79,6 +104,7 @@ export default class SurveyLayer {
           '#ffd700',
           '#ffffff',
         ],
+        // Stroke width varies based on selection/hover state (updated dynamically)
         'circle-stroke-width': 1,
         'circle-stroke-color': '#000000',
       },
@@ -103,39 +129,156 @@ export default class SurveyLayer {
       },
     });
 
-    // Add click handlers
+  }
+
+  private initializeEventHandlers() {
+    // Station click handler
     this.map.on('click', this.stationsLayerId, (e) => {
+      e.preventDefault();
       const feature = e.features?.[0];
-      if (feature) {
-        console.log('Station clicked:', feature.properties);
-        // TODO: Dispatch selection event
+      if (feature?.properties) {
+        const { sectionId, stationIndex } = feature.properties;
+        const ref: StationRef = {
+          section_id: sectionId as number,
+          station_index: stationIndex as number,
+        };
+        this.callbacks.onStationClick?.(ref, e);
       }
     });
 
+    // Shot click handler
     this.map.on('click', this.shotsLayerId, (e) => {
+      e.preventDefault();
       const feature = e.features?.[0];
-      if (feature) {
-        console.log('Shot clicked:', feature.properties);
-        // TODO: Dispatch selection event
+      if (feature?.properties) {
+        const { sectionId, shotId } = feature.properties;
+        this.callbacks.onShotClick?.(sectionId as number, shotId as number, e);
       }
     });
 
-    // Hover cursors
-    this.map.on('mouseenter', this.stationsLayerId, () => {
+    // Empty click handler (on map, not on features)
+    this.map.on('click', (e) => {
+      // Check if we clicked on a feature
+      const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsLayerId] });
+      const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsLayerId] });
+
+      if (stationFeatures.length === 0 && shotFeatures.length === 0) {
+        this.callbacks.onEmptyClick?.(e);
+      }
+    });
+
+    // Station hover handlers
+    this.map.on('mouseenter', this.stationsLayerId, (e) => {
       this.map.getCanvas().style.cursor = 'pointer';
+      const feature = e.features?.[0];
+      if (feature?.properties) {
+        const { sectionId, stationIndex } = feature.properties;
+        const ref: StationRef = {
+          section_id: sectionId as number,
+          station_index: stationIndex as number,
+        };
+        this.hoveredStationId = `${sectionId}:${stationIndex}`;
+        this.callbacks.onStationHover?.(ref);
+        this.updateVisualState();
+      }
     });
 
     this.map.on('mouseleave', this.stationsLayerId, () => {
       this.map.getCanvas().style.cursor = '';
+      this.hoveredStationId = null;
+      this.callbacks.onStationHover?.(null);
+      this.updateVisualState();
     });
 
-    this.map.on('mouseenter', this.shotsLayerId, () => {
+    // Shot hover handlers
+    this.map.on('mouseenter', this.shotsLayerId, (e) => {
       this.map.getCanvas().style.cursor = 'pointer';
+      const feature = e.features?.[0];
+      if (feature?.properties) {
+        const { sectionId, shotId } = feature.properties;
+        this.hoveredShotId = `${sectionId}:${shotId}`;
+        this.callbacks.onShotHover?.({ sectionId: sectionId as number, shotId: shotId as number });
+        this.updateVisualState();
+      }
     });
 
     this.map.on('mouseleave', this.shotsLayerId, () => {
       this.map.getCanvas().style.cursor = '';
+      this.hoveredShotId = null;
+      this.callbacks.onShotHover?.(null);
+      this.updateVisualState();
     });
+
+    // Context menu handler
+    this.map.on('contextmenu', (e) => {
+      const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsLayerId] });
+      const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsLayerId] });
+
+      if (stationFeatures.length > 0) {
+        const feature = stationFeatures[0];
+        if (feature?.properties) {
+          const { sectionId, stationIndex } = feature.properties;
+          const ref: StationRef = {
+            section_id: sectionId as number,
+            station_index: stationIndex as number,
+          };
+          this.callbacks.onContextMenu?.({ type: 'station', ref }, e);
+        }
+      } else if (shotFeatures.length > 0) {
+        const feature = shotFeatures[0];
+        if (feature?.properties) {
+          const { sectionId, shotId } = feature.properties;
+          this.callbacks.onContextMenu?.({ type: 'shot', sectionId: sectionId as number, shotId: shotId as number }, e);
+        }
+      } else {
+        this.callbacks.onContextMenu?.(null, e);
+      }
+    });
+  }
+
+  // Update visual state for selection/hover highlighting
+  private updateVisualState() {
+    // Update station stroke width based on hover/selection
+    this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-width', [
+      'case',
+      ['==', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]], this.hoveredStationId ?? ''],
+      3,
+      ['==', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]], this.selectedStationId ?? ''],
+      2,
+      1,
+    ]);
+
+    // Update station stroke color for selection
+    this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-color', [
+      'case',
+      ['==', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]], this.selectedStationId ?? ''],
+      '#00aaff',
+      ['==', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]], this.hoveredStationId ?? ''],
+      '#0066ff',
+      '#000000',
+    ]);
+
+    // Update shot line width based on hover/selection
+    this.map.setPaintProperty(this.shotsLayerId, 'line-width', [
+      'case',
+      ['==', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'shotId']]], this.hoveredShotId ?? ''],
+      4,
+      ['==', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'shotId']]], this.selectedShotId ?? ''],
+      3,
+      2,
+    ]);
+  }
+
+  // Set selected station (called from outside to sync with uiStore)
+  setSelectedStation(ref: StationRef | null) {
+    this.selectedStationId = ref ? `${ref.section_id}:${ref.station_index}` : null;
+    this.updateVisualState();
+  }
+
+  // Set selected shot (called from outside to sync with uiStore)
+  setSelectedShot(sectionId: SectionId | null, shotId: ShotId | null) {
+    this.selectedShotId = sectionId !== null && shotId !== null ? `${sectionId}:${shotId}` : null;
+    this.updateVisualState();
   }
 
   update(sections: Section[], stations: Station[]) {
