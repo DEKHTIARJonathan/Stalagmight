@@ -140,6 +140,7 @@ export interface Project {
   sections: Section[];
   station_merges: StationMerge[];
   zero_datums: ZeroDatum[];
+  file_path: string | null;
 }
 
 export interface ProjectStats {

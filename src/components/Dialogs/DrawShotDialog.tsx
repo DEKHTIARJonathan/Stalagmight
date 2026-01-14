@@ -59,8 +59,13 @@ export default function DrawShotDialog() {
       setError('Length must be greater than 0');
       return false;
     }
-    if (!azimuthIn || parseFloat(azimuthIn) < 0 || parseFloat(azimuthIn) >= 360) {
-      setError('Azimuth In must be between 0 and 360');
+    const azVal = parseFloat(azimuthIn);
+    if (!azimuthIn || isNaN(azVal)) {
+      setError('Azimuth In is required');
+      return false;
+    }
+    if (azVal < -360 || azVal > 360) {
+      setError('Azimuth must be between -360 and 360');
       return false;
     }
     return true;
@@ -75,10 +80,12 @@ export default function DrawShotDialog() {
     setError(null);
 
     try {
-      // Build shot data
+      // Build shot data with normalized azimuths
+      const normalizedAzimuthIn = normalizeAzimuth(parseFloat(azimuthIn));
+      const normalizedAzimuthOut = azimuthOut ? normalizeAzimuth(parseFloat(azimuthOut)) : normalizedAzimuthIn;
       const shotData: ShotData = {
-        azimuth_in: parseFloat(azimuthIn),
-        azimuth_out: azimuthOut ? parseFloat(azimuthOut) : parseFloat(azimuthIn),
+        azimuth_in: normalizedAzimuthIn,
+        azimuth_out: normalizedAzimuthOut,
         length: parseFloat(length),
         depth_in: depthIn ? parseFloat(depthIn) : currentStationDepth,
         depth_out: depthOut ? parseFloat(depthOut) : (depthIn ? parseFloat(depthIn) : currentStationDepth),
@@ -114,6 +121,13 @@ export default function DrawShotDialog() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Normalize azimuth to 0-360 range
+  const normalizeAzimuth = (value: number): number => {
+    let normalized = value % 360;
+    if (normalized < 0) normalized += 360;
+    return normalized;
   };
 
   // Auto-fill azimuth out when azimuth in changes

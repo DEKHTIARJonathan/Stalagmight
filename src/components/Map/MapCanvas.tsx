@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
-import { getBounds } from '../../utils/coordinates';
+import { getBounds, metersToMapCoords } from '../../utils/coordinates';
 import { useMapTools } from '../../hooks/useMapTools';
 import SurveyLayer from './SurveyLayer';
 
@@ -26,6 +26,8 @@ export default function MapCanvas() {
   const [measureResult, setMeasureResult] = useState<{ distance: number; depthDiff: number } | null>(null);
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [ctrlHeld, setCtrlHeld] = useState(false);
 
   const { project, stations, config, moveSection, moveStation } = useProjectStore();
   const {
@@ -41,6 +43,8 @@ export default function MapCanvas() {
     measureEnd,
     addToSelection,
     clearSelection,
+    requestFitToBounds,
+    clearFitToBoundsRequest,
   } = useUIStore();
 
   // Handle move drag start from SurveyLayer
@@ -213,11 +217,13 @@ export default function MapCanvas() {
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
-    // Calculate initial center from stations
+    // Calculate initial center from stations (in meters)
     const coords = stations.map((s) => s.coordinates);
     const bounds = getBounds(coords);
     const centerX = (bounds.minX + bounds.maxX) / 2;
     const centerY = (bounds.minY + bounds.maxY) / 2;
+    // Transform to map coordinates
+    const mapCenter = metersToMapCoords(centerX, centerY);
 
     map.current = new maplibregl.Map({
       container: mapContainer.current,
@@ -234,7 +240,7 @@ export default function MapCanvas() {
           },
         ],
       },
-      center: [centerX, centerY],
+      center: mapCenter,
       zoom: mapZoom,
       attributionControl: false,
     });
@@ -245,7 +251,7 @@ export default function MapCanvas() {
       'top-right'
     );
 
-    // Add scale control
+    // Add scale control (coordinates are transformed to pseudo-degrees so scale is accurate)
     map.current.addControl(
       new maplibregl.ScaleControl({ maxWidth: 100, unit: 'metric' }),
       'bottom-left'
@@ -267,6 +273,8 @@ export default function MapCanvas() {
     map.current.on('load', () => {
       if (!map.current) return;
       surveyLayerRef.current = new SurveyLayer(map.current, toolCallbacks);
+      setMapLoaded(true);
+      console.log('[MapCanvas] Map loaded, SurveyLayer created');
     });
 
     return () => {
@@ -275,12 +283,13 @@ export default function MapCanvas() {
     };
   }, []);
 
-  // Update survey layer when data changes
+  // Update survey layer when data changes or map loads
   useEffect(() => {
     if (surveyLayerRef.current && project) {
+      console.log('[MapCanvas] Updating SurveyLayer with', project.sections.length, 'sections,', stations.length, 'stations');
       surveyLayerRef.current.update(project.sections, stations);
     }
-  }, [project, stations]);
+  }, [project, stations, mapLoaded]);
 
   // Update callbacks when they change
   useEffect(() => {
@@ -305,7 +314,7 @@ export default function MapCanvas() {
     }
   }, [selection]);
 
-  // Update cursor based on tool
+  // Update cursor based on tool (and Ctrl state for select mode)
   useEffect(() => {
     if (!map.current) return;
 
@@ -321,8 +330,59 @@ export default function MapCanvas() {
       move_station: 'move',
     };
 
-    map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
-  }, [activeTool]);
+    // In select mode with Ctrl held, show grab cursor for panning
+    if (activeTool === 'select' && ctrlHeld) {
+      map.current.getCanvas().style.cursor = 'grab';
+    } else {
+      map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
+    }
+  }, [activeTool, ctrlHeld]);
+
+  // Disable map drag pan for tools that need custom interaction
+  // Exception: In select mode, Ctrl+drag enables panning
+  useEffect(() => {
+    if (!map.current) return;
+
+    // Tools that should have map panning disabled
+    const noPanTools = ['select', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station'];
+
+    // Enable panning in select mode when Ctrl is held
+    if (activeTool === 'select' && ctrlHeld) {
+      map.current.dragPan.enable();
+    } else if (noPanTools.includes(activeTool)) {
+      map.current.dragPan.disable();
+    } else {
+      map.current.dragPan.enable();
+    }
+  }, [activeTool, ctrlHeld]);
+
+  // Track Ctrl key for pan-in-select-mode feature
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Control' && !e.repeat) {
+        setCtrlHeld(true);
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Control') {
+        setCtrlHeld(false);
+      }
+    };
+    // Also handle window blur (Ctrl held, switch windows, release outside)
+    const handleBlur = () => {
+      setCtrlHeld(false);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, []);
 
   // Handle satellite toggle
   useEffect(() => {
@@ -360,32 +420,39 @@ export default function MapCanvas() {
     }
   }, [showSatellite]);
 
-  // Fit to survey bounds
+  // Fit to survey bounds using transformed coordinates
   const fitToBounds = useCallback(() => {
     if (!map.current || stations.length === 0) return;
 
     const coords = stations.map((s) => s.coordinates);
     const bounds = getBounds(coords);
 
-    // Add padding
-    const padding = 50;
+    // Transform bounds to map coordinates
+    const sw = metersToMapCoords(bounds.minX, bounds.minY);
+    const ne = metersToMapCoords(bounds.maxX, bounds.maxY);
 
-    map.current.fitBounds(
-      [
-        [bounds.minX - padding, bounds.minY - padding],
-        [bounds.maxX + padding, bounds.maxY + padding],
-      ],
-      { padding: 50 }
-    );
+    console.log('[MapCanvas] fitToBounds:', {
+      metersExtent: { x: bounds.maxX - bounds.minX, y: bounds.maxY - bounds.minY },
+      sw, ne
+    });
+
+    // Use MapLibre's fitBounds with padding
+    map.current.fitBounds([sw, ne], {
+      padding: 50,
+      maxZoom: 20,
+    });
   }, [stations]);
 
-  // Fit to bounds when project loads
+  // Fit to bounds when requested (e.g., after import)
   useEffect(() => {
-    if (project && stations.length > 0) {
-      // Small delay to ensure map is ready
-      setTimeout(fitToBounds, 100);
+    if (requestFitToBounds && mapLoaded && stations.length > 0) {
+      // Small delay to ensure data is rendered
+      setTimeout(() => {
+        fitToBounds();
+        clearFitToBoundsRequest();
+      }, 100);
     }
-  }, [project?.name, fitToBounds]);
+  }, [requestFitToBounds, mapLoaded, stations.length, clearFitToBoundsRequest]);
 
   // Calculate box select overlay style
   const boxSelectStyle = boxSelect.start && boxSelect.end

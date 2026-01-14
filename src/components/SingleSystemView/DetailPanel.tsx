@@ -59,9 +59,14 @@ export default function DetailPanel() {
 
 function StationDetail({ station }: { station: Station }) {
   const { project } = useProjectStore();
+  const { openDialog } = useUIStore();
   const section = project?.sections.find(
     (s) => s.id === station.station_ref.section_id
   );
+
+  const handleEdit = () => {
+    openDialog('edit-station', { stationRef: station.station_ref });
+  };
 
   return (
     <div className="h-full bg-panel overflow-auto">
@@ -110,7 +115,7 @@ function StationDetail({ station }: { station: Station }) {
       </Panel>
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" className="w-full">
+        <Button size="sm" className="w-full" onClick={handleEdit}>
           Edit
         </Button>
       </div>
@@ -119,16 +124,20 @@ function StationDetail({ station }: { station: Station }) {
 }
 
 function ShotDetail({ section, shot }: { section: Section; shot: Shot }) {
-  const { deleteShot, setShotVirtual } = useProjectStore();
+  const { setShotVirtual } = useProjectStore();
+  const { openDialog } = useUIStore();
 
   const handleToggleVirtual = async () => {
     await setShotVirtual(section.id, shot.id, !shot.is_virtual);
   };
 
-  const handleDelete = async () => {
-    if (confirm('Delete this shot?')) {
-      await deleteShot(section.id, shot.id);
-    }
+  const handleDelete = () => {
+    openDialog('confirm-delete', {
+      type: 'shot',
+      sectionId: section.id,
+      shotId: shot.id,
+      message: 'Are you sure you want to delete this shot?',
+    });
   };
 
   return (
@@ -181,10 +190,16 @@ function ShotDetail({ section, shot }: { section: Section; shot: Shot }) {
 }
 
 function SectionDetail({ section }: { section: Section }) {
+  const { openDialog } = useUIStore();
+
   const stats = {
     shotCount: section.shots.length,
     length: section.shots.reduce((sum, s) => sum + s.length, 0),
     virtualCount: section.shots.filter((s) => s.is_virtual).length,
+  };
+
+  const handleEditSection = () => {
+    openDialog('edit-section', { sectionId: section.id });
   };
 
   return (
@@ -218,7 +233,7 @@ function SectionDetail({ section }: { section: Section }) {
       </Panel>
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" className="w-full">
+        <Button size="sm" className="w-full" onClick={handleEditSection}>
           Edit Section
         </Button>
       </div>

@@ -5,3 +5,6 @@ export { default as DmpImportDialog } from './DmpImportDialog';
 export { default as ConfirmDialog } from './ConfirmDialog';
 export { default as MergeDialog } from './MergeDialog';
 export { default as DrawShotDialog } from './DrawShotDialog';
+export { default as EditSectionDialog } from './EditSectionDialog';
+export { default as EditShotDialog } from './EditShotDialog';
+export { default as EditStationDialog } from './EditStationDialog';

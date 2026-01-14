@@ -12,7 +12,7 @@ interface ContextMenuItem {
 }
 
 export default function ContextMenu() {
-  const { closeDialog, dialogData, openDialog, setActiveTool, setSelection, setMergeStationA } = useUIStore();
+  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA } = useUIStore();
   const { project, setShotVirtual } = useProjectStore();
 
   const menuRef = useRef<HTMLDivElement>(null);
@@ -20,6 +20,7 @@ export default function ContextMenu() {
   const target = dialogData.target as
     | { type: 'station'; ref: StationRef }
     | { type: 'shot'; sectionId: SectionId; shotId: ShotId }
+    | { type: 'section'; sectionId: SectionId }
     | null;
   const position = dialogData.position as { x: number; y: number } | undefined;
 
@@ -58,12 +59,12 @@ export default function ContextMenu() {
     if (!target) return [];
 
     if (target.type === 'station') {
+      const sectionId = target.ref.section_id;
       return [
         {
           label: 'Edit Station',
           action: () => {
-            setSelection({ type: 'station', stationRef: target.ref });
-            closeDialog();
+            openDialog('edit-station', { stationRef: target.ref });
           },
         },
         {
@@ -83,6 +84,20 @@ export default function ContextMenu() {
         },
         { label: '', action: () => {}, separator: true },
         {
+          label: 'Edit Section',
+          action: () => {
+            openDialog('edit-section', { sectionId });
+          },
+        },
+        {
+          label: 'Delete Section',
+          action: () => {
+            openDialog('confirm-delete', { type: 'section', sectionId });
+          },
+          danger: true,
+        },
+        { label: '', action: () => {}, separator: true },
+        {
           label: 'Delete Station',
           action: () => {
             openDialog('confirm-delete', { type: 'station', stationRef: target.ref });
@@ -97,8 +112,7 @@ export default function ContextMenu() {
         {
           label: 'Edit Shot',
           action: () => {
-            setSelection({ type: 'shot', sectionId: target.sectionId, shotId: target.shotId });
-            closeDialog();
+            openDialog('edit-shot', { sectionId: target.sectionId, shotId: target.shotId });
           },
         },
         {
@@ -126,9 +140,42 @@ export default function ContextMenu() {
         },
         { label: '', action: () => {}, separator: true },
         {
+          label: 'Edit Section',
+          action: () => {
+            openDialog('edit-section', { sectionId: target.sectionId });
+          },
+        },
+        {
+          label: 'Delete Section',
+          action: () => {
+            openDialog('confirm-delete', { type: 'section', sectionId: target.sectionId });
+          },
+          danger: true,
+        },
+        { label: '', action: () => {}, separator: true },
+        {
           label: 'Delete Shot',
           action: () => {
             openDialog('confirm-delete', { type: 'shot', sectionId: target.sectionId, shotId: target.shotId });
+          },
+          danger: true,
+        },
+      ];
+    }
+
+    if (target.type === 'section') {
+      return [
+        {
+          label: 'Edit Section',
+          action: () => {
+            openDialog('edit-section', { sectionId: target.sectionId });
+          },
+        },
+        { label: '', action: () => {}, separator: true },
+        {
+          label: 'Delete Section',
+          action: () => {
+            openDialog('confirm-delete', { type: 'section', sectionId: target.sectionId });
           },
           danger: true,
         },

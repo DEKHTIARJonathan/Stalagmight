@@ -745,11 +745,33 @@ impl AppState {
             None => return CommandResult::failure("No project open".to_string()),
         };
 
+        // Check specific error conditions for better error messages
+        if !project.station_exists(station_a) {
+            return CommandResult::failure(format!(
+                "Station A ({}, {}) does not exist",
+                station_a.section_id, station_a.station_index
+            ));
+        }
+        if !project.station_exists(station_b) {
+            return CommandResult::failure(format!(
+                "Station B ({}, {}) does not exist",
+                station_b.section_id, station_b.station_index
+            ));
+        }
+        if project.are_stations_merged(station_a, station_b) {
+            return CommandResult::failure("These stations are already merged".to_string());
+        }
+        if station_a.section_id == station_b.section_id {
+            return CommandResult::failure(
+                "Cannot merge stations from the same section".to_string(),
+            );
+        }
+
         if project.merge_stations(station_a, station_b, strategy) {
             tracing::info!(?station_a, ?station_b, "Stations merged");
             CommandResult::success()
         } else {
-            CommandResult::failure("Failed to merge stations".to_string())
+            CommandResult::failure("Failed to merge stations (unknown error)".to_string())
         }
     }
 
@@ -949,12 +971,12 @@ impl AppState {
 
             UndoData::ShotSnapshot {
                 section_id,
-                shot_id: _,
+                shot_id,
                 shot_data,
                 position,
             } => {
-                // Restore deleted shot at its original position
-                self.restore_shot(*section_id, shot_data.clone(), *position)
+                // Restore deleted shot at its original position with original ID
+                self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position)
             }
 
             UndoData::MergeInfo {
@@ -1136,10 +1158,11 @@ impl AppState {
         CommandResult::success()
     }
 
-    /// Restore a deleted shot at its original position
+    /// Restore a deleted shot at its original position with its original ID
     fn restore_shot(
         &self,
         section_id: SectionId,
+        original_shot_id: ShotId,
         data: ShotData,
         position: usize,
     ) -> CommandResult {
@@ -1158,9 +1181,13 @@ impl AppState {
             None => return CommandResult::failure(format!("Section {} not found", section_id)),
         };
 
-        // Create shot and insert at original position
-        let shot = Shot::new(section.next_shot_id, data);
-        section.next_shot_id += 1;
+        // Create shot with original ID
+        let shot = Shot::new(original_shot_id, data);
+
+        // Update next_shot_id if needed to avoid collisions
+        if original_shot_id >= section.next_shot_id {
+            section.next_shot_id = original_shot_id + 1;
+        }
 
         if position <= section.shots.len() {
             section.shots.insert(position, shot);
@@ -1170,7 +1197,7 @@ impl AppState {
 
         project.touch();
 
-        tracing::info!(section_id, position, "Shot restored");
+        tracing::info!(section_id, shot_id = original_shot_id, position, "Shot restored");
         CommandResult::success()
     }
 

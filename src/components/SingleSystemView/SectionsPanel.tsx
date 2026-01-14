@@ -28,6 +28,15 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     }
   };
 
+  const handleSectionContextMenu = (e: React.MouseEvent, sectionId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openDialog('context-menu', {
+      target: { type: 'section', sectionId },
+      position: { x: e.clientX, y: e.clientY },
+    });
+  };
+
   return (
     <div className="h-full flex flex-col bg-panel">
       {/* Header */}
@@ -67,11 +76,12 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                 <li
                   key={section.id}
                   className={`
-                    px-3 py-2 cursor-pointer
+                    px-3 py-2 cursor-pointer group
                     hover:bg-background/50
                     ${isSelected ? 'bg-accent/20' : ''}
                   `}
                   onClick={() => handleSectionClick(section)}
+                  onContextMenu={(e) => handleSectionContextMenu(e, section.id)}
                 >
                   <div className="flex items-center gap-2">
                     <span

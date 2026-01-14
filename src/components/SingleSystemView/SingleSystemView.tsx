@@ -103,6 +103,7 @@ export default function SingleSystemView() {
             minSize={200}
             maxSize={500}
             onResize={setDetailPanelWidth}
+            handlePosition="start"
             className="border-l border-border"
           >
             <DetailPanel />

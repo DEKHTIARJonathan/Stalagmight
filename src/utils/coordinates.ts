@@ -3,6 +3,29 @@ import type { Coordinates, GpsCoordinates } from '../types/project';
 // Earth radius in meters for coordinate conversions
 const EARTH_RADIUS = 6371000;
 
+// Meters per degree (approximately at equator)
+// Used to transform local meter coordinates to pseudo-lat/lng for MapLibre
+const METERS_PER_DEGREE = 111320;
+
+/**
+ * Transform local meter coordinates to MapLibre-compatible pseudo-lat/lng
+ * This allows MapLibre's scale bar to show correct distances
+ */
+export function metersToMapCoords(x: number, y: number): [number, number] {
+  // lng, lat format for MapLibre
+  return [x / METERS_PER_DEGREE, y / METERS_PER_DEGREE];
+}
+
+/**
+ * Transform MapLibre pseudo-lat/lng back to local meter coordinates
+ */
+export function mapCoordsToMeters(lng: number, lat: number): { x: number; y: number } {
+  return {
+    x: lng * METERS_PER_DEGREE,
+    y: lat * METERS_PER_DEGREE,
+  };
+}
+
 /**
  * Convert GPS coordinates to internal XY coordinates (meters from origin)
  */

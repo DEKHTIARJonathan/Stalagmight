@@ -5,7 +5,7 @@ import { useUIStore } from '../store/uiStore';
 
 export function useProject() {
   const store = useProjectStore();
-  const { setView } = useUIStore();
+  const { setView, openDialog } = useUIStore();
 
   const handleNewProject = useCallback(async () => {
     // TODO: Show new project dialog
@@ -33,13 +33,6 @@ export function useProject() {
     return null;
   }, [store, setView]);
 
-  const handleSaveProject = useCallback(async () => {
-    if (store.project) {
-      return await store.saveProject();
-    }
-    return await handleSaveProjectAs();
-  }, [store]);
-
   const handleSaveProjectAs = useCallback(async () => {
     const selected = await save({
       filters: [{ name: 'Cave Project', extensions: ['cave'] }],
@@ -51,7 +44,24 @@ export function useProject() {
     return null;
   }, [store]);
 
+  const handleSaveProject = useCallback(async () => {
+    if (store.project?.file_path) {
+      return await store.saveProject();
+    }
+    return await handleSaveProjectAs();
+  }, [store, handleSaveProjectAs]);
+
   const handleCloseProject = useCallback(async () => {
+    // Check for unsaved changes
+    if (store.isDirty) {
+      const confirmed = window.confirm(
+        'You have unsaved changes. Are you sure you want to go back? Your changes will be lost.'
+      );
+      if (!confirmed) {
+        return { success: false, error: 'Cancelled' };
+      }
+    }
+
     const result = await store.closeProject();
     if (result.success) {
       setView('global');
@@ -66,16 +76,10 @@ export function useProject() {
     });
 
     if (selected && typeof selected === 'string') {
-      try {
-        const dmpFile = await store.importDmp(selected);
-        // TODO: Open import dialog with parsed data
-        return dmpFile;
-      } catch (e) {
-        console.error('Failed to import DMP:', e);
-      }
+      // Open the import dialog with the file path
+      openDialog('import-dmp', { filePath: selected });
     }
-    return null;
-  }, [store]);
+  }, [openDialog]);
 
   const handleExportCsv = useCallback(async () => {
     const selected = await save({
