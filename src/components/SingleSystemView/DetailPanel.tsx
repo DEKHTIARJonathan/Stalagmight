@@ -526,9 +526,13 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
             </h4>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
               <StatCard label="Total Length" value={`${stats.total_length.toFixed(1)} m`} />
+              <StatCard label="Penetration" value={`${stats.penetration_distance.toFixed(1)} m`} />
               <StatCard label="Sections" value={String(stats.section_count)} />
               <StatCard label="Shots" value={String(stats.shot_count)} />
               <StatCard label="Stations" value={String(stats.station_count)} />
+              {stats.loop_count > 0 && (
+                <StatCard label="Loops" value={String(stats.loop_count)} />
+              )}
             </div>
           </div>
 

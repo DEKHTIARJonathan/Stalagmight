@@ -59,6 +59,8 @@ pub struct ProjectStats {
     pub max_depth: f64,
     pub station_count: usize,
     pub loop_count: usize,
+    /// Maximum straight-line distance from zero datum to any station
+    pub penetration_distance: f64,
 }
 
 impl Project {
@@ -673,7 +675,49 @@ impl Project {
             max_depth,
             station_count,
             loop_count,
+            penetration_distance: 0.0, // Calculated separately with stations
         }
+    }
+
+    /// Calculate penetration distance from zero datum to furthest station
+    pub fn calculate_penetration(&self, stations: &[Station]) -> f64 {
+        // If no zero datums, return 0
+        if self.zero_datums.is_empty() {
+            return 0.0;
+        }
+
+        // Find zero datum station(s)
+        let zero_datum_coords: Vec<_> = self
+            .zero_datums
+            .iter()
+            .filter_map(|zd| {
+                stations
+                    .iter()
+                    .find(|s| {
+                        s.station_ref.section_id == zd.station_ref.section_id
+                            && s.station_ref.station_index == zd.station_ref.station_index
+                    })
+                    .map(|s| &s.coordinates)
+            })
+            .collect();
+
+        if zero_datum_coords.is_empty() {
+            return 0.0;
+        }
+
+        // Calculate max distance from any zero datum to any station
+        let mut max_distance = 0.0f64;
+        for station in stations {
+            for datum_coord in &zero_datum_coords {
+                let dx = station.coordinates.x - datum_coord.x;
+                let dy = station.coordinates.y - datum_coord.y;
+                let dz = station.coordinates.z - datum_coord.z;
+                let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+                max_distance = max_distance.max(distance);
+            }
+        }
+
+        max_distance
     }
 
     /// Get metadata for this project
