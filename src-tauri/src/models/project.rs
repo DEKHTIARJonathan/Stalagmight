@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::{
@@ -28,6 +29,9 @@ pub struct Project {
     pub file_path: Option<PathBuf>,
     /// Next section ID to assign
     pub next_section_id: SectionId,
+    /// Section offsets (x, y) applied when sections are merged/aligned
+    #[serde(default)]
+    pub section_offsets: HashMap<SectionId, (f64, f64)>,
 }
 
 /// Project metadata for listing
@@ -67,6 +71,7 @@ impl Project {
             zero_datums: Vec::new(),
             file_path: None,
             next_section_id: 0,
+            section_offsets: HashMap::new(),
         }
     }
 
@@ -178,21 +183,122 @@ impl Project {
 
     // === Station operations ===
 
+    /// Helper to get sections connected to a station through merges
+    fn get_connected_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
+        let mut connected = HashSet::new();
+        let mut queue = vec![section_id];
+
+        while let Some(current) = queue.pop() {
+            if connected.insert(current) {
+                for merge in &self.station_merges {
+                    if merge.station_a.section_id == current {
+                        if !connected.contains(&merge.station_b.section_id) {
+                            queue.push(merge.station_b.section_id);
+                        }
+                    } else if merge.station_b.section_id == current {
+                        if !connected.contains(&merge.station_a.section_id) {
+                            queue.push(merge.station_a.section_id);
+                        }
+                    }
+                }
+            }
+        }
+        connected
+    }
+
+    /// Check if a section is connected to a zero datum (directly or through merges)
+    fn section_has_zero_datum(&self, section_id: SectionId) -> bool {
+        let connected = self.get_connected_section_ids(section_id);
+        self.zero_datums.iter().any(|zd| connected.contains(&zd.station_ref.section_id))
+    }
+
+    /// Compute raw station coordinates for a single station (without global zero datum offset)
+    fn compute_station_raw_coords(&self, station_ref: StationRef) -> Option<Coordinates> {
+        let section = self.sections.iter().find(|s| s.id == station_ref.section_id)?;
+
+        // Get section offset
+        let (offset_x, offset_y) = self.section_offsets.get(&section.id).copied().unwrap_or((0.0, 0.0));
+        let mut coords = Coordinates::new(offset_x, offset_y, 0.0);
+
+        // Walk through shots to reach the station
+        for i in 0..station_ref.station_index as usize {
+            if i >= section.shots.len() {
+                return None;
+            }
+            let shot = &section.shots[i];
+            let azimuth_rad = shot.average_azimuth().to_radians();
+            let dx = shot.length * azimuth_rad.sin();
+            let dy = shot.length * azimuth_rad.cos();
+            let dz = shot.depth_out - shot.depth_in;
+            coords.x += dx;
+            coords.y += dy;
+            coords.z += dz;
+        }
+
+        Some(coords)
+    }
+
     /// Merge two stations
+    /// Returns Err if validation fails, Ok(true) on success
     pub fn merge_stations(
         &mut self,
         station_a: StationRef,
         station_b: StationRef,
         _strategy: ClosureStrategy,
-    ) -> bool {
+    ) -> Result<bool, String> {
         // Check that both stations exist
         if !self.station_exists(station_a) || !self.station_exists(station_b) {
-            return false;
+            return Err("One or both stations do not exist".to_string());
         }
 
         // Check not already merged
         if self.are_stations_merged(station_a, station_b) {
-            return false;
+            return Err("These stations are already merged".to_string());
+        }
+
+        // Check if already connected (same section group)
+        let connected_a = self.get_connected_section_ids(station_a.section_id);
+        if connected_a.contains(&station_b.section_id) {
+            return Err("These sections are already connected. Use Closure to handle loops.".to_string());
+        }
+
+        // Check zero datum status
+        let a_has_zd = self.section_has_zero_datum(station_a.section_id);
+        let b_has_zd = self.section_has_zero_datum(station_b.section_id);
+
+        if a_has_zd && b_has_zd {
+            return Err("Both stations are connected to zero datums. Use Closure instead to handle survey loops.".to_string());
+        }
+
+        // Compute current coordinates
+        let coords_a = self.compute_station_raw_coords(station_a)
+            .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
+        let coords_b = self.compute_station_raw_coords(station_b)
+            .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
+
+        // Determine which section group needs to move:
+        // - If A has zero datum, B's group moves
+        // - If B has zero datum, A's group moves
+        // - If neither has zero datum, A's group moves to align with B
+        let (anchor_coords, moving_coords, moving_section_id) = if a_has_zd {
+            (coords_a, coords_b, station_b.section_id)
+        } else {
+            // B has zero datum OR neither has one (in which case B is the anchor)
+            (coords_b, coords_a, station_a.section_id)
+        };
+
+        // Calculate offset to align moving station with anchor
+        let offset_x = anchor_coords.x - moving_coords.x;
+        let offset_y = anchor_coords.y - moving_coords.y;
+
+        // Apply offset to all sections in the moving group
+        let moving_sections = self.get_connected_section_ids(moving_section_id);
+        for section_id in moving_sections {
+            let current_offset = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+            self.section_offsets.insert(section_id, (
+                current_offset.0 + offset_x,
+                current_offset.1 + offset_y,
+            ));
         }
 
         // Record the merge
@@ -203,7 +309,7 @@ impl Project {
         });
 
         self.touch();
-        true
+        Ok(true)
     }
 
     /// Unmerge stations
@@ -239,10 +345,79 @@ impl Project {
         }
     }
 
+    /// Get all station refs connected to this station via shots and merges (transitive)
+    /// All stations in a section are connected via shots, and merges connect stations across sections
+    fn get_connected_stations(&self, station_ref: StationRef) -> HashSet<StationRef> {
+        let mut connected = HashSet::new();
+        let mut sections_to_process: HashSet<SectionId> = HashSet::new();
+        let mut processed_sections: HashSet<SectionId> = HashSet::new();
+
+        // Start with the section containing this station
+        sections_to_process.insert(station_ref.section_id);
+
+        while !sections_to_process.is_empty() {
+            // Get a section to process
+            let section_id = *sections_to_process.iter().next().unwrap();
+            sections_to_process.remove(&section_id);
+
+            if processed_sections.contains(&section_id) {
+                continue;
+            }
+            processed_sections.insert(section_id);
+
+            // Add all stations in this section (they're all connected via shots)
+            if let Some(section) = self.sections.iter().find(|s| s.id == section_id) {
+                // A section with N shots has N+1 stations (indices 0 to N)
+                for i in 0..=section.shots.len() {
+                    connected.insert(StationRef {
+                        section_id,
+                        station_index: i as u32,
+                    });
+                }
+            }
+
+            // Find all sections connected via merges to any station in this section
+            for merge in &self.station_merges {
+                if merge.station_a.section_id == section_id {
+                    if !processed_sections.contains(&merge.station_b.section_id) {
+                        sections_to_process.insert(merge.station_b.section_id);
+                    }
+                } else if merge.station_b.section_id == section_id {
+                    if !processed_sections.contains(&merge.station_a.section_id) {
+                        sections_to_process.insert(merge.station_a.section_id);
+                    }
+                }
+            }
+        }
+
+        connected
+    }
+
+    /// Check if any connected station already has a zero datum (returns the conflicting ref)
+    fn find_connected_zero_datum(&self, station_ref: StationRef) -> Option<StationRef> {
+        let connected = self.get_connected_stations(station_ref);
+        for zd in &self.zero_datums {
+            if connected.contains(&zd.station_ref) && zd.station_ref != station_ref {
+                return Some(zd.station_ref);
+            }
+        }
+        None
+    }
+
     /// Set a station as the zero datum
-    pub fn set_zero_datum(&mut self, station_ref: StationRef, gps: GpsCoordinates) -> bool {
+    /// Returns Err if the station doesn't exist or if a connected station already has a zero datum
+    pub fn set_zero_datum(&mut self, station_ref: StationRef, gps: GpsCoordinates) -> Result<bool, String> {
         if !self.station_exists(station_ref) {
-            return false;
+            return Err("Station does not exist".to_string());
+        }
+
+        // Check for connected zero datum
+        if let Some(existing) = self.find_connected_zero_datum(station_ref) {
+            return Err(format!(
+                "Cannot set zero datum: station {}.{} is connected to station {}.{} which already has a zero datum",
+                station_ref.section_id, station_ref.station_index,
+                existing.section_id, existing.station_index
+            ));
         }
 
         // Remove any existing zero datum for this station
@@ -251,7 +426,7 @@ impl Project {
 
         self.zero_datums.push(ZeroDatum { station_ref, gps });
         self.touch();
-        true
+        Ok(true)
     }
 
     /// Remove zero datum from a station
@@ -279,11 +454,9 @@ impl Project {
         let mut stations: Vec<Station> = Vec::new();
 
         for section in &self.sections {
-            let mut current_coords = Coordinates::default();
-
-            // Find if this section's first station is merged with an anchored station
-            // For now, just start from origin if not connected
-            // TODO: Implement full graph traversal for connected sections
+            // Get section offset (from merges)
+            let (offset_x, offset_y) = self.section_offsets.get(&section.id).copied().unwrap_or((0.0, 0.0));
+            let mut current_coords = Coordinates::new(offset_x, offset_y, 0.0);
 
             // First station of section
             let first_station_ref = StationRef::new(section.id, 0);

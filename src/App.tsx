@@ -3,7 +3,7 @@ import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
-import { ImportDialog, ExportDialog, NewProjectDialog, DmpImportDialog, ConfirmDialog, MergeDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, DmpImportDialog, ConfirmDialog, MergeDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 
 function App() {
@@ -34,6 +34,9 @@ function App() {
       {activeDialog === 'edit-section' && <EditSectionDialog />}
       {activeDialog === 'edit-shot' && <EditShotDialog />}
       {activeDialog === 'edit-station' && <EditStationDialog />}
+      {activeDialog === 'unsaved-changes' && <UnsavedChangesDialog />}
+      {activeDialog === 'error' && <ErrorDialog />}
+      {activeDialog === 'confirm-overwrite' && <OverwriteConfirmDialog />}
       {activeDialog === 'context-menu' && <ContextMenu />}
     </div>
   );

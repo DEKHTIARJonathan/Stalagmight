@@ -9,6 +9,7 @@ export interface SurveyLayerCallbacks {
   onEmptyClick?: (event: MapMouseEvent) => void;
   onStationHover?: (ref: StationRef | null) => void;
   onShotHover?: (shot: { sectionId: SectionId; shotId: ShotId } | null) => void;
+  onFeatureHover?: ((isHovering: boolean) => void) | undefined;
   onContextMenu?: (
     target: { type: 'station'; ref: StationRef } | { type: 'shot'; sectionId: SectionId; shotId: ShotId } | null,
     event: MapMouseEvent
@@ -150,6 +151,7 @@ export default class SurveyLayer {
     // Station hover handlers
     this.map.on('mouseenter', this.stationsLayerId, (e) => {
       this.map.getCanvas().style.cursor = 'pointer';
+      this.callbacks.onFeatureHover?.(true);
       const feature = e.features?.[0];
       if (feature?.properties) {
         const { sectionId, stationIndex } = feature.properties;
@@ -164,7 +166,7 @@ export default class SurveyLayer {
     });
 
     this.map.on('mouseleave', this.stationsLayerId, () => {
-      this.map.getCanvas().style.cursor = '';
+      this.callbacks.onFeatureHover?.(false);
       this.hoveredStationId = null;
       this.callbacks.onStationHover?.(null);
       this.updateVisualState();
@@ -173,6 +175,7 @@ export default class SurveyLayer {
     // Shot hover handlers
     this.map.on('mouseenter', this.shotsLayerId, (e) => {
       this.map.getCanvas().style.cursor = 'pointer';
+      this.callbacks.onFeatureHover?.(true);
       const feature = e.features?.[0];
       if (feature?.properties) {
         const { sectionId, shotId } = feature.properties;
@@ -183,7 +186,7 @@ export default class SurveyLayer {
     });
 
     this.map.on('mouseleave', this.shotsLayerId, () => {
-      this.map.getCanvas().style.cursor = '';
+      this.callbacks.onFeatureHover?.(false);
       this.hoveredShotId = null;
       this.callbacks.onShotHover?.(null);
       this.updateVisualState();

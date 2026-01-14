@@ -28,15 +28,15 @@ export default function NewProjectDialog() {
 
       if (result.success) {
         if (saveImmediately) {
-          // Open save dialog
-          const { open } = await import('@tauri-apps/plugin-dialog');
-          const path = await open({
+          // Open save dialog (use save, not open, to allow entering custom filename)
+          const { save } = await import('@tauri-apps/plugin-dialog');
+          const path = await save({
             title: 'Save Project',
-            filters: [{ name: 'CaveChef Project', extensions: ['cavechef'] }],
-            defaultPath: `${name.replace(/[^a-zA-Z0-9]/g, '_')}.cavechef`,
+            filters: [{ name: 'CaveChef Project', extensions: ['cvproj'] }],
+            defaultPath: `${name.replace(/[^a-zA-Z0-9]/g, '_')}.cvproj`,
           });
 
-          if (path && typeof path === 'string') {
+          if (path) {
             await saveProject(path);
           }
         }

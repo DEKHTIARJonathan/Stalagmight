@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::models::{
@@ -21,10 +22,86 @@ pub struct Database {
 impl Database {
     /// Open or create a database at the given path
     pub fn open(path: &Path) -> Result<Self> {
+        tracing::info!("=== DATABASE OPEN (for save) ===");
+        tracing::info!("Opening database at: {:?}", path);
+        let exists = path.exists();
+        tracing::info!("File existed before open: {}", exists);
+
         let conn = Connection::open(path).context("Failed to open database")?;
+        tracing::info!("SQLite connection created");
+
         let db = Self { conn };
         db.init_schema()?;
+        tracing::info!("Schema initialized");
+
+        // Verify tables exist after schema init
+        let table_count: i32 = db.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        tracing::info!("Tables in database after init: {}", table_count);
+
         Ok(db)
+    }
+
+    /// Open an existing database (does not create if missing)
+    pub fn open_existing(path: &Path) -> Result<Self> {
+        tracing::info!("=== OPEN EXISTING START ===");
+        tracing::info!("Opening existing database at: {:?}", path);
+
+        if !path.exists() {
+            tracing::error!("File does not exist: {:?}", path);
+            anyhow::bail!("File does not exist");
+        }
+        tracing::info!("File exists, size: {:?} bytes", std::fs::metadata(path).map(|m| m.len()).ok());
+
+        // Open in read-only mode first to check if it's valid
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .context("Failed to open database - file may not be a valid SQLite database")?;
+        tracing::info!("SQLite connection opened successfully");
+
+        let db = Self { conn };
+
+        // Check if the project table exists and has data
+        let has_data = db.has_project_data()?;
+        tracing::info!("has_project_data returned: {}", has_data);
+
+        if !has_data {
+            tracing::error!("File does not contain valid CaveChef project data");
+            anyhow::bail!("File does not contain a valid CaveChef project");
+        }
+
+        tracing::info!("=== OPEN EXISTING END === Success");
+        Ok(db)
+    }
+
+    /// Check if the database has valid project data
+    pub fn has_project_data(&self) -> Result<bool> {
+        tracing::info!("Checking if database has project data...");
+
+        // First check if project table exists
+        let table_exists: i32 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='project'",
+            [],
+            |row| row.get(0),
+        )?;
+        tracing::info!("project table exists: {}", table_exists > 0);
+
+        if table_exists == 0 {
+            tracing::warn!("project table does not exist in database");
+            return Ok(false);
+        }
+
+        // Check if project table has any rows
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM project",
+            [],
+            |row| row.get(0),
+        )?;
+        tracing::info!("project table row count: {}", count);
+
+        Ok(count > 0)
     }
 
     /// Create an in-memory database (for testing)
@@ -103,6 +180,13 @@ impl Database {
                 UNIQUE(section_id, station_index)
             );
 
+            -- Section offsets (for aligning merged sections)
+            CREATE TABLE IF NOT EXISTS section_offsets (
+                section_id INTEGER PRIMARY KEY,
+                offset_x REAL NOT NULL,
+                offset_y REAL NOT NULL
+            );
+
             -- Undo/redo stack
             CREATE TABLE IF NOT EXISTS undo_stack (
                 id INTEGER PRIMARY KEY,
@@ -129,7 +213,20 @@ impl Database {
 
     /// Save a project to the database
     pub fn save_project(&mut self, project: &Project) -> Result<()> {
-        let tx = self.conn.transaction()?;
+        tracing::info!("=== SAVE PROJECT START ===");
+        tracing::info!("Saving project: name={}, sections={}", project.name, project.sections.len());
+
+        tracing::info!("About to start transaction...");
+        let tx = match self.conn.transaction() {
+            Ok(t) => {
+                tracing::info!("Transaction started successfully");
+                t
+            }
+            Err(e) => {
+                tracing::error!("Failed to start transaction: {}", e);
+                return Err(e.into());
+            }
+        };
 
         // Clear existing data
         tx.execute_batch(
@@ -139,11 +236,13 @@ impl Database {
             DELETE FROM shots;
             DELETE FROM station_merges;
             DELETE FROM zero_datums;
+            DELETE FROM section_offsets;
             "#,
         )?;
+        tracing::info!("Existing data cleared");
 
         // Save project metadata
-        tx.execute(
+        let rows_affected = tx.execute(
             "INSERT INTO project (id, name, location, created_at, modified_at, schema_version) VALUES (1, ?1, ?2, ?3, ?4, ?5)",
             params![
                 project.name,
@@ -153,6 +252,7 @@ impl Database {
                 SCHEMA_VERSION
             ],
         )?;
+        tracing::info!("Project metadata inserted, rows_affected={}", rows_affected);
 
         // Save sections and shots
         for section in &project.sections {
@@ -169,15 +269,16 @@ impl Database {
             )?;
 
             for (seq, shot) in section.shots.iter().enumerate() {
+                // Note: We don't store shot.id - it's regenerated on load based on sequence_order
+                // The database uses auto-increment for the id column
                 tx.execute(
                     r#"INSERT INTO shots (
-                        id, section_id, sequence_order,
+                        section_id, sequence_order,
                         azimuth_in, azimuth_out, length, depth_in, depth_out,
                         pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
                         comment, is_virtual, marker_index, temperature
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)"#,
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)"#,
                     params![
-                        shot.id,
                         section.id,
                         seq as i64,
                         shot.azimuth_in,
@@ -228,20 +329,51 @@ impl Database {
             )?;
         }
 
+        // Save section offsets
+        for (section_id, (offset_x, offset_y)) in &project.section_offsets {
+            tx.execute(
+                "INSERT INTO section_offsets (section_id, offset_x, offset_y) VALUES (?1, ?2, ?3)",
+                params![section_id, offset_x, offset_y],
+            )?;
+        }
+
         tx.commit()?;
-        tracing::info!("Project saved successfully");
+        tracing::info!("Transaction committed");
+
+        // Verify the data was written
+        let verify_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM project",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        tracing::info!("=== SAVE PROJECT END === Verification: project table has {} rows", verify_count);
+
         Ok(())
     }
 
     /// Load a project from the database
     pub fn load_project(&self) -> Result<Project> {
-        // Load project metadata
+        tracing::info!("Loading project from database");
+
+        // First check if project table has data and log what's there
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM project",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        tracing::info!("Project table row count: {}", count);
+
+        if count == 0 {
+            anyhow::bail!("Project table is empty - file may be corrupted");
+        }
+
+        // Load project metadata - get the first row (don't require id = 1)
         let (name, location, created_at, modified_at): (String, Option<String>, String, String) =
             self.conn.query_row(
-                "SELECT name, location, created_at, modified_at FROM project WHERE id = 1",
+                "SELECT name, location, created_at, modified_at FROM project LIMIT 1",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )?;
+            ).context("Failed to read project metadata")?;
 
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc);
         let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at)?.with_timezone(&Utc);
@@ -279,16 +411,20 @@ impl Database {
                 let mut section = Section::new(id, section_data);
 
                 // Load shots for this section
+                // Note: Shot IDs are generated from section_id and sequence_order
                 let mut shot_stmt = self.conn.prepare(
-                    r#"SELECT id, azimuth_in, azimuth_out, length, depth_in, depth_out,
+                    r#"SELECT sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out,
                               pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
                               comment, is_virtual, marker_index, temperature
                        FROM shots WHERE section_id = ?1 ORDER BY sequence_order"#,
                 )?;
 
+                let section_id_for_shots = id;
                 let shot_rows = shot_stmt.query_map([id], |row| {
+                    let seq: i64 = row.get(0)?;
                     Ok(Shot {
-                        id: row.get(0)?,
+                        // Generate globally unique shot ID from section_id and sequence
+                        id: (section_id_for_shots as u32) * 100000 + (seq as u32),
                         azimuth_in: row.get(1)?,
                         azimuth_out: row.get(2)?,
                         length: row.get(3)?,
@@ -373,6 +509,26 @@ impl Database {
             }
         }
 
+        // Load section offsets
+        let mut section_offsets: HashMap<u32, (f64, f64)> = HashMap::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT section_id, offset_x, offset_y FROM section_offsets",
+            )?;
+            let offset_rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            })?;
+
+            for offset_row in offset_rows {
+                let (section_id, offset_x, offset_y) = offset_row?;
+                section_offsets.insert(section_id, (offset_x, offset_y));
+            }
+        }
+
         Ok(Project {
             name,
             location,
@@ -381,6 +537,7 @@ impl Database {
             sections,
             station_merges,
             zero_datums,
+            section_offsets,
             file_path: None,
             next_section_id,
         })

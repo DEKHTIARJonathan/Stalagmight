@@ -8,3 +8,6 @@ export { default as DrawShotDialog } from './DrawShotDialog';
 export { default as EditSectionDialog } from './EditSectionDialog';
 export { default as EditShotDialog } from './EditShotDialog';
 export { default as EditStationDialog } from './EditStationDialog';
+export { default as UnsavedChangesDialog } from './UnsavedChangesDialog';
+export { default as ErrorDialog } from './ErrorDialog';
+export { default as OverwriteConfirmDialog } from './OverwriteConfirmDialog';

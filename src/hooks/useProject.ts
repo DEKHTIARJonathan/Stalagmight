@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
+import { exists } from '@tauri-apps/plugin-fs';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 
@@ -7,59 +8,94 @@ export function useProject() {
   const store = useProjectStore();
   const { setView, openDialog } = useUIStore();
 
-  const handleNewProject = useCallback(async () => {
-    // TODO: Show new project dialog
-    const name = 'New Project'; // Should come from dialog
-    const result = await store.createProject(name);
-    if (result.success) {
-      setView('single');
-    }
-    return result;
-  }, [store, setView]);
+  const handleNewProject = useCallback(() => {
+    // Show the new project dialog which handles name input
+    openDialog('new-project');
+  }, [openDialog]);
 
   const handleOpenProject = useCallback(async () => {
     const selected = await open({
       multiple: false,
-      filters: [{ name: 'Cave Project', extensions: ['cave'] }],
+      filters: [{ name: 'CaveChef Project', extensions: ['cvproj', 'cvchef'] }],
     });
 
-    if (selected && typeof selected === 'string') {
-      const result = await store.openProject(selected);
+    console.log('[useProject] Open dialog result:', selected, typeof selected);
+
+    // Handle both string and single-item array returns
+    let path: string | null = null;
+    if (typeof selected === 'string') {
+      path = selected;
+    } else if (Array.isArray(selected) && (selected as string[]).length > 0) {
+      path = (selected as string[])[0] ?? null;
+    }
+
+    if (path) {
+      console.log('[useProject] Opening project:', path);
+      const result = await store.openProject(path);
+      console.log('[useProject] Open result:', result);
       if (result.success) {
         setView('single');
+      } else if (result.error) {
+        // Show error to user via dialog
+        openDialog('error', { message: result.error });
       }
       return result;
     }
     return null;
-  }, [store, setView]);
+  }, [store, setView, openDialog]);
 
   const handleSaveProjectAs = useCallback(async () => {
     const selected = await save({
-      filters: [{ name: 'Cave Project', extensions: ['cave'] }],
+      filters: [{ name: 'CaveChef Project', extensions: ['cvproj'] }],
     });
 
     if (selected) {
-      return await store.saveProject(selected);
+      // Ensure .cvproj extension (matching backend logic)
+      const finalPath = selected.endsWith('.cvproj') ? selected : `${selected}.cvproj`;
+
+      // Check if file already exists
+      try {
+        const fileExists = await exists(finalPath);
+        if (fileExists) {
+          // Show confirmation dialog - store the path for later use
+          openDialog('confirm-overwrite', {
+            path: finalPath,
+            fileName: finalPath.split('/').pop() ?? finalPath,
+          });
+          return null; // Dialog will handle the actual save
+        }
+      } catch {
+        // If exists check fails, proceed with save (backend will handle errors)
+      }
+
+      const result = await store.saveProject(selected);
+      if (result && !result.success && result.error) {
+        openDialog('error', { message: result.error, title: 'Save Failed' });
+      }
+      return result;
     }
     return null;
-  }, [store]);
+  }, [store, openDialog]);
 
   const handleSaveProject = useCallback(async () => {
-    if (store.project?.file_path) {
-      return await store.saveProject();
+    const result = store.project?.file_path
+      ? await store.saveProject()
+      : await handleSaveProjectAs();
+
+    if (result && !result.success && result.error) {
+      openDialog('error', { message: result.error, title: 'Save Failed' });
     }
-    return await handleSaveProjectAs();
-  }, [store, handleSaveProjectAs]);
+    return result;
+  }, [store, handleSaveProjectAs, openDialog]);
 
   const handleCloseProject = useCallback(async () => {
-    // Check for unsaved changes
-    if (store.isDirty) {
-      const confirmed = window.confirm(
-        'You have unsaved changes. Are you sure you want to go back? Your changes will be lost.'
-      );
-      if (!confirmed) {
-        return { success: false, error: 'Cancelled' };
-      }
+    // Check for unsaved changes - use getState() to get current value, not stale closure
+    const currentIsDirty = useProjectStore.getState().isDirty;
+    console.log('[useProject] handleCloseProject called, isDirty:', currentIsDirty);
+    if (currentIsDirty) {
+      // Open styled dialog - the dialog will handle the actual close
+      openDialog('unsaved-changes');
+      return { success: false, error: 'Showing dialog' };
     }
 
     const result = await store.closeProject();
@@ -67,7 +103,7 @@ export function useProject() {
       setView('global');
     }
     return result;
-  }, [store, setView]);
+  }, [store, setView, openDialog]);
 
   const handleImportDmp = useCallback(async () => {
     const selected = await open({
