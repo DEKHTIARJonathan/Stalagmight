@@ -25,7 +25,7 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 - [x] File overwrite warning dialog
 - [x] Safe save with temp file + atomic rename
 - [x] Error notifications for failed operations
-- [ ] Add file path to window title (minor, deferred)
+- [x] Add file path to window title
 
 ## Priority 2: Map Interactions ✅ COMPLETE
 

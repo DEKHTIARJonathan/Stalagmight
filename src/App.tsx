@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import GlobalView from './components/GlobalView/GlobalView';
@@ -7,13 +8,39 @@ import { ImportDialog, ExportDialog, NewProjectDialog, DmpImportDialog, ConfirmD
 import { ContextMenu } from './components/common';
 
 function App() {
-  const { project, loadConfig } = useProjectStore();
+  const { project, loadConfig, isDirty } = useProjectStore();
   const { view, activeDialog } = useUIStore();
 
   useEffect(() => {
     // Load config on startup
     loadConfig();
   }, [loadConfig]);
+
+  // Update window title based on project state
+  useEffect(() => {
+    const updateTitle = async () => {
+      let title = 'CaveChef';
+      if (project) {
+        if (project.file_path) {
+          // Extract filename from path
+          const filename = project.file_path.split(/[/\\]/).pop() ?? project.file_path;
+          title = `CaveChef - ${filename}`;
+        } else {
+          title = `CaveChef - ${project.name} (unsaved)`;
+        }
+        if (isDirty) {
+          title = `${title} *`;
+        }
+      }
+      try {
+        await getCurrentWindow().setTitle(title);
+      } catch (e) {
+        // Fallback for dev mode or if Tauri API unavailable
+        document.title = title;
+      }
+    };
+    updateTitle();
+  }, [project, project?.file_path, project?.name, isDirty]);
 
   return (
     <div className="h-full bg-background text-text-primary flex flex-col">
