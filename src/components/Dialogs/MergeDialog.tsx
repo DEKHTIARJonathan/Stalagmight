@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
-import type { StationRef, ClosureStrategy } from '../../types/project';
+import type { StationRef } from '../../types/project';
 
 export default function MergeDialog() {
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
@@ -13,7 +13,6 @@ export default function MergeDialog() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [closureStrategy, setClosureStrategy] = useState<ClosureStrategy>('ProportionalByLength');
 
   // Get station data
   const stationAData = useMemo(() => {
@@ -95,7 +94,7 @@ export default function MergeDialog() {
     setError(null);
 
     try {
-      const result = await mergeStations(stationA, stationB, closureStrategy);
+      const result = await mergeStations(stationA, stationB, 'KeepRaw');
       if (result.success) {
         clearMergeStations();
         closeDialog();
@@ -174,49 +173,6 @@ export default function MergeDialog() {
             </div>
           </div>
         )}
-
-        {/* Closure strategy selection */}
-        <div className="space-y-2">
-          <p className="text-text-secondary text-sm">How to handle closure error?</p>
-          <div className="space-y-1">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="closureStrategy"
-                checked={closureStrategy === 'ProportionalByLength'}
-                onChange={() => setClosureStrategy('ProportionalByLength')}
-              />
-              <span>Distribute proportionally by shot length</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="closureStrategy"
-                checked={closureStrategy === 'EqualDistribution'}
-                onChange={() => setClosureStrategy('EqualDistribution')}
-              />
-              <span>Distribute equally across all shots</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="closureStrategy"
-                checked={closureStrategy === 'KeepRaw'}
-                onChange={() => setClosureStrategy('KeepRaw')}
-              />
-              <span>Keep raw data (stations won't align perfectly)</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="closureStrategy"
-                checked={closureStrategy === 'ManualAdjustment'}
-                onChange={() => setClosureStrategy('ManualAdjustment')}
-              />
-              <span>Adjust manually later</span>
-            </label>
-          </div>
-        </div>
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">

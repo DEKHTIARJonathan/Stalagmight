@@ -103,11 +103,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   // Project operations
   createProject: async (name: string, location?: string) => {
+    console.log('[projectStore] createProject called:', name);
     set({ isLoading: true, error: null });
     try {
+      console.log('[projectStore] Invoking create_project...');
       const result = await invoke<CommandResult>('create_project', { name, location });
+      console.log('[projectStore] create_project result:', result);
       if (result.success) {
+        console.log('[projectStore] Calling refreshProjectState...');
         await get().refreshProjectState();
+        console.log('[projectStore] refreshProjectState done');
         set({ isDirty: false });
       } else {
         set({ error: result.error ?? 'Failed to create project' });
@@ -119,14 +124,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   openProject: async (path: string) => {
+    console.log('[projectStore] openProject called with path:', path);
     set({ isLoading: true, error: null });
     try {
       const result = await invoke<CommandResult>('open_project', { path });
+      console.log('[projectStore] open_project result:', result);
       if (result.success) {
+        console.log('[projectStore] Calling refreshProjectState');
         await get().refreshProjectState();
+        console.log('[projectStore] refreshProjectState complete, project:', get().project?.name);
         await get().loadRecentProjects();
         set({ isDirty: false });
       } else {
+        console.error('[projectStore] open_project failed:', result.error);
         set({ error: result.error ?? 'Failed to open project' });
       }
       return result;
@@ -136,11 +146,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   saveProject: async (path?: string) => {
+    console.log('[projectStore] saveProject called, current isDirty:', get().isDirty);
     const result = await invoke<CommandResult>('save_project', { path });
+    console.log('[projectStore] save_project result:', result);
     if (result.success) {
-      set({ isDirty: false });
-      // Refresh project state to get updated file_path
+      // Refresh project state to get updated file_path first
+      console.log('[projectStore] Before refresh, isDirty:', get().isDirty);
       await get().refreshProjectState();
+      console.log('[projectStore] After refresh, isDirty:', get().isDirty);
+      // Set isDirty: false AFTER refresh completes to avoid race conditions
+      set({ isDirty: false });
+      console.log('[projectStore] After set false, isDirty:', get().isDirty);
     } else {
       set({ error: result.error ?? 'Failed to save project' });
     }
@@ -157,7 +173,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   refreshProjectState: async () => {
     try {
+      console.log('[projectStore] refreshProjectState: invoking get_project_state...');
       const state = await invoke<ProjectState | null>('get_project_state');
+      console.log('[projectStore] refreshProjectState: got state, sections:', state?.project?.sections?.length);
       if (state) {
         set({
           project: state.project,
@@ -165,7 +183,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
           stats: state.stats,
         });
       }
+      console.log('[projectStore] refreshProjectState: calling refreshUndoState...');
       await get().refreshUndoState();
+      console.log('[projectStore] refreshProjectState: done');
     } catch (e) {
       console.error('Failed to refresh project state:', e);
     }
@@ -182,6 +202,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   // Section operations
   createSection: async (data: SectionData) => {
+    console.log('[projectStore] createSection called:', data.name, 'shots:', data.shots?.length);
     const result = await invoke<CommandResult>('create_section', {
       name: data.name,
       surveyor: data.surveyor,
@@ -189,8 +210,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       color: data.color,
       shots: data.shots,
     });
+    console.log('[projectStore] create_section result:', result);
     if (result.success) {
+      console.log('[projectStore] Refreshing after section create...');
       await get().refreshProjectState();
+      console.log('[projectStore] Refresh done after section create');
       set({ isDirty: true });
     }
     return result;

@@ -1,6 +1,5 @@
 import { type Section } from '../../types/project';
 import { useUIStore } from '../../store/uiStore';
-import { useProjectStore } from '../../store/projectStore';
 
 interface SectionsPanelProps {
   sections: Section[];
@@ -8,7 +7,6 @@ interface SectionsPanelProps {
 
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { selection, setSelection, openDialog } = useUIStore();
-  const { deleteSection } = useProjectStore();
 
   const handleSectionClick = (section: Section) => {
     setSelection({
@@ -21,11 +19,13 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     openDialog('import');
   };
 
-  const handleDeleteSection = async (sectionId: number, e: React.MouseEvent) => {
+  const handleDeleteSection = (sectionId: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm('Delete this section? This cannot be undone.')) {
-      await deleteSection(sectionId);
-    }
+    openDialog('confirm-delete', {
+      type: 'section',
+      sectionId,
+      message: 'Delete this section and all its shots? This cannot be undone.',
+    });
   };
 
   const handleSectionContextMenu = (e: React.MouseEvent, sectionId: number) => {

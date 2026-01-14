@@ -23,6 +23,8 @@ pub struct GeneralConfig {
     pub auto_save: bool,
     pub auto_save_interval_seconds: u32,
     pub recent_projects_max: usize,
+    #[serde(default)]
+    pub recent_projects: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

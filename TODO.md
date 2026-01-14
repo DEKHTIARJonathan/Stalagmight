@@ -18,11 +18,14 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 - [ ] Persist undo stack to SQLite `undo_stack` table (deferred)
 
 ### File Operations ✅
-- [x] NewProjectDialog for creating projects
+- [x] NewProjectDialog for creating projects with name input
 - [x] DmpImportDialog for importing mNemo DMP files with section selection
 - [x] Save/Open dialogs wired to actual file operations
+- [x] Recent projects list in GlobalView (persisted to config)
+- [x] File overwrite warning dialog
+- [x] Safe save with temp file + atomic rename
+- [x] Error notifications for failed operations
 - [ ] Add file path to window title (minor, deferred)
-- [ ] Recent projects list in GlobalView (minor, deferred)
 
 ## Priority 2: Map Interactions ✅ COMPLETE
 
@@ -51,7 +54,7 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 - [x] Create `src/components/Dialogs/MergeDialog.tsx`
 - [x] Show station details and distance/depth difference
 - [x] Loop closure error calculation and display
-- [x] Closure strategy selection (proportional, equal, raw, manual)
+- [ ] Closure strategy selection (deferred - not handling loop closures in v1)
 
 ### ImportDialog Enhancements
 - [ ] Live preview rendering as data is edited
@@ -67,12 +70,12 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 
 ## Priority 4: Loop Closure & Section Positioning
 
-### Section Position Recalculation (Bug 9)
-- [ ] When stations are merged, recalculate section positions
-  - Build a graph of section connections through merges
-  - Pick an anchor section (first section or one with zero datum)
-  - Calculate offsets for connected sections so merged stations share coordinates
-  - Apply offsets to section station coordinates
+### Section Position Recalculation ✅
+- [x] When stations are merged, recalculate section positions
+  - [x] Build a graph of section connections through merges
+  - [x] Pick an anchor section (first section or one with zero datum)
+  - [x] Calculate offsets for connected sections so merged stations share coordinates
+  - [x] Apply offsets to section station coordinates
 - [ ] Visual indicator for merged station connections
 
 ### Loop Closure Error Handling
@@ -128,10 +131,10 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 
 ## Priority 7: Additional Features
 
-### Auto-save
-- [ ] Implement auto-save timer (config exists, not wired up)
-- [ ] Dirty state indicator in UI
-- [ ] Prompt to save on close
+### Auto-save ✅
+- [x] Implement auto-save after modifying operations (config `auto_save` setting)
+- [x] Dirty state indicator in UI (`isDirty` in projectStore)
+- [x] Prompt to save on close (UnsavedChangesDialog)
 
 ### Statistics
 - [ ] Project statistics panel

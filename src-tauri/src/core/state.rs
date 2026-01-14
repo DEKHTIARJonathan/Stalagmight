@@ -29,13 +29,15 @@ impl AppState {
     /// Create a new application state
     pub fn new() -> Result<Self> {
         let config = Config::load().unwrap_or_default();
+        // Load recent projects from config
+        let recent = config.general.recent_projects.clone();
 
         Ok(Self {
             project: Mutex::new(None),
             database: Mutex::new(None),
             undo_stack: Mutex::new(UndoStack::new()),
             config: Mutex::new(config),
-            recent_projects: Mutex::new(Vec::new()),
+            recent_projects: Mutex::new(recent),
         })
     }
 
@@ -125,13 +127,13 @@ impl AppState {
             }
         }
 
-        // Auto-save if enabled
-        if result.success && Self::is_modifying(&cmd) {
-            if let Ok(config) = self.config.lock() {
-                if config.general.auto_save {
-                    let _ = self.save_project(None);
-                }
-            }
+        // Auto-save if enabled - check config first, then release lock before saving
+        let should_auto_save = result.success
+            && Self::is_modifying(&cmd)
+            && self.config.lock().map(|c| c.general.auto_save).unwrap_or(false);
+
+        if should_auto_save {
+            let _ = self.save_project(None);
         }
 
         result
@@ -456,14 +458,20 @@ impl AppState {
     }
 
     fn open_project(&self, path: PathBuf) -> CommandResult {
-        let db = match Database::open(&path) {
+        // Verify file exists before trying to open
+        if !path.exists() {
+            return CommandResult::failure(format!("File not found: {}", path.display()));
+        }
+
+        // Use open_existing which validates the file is a valid CaveChef project
+        let db = match Database::open_existing(&path) {
             Ok(db) => db,
-            Err(e) => return CommandResult::failure(format!("Failed to open database: {}", e)),
+            Err(e) => return CommandResult::failure(format!("{}", e)),
         };
 
         let mut project = match db.load_project() {
             Ok(p) => p,
-            Err(e) => return CommandResult::failure(format!("Failed to load project: {}", e)),
+            Err(e) => return CommandResult::failure(format!("Failed to load project data: {}", e)),
         };
 
         project.file_path = Some(path.clone());
@@ -480,12 +488,17 @@ impl AppState {
             undo_stack.clear();
         }
 
-        // Add to recent projects
+        // Add to recent projects and persist to config
         if let Ok(mut recent) = self.recent_projects.lock() {
             recent.retain(|p| p != &path);
             recent.insert(0, path);
-            if let Ok(config) = self.config.lock() {
+            if let Ok(mut config) = self.config.lock() {
                 recent.truncate(config.general.recent_projects_max);
+                // Update config with recent projects and save
+                config.general.recent_projects = recent.clone();
+                if let Err(e) = config.save() {
+                    tracing::warn!("Failed to save config with recent projects: {}", e);
+                }
             }
         }
 
@@ -504,25 +517,72 @@ impl AppState {
             None => return CommandResult::failure("No project open".to_string()),
         };
 
-        // Determine save path
+        // Determine save path and ensure .cvproj extension
         let save_path = path.or_else(|| project.file_path.clone());
         let save_path = match save_path {
-            Some(p) => p,
+            Some(p) => {
+                // Ensure .cvproj extension
+                if p.extension().map_or(true, |ext| ext != "cvproj") {
+                    p.with_extension("cvproj")
+                } else {
+                    p
+                }
+            }
             None => return CommandResult::failure("No save path specified".to_string()),
         };
 
-        // Update file path
-        project.file_path = Some(save_path.clone());
+        // Create a temporary file path in the same directory (for atomic rename)
+        let temp_path = save_path.with_extension("cvproj.tmp");
+        tracing::info!(final_path = ?save_path, temp_path = ?temp_path, "Starting safe save operation");
 
-        // Save to database
-        let mut db = match Database::open(&save_path) {
+        // Remove any leftover temp file from previous failed saves
+        if temp_path.exists() {
+            let _ = std::fs::remove_file(&temp_path);
+        }
+
+        // Save to temporary file first
+        let mut db = match Database::open(&temp_path) {
             Ok(db) => db,
-            Err(e) => return CommandResult::failure(format!("Failed to open database: {}", e)),
+            Err(e) => {
+                // Clean up temp file on failure
+                let _ = std::fs::remove_file(&temp_path);
+                return CommandResult::failure(format!("Failed to create save file: {}", e));
+            }
         };
 
         if let Err(e) = db.save_project(project) {
+            // Clean up temp file on failure
+            drop(db);
+            let _ = std::fs::remove_file(&temp_path);
+            tracing::error!(error = %e, "Save failed, temp file cleaned up");
             return CommandResult::failure(format!("Failed to save project: {}", e));
         }
+
+        // Close the database before renaming
+        drop(db);
+
+        // Atomically rename temp file to final destination
+        // This is safe: if rename fails, original file is untouched
+        if let Err(e) = std::fs::rename(&temp_path, &save_path) {
+            let _ = std::fs::remove_file(&temp_path);
+            tracing::error!(error = %e, "Failed to rename temp file to final destination");
+            return CommandResult::failure(format!("Failed to finalize save: {}", e));
+        }
+
+        // Reopen the database at the final path
+        let db = match Database::open(&save_path) {
+            Ok(db) => db,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to reopen saved database (file was saved successfully)");
+                // File was saved, just can't reopen - not a critical failure
+                project.file_path = Some(save_path.clone());
+                drop(proj_guard);
+                return CommandResult::success();
+            }
+        };
+
+        // Update file path after successful save
+        project.file_path = Some(save_path.clone());
 
         // Update database handle
         drop(proj_guard);
@@ -530,24 +590,47 @@ impl AppState {
             *database = Some(db);
         }
 
-        tracing::info!(path = ?save_path, "Project saved");
+        // Add to recent projects and persist to config
+        if let Ok(mut recent) = self.recent_projects.lock() {
+            recent.retain(|p| p != &save_path);
+            recent.insert(0, save_path.clone());
+            if let Ok(mut config) = self.config.lock() {
+                recent.truncate(config.general.recent_projects_max);
+                config.general.recent_projects = recent.clone();
+                if let Err(e) = config.save() {
+                    tracing::warn!("Failed to save config with recent projects: {}", e);
+                }
+            }
+        }
+
+        tracing::info!(path = ?save_path, "Project saved successfully");
         CommandResult::success()
     }
 
     fn close_project(&self) -> CommandResult {
+        tracing::debug!("close_project: acquiring project lock");
         if let Ok(mut proj) = self.project.lock() {
+            tracing::debug!("close_project: dropping project");
             *proj = None;
+            tracing::debug!("close_project: project dropped");
         }
 
+        tracing::debug!("close_project: acquiring database lock");
         if let Ok(mut db) = self.database.lock() {
+            tracing::debug!("close_project: dropping database");
             *db = None;
+            tracing::debug!("close_project: database dropped");
         }
 
+        tracing::debug!("close_project: acquiring undo_stack lock");
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
+            tracing::debug!("close_project: clearing undo stack");
             undo_stack.clear();
+            tracing::debug!("close_project: undo stack cleared");
         }
 
         tracing::info!("Project closed");
+        tracing::debug!("close_project: returning success");
         CommandResult::success()
     }
 
@@ -745,33 +828,22 @@ impl AppState {
             None => return CommandResult::failure("No project open".to_string()),
         };
 
-        // Check specific error conditions for better error messages
-        if !project.station_exists(station_a) {
-            return CommandResult::failure(format!(
-                "Station A ({}, {}) does not exist",
-                station_a.section_id, station_a.station_index
-            ));
-        }
-        if !project.station_exists(station_b) {
-            return CommandResult::failure(format!(
-                "Station B ({}, {}) does not exist",
-                station_b.section_id, station_b.station_index
-            ));
-        }
-        if project.are_stations_merged(station_a, station_b) {
-            return CommandResult::failure("These stations are already merged".to_string());
-        }
+        // Check same section (not allowed)
         if station_a.section_id == station_b.section_id {
             return CommandResult::failure(
                 "Cannot merge stations from the same section".to_string(),
             );
         }
 
-        if project.merge_stations(station_a, station_b, strategy) {
-            tracing::info!(?station_a, ?station_b, "Stations merged");
-            CommandResult::success()
-        } else {
-            CommandResult::failure("Failed to merge stations (unknown error)".to_string())
+        match project.merge_stations(station_a, station_b, strategy) {
+            Ok(_) => {
+                tracing::info!(?station_a, ?station_b, "Stations merged");
+                CommandResult::success()
+            }
+            Err(e) => {
+                tracing::warn!(?station_a, ?station_b, error = %e, "Failed to merge stations");
+                CommandResult::failure(e)
+            }
         }
     }
 
@@ -813,11 +885,15 @@ impl AppState {
             None => return CommandResult::failure("No project open".to_string()),
         };
 
-        if project.set_zero_datum(station_ref, gps) {
-            tracing::info!(?station_ref, "Zero datum set");
-            CommandResult::success()
-        } else {
-            CommandResult::failure("Failed to set zero datum".to_string())
+        match project.set_zero_datum(station_ref, gps) {
+            Ok(_) => {
+                tracing::info!(?station_ref, "Zero datum set");
+                CommandResult::success()
+            }
+            Err(e) => {
+                tracing::warn!(?station_ref, error = %e, "Failed to set zero datum");
+                CommandResult::failure(e)
+            }
         }
     }
 
@@ -1060,16 +1136,11 @@ impl AppState {
         let result = self.execute_without_undo(entry.command.clone());
 
         // Push back to undo stack if successful
+        // Important: Use the original entry with its original undo_data, not regenerated data
+        // This ensures undo after redo works correctly
         if result.success {
-            // Re-generate undo data for the command
-            let undo_data = self.generate_undo_data(&entry.command);
-            let final_undo_data = self.finalize_undo_data(&entry.command, undo_data);
-
             if let Ok(mut stack) = self.undo_stack.lock() {
-                stack.push_undo(UndoEntry {
-                    command: entry.command,
-                    undo_data: final_undo_data,
-                });
+                stack.push_undo(entry);
             }
             tracing::info!("Redo performed");
         }
@@ -1218,7 +1289,8 @@ impl AppState {
         recent
             .iter()
             .filter_map(|path| {
-                if let Ok(db) = Database::open(path) {
+                // Use open_existing to avoid creating files for missing projects
+                if let Ok(db) = Database::open_existing(path) {
                     if let Ok(mut project) = db.load_project() {
                         project.file_path = Some(path.clone());
                         return project.metadata();

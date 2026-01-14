@@ -28,6 +28,7 @@ export default function MapCanvas() {
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
+  const [isHoveringFeature, setIsHoveringFeature] = useState(false);
 
   const { project, stations, config, moveSection, moveStation } = useProjectStore();
   const {
@@ -79,6 +80,7 @@ export default function MapCanvas() {
       setTimeout(() => setMeasureResult(null), 5000);
     },
     onMoveDragStart: handleMoveDragStart,
+    onFeatureHover: setIsHoveringFeature,
   });
 
   // Box select handlers
@@ -89,6 +91,10 @@ export default function MapCanvas() {
 
       // Only start box select on left click and not on a feature
       if (e.button !== 0) return;
+
+      // Don't start box select when Ctrl is held (Ctrl+drag is for panning)
+      // Use e.ctrlKey directly instead of state to avoid timing issues
+      if (e.ctrlKey) return;
 
       const rect = mapContainer.current.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -245,6 +251,12 @@ export default function MapCanvas() {
       attributionControl: false,
     });
 
+    // Disable rotation (Ctrl+drag rotates by default, we want Ctrl+drag to pan)
+    map.current.dragRotate.disable();
+    map.current.touchPitch.disable();
+    // Disable box zoom (Ctrl+drag draws selection box by default, we want Ctrl+drag to pan)
+    map.current.boxZoom.disable();
+
     // Add navigation controls
     map.current.addControl(
       new maplibregl.NavigationControl({ showCompass: false }),
@@ -330,13 +342,17 @@ export default function MapCanvas() {
       move_station: 'move',
     };
 
-    // In select mode with Ctrl held, show grab cursor for panning
-    if (activeTool === 'select' && ctrlHeld) {
-      map.current.getCanvas().style.cursor = 'grab';
-    } else {
-      map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
+    // If hovering over a feature, SurveyLayer sets cursor to 'pointer'
+    // Otherwise, set cursor based on active tool
+    if (!isHoveringFeature) {
+      // In select mode with Ctrl held, show grab cursor for panning
+      if (activeTool === 'select' && ctrlHeld) {
+        map.current.getCanvas().style.cursor = 'grab';
+      } else {
+        map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
+      }
     }
-  }, [activeTool, ctrlHeld]);
+  }, [activeTool, ctrlHeld, isHoveringFeature]);
 
   // Disable map drag pan for tools that need custom interaction
   // Exception: In select mode, Ctrl+drag enables panning
@@ -357,20 +373,34 @@ export default function MapCanvas() {
   }, [activeTool, ctrlHeld]);
 
   // Track Ctrl key for pan-in-select-mode feature
+  // IMPORTANT: Enable dragPan directly in the handler, not via useEffect, to avoid timing issues
   useEffect(() => {
+    const noPanTools = ['select', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station'];
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Control' && !e.repeat) {
         setCtrlHeld(true);
+        // Enable dragPan immediately when Ctrl is pressed (for select mode)
+        if (map.current && activeTool === 'select') {
+          map.current.dragPan.enable();
+        }
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Control') {
         setCtrlHeld(false);
+        // Disable dragPan when Ctrl is released (for select mode)
+        if (map.current && noPanTools.includes(activeTool)) {
+          map.current.dragPan.disable();
+        }
       }
     };
     // Also handle window blur (Ctrl held, switch windows, release outside)
     const handleBlur = () => {
       setCtrlHeld(false);
+      if (map.current && noPanTools.includes(activeTool)) {
+        map.current.dragPan.disable();
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -382,7 +412,7 @@ export default function MapCanvas() {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
     };
-  }, []);
+  }, [activeTool]);
 
   // Handle satellite toggle
   useEffect(() => {
@@ -484,6 +514,7 @@ export default function MapCanvas() {
     }
   }, [moveDrag, boxSelect.start, handleMoveDragEnd, handleBoxSelectEnd]);
 
+  // Mouse handlers always attached - they check e.ctrlKey internally to decide behavior
   return (
     <div
       className="relative w-full h-full"

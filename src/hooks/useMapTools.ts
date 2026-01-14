@@ -13,6 +13,7 @@ interface MoveDragStartData {
 interface MapToolsOptions {
   onMeasureComplete?: (distance: number, depthDiff: number) => void;
   onMoveDragStart?: (data: MoveDragStartData) => void;
+  onFeatureHover?: (isHovering: boolean) => void;
 }
 
 export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks {
@@ -279,6 +280,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     onEmptyClick: handleEmptyClick,
     onStationHover: handleStationHover,
     onShotHover: handleShotHover,
+    onFeatureHover: options.onFeatureHover,
     onContextMenu: handleContextMenu,
   };
 }

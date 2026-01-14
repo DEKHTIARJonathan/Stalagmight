@@ -117,7 +117,21 @@ Logs are written to `~/.local/share/cavechef/logs/` using the `tracing` crate. L
 ## Known Limitations (v1.0)
 
 See `TODO.md` for full list. Key items:
-- DMP parser is a stub (returns empty data)
-- Undo/redo is basic (no state snapshots)
-- Map tools are placeholders
+- Undo/redo stack not persisted across sessions
 - No offline tile caching
+- Loop closure error distribution not fully implemented
+
+## Recent Changes
+
+### Working Features
+- **DMP Parser**: Full implementation supporting versions 2-5 (ported from pytool_mnemo_lib)
+- **Auto-save**: Saves after each modifying operation when enabled in config
+- **Recent Projects**: Persisted to config file, displayed on start page
+- **Safe Save**: Uses temp file + atomic rename to prevent data loss
+- **Station Merges**: Properly moves sections so merged stations share coordinates
+- **File Operations**: New project dialog, overwrite warnings, error notifications
+
+### Architecture Notes
+- Config file at `~/.config/cavechef/config.toml` stores recent projects
+- Auto-save triggers after modifying commands (create/update/delete section/shot, merge, etc.)
+- Mutex lock ordering is important - avoid holding locks while calling other methods that acquire locks
