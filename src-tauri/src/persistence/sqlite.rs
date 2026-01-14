@@ -581,6 +581,23 @@ impl Database {
         )?;
         Ok(())
     }
+
+    /// Save undo stack (clear existing and save new entries)
+    pub fn save_undo_stack(&self, entries: Vec<(String, String)>) -> Result<()> {
+        // Clear existing
+        self.conn.execute("DELETE FROM undo_stack", [])?;
+
+        // Save new entries
+        for (seq, (command_json, undo_data_json)) in entries.iter().enumerate() {
+            self.conn.execute(
+                "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) VALUES (?1, ?2, ?3, ?4)",
+                params![seq as i64, command_json, undo_data_json, Utc::now().to_rfc3339()],
+            )?;
+        }
+
+        tracing::info!(count = entries.len(), "Saved undo stack to database");
+        Ok(())
+    }
 }
 
 #[cfg(test)]

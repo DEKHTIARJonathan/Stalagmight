@@ -189,4 +189,55 @@ impl UndoStack {
     pub fn peek_undo_data(&self) -> Option<&UndoData> {
         self.undo_stack.last().map(|e| &e.undo_data)
     }
+
+    /// Get undo entries to persist (last N entries up to persist_limit)
+    pub fn entries_to_persist(&self, persist_limit: usize) -> impl Iterator<Item = &UndoEntry> {
+        let skip = if self.undo_stack.len() > persist_limit {
+            self.undo_stack.len() - persist_limit
+        } else {
+            0
+        };
+        self.undo_stack.iter().skip(skip)
+    }
+
+    /// Serialize an entry to JSON for persistence
+    pub fn serialize_entry(entry: &UndoEntry) -> Option<(String, String)> {
+        let command_json = serde_json::to_string(&entry.command).ok()?;
+        let undo_data_json = serde_json::to_string(&entry.undo_data).ok()?;
+        Some((command_json, undo_data_json))
+    }
+
+    /// Deserialize an entry from JSON
+    pub fn deserialize_entry(command_json: &str, undo_data_json: &str) -> Option<UndoEntry> {
+        let command: Command = serde_json::from_str(command_json).ok()?;
+        let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
+        Some(UndoEntry { command, undo_data })
+    }
+
+    /// Load entries from persisted data
+    pub fn load_from_persisted(&mut self, entries: Vec<(String, String)>) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+
+        for (command_json, undo_data_json) in entries {
+            if let Some(entry) = Self::deserialize_entry(&command_json, &undo_data_json) {
+                self.undo_stack.push(entry);
+            }
+        }
+
+        // Trim to history limit
+        while self.undo_stack.len() > self.history_limit {
+            self.undo_stack.remove(0);
+        }
+    }
+
+    /// Get the number of entries in the undo stack
+    pub fn len(&self) -> usize {
+        self.undo_stack.len()
+    }
+
+    /// Check if the undo stack is empty
+    pub fn is_empty(&self) -> bool {
+        self.undo_stack.is_empty()
+    }
 }

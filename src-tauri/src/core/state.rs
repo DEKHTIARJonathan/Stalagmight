@@ -481,12 +481,25 @@ impl AppState {
             *proj = Some(project);
         }
 
+        // Load undo stack from database before replacing database reference
+        let loaded_undo = db.load_undo_stack().unwrap_or_default();
+        let undo_entries: Vec<_> = loaded_undo
+            .into_iter()
+            .map(|(_, cmd, undo)| (cmd, undo))
+            .collect();
+
         if let Ok(mut database) = self.database.lock() {
             *database = Some(db);
         }
 
+        // Restore persisted undo stack
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.clear();
+            if undo_entries.is_empty() {
+                undo_stack.clear();
+            } else {
+                undo_stack.load_from_persisted(undo_entries);
+                tracing::info!(count = undo_stack.len(), "Restored undo stack from database");
+            }
         }
 
         // Add to recent projects and persist to config
@@ -581,6 +594,24 @@ impl AppState {
                 return CommandResult::success();
             }
         };
+
+        // Persist undo stack to database
+        let persist_limit = self
+            .config
+            .lock()
+            .map(|c| c.general.undo_persist_limit)
+            .unwrap_or(20);
+
+        if let Ok(undo_stack) = self.undo_stack.lock() {
+            let entries: Vec<_> = undo_stack
+                .entries_to_persist(persist_limit)
+                .filter_map(|e| UndoStack::serialize_entry(e))
+                .collect();
+
+            if let Err(e) = db.save_undo_stack(entries) {
+                tracing::warn!(error = %e, "Failed to persist undo stack (project was saved)");
+            }
+        }
 
         // Update file path after successful save
         project.file_path = Some(save_path.clone());
