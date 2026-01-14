@@ -4,8 +4,7 @@ use rusqlite::{params, Connection};
 use std::path::Path;
 
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, Project, Section, SectionData, Shot, ShotData, StationMerge,
-    StationRef, ZeroDatum,
+    GpsCoordinates, Project, Section, SectionData, Shot, StationMerge, StationRef, ZeroDatum,
 };
 
 /// Schema version for migrations

@@ -28,7 +28,7 @@ pub struct Project {
     #[serde(skip)]
     pub file_path: Option<PathBuf>,
     /// Next section ID to assign
-    next_section_id: SectionId,
+    pub next_section_id: SectionId,
 }
 
 /// Project metadata for listing

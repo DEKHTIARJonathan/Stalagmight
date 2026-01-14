@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use tauri::State;
 
 use crate::core::AppState;
-use crate::export::{ExportImageOptions, ExportOptions};
+use crate::export::ExportImageOptions;
 
 /// Export project data to CSV
 #[tauri::command]
