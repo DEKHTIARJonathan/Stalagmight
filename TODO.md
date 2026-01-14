@@ -108,8 +108,9 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 - [x] Ctrl+Z/Y for undo/redo
 - [x] Ctrl+S to save
 - [x] Ctrl+1/2/3 to toggle panels
-- [ ] Add: Ctrl+I (Import), Ctrl+E (Export), Ctrl+0 (Fit to View)
-- [ ] Ctrl+A (Select All)
+- [x] Ctrl+I (Import), Ctrl+E (Export)
+- [x] Ctrl+0 (Fit to View)
+- [x] Ctrl+A (Select All)
 
 ### Validation Warnings
 - [ ] Display validation warnings in UI (currently only logged)

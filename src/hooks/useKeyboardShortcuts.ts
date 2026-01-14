@@ -1,7 +1,7 @@
 import { useEffect, useCallback } from 'react';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
-import type { ToolType } from '../store/uiStore';
+import type { ToolType, Selection } from '../store/uiStore';
 
 interface ShortcutConfig {
   [key: string]: ToolType | 'undo' | 'redo' | 'save' | 'toggle_sections' | 'toggle_detail' | 'toggle_data';
@@ -26,13 +26,15 @@ export function useKeyboardShortcuts() {
     toggleDetailPanel,
     toggleDataTable,
     clearSelection,
+    selectAll,
+    triggerFitToBounds,
     selection,
     openDialog,
     clearMergeStations,
     clearMeasure,
     setDrawFromStation,
   } = useUIStore();
-  const { undo, redo, saveProject, project } = useProjectStore();
+  const { undo, redo, saveProject, project, stations } = useProjectStore();
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
@@ -83,10 +85,28 @@ export function useKeyboardShortcuts() {
             toggleDataTable();
             return;
           case 'a':
-            // TODO: Select all
+            event.preventDefault();
+            if (stations.length > 0) {
+              const allStations: Selection[] = stations.map((station) => ({
+                type: 'station' as const,
+                stationRef: station.station_ref,
+              }));
+              selectAll(allStations);
+            }
             return;
           case '0':
-            // TODO: Fit to view
+            event.preventDefault();
+            triggerFitToBounds();
+            return;
+          case 'i':
+            event.preventDefault();
+            openDialog('import-dmp');
+            return;
+          case 'e':
+            event.preventDefault();
+            if (project) {
+              openDialog('export');
+            }
             return;
         }
       }
@@ -140,7 +160,7 @@ export function useKeyboardShortcuts() {
         setActiveTool(toolShortcut as ToolType);
       }
     },
-    [setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection, clearMergeStations, clearMeasure, setDrawFromStation, selection, openDialog, undo, redo, saveProject, project]
+    [setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection, selectAll, triggerFitToBounds, clearMergeStations, clearMeasure, setDrawFromStation, selection, openDialog, undo, redo, saveProject, project, stations]
   );
 
   useEffect(() => {
