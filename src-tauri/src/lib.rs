@@ -66,6 +66,8 @@ pub fn run() {
             commands::config::update_panel_sizes,
             // Validation
             commands::validation::get_project_warnings,
+            commands::validation::resolve_warning,
+            commands::validation::unresolve_warning,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

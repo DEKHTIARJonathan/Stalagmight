@@ -19,6 +19,7 @@ export interface ProjectWarning {
   code: string;
   message: string;
   severity: 'warning' | 'error';
+  is_resolved: boolean;
 }
 
 // DMP import types

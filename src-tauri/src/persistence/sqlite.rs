@@ -216,6 +216,17 @@ impl Database {
                 value TEXT NOT NULL
             );
 
+            -- Resolved warnings (user acknowledged)
+            CREATE TABLE IF NOT EXISTS resolved_warnings (
+                id INTEGER PRIMARY KEY,
+                section_id INTEGER NOT NULL,
+                shot_id INTEGER NOT NULL,
+                warning_code TEXT NOT NULL,
+                resolved_at TEXT NOT NULL,
+                resolved_comment TEXT,
+                UNIQUE(section_id, shot_id, warning_code)
+            );
+
             -- Indexes
             CREATE INDEX IF NOT EXISTS idx_shots_section ON shots(section_id);
             CREATE INDEX IF NOT EXISTS idx_undo_sequence ON undo_stack(sequence);
@@ -675,6 +686,82 @@ impl Database {
 
         Ok(closures)
     }
+
+    /// Load resolved warnings from database
+    pub fn load_resolved_warnings(&self) -> Result<Vec<ResolvedWarning>> {
+        let mut resolved = Vec::new();
+
+        // Check if table exists (for backwards compatibility with older files)
+        let table_exists: bool = self.conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='resolved_warnings'",
+            [],
+            |row| row.get::<_, i64>(0),
+        ).map(|c| c > 0).unwrap_or(false);
+
+        if !table_exists {
+            return Ok(resolved);
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT section_id, shot_id, warning_code, resolved_at, resolved_comment \
+             FROM resolved_warnings",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let resolved_at_str: String = row.get(3)?;
+            let resolved_at = chrono::DateTime::parse_from_rfc3339(&resolved_at_str)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+            Ok(ResolvedWarning {
+                section_id: row.get(0)?,
+                shot_id: row.get(1)?,
+                warning_code: row.get(2)?,
+                resolved_at,
+                resolved_comment: row.get(4)?,
+            })
+        })?;
+
+        for row in rows {
+            resolved.push(row?);
+        }
+
+        Ok(resolved)
+    }
+
+    /// Save a resolved warning to database
+    pub fn save_resolved_warning(&self, warning: &ResolvedWarning) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                warning.section_id,
+                warning.shot_id,
+                warning.warning_code,
+                warning.resolved_at.to_rfc3339(),
+                warning.resolved_comment,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a resolved warning from database
+    pub fn delete_resolved_warning(&self, section_id: u32, shot_id: u32, warning_code: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM resolved_warnings WHERE section_id = ?1 AND shot_id = ?2 AND warning_code = ?3",
+            params![section_id, shot_id, warning_code],
+        )?;
+        Ok(())
+    }
+}
+
+/// Resolved warning record
+#[derive(Debug, Clone)]
+pub struct ResolvedWarning {
+    pub section_id: u32,
+    pub shot_id: u32,
+    pub warning_code: String,
+    pub resolved_at: chrono::DateTime<Utc>,
+    pub resolved_comment: Option<String>,
 }
 
 #[cfg(test)]
