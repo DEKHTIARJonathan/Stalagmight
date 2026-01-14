@@ -4,8 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::{
-    ClosureStrategy, Coordinates, GpsCoordinates, Section, SectionData, SectionId, SectionUpdates,
-    Shot, ShotData, ShotId, ShotUpdates, Station, StationMerge, StationRef, ZeroDatum,
+    ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure, Section, SectionData, SectionId,
+    SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station, StationMerge, StationRef,
+    ZeroDatum,
 };
 
 /// A complete cave survey project
@@ -25,6 +26,9 @@ pub struct Project {
     pub station_merges: Vec<StationMerge>,
     /// Zero datums
     pub zero_datums: Vec<ZeroDatum>,
+    /// Detected loop closures
+    #[serde(default)]
+    pub loop_closures: Vec<LoopClosure>,
     /// File path if saved (None for new unsaved projects)
     pub file_path: Option<PathBuf>,
     /// Next section ID to assign
@@ -69,6 +73,7 @@ impl Project {
             sections: Vec::new(),
             station_merges: Vec::new(),
             zero_datums: Vec::new(),
+            loop_closures: Vec::new(),
             file_path: None,
             next_section_id: 0,
             section_offsets: HashMap::new(),
@@ -238,6 +243,81 @@ impl Project {
         Some(coords)
     }
 
+    /// Calculate the path length between two stations through the survey
+    /// This finds the shortest path through shots and existing merges
+    fn calculate_path_length_between(&self, station_a: StationRef, station_b: StationRef) -> f64 {
+        // Use BFS to find path between stations
+        use std::collections::VecDeque;
+
+        // Node in our search: (section_id, station_index, accumulated_length)
+        let mut queue: VecDeque<(SectionId, u32, f64)> = VecDeque::new();
+        let mut visited: HashSet<(SectionId, u32)> = HashSet::new();
+
+        queue.push_back((station_a.section_id, station_a.station_index, 0.0));
+        visited.insert((station_a.section_id, station_a.station_index));
+
+        while let Some((section_id, station_index, path_len)) = queue.pop_front() {
+            // Check if we reached the destination
+            if section_id == station_b.section_id && station_index == station_b.station_index {
+                return path_len;
+            }
+
+            let section = match self.sections.iter().find(|s| s.id == section_id) {
+                Some(s) => s,
+                None => continue,
+            };
+
+            // Move to previous station in section (if exists)
+            if station_index > 0 {
+                let prev_index = station_index - 1;
+                let key = (section_id, prev_index);
+                if !visited.contains(&key) {
+                    let shot_len = section.shots.get(prev_index as usize).map(|s| s.length).unwrap_or(0.0);
+                    visited.insert(key);
+                    queue.push_back((section_id, prev_index, path_len + shot_len));
+                }
+            }
+
+            // Move to next station in section (if exists)
+            if (station_index as usize) < section.shots.len() {
+                let next_index = station_index + 1;
+                let key = (section_id, next_index);
+                if !visited.contains(&key) {
+                    let shot_len = section.shots.get(station_index as usize).map(|s| s.length).unwrap_or(0.0);
+                    visited.insert(key);
+                    queue.push_back((section_id, next_index, path_len + shot_len));
+                }
+            }
+
+            // Follow merges to other sections
+            for merge in &self.station_merges {
+                let current_ref = StationRef::new(section_id, station_index);
+                if merge.station_a == current_ref {
+                    let key = (merge.station_b.section_id, merge.station_b.station_index);
+                    if !visited.contains(&key) {
+                        visited.insert(key);
+                        queue.push_back((merge.station_b.section_id, merge.station_b.station_index, path_len));
+                    }
+                } else if merge.station_b == current_ref {
+                    let key = (merge.station_a.section_id, merge.station_a.station_index);
+                    if !visited.contains(&key) {
+                        visited.insert(key);
+                        queue.push_back((merge.station_a.section_id, merge.station_a.station_index, path_len));
+                    }
+                }
+            }
+        }
+
+        // No path found (shouldn't happen if sections are connected)
+        // Fall back to sum of all connected section lengths
+        let connected = self.get_connected_section_ids(station_a.section_id);
+        connected.iter()
+            .filter_map(|sid| self.sections.iter().find(|s| s.id == *sid))
+            .flat_map(|s| s.shots.iter())
+            .map(|shot| shot.length)
+            .sum()
+    }
+
     /// Merge two stations
     /// Returns Err if validation fails, Ok(true) on success
     pub fn merge_stations(
@@ -256,10 +336,50 @@ impl Project {
             return Err("These stations are already merged".to_string());
         }
 
-        // Check if already connected (same section group)
+        // Check if already connected (same section group) - this creates a loop closure
         let connected_a = self.get_connected_section_ids(station_a.section_id);
         if connected_a.contains(&station_b.section_id) {
-            return Err("These sections are already connected. Use Closure to handle loops.".to_string());
+            // This merge creates a loop closure - record it but don't move sections
+            let coords_a = self.compute_station_raw_coords(station_a)
+                .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
+            let coords_b = self.compute_station_raw_coords(station_b)
+                .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
+
+            // Calculate misclosure
+            let horizontal_misclosure = coords_a.horizontal_distance_to(&coords_b);
+            let vertical_misclosure = (coords_a.z - coords_b.z).abs();
+            let misclosure_distance = coords_a.distance_to(&coords_b);
+
+            // Calculate path length (simplified: sum of all shot lengths in connected sections)
+            let path_length = self.calculate_path_length_between(station_a, station_b);
+
+            // Calculate error percentage
+            let error_percentage = if path_length > 0.0 {
+                (misclosure_distance / path_length) * 100.0
+            } else {
+                0.0
+            };
+
+            // Record the loop closure
+            self.loop_closures.push(LoopClosure {
+                station_a,
+                station_b,
+                path_length,
+                misclosure_distance,
+                error_percentage,
+                horizontal_misclosure,
+                vertical_misclosure,
+            });
+
+            // Record the merge (but don't move sections)
+            self.station_merges.push(StationMerge {
+                station_a,
+                station_b,
+                merged_at: Utc::now(),
+            });
+
+            self.touch();
+            return Ok(true);
         }
 
         // Check zero datum status
@@ -542,8 +662,8 @@ impl Project {
         // Station count = shots + 1 per section (first station)
         let station_count = shot_count + self.sections.len();
 
-        // Loop count = number of station merges (simplified)
-        let loop_count = self.station_merges.len();
+        // Loop count = number of detected loop closures
+        let loop_count = self.loop_closures.len();
 
         ProjectStats {
             section_count: self.sections.len(),
