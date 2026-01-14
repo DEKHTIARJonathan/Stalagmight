@@ -29,6 +29,7 @@ export default class SurveyLayer {
   private shotsLayerId = 'survey-shots';
   private stationsLayerId = 'survey-stations';
   private labelsLayerId = 'survey-labels';
+  private shotLabelsLayerId = 'survey-shot-labels';
   private mergesLayerId = 'survey-merges';
   private loopClosuresLayerId = 'survey-loop-closures';
   private callbacks: SurveyLayerCallbacks;
@@ -82,6 +83,15 @@ export default class SurveyLayer {
 
     // Loop closures line source
     this.map.addSource(this.sourceId + '-loop-closures', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    });
+
+    // Shot labels point source (midpoint of each shot)
+    this.map.addSource(this.sourceId + '-shot-labels', {
       type: 'geojson',
       data: {
         type: 'FeatureCollection',
@@ -154,9 +164,55 @@ export default class SurveyLayer {
       },
     });
 
-    // Labels layer disabled - requires glyphs URL in map style
-    // Zero datum stations are shown as larger gold circles instead
-    // TODO: Re-enable when glyphs are configured in the map style
+    // Shot data labels layer - shows azimuth, length, depth at shot midpoint
+    // Visibility controlled by showShotLabels toggle and zoom-based density
+    this.map.addLayer({
+      id: this.shotLabelsLayerId,
+      type: 'symbol',
+      source: this.sourceId + '-shot-labels',
+      layout: {
+        'text-field': ['get', 'label'],
+        'text-font': ['Open Sans Regular'],
+        'text-size': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          14, 9,
+          18, 12,
+        ],
+        'text-offset': [0, 0.5],
+        'text-anchor': 'top',
+        // Progressive density: hide labels at low zoom
+        'text-allow-overlap': false,
+        'visibility': 'none', // Start hidden, controlled by setShowShotLabels
+      },
+      paint: {
+        'text-color': '#ffffff',
+        'text-halo-color': '#000000',
+        'text-halo-width': 1.5,
+        'text-opacity': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          14, 0.7,
+          18, 1,
+        ],
+      },
+      filter: [
+        'case',
+        // At zoom < 14: show nothing (filter all)
+        ['<', ['zoom'], 14],
+        false,
+        // At zoom 14-16: show every 5th label (index % 5 == 0)
+        ['all', ['>=', ['zoom'], 14], ['<', ['zoom'], 16]],
+        ['==', ['%', ['get', 'index'], 5], 0],
+        // At zoom 16-18: show every 2nd label
+        ['all', ['>=', ['zoom'], 16], ['<', ['zoom'], 18]],
+        ['==', ['%', ['get', 'index'], 2], 0],
+        // At zoom >= 18: show all
+        true,
+      ],
+    });
 
   }
 
@@ -335,9 +391,20 @@ export default class SurveyLayer {
     this.updateVisualState();
   }
 
+  // Control shot data labels visibility
+  setShowShotLabels(show: boolean) {
+    this.map.setLayoutProperty(
+      this.shotLabelsLayerId,
+      'visibility',
+      show ? 'visible' : 'none'
+    );
+  }
+
   update(sections: Section[], stations: Station[], stationMerges?: StationMerge[], loopClosures?: LoopClosure[]) {
-    // Build shot features
+    // Build shot features and shot label features
     const shotFeatures: GeoJSON.Feature[] = [];
+    const shotLabelFeatures: GeoJSON.Feature[] = [];
+    let globalShotIndex = 0;
 
     console.log('[SurveyLayer] update called', { sectionsCount: sections.length, stationsCount: stations.length, mergesCount: stationMerges?.length ?? 0, loopClosuresCount: loopClosures?.length ?? 0 });
 
@@ -376,6 +443,30 @@ export default class SurveyLayer {
               azimuth: shot.azimuth_in,
             },
           });
+
+          // Generate shot label at midpoint
+          const midX = (fromStation.coordinates.x + toStation.coordinates.x) / 2;
+          const midY = (fromStation.coordinates.y + toStation.coordinates.y) / 2;
+          const avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
+
+          // Format: "45° 3.2m -12.5m" (azimuth, length, depth)
+          const label = `${shot.azimuth_in.toFixed(0)}° ${shot.length.toFixed(1)}m ${avgDepth.toFixed(1)}m`;
+
+          shotLabelFeatures.push({
+            type: 'Feature',
+            geometry: {
+              type: 'Point',
+              coordinates: metersToMapCoords(midX, midY),
+            },
+            properties: {
+              label,
+              index: globalShotIndex,
+              sectionId: section.id,
+              shotId: shot.id,
+            },
+          });
+
+          globalShotIndex++;
         }
       }
     }
@@ -464,6 +555,15 @@ export default class SurveyLayer {
       (mergesSource as maplibregl.GeoJSONSource).setData({
         type: 'FeatureCollection',
         features: mergeFeatures,
+      });
+    }
+
+    // Update shot labels source
+    const shotLabelsSource = this.map.getSource(this.sourceId + '-shot-labels');
+    if (shotLabelsSource && 'setData' in shotLabelsSource) {
+      (shotLabelsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: shotLabelFeatures,
       });
     }
 

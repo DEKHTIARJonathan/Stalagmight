@@ -38,6 +38,7 @@ export default function MapCanvas() {
     activeTool,
     showGrid,
     showSatellite,
+    showShotData,
     selection,
     mergeStationA,
     measureStart,
@@ -301,6 +302,8 @@ export default function MapCanvas() {
       container: mapContainer.current,
       style: {
         version: 8,
+        // Use OpenMapTiles fonts for text labels
+        glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
         sources: {},
         layers: [
           {
@@ -397,6 +400,12 @@ export default function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setSnappedStation(snappedStation);
   }, [snappedStation]);
+
+  // Sync shot data labels visibility with SurveyLayer
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setShowShotLabels(showShotData);
+  }, [showShotData, mapLoaded]);
 
   // Update cursor based on tool (and Ctrl state for select mode)
   useEffect(() => {
