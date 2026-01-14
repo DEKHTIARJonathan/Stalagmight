@@ -28,7 +28,7 @@ cavechef/
 │   │   ├── commands/             # Tauri IPC command handlers
 │   │   ├── core/                 # Business logic (command, state, undo)
 │   │   ├── models/               # Data structures
-│   │   ├── parsers/              # File format parsers (DMP stub)
+│   │   ├── parsers/              # DMP file parser (versions 2-5)
 │   │   ├── persistence/          # SQLite operations
 │   │   ├── export/               # CSV, JSON, image export
 │   │   ├── config/               # Configuration with defaults
@@ -43,7 +43,7 @@ cavechef/
 │   │   ├── GlobalView/           # Landing/overview view
 │   │   ├── SingleSystemView/     # Main editing view
 │   │   ├── Map/                  # MapLibre integration
-│   │   ├── Dialogs/              # Import, Export dialogs
+│   │   ├── Dialogs/              # All dialog components
 │   │   └── common/               # Button, Panel, Table
 │   ├── store/                    # Zustand stores
 │   ├── hooks/                    # Custom React hooks
@@ -87,7 +87,7 @@ User Action → Zustand Store → Tauri IPC → Rust Command Executor
 All persistent operations go through the Rust `Command` enum in `src-tauri/src/core/command.rs`. The `AppState` in `state.rs` executes commands and manages undo/redo.
 
 ### Data Model
-- **Project**: Contains sections, station merges, zero datums
+- **Project**: Contains sections, station merges, zero datums, section offsets
 - **Section**: Group of shots with metadata (name, surveyor, date, color)
 - **Shot**: Single measurement (azimuth, length, depth, LRUD)
 - **Station**: Computed from shots, can be merged or set as zero datum
@@ -97,16 +97,25 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 | File | Purpose |
 |------|---------|
 | `src-tauri/src/core/command.rs` | Command enum and result types |
-| `src-tauri/src/core/state.rs` | AppState with command execution |
+| `src-tauri/src/core/state.rs` | AppState with command execution, auto-save |
 | `src-tauri/src/persistence/sqlite.rs` | Database schema and operations |
+| `src-tauri/src/parsers/dmp.rs` | mNemo DMP file parser |
+| `src-tauri/src/models/project.rs` | Project model with merge/offset logic |
 | `src/store/projectStore.ts` | Frontend state, Tauri IPC calls |
 | `src/store/uiStore.ts` | UI state (selection, tools, panels) |
 | `src/components/Map/MapCanvas.tsx` | MapLibre map initialization |
 | `src/components/Map/SurveyLayer.tsx` | Survey rendering on map |
+| `src/hooks/useProject.ts` | Project file operations hook |
+| `src/hooks/useMapTools.ts` | Map tool handlers |
 
 ## Configuration
 
 Config file location: `~/.config/cavechef/config.toml` (Linux)
+
+Key config options:
+- `general.auto_save` - Enable auto-save after modifications
+- `general.recent_projects` - List of recently opened project paths
+- `general.recent_projects_max` - Maximum recent projects to track
 
 Default config is defined in `src-tauri/src/config/defaults.rs`. See `SPEC.md` section 8 for full config options.
 
@@ -114,24 +123,61 @@ Default config is defined in `src-tauri/src/config/defaults.rs`. See `SPEC.md` s
 
 Logs are written to `~/.local/share/cavechef/logs/` using the `tracing` crate. Log level is configurable in config.
 
+## Working Features (v1.0)
+
+- **DMP Import**: Full parser supporting versions 2-5 (ported from pytool_mnemo_lib)
+- **Auto-save**: Saves after each modifying operation when enabled
+- **Recent Projects**: Persisted to config, displayed on start page
+- **Safe Save**: Uses temp file + atomic rename to prevent data loss
+- **Station Merges**: Moves sections so merged stations share coordinates
+- **File Operations**: New project dialog, overwrite warnings, error notifications
+- **Map Tools**: Select, pan, draw, delete, merge, measure, move section/station
+- **Undo/Redo**: Hybrid system with inverse commands and state snapshots
+
 ## Known Limitations (v1.0)
 
-See `TODO.md` for full list. Key items:
 - Undo/redo stack not persisted across sessions
 - No offline tile caching
-- Loop closure error distribution not fully implemented
+- Loop closure error distribution not implemented
+- Zero datum validation for connected stations not implemented
 
-## Recent Changes
+## Architecture Notes
 
-### Working Features
-- **DMP Parser**: Full implementation supporting versions 2-5 (ported from pytool_mnemo_lib)
-- **Auto-save**: Saves after each modifying operation when enabled in config
-- **Recent Projects**: Persisted to config file, displayed on start page
-- **Safe Save**: Uses temp file + atomic rename to prevent data loss
-- **Station Merges**: Properly moves sections so merged stations share coordinates
-- **File Operations**: New project dialog, overwrite warnings, error notifications
+### Mutex Lock Ordering
+**Critical**: Never hold a Mutex lock while calling methods that acquire other locks. This caused a deadlock bug where auto-save held the `config` lock while calling `save_project`, which tried to lock `config` again.
 
-### Architecture Notes
-- Config file at `~/.config/cavechef/config.toml` stores recent projects
-- Auto-save triggers after modifying commands (create/update/delete section/shot, merge, etc.)
-- Mutex lock ordering is important - avoid holding locks while calling other methods that acquire locks
+**Pattern to avoid**:
+```rust
+// BAD - holds lock while calling other method
+if let Ok(config) = self.config.lock() {
+    if config.auto_save {
+        self.save_project(None); // save_project also locks config!
+    }
+}
+
+// GOOD - release lock before calling
+let should_save = self.config.lock().map(|c| c.auto_save).unwrap_or(false);
+if should_save {
+    self.save_project(None);
+}
+```
+
+### Safe File Save
+Always use temp file + atomic rename pattern for saves:
+1. Write to `file.cvproj.tmp`
+2. On success, rename to `file.cvproj`
+3. On failure, delete temp file
+
+This prevents data loss if save fails mid-write.
+
+### Section Offset Tracking
+When stations are merged, section positions are recalculated:
+1. Build graph of section connections through merges
+2. Anchor section (first or with zero datum) stays fixed
+3. Calculate offsets for connected sections
+4. Store in `Project.section_offsets: HashMap<SectionId, (f64, f64)>`
+
+### Database Operations
+- Use `Database::open_existing()` for reading (doesn't create files)
+- Use `Database::open()` for writing (creates if needed)
+- Shot IDs are generated on load: `section_id * 100000 + sequence`
