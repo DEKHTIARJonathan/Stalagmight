@@ -57,6 +57,8 @@ interface ResizablePanelProps {
   defaultSize?: number;
   onResize?: (size: number) => void;
   className?: string;
+  /** For horizontal panels: which edge to put the resize handle on */
+  handlePosition?: 'start' | 'end';
 }
 
 export function ResizablePanel({
@@ -67,6 +69,7 @@ export function ResizablePanel({
   defaultSize = 250,
   onResize,
   className = '',
+  handlePosition = 'end',
 }: ResizablePanelProps) {
   const [size, setSize] = useState(defaultSize);
   const [isResizing, setIsResizing] = useState(false);
@@ -85,8 +88,15 @@ export function ResizablePanel({
       let newSize: number;
 
       if (direction === 'horizontal') {
-        newSize = e.clientX - rect.left;
+        if (handlePosition === 'end') {
+          // Handle on right edge: size = mouse.x - panel.left
+          newSize = e.clientX - rect.left;
+        } else {
+          // Handle on left edge: size = panel.right - mouse.x
+          newSize = rect.right - e.clientX;
+        }
       } else {
+        // Vertical: handle at top, size grows upward
         newSize = rect.bottom - e.clientY;
       }
 
@@ -94,7 +104,7 @@ export function ResizablePanel({
       setSize(newSize);
       onResize?.(newSize);
     },
-    [isResizing, direction, minSize, maxSize, onResize]
+    [isResizing, direction, handlePosition, minSize, maxSize, onResize]
   );
 
   const handleMouseUp = useCallback(() => {
@@ -114,9 +124,19 @@ export function ResizablePanel({
   }, [isResizing, handleMouseMove, handleMouseUp]);
 
   const style = direction === 'horizontal' ? { width: size } : { height: size };
-  const handleStyle = direction === 'horizontal'
-    ? 'right-0 top-0 w-1 h-full cursor-ew-resize'
-    : 'bottom-0 left-0 h-1 w-full cursor-ns-resize';
+
+  // Handle styling based on direction and position
+  // Using w-1 but with padding to make it easier to grab (total 8px hit area)
+  let handleStyle: string;
+  if (direction === 'horizontal') {
+    if (handlePosition === 'end') {
+      handleStyle = 'right-0 top-0 w-1 h-full cursor-ew-resize -mr-1 px-1';
+    } else {
+      handleStyle = 'left-0 top-0 w-1 h-full cursor-ew-resize -ml-1 px-1';
+    }
+  } else {
+    handleStyle = 'top-0 left-0 h-1 w-full cursor-ns-resize -mt-1 py-1';
+  }
 
   return (
     <div
@@ -126,9 +146,11 @@ export function ResizablePanel({
     >
       {children}
       <div
-        className={`absolute bg-transparent hover:bg-accent/50 transition-colors ${handleStyle}`}
+        className={`absolute bg-transparent hover:bg-accent/50 transition-colors ${handleStyle} ${isResizing ? 'bg-accent/50' : ''}`}
         onMouseDown={handleMouseDown}
-      />
+      >
+        <div className={direction === 'horizontal' ? 'w-full h-full' : 'w-full h-full'} />
+      </div>
     </div>
   );
 }

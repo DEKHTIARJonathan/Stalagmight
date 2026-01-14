@@ -65,8 +65,17 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 - [ ] Resolution/DPI options for PNG
 - [ ] Preview of export
 
-## Priority 4: Loop Closure
+## Priority 4: Loop Closure & Section Positioning
 
+### Section Position Recalculation (Bug 9)
+- [ ] When stations are merged, recalculate section positions
+  - Build a graph of section connections through merges
+  - Pick an anchor section (first section or one with zero datum)
+  - Calculate offsets for connected sections so merged stations share coordinates
+  - Apply offsets to section station coordinates
+- [ ] Visual indicator for merged station connections
+
+### Loop Closure Error Handling
 - [ ] Detect when merge creates a loop
 - [ ] Calculate closure error percentage
 - [ ] Implement error distribution strategies:

@@ -1,6 +1,7 @@
 import type { Map as MaplibreMap, MapMouseEvent } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
 import type { Section, SectionId, ShotId, Station, StationRef } from '../../types/project';
+import { metersToMapCoords } from '../../utils/coordinates';
 
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
@@ -68,7 +69,7 @@ export default class SurveyLayer {
   }
 
   private initializeLayers() {
-    // Shots layer (lines)
+    // Shots layer (lines) - solid lines, virtual shots handled by opacity
     this.map.addLayer({
       id: this.shotsLayerId,
       type: 'line',
@@ -76,12 +77,6 @@ export default class SurveyLayer {
       paint: {
         'line-color': ['get', 'color'],
         'line-width': 2,
-        'line-dasharray': [
-          'case',
-          ['get', 'isVirtual'],
-          ['literal', [2, 2]],
-          ['literal', [1, 0]],
-        ],
         'line-opacity': ['case', ['get', 'isVirtual'], 0.5, 1],
       },
     });
@@ -102,7 +97,7 @@ export default class SurveyLayer {
           'case',
           ['get', 'isZeroDatum'],
           '#ffd700',
-          '#ffffff',
+          ['get', 'color'],
         ],
         // Stroke width varies based on selection/hover state (updated dynamically)
         'circle-stroke-width': 1,
@@ -110,24 +105,9 @@ export default class SurveyLayer {
       },
     });
 
-    // Labels layer (for zero datum)
-    this.map.addLayer({
-      id: this.labelsLayerId,
-      type: 'symbol',
-      source: this.sourceId + '-stations',
-      filter: ['==', ['get', 'isZeroDatum'], true],
-      layout: {
-        'text-field': 'ZD',
-        'text-size': 10,
-        'text-offset': [1, 0],
-        'text-anchor': 'left',
-      },
-      paint: {
-        'text-color': '#ffd700',
-        'text-halo-color': '#000000',
-        'text-halo-width': 1,
-      },
-    });
+    // Labels layer disabled - requires glyphs URL in map style
+    // Zero datum stations are shown as larger gold circles instead
+    // TODO: Re-enable when glyphs are configured in the map style
 
   }
 
@@ -285,15 +265,23 @@ export default class SurveyLayer {
     // Build shot features
     const shotFeatures: GeoJSON.Feature[] = [];
 
+    console.log('[SurveyLayer] update called', { sectionsCount: sections.length, stationsCount: stations.length });
+
     for (const section of sections) {
-      const sectionStations = stations.filter(
-        (s) => s.station_ref.section_id === section.id
-      );
+      const sectionStations = stations
+        .filter((s) => s.station_ref.section_id === section.id)
+        .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index);
+
+      console.log(`[SurveyLayer] Section ${section.id}: ${section.shots.length} shots, ${sectionStations.length} stations`);
 
       for (let i = 0; i < section.shots.length; i++) {
         const shot = section.shots[i];
         const fromStation = sectionStations[i];
         const toStation = sectionStations[i + 1];
+
+        if (!fromStation || !toStation) {
+          console.warn(`[SurveyLayer] Missing station for shot ${i}: from=${!!fromStation}, to=${!!toStation}`);
+        }
 
         if (fromStation && toStation && shot) {
           shotFeatures.push({
@@ -301,8 +289,8 @@ export default class SurveyLayer {
             geometry: {
               type: 'LineString',
               coordinates: [
-                [fromStation.coordinates.x, fromStation.coordinates.y],
-                [toStation.coordinates.x, toStation.coordinates.y],
+                metersToMapCoords(fromStation.coordinates.x, fromStation.coordinates.y),
+                metersToMapCoords(toStation.coordinates.x, toStation.coordinates.y),
               ],
             },
             properties: {
@@ -319,20 +307,32 @@ export default class SurveyLayer {
     }
 
     // Build station features
-    const stationFeatures: GeoJSON.Feature[] = stations.map((station) => ({
-      type: 'Feature',
-      geometry: {
-        type: 'Point',
-        coordinates: [station.coordinates.x, station.coordinates.y],
-      },
-      properties: {
-        sectionId: station.station_ref.section_id,
-        stationIndex: station.station_ref.station_index,
-        isZeroDatum: station.is_zero_datum,
-        isMerged: station.merged_with.length > 0,
-        depth: station.coordinates.z,
-      },
-    }));
+    const stationFeatures: GeoJSON.Feature[] = stations.map((station) => {
+      // Find section color for this station
+      const section = sections.find((s) => s.id === station.station_ref.section_id);
+      const color = section?.color ?? '#ffffff';
+
+      return {
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: metersToMapCoords(station.coordinates.x, station.coordinates.y),
+        },
+        properties: {
+          sectionId: station.station_ref.section_id,
+          stationIndex: station.station_ref.station_index,
+          isZeroDatum: station.is_zero_datum,
+          isMerged: station.merged_with.length > 0,
+          depth: station.coordinates.z,
+          color,
+        },
+      };
+    });
+
+    console.log(`[SurveyLayer] Created ${shotFeatures.length} shot features, ${stationFeatures.length} station features`);
+    if (shotFeatures.length > 0) {
+      console.log('[SurveyLayer] First shot feature:', JSON.stringify(shotFeatures[0]));
+    }
 
     // Update sources
     const shotsSource = this.map.getSource(this.sourceId + '-shots');

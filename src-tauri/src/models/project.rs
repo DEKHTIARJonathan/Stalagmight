@@ -24,8 +24,7 @@ pub struct Project {
     pub station_merges: Vec<StationMerge>,
     /// Zero datums
     pub zero_datums: Vec<ZeroDatum>,
-    /// File path if saved
-    #[serde(skip)]
+    /// File path if saved (None for new unsaved projects)
     pub file_path: Option<PathBuf>,
     /// Next section ID to assign
     pub next_section_id: SectionId,

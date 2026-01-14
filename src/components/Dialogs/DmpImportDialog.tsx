@@ -11,9 +11,8 @@ interface DmpImportDialogProps {
 }
 
 export default function DmpImportDialog({ filePath: initialPath }: DmpImportDialogProps) {
-  const { closeDialog, dialogData } = useUIStore();
+  const { closeDialog, dialogData, setView, triggerFitToBounds } = useUIStore();
   const { importDmp, createSection, createProject, project } = useProjectStore();
-  const { setView } = useUIStore();
 
   const [filePath, setFilePath] = useState<string>(initialPath ?? (dialogData.filePath as string) ?? '');
   const [dmpFile, setDmpFile] = useState<DmpFile | null>(null);
@@ -58,8 +57,15 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
     try {
       const result = await importDmp(filePath);
       setDmpFile(result);
-      // Select all sections by default
-      setSelectedSections(new Set(result.sections.map((_, i) => i)));
+      // Select only sections that have shots by default (empty sections unselected and grayed)
+      const nonEmptyIndices = result.sections
+        .map((section, index) => ({
+          index,
+          hasShots: section.shots.filter((s) => s.shot_type === 'Standard').length > 0,
+        }))
+        .filter((s) => s.hasShots)
+        .map((s) => s.index);
+      setSelectedSections(new Set(nonEmptyIndices));
       // Use filename as default project name
       const fileName = filePath.split(/[/\\]/).pop()?.replace('.dmp', '') ?? 'Imported';
       setNewProjectName(fileName);
@@ -121,11 +127,16 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
 
         // Convert DMP section to our format
         const standardShots = section.shots.filter((s) => s.shot_type === 'Standard');
-        const dateStr = section.date?.split(' ')[0];
-        await createSection({
+        // Extract date part (format: "YYYY-MM-DD" or null)
+        // Handle both "2016-10-03T18:42:00" and "2016-10-03 18:42:00" formats
+        const dateStr = section.date?.split(/[T ]/)[0] ?? null;
+
+        console.log(`[DmpImport] Creating section ${section.name} with ${standardShots.length} shots, date: ${dateStr}`);
+
+        const sectionData = {
           name: section.name,
           surveyor: null,
-          date: dateStr ?? null, // Extract date part
+          date: dateStr ?? null,
           color,
           shots: standardShots.map((shot) => ({
             azimuth_in: shot.heading_in,
@@ -133,20 +144,30 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
             length: shot.length,
             depth_in: shot.depth_in,
             depth_out: shot.depth_out,
-            pitch_in: shot.pitch_in,
-            pitch_out: shot.pitch_out,
-            left: shot.left,
-            right: shot.right,
-            up: shot.up,
-            down: shot.down,
+            pitch_in: shot.pitch_in ?? null,
+            pitch_out: shot.pitch_out ?? null,
+            left: shot.left ?? null,
+            right: shot.right ?? null,
+            up: shot.up ?? null,
+            down: shot.down ?? null,
             is_virtual: false,
-            marker_index: shot.marker_index,
-            temperature: shot.temperature,
+            marker_index: shot.marker_index ?? null,
+            temperature: shot.temperature ?? null,
           })),
-        });
+        };
+
+        console.log('[DmpImport] Section data:', JSON.stringify(sectionData, null, 2));
+
+        const result = await createSection(sectionData);
+        console.log('[DmpImport] Result:', result);
+
+        if (!result.success) {
+          throw new Error(result.error ?? `Failed to create section ${section.name}`);
+        }
       }
 
       setView('single');
+      triggerFitToBounds();
       closeDialog();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to import sections');
@@ -258,10 +279,11 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                       const standardShots = section.shots.filter(
                         (s) => s.shot_type === 'Standard'
                       );
+                      const hasShots = standardShots.length > 0;
                       return (
                         <tr
                           key={index}
-                          className={selectedSections.has(index) ? 'bg-accent/10' : ''}
+                          className={`${!hasShots ? 'opacity-50' : ''} ${selectedSections.has(index) ? 'bg-accent/10' : ''}`}
                         >
                           <td>
                             <input

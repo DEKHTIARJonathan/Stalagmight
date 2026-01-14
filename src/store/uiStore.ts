@@ -93,6 +93,9 @@ interface UIStore {
   mapZoom: number;
   setMapCenter: (center: [number, number]) => void;
   setMapZoom: (zoom: number) => void;
+  requestFitToBounds: boolean;
+  triggerFitToBounds: () => void;
+  clearFitToBoundsRequest: () => void;
 
   // Display toggles
   showStations: boolean;
@@ -228,6 +231,9 @@ export const useUIStore = create<UIStore>((set) => ({
   mapZoom: 15,
   setMapCenter: (mapCenter) => set({ mapCenter }),
   setMapZoom: (mapZoom) => set({ mapZoom }),
+  requestFitToBounds: false,
+  triggerFitToBounds: () => set({ requestFitToBounds: true }),
+  clearFitToBoundsRequest: () => set({ requestFitToBounds: false }),
 
   // Display toggles
   showStations: true,

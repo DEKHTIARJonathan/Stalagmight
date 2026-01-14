@@ -131,6 +131,80 @@ export const SECTION_COLORS = [
 ];
 
 /**
+ * Generate a random color with good saturation and lightness
+ * that is visually distinct from existing colors
+ */
+function generateRandomColor(usedColors: string[]): string {
+  // Generate random hue, avoiding hues too similar to existing colors
+  const usedHues = usedColors.map((c) => {
+    const [r, g, b] = hexToRgb(c);
+    // Convert RGB to HSL to get hue
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    if (max === min) return 0;
+    let h = 0;
+    if (max === r) {
+      h = (g - b) / (max - min);
+    } else if (max === g) {
+      h = 2 + (b - r) / (max - min);
+    } else {
+      h = 4 + (r - g) / (max - min);
+    }
+    h *= 60;
+    if (h < 0) h += 360;
+    return h;
+  });
+
+  // Find a hue that's at least 30 degrees away from all used hues
+  let bestHue = Math.random() * 360;
+  let bestMinDistance = 0;
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const candidateHue = Math.random() * 360;
+    const minDistance = Math.min(
+      ...usedHues.map((h) => {
+        const diff = Math.abs(candidateHue - h);
+        return Math.min(diff, 360 - diff);
+      }),
+      360 // Default if no used hues
+    );
+    if (minDistance > bestMinDistance) {
+      bestMinDistance = minDistance;
+      bestHue = candidateHue;
+    }
+  }
+
+  // Convert HSL to RGB with good saturation (60-80%) and lightness (50-60%)
+  const h = bestHue;
+  const s = 0.6 + Math.random() * 0.2; // 60-80% saturation
+  const l = 0.5 + Math.random() * 0.1; // 50-60% lightness
+
+  // HSL to RGB conversion
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+
+  let r = 0,
+    g = 0,
+    b = 0;
+  if (h < 60) {
+    [r, g, b] = [c, x, 0];
+  } else if (h < 120) {
+    [r, g, b] = [x, c, 0];
+  } else if (h < 180) {
+    [r, g, b] = [0, c, x];
+  } else if (h < 240) {
+    [r, g, b] = [0, x, c];
+  } else if (h < 300) {
+    [r, g, b] = [x, 0, c];
+  } else {
+    [r, g, b] = [c, 0, x];
+  }
+
+  return rgbToHex((r + m) * 255, (g + m) * 255, (b + m) * 255);
+}
+
+/**
  * Get the next available color from the palette
  */
 export function getNextSectionColor(usedColors: string[]): string {
@@ -139,6 +213,6 @@ export function getNextSectionColor(usedColors: string[]): string {
       return color;
     }
   }
-  // If all colors used, return the first one
-  return SECTION_COLORS[0] ?? '#4ecdc4';
+  // If all palette colors used, generate a random distinct color
+  return generateRandomColor(usedColors);
 }

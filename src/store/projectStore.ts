@@ -31,6 +31,7 @@ interface ProjectStore {
   error: string | null;
   canUndo: boolean;
   canRedo: boolean;
+  isDirty: boolean;
 
   // Actions
   loadConfig: () => Promise<void>;
@@ -80,6 +81,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   error: null,
   canUndo: false,
   canRedo: false,
+  isDirty: false,
 
   // Config
   loadConfig: async () => {
@@ -106,6 +108,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       const result = await invoke<CommandResult>('create_project', { name, location });
       if (result.success) {
         await get().refreshProjectState();
+        set({ isDirty: false });
       } else {
         set({ error: result.error ?? 'Failed to create project' });
       }
@@ -122,6 +125,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       if (result.success) {
         await get().refreshProjectState();
         await get().loadRecentProjects();
+        set({ isDirty: false });
       } else {
         set({ error: result.error ?? 'Failed to open project' });
       }
@@ -133,7 +137,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   saveProject: async (path?: string) => {
     const result = await invoke<CommandResult>('save_project', { path });
-    if (!result.success) {
+    if (result.success) {
+      set({ isDirty: false });
+      // Refresh project state to get updated file_path
+      await get().refreshProjectState();
+    } else {
       set({ error: result.error ?? 'Failed to save project' });
     }
     return result;
@@ -142,7 +150,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   closeProject: async () => {
     const result = await invoke<CommandResult>('close_project');
     if (result.success) {
-      set({ project: null, stations: [], stats: null });
+      set({ project: null, stations: [], stats: null, isDirty: false });
     }
     return result;
   },
@@ -183,6 +191,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     });
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -191,6 +200,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const result = await invoke<CommandResult>('update_section', { sectionId, updates });
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -199,6 +209,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const result = await invoke<CommandResult>('delete_section', { sectionId });
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -212,6 +223,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     });
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -220,6 +232,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const result = await invoke<CommandResult>('update_shot', { sectionId, shotId, updates });
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -228,6 +241,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const result = await invoke<CommandResult>('delete_shot', { sectionId, shotId });
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -236,6 +250,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const result = await invoke<CommandResult>('set_shot_virtual', { sectionId, shotId, isVirtual });
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -245,6 +260,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const result = await invoke<CommandResult>('merge_stations', { stationA, stationB, closureStrategy });
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -253,6 +269,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const result = await invoke<CommandResult>('unmerge_stations', { stationRef });
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -261,6 +278,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const result = await invoke<CommandResult>('set_zero_datum', { stationRef, coordinates });
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -269,6 +287,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const result = await invoke<CommandResult>('remove_zero_datum', { stationRef });
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -277,6 +296,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const result = await invoke<CommandResult>('move_section', { sectionId, offset });
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -285,6 +305,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const result = await invoke<CommandResult>('move_station', { stationRef, newPosition });
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -294,6 +315,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const result = await invoke<CommandResult>('undo');
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
@@ -302,6 +324,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const result = await invoke<CommandResult>('redo');
     if (result.success) {
       await get().refreshProjectState();
+      set({ isDirty: true });
     }
     return result;
   },
