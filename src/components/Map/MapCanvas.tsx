@@ -46,7 +46,73 @@ export default function MapCanvas() {
     clearSelection,
     requestFitToBounds,
     clearFitToBoundsRequest,
+    snappedStation,
+    setSnappedStation,
   } = useUIStore();
+
+  // Snap-to-station detection
+  const checkSnapToStation = useCallback(
+    (screenX: number, screenY: number) => {
+      if (!map.current || !config) {
+        setSnappedStation(null);
+        return;
+      }
+
+      // Check if snap is enabled for the current tool
+      const snapConfig = config.snap;
+      const shouldSnap =
+        (activeTool === 'draw' && snapConfig.enabled_draw) ||
+        (activeTool === 'merge' && snapConfig.enabled_merge) ||
+        (activeTool === 'measure' && snapConfig.enabled_measure);
+
+      if (!shouldSnap) {
+        setSnappedStation(null);
+        return;
+      }
+
+      const threshold = snapConfig.threshold_pixels;
+      let nearestStation = null;
+      let nearestDistance = Infinity;
+
+      // Check each station's screen position
+      for (const station of stations) {
+        const mapCoords = metersToMapCoords(station.coordinates.x, station.coordinates.y);
+        const screenPos = map.current.project(mapCoords as [number, number]);
+
+        const dx = screenPos.x - screenX;
+        const dy = screenPos.y - screenY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance < threshold && distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestStation = station.station_ref;
+        }
+      }
+
+      // Update snapped station state
+      if (nearestStation) {
+        // Only update if different from current
+        if (
+          !snappedStation ||
+          snappedStation.section_id !== nearestStation.section_id ||
+          snappedStation.station_index !== nearestStation.station_index
+        ) {
+          setSnappedStation(nearestStation);
+        }
+      } else if (snappedStation) {
+        setSnappedStation(null);
+      }
+    },
+    [activeTool, config, stations, snappedStation, setSnappedStation]
+  );
+
+  // Clear snap when tool changes to non-snap tool
+  useEffect(() => {
+    const isSnapTool = activeTool === 'draw' || activeTool === 'merge' || activeTool === 'measure';
+    if (!isSnapTool && snappedStation) {
+      setSnappedStation(null);
+    }
+  }, [activeTool, snappedStation, setSnappedStation]);
 
   // Handle move drag start from SurveyLayer
   const handleMoveDragStart = useCallback(
@@ -326,6 +392,12 @@ export default function MapCanvas() {
     }
   }, [selection]);
 
+  // Sync snapped station with SurveyLayer for snap indicator
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setSnappedStation(snappedStation);
+  }, [snappedStation]);
+
   // Update cursor based on tool (and Ctrl state for select mode)
   useEffect(() => {
     if (!map.current) return;
@@ -502,8 +574,16 @@ export default function MapCanvas() {
       } else if (boxSelect.start) {
         handleBoxSelectMove(e);
       }
+
+      // Always check snap when moving (snap logic internally checks if tool requires snap)
+      if (mapContainer.current) {
+        const rect = mapContainer.current.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        checkSnapToStation(x, y);
+      }
     },
-    [moveDrag, boxSelect.start, handleMoveDragMove, handleBoxSelectMove]
+    [moveDrag, boxSelect.start, handleMoveDragMove, handleBoxSelectMove, checkSnapToStation]
   );
 
   const handleMouseUp = useCallback(() => {
