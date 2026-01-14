@@ -3,13 +3,16 @@
 //! This test suite covers 51 tests as specified in the implementation plan.
 //! Tests are organized by category and numbered for reference.
 
-use cavechef_lib::core::{Command, UndoData, UndoEntry, UndoStack};
+use cavechef_lib::config::ValidationConfig;
+use cavechef_lib::core::{Command, UndoData, UndoEntry, UndoStack, Validator};
 use cavechef_lib::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates,
-    Shot, ShotData, ShotUpdates, StationRef,
+    ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure, Project, Section, SectionData,
+    SectionUpdates, Shot, ShotData, ShotUpdates, StationMerge, StationRef,
 };
 use cavechef_lib::persistence::Database;
+use chrono::Utc;
 use std::collections::HashSet;
+use std::path::Path;
 use tempfile::NamedTempFile;
 
 // ============================================================================
@@ -1310,4 +1313,382 @@ fn test_project_metadata() {
     assert_eq!(metadata.location, Some("Location".to_string()));
     assert_eq!(metadata.section_count, 1);
     assert!((metadata.total_length - 50.0).abs() < 0.001);
+}
+
+// ============================================================================
+// NEW COVERAGE TESTS (15 tests for increased coverage)
+// ============================================================================
+
+/// Helper: Create default validation config
+fn default_validation_config() -> ValidationConfig {
+    ValidationConfig {
+        warn_shot_length_min: 0.1,
+        warn_shot_length_max: 50.0,
+        warn_depth_change_per_shot_max: 10.0,
+        warn_azimuth_deviation_max: 30.0,
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Validation Tests (5 tests)
+// ----------------------------------------------------------------------------
+
+/// Coverage Test 1: Negative length shot returns NEGATIVE_LENGTH error
+#[test]
+fn test_negative_length_shot() {
+    let shot = ShotData {
+        azimuth_in: 45.0,
+        azimuth_out: 225.0,
+        length: -5.0, // Negative!
+        depth_in: 10.0,
+        depth_out: 10.0,
+        ..Default::default()
+    };
+    let config = default_validation_config();
+    let warnings = Validator::validate_shot(&shot, &config, 0);
+
+    assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LENGTH"));
+    assert!(Validator::has_errors(&warnings));
+}
+
+/// Coverage Test 2: Short shot warning
+#[test]
+fn test_short_shot_warning() {
+    let shot = ShotData {
+        azimuth_in: 45.0,
+        azimuth_out: 225.0,
+        length: 0.05, // Below 0.1m threshold
+        depth_in: 10.0,
+        depth_out: 10.0,
+        ..Default::default()
+    };
+    let config = ValidationConfig {
+        warn_shot_length_min: 0.1,
+        ..default_validation_config()
+    };
+    let warnings = Validator::validate_shot(&shot, &config, 0);
+
+    assert!(warnings.iter().any(|w| w.code == "SHORT_SHOT"));
+    // SHORT_SHOT is a warning, not error
+    let short_warning = warnings.iter().find(|w| w.code == "SHORT_SHOT").unwrap();
+    assert_eq!(short_warning.severity, cavechef_lib::core::WarningSeverity::Warning);
+}
+
+/// Coverage Test 3: Long shot warning
+#[test]
+fn test_long_shot_warning() {
+    let shot = ShotData {
+        azimuth_in: 45.0,
+        azimuth_out: 225.0,
+        length: 100.0, // Above 50m threshold
+        depth_in: 10.0,
+        depth_out: 10.0,
+        ..Default::default()
+    };
+    let config = ValidationConfig {
+        warn_shot_length_max: 50.0,
+        ..default_validation_config()
+    };
+    let warnings = Validator::validate_shot(&shot, &config, 0);
+
+    assert!(warnings.iter().any(|w| w.code == "LONG_SHOT"));
+}
+
+/// Coverage Test 4: Large depth change warning
+#[test]
+fn test_large_depth_change_warning() {
+    let shot = ShotData {
+        azimuth_in: 45.0,
+        azimuth_out: 225.0,
+        length: 10.0,
+        depth_in: 10.0,
+        depth_out: 25.0, // 15m change, above 10m threshold
+        ..Default::default()
+    };
+    let config = ValidationConfig {
+        warn_depth_change_per_shot_max: 10.0,
+        ..default_validation_config()
+    };
+    let warnings = Validator::validate_shot(&shot, &config, 0);
+
+    assert!(warnings.iter().any(|w| w.code == "LARGE_DEPTH_CHANGE"));
+}
+
+/// Coverage Test 5: Negative LRUD values return errors
+#[test]
+fn test_negative_lrud_errors() {
+    let shot = ShotData {
+        azimuth_in: 45.0,
+        azimuth_out: 225.0,
+        length: 10.0,
+        depth_in: 10.0,
+        depth_out: 10.0,
+        left: Some(-1.0),
+        right: Some(-2.0),
+        up: Some(-3.0),
+        down: Some(-4.0),
+        ..Default::default()
+    };
+    let warnings = Validator::validate_shot(&shot, &default_validation_config(), 0);
+
+    let lrud_errors: Vec<_> = warnings
+        .iter()
+        .filter(|w| w.code == "NEGATIVE_LRUD")
+        .collect();
+    assert_eq!(lrud_errors.len(), 4); // All 4 LRUD values negative
+    assert!(Validator::has_errors(&warnings));
+}
+
+// ----------------------------------------------------------------------------
+// Persistence Tests (5 tests)
+// ----------------------------------------------------------------------------
+
+/// Coverage Test 6: Save/load with station merges
+#[test]
+fn test_save_load_with_station_merges() {
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(create_section_with_shots(
+        "A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project.add_section(create_section_with_shots(
+        "B",
+        vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
+    ));
+
+    // Add a merge
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(0, 1),
+        station_b: StationRef::new(1, 0),
+        merged_at: Utc::now(),
+    });
+
+    let mut db = Database::in_memory().unwrap();
+    db.save_project(&project).unwrap();
+    let loaded = db.load_project().unwrap();
+
+    assert_eq!(loaded.station_merges.len(), 1);
+    assert_eq!(loaded.station_merges[0].station_a, StationRef::new(0, 1));
+    assert_eq!(loaded.station_merges[0].station_b, StationRef::new(1, 0));
+}
+
+/// Coverage Test 7: Save/load with zero datums
+#[test]
+fn test_save_load_with_zero_datums() {
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(create_section_with_shots(
+        "A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    project
+        .set_zero_datum(
+            StationRef::new(0, 0),
+            GpsCoordinates {
+                latitude: 45.123,
+                longitude: -122.456,
+                depth_reference: 5.0,
+            },
+        )
+        .unwrap();
+
+    let mut db = Database::in_memory().unwrap();
+    db.save_project(&project).unwrap();
+    let loaded = db.load_project().unwrap();
+
+    assert_eq!(loaded.zero_datums.len(), 1);
+    assert!((loaded.zero_datums[0].gps.latitude - 45.123).abs() < 0.0001);
+    assert!((loaded.zero_datums[0].gps.longitude - (-122.456)).abs() < 0.0001);
+    assert!((loaded.zero_datums[0].gps.depth_reference - 5.0).abs() < 0.0001);
+}
+
+/// Coverage Test 8: Save/load with section offsets
+#[test]
+fn test_save_load_with_section_offsets() {
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(create_section_with_shots(
+        "A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project.section_offsets.insert(0, (15.5, -20.3));
+
+    let mut db = Database::in_memory().unwrap();
+    db.save_project(&project).unwrap();
+    let loaded = db.load_project().unwrap();
+
+    let offset = loaded.section_offsets.get(&0).unwrap();
+    assert!((offset.0 - 15.5).abs() < 0.0001);
+    assert!((offset.1 - (-20.3)).abs() < 0.0001);
+}
+
+/// Coverage Test 9: Save/load with loop closures
+#[test]
+fn test_save_load_with_loop_closures() {
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(create_section_with_shots(
+        "A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    project.loop_closures.push(LoopClosure {
+        station_a: StationRef::new(0, 0),
+        station_b: StationRef::new(0, 1),
+        path_length: 100.0,
+        misclosure_distance: 2.5,
+        error_percentage: 2.5,
+        horizontal_misclosure: 2.0,
+        vertical_misclosure: 1.5,
+    });
+
+    let mut db = Database::in_memory().unwrap();
+    db.save_project(&project).unwrap();
+    let loaded = db.load_project().unwrap();
+
+    assert_eq!(loaded.loop_closures.len(), 1);
+    assert!((loaded.loop_closures[0].path_length - 100.0).abs() < 0.0001);
+    assert!((loaded.loop_closures[0].error_percentage - 2.5).abs() < 0.0001);
+    assert!((loaded.loop_closures[0].horizontal_misclosure - 2.0).abs() < 0.0001);
+    assert!((loaded.loop_closures[0].vertical_misclosure - 1.5).abs() < 0.0001);
+}
+
+/// Coverage Test 10: Open nonexistent file fails
+#[test]
+fn test_open_nonexistent_file_fails() {
+    let result = Database::open_existing(Path::new("/nonexistent/path/file.cvproj"));
+    assert!(result.is_err());
+    match result {
+        Err(e) => assert!(e.to_string().contains("does not exist")),
+        Ok(_) => panic!("Expected error for nonexistent file"),
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Model Tests (5 tests)
+// ----------------------------------------------------------------------------
+
+/// Coverage Test 11: Shot depth_change calculation
+#[test]
+fn test_shot_depth_change_method() {
+    let shot = Shot::new(
+        0,
+        ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 0.0,
+            length: 10.0,
+            depth_in: 10.0,
+            depth_out: 15.0,
+            ..Default::default()
+        },
+    );
+    assert!((shot.depth_change() - 5.0).abs() < 0.001);
+
+    let shot2 = Shot::new(
+        1,
+        ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 0.0,
+            length: 10.0,
+            depth_in: 20.0,
+            depth_out: 12.0,
+            ..Default::default()
+        },
+    );
+    assert!((shot2.depth_change() - (-8.0)).abs() < 0.001);
+}
+
+/// Coverage Test 12: Section insert_shot_after
+#[test]
+fn test_section_insert_shot_after() {
+    let mut section = Section::new(
+        0,
+        SectionData {
+            name: Some("Test".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            shots: vec![
+                create_shot_data(0.0, 10.0, 5.0, 5.0),
+                create_shot_data(90.0, 10.0, 5.0, 5.0),
+            ],
+        },
+    );
+
+    let first_shot_id = section.shots[0].id;
+    let new_shot = section.insert_shot_after(first_shot_id, create_shot_data(45.0, 5.0, 5.0, 5.0));
+
+    assert!(new_shot.is_some());
+    assert_eq!(section.shots.len(), 3);
+    // New shot should be in position 1 (after first shot)
+    assert!((section.shots[1].azimuth_in - 45.0).abs() < 0.001);
+    assert!((section.shots[1].length - 5.0).abs() < 0.001);
+}
+
+/// Coverage Test 13: Section to_section_data
+#[test]
+fn test_section_to_section_data() {
+    let section = Section::new(
+        0,
+        SectionData {
+            name: Some("Original".to_string()),
+            surveyor: Some("John".to_string()),
+            date: None,
+            color: "#ff0000".to_string(),
+            shots: vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
+        },
+    );
+
+    let data = section.to_section_data();
+
+    assert_eq!(data.name, Some("Original".to_string()));
+    assert_eq!(data.surveyor, Some("John".to_string()));
+    assert_eq!(data.color, "#ff0000");
+    assert_eq!(data.shots.len(), 1);
+    assert!((data.shots[0].length - 10.0).abs() < 0.001);
+}
+
+/// Coverage Test 14: Project insert_shot_after
+#[test]
+fn test_project_insert_shot_after() {
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(create_section_with_shots(
+        "A",
+        vec![
+            create_shot_data(0.0, 10.0, 5.0, 5.0),
+            create_shot_data(90.0, 10.0, 5.0, 5.0),
+        ],
+    ));
+
+    let first_shot_id = project.sections[0].shots[0].id;
+    let result = project.insert_shot_after(0, first_shot_id, create_shot_data(45.0, 5.0, 5.0, 5.0));
+
+    assert!(result.is_some());
+    assert_eq!(project.sections[0].shots.len(), 3);
+    // Verify the new shot is in the middle
+    assert!((project.sections[0].shots[1].azimuth_in - 45.0).abs() < 0.001);
+}
+
+/// Coverage Test 15: Project update_shot
+#[test]
+fn test_project_update_shot() {
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(create_section_with_shots(
+        "A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    let shot_id = project.sections[0].shots[0].id;
+    let updates = ShotUpdates {
+        length: Some(20.0),
+        comment: Some(Some("Updated comment".to_string())),
+        is_virtual: Some(true),
+        ..Default::default()
+    };
+
+    let result = project.update_shot(0, shot_id, &updates);
+    assert!(result.is_some());
+
+    let shot = project.get_section(0).unwrap().get_shot(shot_id).unwrap();
+    assert!((shot.length - 20.0).abs() < 0.001);
+    assert_eq!(shot.comment, Some("Updated comment".to_string()));
+    assert!(shot.is_virtual);
 }
