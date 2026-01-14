@@ -130,3 +130,22 @@ pub enum ClosureStrategy {
     /// Manual adjustment later
     ManualAdjustment,
 }
+
+/// A detected loop closure in the survey
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopClosure {
+    /// First station in the closure (merge point A)
+    pub station_a: StationRef,
+    /// Second station in the closure (merge point B)
+    pub station_b: StationRef,
+    /// Total path length along the loop (meters)
+    pub path_length: f64,
+    /// Misclosure distance (meters) - how far apart the two stations are
+    pub misclosure_distance: f64,
+    /// Closure error percentage (misclosure / path_length * 100)
+    pub error_percentage: f64,
+    /// Horizontal misclosure component (meters)
+    pub horizontal_misclosure: f64,
+    /// Vertical misclosure component (meters)
+    pub vertical_misclosure: f64,
+}
