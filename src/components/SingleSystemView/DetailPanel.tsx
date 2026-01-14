@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
@@ -157,6 +158,13 @@ interface WarningsContentProps {
 }
 
 function WarningsContent({ warnings, project, onWarningClick }: WarningsContentProps) {
+  const { resolveWarning, unresolveWarning } = useProjectStore();
+  const [showResolved, setShowResolved] = useState(false);
+
+  const unresolvedCount = warnings.filter((w) => !w.is_resolved).length;
+  const resolvedCount = warnings.filter((w) => w.is_resolved).length;
+  const displayedWarnings = showResolved ? warnings : warnings.filter((w) => !w.is_resolved);
+
   if (warnings.length === 0) {
     return (
       <div className="p-4 text-center text-text-secondary">
@@ -171,30 +179,69 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
     return section?.name ?? `Section ${sectionId}`;
   };
 
+  const handleToggleResolved = (e: React.MouseEvent, warning: ProjectWarning) => {
+    e.stopPropagation();
+    if (warning.is_resolved) {
+      unresolveWarning(warning.section_id, warning.shot_id, warning.code);
+    } else {
+      resolveWarning(warning.section_id, warning.shot_id, warning.code);
+    }
+  };
+
   return (
     <div className="p-2">
-      <div className="text-sm text-text-secondary mb-2 px-2">
-        {warnings.length} issue{warnings.length !== 1 ? 's' : ''} found
+      <div className="flex items-center justify-between mb-2 px-2">
+        <span className="text-sm text-text-secondary">
+          {unresolvedCount} issue{unresolvedCount !== 1 ? 's' : ''}
+          {resolvedCount > 0 && ` (${resolvedCount} resolved)`}
+        </span>
+        {resolvedCount > 0 && (
+          <button
+            onClick={() => setShowResolved(!showResolved)}
+            className="text-xs text-accent hover:underline"
+          >
+            {showResolved ? 'Hide resolved' : 'Show resolved'}
+          </button>
+        )}
       </div>
       <div className="space-y-1">
-        {warnings.map((warning, index) => (
-          <button
+        {displayedWarnings.map((warning, index) => (
+          <div
             key={`${warning.section_id}-${warning.shot_id}-${warning.code}-${index}`}
-            onClick={() => onWarningClick(warning)}
-            className="w-full text-left p-2 rounded hover:bg-background/50 transition-colors"
+            className={`
+              p-2 rounded transition-colors
+              ${warning.is_resolved ? 'opacity-50' : ''}
+              hover:bg-background/50
+            `}
           >
             <div className="flex items-start gap-2">
-              <span className={warning.severity === 'error' ? 'text-red-400' : 'text-yellow-400'}>
-                {warning.severity === 'error' ? '⛔' : '⚠️'}
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm">{warning.message}</div>
-                <div className="text-xs text-text-secondary mt-0.5">
-                  {getSectionName(warning.section_id)} • Shot {warning.shot_index + 1}
+              <button
+                onClick={() => onWarningClick(warning)}
+                className="flex-1 text-left"
+              >
+                <div className="flex items-start gap-2">
+                  <span className={warning.severity === 'error' ? 'text-red-400' : 'text-yellow-400'}>
+                    {warning.is_resolved ? '✓' : (warning.severity === 'error' ? '⛔' : '⚠️')}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-sm ${warning.is_resolved ? 'line-through' : ''}`}>
+                      {warning.message}
+                    </div>
+                    <div className="text-xs text-text-secondary mt-0.5">
+                      {getSectionName(warning.section_id)} • Shot {warning.shot_index + 1}
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </button>
+              <button
+                onClick={(e) => handleToggleResolved(e, warning)}
+                className="text-xs px-2 py-1 rounded bg-background/50 hover:bg-background text-text-secondary"
+                title={warning.is_resolved ? 'Mark as unresolved' : 'Mark as resolved'}
+              >
+                {warning.is_resolved ? 'Undo' : 'Resolve'}
+              </button>
             </div>
-          </button>
+          </div>
         ))}
       </div>
     </div>

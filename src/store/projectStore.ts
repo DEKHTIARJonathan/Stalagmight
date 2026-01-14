@@ -44,6 +44,8 @@ interface ProjectStore {
   closeProject: () => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   refreshWarnings: () => Promise<void>;
+  resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<void>;
+  unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
 
   createSection: (data: SectionData) => Promise<CommandResult>;
@@ -203,6 +205,24 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     } catch (e) {
       console.error('Failed to refresh warnings:', e);
       set({ warnings: [] });
+    }
+  },
+
+  resolveWarning: async (sectionId: number, shotId: number, warningCode: string, comment?: string) => {
+    try {
+      await invoke('resolve_warning', { sectionId, shotId, warningCode, comment });
+      await get().refreshWarnings();
+    } catch (e) {
+      console.error('Failed to resolve warning:', e);
+    }
+  },
+
+  unresolveWarning: async (sectionId: number, shotId: number, warningCode: string) => {
+    try {
+      await invoke('unresolve_warning', { sectionId, shotId, warningCode });
+      await get().refreshWarnings();
+    } catch (e) {
+      console.error('Failed to unresolve warning:', e);
     }
   },
 

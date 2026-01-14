@@ -1362,4 +1362,25 @@ impl AppState {
             .map(|s| s.can_redo())
             .unwrap_or(false)
     }
+
+    /// Load resolved warnings from database
+    pub fn load_resolved_warnings(&self) -> Result<Vec<crate::persistence::ResolvedWarning>> {
+        let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
+        let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
+        db.load_resolved_warnings()
+    }
+
+    /// Save a resolved warning to database
+    pub fn save_resolved_warning(&self, warning: &crate::persistence::ResolvedWarning) -> Result<()> {
+        let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
+        let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
+        db.save_resolved_warning(warning)
+    }
+
+    /// Delete a resolved warning from database
+    pub fn delete_resolved_warning(&self, section_id: u32, shot_id: u32, warning_code: &str) -> Result<()> {
+        let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
+        let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
+        db.delete_resolved_warning(section_id, shot_id, warning_code)
+    }
 }
