@@ -15,7 +15,8 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 - [x] Implement hybrid undo with state snapshots and inverse commands
 - [x] `UndoData` variants: `InverseCommand`, `PreviousValues`, `SectionSnapshot`, `ShotSnapshot`, `MergeInfo`, `ZeroDatumInfo`, `ProjectSnapshot`
 - [x] Full undo/redo execution with proper state restoration
-- [ ] Persist undo stack to SQLite `undo_stack` table (deferred)
+- [x] Persist undo stack to SQLite `undo_stack` table
+- [x] Configurable undo history and persistence limits
 
 ### File Operations ✅
 - [x] NewProjectDialog for creating projects with name input
@@ -44,7 +45,7 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 
 ### Map Features ✅
 - [x] Context menu on right-click (Edit, Delete, Mark Virtual, etc.)
-- [ ] Snap to station when within threshold (deferred)
+- [x] Snap to station when within threshold (configurable per-tool)
 - [x] Hover highlighting
 - [x] Drag preview before release
 
@@ -64,7 +65,7 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 - [x] DMP file loading (implemented in DmpImportDialog)
 
 ### ExportDialog Enhancements
-- [ ] PDF export (currently only SVG implemented)
+- [x] PDF export using svg2pdf library
 - [ ] Resolution/DPI options for PNG
 - [ ] Preview of export
 
@@ -76,30 +77,30 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
   - [x] Pick an anchor section (first section or one with zero datum)
   - [x] Calculate offsets for connected sections so merged stations share coordinates
   - [x] Apply offsets to section station coordinates
-- [ ] Visual indicator for merged station connections
+- [x] Visual indicator for merged station connections (dashed cyan lines)
 
-### Loop Closure Error Handling
-- [ ] Detect when merge creates a loop
-- [ ] Calculate closure error percentage
-- [ ] Implement error distribution strategies:
+### Loop Closure Error Handling ✅
+- [x] Detect when merge creates a loop (graph-based cycle detection)
+- [x] Calculate closure error percentage
+- [ ] Implement error distribution strategies (deferred to v2):
   - [ ] Proportional by shot length (Bowditch method)
   - [ ] Equal across all shots
   - [ ] Keep raw data
-- [ ] Visual indicator for loop closure lines
+- [x] Visual indicator for loop closure lines (color-coded by error severity)
 
 ## Priority 5: UI Polish
 
-### Panels
-- [ ] Collapsible Data Table panel (currently always visible area)
-- [ ] Resizable panel persistence (save sizes to config)
-- [ ] Panel keyboard shortcuts (Ctrl+1, Ctrl+2, Ctrl+3)
+### Panels ✅
+- [x] Collapsible Data Table panel with smooth animation
+- [x] Resizable panel persistence (save sizes to config)
+- [x] Panel keyboard shortcuts (Ctrl+1, Ctrl+2, Ctrl+3)
 
 ### GlobalView
 - [ ] Display cave systems positioned by GPS on map
 - [ ] Click system to show metadata in side panel
 - [ ] Double-click to open in SingleSystemView
 - [ ] Multi-select for merging systems
-- [ ] Empty state message with prominent action buttons
+- [x] Empty state message with prominent action buttons
 
 ### Keyboard Shortcuts
 - [x] Tool shortcuts (S, P, Z, D, X, M, R, V, T)
@@ -112,11 +113,11 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 - [x] Ctrl+0 (Fit to View)
 - [x] Ctrl+A (Select All)
 
-### Validation Warnings
-- [ ] Display validation warnings in UI (currently only logged)
-- [ ] Warning icon (⚠) in data table rows
-- [ ] "Mark as resolved" option
-- [ ] Warning panel/list
+### Validation Warnings ✅
+- [x] Display validation warnings in UI (Warnings tab in DetailPanel)
+- [x] Warning icon in data table rows
+- [x] "Mark as resolved" option with persistence to SQLite
+- [x] Warning panel/list with show/hide resolved toggle
 
 ## Priority 6: Performance & Offline
 
@@ -137,16 +138,16 @@ This document tracks functionality specified in SPEC.md but not yet implemented.
 - [x] Dirty state indicator in UI (`isDirty` in projectStore)
 - [x] Prompt to save on close (UnsavedChangesDialog)
 
-### Statistics
-- [ ] Project statistics panel
-- [ ] Section statistics in DetailPanel
-- [ ] Penetration distance calculation
+### Statistics ✅
+- [x] Project statistics panel (default view when nothing selected)
+- [x] Section statistics in DetailPanel (depth range, avg shot, contribution %)
+- [x] Penetration distance calculation (max distance from zero datum)
 
-### Display Options
-- [ ] Depth color gradient toggle
+### Display Options ✅
+- [ ] Depth color gradient toggle (UI exists, rendering not implemented)
 - [ ] LRUD passage wall visualization
-- [ ] Shot data labels (azimuth, length, depth)
-- [ ] Configurable display toggles menu
+- [x] Shot data labels (azimuth, length, depth) with progressive zoom density
+- [x] Configurable display toggles dropdown menu
 
 ## Out of Scope (Future Versions)
 
