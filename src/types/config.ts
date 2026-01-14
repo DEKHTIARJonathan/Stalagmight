@@ -13,12 +13,15 @@ export interface Config {
   export: ExportConfig;
   logging: LoggingConfig;
   shortcuts: ShortcutsConfig;
+  snap: SnapConfig;
 }
 
 export interface GeneralConfig {
   auto_save: boolean;
   auto_save_interval_seconds: number;
   recent_projects_max: number;
+  undo_history_limit: number;
+  undo_persist_limit: number;
 }
 
 export interface UnitsConfig {
@@ -101,11 +104,20 @@ export interface ShortcutsConfig {
   save: string;
 }
 
+export interface SnapConfig {
+  enabled_draw: boolean;
+  enabled_merge: boolean;
+  enabled_measure: boolean;
+  threshold_pixels: number;
+}
+
 export const defaultConfig: Config = {
   general: {
     auto_save: true,
     auto_save_interval_seconds: 30,
     recent_projects_max: 20,
+    undo_history_limit: 100,
+    undo_persist_limit: 20,
   },
   units: {
     length: 'meters',
@@ -183,5 +195,11 @@ export const defaultConfig: Config = {
     undo: 'Ctrl+Z',
     redo: 'Ctrl+Y',
     save: 'Ctrl+S',
+  },
+  snap: {
+    enabled_draw: true,
+    enabled_merge: true,
+    enabled_measure: true,
+    threshold_pixels: 10,
   },
 };

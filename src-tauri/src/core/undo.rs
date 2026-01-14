@@ -5,16 +5,18 @@ use crate::models::{
     ClosureStrategy, GpsCoordinates, SectionData, SectionId, ShotData, ShotId, StationRef,
 };
 
-/// Maximum number of undo entries to keep
-const MAX_UNDO_ENTRIES: usize = 100;
+/// Default maximum number of undo entries to keep in memory
+const DEFAULT_UNDO_HISTORY_LIMIT: usize = 100;
 
 /// Undo/redo stack
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct UndoStack {
     /// Commands that can be undone
     undo_stack: Vec<UndoEntry>,
     /// Commands that can be redone
     redo_stack: Vec<UndoEntry>,
+    /// Maximum entries to keep in memory
+    history_limit: usize,
 }
 
 /// Entry in the undo stack
@@ -77,10 +79,43 @@ pub enum UndoData {
     None,
 }
 
+impl Default for UndoStack {
+    fn default() -> Self {
+        Self {
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            history_limit: DEFAULT_UNDO_HISTORY_LIMIT,
+        }
+    }
+}
+
 impl UndoStack {
-    /// Create a new empty undo stack
+    /// Create a new empty undo stack with default limit
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a new empty undo stack with custom limit
+    pub fn new_with_limit(history_limit: usize) -> Self {
+        Self {
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            history_limit,
+        }
+    }
+
+    /// Get the current history limit
+    pub fn history_limit(&self) -> usize {
+        self.history_limit
+    }
+
+    /// Set the history limit
+    pub fn set_history_limit(&mut self, limit: usize) {
+        self.history_limit = limit;
+        // Trim stack if needed
+        while self.undo_stack.len() > self.history_limit {
+            self.undo_stack.remove(0);
+        }
     }
 
     /// Push a command with its undo data to the undo stack
@@ -93,7 +128,7 @@ impl UndoStack {
         self.redo_stack.clear();
 
         // Limit stack size
-        while self.undo_stack.len() > MAX_UNDO_ENTRIES {
+        while self.undo_stack.len() > self.history_limit {
             self.undo_stack.remove(0);
         }
     }

@@ -16,6 +16,21 @@ pub struct Config {
     pub export: ExportConfig,
     pub logging: LoggingConfig,
     pub shortcuts: ShortcutsConfig,
+    #[serde(default)]
+    pub snap: SnapConfig,
+}
+
+/// Snap-to-station configuration for precision tools
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapConfig {
+    /// Enable snap for draw tool
+    pub enabled_draw: bool,
+    /// Enable snap for merge tool
+    pub enabled_merge: bool,
+    /// Enable snap for measure tool
+    pub enabled_measure: bool,
+    /// Snap threshold in pixels
+    pub threshold_pixels: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +40,20 @@ pub struct GeneralConfig {
     pub recent_projects_max: usize,
     #[serde(default)]
     pub recent_projects: Vec<PathBuf>,
+    /// Maximum undo history entries to keep in memory (default: 100)
+    #[serde(default = "default_undo_history_limit")]
+    pub undo_history_limit: usize,
+    /// Maximum undo entries to persist to project file (default: 20)
+    #[serde(default = "default_undo_persist_limit")]
+    pub undo_persist_limit: usize,
+}
+
+fn default_undo_history_limit() -> usize {
+    100
+}
+
+fn default_undo_persist_limit() -> usize {
+    20
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
