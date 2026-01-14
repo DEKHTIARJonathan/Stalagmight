@@ -134,7 +134,13 @@ function DetailsContent({ selection, project, stations }: DetailsContentProps) {
     const section = project?.sections.find((s) => s.id === selection.sectionId);
 
     if (section) {
-      return <SectionDetail section={section} />;
+      return (
+        <SectionDetail
+          section={section}
+          stations={stations}
+          totalProjectLength={stats?.total_length ?? 0}
+        />
+      );
     }
   }
 
@@ -374,14 +380,31 @@ function ShotDetail({ section, shot }: { section: Section; shot: Shot }) {
   );
 }
 
-function SectionDetail({ section }: { section: Section }) {
+interface SectionDetailProps {
+  section: Section;
+  stations: Station[];
+  totalProjectLength: number;
+}
+
+function SectionDetail({ section, stations, totalProjectLength }: SectionDetailProps) {
   const { openDialog } = useUIStore();
 
-  const stats = {
-    shotCount: section.shots.length,
-    length: section.shots.reduce((sum, s) => sum + s.length, 0),
-    virtualCount: section.shots.filter((s) => s.is_virtual).length,
-  };
+  // Calculate section statistics
+  const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
+  const shotCount = section.shots.length;
+  const virtualCount = section.shots.filter((s) => s.is_virtual).length;
+  const avgShotLength = shotCount > 0 ? sectionLength / shotCount : 0;
+  const contributionPercent = totalProjectLength > 0
+    ? (sectionLength / totalProjectLength) * 100
+    : 0;
+
+  // Get stations for this section and calculate depth range
+  const sectionStations = stations.filter(
+    (s) => s.station_ref.section_id === section.id
+  );
+  const depths = sectionStations.map((s) => s.coordinates.z);
+  const minDepth = depths.length > 0 ? Math.min(...depths) : 0;
+  const maxDepth = depths.length > 0 ? Math.max(...depths) : 0;
 
   const handleEditSection = () => {
     openDialog('edit-section', { sectionId: section.id });
@@ -390,28 +413,66 @@ function SectionDetail({ section }: { section: Section }) {
   return (
     <div className="h-full bg-panel overflow-auto">
       <Panel title="Section">
-        <div className="space-y-3">
-          <DetailRow label="Name" value={section.name ?? 'Unnamed'} />
-          <DetailRow label="Surveyor" value={section.surveyor ?? '-'} />
-          <DetailRow label="Date" value={section.date ?? '-'} />
-          <DetailRow label="Color" value={
-            <div className="flex items-center gap-2">
-              <span
-                className="w-4 h-4 rounded"
-                style={{ backgroundColor: section.color }}
-              />
-              <span>{section.color}</span>
-            </div>
-          } />
+        <div className="space-y-4">
+          {/* Section info */}
+          <div className="space-y-2">
+            <DetailRow label="Name" value={section.name ?? 'Unnamed'} />
+            <DetailRow label="Surveyor" value={section.surveyor ?? '-'} />
+            <DetailRow label="Date" value={section.date ?? '-'} />
+            <DetailRow label="Color" value={
+              <div className="flex items-center gap-2">
+                <span
+                  className="w-4 h-4 rounded"
+                  style={{ backgroundColor: section.color }}
+                />
+                <span>{section.color}</span>
+              </div>
+            } />
+          </div>
 
-          <div className="pt-2 border-t border-border">
-            <span className="text-sm text-text-secondary">Statistics:</span>
-            <div className="mt-1 text-sm">
-              <DetailRow label="Shots" value={String(stats.shotCount)} />
-              <DetailRow label="Length" value={`${stats.length.toFixed(1)} m`} />
-              {stats.virtualCount > 0 && (
-                <DetailRow label="Virtual" value={String(stats.virtualCount)} />
+          {/* Survey statistics */}
+          <div className="space-y-2 pt-2 border-t border-border">
+            <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+              Survey Statistics
+            </h4>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+              <StatCard label="Total Length" value={`${sectionLength.toFixed(1)} m`} />
+              <StatCard label="Shot Count" value={String(shotCount)} />
+              <StatCard label="Avg Shot" value={`${avgShotLength.toFixed(2)} m`} />
+              {virtualCount > 0 && (
+                <StatCard label="Virtual Shots" value={String(virtualCount)} />
               )}
+            </div>
+          </div>
+
+          {/* Depth range */}
+          {sectionStations.length > 0 && (
+            <div className="space-y-2 pt-2 border-t border-border">
+              <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+                Depth Range
+              </h4>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                <StatCard label="Shallowest" value={`${minDepth.toFixed(1)} m`} />
+                <StatCard label="Deepest" value={`${maxDepth.toFixed(1)} m`} />
+              </div>
+            </div>
+          )}
+
+          {/* Contribution */}
+          <div className="space-y-2 pt-2 border-t border-border">
+            <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+              Project Contribution
+            </h4>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 h-2 bg-background rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-accent transition-all"
+                  style={{ width: `${Math.min(contributionPercent, 100)}%` }}
+                />
+              </div>
+              <span className="text-sm font-medium w-12 text-right">
+                {contributionPercent.toFixed(1)}%
+              </span>
             </div>
           </div>
         </div>
