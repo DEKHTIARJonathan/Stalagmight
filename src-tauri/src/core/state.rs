@@ -9,7 +9,7 @@ use crate::models::{
 };
 use crate::persistence::Database;
 
-use super::{Command, CommandResult, UndoData, UndoEntry, UndoStack, Validator};
+use super::{Command, CommandResult, UndoData, UndoStack, Validator};
 
 /// Application state managed by Tauri
 pub struct AppState {
