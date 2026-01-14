@@ -1,6 +1,6 @@
 import type { Map as MaplibreMap, MapMouseEvent } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
-import type { Section, SectionId, ShotId, Station, StationRef } from '../../types/project';
+import type { Section, SectionId, ShotId, Station, StationRef, StationMerge } from '../../types/project';
 import { metersToMapCoords } from '../../utils/coordinates';
 
 export interface SurveyLayerCallbacks {
@@ -29,6 +29,7 @@ export default class SurveyLayer {
   private shotsLayerId = 'survey-shots';
   private stationsLayerId = 'survey-stations';
   private labelsLayerId = 'survey-labels';
+  private mergesLayerId = 'survey-merges';
   private callbacks: SurveyLayerCallbacks;
 
   // Visual state
@@ -68,9 +69,31 @@ export default class SurveyLayer {
         features: [],
       },
     });
+
+    // Merge connections line source
+    this.map.addSource(this.sourceId + '-merges', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    });
   }
 
   private initializeLayers() {
+    // Merge connections layer (dashed lines) - rendered first so it's behind everything
+    this.map.addLayer({
+      id: this.mergesLayerId,
+      type: 'line',
+      source: this.sourceId + '-merges',
+      paint: {
+        'line-color': '#00cccc', // Cyan for merge connections
+        'line-width': 2,
+        'line-opacity': 0.5,
+        'line-dasharray': [4, 4], // Dashed line
+      },
+    });
+
     // Shots layer (lines) - solid lines, virtual shots handled by opacity
     this.map.addLayer({
       id: this.shotsLayerId,
@@ -288,11 +311,11 @@ export default class SurveyLayer {
     this.updateVisualState();
   }
 
-  update(sections: Section[], stations: Station[]) {
+  update(sections: Section[], stations: Station[], stationMerges?: StationMerge[]) {
     // Build shot features
     const shotFeatures: GeoJSON.Feature[] = [];
 
-    console.log('[SurveyLayer] update called', { sectionsCount: sections.length, stationsCount: stations.length });
+    console.log('[SurveyLayer] update called', { sectionsCount: sections.length, stationsCount: stations.length, mergesCount: stationMerges?.length ?? 0 });
 
     for (const section of sections) {
       const sectionStations = stations
@@ -356,7 +379,41 @@ export default class SurveyLayer {
       };
     });
 
-    console.log(`[SurveyLayer] Created ${shotFeatures.length} shot features, ${stationFeatures.length} station features`);
+    // Build merge connection features
+    const mergeFeatures: GeoJSON.Feature[] = [];
+    if (stationMerges && stationMerges.length > 0) {
+      // Helper to find station coordinates
+      const findStationCoords = (ref: StationRef) => {
+        const station = stations.find(
+          (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
+        );
+        return station?.coordinates;
+      };
+
+      for (const merge of stationMerges) {
+        const coordsA = findStationCoords(merge.station_a);
+        const coordsB = findStationCoords(merge.station_b);
+
+        if (coordsA && coordsB) {
+          mergeFeatures.push({
+            type: 'Feature',
+            geometry: {
+              type: 'LineString',
+              coordinates: [
+                metersToMapCoords(coordsA.x, coordsA.y),
+                metersToMapCoords(coordsB.x, coordsB.y),
+              ],
+            },
+            properties: {
+              stationA: `${merge.station_a.section_id}:${merge.station_a.station_index}`,
+              stationB: `${merge.station_b.section_id}:${merge.station_b.station_index}`,
+            },
+          });
+        }
+      }
+    }
+
+    console.log(`[SurveyLayer] Created ${shotFeatures.length} shot features, ${stationFeatures.length} station features, ${mergeFeatures.length} merge features`);
     if (shotFeatures.length > 0) {
       console.log('[SurveyLayer] First shot feature:', JSON.stringify(shotFeatures[0]));
     }
@@ -377,6 +434,14 @@ export default class SurveyLayer {
         features: stationFeatures,
       });
     }
+
+    const mergesSource = this.map.getSource(this.sourceId + '-merges');
+    if (mergesSource && 'setData' in mergesSource) {
+      (mergesSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: mergeFeatures,
+      });
+    }
   }
 
   destroy() {
@@ -389,11 +454,17 @@ export default class SurveyLayer {
     if (this.map.getLayer(this.shotsLayerId)) {
       this.map.removeLayer(this.shotsLayerId);
     }
+    if (this.map.getLayer(this.mergesLayerId)) {
+      this.map.removeLayer(this.mergesLayerId);
+    }
     if (this.map.getSource(this.sourceId + '-shots')) {
       this.map.removeSource(this.sourceId + '-shots');
     }
     if (this.map.getSource(this.sourceId + '-stations')) {
       this.map.removeSource(this.sourceId + '-stations');
+    }
+    if (this.map.getSource(this.sourceId + '-merges')) {
+      this.map.removeSource(this.sourceId + '-merges');
     }
   }
 }

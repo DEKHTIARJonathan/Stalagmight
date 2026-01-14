@@ -364,8 +364,8 @@ export default function MapCanvas() {
   // Update survey layer when data changes or map loads
   useEffect(() => {
     if (surveyLayerRef.current && project) {
-      console.log('[MapCanvas] Updating SurveyLayer with', project.sections.length, 'sections,', stations.length, 'stations');
-      surveyLayerRef.current.update(project.sections, stations);
+      console.log('[MapCanvas] Updating SurveyLayer with', project.sections.length, 'sections,', stations.length, 'stations,', project.station_merges.length, 'merges');
+      surveyLayerRef.current.update(project.sections, stations, project.station_merges);
     }
   }, [project, stations, mapLoaded]);
 
