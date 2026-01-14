@@ -35,6 +35,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     setHoveredStation,
     setHoveredShot,
     openDialog,
+    snappedStation,
   } = useUIStore();
 
   const { stations, project } = useProjectStore();
@@ -215,22 +216,85 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     [activeTool, addToSelection, openDialog, setSelection, toggleSelection]
   );
 
-  // Handle empty click (no feature)
-  const handleEmptyClick = useCallback(() => {
-    switch (activeTool) {
-      case 'select':
-        clearSelection();
-        break;
+  // Handle empty click (no feature) - but use snapped station if available
+  const handleEmptyClick = useCallback(
+    (_event: { originalEvent: MouseEvent }) => {
+      // If we have a snapped station, use it instead of treating as empty click
+      // This enables snap functionality for draw/merge/measure tools
+      if (snappedStation) {
+        switch (activeTool) {
+          case 'draw':
+            setDrawFromStation(snappedStation);
+            openDialog('draw-shot', { fromStation: snappedStation });
+            return;
 
-      case 'merge':
-        clearMergeStations();
-        break;
+          case 'merge':
+            if (!mergeStationA) {
+              setMergeStationA(snappedStation);
+            } else {
+              // Check if clicking the same station
+              if (
+                mergeStationA.section_id === snappedStation.section_id &&
+                mergeStationA.station_index === snappedStation.station_index
+              ) {
+                clearMergeStations();
+              } else {
+                setMergeStationB(snappedStation);
+                openDialog('merge', {
+                  stationA: mergeStationA,
+                  stationB: snappedStation,
+                });
+              }
+            }
+            return;
 
-      case 'measure':
-        clearMeasure();
-        break;
-    }
-  }, [activeTool, clearMeasure, clearMergeStations, clearSelection]);
+          case 'measure':
+            if (!measureStart) {
+              setMeasureStart(snappedStation);
+            } else {
+              setMeasureEnd(snappedStation);
+              const result = calculateDistance(measureStart, snappedStation);
+              if (result) {
+                options.onMeasureComplete?.(result.distance, result.depthDiff);
+              }
+            }
+            return;
+        }
+      }
+
+      // No snapped station, handle as regular empty click
+      switch (activeTool) {
+        case 'select':
+          clearSelection();
+          break;
+
+        case 'merge':
+          clearMergeStations();
+          break;
+
+        case 'measure':
+          clearMeasure();
+          break;
+      }
+    },
+    [
+      activeTool,
+      snappedStation,
+      mergeStationA,
+      measureStart,
+      calculateDistance,
+      clearMeasure,
+      clearMergeStations,
+      clearSelection,
+      openDialog,
+      options,
+      setDrawFromStation,
+      setMeasureEnd,
+      setMeasureStart,
+      setMergeStationA,
+      setMergeStationB,
+    ]
+  );
 
   // Handle station hover
   const handleStationHover = useCallback(

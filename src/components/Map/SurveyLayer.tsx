@@ -36,6 +36,7 @@ export default class SurveyLayer {
   private selectedShotId: string | null = null;
   private hoveredStationId: string | null = null;
   private hoveredShotId: string | null = null;
+  private snappedStationId: string | null = null;
 
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
@@ -219,26 +220,43 @@ export default class SurveyLayer {
     });
   }
 
-  // Update visual state for selection/hover highlighting
+  // Update visual state for selection/hover/snap highlighting
   private updateVisualState() {
-    // Update station stroke width based on hover/selection
+    // Build station ID expression for matching
+    const stationIdExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]];
+
+    // Update station stroke width based on snap/hover/selection (snap takes priority for visual feedback)
     this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-width', [
       'case',
-      ['==', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]], this.hoveredStationId ?? ''],
+      ['==', stationIdExpr, this.snappedStationId ?? ''],
+      4, // Snapped station has prominent ring
+      ['==', stationIdExpr, this.hoveredStationId ?? ''],
       3,
-      ['==', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]], this.selectedStationId ?? ''],
+      ['==', stationIdExpr, this.selectedStationId ?? ''],
       2,
       1,
     ]);
 
-    // Update station stroke color for selection
+    // Update station stroke color for snap/selection/hover
     this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-color', [
       'case',
-      ['==', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]], this.selectedStationId ?? ''],
+      ['==', stationIdExpr, this.snappedStationId ?? ''],
+      '#00ffcc', // Cyan/teal for snap indicator
+      ['==', stationIdExpr, this.selectedStationId ?? ''],
       '#00aaff',
-      ['==', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]], this.hoveredStationId ?? ''],
+      ['==', stationIdExpr, this.hoveredStationId ?? ''],
       '#0066ff',
       '#000000',
+    ]);
+
+    // Update station radius when snapped for extra visibility
+    this.map.setPaintProperty(this.stationsLayerId, 'circle-radius', [
+      'case',
+      ['==', stationIdExpr, this.snappedStationId ?? ''],
+      7, // Slightly larger when snapped
+      ['get', 'isZeroDatum'],
+      8,
+      4,
     ]);
 
     // Update shot line width based on hover/selection
@@ -261,6 +279,12 @@ export default class SurveyLayer {
   // Set selected shot (called from outside to sync with uiStore)
   setSelectedShot(sectionId: SectionId | null, shotId: ShotId | null) {
     this.selectedShotId = sectionId !== null && shotId !== null ? `${sectionId}:${shotId}` : null;
+    this.updateVisualState();
+  }
+
+  // Set snapped station (called from outside for snap indicator)
+  setSnappedStation(ref: StationRef | null) {
+    this.snappedStationId = ref ? `${ref.section_id}:${ref.station_index}` : null;
     this.updateVisualState();
   }
 

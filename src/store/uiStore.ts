@@ -116,6 +116,10 @@ interface UIStore {
   setHoveredStation: (ref: StationRef | null) => void;
   setHoveredShot: (shot: { sectionId: SectionId; shotId: ShotId } | null) => void;
 
+  // Snap state
+  snappedStation: StationRef | null;
+  setSnappedStation: (ref: StationRef | null) => void;
+
   // Drag state
   isDragging: boolean;
   dragStart: [number, number] | null;
@@ -258,6 +262,10 @@ export const useUIStore = create<UIStore>((set) => ({
   hoveredShot: null,
   setHoveredStation: (hoveredStation) => set({ hoveredStation }),
   setHoveredShot: (hoveredShot) => set({ hoveredShot }),
+
+  // Snap state
+  snappedStation: null,
+  setSnappedStation: (snappedStation) => set({ snappedStation }),
 
   // Drag state
   isDragging: false,
