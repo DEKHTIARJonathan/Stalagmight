@@ -82,20 +82,64 @@ interface EmptyStateProps {
 
 function EmptyState({ onImport, onNew, onOpen }: EmptyStateProps) {
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-6">
+    <div className="flex flex-col items-center justify-center h-full gap-8">
       <div className="text-center">
+        <div className="text-6xl mb-4">🗺️</div>
         <h2 className="text-2xl font-bold mb-2">No cave systems yet</h2>
-        <p className="text-text-secondary">
-          Import a DMP file from your mNemo device, or create a new project
+        <p className="text-text-secondary max-w-md">
+          Start by importing survey data from your mNemo device, creating a new project,
+          or opening an existing CaveChef project file.
         </p>
       </div>
-      <div className="flex gap-4">
-        <Button variant="primary" onClick={onImport}>
-          Import DMP
-        </Button>
-        <Button onClick={onNew}>New Project</Button>
-        <Button onClick={onOpen}>Open Existing</Button>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-2xl">
+        <EmptyStateCard
+          icon="📥"
+          title="Import DMP"
+          description="Import survey data from mNemo's .dmp file format"
+          onClick={onImport}
+          primary
+        />
+        <EmptyStateCard
+          icon="📝"
+          title="New Project"
+          description="Create a blank project and enter data manually"
+          onClick={onNew}
+        />
+        <EmptyStateCard
+          icon="📂"
+          title="Open Existing"
+          description="Open a previously saved .cvchef project file"
+          onClick={onOpen}
+        />
       </div>
     </div>
+  );
+}
+
+interface EmptyStateCardProps {
+  icon: string;
+  title: string;
+  description: string;
+  onClick: () => void;
+  primary?: boolean;
+}
+
+function EmptyStateCard({ icon, title, description, onClick, primary }: EmptyStateCardProps) {
+  return (
+    <button
+      onClick={onClick}
+      className={`
+        p-6 rounded-lg border text-left transition-all
+        hover:scale-105 hover:shadow-lg
+        ${primary
+          ? 'bg-accent/10 border-accent hover:bg-accent/20'
+          : 'bg-panel border-border hover:bg-background/50'
+        }
+      `}
+    >
+      <div className="text-4xl mb-3">{icon}</div>
+      <h3 className="font-semibold mb-1">{title}</h3>
+      <p className="text-sm text-text-secondary">{description}</p>
+    </button>
   );
 }
