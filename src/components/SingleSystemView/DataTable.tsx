@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { type Section, type Shot } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -14,7 +14,17 @@ export default function DataTable({ sections }: DataTableProps) {
   );
 
   const { updateShot } = useProjectStore();
-  const { selection, setSelection } = useUIStore();
+  const { selection, setSelection, dataTableOpen, toggleDataTable, dataTableHeight } = useUIStore();
+
+  // Update selected section when sections change (e.g., first load)
+  useEffect(() => {
+    if (sections.length > 0 && selectedSectionId === null) {
+      const firstSection = sections[0];
+      if (firstSection) {
+        setSelectedSectionId(firstSection.id);
+      }
+    }
+  }, [sections, selectedSectionId]);
 
   const selectedSection = sections.find((s) => s.id === selectedSectionId);
 
@@ -75,46 +85,73 @@ export default function DataTable({ sections }: DataTableProps) {
   ];
 
   return (
-    <div className="h-full flex flex-col bg-panel">
-      {/* Header with section selector */}
-      <div className="flex items-center gap-4 px-4 py-2 border-b border-border">
-        <label className="text-sm text-text-secondary">Section:</label>
-        <select
-          value={selectedSectionId ?? ''}
-          onChange={(e) => setSelectedSectionId(Number(e.target.value))}
-          className="bg-background border border-border rounded px-2 py-1 text-sm"
+    <div
+      className="flex flex-col bg-panel border-t border-border transition-all duration-300 ease-in-out"
+      style={{
+        height: dataTableOpen ? `${dataTableHeight}px` : '40px',
+        minHeight: '40px',
+      }}
+    >
+      {/* Header with section selector and collapse toggle */}
+      <div className="flex items-center gap-4 px-4 py-2 border-b border-border shrink-0">
+        <button
+          onClick={toggleDataTable}
+          className="text-text-secondary hover:text-text transition-transform duration-200"
+          style={{ transform: dataTableOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
+          title={dataTableOpen ? 'Collapse (Ctrl+3)' : 'Expand (Ctrl+3)'}
         >
-          {sections.map((section) => (
-            <option key={section.id} value={section.id}>
-              {section.name ?? `Section ${section.id}`}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Table */}
-      <div className="flex-1 overflow-auto">
-        {selectedSection ? (
-          <EditableTable<Shot>
-            columns={columns}
-            data={selectedSection.shots}
-            keyField="id"
-            onCellEdit={handleCellEdit}
-            editableColumns={editableColumns}
-            selectedKey={
-              selection?.type === 'shot' &&
-              selection.sectionId === selectedSectionId
-                ? selection.shotId
-                : null
-            }
-            emptyMessage="No shots in this section"
-          />
-        ) : (
-          <div className="flex items-center justify-center h-full text-text-secondary">
-            Select a section to view shots
-          </div>
+          ▲
+        </button>
+        <span className="text-sm font-medium">Data Table</span>
+        {dataTableOpen && (
+          <>
+            <span className="text-text-secondary">|</span>
+            <label className="text-sm text-text-secondary">Section:</label>
+            <select
+              value={selectedSectionId ?? ''}
+              onChange={(e) => setSelectedSectionId(Number(e.target.value))}
+              className="bg-background border border-border rounded px-2 py-1 text-sm"
+            >
+              {sections.map((section) => (
+                <option key={section.id} value={section.id}>
+                  {section.name ?? `Section ${section.id}`}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+        {!dataTableOpen && selectedSection && (
+          <span className="text-sm text-text-secondary ml-auto">
+            {selectedSection.name ?? `Section ${selectedSection.id}`} ({selectedSection.shots.length} shots)
+          </span>
         )}
       </div>
+
+      {/* Table - only render when open for performance */}
+      {dataTableOpen && (
+        <div className="flex-1 overflow-auto">
+          {selectedSection ? (
+            <EditableTable<Shot>
+              columns={columns}
+              data={selectedSection.shots}
+              keyField="id"
+              onCellEdit={handleCellEdit}
+              editableColumns={editableColumns}
+              selectedKey={
+                selection?.type === 'shot' &&
+                selection.sectionId === selectedSectionId
+                  ? selection.shotId
+                  : null
+              }
+              emptyMessage="No shots in this section"
+            />
+          ) : (
+            <div className="flex items-center justify-center h-full text-text-secondary">
+              Select a section to view shots
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
