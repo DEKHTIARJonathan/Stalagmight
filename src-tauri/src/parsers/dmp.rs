@@ -1,12 +1,125 @@
 //! DMP file parser for mNemo device data
 //!
-//! This is a stub implementation. The actual binary format parsing
-//! will be implemented when the format specification is available.
+//! Ported from pytool_mnemo_lib Python implementation.
+//! Supports DMP versions 2-5.
 
-use anyhow::{Context, Result};
-use chrono::NaiveDate;
+use anyhow::{anyhow, bail, Context, Result};
+use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/// Supported DMP file versions
+const SUPPORTED_VERSIONS: &[u8] = &[2, 3, 4, 5];
+
+/// Section start magic bytes (version > 2)
+const SECTION_MAGIC: [u8; 3] = [68, 89, 101];
+
+/// Shot start magic bytes (version >= 5)
+const SHOT_START_MAGIC: [u8; 3] = [57, 67, 77];
+
+/// Shot end magic bytes (version >= 5)
+const SHOT_END_MAGIC: [u8; 3] = [95, 25, 35];
+
+/// Get shot size in bytes for a given version
+fn shot_size(version: u8) -> usize {
+    match version {
+        2 => 16,
+        3 => 21,
+        4 => 29,
+        5 => 35,
+        _ => 0,
+    }
+}
+
+/// End-of-section patterns for splitting sections
+fn end_of_section_patterns(version: u8) -> Vec<Vec<u8>> {
+    match version {
+        2 => vec![vec![3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
+        5 => {
+            // Normal end sequence: shot_start_magic + type(3) + zeros + shot_end_magic
+            let mut normal = vec![57, 67, 77, 3];
+            normal.extend(vec![0u8; 28]);
+            normal.extend(&[95, 25, 35]);
+
+            // Buggy end sequence (sometimes legal)
+            let mut buggy = vec![57, 67, 77, 3, 7, 8, 7, 8];
+            buggy.extend(vec![0u8; 24]);
+            buggy.extend(&[95, 25, 35]);
+
+            vec![normal, buggy]
+        }
+        3 | 4 => {
+            // Versions 3 and 4 use similar pattern to v2 but with different shot sizes
+            let size = shot_size(version);
+            let mut pattern = vec![3];
+            pattern.extend(vec![0u8; size - 1]);
+            vec![pattern]
+        }
+        _ => vec![],
+    }
+}
+
+// ============================================================================
+// IntBuffer - Sequential binary reading
+// ============================================================================
+
+/// Buffer for sequential reading of integer data
+struct IntBuffer {
+    data: Vec<u8>,
+    cursor: usize,
+}
+
+impl IntBuffer {
+    fn new(data: Vec<u8>) -> Self {
+        Self { data, cursor: 0 }
+    }
+
+    /// Read a single byte and advance cursor
+    fn read(&mut self) -> Result<u8> {
+        if self.cursor >= self.data.len() {
+            bail!("Reading beyond buffer at position {}", self.cursor);
+        }
+        let value = self.data[self.cursor];
+        self.cursor += 1;
+        Ok(value)
+    }
+
+    /// Read n bytes and advance cursor
+    fn read_n(&mut self, n: usize) -> Result<Vec<u8>> {
+        if self.cursor + n > self.data.len() {
+            bail!(
+                "Reading {} bytes beyond buffer at position {}",
+                n,
+                self.cursor
+            );
+        }
+        let values = self.data[self.cursor..self.cursor + n].to_vec();
+        self.cursor += n;
+        Ok(values)
+    }
+
+    /// Read big-endian signed 16-bit integer (matches Python readInt16BE)
+    /// Format: first byte is LSB * 256, second byte is MSB masked
+    fn read_int16_be(&mut self) -> Result<i32> {
+        let lsb = self.read()? as i32;
+        let msb = self.read()? as i32;
+        // Matches Python: (lsb * 2**8) + (msb & 0xFF)
+        Ok((lsb << 8) + (msb & 0xFF))
+    }
+
+    /// Check if we have at least n bytes remaining
+    fn has_remaining(&self, n: usize) -> bool {
+        self.cursor + n <= self.data.len()
+    }
+}
+
+// ============================================================================
+// Data Types
+// ============================================================================
 
 /// Parsed DMP file
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,12 +133,14 @@ pub struct DmpFile {
 /// A section from a DMP file
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DmpSection {
+    /// DMP version for this section
+    pub version: u8,
     /// 3-character section identifier
     pub name: String,
     /// Survey direction
     pub direction: DmpDirection,
-    /// Survey date
-    pub date: NaiveDate,
+    /// Survey date and time
+    pub date: NaiveDateTime,
     /// Shots in this section
     pub shots: Vec<DmpShot>,
 }
@@ -38,17 +153,43 @@ pub enum DmpDirection {
     Out,
 }
 
+impl TryFrom<u8> for DmpDirection {
+    type Error = anyhow::Error;
+
+    fn try_from(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(DmpDirection::In),
+            1 => Ok(DmpDirection::Out),
+            _ => bail!("Invalid direction value: {}", value),
+        }
+    }
+}
+
 /// Shot type from mNemo
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DmpShotType {
-    /// Standard shot
-    Standard,
     /// Cross-section A
     CsA,
     /// Cross-section B
     CsB,
+    /// Standard shot
+    Standard,
     /// End of survey marker
     EndOfSurvey,
+}
+
+impl TryFrom<u8> for DmpShotType {
+    type Error = anyhow::Error;
+
+    fn try_from(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(DmpShotType::CsA),
+            1 => Ok(DmpShotType::CsB),
+            2 => Ok(DmpShotType::Standard),
+            3 => Ok(DmpShotType::EndOfSurvey),
+            _ => bail!("Invalid shot type value: {}", value),
+        }
+    }
 }
 
 /// A shot from a DMP file
@@ -70,66 +211,319 @@ pub struct DmpShot {
     pub pitch_in: f64,
     /// Pitch when exiting (degrees)
     pub pitch_out: f64,
-    /// Left passage dimension (meters)
+    /// Left passage dimension (meters), v4+
     pub left: f64,
-    /// Right passage dimension (meters)
+    /// Right passage dimension (meters), v4+
     pub right: f64,
-    /// Up passage dimension (meters)
+    /// Up passage dimension (meters), v4+
     pub up: f64,
-    /// Down passage dimension (meters)
+    /// Down passage dimension (meters), v4+
     pub down: f64,
-    /// Water temperature (celsius)
+    /// Water temperature (celsius), v3+
     pub temperature: f64,
-    /// Time: hour
+    /// Time: hour, v4+
     pub hour: u8,
-    /// Time: minute
+    /// Time: minute, v4+
     pub minute: u8,
-    /// Time: second
+    /// Time: second, v4+
     pub second: u8,
     /// Physical marker index
     pub marker_index: u8,
 }
 
-/// Parse a DMP file
-///
-/// This is a stub implementation that returns an empty file.
-/// The actual binary parsing will be implemented when the format
-/// specification becomes available.
-pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
-    tracing::warn!(
-        path = ?path,
-        "DMP parser is a stub - real implementation pending format specification"
-    );
+// ============================================================================
+// Parsing Functions
+// ============================================================================
 
-    // Verify the file exists and has .dmp extension
-    if !path.exists() {
-        anyhow::bail!("File not found: {}", path.display());
+/// Split DMP data into sections by end-of-section markers
+fn split_into_sections(data: &[u8], version: u8) -> Vec<Vec<u8>> {
+    let patterns = end_of_section_patterns(version);
+    if patterns.is_empty() {
+        return vec![];
     }
 
+    let pattern_len = patterns[0].len();
+    let mut sections = Vec::new();
+    let mut start_idx = 0;
+
+    for current_idx in 0..=data.len().saturating_sub(pattern_len) {
+        let window = &data[current_idx..current_idx + pattern_len];
+
+        // Check if window matches any end pattern
+        if patterns.iter().any(|p| p.as_slice() == window) {
+            let end_idx = current_idx + pattern_len;
+            sections.push(data[start_idx..end_idx].to_vec());
+            start_idx = end_idx;
+        }
+    }
+
+    sections
+}
+
+/// Parse a shot from buffer based on version
+fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
+    // Magic values check (version >= 5)
+    if version >= 5 {
+        let magic = buffer.read_n(3)?;
+        if magic != SHOT_START_MAGIC {
+            bail!(
+                "Invalid shot start magic: {:?}, expected {:?}",
+                magic,
+                SHOT_START_MAGIC
+            );
+        }
+    }
+
+    // Shot type
+    let shot_type = DmpShotType::try_from(buffer.read()?)?;
+
+    // Core shot data (all versions)
+    let heading_in = buffer.read_int16_be()? as f64 / 10.0;
+    let heading_out = buffer.read_int16_be()? as f64 / 10.0;
+    let length = (buffer.read_int16_be()? as f64 / 100.0).max(0.0);
+    let depth_in = (buffer.read_int16_be()? as f64 / 100.0).max(0.0);
+    let depth_out = (buffer.read_int16_be()? as f64 / 100.0).max(0.0);
+    let pitch_in = buffer.read_int16_be()? as f64 / 10.0;
+    let pitch_out = buffer.read_int16_be()? as f64 / 10.0;
+
+    // LRUD (version >= 4)
+    let (left, right, up, down) = if version >= 4 {
+        (
+            buffer.read_int16_be()? as f64 / 100.0,
+            buffer.read_int16_be()? as f64 / 100.0,
+            buffer.read_int16_be()? as f64 / 100.0,
+            buffer.read_int16_be()? as f64 / 100.0,
+        )
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
+    };
+
+    // Temperature and time (version >= 4 for time, >= 3 for temp in _generate but >= 4 in from_dmp)
+    let (temperature, hour, minute, second) = if version >= 4 {
+        (
+            buffer.read_int16_be()? as f64 / 10.0,
+            buffer.read()?,
+            buffer.read()?,
+            buffer.read()?,
+        )
+    } else {
+        (0.0, 0, 0, 0)
+    };
+
+    // Marker index (all versions)
+    let marker_index = buffer.read()?;
+
+    // Magic values check end (version >= 5)
+    if version >= 5 {
+        let magic = buffer.read_n(3)?;
+        if magic != SHOT_END_MAGIC {
+            bail!(
+                "Invalid shot end magic: {:?}, expected {:?}",
+                magic,
+                SHOT_END_MAGIC
+            );
+        }
+    }
+
+    Ok(DmpShot {
+        shot_type,
+        heading_in,
+        heading_out,
+        length,
+        depth_in,
+        depth_out,
+        pitch_in,
+        pitch_out,
+        left,
+        right,
+        up,
+        down,
+        temperature,
+        hour,
+        minute,
+        second,
+        marker_index,
+    })
+}
+
+/// Parse a section from raw section data
+fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
+    let mut buffer = IntBuffer::new(data);
+
+    // Version byte
+    let version = buffer.read()?;
+    if !SUPPORTED_VERSIONS.contains(&version) {
+        bail!("Unsupported DMP version: {}", version);
+    }
+
+    // Magic values (version > 2)
+    if version > 2 {
+        let magic = buffer.read_n(3)?;
+        if magic != SECTION_MAGIC {
+            bail!(
+                "Invalid section magic: {:?}, expected {:?}",
+                magic,
+                SECTION_MAGIC
+            );
+        }
+    }
+
+    // Date: year (offset from 2000), month, day, hour, minute
+    let year = buffer.read()? as i32 + 2000;
+    let month = buffer.read()? as u32;
+    let day = buffer.read()? as u32;
+    let hour = buffer.read()? as u32;
+    let minute = buffer.read()? as u32;
+
+    // Validate date components
+    if !(2016..2100).contains(&year) {
+        bail!("Invalid year: {}", year);
+    }
+    if !(1..=12).contains(&month) {
+        bail!("Invalid month: {}", month);
+    }
+    if !(1..=31).contains(&day) {
+        bail!("Invalid day: {}", day);
+    }
+    if hour >= 24 {
+        bail!("Invalid hour: {}", hour);
+    }
+    if minute >= 60 {
+        bail!("Invalid minute: {}", minute);
+    }
+
+    let date = NaiveDate::from_ymd_opt(year, month, day)
+        .ok_or_else(|| anyhow!("Invalid date: {}-{}-{}", year, month, day))?
+        .and_hms_opt(hour, minute, 0)
+        .ok_or_else(|| anyhow!("Invalid time: {}:{}", hour, minute))?;
+
+    // Name: 3 ASCII characters
+    let name_bytes = buffer.read_n(3)?;
+    let name = String::from_utf8(name_bytes.clone())
+        .unwrap_or_else(|_| format!("{}{}{}", name_bytes[0], name_bytes[1], name_bytes[2]));
+
+    // Direction
+    let direction = DmpDirection::try_from(buffer.read()?)?;
+
+    // Parse shots
+    let shot_len = shot_size(version);
+    let mut shots = Vec::new();
+
+    while buffer.has_remaining(shot_len) {
+        match parse_shot(&mut buffer, version) {
+            Ok(shot) => shots.push(shot),
+            Err(e) => {
+                tracing::debug!("Shot parsing ended: {}", e);
+                break;
+            }
+        }
+    }
+
+    if shots.is_empty() {
+        bail!("Section has no shots");
+    }
+
+    Ok(DmpSection {
+        version,
+        name,
+        direction,
+        date,
+        shots,
+    })
+}
+
+/// Parse a DMP file
+///
+/// DMP files are text files with semicolon-separated integers.
+pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
+    // Verify the file exists
+    if !path.exists() {
+        bail!("File not found: {}", path.display());
+    }
+
+    // Verify extension
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
 
     if extension.to_lowercase() != "dmp" {
-        anyhow::bail!("File is not a DMP file: {}", path.display());
+        bail!("File is not a DMP file: {}", path.display());
     }
 
-    // Read file to verify it's readable
-    let _data = std::fs::read(path).context("Failed to read DMP file")?;
+    // Read and parse file content
+    let content = std::fs::read_to_string(path).context("Failed to read DMP file")?;
 
-    // TODO: Implement actual binary parsing
-    // The format includes:
-    // - Header with version info
-    // - Section headers with 3-char names
-    // - Shot records with compass/depth/LRUD data
-    // Reference: pytool_mnemo_lib
+    // Parse semicolon-separated integers
+    let data: Vec<u8> = content
+        .trim()
+        .split(';')
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.trim()
+                .parse::<i32>()
+                .map(|v| v as u8)
+                .with_context(|| format!("Invalid integer in DMP file: '{}'", s))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-    Ok(DmpFile {
-        version: 0,
-        sections: Vec::new(),
-    })
+    if data.is_empty() {
+        bail!("DMP file is empty");
+    }
+
+    // Get version from first byte
+    let version = data[0];
+    if !SUPPORTED_VERSIONS.contains(&version) {
+        bail!(
+            "Unsupported DMP version: {}. Supported: {:?}",
+            version,
+            SUPPORTED_VERSIONS
+        );
+    }
+
+    tracing::info!(path = ?path, version = version, "Parsing DMP file");
+
+    // Split into sections
+    let section_data = split_into_sections(&data, version);
+    if section_data.is_empty() {
+        bail!("No sections found in DMP file");
+    }
+
+    // Parse each section
+    let mut sections = Vec::new();
+    for (i, section_bytes) in section_data.into_iter().enumerate() {
+        match parse_section(section_bytes) {
+            Ok(section) => {
+                tracing::debug!(
+                    section_name = %section.name,
+                    shot_count = section.shots.len(),
+                    "Parsed section {}",
+                    i
+                );
+                sections.push(section);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to parse section {}: {}", i, e);
+            }
+        }
+    }
+
+    if sections.is_empty() {
+        bail!("No valid sections found in DMP file");
+    }
+
+    tracing::info!(
+        section_count = sections.len(),
+        total_shots = sections.iter().map(|s| s.shots.len()).sum::<usize>(),
+        "DMP file parsed successfully"
+    );
+
+    Ok(DmpFile { version, sections })
 }
+
+// ============================================================================
+// Conversions to internal types
+// ============================================================================
 
 impl DmpShot {
     /// Convert to our internal ShotData format
@@ -160,7 +554,7 @@ impl DmpSection {
         crate::models::SectionData {
             name: Some(self.name.clone()),
             surveyor: None,
-            date: Some(self.date),
+            date: Some(self.date.date()),
             color,
             shots: self
                 .shots
@@ -172,6 +566,10 @@ impl DmpSection {
     }
 }
 
+// ============================================================================
+// Tests
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,28 +577,150 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_stub_parser_returns_empty() {
-        // Create a temporary .dmp file
-        let mut file = NamedTempFile::new().unwrap();
-        file.write_all(b"dummy dmp content").unwrap();
+    fn test_int_buffer_read() {
+        let mut buffer = IntBuffer::new(vec![1, 2, 3, 4, 5]);
+        assert_eq!(buffer.read().unwrap(), 1);
+        assert_eq!(buffer.read().unwrap(), 2);
+        assert_eq!(buffer.read_n(2).unwrap(), vec![3, 4]);
+        assert_eq!(buffer.read().unwrap(), 5);
+        assert!(buffer.read().is_err());
+    }
 
-        let path = file.path().with_extension("dmp");
-        std::fs::copy(file.path(), &path).unwrap();
+    #[test]
+    fn test_int_buffer_read_int16_be() {
+        // Test big-endian reading: (lsb << 8) + (msb & 0xFF)
+        let mut buffer = IntBuffer::new(vec![0, 100]); // 0 * 256 + 100 = 100
+        assert_eq!(buffer.read_int16_be().unwrap(), 100);
 
-        let result = parse_dmp(&path);
-        assert!(result.is_ok());
+        let mut buffer = IntBuffer::new(vec![1, 0]); // 1 * 256 + 0 = 256
+        assert_eq!(buffer.read_int16_be().unwrap(), 256);
 
-        let dmp = result.unwrap();
-        assert_eq!(dmp.version, 0);
-        assert!(dmp.sections.is_empty());
+        let mut buffer = IntBuffer::new(vec![14, 16]); // 14 * 256 + 16 = 3600
+        assert_eq!(buffer.read_int16_be().unwrap(), 3600);
+    }
 
-        // Cleanup
-        std::fs::remove_file(&path).ok();
+    #[test]
+    fn test_shot_type_conversion() {
+        assert_eq!(DmpShotType::try_from(0).unwrap(), DmpShotType::CsA);
+        assert_eq!(DmpShotType::try_from(1).unwrap(), DmpShotType::CsB);
+        assert_eq!(DmpShotType::try_from(2).unwrap(), DmpShotType::Standard);
+        assert_eq!(DmpShotType::try_from(3).unwrap(), DmpShotType::EndOfSurvey);
+        assert!(DmpShotType::try_from(4).is_err());
+    }
+
+    #[test]
+    fn test_direction_conversion() {
+        assert_eq!(DmpDirection::try_from(0).unwrap(), DmpDirection::In);
+        assert_eq!(DmpDirection::try_from(1).unwrap(), DmpDirection::Out);
+        assert!(DmpDirection::try_from(2).is_err());
+    }
+
+    #[test]
+    fn test_split_into_sections_v2() {
+        // Create minimal v2 section data with end-of-section marker
+        let mut data = vec![2]; // version
+        data.extend(vec![0u8; 20]); // padding/header
+        data.extend(vec![3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // end marker
+
+        let sections = split_into_sections(&data, 2);
+        assert_eq!(sections.len(), 1);
     }
 
     #[test]
     fn test_non_existent_file() {
         let result = parse_dmp(Path::new("/nonexistent/file.dmp"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_empty_dmp_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"").unwrap();
+
+        let path = file.path().with_extension("dmp");
+        std::fs::copy(file.path(), &path).unwrap();
+
+        let result = parse_dmp(&path);
+        assert!(result.is_err());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_shot_size() {
+        assert_eq!(shot_size(2), 16);
+        assert_eq!(shot_size(3), 21);
+        assert_eq!(shot_size(4), 29);
+        assert_eq!(shot_size(5), 35);
+        assert_eq!(shot_size(1), 0);
+    }
+
+    // Integration tests with real DMP files
+    #[test]
+    fn test_parse_v2_dmp() {
+        let test_file = Path::new("/home/user/src/cave/pytool_mnemo_lib/tests/artifacts/test_v2.dmp");
+        if !test_file.exists() {
+            println!("Skipping test: test file not found");
+            return;
+        }
+
+        let result = parse_dmp(test_file);
+        assert!(result.is_ok(), "Failed to parse v2 DMP: {:?}", result.err());
+
+        let dmp = result.unwrap();
+        assert_eq!(dmp.version, 2);
+        assert!(!dmp.sections.is_empty(), "No sections found");
+
+        // Check first section has shots
+        let first_section = &dmp.sections[0];
+        assert!(!first_section.shots.is_empty(), "First section has no shots");
+
+        // Print summary for debugging
+        println!(
+            "v2 DMP: {} sections, {} total shots",
+            dmp.sections.len(),
+            dmp.sections.iter().map(|s| s.shots.len()).sum::<usize>()
+        );
+        for (i, section) in dmp.sections.iter().enumerate() {
+            let standard_shots = section.shots.iter().filter(|s| s.shot_type == DmpShotType::Standard).count();
+            println!(
+                "  Section {}: name='{}', dir={:?}, shots={} (standard={})",
+                i, section.name, section.direction, section.shots.len(), standard_shots
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_v5_dmp() {
+        let test_file = Path::new("/home/user/src/cave/pytool_mnemo_lib/tests/artifacts/test_v5.dmp");
+        if !test_file.exists() {
+            println!("Skipping test: test file not found");
+            return;
+        }
+
+        let result = parse_dmp(test_file);
+        assert!(result.is_ok(), "Failed to parse v5 DMP: {:?}", result.err());
+
+        let dmp = result.unwrap();
+        assert_eq!(dmp.version, 5);
+        assert!(!dmp.sections.is_empty(), "No sections found");
+
+        // Check first section has shots
+        let first_section = &dmp.sections[0];
+        assert!(!first_section.shots.is_empty(), "First section has no shots");
+
+        // Print summary for debugging
+        println!(
+            "v5 DMP: {} sections, {} total shots",
+            dmp.sections.len(),
+            dmp.sections.iter().map(|s| s.shots.len()).sum::<usize>()
+        );
+        for (i, section) in dmp.sections.iter().enumerate() {
+            let standard_shots = section.shots.iter().filter(|s| s.shot_type == DmpShotType::Standard).count();
+            println!(
+                "  Section {}: name='{}', dir={:?}, shots={} (standard={})",
+                i, section.name, section.direction, section.shots.len(), standard_shots
+            );
+        }
     }
 }

@@ -22,7 +22,7 @@ pub struct Section {
     /// Shots in this section, in order
     pub shots: Vec<Shot>,
     /// Next shot ID to assign
-    next_shot_id: ShotId,
+    pub next_shot_id: ShotId,
 }
 
 /// Data for creating a new section
@@ -76,6 +76,22 @@ impl Section {
         }
 
         section
+    }
+
+    /// Create a new section with a specific ID (for undo restoration)
+    pub fn new_with_id(id: SectionId, data: SectionData) -> Self {
+        Self::new(id, data)
+    }
+
+    /// Convert to SectionData (for undo snapshots)
+    pub fn to_section_data(&self) -> SectionData {
+        SectionData {
+            name: self.name.clone(),
+            surveyor: self.surveyor.clone(),
+            date: self.date,
+            color: self.color.clone(),
+            shots: self.shots.iter().map(|s| s.to_shot_data()).collect(),
+        }
     }
 
     /// Add a shot to the end of this section

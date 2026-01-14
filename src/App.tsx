@@ -3,7 +3,7 @@ import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
-import { ImportDialog, ExportDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, DmpImportDialog } from './components/Dialogs';
 
 function App() {
   const { project, loadConfig } = useProjectStore();
@@ -25,6 +25,8 @@ function App() {
       {/* Dialogs */}
       {activeDialog === 'import' && <ImportDialog />}
       {activeDialog === 'export' && <ExportDialog />}
+      {activeDialog === 'new-project' && <NewProjectDialog />}
+      {activeDialog === 'import-dmp' && <DmpImportDialog />}
     </div>
   );
 }
