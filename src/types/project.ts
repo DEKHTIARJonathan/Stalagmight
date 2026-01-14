@@ -121,6 +121,16 @@ export interface StationMerge {
   merged_at: string;
 }
 
+export interface LoopClosure {
+  station_a: StationRef;
+  station_b: StationRef;
+  path_length: number;
+  misclosure_distance: number;
+  error_percentage: number;
+  horizontal_misclosure: number;
+  vertical_misclosure: number;
+}
+
 export interface ZeroDatum {
   station_ref: StationRef;
   gps: GpsCoordinates;
@@ -140,6 +150,7 @@ export interface Project {
   sections: Section[];
   station_merges: StationMerge[];
   zero_datums: ZeroDatum[];
+  loop_closures: LoopClosure[];
   file_path: string | null;
 }
 

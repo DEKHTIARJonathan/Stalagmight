@@ -1,6 +1,6 @@
 import type { Map as MaplibreMap, MapMouseEvent } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
-import type { Section, SectionId, ShotId, Station, StationRef, StationMerge } from '../../types/project';
+import type { Section, SectionId, ShotId, Station, StationRef, StationMerge, LoopClosure } from '../../types/project';
 import { metersToMapCoords } from '../../utils/coordinates';
 
 export interface SurveyLayerCallbacks {
@@ -30,6 +30,7 @@ export default class SurveyLayer {
   private stationsLayerId = 'survey-stations';
   private labelsLayerId = 'survey-labels';
   private mergesLayerId = 'survey-merges';
+  private loopClosuresLayerId = 'survey-loop-closures';
   private callbacks: SurveyLayerCallbacks;
 
   // Visual state
@@ -78,6 +79,15 @@ export default class SurveyLayer {
         features: [],
       },
     });
+
+    // Loop closures line source
+    this.map.addSource(this.sourceId + '-loop-closures', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    });
   }
 
   private initializeLayers() {
@@ -91,6 +101,20 @@ export default class SurveyLayer {
         'line-width': 2,
         'line-opacity': 0.5,
         'line-dasharray': [4, 4], // Dashed line
+      },
+    });
+
+    // Loop closures layer (dashed lines with color based on error severity)
+    this.map.addLayer({
+      id: this.loopClosuresLayerId,
+      type: 'line',
+      source: this.sourceId + '-loop-closures',
+      paint: {
+        // Color based on error percentage: green (<1%), yellow (1-3%), orange (3-5%), red (>5%)
+        'line-color': ['get', 'color'],
+        'line-width': 3,
+        'line-opacity': 0.8,
+        'line-dasharray': [6, 4], // Longer dashes than regular merges
       },
     });
 
@@ -311,11 +335,11 @@ export default class SurveyLayer {
     this.updateVisualState();
   }
 
-  update(sections: Section[], stations: Station[], stationMerges?: StationMerge[]) {
+  update(sections: Section[], stations: Station[], stationMerges?: StationMerge[], loopClosures?: LoopClosure[]) {
     // Build shot features
     const shotFeatures: GeoJSON.Feature[] = [];
 
-    console.log('[SurveyLayer] update called', { sectionsCount: sections.length, stationsCount: stations.length, mergesCount: stationMerges?.length ?? 0 });
+    console.log('[SurveyLayer] update called', { sectionsCount: sections.length, stationsCount: stations.length, mergesCount: stationMerges?.length ?? 0, loopClosuresCount: loopClosures?.length ?? 0 });
 
     for (const section of sections) {
       const sectionStations = stations
@@ -379,17 +403,17 @@ export default class SurveyLayer {
       };
     });
 
+    // Helper to find station coordinates (used by merges and loop closures)
+    const findStationCoords = (ref: StationRef) => {
+      const station = stations.find(
+        (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
+      );
+      return station?.coordinates;
+    };
+
     // Build merge connection features
     const mergeFeatures: GeoJSON.Feature[] = [];
     if (stationMerges && stationMerges.length > 0) {
-      // Helper to find station coordinates
-      const findStationCoords = (ref: StationRef) => {
-        const station = stations.find(
-          (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
-        );
-        return station?.coordinates;
-      };
-
       for (const merge of stationMerges) {
         const coordsA = findStationCoords(merge.station_a);
         const coordsB = findStationCoords(merge.station_b);
@@ -442,6 +466,52 @@ export default class SurveyLayer {
         features: mergeFeatures,
       });
     }
+
+    // Build loop closure features with severity-based colors
+    const loopClosureFeatures: GeoJSON.Feature[] = [];
+    if (loopClosures && loopClosures.length > 0) {
+      // Helper function to get color based on error percentage
+      const getErrorColor = (errorPct: number): string => {
+        if (errorPct < 1) return '#22c55e'; // Green - excellent
+        if (errorPct < 3) return '#eab308'; // Yellow - acceptable
+        if (errorPct < 5) return '#f97316'; // Orange - marginal
+        return '#ef4444'; // Red - poor
+      };
+
+      for (const closure of loopClosures) {
+        const coordsA = findStationCoords(closure.station_a);
+        const coordsB = findStationCoords(closure.station_b);
+
+        if (coordsA && coordsB) {
+          loopClosureFeatures.push({
+            type: 'Feature',
+            geometry: {
+              type: 'LineString',
+              coordinates: [
+                metersToMapCoords(coordsA.x, coordsA.y),
+                metersToMapCoords(coordsB.x, coordsB.y),
+              ],
+            },
+            properties: {
+              stationA: `${closure.station_a.section_id}:${closure.station_a.station_index}`,
+              stationB: `${closure.station_b.section_id}:${closure.station_b.station_index}`,
+              errorPercentage: closure.error_percentage,
+              misclosureDistance: closure.misclosure_distance,
+              pathLength: closure.path_length,
+              color: getErrorColor(closure.error_percentage),
+            },
+          });
+        }
+      }
+    }
+
+    const loopClosuresSource = this.map.getSource(this.sourceId + '-loop-closures');
+    if (loopClosuresSource && 'setData' in loopClosuresSource) {
+      (loopClosuresSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: loopClosureFeatures,
+      });
+    }
   }
 
   destroy() {
@@ -457,6 +527,9 @@ export default class SurveyLayer {
     if (this.map.getLayer(this.mergesLayerId)) {
       this.map.removeLayer(this.mergesLayerId);
     }
+    if (this.map.getLayer(this.loopClosuresLayerId)) {
+      this.map.removeLayer(this.loopClosuresLayerId);
+    }
     if (this.map.getSource(this.sourceId + '-shots')) {
       this.map.removeSource(this.sourceId + '-shots');
     }
@@ -465,6 +538,9 @@ export default class SurveyLayer {
     }
     if (this.map.getSource(this.sourceId + '-merges')) {
       this.map.removeSource(this.sourceId + '-merges');
+    }
+    if (this.map.getSource(this.sourceId + '-loop-closures')) {
+      this.map.removeSource(this.sourceId + '-loop-closures');
     }
   }
 }
