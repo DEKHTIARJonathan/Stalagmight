@@ -18,13 +18,14 @@ import type {
   Coordinates,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, DmpFile, ExportImageOptions } from '../types/commands';
+import type { CommandResult, DmpFile, ExportImageOptions, ProjectWarning } from '../types/commands';
 
 interface ProjectStore {
   // State
   project: Project | null;
   stations: Station[];
   stats: ProjectStats | null;
+  warnings: ProjectWarning[];
   recentProjects: ProjectMetadata[];
   config: Config | null;
   isLoading: boolean;
@@ -42,6 +43,7 @@ interface ProjectStore {
   saveProject: (path?: string) => Promise<CommandResult>;
   closeProject: () => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
+  refreshWarnings: () => Promise<void>;
   loadRecentProjects: () => Promise<void>;
 
   createSection: (data: SectionData) => Promise<CommandResult>;
@@ -75,6 +77,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   project: null,
   stations: [],
   stats: null,
+  warnings: [],
   recentProjects: [],
   config: null,
   isLoading: false,
@@ -185,9 +188,21 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       }
       console.log('[projectStore] refreshProjectState: calling refreshUndoState...');
       await get().refreshUndoState();
+      // Also refresh warnings
+      await get().refreshWarnings();
       console.log('[projectStore] refreshProjectState: done');
     } catch (e) {
       console.error('Failed to refresh project state:', e);
+    }
+  },
+
+  refreshWarnings: async () => {
+    try {
+      const warnings = await invoke<ProjectWarning[]>('get_project_warnings');
+      set({ warnings });
+    } catch (e) {
+      console.error('Failed to refresh warnings:', e);
+      set({ warnings: [] });
     }
   },
 

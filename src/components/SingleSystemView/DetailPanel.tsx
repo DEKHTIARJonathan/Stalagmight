@@ -1,16 +1,109 @@
-import { useUIStore } from '../../store/uiStore';
+import { useUIStore, type Selection } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
-import type { Station, Shot, Section } from '../../types/project';
+import type { Station, Shot, Section, Project } from '../../types/project';
+import type { ProjectWarning } from '../../types/commands';
 
 export default function DetailPanel() {
-  const { selection } = useUIStore();
-  const { project, stations } = useProjectStore();
+  const { selection, detailPanelTab, setDetailPanelTab, setSelection } = useUIStore();
+  const { project, stations, warnings } = useProjectStore();
 
+  const errorCount = warnings.filter((w) => w.severity === 'error').length;
+  const totalWarnings = warnings.length;
+
+  return (
+    <div className="h-full bg-panel flex flex-col">
+      {/* Tab bar */}
+      <div className="flex border-b border-border shrink-0">
+        <TabButton
+          active={detailPanelTab === 'details'}
+          onClick={() => setDetailPanelTab('details')}
+        >
+          Details
+        </TabButton>
+        <TabButton
+          active={detailPanelTab === 'warnings'}
+          onClick={() => setDetailPanelTab('warnings')}
+          badge={totalWarnings > 0 ? totalWarnings : undefined}
+          badgeType={errorCount > 0 ? 'error' : 'warning'}
+        >
+          Warnings
+        </TabButton>
+      </div>
+
+      {/* Tab content */}
+      <div className="flex-1 overflow-auto">
+        {detailPanelTab === 'details' ? (
+          <DetailsContent
+            selection={selection}
+            project={project}
+            stations={stations}
+          />
+        ) : (
+          <WarningsContent
+            warnings={warnings}
+            project={project}
+            onWarningClick={(warning) => {
+              setSelection({
+                type: 'shot',
+                sectionId: warning.section_id,
+                shotId: warning.shot_id,
+              });
+              setDetailPanelTab('details');
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface TabButtonProps {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  badge?: number | undefined;
+  badgeType?: 'warning' | 'error' | undefined;
+}
+
+function TabButton({ active, onClick, children, badge, badgeType }: TabButtonProps) {
+  return (
+    <button
+      onClick={onClick}
+      className={`
+        px-4 py-2 text-sm font-medium border-b-2 transition-colors
+        ${active
+          ? 'border-accent text-text-primary'
+          : 'border-transparent text-text-secondary hover:text-text-primary'
+        }
+      `}
+    >
+      {children}
+      {badge !== undefined && badge > 0 && (
+        <span
+          className={`
+            ml-2 px-1.5 py-0.5 text-xs rounded-full
+            ${badgeType === 'error' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}
+          `}
+        >
+          {badge}
+        </span>
+      )}
+    </button>
+  );
+}
+
+interface DetailsContentProps {
+  selection: Selection | null;
+  project: Project | null;
+  stations: Station[];
+}
+
+function DetailsContent({ selection, project, stations }: DetailsContentProps) {
   if (!selection) {
     return (
-      <div className="h-full bg-panel p-4">
+      <div className="p-4">
         <div className="text-text-secondary text-center">
           <p>No selection</p>
           <p className="text-sm mt-2">
@@ -51,8 +144,59 @@ export default function DetailPanel() {
   }
 
   return (
-    <div className="h-full bg-panel p-4">
+    <div className="p-4">
       <div className="text-text-secondary">Selection not found</div>
+    </div>
+  );
+}
+
+interface WarningsContentProps {
+  warnings: ProjectWarning[];
+  project: Project | null;
+  onWarningClick: (warning: ProjectWarning) => void;
+}
+
+function WarningsContent({ warnings, project, onWarningClick }: WarningsContentProps) {
+  if (warnings.length === 0) {
+    return (
+      <div className="p-4 text-center text-text-secondary">
+        <div className="text-3xl mb-2">✓</div>
+        <p>No validation issues found</p>
+      </div>
+    );
+  }
+
+  const getSectionName = (sectionId: number) => {
+    const section = project?.sections.find((s) => s.id === sectionId);
+    return section?.name ?? `Section ${sectionId}`;
+  };
+
+  return (
+    <div className="p-2">
+      <div className="text-sm text-text-secondary mb-2 px-2">
+        {warnings.length} issue{warnings.length !== 1 ? 's' : ''} found
+      </div>
+      <div className="space-y-1">
+        {warnings.map((warning, index) => (
+          <button
+            key={`${warning.section_id}-${warning.shot_id}-${warning.code}-${index}`}
+            onClick={() => onWarningClick(warning)}
+            className="w-full text-left p-2 rounded hover:bg-background/50 transition-colors"
+          >
+            <div className="flex items-start gap-2">
+              <span className={warning.severity === 'error' ? 'text-red-400' : 'text-yellow-400'}>
+                {warning.severity === 'error' ? '⛔' : '⚠️'}
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm">{warning.message}</div>
+                <div className="text-xs text-text-secondary mt-0.5">
+                  {getSectionName(warning.section_id)} • Shot {warning.shot_index + 1}
+                </div>
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

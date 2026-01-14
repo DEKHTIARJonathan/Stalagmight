@@ -5,6 +5,8 @@ import type { PanelsConfig } from '../types/config';
 
 export type ViewType = 'global' | 'single';
 
+export type DetailPanelTab = 'details' | 'warnings';
+
 export type ToolType =
   | 'select'
   | 'pan'
@@ -82,11 +84,13 @@ interface UIStore {
   sectionsPanelWidth: number;
   detailPanelOpen: boolean;
   detailPanelWidth: number;
+  detailPanelTab: DetailPanelTab;
   dataTableOpen: boolean;
   dataTableHeight: number;
   toggleSectionsPanel: () => void;
   toggleDetailPanel: () => void;
   toggleDataTable: () => void;
+  setDetailPanelTab: (tab: DetailPanelTab) => void;
   setSectionsPanelWidth: (width: number) => void;
   setDetailPanelWidth: (width: number) => void;
   setDataTableHeight: (height: number) => void;
@@ -235,11 +239,13 @@ export const useUIStore = create<UIStore>((set) => ({
   sectionsPanelWidth: 250,
   detailPanelOpen: true,
   detailPanelWidth: 300,
+  detailPanelTab: 'details',
   dataTableOpen: false,
   dataTableHeight: 200,
   toggleSectionsPanel: () => set((state) => ({ sectionsPanelOpen: !state.sectionsPanelOpen })),
   toggleDetailPanel: () => set((state) => ({ detailPanelOpen: !state.detailPanelOpen })),
   toggleDataTable: () => set((state) => ({ dataTableOpen: !state.dataTableOpen })),
+  setDetailPanelTab: (detailPanelTab) => set({ detailPanelTab }),
   setSectionsPanelWidth: (sectionsPanelWidth) => set({ sectionsPanelWidth }),
   setDetailPanelWidth: (detailPanelWidth) => set({ detailPanelWidth }),
   setDataTableHeight: (dataTableHeight) => set({ dataTableHeight }),
