@@ -56,6 +56,7 @@ interface UIStore {
   removeFromSelection: (selection: Selection) => void;
   toggleSelection: (selection: Selection) => void;
   clearSelection: () => void;
+  selectAll: (selections: Selection[]) => void;
   isSelected: (selection: Selection) => boolean;
 
   // Tool-specific state
@@ -191,6 +192,11 @@ export const useUIStore = create<UIStore>((set) => ({
       }
     }),
   clearSelection: () => set({ selection: null, multiSelection: [] }),
+  selectAll: (selections: Selection[]) =>
+    set({
+      multiSelection: selections,
+      selection: selections[selections.length - 1] ?? null,
+    }),
   isSelected: (selection: Selection): boolean => {
     // Note: This will get the latest state at call time
     return useUIStore.getState().multiSelection.some((s: Selection) => selectionsEqual(s, selection));
