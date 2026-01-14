@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::Command;
+use crate::models::{
+    ClosureStrategy, GpsCoordinates, SectionData, SectionId, ShotData, ShotId, StationRef,
+};
 
 /// Maximum number of undo entries to keep
 const MAX_UNDO_ENTRIES: usize = 100;
@@ -26,10 +29,50 @@ pub struct UndoEntry {
 /// Data needed to undo a command
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UndoData {
-    /// Simple inverse command
+    /// Simple inverse command (e.g., CreateShot -> DeleteShot, MergeStations -> UnmergeStations)
     InverseCommand(Command),
-    /// State snapshot for complex operations
-    StateSnapshot(String), // JSON serialized project state
+
+    /// Previous values for an update operation (JSON serialized)
+    PreviousValues {
+        section_id: SectionId,
+        shot_id: Option<ShotId>,
+        /// JSON serialized previous values (ShotUpdates or SectionUpdates)
+        values_json: String,
+    },
+
+    /// Full section snapshot for restoring deleted sections
+    SectionSnapshot {
+        section_id: SectionId,
+        /// Full section data including all shots
+        section_data: SectionData,
+    },
+
+    /// Shot snapshot for restoring deleted shots
+    ShotSnapshot {
+        section_id: SectionId,
+        shot_id: ShotId,
+        shot_data: ShotData,
+        /// Position in the section's shot list (for re-insertion)
+        position: usize,
+    },
+
+    /// Merge info for unmerging stations
+    MergeInfo {
+        station_a: StationRef,
+        station_b: StationRef,
+        strategy: ClosureStrategy,
+    },
+
+    /// Zero datum info for restoring previous GPS or removing datum
+    ZeroDatumInfo {
+        station_ref: StationRef,
+        /// Previous GPS coordinates, None if there was no previous datum
+        previous_gps: Option<GpsCoordinates>,
+    },
+
+    /// Full project snapshot for batch operations (JSON serialized)
+    ProjectSnapshot(String),
+
     /// No undo data (for commands that can't be undone)
     None,
 }
@@ -40,14 +83,9 @@ impl UndoStack {
         Self::default()
     }
 
-    /// Push a command to the undo stack
-    pub fn push(&mut self, command: Command) {
-        // For now, we just store the command without proper undo data
-        // TODO: Generate proper undo data based on command type
-        let entry = UndoEntry {
-            command,
-            undo_data: UndoData::None,
-        };
+    /// Push a command with its undo data to the undo stack
+    pub fn push_with_data(&mut self, command: Command, undo_data: UndoData) {
+        let entry = UndoEntry { command, undo_data };
 
         self.undo_stack.push(entry);
 
@@ -60,24 +98,30 @@ impl UndoStack {
         }
     }
 
-    /// Pop from undo stack and push to redo
-    pub fn undo(&mut self) -> bool {
-        if let Some(entry) = self.undo_stack.pop() {
-            self.redo_stack.push(entry);
-            true
-        } else {
-            false
-        }
+    /// Push a command without undo data (legacy, for backwards compatibility)
+    pub fn push(&mut self, command: Command) {
+        self.push_with_data(command, UndoData::None);
     }
 
-    /// Pop from redo stack and push to undo
-    pub fn redo(&mut self) -> bool {
-        if let Some(entry) = self.redo_stack.pop() {
-            self.undo_stack.push(entry);
-            true
-        } else {
-            false
-        }
+    /// Pop from undo stack and return the entry
+    pub fn pop_undo(&mut self) -> Option<UndoEntry> {
+        self.undo_stack.pop()
+    }
+
+    /// Push to redo stack
+    pub fn push_redo(&mut self, entry: UndoEntry) {
+        self.redo_stack.push(entry);
+    }
+
+    /// Pop from redo stack
+    pub fn pop_redo(&mut self) -> Option<UndoEntry> {
+        self.redo_stack.pop()
+    }
+
+    /// Push back to undo stack (for redo operations)
+    pub fn push_undo(&mut self, entry: UndoEntry) {
+        self.undo_stack.push(entry);
+        // Don't clear redo stack when pushing for redo
     }
 
     /// Check if undo is available
@@ -104,5 +148,10 @@ impl UndoStack {
     /// Get the last command that can be redone
     pub fn peek_redo(&self) -> Option<&Command> {
         self.redo_stack.last().map(|e| &e.command)
+    }
+
+    /// Get the undo data for the last undoable command
+    pub fn peek_undo_data(&self) -> Option<&UndoData> {
+        self.undo_stack.last().map(|e| &e.undo_data)
     }
 }

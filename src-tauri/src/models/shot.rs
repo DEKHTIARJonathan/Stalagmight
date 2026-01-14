@@ -188,6 +188,27 @@ impl Shot {
     pub fn depth_change(&self) -> f64 {
         self.depth_out - self.depth_in
     }
+
+    /// Convert to ShotData (for undo snapshots)
+    pub fn to_shot_data(&self) -> ShotData {
+        ShotData {
+            azimuth_in: self.azimuth_in,
+            azimuth_out: self.azimuth_out,
+            length: self.length,
+            depth_in: self.depth_in,
+            depth_out: self.depth_out,
+            pitch_in: self.pitch_in,
+            pitch_out: self.pitch_out,
+            left: self.left,
+            right: self.right,
+            up: self.up,
+            down: self.down,
+            comment: self.comment.clone(),
+            is_virtual: self.is_virtual,
+            marker_index: self.marker_index,
+            temperature: self.temperature,
+        }
+    }
 }
 
 impl From<Shot> for ShotData {

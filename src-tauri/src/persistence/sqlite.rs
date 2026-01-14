@@ -7,6 +7,9 @@ use crate::models::{
     GpsCoordinates, Project, Section, SectionData, Shot, StationMerge, StationRef, ZeroDatum,
 };
 
+#[cfg(test)]
+use crate::models::ShotData;
+
 /// Schema version for migrations
 const SCHEMA_VERSION: i32 = 1;
 
