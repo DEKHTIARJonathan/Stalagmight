@@ -145,7 +145,7 @@ interface UIStore {
   closeDialog: () => void;
 }
 
-type DisplayToggleKey =
+export type DisplayToggleKey =
   | 'showStations'
   | 'showSectionNames'
   | 'showShotData'

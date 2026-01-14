@@ -1,5 +1,6 @@
 import { useUIStore, type ToolType } from '../../store/uiStore';
 import { Button, IconButton } from '../common/Button';
+import DisplayMenu from './DisplayMenu';
 
 interface ToolbarProps {
   projectName: string;
@@ -62,18 +63,21 @@ export default function Toolbar({
       {/* Center - project name */}
       <h1 className="font-medium">{projectName}</h1>
 
-      {/* Right section - tools */}
-      <div className="flex items-center gap-1 bg-background rounded px-1 py-1">
-        {tools.map((tool) => (
-          <IconButton
-            key={tool.id}
-            icon={<ToolIcon tool={tool.id} />}
-            active={activeTool === tool.id}
-            onClick={() => setActiveTool(tool.id)}
-            tooltip={`${tool.label} (${tool.shortcut})`}
-            size="sm"
-          />
-        ))}
+      {/* Right section - tools and display menu */}
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 bg-background rounded px-1 py-1">
+          {tools.map((tool) => (
+            <IconButton
+              key={tool.id}
+              icon={<ToolIcon tool={tool.id} />}
+              active={activeTool === tool.id}
+              onClick={() => setActiveTool(tool.id)}
+              tooltip={`${tool.label} (${tool.shortcut})`}
+              size="sm"
+            />
+          ))}
+        </div>
+        <DisplayMenu />
       </div>
     </header>
   );
