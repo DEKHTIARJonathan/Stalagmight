@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -9,7 +9,7 @@ use crate::models::{
 };
 use crate::persistence::Database;
 
-use super::{Command, CommandResult, UndoStack, ValidationWarning, Validator};
+use super::{Command, CommandResult, UndoStack, Validator};
 
 /// Application state managed by Tauri
 pub struct AppState {

@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, SectionData, SectionId, SectionUpdates, ShotData, ShotId,
-    ShotUpdates, StationRef,
+    ClosureStrategy, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates,
+    StationRef,
 };
 
 /// All persistent commands that modify project state

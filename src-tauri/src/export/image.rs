@@ -104,7 +104,7 @@ fn export_svg(project: &Project, path: &Path, options: &ExportImageOptions) -> R
 
     let mut svg = String::new();
     svg.push_str(&format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
+        r##"<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="{:.0}" height="{:.0}" viewBox="{:.1} {:.1} {:.1} {:.1}">
 <style>
   .shot {{ stroke-width: 2; fill: none; }}
@@ -114,7 +114,7 @@ fn export_svg(project: &Project, path: &Path, options: &ExportImageOptions) -> R
   .section-name {{ font-family: sans-serif; font-size: 12px; font-weight: bold; fill: #333333; }}
 </style>
 <rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" fill="#1a1a2e"/>
-"#,
+"##,
         svg_width,
         svg_height,
         min_x - padding,
@@ -129,10 +129,8 @@ fn export_svg(project: &Project, path: &Path, options: &ExportImageOptions) -> R
 
     // Draw grid if enabled
     if options.include_grid {
-        svg.push_str(&format!(
-            r#"<g class="grid" stroke="#333366" stroke-width="0.5">
-"#
-        ));
+        svg.push_str(r##"<g class="grid" stroke="#333366" stroke-width="0.5">
+"##);
         let grid_step = 10.0; // 10 meter grid
         let grid_min_x = (min_x / grid_step).floor() * grid_step;
         let grid_max_x = (max_x / grid_step).ceil() * grid_step;
