@@ -12,6 +12,15 @@ export interface ValidationWarning {
   severity: 'warning' | 'error';
 }
 
+export interface ProjectWarning {
+  section_id: number;
+  shot_id: number;
+  shot_index: number;
+  code: string;
+  message: string;
+  severity: 'warning' | 'error';
+}
+
 // DMP import types
 export interface DmpFile {
   version: number;
