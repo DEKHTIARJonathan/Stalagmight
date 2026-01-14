@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates,
-    StationRef,
+    ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,
+    ShotUpdates, StationRef,
 };
 
 /// All persistent commands that modify project state
@@ -76,6 +76,16 @@ pub enum Command {
     },
     RemoveZeroDatum {
         station_ref: StationRef,
+    },
+
+    // Move commands
+    MoveSection {
+        section_id: SectionId,
+        offset: Coordinates,
+    },
+    MoveStation {
+        station_ref: StationRef,
+        new_position: Coordinates,
     },
 
     // Batch commands
@@ -191,6 +201,12 @@ impl Command {
             }
             Command::RemoveZeroDatum { station_ref } => {
                 format!("Remove zero datum from {}", station_ref)
+            }
+            Command::MoveSection { section_id, .. } => {
+                format!("Move section {}", section_id)
+            }
+            Command::MoveStation { station_ref, .. } => {
+                format!("Move station {}", station_ref)
             }
             Command::Batch { commands } => {
                 format!("Batch of {} commands", commands.len())

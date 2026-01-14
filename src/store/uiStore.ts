@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { SectionId, ShotId, StationRef } from '../types/project';
+import type { Coordinates, SectionId, ShotId, StationRef } from '../types/project';
 
 export type ViewType = 'global' | 'single';
 
@@ -21,6 +21,24 @@ export interface Selection {
   shotId?: ShotId;
 }
 
+// Helper to compare selections
+export function selectionsEqual(a: Selection, b: Selection): boolean {
+  if (a.type !== b.type) return false;
+  if (a.type === 'station' && b.type === 'station') {
+    return (
+      a.stationRef?.section_id === b.stationRef?.section_id &&
+      a.stationRef?.station_index === b.stationRef?.station_index
+    );
+  }
+  if (a.type === 'shot' && b.type === 'shot') {
+    return a.sectionId === b.sectionId && a.shotId === b.shotId;
+  }
+  if (a.type === 'section' && b.type === 'section') {
+    return a.sectionId === b.sectionId;
+  }
+  return false;
+}
+
 interface UIStore {
   // View state
   view: ViewType;
@@ -36,7 +54,25 @@ interface UIStore {
   setSelection: (selection: Selection | null) => void;
   addToSelection: (selection: Selection) => void;
   removeFromSelection: (selection: Selection) => void;
+  toggleSelection: (selection: Selection) => void;
   clearSelection: () => void;
+  isSelected: (selection: Selection) => boolean;
+
+  // Tool-specific state
+  mergeStationA: StationRef | null;
+  mergeStationB: StationRef | null;
+  setMergeStationA: (ref: StationRef | null) => void;
+  setMergeStationB: (ref: StationRef | null) => void;
+  clearMergeStations: () => void;
+
+  measureStart: StationRef | Coordinates | null;
+  measureEnd: StationRef | Coordinates | null;
+  setMeasureStart: (point: StationRef | Coordinates | null) => void;
+  setMeasureEnd: (point: StationRef | Coordinates | null) => void;
+  clearMeasure: () => void;
+
+  drawFromStation: StationRef | null;
+  setDrawFromStation: (ref: StationRef | null) => void;
 
   // Panel state
   sectionsPanelOpen: boolean;
@@ -114,30 +150,64 @@ export const useUIStore = create<UIStore>((set) => ({
   multiSelection: [],
   setSelection: (selection) => set({ selection, multiSelection: selection ? [selection] : [] }),
   addToSelection: (selection) =>
-    set((state) => ({
-      multiSelection: [...state.multiSelection, selection],
-      selection: selection,
-    })),
+    set((state) => {
+      // Don't add duplicates
+      const exists = state.multiSelection.some((s) => selectionsEqual(s, selection));
+      if (exists) return state;
+      return {
+        multiSelection: [...state.multiSelection, selection],
+        selection: selection,
+      };
+    }),
   removeFromSelection: (selection) =>
-    set((state) => ({
-      multiSelection: state.multiSelection.filter((s) => {
-        if (s.type !== selection.type) return true;
-        if (s.type === 'station' && selection.type === 'station') {
-          return (
-            s.stationRef?.section_id !== selection.stationRef?.section_id ||
-            s.stationRef?.station_index !== selection.stationRef?.station_index
-          );
-        }
-        if (s.type === 'shot' && selection.type === 'shot') {
-          return s.sectionId !== selection.sectionId || s.shotId !== selection.shotId;
-        }
-        if (s.type === 'section' && selection.type === 'section') {
-          return s.sectionId !== selection.sectionId;
-        }
-        return true;
-      }),
-    })),
+    set((state) => {
+      const newMulti = state.multiSelection.filter((s) => !selectionsEqual(s, selection));
+      const lastItem = newMulti[newMulti.length - 1];
+      const newSelection: Selection | null = lastItem !== undefined ? lastItem : null;
+      return {
+        multiSelection: newMulti,
+        selection: newSelection,
+      };
+    }),
+  toggleSelection: (selection) =>
+    set((state) => {
+      const exists = state.multiSelection.some((s) => selectionsEqual(s, selection));
+      if (exists) {
+        const newMulti = state.multiSelection.filter((s) => !selectionsEqual(s, selection));
+        const lastItem = newMulti[newMulti.length - 1];
+        const newSelection: Selection | null = lastItem !== undefined ? lastItem : null;
+        return {
+          multiSelection: newMulti,
+          selection: newSelection,
+        };
+      } else {
+        return {
+          multiSelection: [...state.multiSelection, selection],
+          selection: selection,
+        };
+      }
+    }),
   clearSelection: () => set({ selection: null, multiSelection: [] }),
+  isSelected: (selection: Selection): boolean => {
+    // Note: This will get the latest state at call time
+    return useUIStore.getState().multiSelection.some((s: Selection) => selectionsEqual(s, selection));
+  },
+
+  // Tool-specific state
+  mergeStationA: null,
+  mergeStationB: null,
+  setMergeStationA: (mergeStationA) => set({ mergeStationA }),
+  setMergeStationB: (mergeStationB) => set({ mergeStationB }),
+  clearMergeStations: () => set({ mergeStationA: null, mergeStationB: null }),
+
+  measureStart: null,
+  measureEnd: null,
+  setMeasureStart: (measureStart) => set({ measureStart }),
+  setMeasureEnd: (measureEnd) => set({ measureEnd }),
+  clearMeasure: () => set({ measureStart: null, measureEnd: null }),
+
+  drawFromStation: null,
+  setDrawFromStation: (drawFromStation) => set({ drawFromStation }),
 
   // Panel state
   sectionsPanelOpen: true,

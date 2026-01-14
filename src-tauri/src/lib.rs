@@ -38,6 +38,7 @@ pub fn run() {
             commands::section::update_section,
             commands::section::delete_section,
             commands::section::get_section,
+            commands::section::move_section,
             // Shot commands
             commands::shot::create_shot,
             commands::shot::update_shot,
@@ -48,6 +49,7 @@ pub fn run() {
             commands::station::unmerge_stations,
             commands::station::set_zero_datum,
             commands::station::remove_zero_datum,
+            commands::station::move_station,
             // Undo/Redo
             commands::history::undo,
             commands::history::redo,

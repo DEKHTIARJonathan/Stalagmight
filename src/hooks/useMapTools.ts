@@ -1,0 +1,284 @@
+import { useCallback } from 'react';
+import { useUIStore, type Selection } from '../store/uiStore';
+import { useProjectStore } from '../store/projectStore';
+import type { SectionId, ShotId, StationRef, Coordinates } from '../types/project';
+import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
+
+interface MoveDragStartData {
+  type: 'section' | 'station';
+  sectionId?: number;
+  stationRef?: StationRef;
+}
+
+interface MapToolsOptions {
+  onMeasureComplete?: (distance: number, depthDiff: number) => void;
+  onMoveDragStart?: (data: MoveDragStartData) => void;
+}
+
+export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks {
+  const {
+    activeTool,
+    setSelection,
+    addToSelection,
+    toggleSelection,
+    clearSelection,
+    mergeStationA,
+    setMergeStationA,
+    setMergeStationB,
+    clearMergeStations,
+    measureStart,
+    setMeasureStart,
+    setMeasureEnd,
+    clearMeasure,
+    setDrawFromStation,
+    setHoveredStation,
+    setHoveredShot,
+    openDialog,
+  } = useUIStore();
+
+  const { stations, project } = useProjectStore();
+
+  // Get station coordinates by ref
+  const getStationCoordinates = useCallback(
+    (ref: StationRef): Coordinates | null => {
+      const station = stations.find(
+        (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
+      );
+      return station?.coordinates ?? null;
+    },
+    [stations]
+  );
+
+  // Calculate distance between two points
+  const calculateDistance = useCallback(
+    (a: StationRef | Coordinates, b: StationRef | Coordinates): { distance: number; depthDiff: number } | null => {
+      const coordsA = 'section_id' in a ? getStationCoordinates(a as StationRef) : (a as Coordinates);
+      const coordsB = 'section_id' in b ? getStationCoordinates(b as StationRef) : (b as Coordinates);
+
+      if (!coordsA || !coordsB) return null;
+
+      const dx = coordsB.x - coordsA.x;
+      const dy = coordsB.y - coordsA.y;
+      const dz = coordsB.z - coordsA.z;
+
+      return {
+        distance: Math.sqrt(dx * dx + dy * dy + dz * dz),
+        depthDiff: dz,
+      };
+    },
+    [getStationCoordinates]
+  );
+
+  // Handle station click based on active tool
+  const handleStationClick = useCallback(
+    (ref: StationRef, event: { originalEvent: MouseEvent }) => {
+      const mouseEvent = event.originalEvent;
+
+      switch (activeTool) {
+        case 'select': {
+          const sel: Selection = { type: 'station', stationRef: ref };
+          if (mouseEvent.shiftKey) {
+            addToSelection(sel);
+          } else if (mouseEvent.ctrlKey || mouseEvent.metaKey) {
+            toggleSelection(sel);
+          } else {
+            setSelection(sel);
+          }
+          break;
+        }
+
+        case 'delete': {
+          // For now, we can't delete individual stations - need to delete shots
+          // Show a message or open a dialog explaining this
+          openDialog('confirm-delete', {
+            type: 'station',
+            stationRef: ref,
+            message: 'Deleting a station will also delete all connected shots.',
+          });
+          break;
+        }
+
+        case 'merge': {
+          if (!mergeStationA) {
+            setMergeStationA(ref);
+          } else {
+            // Check if clicking the same station
+            if (
+              mergeStationA.section_id === ref.section_id &&
+              mergeStationA.station_index === ref.station_index
+            ) {
+              // Clear selection
+              clearMergeStations();
+            } else {
+              // Set station B and open merge dialog
+              setMergeStationB(ref);
+              openDialog('merge', {
+                stationA: mergeStationA,
+                stationB: ref,
+              });
+            }
+          }
+          break;
+        }
+
+        case 'measure': {
+          if (!measureStart) {
+            setMeasureStart(ref);
+          } else {
+            setMeasureEnd(ref);
+            // Calculate and display distance
+            const result = calculateDistance(measureStart, ref);
+            if (result) {
+              options.onMeasureComplete?.(result.distance, result.depthDiff);
+            }
+            // Keep the measurement displayed but allow new measurement
+          }
+          break;
+        }
+
+        case 'draw': {
+          setDrawFromStation(ref);
+          openDialog('draw-shot', { fromStation: ref });
+          break;
+        }
+
+        case 'move_station': {
+          // Start drag operation - handled by MapCanvas
+          setSelection({ type: 'station', stationRef: ref });
+          options.onMoveDragStart?.({ type: 'station', stationRef: ref });
+          break;
+        }
+
+        case 'move_section': {
+          // Find the section for this station
+          const section = project?.sections.find((s) => s.id === ref.section_id);
+          if (section) {
+            setSelection({ type: 'section', sectionId: ref.section_id });
+            options.onMoveDragStart?.({ type: 'section', sectionId: ref.section_id });
+          }
+          break;
+        }
+      }
+    },
+    [
+      activeTool,
+      addToSelection,
+      calculateDistance,
+      clearMergeStations,
+      measureStart,
+      mergeStationA,
+      openDialog,
+      options,
+      project?.sections,
+      setDrawFromStation,
+      setMeasureEnd,
+      setMeasureStart,
+      setMergeStationA,
+      setMergeStationB,
+      setSelection,
+      toggleSelection,
+    ]
+  );
+
+  // Handle shot click based on active tool
+  const handleShotClick = useCallback(
+    (sectionId: SectionId, shotId: ShotId, event: { originalEvent: MouseEvent }) => {
+      const mouseEvent = event.originalEvent;
+
+      switch (activeTool) {
+        case 'select': {
+          const sel: Selection = { type: 'shot', sectionId, shotId };
+          if (mouseEvent.shiftKey) {
+            addToSelection(sel);
+          } else if (mouseEvent.ctrlKey || mouseEvent.metaKey) {
+            toggleSelection(sel);
+          } else {
+            setSelection(sel);
+          }
+          break;
+        }
+
+        case 'delete': {
+          openDialog('confirm-delete', {
+            type: 'shot',
+            sectionId,
+            shotId,
+            message: 'Are you sure you want to delete this shot?',
+          });
+          break;
+        }
+
+        // Other tools don't respond to shot clicks
+      }
+    },
+    [activeTool, addToSelection, openDialog, setSelection, toggleSelection]
+  );
+
+  // Handle empty click (no feature)
+  const handleEmptyClick = useCallback(() => {
+    switch (activeTool) {
+      case 'select':
+        clearSelection();
+        break;
+
+      case 'merge':
+        clearMergeStations();
+        break;
+
+      case 'measure':
+        clearMeasure();
+        break;
+    }
+  }, [activeTool, clearMeasure, clearMergeStations, clearSelection]);
+
+  // Handle station hover
+  const handleStationHover = useCallback(
+    (ref: StationRef | null) => {
+      setHoveredStation(ref);
+    },
+    [setHoveredStation]
+  );
+
+  // Handle shot hover
+  const handleShotHover = useCallback(
+    (shot: { sectionId: SectionId; shotId: ShotId } | null) => {
+      setHoveredShot(shot);
+    },
+    [setHoveredShot]
+  );
+
+  // Handle context menu
+  const handleContextMenu = useCallback(
+    (
+      target: { type: 'station'; ref: StationRef } | { type: 'shot'; sectionId: SectionId; shotId: ShotId } | null,
+      event: { originalEvent: MouseEvent }
+    ) => {
+      event.originalEvent.preventDefault();
+
+      if (target) {
+        // Select the target first
+        if (target.type === 'station') {
+          setSelection({ type: 'station', stationRef: target.ref });
+        } else {
+          setSelection({ type: 'shot', sectionId: target.sectionId, shotId: target.shotId });
+        }
+
+        // Open context menu
+        openDialog('context-menu', {
+          target,
+          position: { x: event.originalEvent.clientX, y: event.originalEvent.clientY },
+        });
+      }
+    },
+    [openDialog, setSelection]
+  );
+
+  return {
+    onStationClick: handleStationClick,
+    onShotClick: handleShotClick,
+    onEmptyClick: handleEmptyClick,
+    onStationHover: handleStationHover,
+    onShotHover: handleShotHover,
+    onContextMenu: handleContextMenu,
+  };
+}

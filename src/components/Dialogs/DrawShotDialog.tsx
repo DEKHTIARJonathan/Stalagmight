@@ -1,0 +1,321 @@
+import { useState, useMemo } from 'react';
+import { useUIStore } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
+import { Button } from '../common/Button';
+import type { StationRef, ShotData } from '../../types/project';
+
+export default function DrawShotDialog() {
+  const { closeDialog, dialogData, setDrawFromStation } = useUIStore();
+  const { createShot, project, stations } = useProjectStore();
+
+  const fromStation = dialogData.fromStation as StationRef | undefined;
+
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Form state
+  const [azimuthIn, setAzimuthIn] = useState('');
+  const [azimuthOut, setAzimuthOut] = useState('');
+  const [length, setLength] = useState('');
+  const [depthIn, setDepthIn] = useState('');
+  const [depthOut, setDepthOut] = useState('');
+  const [isVirtual, setIsVirtual] = useState(false);
+  const [left, setLeft] = useState('');
+  const [right, setRight] = useState('');
+  const [up, setUp] = useState('');
+  const [down, setDown] = useState('');
+
+  // Get section info
+  const section = useMemo(() => {
+    if (!fromStation) return null;
+    return project?.sections.find((s) => s.id === fromStation.section_id);
+  }, [fromStation, project]);
+
+  const sectionName = section?.name ?? `Section ${fromStation?.section_id}`;
+
+  // Get current station depth for default
+  const currentStationDepth = useMemo(() => {
+    if (!fromStation) return 0;
+    const station = stations.find(
+      (s) => s.station_ref.section_id === fromStation.section_id && s.station_ref.station_index === fromStation.station_index
+    );
+    return station?.coordinates.z ?? 0;
+  }, [fromStation, stations]);
+
+  // Initialize depth_in with current station depth
+  useState(() => {
+    if (depthIn === '' && currentStationDepth !== 0) {
+      setDepthIn(currentStationDepth.toFixed(1));
+    }
+  });
+
+  const handleClose = () => {
+    setDrawFromStation(null);
+    closeDialog();
+  };
+
+  const validateForm = (): boolean => {
+    if (!length || parseFloat(length) <= 0) {
+      setError('Length must be greater than 0');
+      return false;
+    }
+    if (!azimuthIn || parseFloat(azimuthIn) < 0 || parseFloat(azimuthIn) >= 360) {
+      setError('Azimuth In must be between 0 and 360');
+      return false;
+    }
+    return true;
+  };
+
+  const handleCreate = async () => {
+    if (!fromStation || !section) return;
+
+    if (!validateForm()) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // Build shot data
+      const shotData: ShotData = {
+        azimuth_in: parseFloat(azimuthIn),
+        azimuth_out: azimuthOut ? parseFloat(azimuthOut) : parseFloat(azimuthIn),
+        length: parseFloat(length),
+        depth_in: depthIn ? parseFloat(depthIn) : currentStationDepth,
+        depth_out: depthOut ? parseFloat(depthOut) : (depthIn ? parseFloat(depthIn) : currentStationDepth),
+        pitch_in: null,
+        pitch_out: null,
+        left: left ? parseFloat(left) : null,
+        right: right ? parseFloat(right) : null,
+        up: up ? parseFloat(up) : null,
+        down: down ? parseFloat(down) : null,
+        comment: null,
+        is_virtual: isVirtual,
+        marker_index: null,
+        temperature: null,
+      };
+
+      // Determine where to insert the shot
+      // If station_index === shots.length, append to end
+      // Otherwise, insert after the shot at station_index - 1
+      const afterShotId = fromStation.station_index > 0 && fromStation.station_index <= section.shots.length
+        ? section.shots[fromStation.station_index - 1]?.id
+        : undefined;
+
+      const result = await createShot(fromStation.section_id, shotData, afterShotId);
+
+      if (result.success) {
+        setDrawFromStation(null);
+        closeDialog();
+      } else {
+        setError(result.error ?? 'Failed to create shot');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to create shot');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Auto-fill azimuth out when azimuth in changes
+  const handleAzimuthInChange = (value: string) => {
+    setAzimuthIn(value);
+    if (!azimuthOut && value) {
+      setAzimuthOut(value);
+    }
+  };
+
+  // Auto-fill depth out when depth in changes
+  const handleDepthInChange = (value: string) => {
+    setDepthIn(value);
+    if (!depthOut && value) {
+      setDepthOut(value);
+    }
+  };
+
+  if (!fromStation) {
+    return null;
+  }
+
+  return (
+    <DialogWrapper title="Draw New Shot" onClose={handleClose}>
+      <div className="space-y-4">
+        {error && (
+          <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">{error}</div>
+        )}
+
+        {/* From station info */}
+        <div className="p-3 bg-background rounded">
+          <span className="text-text-secondary">From:</span>{' '}
+          <span className="font-medium">
+            {sectionName} #{fromStation.station_index}
+          </span>
+        </div>
+
+        {/* Main fields */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm text-text-secondary mb-1">
+              Azimuth In (degrees) <span className="text-error">*</span>
+            </label>
+            <input
+              type="number"
+              min="0"
+              max="359.99"
+              step="0.1"
+              value={azimuthIn}
+              onChange={(e) => handleAzimuthInChange(e.target.value)}
+              className="w-full"
+              placeholder="0-360"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-text-secondary mb-1">Azimuth Out (degrees)</label>
+            <input
+              type="number"
+              min="0"
+              max="359.99"
+              step="0.1"
+              value={azimuthOut}
+              onChange={(e) => setAzimuthOut(e.target.value)}
+              className="w-full"
+              placeholder="Same as in"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm text-text-secondary mb-1">
+            Length (meters) <span className="text-error">*</span>
+          </label>
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            value={length}
+            onChange={(e) => setLength(e.target.value)}
+            className="w-full"
+            placeholder="Shot distance"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm text-text-secondary mb-1">Depth In (meters)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={depthIn}
+              onChange={(e) => handleDepthInChange(e.target.value)}
+              className="w-full"
+              placeholder={currentStationDepth.toFixed(1)}
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-text-secondary mb-1">Depth Out (meters)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={depthOut}
+              onChange={(e) => setDepthOut(e.target.value)}
+              className="w-full"
+              placeholder="Same as in"
+            />
+          </div>
+        </div>
+
+        {/* LRUD fields (collapsed by default) */}
+        <details className="border border-border rounded">
+          <summary className="px-3 py-2 cursor-pointer text-text-secondary hover:text-text-primary">
+            LRUD (optional)
+          </summary>
+          <div className="p-3 pt-0 grid grid-cols-4 gap-2">
+            <div>
+              <label className="block text-xs text-text-secondary mb-1">Left</label>
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={left}
+                onChange={(e) => setLeft(e.target.value)}
+                className="w-full"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-text-secondary mb-1">Right</label>
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={right}
+                onChange={(e) => setRight(e.target.value)}
+                className="w-full"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-text-secondary mb-1">Up</label>
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={up}
+                onChange={(e) => setUp(e.target.value)}
+                className="w-full"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-text-secondary mb-1">Down</label>
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={down}
+                onChange={(e) => setDown(e.target.value)}
+                className="w-full"
+              />
+            </div>
+          </div>
+        </details>
+
+        {/* Virtual checkbox */}
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={isVirtual} onChange={(e) => setIsVirtual(e.target.checked)} />
+          <span>Mark as virtual shot</span>
+          <span className="text-text-secondary text-sm">(temporary connection)</span>
+        </label>
+
+        {/* Actions */}
+        <div className="flex justify-end gap-2 pt-4 border-t border-border">
+          <Button onClick={handleClose} disabled={isLoading}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={handleCreate} disabled={isLoading}>
+            {isLoading ? 'Creating...' : 'Create Shot'}
+          </Button>
+        </div>
+      </div>
+    </DialogWrapper>
+  );
+}
+
+interface DialogWrapperProps {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}
+
+function DialogWrapper({ title, onClose, children }: DialogWrapperProps) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-panel border border-border rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[90vh] overflow-auto">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <h2 className="text-lg font-medium">{title}</h2>
+          <button onClick={onClose} className="text-text-secondary hover:text-text-primary text-xl">
+            x
+          </button>
+        </div>
+        <div className="p-4">{children}</div>
+      </div>
+    </div>
+  );
+}

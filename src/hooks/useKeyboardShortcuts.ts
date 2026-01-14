@@ -20,7 +20,18 @@ const DEFAULT_SHORTCUTS: ShortcutConfig = {
 };
 
 export function useKeyboardShortcuts() {
-  const { setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection } = useUIStore();
+  const {
+    setActiveTool,
+    toggleSectionsPanel,
+    toggleDetailPanel,
+    toggleDataTable,
+    clearSelection,
+    selection,
+    openDialog,
+    clearMergeStations,
+    clearMeasure,
+    setDrawFromStation,
+  } = useUIStore();
   const { undo, redo, saveProject, project } = useProjectStore();
 
   const handleKeyDown = useCallback(
@@ -80,15 +91,36 @@ export function useKeyboardShortcuts() {
         }
       }
 
-      // Handle Escape
+      // Handle Escape - clear all tool state and selection
       if (key === 'escape') {
         clearSelection();
+        clearMergeStations();
+        clearMeasure();
+        setDrawFromStation(null);
         return;
       }
 
-      // Handle Delete/Backspace
+      // Handle Delete/Backspace - delete selected items
       if (key === 'delete' || key === 'backspace') {
-        // TODO: Delete selected item
+        if (selection) {
+          if (selection.type === 'shot' && selection.sectionId !== undefined && selection.shotId !== undefined) {
+            openDialog('confirm-delete', {
+              type: 'shot',
+              sectionId: selection.sectionId,
+              shotId: selection.shotId,
+            });
+          } else if (selection.type === 'station' && selection.stationRef) {
+            openDialog('confirm-delete', {
+              type: 'station',
+              stationRef: selection.stationRef,
+            });
+          } else if (selection.type === 'section' && selection.sectionId !== undefined) {
+            openDialog('confirm-delete', {
+              type: 'section',
+              sectionId: selection.sectionId,
+            });
+          }
+        }
         return;
       }
 
@@ -108,7 +140,7 @@ export function useKeyboardShortcuts() {
         setActiveTool(toolShortcut as ToolType);
       }
     },
-    [setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection, undo, redo, saveProject, project]
+    [setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection, clearMergeStations, clearMeasure, setDrawFromStation, selection, openDialog, undo, redo, saveProject, project]
   );
 
   useEffect(() => {
