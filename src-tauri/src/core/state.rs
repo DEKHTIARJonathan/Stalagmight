@@ -31,11 +31,12 @@ impl AppState {
         let config = Config::load().unwrap_or_default();
         // Load recent projects from config
         let recent = config.general.recent_projects.clone();
+        let undo_limit = config.general.undo_history_limit;
 
         Ok(Self {
             project: Mutex::new(None),
             database: Mutex::new(None),
-            undo_stack: Mutex::new(UndoStack::new()),
+            undo_stack: Mutex::new(UndoStack::new_with_limit(undo_limit)),
             config: Mutex::new(config),
             recent_projects: Mutex::new(recent),
         })

@@ -12,6 +12,7 @@ impl Default for Config {
             export: ExportConfig::default(),
             logging: LoggingConfig::default(),
             shortcuts: ShortcutsConfig::default(),
+            snap: SnapConfig::default(),
         }
     }
 }
@@ -23,6 +24,8 @@ impl Default for GeneralConfig {
             auto_save_interval_seconds: 30,
             recent_projects_max: 20,
             recent_projects: Vec::new(),
+            undo_history_limit: 100,
+            undo_persist_limit: 20,
         }
     }
 }
@@ -152,6 +155,17 @@ impl Default for ShortcutsConfig {
             undo: "Ctrl+Z".to_string(),
             redo: "Ctrl+Y".to_string(),
             save: "Ctrl+S".to_string(),
+        }
+    }
+}
+
+impl Default for SnapConfig {
+    fn default() -> Self {
+        Self {
+            enabled_draw: true,
+            enabled_merge: true,
+            enabled_measure: true,
+            threshold_pixels: 10,
         }
     }
 }
