@@ -107,6 +107,7 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 | `src/components/Map/SurveyLayer.tsx` | Survey rendering on map |
 | `src/hooks/useProject.ts` | Project file operations hook |
 | `src/hooks/useMapTools.ts` | Map tool handlers |
+| `src/hooks/useKeyboardShortcuts.ts` | Global keyboard shortcut handler |
 
 ## Configuration
 
@@ -133,6 +134,23 @@ Logs are written to `~/.local/share/cavechef/logs/` using the `tracing` crate. L
 - **File Operations**: New project dialog, overwrite warnings, error notifications
 - **Map Tools**: Select, pan, draw, delete, merge, measure, move section/station
 - **Undo/Redo**: Hybrid system with inverse commands and state snapshots
+- **Window Title**: Shows filename and dirty state (e.g., "CaveChef - survey.cvproj *")
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| S, P, Z, D, X, M, R, V, T | Tool shortcuts (select, pan, zoom, draw, delete, merge, measure, move section, move station) |
+| Ctrl+Z | Undo |
+| Ctrl+Y / Ctrl+Shift+Z | Redo |
+| Ctrl+S | Save project |
+| Ctrl+A | Select all stations |
+| Ctrl+I | Import DMP file |
+| Ctrl+E | Export (requires open project) |
+| Ctrl+0 | Fit map to view all stations |
+| Ctrl+1/2/3 | Toggle panels (sections, detail, data table) |
+| Delete/Backspace | Delete selected item |
+| Escape | Clear selection and tool state |
 
 ## Known Limitations (v1.0)
 
