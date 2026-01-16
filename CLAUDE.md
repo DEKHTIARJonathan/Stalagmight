@@ -174,6 +174,57 @@ When implementing a new feature:
 
 See `TESTING.md` for detailed testing documentation and examples.
 
+### UI Component Testability Requirements (MANDATORY)
+
+All UI components **must** include proper accessibility attributes and test identifiers for E2E tests to reliably locate and interact with elements.
+
+#### Required for All Dialogs
+
+Every dialog component MUST include:
+
+```tsx
+<div
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="dialog-title-id"
+>
+  <h2 id="dialog-title-id">Dialog Title</h2>
+  {/* Dialog content */}
+</div>
+```
+
+**Why**: E2E tests use `[role="dialog"]` to locate dialogs. Without this attribute, tests cannot find the dialog even when visually present.
+
+#### Required Test Identifiers
+
+Add `data-testid` attributes to key interactive elements:
+
+| Element Type | Convention | Example |
+|--------------|------------|---------|
+| Main views | `<view>-view` | `data-testid="global-view"` |
+| Buttons | `<action>-button` | `data-testid="new-project-button"` |
+| Dialogs | `<name>-dialog` | `data-testid="import-dialog"` |
+| Form inputs | `<field>-input` | `data-testid="project-name-input"` |
+| Statistics | `stats-<metric>` | `data-testid="stats-total-length"` |
+
+#### ARIA Attributes Quick Reference
+
+| Attribute | Use Case |
+|-----------|----------|
+| `role="dialog"` | Modal dialogs (required) |
+| `aria-modal="true"` | Dialogs that block interaction |
+| `aria-labelledby` | Connect dialog to its title |
+| `aria-label` | Icon-only buttons |
+| `aria-expanded` | Collapsible panels |
+
+#### Checklist for New UI Components
+
+- [ ] Dialogs have `role="dialog"` and `aria-modal="true"`
+- [ ] Dialog titles have `id` referenced by `aria-labelledby`
+- [ ] Primary buttons have `data-testid`
+- [ ] Form inputs have `data-testid`
+- [ ] Icon-only buttons have `aria-label`
+
 ## Architecture
 
 ### State Flow
