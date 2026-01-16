@@ -391,12 +391,43 @@ await expect(page.locator('.error-message'))
   .toHaveText('Project name is required', { timeout: 3000 });
 ```
 
+## UI Component Requirements for Testability
+
+All UI components must include proper attributes for tests to locate elements reliably.
+
+### Dialog Components (MANDATORY)
+
+```tsx
+<div
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="dialog-title-id"
+>
+  <h2 id="dialog-title-id">Dialog Title</h2>
+</div>
+```
+
+### Test Identifiers (`data-testid`)
+
+```tsx
+<button data-testid="new-project-button">New Project</button>
+<div data-testid="global-view">...</div>
+<input data-testid="project-name-input" />
+```
+
+### Selector Priority
+
+1. `data-testid` - Most reliable: `[data-testid="new-project-button"]`
+2. `role` + `aria-*` - Accessibility: `[role="dialog"]`
+3. Semantic elements: `button:has-text("New Project")`
+4. CSS classes - Least reliable
+
 ## Troubleshooting
 
 ### Playwright Tests Failing
 
 1. **Check mock completeness**: Ensure all IPC commands are mocked
-2. **Check selectors**: Dialogs use `.fixed.inset-0`, not `[role="dialog"]`
+2. **Check selectors**: Use `[role="dialog"]` for dialogs, `[data-testid="..."]` for elements
 3. **Check field types**: Ensure mock returns match TypeScript types
 4. **Run debug test**: Use `debug.spec.ts` to see console errors
 
@@ -405,6 +436,7 @@ await expect(page.locator('.error-message'))
 1. **Check tauri-driver**: Must be installed and running
 2. **Check build**: App must be built with `--debug --no-bundle`
 3. **Check platform**: Only Linux/Windows supported
+4. **Check ARIA attributes**: Dialogs must have `role="dialog"`
 
 ### Rust Tests Failing
 
