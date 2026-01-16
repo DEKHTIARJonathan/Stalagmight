@@ -1,6 +1,7 @@
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
+import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
 
 export default function ConfirmDialog() {
@@ -55,7 +56,7 @@ export default function ConfirmDialog() {
   };
 
   return (
-    <DialogWrapper title={getTitle()} onClose={closeDialog}>
+    <DialogWrapper title={getTitle()} onClose={closeDialog} size="md" data-testid="confirm-dialog">
       <div className="space-y-4">
         <p className="text-text-secondary">{message ?? getDefaultMessage()}</p>
 
@@ -73,31 +74,5 @@ export default function ConfirmDialog() {
         </div>
       </div>
     </DialogWrapper>
-  );
-}
-
-interface DialogWrapperProps {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}
-
-function DialogWrapper({ title, onClose, children }: DialogWrapperProps) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-labelledby="dialog-title" className="relative bg-panel border border-border rounded-lg shadow-xl max-w-md w-full mx-4">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 id="dialog-title" className="text-lg font-medium">{title}</h2>
-          <button
-            onClick={onClose}
-            className="text-text-secondary hover:text-text-primary text-xl"
-          >
-            x
-          </button>
-        </div>
-        <div className="p-4">{children}</div>
-      </div>
-    </div>
   );
 }

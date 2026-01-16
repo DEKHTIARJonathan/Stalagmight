@@ -168,18 +168,8 @@ export async function createNewProject(projectName: string): Promise<void> {
   // Wait for React to process the click and open dialog
   await browser.pause(2000);
 
-  // Check what's on the page
-  const pageHtml = await browser.execute(() => document.body.innerHTML.substring(0, 2000));
-  console.log('[createNewProject] Page HTML after click:', pageHtml);
-
   // Wait for the new project dialog
   const dialog = await $('[role="dialog"]');
-  const dialogExists = await dialog.isExisting();
-  console.log('[createNewProject] Dialog exists:', dialogExists);
-  if (dialogExists) {
-    const dialogDisplayed = await dialog.isDisplayed();
-    console.log('[createNewProject] Dialog displayed:', dialogDisplayed);
-  }
   await dialog.waitForDisplayed({ timeout: 15000 });
 
   // Fill in the project name - look for the first text input in the dialog

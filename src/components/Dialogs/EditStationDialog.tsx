@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
+import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
 
 export default function EditStationDialog() {
@@ -123,16 +124,23 @@ export default function EditStationDialog() {
     }
   };
 
+  // Track if form has been modified
+  const isDirty = station ? (
+    isZeroDatum !== station.is_zero_datum ||
+    latitude !== (station.gps_coordinates?.latitude.toString() ?? '') ||
+    longitude !== (station.gps_coordinates?.longitude.toString() ?? '')
+  ) : false;
+
   if (!station || !stationRef) {
     return (
-      <DialogWrapper title="Edit Station" onClose={closeDialog}>
+      <DialogWrapper title="Edit Station" onClose={closeDialog} size="md" data-testid="edit-station-dialog">
         <div className="text-error">Station not found</div>
       </DialogWrapper>
     );
   }
 
   return (
-    <DialogWrapper title="Edit Station" onClose={closeDialog}>
+    <DialogWrapper title="Edit Station" onClose={closeDialog} size="md" isDirty={isDirty} data-testid="edit-station-dialog">
       <div className="space-y-4">
         {error && (
           <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">
@@ -244,32 +252,6 @@ function DetailRow({ label, value }: { label: string; value: string }) {
     <div className="flex justify-between text-sm">
       <span className="text-text-secondary">{label}:</span>
       <span>{value}</span>
-    </div>
-  );
-}
-
-interface DialogWrapperProps {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}
-
-function DialogWrapper({ title, onClose, children }: DialogWrapperProps) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-labelledby="dialog-title" className="relative bg-panel border border-border rounded-lg shadow-xl max-w-md w-full mx-4">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 id="dialog-title" className="text-lg font-medium">{title}</h2>
-          <button
-            onClick={onClose}
-            className="text-text-secondary hover:text-text-primary text-xl"
-          >
-            x
-          </button>
-        </div>
-        <div className="p-4">{children}</div>
-      </div>
     </div>
   );
 }

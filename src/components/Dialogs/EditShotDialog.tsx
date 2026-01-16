@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
+import { DialogWrapper } from './DialogWrapper';
 
 export default function EditShotDialog() {
   const { closeDialog, dialogData } = useUIStore();
@@ -113,16 +114,32 @@ export default function EditShotDialog() {
     }
   };
 
+  // Track if form has been modified
+  const isDirty = shot ? (
+    azimuthIn !== shot.azimuth_in.toString() ||
+    azimuthOut !== shot.azimuth_out.toString() ||
+    length !== shot.length.toString() ||
+    depthIn !== shot.depth_in.toString() ||
+    depthOut !== shot.depth_out.toString() ||
+    pitchIn !== (shot.pitch_in?.toString() ?? '') ||
+    pitchOut !== (shot.pitch_out?.toString() ?? '') ||
+    left !== (shot.left?.toString() ?? '') ||
+    right !== (shot.right?.toString() ?? '') ||
+    up !== (shot.up?.toString() ?? '') ||
+    down !== (shot.down?.toString() ?? '') ||
+    comment !== (shot.comment ?? '')
+  ) : false;
+
   if (!shot) {
     return (
-      <DialogWrapper title="Edit Shot" onClose={closeDialog}>
+      <DialogWrapper title="Edit Shot" onClose={closeDialog} size="lg" data-testid="edit-shot-dialog">
         <div className="text-error">Shot not found</div>
       </DialogWrapper>
     );
   }
 
   return (
-    <DialogWrapper title="Edit Shot" onClose={closeDialog}>
+    <DialogWrapper title="Edit Shot" onClose={closeDialog} size="lg" isDirty={isDirty} data-testid="edit-shot-dialog">
       <div className="space-y-4">
         {error && (
           <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">
@@ -283,31 +300,5 @@ export default function EditShotDialog() {
         </div>
       </div>
     </DialogWrapper>
-  );
-}
-
-interface DialogWrapperProps {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}
-
-function DialogWrapper({ title, onClose, children }: DialogWrapperProps) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-labelledby="dialog-title" className="relative bg-panel border border-border rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[90vh] overflow-auto">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 id="dialog-title" className="text-lg font-medium">{title}</h2>
-          <button
-            onClick={onClose}
-            className="text-text-secondary hover:text-text-primary text-xl"
-          >
-            ×
-          </button>
-        </div>
-        <div className="p-4">{children}</div>
-      </div>
-    </div>
   );
 }

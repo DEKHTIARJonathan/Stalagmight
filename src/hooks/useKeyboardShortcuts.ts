@@ -38,7 +38,27 @@ export function useKeyboardShortcuts() {
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
-      // Ignore if typing in an input
+      const key = event.key.toLowerCase();
+
+      // Handle Escape FIRST - works even when focus is in an input
+      if (key === 'escape' || key === 'esc') {
+        // Close any open dialog
+        const { activeDialog, closeDialog } = useUIStore.getState();
+        if (activeDialog) {
+          event.preventDefault();
+          closeDialog();
+          // IMPORTANT: Don't return - continue to clear tool state
+        }
+
+        // Always clear tool state (existing behavior)
+        clearSelection();
+        clearMergeStations();
+        clearMeasure();
+        setDrawFromStation(null);
+        return;
+      }
+
+      // Ignore if typing in an input (for all other keys)
       if (
         event.target instanceof HTMLInputElement ||
         event.target instanceof HTMLTextAreaElement ||
@@ -46,8 +66,6 @@ export function useKeyboardShortcuts() {
       ) {
         return;
       }
-
-      const key = event.key.toLowerCase();
       const isCtrlOrCmd = event.ctrlKey || event.metaKey;
 
       // Handle Ctrl/Cmd shortcuts
@@ -109,15 +127,6 @@ export function useKeyboardShortcuts() {
             }
             return;
         }
-      }
-
-      // Handle Escape - clear all tool state and selection
-      if (key === 'escape') {
-        clearSelection();
-        clearMergeStations();
-        clearMeasure();
-        setDrawFromStation(null);
-        return;
       }
 
       // Handle Delete/Backspace - delete selected items

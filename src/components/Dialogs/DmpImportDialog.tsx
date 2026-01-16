@@ -3,6 +3,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
+import { DialogWrapper } from './DialogWrapper';
 import type { DmpFile } from '../../types/commands';
 import { getNextSectionColor } from '../../utils/colors';
 
@@ -176,8 +177,11 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
     }
   };
 
+  // Track if form has been modified (file loaded or project name changed)
+  const isDirty = dmpFile !== null || newProjectName !== '';
+
   return (
-    <DialogWrapper title="Import DMP File" onClose={closeDialog}>
+    <DialogWrapper title="Import DMP File" onClose={closeDialog} size="2xl" isDirty={isDirty} data-testid="import-dmp-dialog">
       <div className="space-y-4">
         {error && (
           <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">
@@ -194,7 +198,6 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
             <input
               type="text"
               value={filePath}
-              onChange={(e) => setFilePath(e.target.value)}
               className="flex-1"
               placeholder="/path/to/survey.dmp"
               readOnly
@@ -321,31 +324,5 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
         </div>
       </div>
     </DialogWrapper>
-  );
-}
-
-interface DialogWrapperProps {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}
-
-function DialogWrapper({ title, onClose, children }: DialogWrapperProps) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-labelledby="dialog-title" data-testid="import-dmp-dialog" className="relative bg-panel border border-border rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-auto">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 id="dialog-title" className="text-lg font-medium">{title}</h2>
-          <button
-            onClick={onClose}
-            className="text-text-secondary hover:text-text-primary text-xl"
-          >
-            ×
-          </button>
-        </div>
-        <div className="p-4">{children}</div>
-      </div>
-    </div>
   );
 }
