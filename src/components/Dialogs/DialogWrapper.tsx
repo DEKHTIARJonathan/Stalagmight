@@ -1,5 +1,5 @@
-import { useEffect, useId, ReactNode, useCallback } from 'react';
-import { useUIStore } from '../../store/uiStore';
+import { useEffect, useId, ReactNode, useCallback, useState } from 'react';
+import { Button } from '../common/Button';
 
 type DialogSize = 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl' | '5xl';
 
@@ -33,26 +33,40 @@ export function DialogWrapper({
   maxHeight = 'max-h-[90vh]',
 }: DialogWrapperProps) {
   const titleId = useId();
-  const { openDialog: showConfirmDialog } = useUIStore();
+  const [showConfirm, setShowConfirm] = useState(false);
 
   const requestClose = useCallback(() => {
     if (isDirty) {
-      showConfirmDialog('unsaved-changes', { onConfirm: onClose });
+      setShowConfirm(true);
     } else {
       onClose();
     }
-  }, [isDirty, onClose, showConfirmDialog]);
+  }, [isDirty, onClose]);
+
+  const handleConfirmDiscard = useCallback(() => {
+    setShowConfirm(false);
+    onClose();
+  }, [onClose]);
+
+  const handleCancelDiscard = useCallback(() => {
+    setShowConfirm(false);
+  }, []);
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if ((e.key === 'Escape' || e.key === 'Esc') && !e.repeat && !e.defaultPrevented) {
         e.preventDefault();
-        requestClose();
+        e.stopPropagation();
+        if (showConfirm) {
+          handleCancelDiscard();
+        } else {
+          requestClose();
+        }
       }
     };
     document.addEventListener('keydown', handleEscape, true);
     return () => document.removeEventListener('keydown', handleEscape, true);
-  }, [requestClose]);
+  }, [requestClose, showConfirm, handleCancelDiscard]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -67,6 +81,7 @@ export function DialogWrapper({
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <h2 id={titleId} className="text-lg font-medium">{title}</h2>
           <button
+            type="button"
             onClick={requestClose}
             className="text-text-secondary hover:text-text-primary text-xl"
             aria-label="Close dialog"
@@ -76,6 +91,33 @@ export function DialogWrapper({
         </div>
         <div className="p-4">{children}</div>
       </div>
+
+      {/* Inline confirm overlay for dirty state */}
+      {showConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50" onClick={handleCancelDiscard} />
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="confirm-discard-title"
+            className="relative bg-panel border border-border rounded-lg shadow-xl max-w-sm w-full mx-4"
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+              <h2 id="confirm-discard-title" className="text-lg font-medium">Unsaved Changes</h2>
+            </div>
+            <div className="p-4 space-y-4">
+              <p>You have unsaved changes. Are you sure you want to close?</p>
+              <p className="text-text-secondary text-sm">Your changes will be lost.</p>
+              <div className="flex justify-end gap-2 pt-4 border-t border-border">
+                <Button type="button" onClick={handleCancelDiscard}>Cancel</Button>
+                <Button type="button" variant="danger" onClick={handleConfirmDiscard}>
+                  Discard Changes
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

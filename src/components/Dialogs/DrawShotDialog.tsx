@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
@@ -43,12 +43,16 @@ export default function DrawShotDialog() {
     return station?.coordinates.z ?? 0;
   }, [fromStation, stations]);
 
-  // Initialize depth_in with current station depth
-  useState(() => {
+  // Track if depth was auto-initialized (for isDirty calculation)
+  const depthAutoInitialized = useRef(false);
+
+  // Initialize depth_in with current station depth on mount
+  useEffect(() => {
     if (depthIn === '' && currentStationDepth !== 0) {
       setDepthIn(currentStationDepth.toFixed(1));
+      depthAutoInitialized.current = true;
     }
-  });
+  }, [currentStationDepth]); // Only run when currentStationDepth changes
 
   const handleClose = () => {
     setDrawFromStation(null);
@@ -147,8 +151,9 @@ export default function DrawShotDialog() {
     }
   };
 
-  // Track if form has been modified
-  const isDirty = azimuthIn !== '' || length !== '' || depthIn !== '' || depthOut !== '' || isVirtual;
+  // Track if form has been modified (exclude auto-initialized depth from making dirty)
+  const userModifiedDepth = depthIn !== '' && !depthAutoInitialized.current;
+  const isDirty = azimuthIn !== '' || length !== '' || userModifiedDepth || isVirtual || left !== '' || right !== '' || up !== '' || down !== '';
 
   if (!fromStation) {
     return null;

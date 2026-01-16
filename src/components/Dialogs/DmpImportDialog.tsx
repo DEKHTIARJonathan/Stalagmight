@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
@@ -23,12 +23,49 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
   const [createNewProject, setCreateNewProject] = useState(!project);
   const [newProjectName, setNewProjectName] = useState('');
 
-  // Auto-load if file path provided
-  useEffect(() => {
-    if (filePath && !dmpFile) {
-      handleLoadFile();
+  // Track auto-populated project name for isDirty calculation
+  const autoPopulatedProjectName = useRef<string>('');
+
+  // Track if auto-load has been attempted for initial path
+  const autoLoadAttempted = useRef(false);
+
+  const handleLoadFile = useCallback(async (path: string) => {
+    if (!path) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const result = await importDmp(path);
+      setDmpFile(result);
+      // Select only sections that have shots by default (empty sections unselected and grayed)
+      const nonEmptyIndices = result.sections
+        .map((section, index) => ({
+          index,
+          hasShots: section.shots.filter((s) => s.shot_type === 'Standard').length > 0,
+        }))
+        .filter((s) => s.hasShots)
+        .map((s) => s.index);
+      setSelectedSections(new Set(nonEmptyIndices));
+      // Use filename as default project name
+      const fileName = path.split(/[/\\]/).pop()?.replace('.dmp', '') ?? 'Imported';
+      setNewProjectName(fileName);
+      autoPopulatedProjectName.current = fileName;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to parse DMP file');
+      setDmpFile(null);
+    } finally {
+      setIsLoading(false);
     }
-  }, []);
+  }, [importDmp]);
+
+  // Auto-load if file path provided on mount
+  useEffect(() => {
+    if (filePath && !dmpFile && !autoLoadAttempted.current) {
+      autoLoadAttempted.current = true;
+      handleLoadFile(filePath);
+    }
+  }, [filePath, dmpFile, handleLoadFile]);
 
   const handleBrowse = async () => {
     try {
@@ -46,35 +83,6 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to open file dialog');
-    }
-  };
-
-  const handleLoadFile = async () => {
-    if (!filePath) return;
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const result = await importDmp(filePath);
-      setDmpFile(result);
-      // Select only sections that have shots by default (empty sections unselected and grayed)
-      const nonEmptyIndices = result.sections
-        .map((section, index) => ({
-          index,
-          hasShots: section.shots.filter((s) => s.shot_type === 'Standard').length > 0,
-        }))
-        .filter((s) => s.hasShots)
-        .map((s) => s.index);
-      setSelectedSections(new Set(nonEmptyIndices));
-      // Use filename as default project name
-      const fileName = filePath.split(/[/\\]/).pop()?.replace('.dmp', '') ?? 'Imported';
-      setNewProjectName(fileName);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to parse DMP file');
-      setDmpFile(null);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -177,8 +185,9 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
     }
   };
 
-  // Track if form has been modified (file loaded or project name changed)
-  const isDirty = dmpFile !== null || newProjectName !== '';
+  // Track if form has user changes (exclude auto-loaded file and auto-populated project name)
+  const userModifiedProjectName = newProjectName !== '' && newProjectName !== autoPopulatedProjectName.current;
+  const isDirty = userModifiedProjectName || (dmpFile !== null && selectedSections.size > 0);
 
   return (
     <DialogWrapper title="Import DMP File" onClose={closeDialog} size="2xl" isDirty={isDirty} data-testid="import-dmp-dialog">
@@ -207,7 +216,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
         </div>
 
         {filePath && !dmpFile && (
-          <Button onClick={handleLoadFile} disabled={isLoading}>
+          <Button onClick={() => handleLoadFile(filePath)} disabled={isLoading}>
             {isLoading ? 'Loading...' : 'Load File'}
           </Button>
         )}
