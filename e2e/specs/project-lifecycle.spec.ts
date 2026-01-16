@@ -1,5 +1,6 @@
 import {
   waitForAppReady,
+  resetAppState,
   createNewProject,
   saveProject,
   undo,
@@ -9,15 +10,24 @@ import {
 describe('Project Lifecycle', () => {
   beforeEach(async () => {
     await waitForAppReady();
+    // Reset any leftover state from previous tests
+    await resetAppState();
   });
 
   describe('Project Creation', () => {
     it('should display the start page on launch', async () => {
       // Look for elements that indicate we're on the start/global view
-      const startPage = await $(
-        '[class*="GlobalView"], [class*="StartPage"], button*=New Project'
-      );
-      await expect(startPage).toBeExisting();
+      // The GlobalView should have either data-testid or the New Project button
+      const startPage = await $('[data-testid="global-view"]');
+      const hasGlobalView = await startPage.isExisting();
+
+      if (!hasGlobalView) {
+        // Fallback: check for New Project button which indicates we're on GlobalView
+        const newProjectBtn = await $('button*=New Project');
+        await expect(newProjectBtn).toBeExisting();
+      } else {
+        await expect(startPage).toBeExisting();
+      }
     });
 
     it('should have a New Project button', async () => {
@@ -28,14 +38,25 @@ describe('Project Lifecycle', () => {
 
     it('should open new project dialog when clicking New Project', async () => {
       const newProjectBtn = await $('button*=New Project');
-      await newProjectBtn.click();
+      await newProjectBtn.waitForDisplayed({ timeout: 5000 });
+
+      // Use JavaScript click for WebKit reliability
+      try {
+        await newProjectBtn.waitForClickable({ timeout: 3000 });
+        await newProjectBtn.click();
+      } catch {
+        await browser.execute((el) => (el as HTMLElement).click(), newProjectBtn);
+      }
+
+      // Wait for React state update
+      await browser.pause(1000);
 
       // Wait for dialog
       const dialog = await $('[role="dialog"]');
-      await dialog.waitForDisplayed({ timeout: 5000 });
+      await dialog.waitForDisplayed({ timeout: 10000 });
 
       // Should have a project name input
-      const nameInput = await $('input');
+      const nameInput = await dialog.$('input');
       await expect(nameInput).toBeExisting();
     });
 

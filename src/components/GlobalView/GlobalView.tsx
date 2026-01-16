@@ -20,12 +20,12 @@ export default function GlobalView() {
   }, [loadRecentProjects]);
 
   return (
-    <div className="h-full flex flex-col">
+    <div data-testid="global-view" className="h-full flex flex-col">
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-3">
           <Button onClick={() => handleImportDmp()}>Import DMP</Button>
-          <Button onClick={() => handleNewProject()}>New Project</Button>
+          <Button data-testid="new-project-button" onClick={() => handleNewProject()}>New Project</Button>
           <Button onClick={() => handleOpenProject()}>Open Project</Button>
         </div>
         <h1 className="text-xl font-bold">CaveChef</h1>
