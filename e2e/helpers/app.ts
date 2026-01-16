@@ -8,44 +8,51 @@
  * Call this in beforeEach to ensure clean test state.
  */
 export async function resetAppState(): Promise<void> {
-  // Try to close any open dialogs by pressing Escape multiple times
-  for (let i = 0; i < 3; i++) {
-    await browser.keys(['Escape']);
-    await browser.pause(100);
-  }
+  // First ensure E2E helpers available
+  await browser.waitUntil(
+    async () => await browser.execute(() => !!(window as { __E2E_TEST__?: unknown }).__E2E_TEST__),
+    { timeout: 5000, timeoutMsg: 'E2E helpers not available' }
+  );
 
-  // Use exposed store to reset to GlobalView if available
-  const result = await browser.execute(() => {
-    const e2e = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { setView: (view: string) => void }; }; projectStore: { getState: () => { closeProject: () => void }; }; }; }).__E2E_TEST__;
-    if (e2e) {
-      try {
-        // Close any open project and return to global view
-        e2e.projectStore.getState().closeProject();
-        e2e.uiStore.getState().setView('global');
-        return { success: true };
-      } catch (err) {
-        return { success: false, error: String(err) };
-      }
+  // Use executeAsync with error handling
+  const result = await browser.executeAsync((done: (result: { ok: boolean; error?: string }) => void) => {
+    const e2e = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { closeDialog: () => void; setView: (view: string) => void }; }; projectStore: { getState: () => { closeProject: () => Promise<void> }; }; }; }).__E2E_TEST__;
+    if (!e2e) {
+      done({ ok: false, error: 'E2E helpers not found' });
+      return;
     }
-    return { success: false, error: 'E2E helpers not available' };
+
+    (async () => {
+      try {
+        e2e.uiStore.getState().closeDialog();
+        await e2e.projectStore.getState().closeProject();
+        e2e.uiStore.getState().setView('global');
+        done({ ok: true });
+      } catch (err) {
+        done({ ok: false, error: String(err) });
+      }
+    })();
   });
 
   console.log('[resetAppState] Store reset result:', result);
 
-  // Wait a moment for state to settle
-  await browser.pause(500);
+  // Check result and throw if failed
+  if (!result.ok) {
+    throw new Error(`resetAppState failed: ${result.error}`);
+  }
 
-  // Verify we're back at GlobalView
+  // Verify project is closed
   await browser.waitUntil(
-    async () => {
-      const globalView = await $('[data-testid="global-view"]');
-      return await globalView.isExisting();
-    },
-    {
-      timeout: 5000,
-      timeoutMsg: 'Failed to return to GlobalView after reset',
-    }
+    async () => await browser.execute(() => {
+      const e2e = (window as unknown as { __E2E_TEST__?: { projectStore: { getState: () => { project: unknown } }; }; }).__E2E_TEST__;
+      return e2e && e2e.projectStore.getState().project === null;
+    }),
+    { timeout: 5000, timeoutMsg: 'Project did not close' }
   );
+
+  // Wait for GlobalView
+  const globalView = await $('[data-testid="global-view"]');
+  await globalView.waitForExist({ timeout: 5000 });
 }
 
 /**
@@ -204,25 +211,71 @@ export async function createNewProject(projectName: string): Promise<void> {
 }
 
 /**
- * Open the Import Dialog using keyboard shortcut.
+ * Open the DMP Import Dialog using keyboard shortcut (Ctrl+I).
+ * Note: This opens DmpImportDialog, NOT ImportDialog (section creation).
  */
-export async function openImportDialog(): Promise<void> {
+export async function openDmpImportDialog(): Promise<void> {
   await browser.keys(['Control', 'i']);
 
-  // Wait for import dialog to appear
-  const importDialog = await $('[role="dialog"]');
+  // Wait for DMP import dialog to appear (use specific data-testid)
+  const importDialog = await $('[data-testid="import-dmp-dialog"]');
   await importDialog.waitForDisplayed({
     timeout: 5000,
-    timeoutMsg: 'Import dialog did not appear',
+    timeoutMsg: 'DMP Import dialog did not appear',
   });
 }
 
 /**
- * Close any open dialog by pressing Escape.
+ * Ensure Sections panel is open (don't toggle - set explicitly).
  */
-export async function closeDialog(): Promise<void> {
+export async function ensureSectionsPanelOpen(): Promise<void> {
+  await browser.execute(() => {
+    const e2e = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { setSectionsPanelOpen: (open: boolean) => void } }; }; }).__E2E_TEST__;
+    if (e2e) {
+      e2e.uiStore.getState().setSectionsPanelOpen(true);
+    }
+  });
+  await browser.pause(100); // Let React render
+}
+
+/**
+ * Open the Import Section Dialog via store (for section creation).
+ * Note: This opens ImportDialog, NOT DmpImportDialog.
+ */
+export async function openImportSectionDialog(): Promise<void> {
+  const result = await browser.execute(() => {
+    const e2e = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { openDialog: (name: string) => void } }; }; }).__E2E_TEST__;
+    if (!e2e) {
+      return { success: false, error: 'E2E helpers not exposed on window. Ensure the app has loaded.' };
+    }
+    try {
+      e2e.uiStore.getState().openDialog('import');
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  });
+
+  if (!result.success) {
+    throw new Error(`Failed to open Import Section dialog: ${result.error}`);
+  }
+
+  // Wait for import section dialog to appear (use specific data-testid)
+  const importDialog = await $('[data-testid="import-section-dialog"]');
+  await importDialog.waitForDisplayed({
+    timeout: 5000,
+    timeoutMsg: 'Import Section dialog did not appear',
+  });
+}
+
+/**
+ * Press Escape key. Note: This clears tool/selection state in useKeyboardShortcuts,
+ * but does NOT close dialogs (Escape support for dialogs is not yet implemented).
+ * To close dialogs, use the Cancel button or backdrop click.
+ */
+export async function pressEscape(): Promise<void> {
   await browser.keys(['Escape']);
-  // Wait for dialog to disappear
+  // Wait for state to update
   await browser.pause(500);
 }
 

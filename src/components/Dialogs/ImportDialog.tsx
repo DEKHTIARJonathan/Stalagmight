@@ -65,6 +65,7 @@ export default function ImportDialog() {
               onChange={(e) => setName(e.target.value)}
               className="w-full"
               placeholder="e.g., Main Line"
+              data-testid="section-name-input"
             />
           </div>
           <div>
@@ -232,7 +233,7 @@ function DialogWrapper({ title, onClose, children }: DialogWrapperProps) {
       />
 
       {/* Dialog */}
-      <div role="dialog" aria-modal="true" aria-labelledby="dialog-title" className="relative bg-panel border border-border rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-auto">
+      <div role="dialog" aria-modal="true" aria-labelledby="dialog-title" data-testid="import-section-dialog" className="relative bg-panel border border-border rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-auto">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <h2 id="dialog-title" className="text-lg font-medium">{title}</h2>
