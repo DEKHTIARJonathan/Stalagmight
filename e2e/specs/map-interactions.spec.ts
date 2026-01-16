@@ -1,8 +1,9 @@
-import { waitForAppReady, createNewProject, selectTool } from '../helpers/app';
+import { waitForAppReady, resetAppState, createNewProject, selectTool } from '../helpers/app';
 
 describe('Map Interactions', () => {
   beforeEach(async () => {
     await waitForAppReady();
+    await resetAppState();
     await createNewProject('Map Test Project');
   });
 

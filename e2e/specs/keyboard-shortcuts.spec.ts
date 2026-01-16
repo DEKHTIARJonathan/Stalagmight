@@ -1,8 +1,9 @@
-import { waitForAppReady, createNewProject, selectTool, togglePanel } from '../helpers/app';
+import { waitForAppReady, resetAppState, createNewProject, selectTool, togglePanel } from '../helpers/app';
 
 describe('Keyboard Shortcuts', () => {
   beforeEach(async () => {
     await waitForAppReady();
+    await resetAppState();
     // Create a project so we have access to tools and panels
     await createNewProject('Keyboard Shortcuts Test');
   });
@@ -26,16 +27,8 @@ describe('Keyboard Shortcuts', () => {
         await browser.keys([tool.key]);
         await browser.pause(200);
 
-        // Check if the toolbar reflects the active tool
-        // Look for an active/selected state on toolbar buttons
-        const activeToolIndicator = await $(
-          `[class*="active"][class*="${tool.expectedClass}"], ` +
-            `[data-active="true"][data-tool="${tool.name}"], ` +
-            `button[class*="active"]:has-text("${tool.name}")`
-        );
-
         // The app should remain functional regardless of tool selection
-        const mainView = await $('canvas, [class*="MapCanvas"]');
+        const mainView = await $('canvas');
         await expect(mainView).toBeExisting();
       });
     }

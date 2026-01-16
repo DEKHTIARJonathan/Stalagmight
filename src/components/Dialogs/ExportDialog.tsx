@@ -58,9 +58,9 @@ export default function ExportDialog() {
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={closeDialog} />
 
-      <div className="relative bg-panel border border-border rounded-lg shadow-xl max-w-md w-full mx-4">
+      <div role="dialog" aria-modal="true" aria-labelledby="dialog-title" className="relative bg-panel border border-border rounded-lg shadow-xl max-w-md w-full mx-4">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 className="text-lg font-medium">Export</h2>
+          <h2 id="dialog-title" className="text-lg font-medium">Export</h2>
           <button onClick={closeDialog} className="text-text-secondary hover:text-text-primary text-xl">
             ×
           </button>

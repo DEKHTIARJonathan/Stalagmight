@@ -1,5 +1,6 @@
 import {
   waitForAppReady,
+  resetAppState,
   createNewProject,
   openImportDialog,
   closeDialog,
@@ -10,6 +11,8 @@ describe('Import Dialog', () => {
   beforeEach(async () => {
     // Wait for the app to be fully loaded
     await waitForAppReady();
+    // Reset any leftover state from previous tests
+    await resetAppState();
   });
 
   it('should create a new project and open import dialog', async () => {
