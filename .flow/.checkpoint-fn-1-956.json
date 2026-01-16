@@ -1,0 +1,80 @@
+{
+  "created_at": "2026-01-16T21:51:47.483135Z",
+  "epic": {
+    "data": {
+      "branch_name": "fn-1-956",
+      "created_at": "2026-01-16T20:48:52.462284Z",
+      "depends_on_epics": [],
+      "id": "fn-1-956",
+      "next_task": 1,
+      "plan_review_status": "unknown",
+      "plan_reviewed_at": null,
+      "spec_path": ".flow/specs/fn-1-956.md",
+      "status": "open",
+      "title": "Fix WebdriverIO Tests",
+      "updated_at": "2026-01-16T20:51:35.972903Z"
+    },
+    "spec": "# Plan: Fix Two Failing WebdriverIO E2E Tests (v2)\n\n## Summary\n\nTwo WebdriverIO E2E tests in `e2e/specs/import-dialog.spec.ts` are failing:\n1. **\"should display section name input field\"** - Testing wrong dialog\n2. **\"should allow keyboard shortcut to open import dialog\"** - Escape doesn't close dialogs\n\n## Test 1: \"should display section name input field\"\n\n### Root Cause Analysis (REVISED)\n\n**Test code** (import-dialog.spec.ts:37-55):\n```typescript\nit('should display section name input field', async () => {\n  await createNewProject('Section Name Test');\n  await openImportDialog();  // <-- Opens DMP Import dialog via Ctrl+I\n\n  const sectionNameInput = await $(\n    'input[name*=\"section\"], input[name*=\"name\"], input[placeholder*=\"Section\"]'\n  );\n  await expect(sectionNameInput).toBeExisting();\n  ...\n});\n```\n\n**The `openImportDialog()` helper** calls `browser.keys(['Control', 'i'])` which triggers `openDialog('import-dmp')` (useKeyboardShortcuts.ts:103), opening **DmpImportDialog**.\n\n**But the section name input** with `placeholder=\"e.g., Main Line\"` is in **ImportDialog** (a different component for manually creating sections).\n\n**Problem**: The test is testing the **wrong dialog**. DmpImportDialog is for importing .dmp files and has different fields.\n\n### Fix\n\nThe test should either:\n1. **Test the correct dialog (ImportDialog)** - opened via clicking \"+\" in SectionsPanel, or\n2. **Test DmpImportDialog fields** - which has a file path input, not a section name input\n\n**Recommended: Option 1** - Update the test to open ImportDialog correctly:\n\n```typescript\nit('should display section name input field', async () => {\n  await createNewProject('Section Name Test');\n\n  // Open ImportDialog (not DmpImportDialog) via E2E store\n  await browser.execute(() => {\n    const e2e = (window as any).__E2E_TEST__;\n    if (e2e) {\n      e2e.uiStore.getState().openDialog('import');\n    }\n  });\n  await browser.pause(500);\n\n  // ImportDialog has section name input with placeholder \"e.g., Main Line\"\n  const sectionNameInput = await $('[data-testid=\"section-name-input\"]');\n  await expect(sectionNameInput).toBeExisting();\n  ...\n});\n```\n\n**Also add `data-testid`** to ImportDialog for reliable selection:\n\n```tsx\n// ImportDialog.tsx line 62\n<input\n  type=\"text\"\n  data-testid=\"section-name-input\"\n  value={name}\n  onChange={(e) => setName(e.target.value)}\n  className=\"w-full\"\n  placeholder=\"e.g., Main Line\"\n/>\n```\n\n**Add `data-testid` to dialog wrapper** for consistency:\n```tsx\n// ImportDialog.tsx DialogWrapper\n<div role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"dialog-title\"\n     data-testid=\"import-dialog\"\n     className=\"...\">\n```\n\n### Files to Change\n\n1. `src/components/Dialogs/ImportDialog.tsx`:\n   - Add `data-testid=\"section-name-input\"` to section name input (line 62)\n   - Add `data-testid=\"import-dialog\"` to dialog wrapper (line 235)\n\n2. `e2e/specs/import-dialog.spec.ts`:\n   - Update test to open `'import'` dialog instead of using `openImportDialog()`\n   - Update selector to `[data-testid=\"section-name-input\"]`\n\n3. `e2e/helpers/app.ts`:\n   - Add new helper `openSectionDialog()` that opens the correct dialog\n\n---\n\n## Test 2: \"should allow keyboard shortcut to open import dialog\"\n\n### Root Cause Analysis (REVISED)\n\n**Test code** (import-dialog.spec.ts:77-96):\n```typescript\nit('should allow keyboard shortcut to open import dialog', async () => {\n  await createNewProject('Keyboard Test');\n  await browser.keys(['Control', 'i']);  // Opens dialog - works\n\n  const dialog = await $('[role=\"dialog\"]');\n  await dialog.waitForDisplayed({ timeout: 5000 });  // Works\n\n  await browser.keys(['Escape']);  // <-- Escape does NOT close dialogs!\n\n  await browser.waitUntil(\n    async () => !(await dialog.isDisplayed()),\n    { timeout: 5000 }  // <-- TIMES OUT\n  );\n});\n```\n\n**The Escape handler** (useKeyboardShortcuts.ts:114-121):\n```typescript\nif (key === 'escape') {\n  clearSelection();\n  clearMergeStations();\n  clearMeasure();\n  setDrawFromStation(null);\n  return;  // Does NOT call closeDialog()!\n}\n```\n\n**Problem**: The app does NOT close dialogs on Escape key. The test assumption is wrong.\n\n### Fix Options\n\n**Option A: Implement Escape-to-close in dialogs (Recommended)**\n\nAdd an Escape keydown handler to DialogWrapper that calls `closeDialog()`:\n\n```tsx\n// Add to DialogWrapper in ImportDialog.tsx (and shared DialogWrapper if exists)\nuseEffect(() => {\n  const handleEscape = (e: KeyboardEvent) => {\n    if (e.key === 'Escape') {\n      onClose();\n    }\n  };\n  document.addEventListener('keydown', handleEscape);\n  return () => document.removeEventListener('keydown', handleEscape);\n}, [onClose]);\n```\n\nThis is good UX and matches user expectations.\n\n**Option B: Update test to close via button**\n\nIf Escape-to-close is not desired behavior:\n```typescript\n// Click the close button instead\nconst closeBtn = await dialog.$('button:has-text(\"\u00d7\")');\nawait closeBtn.click();\n```\n\n### Recommendation\n\n**Option A** - Implement Escape-to-close because:\n1. Standard UX expectation for modal dialogs\n2. ContextMenu already implements this pattern (ContextMenu.tsx:35-48)\n3. Improves overall app usability\n\n### Files to Change\n\n1. `src/components/Dialogs/ImportDialog.tsx`:\n   - Add Escape keydown handler to DialogWrapper component\n\n2. Create shared `DialogWrapper` component if one doesn't exist, or update each dialog to use consistent Escape handling.\n\n---\n\n## Implementation Plan\n\n### Step 1: Create/Update Shared DialogWrapper (if needed)\n\nCheck if there's a shared DialogWrapper. If not, add Escape handling to ImportDialog's local DialogWrapper:\n\n```tsx\nfunction DialogWrapper({ title, onClose, children }: DialogWrapperProps) {\n  useEffect(() => {\n    const handleEscape = (e: KeyboardEvent) => {\n      if (e.key === 'Escape') {\n        onClose();\n      }\n    };\n    document.addEventListener('keydown', handleEscape);\n    return () => document.removeEventListener('keydown', handleEscape);\n  }, [onClose]);\n\n  return (\n    <div className=\"fixed inset-0 z-50 flex items-center justify-center\">\n      {/* ... existing code ... */}\n    </div>\n  );\n}\n```\n\n### Step 2: Add test IDs to ImportDialog\n\n```tsx\n// ImportDialog.tsx\n<input\n  type=\"text\"\n  data-testid=\"section-name-input\"  // ADD THIS\n  value={name}\n  ...\n/>\n\n// In DialogWrapper:\n<div role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"dialog-title\"\n     data-testid=\"import-dialog\"  // ADD THIS\n     className=\"...\">\n```\n\n### Step 3: Update E2E Test for \"section name input\"\n\n```typescript\n// import-dialog.spec.ts\nit('should display section name input field', async () => {\n  await createNewProject('Section Name Test');\n\n  // Wait for E2E helpers\n  await browser.waitUntil(\n    async () => !!(await browser.execute(() => (window as any).__E2E_TEST__)),\n    { timeout: 10000 }\n  );\n\n  // Open the correct dialog (ImportDialog, not DmpImportDialog)\n  await browser.execute(() => {\n    const e2e = (window as any).__E2E_TEST__;\n    e2e.uiStore.getState().openDialog('import');\n  });\n\n  await browser.pause(500);\n\n  const sectionNameInput = await $('[data-testid=\"section-name-input\"]');\n  await expect(sectionNameInput).toBeExisting();\n\n  await sectionNameInput.setValue('Main Passage');\n  const value = await sectionNameInput.getValue();\n  expect(value).toBe('Main Passage');\n\n  await closeDialog();\n});\n```\n\n### Step 4: Update closeDialog helper\n\n```typescript\n// e2e/helpers/app.ts\nexport async function closeDialog(): Promise<void> {\n  // Wait for E2E helpers\n  await browser.waitUntil(\n    async () => !!(await browser.execute(() => (window as any).__E2E_TEST__)),\n    { timeout: 5000 }\n  );\n\n  // Try Escape first (now that dialogs support it)\n  await browser.keys(['Escape']);\n  await browser.pause(500);\n\n  // Verify dialog closed, fallback to store if needed\n  const dialog = await $('[role=\"dialog\"]');\n  if (await dialog.isDisplayed()) {\n    await browser.execute(() => {\n      const e2e = (window as any).__E2E_TEST__;\n      if (e2e) {\n        e2e.uiStore.getState().closeDialog();\n      }\n    });\n    await browser.pause(300);\n  }\n}\n```\n\n### Step 5: Verify Fixes\n\n```bash\nexport CARGO_TARGET_DIR=/root/CaveChef/src-tauri/target\nexport SKIP_BUILD=1\nxvfb-run --auto-servernum pnpm wdio run wdio.conf.ts --spec ./e2e/specs/import-dialog.spec.ts\n```\n\n---\n\n## Risk Assessment\n\n| Change | Risk | Mitigation |\n|--------|------|------------|\n| Adding Escape handler to dialogs | Low | Standard UX, matches ContextMenu pattern |\n| Adding data-testid attributes | Very Low | No behavior change |\n| Changing test to open different dialog | Medium | Verify test still tests intended functionality |\n| Updating closeDialog helper | Low | Maintains backward compatibility with fallback |\n\n---\n\n## Acceptance Criteria\n\n- [ ] ImportDialog has `data-testid=\"section-name-input\"` on section name input\n- [ ] ImportDialog has `data-testid=\"import-dialog\"` on dialog wrapper\n- [ ] Dialogs close on Escape key press\n- [ ] Test \"should display section name input field\" opens ImportDialog (not DmpImportDialog)\n- [ ] Test \"should display section name input field\" passes\n- [ ] Test \"should allow keyboard shortcut to open import dialog\" passes\n- [ ] All other WebdriverIO tests continue to pass (37 tests)\n- [ ] Playwright tests unaffected (34 tests)\n- [ ] Rust backend tests unaffected (79 tests)\n"
+  },
+  "epic_id": "fn-1-956",
+  "schema_version": 1,
+  "tasks": [
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-16T21:51:02.375780Z",
+        "depends_on": [],
+        "epic": "fn-1-956",
+        "id": "fn-1-956.1",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-1-956.1.md",
+        "status": "todo",
+        "title": "Complete fn-2-29o (section name input test fix)",
+        "updated_at": "2026-01-16T21:51:18.457541Z"
+      },
+      "id": "fn-1-956.1",
+      "spec": "# fn-1-956.1 Complete fn-2-29o (section name input test fix)\n\n## Description\nComplete all tasks in epic fn-2-29o to fix the \"should display section name input field\" test.\n\nSee epic fn-2-29o for detailed task breakdown:\n- fn-2-29o.1: Add data-testid attributes to ImportDialog\n- fn-2-29o.2: Add data-testid to DmpImportDialog\n- fn-2-29o.3: Update E2E test helpers and create new spec file\n- fn-2-29o.4: Update TESTING.md documentation\n\nRun `/flow-next:work fn-2-29o` to implement.\n## Acceptance\n- [ ] All fn-2-29o tasks completed\n- [ ] Test \"should display section name input field\" passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-16T21:51:02.516359Z",
+        "depends_on": [],
+        "epic": "fn-1-956",
+        "id": "fn-1-956.2",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-1-956.2.md",
+        "status": "todo",
+        "title": "Complete fn-3-m4h (escape close dialog fix)",
+        "updated_at": "2026-01-16T21:51:18.595141Z"
+      },
+      "id": "fn-1-956.2",
+      "spec": "# fn-1-956.2 Complete fn-3-m4h (escape close dialog fix)\n\n## Description\nComplete all tasks in epic fn-3-m4h to fix the \"should allow keyboard shortcut to open import dialog\" test.\n\nSee epic fn-3-m4h for detailed task breakdown:\n- fn-3-m4h.1: Add Escape handling to useKeyboardShortcuts\n- fn-3-m4h.2: Create shared DialogWrapper component\n- fn-3-m4h.3: Migrate confirmation dialogs to shared DialogWrapper\n- fn-3-m4h.4: Migrate form dialogs to shared DialogWrapper\n- fn-3-m4h.5: Migrate remaining dialogs to shared DialogWrapper\n- fn-3-m4h.6: Verify all WebdriverIO tests pass\n\nRun `/flow-next:work fn-3-m4h` to implement.\n## Acceptance\n- [ ] All fn-3-m4h tasks completed\n- [ ] Escape key closes all dialogs\n- [ ] Test \"should allow keyboard shortcut to open import dialog\" passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-16T21:51:02.658658Z",
+        "depends_on": [
+          "fn-1-956.1",
+          "fn-1-956.2"
+        ],
+        "epic": "fn-1-956",
+        "id": "fn-1-956.3",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-1-956.3.md",
+        "status": "todo",
+        "title": "Final verification - all WebdriverIO tests pass",
+        "updated_at": "2026-01-16T21:51:18.723702Z"
+      },
+      "id": "fn-1-956.3",
+      "spec": "# fn-1-956.3 Final verification - all WebdriverIO tests pass\n\n## Description\nFinal verification that all WebdriverIO E2E tests pass after both fixes are complete.\n\n## Verification Steps\n\n```bash\n# 1. TypeScript check\npnpm tsc --noEmit\n\n# 2. Playwright tests\npnpm test:ui\n\n# 3. Rust tests\ncd src-tauri && cargo test\n\n# 4. WebdriverIO tests (the originally failing tests)\nexport CARGO_TARGET_DIR=/root/CaveChef/src-tauri/target\nexport SKIP_BUILD=1\nxvfb-run --auto-servernum pnpm wdio\n```\n\n## Expected Results\n\nBoth originally failing tests now pass:\n1. \"should display section name input field\" \n2. \"should allow keyboard shortcut to open import dialog\"\n\nTotal: 37+ WebdriverIO tests passing (0 failures)\n## Acceptance\n- [ ] TypeScript compiles without errors\n- [ ] All Playwright tests pass (34+)\n- [ ] All Rust tests pass (79+)\n- [ ] All WebdriverIO tests pass (37+, 0 failures)\n- [ ] Both originally failing tests now pass\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    }
+  ]
+}

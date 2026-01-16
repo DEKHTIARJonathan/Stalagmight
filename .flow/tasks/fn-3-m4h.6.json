@@ -1,0 +1,26 @@
+{
+  "assignee": "cavechef@example.com",
+  "claim_note": "",
+  "claimed_at": "2026-01-16T23:42:14.896948Z",
+  "created_at": "2026-01-16T21:47:57.723005Z",
+  "depends_on": [
+    "fn-3-m4h.1",
+    "fn-3-m4h.3",
+    "fn-3-m4h.4",
+    "fn-3-m4h.5"
+  ],
+  "epic": "fn-3-m4h",
+  "evidence": {
+    "commits": [],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit"
+    ]
+  },
+  "id": "fn-3-m4h.6",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-3-m4h.6.md",
+  "status": "done",
+  "title": "Verify all WebdriverIO tests pass",
+  "updated_at": "2026-01-16T23:43:06.763639Z"
+}

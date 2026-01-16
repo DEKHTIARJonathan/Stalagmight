@@ -1,0 +1,22 @@
+{
+  "assignee": "cavechef@example.com",
+  "claim_note": "",
+  "claimed_at": "2026-01-16T22:41:41.475477Z",
+  "created_at": "2026-01-16T21:47:49.806173Z",
+  "depends_on": [],
+  "epic": "fn-2-29o",
+  "evidence": {
+    "commits": [],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui"
+    ]
+  },
+  "id": "fn-2-29o.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-2-29o.1.md",
+  "status": "done",
+  "title": "Add data-testid attributes to ImportDialog",
+  "updated_at": "2026-01-16T22:41:58.955136Z"
+}

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
+import { DialogWrapper } from './DialogWrapper';
 import type { Shot, ShotData } from '../../types/project';
 
 interface EditableShot extends Omit<Shot, 'marker_index' | 'temperature'> {
@@ -184,9 +185,22 @@ export default function EditSectionDialog() {
     }
   };
 
+  // Track if form has been modified
+  const isDirty = section ? (
+    name !== (section.name ?? '') ||
+    surveyor !== (section.surveyor ?? '') ||
+    date !== (section.date ?? '') ||
+    color !== section.color ||
+    shots.some(s => s.isNew || s.isDeleted) ||
+    shots.some(s => {
+      const original = section.shots.find(o => o.id === s.id);
+      return original && hasChanges(original, s);
+    })
+  ) : false;
+
   if (!section) {
     return (
-      <DialogWrapper title="Edit Section" onClose={closeDialog}>
+      <DialogWrapper title="Edit Section" onClose={closeDialog} size="5xl" data-testid="edit-section-dialog">
         <div className="text-error">Section not found</div>
       </DialogWrapper>
     );
@@ -195,7 +209,7 @@ export default function EditSectionDialog() {
   const visibleShots = shots.filter(s => !s.isDeleted);
 
   return (
-    <DialogWrapper title="Edit Section" onClose={closeDialog} wide>
+    <DialogWrapper title="Edit Section" onClose={closeDialog} size="5xl" isDirty={isDirty} data-testid="edit-section-dialog">
       <div className="space-y-4">
         {error && (
           <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">
@@ -467,32 +481,5 @@ function hasChanges(original: Shot, current: EditableShot): boolean {
     original.down !== current.down ||
     original.comment !== current.comment ||
     original.is_virtual !== current.is_virtual
-  );
-}
-
-interface DialogWrapperProps {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-  wide?: boolean;
-}
-
-function DialogWrapper({ title, onClose, children, wide }: DialogWrapperProps) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-labelledby="dialog-title" className={`relative bg-panel border border-border rounded-lg shadow-xl mx-4 ${wide ? 'max-w-5xl w-full' : 'max-w-md w-full'}`}>
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 id="dialog-title" className="text-lg font-medium">{title}</h2>
-          <button
-            onClick={onClose}
-            className="text-text-secondary hover:text-text-primary text-xl"
-          >
-            x
-          </button>
-        </div>
-        <div className="p-4">{children}</div>
-      </div>
-    </div>
   );
 }

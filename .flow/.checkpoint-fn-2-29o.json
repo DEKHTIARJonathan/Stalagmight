@@ -1,0 +1,100 @@
+{
+  "created_at": "2026-01-16T21:51:47.578670Z",
+  "epic": {
+    "data": {
+      "branch_name": "fn-2-29o",
+      "created_at": "2026-01-16T21:07:14.815841Z",
+      "depends_on_epics": [],
+      "id": "fn-2-29o",
+      "next_task": 1,
+      "plan_review_status": "unknown",
+      "plan_reviewed_at": null,
+      "spec_path": ".flow/specs/fn-2-29o.md",
+      "status": "open",
+      "title": "Fix section name input test",
+      "updated_at": "2026-01-16T21:19:03.181272Z"
+    },
+    "spec": "# Fix: \"should display section name input field\" Test\n\n## Problem\n\nThe WebdriverIO test `import-dialog.spec.ts:37` fails with:\n```\nExpect $(`input[name*=\"section\"], input[name*=\"name\"], input[placeholder*=\"Section\"]`) to be existing\nExpected: \"existing\"\nReceived: \"not existing\"\n```\n\n## Root Cause\n\nThe test calls `openImportDialog()` which triggers `Ctrl+I`, opening **DmpImportDialog** (for importing .dmp files).\n\nHowever, the section name input with `placeholder=\"e.g., Main Line\"` is in **ImportDialog** (a different component for manually creating sections).\n\nThe test is testing the **wrong dialog**.\n\n## Solution\n\n### Component Changes\n\n1. **ImportDialog.tsx**: Add `data-testid` attributes\n   - Add `data-testid=\"section-name-input\"` to section name input\n   - Add `data-testid=\"import-section-dialog\"` to the `role=\"dialog\"` element (not wrapper)\n\n2. **DmpImportDialog.tsx**: Add `data-testid` for consistency\n   - Add `data-testid=\"import-dmp-dialog\"` to the `role=\"dialog\"` element\n\n### Test Changes\n\n1. **Rename/split spec file** for clarity:\n   - Rename `import-dialog.spec.ts` \u2192 `import-dmp-dialog.spec.ts` for Ctrl+I tests\n   - Create `import-section-dialog.spec.ts` for ImportDialog tests\n\n2. **Fix test to open correct dialog**:\n   - Open ImportDialog via E2E store (not Ctrl+I)\n   - Return boolean from `browser.execute` (not store objects)\n   - Use explicit waits instead of `browser.pause()`\n   - Close with Cancel button only (NOT Escape - depends on separate fix)\n\n3. **Fix helpers**:\n   - Update `resetAppState()` to call `uiStore.getState().closeDialog()`\n   - Rename `openImportDialog()` \u2192 `openDmpImportDialog()` for clarity\n\n### Documentation Changes\n\n1. **TESTING.md**: Update to clarify:\n   - `Ctrl+I` opens DmpImportDialog (not generic \"import dialog\")\n   - Recommend opening dialogs via `__E2E_TEST__.uiStore.getState().openDialog('...')`\n   - Document actual close behaviors (Cancel/backdrop work, Escape doesn't yet)\n\n## Key Decisions\n\n| Decision | Choice |\n|----------|--------|\n| data-testid placement | On `role=\"dialog\"` element specifically |\n| Test close method | Cancel button only (Escape test removed until fix lands) |\n| browser.execute return | Boolean only (`!!window.__E2E_TEST__`) |\n| Wait strategy | Explicit waits (`waitForDisplayed`, `waitUntil`) - no fixed pauses |\n| Spec file organization | Split by dialog type for clarity |\n\n## Files to Change\n\n| File | Change |\n|------|--------|\n| `src/components/Dialogs/ImportDialog.tsx` | Add `data-testid=\"section-name-input\"` and `data-testid=\"import-section-dialog\"` on `role=\"dialog\"` |\n| `src/components/Dialogs/DmpImportDialog.tsx` | Add `data-testid=\"import-dmp-dialog\"` on `role=\"dialog\"` |\n| `e2e/specs/import-dialog.spec.ts` | Rename to `import-dmp-dialog.spec.ts`, update helper calls |\n| `e2e/specs/import-section-dialog.spec.ts` | **Create** - New spec for ImportDialog tests |\n| `e2e/helpers/app.ts` | Fix `resetAppState()`, rename `openImportDialog()` \u2192 `openDmpImportDialog()` |\n| `TESTING.md` | Clarify dialog shortcuts and close behaviors |\n\n## Implementation Details\n\n### Fixed resetAppState Helper\n\n```typescript\nexport async function resetAppState(): Promise<void> {\n  // Close any open dialogs via store (reliable)\n  await browser.execute(() => {\n    const e2e = (window as any).__E2E_TEST__;\n    if (e2e) {\n      e2e.uiStore.getState().closeDialog();\n      e2e.projectStore.getState().closeProject();\n      e2e.uiStore.getState().setView('global');\n    }\n  });\n\n  await browser.waitUntil(\n    async () => {\n      const globalView = await $('[data-testid=\"global-view\"]');\n      return await globalView.isExisting();\n    },\n    { timeout: 5000, timeoutMsg: 'Failed to return to GlobalView after reset' }\n  );\n}\n```\n\n### Fixed Test Code Pattern\n\n```typescript\n// import-section-dialog.spec.ts\ndescribe('Import Section Dialog', () => {\n  beforeEach(async () => {\n    await waitForAppReady();\n    await resetAppState();\n  });\n\n  it('should display section name input field', async () => {\n    await createNewProject('Section Name Test');\n\n    // Wait for E2E store - return BOOLEAN only\n    await browser.waitUntil(\n      async () => await browser.execute(() => !!(window as any).__E2E_TEST__),\n      { timeout: 2000, timeoutMsg: 'E2E store not available' }\n    );\n\n    // Open ImportDialog (not DmpImportDialog)\n    await browser.execute(() => {\n      (window as any).__E2E_TEST__.uiStore.getState().openDialog('import');\n    });\n\n    // Explicit wait - NO browser.pause()\n    const dialog = await $('[data-testid=\"import-section-dialog\"]');\n    await dialog.waitForDisplayed({ timeout: 2000 });\n\n    // Full validation\n    const sectionNameInput = await $('[data-testid=\"section-name-input\"]');\n    await expect(sectionNameInput).toBeExisting();\n\n    const placeholder = await sectionNameInput.getAttribute('placeholder');\n    expect(placeholder).toBe('e.g., Main Line');\n\n    await sectionNameInput.setValue('Main Passage');\n    const value = await sectionNameInput.getValue();\n    expect(value).toBe('Main Passage');\n\n    // Close with Cancel button (NOT Escape - that fix is separate)\n    const cancelBtn = await dialog.$('button*=Cancel');\n    await cancelBtn.click();\n\n    // Verify dialog closed\n    await browser.waitUntil(\n      async () => !(await dialog.isDisplayed()),\n      { timeout: 2000 }\n    );\n  });\n});\n```\n\n### Renamed Helper\n\n```typescript\n// Rename for clarity - this opens DmpImportDialog via Ctrl+I\nexport async function openDmpImportDialog(): Promise<void> {\n  await browser.keys(['Control', 'i']);\n  const importDialog = await $('[data-testid=\"import-dmp-dialog\"]');\n  await importDialog.waitForDisplayed({ timeout: 5000 });\n}\n```\n\n## Acceptance Criteria\n\n- [ ] ImportDialog has `data-testid=\"section-name-input\"` on section name input\n- [ ] ImportDialog has `data-testid=\"import-section-dialog\"` on `role=\"dialog\"` element\n- [ ] DmpImportDialog has `data-testid=\"import-dmp-dialog\"` on `role=\"dialog\"` element\n- [ ] `resetAppState()` calls `closeDialog()` via store\n- [ ] `openImportDialog()` renamed to `openDmpImportDialog()`\n- [ ] New `import-section-dialog.spec.ts` created for ImportDialog tests\n- [ ] Old `import-dialog.spec.ts` renamed to `import-dmp-dialog.spec.ts`\n- [ ] Tests use explicit waits (no `browser.pause()`)\n- [ ] Tests return boolean from `browser.execute()` (not objects)\n- [ ] Tests close with Cancel button (not Escape)\n- [ ] TESTING.md updated with accurate dialog info\n- [ ] All WebdriverIO tests pass\n- [ ] Playwright tests unaffected\n- [ ] Rust backend tests unaffected\n\n## Dependencies\n\n- None (Escape-close test removed from this plan - handled separately)\n\n## Quick Commands\n\n```bash\n# Run the new spec\nexport CARGO_TARGET_DIR=/root/CaveChef/src-tauri/target\nexport SKIP_BUILD=1\nxvfb-run --auto-servernum pnpm wdio run wdio.conf.ts --spec ./e2e/specs/import-section-dialog.spec.ts\n```\n"
+  },
+  "epic_id": "fn-2-29o",
+  "schema_version": 1,
+  "tasks": [
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-16T21:47:49.806173Z",
+        "depends_on": [],
+        "epic": "fn-2-29o",
+        "id": "fn-2-29o.1",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-2-29o.1.md",
+        "status": "todo",
+        "title": "Add data-testid attributes to ImportDialog",
+        "updated_at": "2026-01-16T21:48:44.954760Z"
+      },
+      "id": "fn-2-29o.1",
+      "spec": "# fn-2-29o.1 Add data-testid attributes to ImportDialog\n\n## Description\nAdd `data-testid` attributes to ImportDialog component for reliable E2E test selection.\n\n## Files to Change\n\n- `src/components/Dialogs/ImportDialog.tsx`\n\n## Changes\n\n1. Add `data-testid=\"section-name-input\"` to the section name input field (line ~62-68)\n2. Add `data-testid=\"import-section-dialog\"` to the `role=\"dialog\"` element (line ~235)\n\n## Code Reference\n\n```tsx\n// Line ~62-68 - Add data-testid to input\n<input\n  type=\"text\"\n  data-testid=\"section-name-input\"  // ADD THIS\n  value={name}\n  onChange={(e) => setName(e.target.value)}\n  className=\"w-full\"\n  placeholder=\"e.g., Main Line\"\n/>\n\n// Line ~235 DialogWrapper - Add data-testid on role=\"dialog\"\n<div \n  role=\"dialog\" \n  aria-modal=\"true\" \n  aria-labelledby=\"dialog-title\"\n  data-testid=\"import-section-dialog\"  // ADD THIS\n  className=\"...\"\n>\n```\n\n## Why\n\nThe WebdriverIO test uses selectors like `input[name*=\"section\"]` which don't match. Using `data-testid` is the recommended approach per CLAUDE.md conventions.\n## Acceptance\n- [ ] ImportDialog.tsx has `data-testid=\"section-name-input\"` on the section name input\n- [ ] ImportDialog.tsx has `data-testid=\"import-section-dialog\"` on the `role=\"dialog\"` element\n- [ ] TypeScript compiles without errors (`pnpm tsc --noEmit`)\n- [ ] Existing Playwright tests pass (`pnpm test:ui`)\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-16T21:47:49.898412Z",
+        "depends_on": [],
+        "epic": "fn-2-29o",
+        "id": "fn-2-29o.2",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-2-29o.2.md",
+        "status": "todo",
+        "title": "Add data-testid to DmpImportDialog",
+        "updated_at": "2026-01-16T21:48:59.979882Z"
+      },
+      "id": "fn-2-29o.2",
+      "spec": "# fn-2-29o.2 Add data-testid to DmpImportDialog\n\n## Description\nAdd `data-testid` attribute to DmpImportDialog for consistency and test disambiguation.\n\n## Files to Change\n\n- `src/components/Dialogs/DmpImportDialog.tsx`\n\n## Changes\n\n1. Add `data-testid=\"import-dmp-dialog\"` to the `role=\"dialog\"` element (line ~340)\n\n## Code Reference\n\n```tsx\n// In DialogWrapper, add to the div with role=\"dialog\"\n<div \n  role=\"dialog\" \n  aria-modal=\"true\" \n  aria-labelledby=\"dialog-title\"\n  data-testid=\"import-dmp-dialog\"  // ADD THIS\n  className=\"...\"\n>\n```\n\n## Why\n\nDistinguishes DmpImportDialog (opened by Ctrl+I) from ImportDialog (manual section creation). Tests can now reliably identify which dialog is open.\n## Acceptance\n- [ ] DmpImportDialog.tsx has `data-testid=\"import-dmp-dialog\"` on the `role=\"dialog\"` element\n- [ ] TypeScript compiles without errors (`pnpm tsc --noEmit`)\n- [ ] Existing Playwright tests pass (`pnpm test:ui`)\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-16T21:47:50.050112Z",
+        "depends_on": [
+          "fn-2-29o.1",
+          "fn-2-29o.2"
+        ],
+        "epic": "fn-2-29o",
+        "id": "fn-2-29o.3",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-2-29o.3.md",
+        "status": "todo",
+        "title": "Update E2E test helpers and create new spec file",
+        "updated_at": "2026-01-16T21:49:22.914855Z"
+      },
+      "id": "fn-2-29o.3",
+      "spec": "# fn-2-29o.3 Update E2E test helpers and create new spec file\n\n## Description\nUpdate E2E test infrastructure to correctly test ImportDialog (section creation dialog).\n\n## Files to Change\n\n1. `e2e/helpers/app.ts` - Update helpers\n2. `e2e/specs/import-dialog.spec.ts` \u2192 Rename to `import-dmp-dialog.spec.ts`\n3. `e2e/specs/import-section-dialog.spec.ts` - Create new\n\n## Changes\n\n### 1. Update helpers (e2e/helpers/app.ts)\n\n- Rename `openImportDialog()` \u2192 `openDmpImportDialog()` for clarity\n- Update `resetAppState()` to call `closeDialog()` via store\n- Update selector in `openDmpImportDialog()` to use `[data-testid=\"import-dmp-dialog\"]`\n\n```typescript\n// Rename for clarity - this opens DmpImportDialog via Ctrl+I\nexport async function openDmpImportDialog(): Promise<void> {\n  await browser.keys(['Control', 'i']);\n  const importDialog = await $('[data-testid=\"import-dmp-dialog\"]');\n  await importDialog.waitForDisplayed({ timeout: 5000 });\n}\n\n// Fix resetAppState to close dialogs\nexport async function resetAppState(): Promise<void> {\n  await browser.execute(() => {\n    const e2e = (window as any).__E2E_TEST__;\n    if (e2e) {\n      e2e.uiStore.getState().closeDialog();\n      e2e.projectStore.getState().closeProject();\n      e2e.uiStore.getState().setView('global');\n    }\n  });\n  // Wait for global view\n  await browser.waitUntil(\n    async () => {\n      const globalView = await $('[data-testid=\"global-view\"]');\n      return await globalView.isExisting();\n    },\n    { timeout: 5000 }\n  );\n}\n```\n\n### 2. Rename import-dialog.spec.ts\n\nRename to `import-dmp-dialog.spec.ts` and update helper calls from `openImportDialog()` to `openDmpImportDialog()`.\n\n### 3. Create import-section-dialog.spec.ts\n\nNew spec for testing ImportDialog (the dialog with section name input):\n\n```typescript\ndescribe('Import Section Dialog', () => {\n  beforeEach(async () => {\n    await waitForAppReady();\n    await resetAppState();\n  });\n\n  it('should display section name input field', async () => {\n    await createNewProject('Section Name Test');\n\n    // Wait for E2E store - return boolean only\n    await browser.waitUntil(\n      async () => await browser.execute(() => !!(window as any).__E2E_TEST__),\n      { timeout: 2000 }\n    );\n\n    // Open ImportDialog (not DmpImportDialog)\n    await browser.execute(() => {\n      (window as any).__E2E_TEST__.uiStore.getState().openDialog('import');\n    });\n\n    // Explicit wait\n    const dialog = await $('[data-testid=\"import-section-dialog\"]');\n    await dialog.waitForDisplayed({ timeout: 2000 });\n\n    // Validate input\n    const sectionNameInput = await $('[data-testid=\"section-name-input\"]');\n    await expect(sectionNameInput).toBeExisting();\n\n    const placeholder = await sectionNameInput.getAttribute('placeholder');\n    expect(placeholder).toBe('e.g., Main Line');\n\n    await sectionNameInput.setValue('Main Passage');\n    const value = await sectionNameInput.getValue();\n    expect(value).toBe('Main Passage');\n\n    // Close with Cancel (NOT Escape - that depends on fn-3-m4h)\n    const cancelBtn = await dialog.$('button*=Cancel');\n    await cancelBtn.click();\n\n    await browser.waitUntil(\n      async () => !(await dialog.isDisplayed()),\n      { timeout: 2000 }\n    );\n  });\n});\n```\n\n## Key Decisions\n\n- Close with Cancel button, not Escape (Escape fix is separate epic fn-3-m4h)\n- Use `browser.execute(() => !!value)` to return boolean, not objects\n- Use explicit waits, no `browser.pause()`\n## Acceptance\n- [ ] `openImportDialog()` renamed to `openDmpImportDialog()` in e2e/helpers/app.ts\n- [ ] `resetAppState()` calls `closeDialog()` via E2E store\n- [ ] `e2e/specs/import-dialog.spec.ts` renamed to `e2e/specs/import-dmp-dialog.spec.ts`\n- [ ] New `e2e/specs/import-section-dialog.spec.ts` created\n- [ ] Test \"should display section name input field\" opens correct dialog (ImportDialog)\n- [ ] Test uses Cancel button to close (not Escape)\n- [ ] All WebdriverIO tests pass: `xvfb-run --auto-servernum pnpm wdio`\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-16T21:47:50.196633Z",
+        "depends_on": [
+          "fn-2-29o.3"
+        ],
+        "epic": "fn-2-29o",
+        "id": "fn-2-29o.4",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-2-29o.4.md",
+        "status": "todo",
+        "title": "Update TESTING.md documentation",
+        "updated_at": "2026-01-16T21:49:32.429797Z"
+      },
+      "id": "fn-2-29o.4",
+      "spec": "# fn-2-29o.4 Update TESTING.md documentation\n\n## Description\nUpdate TESTING.md to clarify the two import dialogs and correct close behaviors.\n\n## Files to Change\n\n- `TESTING.md`\n\n## Changes\n\nAdd/update sections to clarify:\n\n1. **Dialog disambiguation**: \n   - `Ctrl+I` opens DmpImportDialog (for .dmp file import)\n   - ImportDialog (for manual section creation) is opened via store\n\n2. **Recommended approach**:\n   - Use `__E2E_TEST__.uiStore.getState().openDialog('...')` for reliable dialog opening\n   - Use Cancel button to close (Escape support added separately)\n\n3. **Available dialogs**:\n   | Dialog | activeDialog value | Opened by |\n   |--------|-------------------|-----------|\n   | DmpImportDialog | `'import-dmp'` | Ctrl+I |\n   | ImportDialog | `'import'` | Store only |\n## Acceptance\n- [ ] TESTING.md clarifies that Ctrl+I opens DmpImportDialog\n- [ ] TESTING.md documents recommended dialog opening approach\n- [ ] TESTING.md lists available dialogs with their activeDialog values\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    }
+  ]
+}

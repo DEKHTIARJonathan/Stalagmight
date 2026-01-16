@@ -68,13 +68,15 @@ describe('Keyboard Shortcuts', () => {
     it('should open import dialog with Ctrl+I', async () => {
       await browser.keys(['Control', 'i']);
 
-      const dialog = await $('[role="dialog"]');
+      // Ctrl+I opens DmpImportDialog specifically
+      const dialog = await $('[data-testid="import-dmp-dialog"]');
       await dialog.waitForDisplayed({ timeout: 5000 });
 
       await expect(dialog).toBeDisplayed();
 
-      // Close dialog
-      await browser.keys(['Escape']);
+      // Close dialog via Cancel button (Escape not implemented for dialogs)
+      const cancelBtn = await dialog.$('button*=Cancel');
+      await cancelBtn.click();
     });
 
     it('should attempt save with Ctrl+S', async () => {
