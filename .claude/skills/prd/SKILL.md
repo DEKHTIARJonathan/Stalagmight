@@ -75,16 +75,26 @@ Use `mcp__plane__create_project` with the PRD content:
 
 ## Step 3: Create Plane Work Items
 
-For each user story, use `mcp__plane__create_work_item`:
+**First**, get the project's states to find the "Todo" state UUID:
+```
+mcp__plane__list_states({ project_id: "<project-uuid>" })
+```
+
+Look for the state with `name: "Todo"` and note its `id`.
+
+**Then**, for each user story, use `mcp__plane__create_work_item` with the Todo state:
 
 ```json
 {
   "name": "US-001: <Story Title>",
   "project_id": "<project-uuid>",
+  "state": "<todo-state-uuid>",
   "description_html": "<p>As a <user>, I want <feature> so that <benefit>.</p><h2>Acceptance Criteria</h2><ul><li>Criterion 1</li><li>Criterion 2</li><li>Typecheck passes</li></ul>",
   "priority": "urgent"
 }
 ```
+
+**Important:** Always set `state` to the "Todo" state UUID, not "Backlog".
 
 ### Priority Mapping
 
@@ -109,14 +119,22 @@ Stories should be ordered by dependencies:
 
 ## Step 4: Save Local Configuration
 
-Create `.ralph-project` in the Ralph directory:
+The `.ralph-project` file is an **array** of projects.
 
+**If `.ralph-project` doesn't exist**, create it:
 ```json
-{
-  "planeProjectId": "<project-id-from-step-2>",
-  "branchName": "ralph/<feature-name>"
-}
+[
+  {
+    "planeProjectId": "<project-id-from-step-2>",
+    "branchName": "ralph/<feature-name>",
+    "completed": false
+  }
+]
 ```
+
+**If `.ralph-project` exists**, read it and append the new project to the array.
+
+**Note:** `completed` is set to `true` automatically when Ralph finishes all tasks.
 
 Use the Write tool to save this file.
 
