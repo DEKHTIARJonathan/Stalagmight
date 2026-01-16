@@ -61,7 +61,7 @@ cavechef/
 │   ├── mocks/                    # Tauri IPC mocks
 │   │   └── tauri-ipc.ts          # Mock command handlers
 │   ├── fixtures/                 # Test data
-│   ├── import-dialog.spec.ts     # Import dialog tests
+│   ├── import-dialog.spec.ts     # Import DMP dialog tests (Ctrl+I)
 │   ├── project-crud.spec.ts      # Project operations tests
 │   └── ui-components.spec.ts     # UI interaction tests
 │

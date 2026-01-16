@@ -48,7 +48,6 @@ e2e-playwright/
 ├── mocks/
 │   └── tauri-ipc.ts       # Mock Tauri IPC command handlers
 ├── fixtures/              # Test data files
-├── import-dialog.spec.ts  # Import dialog tests
 ├── project-crud.spec.ts   # Project CRUD operation tests
 ├── ui-components.spec.ts  # UI interaction tests
 └── debug.spec.ts          # Debugging helper test
@@ -102,13 +101,18 @@ async function createProject(page: Page, name: string) {
 
 **Opening dialogs:**
 ```typescript
-// Via keyboard shortcut
+// Via keyboard shortcut (opens DmpImportDialog for DMP file import)
 await page.keyboard.press('Control+i');
-await page.waitForSelector('.fixed.inset-0');
+await page.waitForSelector('[data-testid="import-dmp-dialog"]');
 
-// Via button click
-await page.click('button:has-text("Import")');
+// Via store (opens ImportDialog for section creation)
+await page.evaluate(() => {
+  (window as any).__E2E_TEST__.uiStore.getState().openDialog('import');
+});
+await page.waitForSelector('[data-testid="import-section-dialog"]');
 ```
+
+> **Note**: `Ctrl+I` opens `DmpImportDialog` (for DMP file import), NOT `ImportDialog` (for manual section creation). See [Dialog Reference](#dialog-reference) for details.
 
 **Closing dialogs:**
 ```typescript
@@ -219,7 +223,8 @@ Located in `e2e/`. These tests run against the full Tauri application.
 ```
 e2e/
 ├── specs/
-│   ├── import-dialog.spec.ts
+│   ├── import-dmp-dialog.spec.ts      # DmpImportDialog tests (Ctrl+I)
+│   ├── import-section-dialog.spec.ts  # ImportDialog tests (section creation)
 │   ├── project-lifecycle.spec.ts
 │   ├── keyboard-shortcuts.spec.ts
 │   └── map-interactions.spec.ts
@@ -230,6 +235,39 @@ e2e/
 └── helpers/
     └── app.ts
 ```
+
+### Dialog Reference
+
+CaveChef has two different import dialogs that serve different purposes:
+
+| Dialog Component | `activeDialog` Value | Opened By | Test File |
+|------------------|---------------------|-----------|-----------|
+| `DmpImportDialog` | `'import-dmp'` | `Ctrl+I` keyboard shortcut | `import-dmp-dialog.spec.ts` |
+| `ImportDialog` | `'import'` | SectionsPanel "+" button, E2E store | `import-section-dialog.spec.ts` |
+
+**Important**: The `Ctrl+I` shortcut specifically opens `DmpImportDialog`, not `ImportDialog`. Tests that need to verify section name input should use `ImportDialog` via the store.
+
+### Dialog Close Behaviors
+
+| Method | Works? | Notes |
+|--------|--------|-------|
+| Cancel/Close button | Yes | Recommended for tests |
+| Backdrop click | Yes | Calls onClose |
+| Escape key | No | Not implemented yet (planned in fn-3-m4h) |
+
+**Note**: Escape key handling is not implemented for dialogs. Tests should use the Cancel button for reliable dialog closing.
+
+### Opening Dialogs in E2E Tests
+
+**Recommended**: Use the E2E store for reliable dialog opening:
+
+```typescript
+await browser.execute(() => {
+  (window as any).__E2E_TEST__.uiStore.getState().openDialog('import');
+});
+```
+
+**Note**: `Ctrl+I` opens `DmpImportDialog` (for .dmp file import), NOT the generic `ImportDialog` (for manual section creation).
 
 ### Configuration
 
