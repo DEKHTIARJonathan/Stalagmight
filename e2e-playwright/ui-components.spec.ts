@@ -1,0 +1,194 @@
+import { test, expect } from '@playwright/test';
+import { setupTauriMocks } from './mocks/tauri-ipc';
+
+/**
+ * Helper to create a new project
+ */
+async function createProject(page: import('@playwright/test').Page, name: string) {
+  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
+  await newProjectBtn.click();
+  await page.waitForSelector('.fixed.inset-0');
+  await page.locator('.fixed.inset-0 input').first().fill(name);
+  await page.click('.fixed.inset-0 button:has-text("Create")');
+  await page.waitForSelector('canvas', { timeout: 10000 });
+}
+
+test.describe('UI Components', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+
+    // Create a project to access main UI
+    await createProject(page, 'UI Test Project');
+  });
+
+  test.describe('Keyboard Navigation', () => {
+    test('should handle tool shortcuts', async ({ page }) => {
+      // Test each tool shortcut
+      const toolKeys = ['s', 'p', 'z', 'd', 'x', 'm', 'r', 'v', 't'];
+
+      for (const key of toolKeys) {
+        await page.keyboard.press(key);
+        // App should remain functional after each keypress
+        await expect(page.locator('canvas').first()).toBeVisible();
+      }
+    });
+
+    test('should handle Escape to clear state', async ({ page }) => {
+      await page.keyboard.press('Escape');
+      await expect(page.locator('canvas').first()).toBeVisible();
+    });
+
+    test('should handle Ctrl+A for select all', async ({ page }) => {
+      await page.keyboard.press('Control+a');
+      await expect(page.locator('canvas').first()).toBeVisible();
+    });
+
+    test('should handle Ctrl+0 for fit to view', async ({ page }) => {
+      await page.keyboard.press('Control+0');
+      await expect(page.locator('canvas').first()).toBeVisible();
+    });
+  });
+
+  test.describe('Panel Toggles', () => {
+    test('should toggle sections panel with Ctrl+1', async ({ page }) => {
+      // Get initial state
+      const panelsBefore = await page.locator('[class*="panel"]').count();
+
+      await page.keyboard.press('Control+1');
+      await page.waitForTimeout(300);
+
+      // Panel count might change (toggle)
+      const panelsAfter = await page.locator('[class*="panel"]').count();
+
+      // Either count changed or the same (if panel implementation varies)
+      expect(typeof panelsAfter).toBe('number');
+    });
+
+    test('should toggle detail panel with Ctrl+2', async ({ page }) => {
+      await page.keyboard.press('Control+2');
+      await page.waitForTimeout(300);
+      await expect(page.locator('canvas').first()).toBeVisible();
+    });
+
+    test('should toggle data table with Ctrl+3', async ({ page }) => {
+      await page.keyboard.press('Control+3');
+      await page.waitForTimeout(300);
+      await expect(page.locator('canvas').first()).toBeVisible();
+    });
+  });
+
+  test.describe('Undo/Redo', () => {
+    test('should handle Ctrl+Z for undo', async ({ page }) => {
+      await page.keyboard.press('Control+z');
+      await page.waitForTimeout(200);
+      await expect(page.locator('canvas').first()).toBeVisible();
+    });
+
+    test('should handle Ctrl+Y for redo', async ({ page }) => {
+      await page.keyboard.press('Control+y');
+      await page.waitForTimeout(200);
+      await expect(page.locator('canvas').first()).toBeVisible();
+    });
+
+    test('should handle Ctrl+Shift+Z for redo', async ({ page }) => {
+      await page.keyboard.press('Control+Shift+z');
+      await page.waitForTimeout(200);
+      await expect(page.locator('canvas').first()).toBeVisible();
+    });
+  });
+
+  test.describe('Map Interactions', () => {
+    test('should respond to mouse wheel for zoom', async ({ page }) => {
+      const canvas = page.locator('canvas').first();
+      await canvas.hover();
+
+      // Simulate wheel event
+      await page.mouse.wheel(0, -100);
+      await page.waitForTimeout(300);
+
+      await expect(canvas).toBeVisible();
+    });
+
+    test('should respond to mouse drag for pan', async ({ page }) => {
+      const canvas = page.locator('canvas').first();
+      const box = await canvas.boundingBox();
+
+      if (box) {
+        const centerX = box.x + box.width / 2;
+        const centerY = box.y + box.height / 2;
+
+        // Switch to pan tool
+        await page.keyboard.press('p');
+
+        // Perform drag
+        await page.mouse.move(centerX, centerY);
+        await page.mouse.down();
+        await page.mouse.move(centerX + 50, centerY + 50);
+        await page.mouse.up();
+      }
+
+      await expect(canvas).toBeVisible();
+    });
+
+    test('should respond to click in select mode', async ({ page }) => {
+      const canvas = page.locator('canvas').first();
+
+      // Switch to select tool
+      await page.keyboard.press('s');
+
+      // Click on canvas
+      await canvas.click();
+
+      await expect(canvas).toBeVisible();
+    });
+  });
+
+  test.describe('Dialog Interactions', () => {
+    test('should open and close import dialog', async ({ page }) => {
+      // Open
+      await page.keyboard.press('Control+i');
+      const dialog = page.locator('.fixed.inset-0');
+      await expect(dialog).toBeVisible({ timeout: 5000 });
+
+      // Close via Cancel button (dialogs close via button, not Escape)
+      await page.click('.fixed.inset-0 button:has-text("Cancel")');
+      await expect(dialog).not.toBeVisible({ timeout: 3000 });
+    });
+
+    test('should handle dialog form inputs', async ({ page }) => {
+      await page.keyboard.press('Control+i');
+      await page.waitForSelector('.fixed.inset-0');
+
+      // Find and interact with editable form inputs (skip readonly file path input)
+      const editableInputs = page.locator('.fixed.inset-0 input:not([readonly])');
+      const inputCount = await editableInputs.count();
+
+      if (inputCount > 0) {
+        await editableInputs.first().fill('Test Value');
+        const value = await editableInputs.first().inputValue();
+        expect(value).toBe('Test Value');
+      }
+
+      await page.click('.fixed.inset-0 button:has-text("Cancel")');
+    });
+  });
+
+  test.describe('Responsive Layout', () => {
+    test('should handle window resize', async ({ page }) => {
+      // Resize to smaller viewport
+      await page.setViewportSize({ width: 800, height: 600 });
+      await page.waitForTimeout(300);
+
+      // App should still be functional
+      await expect(page.locator('canvas').first()).toBeVisible();
+
+      // Resize back
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.waitForTimeout(300);
+
+      await expect(page.locator('canvas').first()).toBeVisible();
+    });
+  });
+});

@@ -16,6 +16,8 @@ CaveChef is a Tauri desktop application for processing underwater cave survey da
 | Database | SQLite (rusqlite) |
 | Styling | Tailwind CSS |
 | Logging | tracing + tracing-appender |
+| E2E Testing | Playwright (mocked IPC), WebdriverIO (full app) |
+| Backend Testing | Rust built-in tests (`cargo test`) |
 
 ## Project Structure
 
@@ -50,8 +52,22 @@ cavechef/
 │   ├── utils/                    # Coordinate/color utilities
 │   └── types/                    # TypeScript type definitions
 │
+├── e2e/                          # WebdriverIO E2E tests (full Tauri app)
+│   ├── specs/                    # Test specifications
+│   ├── fixtures/                 # Test data (DMP files)
+│   └── helpers/                  # Test utilities
+│
+├── e2e-playwright/               # Playwright E2E tests (mocked IPC)
+│   ├── mocks/                    # Tauri IPC mocks
+│   │   └── tauri-ipc.ts          # Mock command handlers
+│   ├── fixtures/                 # Test data
+│   ├── import-dialog.spec.ts     # Import dialog tests
+│   ├── project-crud.spec.ts      # Project operations tests
+│   └── ui-components.spec.ts     # UI interaction tests
+│
 ├── SPEC.md                       # Full specification document
 ├── TODO.md                       # Unimplemented features
+├── TESTING.md                    # Testing documentation
 ├── CLAUDE.md                     # This file
 └── prd/                          # PRD markdown files for v1.0 tasks
     ├── 01-lrud-fields.md
@@ -78,6 +94,85 @@ pnpm tsc --noEmit
 # Frontend build only
 pnpm build
 ```
+
+## Test Commands
+
+```bash
+# Run all tests (backend + E2E)
+pnpm test:all
+
+# Playwright E2E tests (fast, mocked IPC)
+pnpm test:ui              # Headless
+pnpm test:ui:headed       # With visible browser
+
+# Backend Rust tests
+cd src-tauri && cargo test
+
+# WebdriverIO E2E tests (full Tauri app, Linux/Windows only)
+pnpm test:e2e
+```
+
+## Testing Requirements (MANDATORY)
+
+**Every feature addition MUST include tests to be considered complete.** This is non-negotiable.
+
+### Required Tests by Feature Type
+
+| Feature Type | Required Tests |
+|--------------|----------------|
+| New UI component/dialog | Playwright E2E tests |
+| New Tauri IPC command | Rust unit tests + Playwright E2E tests |
+| Backend logic (parsers, models) | Rust unit tests |
+| User workflow (multi-step) | Playwright E2E tests |
+| Bug fix | Regression test covering the fix |
+
+### Pre-Push Checklist
+
+Before pushing any code to remote, ALL of the following must pass:
+
+```bash
+# 1. TypeScript type check
+pnpm tsc --noEmit
+
+# 2. Playwright E2E tests
+pnpm test:ui
+
+# 3. Backend Rust tests
+cd src-tauri && cargo test
+```
+
+**Do NOT push code with failing tests.** Fix the tests first.
+
+### Test Coverage Guidelines
+
+1. **Playwright tests** (`e2e-playwright/`):
+   - Test all user-facing UI interactions
+   - Test dialog open/close/submit flows
+   - Test keyboard shortcuts
+   - Test error states and edge cases
+   - Update `mocks/tauri-ipc.ts` when adding new IPC commands
+
+2. **Rust tests** (`src-tauri/src/`):
+   - Test all public functions in modules
+   - Test edge cases and error handling
+   - Test parsers with valid and invalid input
+   - Test database operations with in-memory SQLite
+
+3. **WebdriverIO tests** (`e2e/`) - for full integration:
+   - Test complete workflows with real backend
+   - Test file I/O operations
+   - Test persistence across sessions
+
+### Adding Tests for New Features
+
+When implementing a new feature:
+
+1. **Start with tests**: Write failing tests that define expected behavior
+2. **Implement feature**: Make tests pass
+3. **Add edge cases**: Test error handling and boundary conditions
+4. **Update mocks**: If adding new IPC commands, update `e2e-playwright/mocks/tauri-ipc.ts`
+
+See `TESTING.md` for detailed testing documentation and examples.
 
 ## Architecture
 
