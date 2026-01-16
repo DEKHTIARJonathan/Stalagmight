@@ -1,0 +1,97 @@
+[
+{
+  "planeProjectId": "0814753c-e526-4b0e-abf5-149b374e9a8b",
+    "branchName": "ralph/depth-color-gradient",
+    "completed": true
+},
+{
+  "planeProjectId": "b931df2e-8fb0-4e73-ae7e-e728ec1f3b70",
+  "branchName": "ralph/pngexp",
+  "completed": true
+},
+{
+  "planeProjectId": "327201ab-c786-468b-8959-bef4cc11e126",
+  "branchName": "ralph/lrud-fields",
+  "completed": false
+},
+{
+  "planeProjectId": "b460d7d7-b766-4995-bae0-ed355946590c",
+  "branchName": "ralph/pitch-fields",
+  "completed": false
+},
+{
+  "planeProjectId": "efe776fe-d34c-457a-b07d-fd49c4452955",
+  "branchName": "ralph/comment-field",
+  "completed": false
+},
+{
+  "planeProjectId": "d4581158-c94f-404f-a20d-c73a4ebef343",
+  "branchName": "ralph/section-statistics",
+  "completed": false
+},
+{
+  "planeProjectId": "df372fca-1a65-4df9-afa9-d88e57a82490",
+  "branchName": "ralph/validation-warnings",
+  "completed": false
+},
+{
+  "planeProjectId": "92f02258-94e7-49c3-97c2-ff509f9af978",
+  "branchName": "ralph/scale-bar",
+  "completed": false
+},
+{
+  "planeProjectId": "387972d9-1a62-48a4-8a4e-29809be86231",
+  "branchName": "ralph/section-names",
+  "completed": false
+},
+{
+  "planeProjectId": "46208781-064c-4a5e-848e-9b44e1e19f5f",
+  "branchName": "ralph/station-labels",
+  "completed": false
+},
+{
+  "planeProjectId": "19fec72e-1bee-42c8-b0c0-51e09f44249d",
+  "branchName": "ralph/gps-coordinates",
+  "completed": false
+},
+{
+  "planeProjectId": "63868b9b-6677-484e-a031-df58804cb08c",
+  "branchName": "ralph/section-adjustment",
+  "completed": false
+},
+{
+  "planeProjectId": "bd8fa5ce-c566-424c-8f72-717671cca280",
+  "branchName": "ralph/manual-placement",
+  "completed": false
+},
+{
+  "planeProjectId": "246d6930-0068-4e81-b30f-2ebbbfa35eee",
+  "branchName": "ralph/section-preview",
+  "completed": false
+},
+{
+  "planeProjectId": "dc4c0c90-09d9-41ae-83d1-1f2175d1ac6a",
+  "branchName": "ralph/globalview-map",
+  "completed": false
+},
+{
+  "planeProjectId": "24655431-6cf0-433d-902a-877560227ce9",
+  "branchName": "ralph/metadata-panel",
+  "completed": false
+},
+{
+  "planeProjectId": "722bf2fa-0b6c-4f24-a413-0137dbfbb81b",
+  "branchName": "ralph/multi-select-merge",
+  "completed": false
+},
+{
+  "planeProjectId": "1f3eeedf-aad9-4a3c-966d-cc344bfb021e",
+  "branchName": "ralph/direction-field",
+  "completed": false
+},
+{
+  "planeProjectId": "89d7e0e3-0e3c-4081-8896-9ee7ed0dce69",
+  "branchName": "ralph/export-preview",
+  "completed": false
+}
+]
