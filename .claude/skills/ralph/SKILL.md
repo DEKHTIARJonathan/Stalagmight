@@ -50,23 +50,33 @@ Use `mcp__plane__create_project`:
 
 ## Step 3: Create Work Items from User Stories
 
-For each `### US-XXX:` section in the PRD:
+**First**, get the project's states to find the "Todo" state UUID:
+```
+mcp__plane__list_states({ project_id: "<project-uuid>" })
+```
+
+Look for the state with `name: "Todo"` and note its `id`.
+
+**Then**, for each `### US-XXX:` section in the PRD:
 
 1. Extract title (text after `US-XXX:`)
 2. Extract description (the "As a..." line)
 3. Extract acceptance criteria (the `- [ ]` items)
 4. Map position to priority (1st=urgent, 2nd=high, etc.)
 
-Create work item using `mcp__plane__create_work_item`:
+Create work item using `mcp__plane__create_work_item` with the Todo state:
 
 ```json
 {
   "name": "US-001: <Title>",
   "project_id": "<project-uuid>",
+  "state": "<todo-state-uuid>",
   "description_html": "<p><As a... description></p><h2>Acceptance Criteria</h2><ul><li>Criterion 1</li><li>Criterion 2</li></ul>",
   "priority": "urgent"
 }
 ```
+
+**Important:** Always set `state` to the "Todo" state UUID, not "Backlog".
 
 ### Priority Mapping
 
@@ -81,14 +91,22 @@ Create work item using `mcp__plane__create_work_item`:
 
 ## Step 4: Save Configuration
 
-Create `.ralph-project` in the Ralph directory:
+The `.ralph-project` file is an **array** of projects.
 
+**If `.ralph-project` doesn't exist**, create it:
 ```json
-{
-  "planeProjectId": "<project-id>",
-  "branchName": "ralph/<feature-name>"
-}
+[
+  {
+    "planeProjectId": "<project-id>",
+    "branchName": "ralph/<feature-name>",
+    "completed": false
+  }
+]
 ```
+
+**If `.ralph-project` exists**, read it and append the new project to the array.
+
+**Note:** `completed` is set to `true` automatically when Ralph finishes all tasks.
 
 ---
 
