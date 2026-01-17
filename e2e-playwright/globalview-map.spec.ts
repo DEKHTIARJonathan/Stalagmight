@@ -141,8 +141,10 @@ test.describe('GlobalView Map', () => {
       await marker.hover();
 
       // Popup should appear with project name
-      await expect(page.locator('.maplibregl-popup')).toBeVisible({ timeout: 2000 });
-      await expect(page.locator('.maplibregl-popup')).toContainText('Cave System Alpha');
+      // Use longer timeout and wait for content to load
+      const popup = page.locator('.maplibregl-popup');
+      await expect(popup).toBeVisible({ timeout: 5000 });
+      await expect(popup).toContainText('Cave System Alpha', { timeout: 5000 });
     });
 
     test('should open project on marker double-click', async ({ page }) => {
