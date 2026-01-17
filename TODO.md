@@ -2,156 +2,113 @@
 
 This document tracks functionality specified in SPEC.md but not yet implemented.
 
-## Priority 1: Core Functionality ✅ COMPLETE
+**Last Updated**: 2026-01-17
 
-### DMP Parser ✅
-- [x] Implement actual DMP file parsing in `src-tauri/src/parsers/dmp.rs`
-- [x] Ported logic from `pytool_mnemo_lib` Python library
-- [x] Support DMP versions 2-5
-- [x] IntBuffer for binary reading, section/shot parsing
-- [x] Integration tests with real v2 and v5 test files
+---
 
-### Undo/Redo System ✅
-- [x] Implement hybrid undo with state snapshots and inverse commands
-- [x] `UndoData` variants: `InverseCommand`, `PreviousValues`, `SectionSnapshot`, `ShotSnapshot`, `MergeInfo`, `ZeroDatumInfo`, `ProjectSnapshot`
-- [x] Full undo/redo execution with proper state restoration
-- [x] Persist undo stack to SQLite `undo_stack` table
-- [x] Configurable undo history and persistence limits
+## ✅ COMPLETED FEATURES
 
-### File Operations ✅
-- [x] NewProjectDialog for creating projects with name input
-- [x] DmpImportDialog for importing mNemo DMP files with section selection
-- [x] Save/Open dialogs wired to actual file operations
-- [x] Recent projects list in GlobalView (persisted to config)
-- [x] File overwrite warning dialog
-- [x] Safe save with temp file + atomic rename
-- [x] Error notifications for failed operations
-- [x] Add file path to window title
+### Core Functionality
+- [x] DMP Parser (versions 2-5) with IntBuffer, LRUD, pitch, temperature, time
+- [x] Undo/Redo hybrid system with inverse commands and snapshots
+- [x] File Operations: New/Open/Save with overwrite warnings, recent projects, safe save
+- [x] Auto-save with dirty state indicator and prompt on close
 
-## Priority 2: Map Interactions ✅ COMPLETE
+### Map Interactions
+- [x] All tools: Select, Pan, Zoom, Draw, Delete, Merge, Measure, Move Section/Station
+- [x] Multi-select (Shift/Ctrl+click), box select, selection in DetailPanel
+- [x] Context menu, snap-to-station, hover highlighting, drag preview
+- [x] Scale bar (MapLibre ScaleControl)
 
-### Tool Implementations ✅
-- [x] **Draw Tool**: Click station to start new shot, input azimuth/length/depth
-- [x] **Delete Tool**: Click to delete station/shot with confirmation
-- [x] **Merge Tool**: Select two stations, show MergeDialog
-- [x] **Measure Tool**: Click two points to measure distance
-- [x] **Move Section Tool**: Drag unanchored sections
-- [x] **Move Station Tool**: Drag unanchored stations
+### Dialogs
+- [x] DialogWrapper with Escape handling and isDirty confirmation
+- [x] All dialogs migrated: Confirm, Import, Export, Edit, Merge, NewProject, etc.
+- [x] DmpImportDialog with section selection, direction display, date parsing
 
-### Selection ✅
-- [x] Multi-select with Shift+click (add) and Ctrl+click (toggle)
-- [x] Box select with drag
-- [x] Selection state reflected in DetailPanel
+### Section & Station Management
+- [x] Section position recalculation on merge (graph-based)
+- [x] Visual indicators: merged connections (dashed cyan), loop closure lines
+- [x] Loop closure error detection and percentage calculation
 
-### Map Features ✅
-- [x] Context menu on right-click (Edit, Delete, Mark Virtual, etc.)
-- [x] Snap to station when within threshold (configurable per-tool)
-- [x] Hover highlighting
-- [x] Drag preview before release
+### UI Polish
+- [x] Collapsible/resizable panels with persistence
+- [x] All keyboard shortcuts (tools, panels, file ops, selection)
+- [x] Validation warnings with mark-as-resolved
+- [x] Statistics panel (project/section stats, penetration distance)
+- [x] Display toggles dropdown menu
+- [x] Shot data labels with progressive zoom density
 
-## Priority 3: Dialogs ✅ PARTIAL
+### Testing Infrastructure
+- [x] Playwright E2E tests with mocked IPC
+- [x] WebdriverIO E2E tests for full app
+- [x] data-testid attributes on dialogs and key UI elements
+- [x] TESTING.md documentation
 
-### MergeDialog ✅
-- [x] Create `src/components/Dialogs/MergeDialog.tsx`
-- [x] Show station details and distance/depth difference
-- [x] Loop closure error calculation and display
-- [ ] Closure strategy selection (deferred - not handling loop closures in v1)
+---
 
-### ImportDialog Enhancements
-- [ ] Live preview rendering as data is edited
-- [ ] GPS coordinates input for zero datum
-- [ ] "From Existing Station" placement option
-- [ ] Manual map placement (click to position)
-- [x] DMP file loading (implemented in DmpImportDialog)
+## 🚧 REMAINING v1.0 FEATURES
 
-### ExportDialog Enhancements
-- [x] PDF export using svg2pdf library
-- [ ] Resolution/DPI options for PNG
-- [ ] Preview of export
+### Phase 1: Import Dialog Enhancements
 
-## Priority 4: Loop Closure & Section Positioning
+| Feature | Status | Notes |
+|---------|--------|-------|
+| LRUD fields visible/editable | ❌ | Data imported but not shown in table |
+| Pitch fields visible | ❌ | Data imported but not shown in table |
+| Comment field per shot | ❌ | Not in import dialog |
+| Live statistics in footer | ❌ | Total length, depth range, shot count |
+| Inline validation warnings | ❌ | Show warnings during import |
+| Section preview (live SVG) | ❌ | Visual preview as data is edited |
 
-### Section Position Recalculation ✅
-- [x] When stations are merged, recalculate section positions
-  - [x] Build a graph of section connections through merges
-  - [x] Pick an anchor section (first section or one with zero datum)
-  - [x] Calculate offsets for connected sections so merged stations share coordinates
-  - [x] Apply offsets to section station coordinates
-- [x] Visual indicator for merged station connections (dashed cyan lines)
+### Phase 2: Map Display Features
 
-### Loop Closure Error Handling ✅
-- [x] Detect when merge creates a loop (graph-based cycle detection)
-- [x] Calculate closure error percentage
-- [ ] Implement error distribution strategies (deferred to v2):
-  - [ ] Proportional by shot length (Bowditch method)
-  - [ ] Equal across all shots
-  - [ ] Keep raw data
-- [x] Visual indicator for loop closure lines (color-coded by error severity)
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Scale bar toggle | ✅ | Implemented via MapLibre ScaleControl |
+| Section name labels | ❌ | Toggle exists, rendering at midpoints needed |
+| Station index labels | ❌ | Show station numbers on map |
 
-## Priority 5: UI Polish
+### Phase 3: GPS & Placement
 
-### Panels ✅
-- [x] Collapsible Data Table panel with smooth animation
-- [x] Resizable panel persistence (save sizes to config)
-- [x] Panel keyboard shortcuts (Ctrl+1, Ctrl+2, Ctrl+3)
+| Feature | Status | Notes |
+|---------|--------|-------|
+| GPS coordinates input | ❌ | For zero datum in import dialog |
+| Per-section adjustment dialog | ❌ | Offset/rotation per section |
+| Manual map placement | ❌ | Click to position imported section |
+| "From Existing Station" option | ❌ | Connect to existing station on import |
 
-### GlobalView
-- [ ] Display cave systems positioned by GPS on map
-- [ ] Click system to show metadata in side panel
-- [ ] Double-click to open in SingleSystemView
-- [ ] Multi-select for merging systems
-- [x] Empty state message with prominent action buttons
+### Phase 4: GlobalView Enhancements
 
-### Keyboard Shortcuts
-- [x] Tool shortcuts (S, P, Z, D, X, M, R, V, T)
-- [x] Delete/Backspace for selected items
-- [x] Escape to clear selection and tool state
-- [x] Ctrl+Z/Y for undo/redo
-- [x] Ctrl+S to save
-- [x] Ctrl+1/2/3 to toggle panels
-- [x] Ctrl+I (Import), Ctrl+E (Export)
-- [x] Ctrl+0 (Fit to View)
-- [x] Ctrl+A (Select All)
+| Feature | Status | Notes |
+|---------|--------|-------|
+| GPS-based map view | ❌ | Show cave systems by GPS on map |
+| Metadata side panel | ❌ | Click system to show details |
+| Multi-select merge | ❌ | Select multiple systems, merge into one |
 
-### Validation Warnings ✅
-- [x] Display validation warnings in UI (Warnings tab in DetailPanel)
-- [x] Warning icon in data table rows
-- [x] "Mark as resolved" option with persistence to SQLite
-- [x] Warning panel/list with show/hide resolved toggle
+### Phase 5: Polish
 
-## Priority 6: Performance & Offline
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Direction field stored | ❌ | IN/OUT from DMP saved with section |
+| Export preview thumbnail | ❌ | Preview before exporting |
 
-### Tile Caching
-- [ ] Cache satellite tiles on first use for offline access
-- [ ] Configurable cache size limit
-- [ ] Cache management UI
+---
 
-### Large Dataset Optimization
-- [ ] Consider deck.gl for rendering large surveys (100k+ segments)
-- [ ] Virtual scrolling in data table
-- [ ] Incremental rendering
+## 🔮 DEFERRED TO v2.0+
 
-## Priority 7: Additional Features
+### Loop Closure (v2.0)
+- [ ] Error distribution strategies (Bowditch, equal, keep raw)
+- [ ] Advanced loop closure algorithms (least squares)
 
-### Auto-save ✅
-- [x] Implement auto-save after modifying operations (config `auto_save` setting)
-- [x] Dirty state indicator in UI (`isDirty` in projectStore)
-- [x] Prompt to save on close (UnsavedChangesDialog)
+### Performance & Offline
+- [ ] Tile caching for offline satellite imagery
+- [ ] Virtual scrolling in data table (for large surveys)
+- [ ] deck.gl integration for 100k+ segments
 
-### Statistics ✅
-- [x] Project statistics panel (default view when nothing selected)
-- [x] Section statistics in DetailPanel (depth range, avg shot, contribution %)
-- [x] Penetration distance calculation (max distance from zero datum)
-
-### Display Options ✅
-- [ ] Depth color gradient toggle (UI exists, rendering not implemented)
+### Display Features
+- [ ] Depth color gradient rendering (UI toggle exists)
 - [ ] LRUD passage wall visualization
-- [x] Shot data labels (azimuth, length, depth) with progressive zoom density
-- [x] Configurable display toggles dropdown menu
 
-## Out of Scope (Future Versions)
-
-These are explicitly deferred per SPEC.md:
+### Future Versions
 - SpeleoDB integration (v2.0)
 - 3D visualization (v2.x)
 - Profile views (v2.0)
@@ -161,27 +118,18 @@ These are explicitly deferred per SPEC.md:
 
 ---
 
-## Implementation Notes
+## Architecture Notes
 
-### DMP Parser ✅ IMPLEMENTED
-Ported from `pytool_mnemo_lib` Python library to Rust. Supports versions 2-5 with:
-- `IntBuffer` struct for sequential binary reading
-- Section splitting by end-of-section markers
-- Version-specific shot parsing (core fields, LRUD, temperature, time)
-- `DmpImportDialog` for file selection and section import
+### Mutex Lock Ordering
+Never hold a Mutex lock while calling methods that acquire other locks. Extract values first, then call methods.
 
-### Undo System ✅ IMPLEMENTED
-Hybrid approach using:
-- **Inverse commands** for create/toggle operations (CreateSection→DeleteSection)
-- **Previous values** (JSON) for update operations
-- **Snapshots** for delete operations (full section/shot data for restoration)
-- **Project snapshots** for batch operations
+### Safe File Save
+Always use temp file + atomic rename pattern to prevent data loss on failed saves.
 
-### Map Tool Architecture ✅ IMPLEMENTED
-Tools implemented as a state machine in `uiStore.ts` with `useMapTools` hook for handlers:
-- `SurveyLayer.tsx` handles map click/hover events and calls callbacks
-- `useMapTools.ts` dispatches actions based on active tool
-- `MapCanvas.tsx` handles drag operations (box select, move tools)
-- Tool state: `mergeStationA/B`, `measureStart/End`, `drawFromStation`
-- Dialogs: `ConfirmDialog`, `MergeDialog`, `DrawShotDialog`
-- `ContextMenu` for right-click actions on stations/shots
+### Section Offset Tracking
+When stations are merged, section offsets are stored in `Project.section_offsets: HashMap<SectionId, (f64, f64)>`.
+
+### Database Operations
+- `Database::open_existing()` for reading (doesn't create files)
+- `Database::open()` for writing (creates if needed)
+- Shot IDs: `section_id * 100000 + sequence`
