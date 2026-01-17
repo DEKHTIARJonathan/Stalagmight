@@ -2,26 +2,36 @@
 
 ## Specification Document v1.0
 
-**Last Updated**: 2024-01-12
-**Status**: Draft for Implementation
-**Target Version**: 1.0 (Pilot Release)
+**Last Updated**: 2026-01-17
+**Status**: Implementation Phase B
+**Target Version**: 1.0 (Beta Release)
 
 ---
 
 ## Table of Contents
 
 1. [Overview](#1-overview)
-2. [Glossary](#2-glossary)
-3. [Data Model](#3-data-model)
-4. [Architecture](#4-architecture)
-5. [User Interface](#5-user-interface)
-6. [Workflows](#6-workflows)
-7. [Command System](#7-command-system)
-8. [Configuration](#8-configuration)
-9. [Logging](#9-logging)
-10. [File Formats](#10-file-formats)
-11. [Technical Stack](#11-technical-stack)
-12. [Future Versions](#12-future-versions)
+2. [v1.0 Requirements Summary](#2-v10-requirements-summary)
+3. [Glossary](#3-glossary)
+4. [Data Model](#4-data-model)
+5. [Architecture](#5-architecture)
+6. [User Interface](#6-user-interface)
+7. [Workflows](#7-workflows)
+8. [Command System](#8-command-system)
+9. [Configuration](#9-configuration)
+10. [Settings Dialog](#10-settings-dialog)
+11. [Accessibility](#11-accessibility)
+12. [Internationalization](#12-internationalization)
+13. [Performance](#13-performance)
+14. [Error Handling](#14-error-handling)
+15. [Testing](#15-testing)
+16. [Logging](#16-logging)
+17. [File Formats](#17-file-formats)
+18. [Technical Stack](#18-technical-stack)
+19. [Future Versions](#19-future-versions)
+- [Appendix A: Keyboard Shortcuts](#appendix-a-keyboard-shortcuts)
+- [Appendix B: Validation Rules](#appendix-b-validation-rules)
+- [Appendix C: Color Palette](#appendix-c-color-palette)
 
 ---
 
@@ -65,12 +75,89 @@ CaveChef is a desktop application for processing underwater cave survey data. It
 - Profile views
 - Mobile/web versions
 - Direct mNemo device communication
-- Ariane .ari file import
+- Ariane .ari file import (v3)
 - Advanced statistics beyond basic metrics
+- Loop closure error distribution (v2)
+- Touch/tablet support
 
 ---
 
-## 2. Glossary
+## 2. v1.0 Requirements Summary
+
+### 2.1 Target Audience
+- **Beta testers only** - Not general public release
+- Experienced cave divers with survey training
+- Technical users comfortable with early software
+
+### 2.2 Scale Requirements
+| Metric | Target |
+|--------|--------|
+| Maximum shots per project | 10,000 |
+| Maximum shots per section | < 100 (typical) |
+| Maximum sections | 200 (50-200 optimized) |
+| Startup time | < 3 seconds |
+| Map rendering | 30 FPS minimum |
+
+### 2.3 Platform Support
+All platforms equal priority:
+- Linux (primary development)
+- Windows
+- macOS
+
+### 2.4 Accessibility
+- **WCAG 2.1 AA compliance**
+- Focus management with trap in modals
+- Screen reader announcements via ARIA live regions
+- Keyboard navigation for all features
+- High-contrast theme infrastructure (full theme v2)
+
+### 2.5 Internationalization
+- **Infrastructure only** for v1.0
+- react-i18next setup with English translations
+- Locale-aware number/date formatting
+- No additional languages in v1.0
+
+### 2.6 Offline Support
+- **Required**: Tile caching for satellite imagery
+- Auto-cache viewed tiles
+- Configurable cache size (default 500 MB)
+- Graceful offline degradation
+
+### 2.7 GPS Coordinate Formats
+All formats required:
+- Decimal Degrees (DD)
+- Degrees Minutes Seconds (DMS)
+- Degrees Decimal Minutes (DDM)
+- UTM
+- MGRS
+- Plus Codes
+- What3words
+
+### 2.8 Testing Requirements
+- **80% code coverage** target
+- Playwright E2E tests (mocked IPC)
+- WebdriverIO E2E tests (full app)
+- Rust unit tests for backend
+- Both Playwright and WebdriverIO required for all features
+
+### 2.9 Settings
+- **Global settings only** (no per-project overrides)
+- Changes apply immediately (no Save/Apply buttons)
+- Three-level reset: per-setting, per-tab, full reset
+
+### 2.10 Updates & Telemetry
+- No auto-update mechanism
+- Opt-in telemetry only
+- No external network calls except tile servers
+
+### 2.11 Recovery
+- Auto-save only (no crash recovery dialog)
+- Debounced auto-save (2-second delay)
+- SQLite integrity checks on project open
+
+---
+
+## 3. Glossary
 
 | Term | Definition |
 |------|------------|
@@ -89,9 +176,9 @@ CaveChef is a desktop application for processing underwater cave survey data. It
 
 ---
 
-## 3. Data Model
+## 4. Data Model
 
-### 3.1 Entity Hierarchy
+### 4.1 Entity Hierarchy
 
 ```
 Project (Cave System)
@@ -133,7 +220,7 @@ Project (Cave System)
     └── export_preferences: ExportSettings
 ```
 
-### 3.2 Station Identification
+### 4.2 Station Identification
 
 Stations use a dual-ID system to preserve provenance through merges:
 
@@ -146,7 +233,7 @@ Examples:
 - Merged station: [0:15, 1:0] → Station 15 of section 0 merged with station 0 of section 1
 ```
 
-### 3.3 Coordinate System
+### 4.3 Coordinate System
 
 - **Internal coordinates**: X (East), Y (North), Z (Depth) in meters
 - **Origin**: First zero datum station, or (0,0,0) if no GPS assigned
@@ -154,7 +241,7 @@ Examples:
 - **Azimuth**: Degrees from magnetic north (0-360), support for declination correction
 - **Depth**: Positive values = below surface
 
-### 3.4 Computed Values
+### 4.4 Computed Values
 
 These are derived from shot data, not stored:
 
@@ -165,9 +252,9 @@ These are derived from shot data, not stored:
 
 ---
 
-## 4. Architecture
+## 5. Architecture
 
-### 4.1 High-Level Architecture
+### 5.1 High-Level Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -242,7 +329,7 @@ These are derived from shot data, not stored:
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### 4.2 State Management
+### 5.2 State Management
 
 **Single Source of Truth**: Rust backend holds authoritative state.
 
@@ -259,7 +346,7 @@ User Action → Command Dispatcher → Tauri IPC → Rust Executor
      └──────────── Zustand Update ←──────── Command Result
 ```
 
-### 4.3 Transient vs Persistent Operations
+### 5.3 Transient vs Persistent Operations
 
 | Type | Examples | Logging | Undo | Storage |
 |------|----------|---------|------|---------|
@@ -268,11 +355,11 @@ User Action → Command Dispatcher → Tauri IPC → Rust Executor
 
 ---
 
-## 5. User Interface
+## 6. User Interface
 
-### 5.1 Application Views
+### 6.1 Application Views
 
-#### 5.1.1 Global View
+#### 6.1.1 Global View
 
 Shows all cave systems the user has loaded.
 
@@ -297,7 +384,7 @@ Shows all cave systems the user has loaded.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-#### 5.1.2 Single System View
+#### 6.1.2 Single System View
 
 Primary view for survey work.
 
@@ -328,7 +415,7 @@ Primary view for survey work.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.2 Panel Behavior
+### 6.2 Panel Behavior
 
 | Panel | Default State | Behavior |
 |-------|---------------|----------|
@@ -336,7 +423,7 @@ Primary view for survey work.
 | Detail Panel | Open, 300px | Resizable, collapsible |
 | Data Table | Collapsed | Resizable (height), collapsible |
 
-### 5.3 Tools
+### 6.3 Tools
 
 | Tool | Shortcut | Click Station | Click Shot | Click Empty | Drag |
 |------|----------|---------------|------------|-------------|------|
@@ -350,7 +437,7 @@ Primary view for survey work.
 | **Move Section** | V | - | - | - | Drag unanchored section |
 | **Move Station** | T | - | - | - | Drag unanchored station |
 
-### 5.4 Map Features
+### 6.4 Map Features
 
 #### Display Toggles (Right-click or menu)
 - Stations (dots)
@@ -372,7 +459,7 @@ Primary view for survey work.
 - Context menu: Right click
 - Snap to station: Automatic when within threshold (configurable)
 
-### 5.5 Visual Indicators
+### 6.5 Visual Indicators
 
 | Element | Appearance |
 |---------|------------|
@@ -385,7 +472,7 @@ Primary view for survey work.
 | Marked as resolved | Light red highlight |
 | Loop closure line | Dashed line with error percentage |
 
-### 5.6 Dialogs
+### 6.6 Dialogs
 
 #### Import/Create Section Dialog (Unified)
 
@@ -481,16 +568,16 @@ Primary view for survey work.
 
 ---
 
-## 6. Workflows
+## 7. Workflows
 
-### 6.1 First Launch
+### 7.1 First Launch
 
 1. Application opens to Global View (empty)
 2. Empty state message: "No cave systems yet"
 3. Prominent buttons: [Import DMP] [New Project] [Open Existing]
 4. No tutorial - interface should be self-guiding
 
-### 6.2 Creating New Project
+### 7.2 Creating New Project
 
 1. User clicks [New Project]
 2. Dialog: Enter name, optional location description
@@ -499,7 +586,7 @@ Primary view for survey work.
 5. If GPS provided: Single station with golden star visible
 6. User can now import sections or add manually
 
-### 6.3 Importing DMP File
+### 7.3 Importing DMP File
 
 1. User clicks [Import] or drags .dmp file onto application
 2. DMP parsed, Import Dialog opens with data populated
@@ -516,7 +603,7 @@ Primary view for survey work.
 7. Section added to project, visible on map
 8. Auto-saved
 
-### 6.4 Manual Data Entry
+### 7.4 Manual Data Entry
 
 1. User clicks [New Section] or [+] in Sections Panel
 2. Import Dialog opens with empty table
@@ -526,7 +613,7 @@ Primary view for survey work.
 6. Same placement flow as DMP import
 7. Auto-saved
 
-### 6.5 Connecting Sections with Virtual Shots
+### 7.5 Connecting Sections with Virtual Shots
 
 **Scenario**: Two sections exist but aren't connected. User surveyed the gap.
 
@@ -539,7 +626,7 @@ Primary view for survey work.
 7. Virtual shots displayed as dotted lines
 8. User can toggle virtual shot visibility in display options
 
-### 6.6 Editing Existing Data
+### 7.6 Editing Existing Data
 
 **Via Data Table:**
 1. User expands Data Table panel
@@ -560,7 +647,7 @@ Primary view for survey work.
 2. Context menu → Edit, Delete, Mark Virtual, etc.
 3. Dialog or inline edit as appropriate
 
-### 6.7 Deleting Data
+### 7.7 Deleting Data
 
 **Deleting a Shot:**
 1. Select shot, press Delete (or right-click → Delete)
@@ -578,7 +665,7 @@ Primary view for survey work.
 2. Confirmation with statistics: "Delete 'Main Line'? (24 shots, 187.3m)"
 3. Confirm → Section removed
 
-### 6.8 Merging Cave Systems
+### 7.8 Merging Cave Systems
 
 1. User is in Global View
 2. Multi-select two systems (Shift+click or Ctrl+click)
@@ -591,7 +678,7 @@ Primary view for survey work.
 6. Auto-switch to Single System View
 7. User connects the systems using Merge Tool
 
-### 6.9 Moving Unanchored Sections
+### 7.9 Moving Unanchored Sections
 
 **Section is unanchored** (not connected to zero datum):
 1. Select Move Section tool (V)
@@ -606,9 +693,9 @@ Primary view for survey work.
 
 ---
 
-## 7. Command System
+## 8. Command System
 
-### 7.1 Command Pattern
+### 8.1 Command Pattern
 
 All persistent operations go through the Command Executor:
 
@@ -685,7 +772,7 @@ pub enum Command {
 }
 ```
 
-### 7.2 Command Execution
+### 8.2 Command Execution
 
 ```rust
 pub struct CommandResult {
@@ -748,7 +835,7 @@ impl CommandExecutor {
 }
 ```
 
-### 7.3 Transient Operations
+### 8.3 Transient Operations
 
 These do NOT go through Command Executor:
 
@@ -762,9 +849,9 @@ Managed entirely in Zustand store on frontend.
 
 ---
 
-## 8. Configuration
+## 9. Configuration
 
-### 8.1 Config File Format
+### 9.1 Config File Format
 
 TOML format at `~/.config/cavechef/config.toml` (Linux/Mac) or `%APPDATA%\cavechef\config.toml` (Windows).
 
@@ -854,7 +941,7 @@ redo = "Ctrl+Y"
 save = "Ctrl+S"
 ```
 
-### 8.2 Config Loading Priority
+### 9.2 Config Loading Priority
 
 1. Built-in defaults (compiled into binary)
 2. System config file (if exists)
@@ -862,11 +949,448 @@ save = "Ctrl+S"
 
 Later sources override earlier ones.
 
+### 9.3 New Configuration Fields (v1.0)
+
+```toml
+[general]
+auto_save_delay_ms = 2000  # Debounce delay for auto-save
+
+[display]
+font_family = "system"  # "system" | "monospace" | "sans-serif" | "serif"
+color_palette = "default"  # "default" | "ocean" | "forest" | "desert" | "colorblind"
+
+[validation]
+closure_error_threshold = 5.0  # Percentage threshold for warnings
+
+[cache]
+tile_cache_enabled = true
+tile_cache_max_mb = 500  # Maximum tile cache size
+
+[accessibility]
+announce_tool_changes = true
+announce_selections = true
+announce_save_status = true
+```
+
 ---
 
-## 9. Logging
+## 10. Settings Dialog
 
-### 9.1 Log Levels
+### 10.1 Dialog Structure
+
+Tabbed modal dialog accessible via Edit > Settings menu only (no keyboard shortcut).
+
+```typescript
+interface SettingsDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
+  initialTab?: 'display' | 'validation' | 'export' | 'about';
+}
+```
+
+### 10.2 Tabs
+
+| Tab | Contents |
+|-----|----------|
+| Display | Color palette, font family/size, station size, line thickness |
+| Validation | Threshold inputs, severity levels, revalidate button |
+| Export | Default format, DPI, include options, presets |
+| About | Version, diagnostics, bug reporter link |
+
+### 10.3 Behavior
+
+- **Apply immediately**: No Save/Apply buttons, changes take effect instantly
+- **Three-level reset**:
+  - Per-setting: Reset icon (↻) next to each setting
+  - Per-tab: "Reset Tab" button at bottom of each tab
+  - Full: "Reset All Settings" button in dialog footer
+- **Modal**: Blocks background interaction
+- **Draggable**: Can be repositioned
+
+### 10.4 Display Tab
+
+#### Color Palettes (Presets Only)
+- Default (current colors)
+- Ocean (blues/teals)
+- Forest (greens/browns)
+- Desert (oranges/tans)
+- Colorblind-friendly
+
+#### Font Settings
+- Font family: System, Monospace, Sans-serif, Serif
+- Font size: Slider 10-24px (default 12)
+
+#### Size Settings
+- Station size: Slider 2-12px (default 6)
+- Line thickness: Slider 1-6px (default 2)
+
+### 10.5 Validation Tab
+
+#### Thresholds
+- Minimum shot length (default 0.1m)
+- Maximum shot length (default 100m)
+- Maximum depth change per shot (default 50m)
+- Closure error threshold (default 5%)
+
+#### Severity per Validation Type
+- Error: Blocks save/export
+- Warning: Allows proceed with notice
+- Configurable per validation rule
+
+#### Revalidate Button
+- "Revalidate Project" runs validation with current thresholds
+- Shows summary of results
+- Does NOT auto-revalidate on threshold change
+
+### 10.6 Export Tab
+
+#### Default Options
+- Format: csv, json, png, svg
+- DPI: 72, 150, 300
+- Include checkboxes: statistics, metadata, LRUD
+
+#### Built-in Presets
+- **Print**: PNG, 300 DPI, all includes
+- **Web**: PNG, 72 DPI, no metadata
+- **Archive**: JSON, all includes
+
+#### Custom Presets
+- Save current settings as named preset
+- Load/delete custom presets
+- Stored in config file
+
+---
+
+## 11. Accessibility
+
+### 11.1 Focus Management
+
+#### Modal Focus Trap
+- Tab cycles within modal dialogs only
+- Shift+Tab at first element goes to last
+- Tab at last element goes to first
+
+#### Initial Focus
+- First interactive element on dialog open
+- Confirmation dialogs: focus Cancel button (safer default)
+
+#### Return Focus
+- On dialog close, return focus to trigger element
+- Handle case where trigger no longer exists
+
+### 11.2 Keyboard Navigation
+
+#### Table Navigation
+| Key | Action |
+|-----|--------|
+| Arrow Up/Down | Move between rows |
+| Arrow Left/Right | Move between cells |
+| Home/End | First/last row |
+| Ctrl+Home/End | First/last cell |
+| Enter | Select row / enter edit mode |
+| Space | Toggle row selection |
+| F2 | Enter edit mode |
+
+#### Tool Shortcuts
+All shortcuts configurable and disableable:
+- S: Select, P: Pan, Z: Zoom, D: Draw
+- X: Delete, M: Merge, R: Measure
+- V: Move Section, T: Move Station
+
+#### Skip Links
+- "Skip to main content"
+- "Skip to data table"
+- Visible on focus only
+
+### 11.3 Screen Reader Support
+
+#### ARIA Live Regions
+```typescript
+<LiveRegion
+  politeness="polite"  // or "assertive"
+  clearAfter={5000}    // ms
+/>
+```
+
+#### Announcement Events (Configurable)
+- Tool selection changes
+- Station selection changes
+- Save status (saved, saving, error)
+- Validation results
+- Dialog open/close
+- Error messages (assertive)
+
+### 11.4 Visual Accessibility
+
+#### Focus Indicators
+- Clear outline on all focusable elements
+- Custom focus ring: `--cc-focus-ring`
+- Never suppressed with `outline: none`
+
+#### Contrast Ratios (WCAG AA)
+- Normal text: 4.5:1 minimum
+- Large text: 3:1 minimum
+- UI components: 3:1 minimum
+
+### 11.5 Map Accessibility
+
+- Map not keyboard navigable (too complex)
+- Users use data table for keyboard access to survey data
+- Skip link to bypass map
+
+---
+
+## 12. Internationalization
+
+### 12.1 Infrastructure (v1.0 Scope)
+
+Library: react-i18next
+
+```typescript
+// src/i18n/index.ts
+import i18n from 'i18next';
+import { initReactI18next } from 'react-i18next';
+import LanguageDetector from 'i18next-browser-languagedetector';
+import en from './locales/en.json';
+
+i18n
+  .use(LanguageDetector)
+  .use(initReactI18next)
+  .init({
+    resources: { en: { translation: en } },
+    fallbackLng: 'en',
+    interpolation: { escapeValue: false },
+  });
+```
+
+### 12.2 Namespace Structure
+
+```json
+{
+  "common": {
+    "actions": { "save": "Save", "cancel": "Cancel" },
+    "labels": { "name": "Name" }
+  },
+  "dialogs": {
+    "import": { "title": "Import DMP File" },
+    "export": { "title": "Export Project" },
+    "settings": { "title": "Settings" }
+  },
+  "tools": { "select": "Select (S)", "pan": "Pan (P)" },
+  "validation": { "required": "This field is required" },
+  "status": { "saved": "Project saved", "saving": "Saving..." }
+}
+```
+
+### 12.3 Number/Date Formatting
+
+```typescript
+// Locale-aware formatting
+export function formatNumber(value: number, locale: string): string {
+  return new Intl.NumberFormat(locale).format(value);
+}
+
+export function formatDate(date: Date, locale: string): string {
+  return new Intl.DateTimeFormat(locale).format(date);
+}
+```
+
+- Storage: Always ISO 8601
+- Display: Localized based on user preference
+- Units: Hardcoded to metric (meters) in v1
+
+### 12.4 Missing Key Handling
+
+- Development: Show key name (e.g., `[common.missing]`)
+- Production: Show fallback or empty string
+- Log missing keys for debugging
+
+---
+
+## 13. Performance
+
+### 13.1 Targets
+
+| Metric | Target |
+|--------|--------|
+| Startup time | < 3 seconds |
+| Map FPS | 30 minimum |
+| Shots per project | 10,000 |
+| Memory usage | < 500 MB |
+
+### 13.2 Map Rendering Optimization
+
+#### Level of Detail (LOD)
+| Zoom Level | Detail |
+|------------|--------|
+| < 10 | Simplified paths, no labels |
+| 10-14 | Normal paths, section labels only |
+| 14-17 | Full detail, all labels |
+| > 17 | Maximum detail |
+
+#### Geometry Simplification
+- Douglas-Peucker algorithm when zoomed out
+- Merge nearby stations
+- Hide small features
+- Based on pixel density
+
+### 13.3 Data Table Virtualization
+
+Library: TanStack Virtual (for tables > 50 rows)
+
+```typescript
+const virtualizer = useVirtualizer({
+  count: rows.length,
+  getScrollElement: () => parentRef.current,
+  estimateSize: () => 32,
+  overscan: 5,
+});
+```
+
+### 13.4 Auto-Save Debouncing
+
+- 2-second debounce after last change (configurable)
+- Cancel pending save on new change
+- "Save Now" (Ctrl+S) always available
+
+### 13.5 Tile Caching
+
+```rust
+// Cache structure
+tile_cache/
+├── satellite/
+│   ├── {z}/{x}/{y}.png
+└── cache_index.json
+
+// LRU eviction when over max size
+```
+
+- Default max: 500 MB
+- Configurable in settings
+- Auto-cache as user views tiles
+
+---
+
+## 14. Error Handling
+
+### 14.1 Error Boundaries (Per-Panel)
+
+```tsx
+<ErrorBoundary
+  fallback={<ErrorFallback />}
+  onError={logError}
+  onReset={clearErrorState}
+>
+  <Panel />
+</ErrorBoundary>
+```
+
+Wrap each major panel:
+- Map panel
+- Sections panel
+- Detail panel
+- Data table panel
+
+### 14.2 Recovery Options
+
+| Option | Description |
+|--------|-------------|
+| Try Again | Clear error state, re-render |
+| Reload Panel | Reload panel data from backend |
+
+### 14.3 Network Error Handling
+
+```typescript
+function useNetworkStatus() {
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  // Listen for online/offline events
+}
+```
+
+- Detect offline state
+- Show offline indicator in status bar
+- Serve cached tiles when offline
+- Auto-recovery when back online
+
+### 14.4 File Corruption Recovery
+
+#### Integrity Checks
+- Quick check on open: `PRAGMA quick_check`
+- Full check on-demand: `PRAGMA integrity_check`
+
+#### Recovery Options (Always Ask User)
+1. Attempt Repair
+2. Restore from Backup
+3. Export Salvageable Data
+4. Cancel
+
+#### Backup Before Repair
+Always create backup before attempting repair:
+```rust
+fn backup_before_repair(path: &Path) -> Result<PathBuf> {
+    let backup = path.with_extension("cvproj.backup");
+    fs::copy(path, &backup)?;
+    Ok(backup)
+}
+```
+
+### 14.5 Validation Error Recovery
+
+- Individual error clear: X button on each error
+- "Clear All Errors" button
+- Auto-clear when field corrected
+- Cleared errors stay cleared (don't re-validate automatically)
+
+---
+
+## 15. Testing
+
+### 15.1 Coverage Target
+
+**80% code coverage** for both Rust and TypeScript.
+
+### 15.2 Test Types
+
+| Type | Framework | Purpose |
+|------|-----------|---------|
+| Rust unit tests | cargo test | Backend logic |
+| Playwright E2E | Playwright | Frontend with mocked IPC |
+| WebdriverIO E2E | WebdriverIO | Full app integration |
+
+### 15.3 Test Requirements per Feature
+
+Every feature requires:
+- 3-10 specific test cases
+- Both Playwright AND WebdriverIO tests
+- Rust tests for backend logic
+
+### 15.4 Test Data Identifiers
+
+All testable elements must have `data-testid`:
+
+| Element | Convention |
+|---------|------------|
+| Views | `<view>-view` |
+| Buttons | `<action>-button` |
+| Dialogs | `<name>-dialog` |
+| Form inputs | `<field>-input` |
+
+### 15.5 ARIA Requirements for Testing
+
+All dialogs must have:
+```tsx
+<div
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="dialog-title-id"
+>
+```
+
+---
+
+## 16. Logging
+
+### 16.1 Log Levels
 
 | Level | Usage | Example |
 |-------|-------|---------|
@@ -876,7 +1400,7 @@ Later sources override earlier ones.
 | **DEBUG** | Detailed execution info | "Generated undo data: StateDelta with 5 entities" |
 | **TRACE** | Very verbose, performance debugging | "Rendering 45000 line segments" |
 
-### 9.2 Log File Management
+### 16.2 Log File Management
 
 - **Location**: `~/.local/share/cavechef/logs/` (Linux), `~/Library/Application Support/cavechef/logs/` (Mac), `%APPDATA%\cavechef\logs\` (Windows)
 - **Naming**: `cavechef_YYYY-MM-DD_HH-MM-SS.log`
@@ -884,7 +1408,7 @@ Later sources override earlier ones.
 - **Rotation**: Delete oldest logs when directory exceeds `max_directory_size_mb` (default 128MB)
 - **Level**: Configurable in settings
 
-### 9.3 Log Format
+### 16.3 Log Format
 
 Structured JSON for machine parsing:
 
@@ -894,7 +1418,7 @@ Structured JSON for machine parsing:
 {"ts":"2024-01-12T14:32:15.130Z","level":"INFO","target":"cavechef::persistence","msg":"Project saved","path":"/home/user/caves/sistema.cave","size_kb":245}
 ```
 
-### 9.4 Instrumentation Requirements
+### 16.4 Instrumentation Requirements
 
 **All code must include appropriate logging:**
 
@@ -934,9 +1458,9 @@ pub fn create_section(state: &mut State, cmd: CreateSectionCommand) -> Result<Se
 
 ---
 
-## 10. File Formats
+## 17. File Formats
 
-### 10.1 Project File (.cave)
+### 17.1 Project File (.cave)
 
 SQLite database with the following schema:
 
@@ -1005,6 +1529,18 @@ CREATE TABLE zero_datums (
     UNIQUE(section_id, station_index)
 );
 
+-- Loop closures (Task 32)
+CREATE TABLE loop_closures (
+    id INTEGER PRIMARY KEY,
+    merge_id INTEGER NOT NULL REFERENCES station_merges(id),
+    loop_path_json TEXT NOT NULL,  -- JSON array of section IDs in loop
+    total_length REAL NOT NULL,    -- Total path length in meters
+    error_distance REAL NOT NULL,  -- Closure error in meters
+    error_percent REAL NOT NULL,   -- Closure error as percentage
+    strategy TEXT NOT NULL,        -- 'keep_raw' or 'mark_for_distribution'
+    created_at TEXT NOT NULL
+);
+
 -- Undo/redo stack (persisted)
 CREATE TABLE undo_stack (
     id INTEGER PRIMARY KEY,
@@ -1025,7 +1561,7 @@ CREATE INDEX idx_shots_section ON shots(section_id);
 CREATE INDEX idx_undo_sequence ON undo_stack(sequence);
 ```
 
-### 10.2 DMP File Import
+### 17.2 DMP File Import
 
 Rewrite `pytool_mnemo_lib` parser in Rust. Key structures:
 
@@ -1063,7 +1599,7 @@ pub struct DmpShot {
 }
 ```
 
-### 10.3 Export Formats
+### 17.3 Export Formats
 
 **Map Image (PNG/SVG/PDF):**
 - Render current map view with selected options
@@ -1109,9 +1645,9 @@ section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out
 
 ---
 
-## 11. Technical Stack
+## 18. Technical Stack
 
-### 11.1 Overview
+### 18.1 Overview
 
 | Layer | Technology |
 |-------|------------|
@@ -1119,13 +1655,15 @@ section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out
 | **Backend** | Rust (stable) |
 | **Frontend** | React 18+ with TypeScript (strict mode) |
 | **State** | Zustand |
-| **Map Rendering** | MapLibre GL JS + deck.gl |
+| **Map Rendering** | MapLibre GL JS |
+| **Virtualization** | TanStack Virtual (data tables) |
+| **i18n** | react-i18next |
 | **Database** | SQLite (via rusqlite) |
 | **Logging** | tracing + tracing-subscriber |
 | **Build** | pnpm + Vite + Tauri CLI |
-| **Testing** | Rust: cargo test, TS: Vitest |
+| **Testing** | Rust: cargo test, Playwright, WebdriverIO |
 
-### 11.2 Dependencies
+### 18.2 Dependencies
 
 **Rust (Cargo.toml):**
 ```toml
@@ -1153,9 +1691,10 @@ directories = "5"
     "@tauri-apps/api": "^2",
     "zustand": "^4",
     "maplibre-gl": "^4",
-    "@deck.gl/core": "^9",
-    "@deck.gl/layers": "^9",
-    "@deck.gl/mapbox": "^9"
+    "@tanstack/react-virtual": "^3",
+    "i18next": "^23",
+    "react-i18next": "^14",
+    "i18next-browser-languagedetector": "^7"
   },
   "devDependencies": {
     "typescript": "^5",
@@ -1163,13 +1702,14 @@ directories = "5"
     "@types/react-dom": "^18",
     "vite": "^5",
     "@vitejs/plugin-react": "^4",
-    "vitest": "^1",
+    "@playwright/test": "^1",
+    "wdio": "^8",
     "@tauri-apps/cli": "^2"
   }
 }
 ```
 
-### 11.3 TypeScript Configuration
+### 18.3 TypeScript Configuration
 
 **tsconfig.json (strict mode required):**
 ```json
@@ -1205,7 +1745,7 @@ directories = "5"
 }
 ```
 
-### 11.4 Project Structure
+### 18.4 Project Structure
 
 ```
 cavechef/
@@ -1307,23 +1847,23 @@ cavechef/
 
 ---
 
-## 12. Future Versions
+## 19. Future Versions
 
-### 12.1 Version 2.0 (High Priority)
+### 19.1 Version 2.0 (High Priority)
 
 - **SpeleoDB Integration**: Push/pull survey data, authentication
 - **Loop Closure Algorithms**: Least squares adjustment, more distribution options
 - **Profile Views**: Side elevation visualization
 - **Advanced Statistics**: Survey efficiency, quality scores, progress over time
 
-### 12.2 Version 2.x (Medium Priority)
+### 19.2 Version 2.x (Medium Priority)
 
 - **Ariane .ari Import**: Migration path for existing users
 - **Additional Export Formats**: Survex, Therion, KML/KMZ
 - **3D Visualization**: Basic 3D cave model
 - **LRUD Passage Walls**: Render passage cross-sections on 2D map
 
-### 12.3 Version 3.0+ (Future)
+### 19.3 Version 3.0+ (Future)
 
 - **Web Version**: Same frontend, different backend
 - **Mobile Version**: Flutter or React Native
