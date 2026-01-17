@@ -136,7 +136,9 @@ interface UIStore {
   showScaleBar: boolean;
   showSatellite: boolean;
   showDepthGradient: boolean;
+  gridSpacing: number;
   toggleDisplay: (key: DisplayToggleKey) => void;
+  setGridSpacing: (spacing: number) => void;
   loadDisplaySettings: () => Promise<void>;
   saveDisplaySetting: (key: DisplayToggleKey, value: boolean) => Promise<void>;
   resetDisplaySettings: () => void;
@@ -315,6 +317,7 @@ export const useUIStore = create<UIStore>((set) => ({
   showScaleBar: true,
   showSatellite: false,
   showDepthGradient: false,
+  gridSpacing: 10,
   toggleDisplay: (key) => {
     const state = useUIStore.getState();
     const newValue = !state[key];
@@ -322,17 +325,30 @@ export const useUIStore = create<UIStore>((set) => ({
     // Persist the setting asynchronously via the helper
     state.saveDisplaySetting(key, newValue);
   },
+  setGridSpacing: (spacing) => {
+    set({ gridSpacing: spacing });
+    // Persist the spacing setting
+    invoke('save_display_setting', { key: 'gridSpacing', value: String(spacing) }).catch((e) => {
+      console.warn('Failed to save grid spacing:', e);
+    });
+  },
   loadDisplaySettings: async () => {
     try {
       const settings = await invoke<Record<string, string>>('load_display_settings');
       const displayState: Partial<Record<DisplayToggleKey, boolean>> = {};
+      let gridSpacing: number | undefined;
       for (const [key, value] of Object.entries(settings)) {
         if (key.startsWith('show')) {
           displayState[key as DisplayToggleKey] = value === 'true';
+        } else if (key === 'gridSpacing') {
+          const parsed = parseFloat(value);
+          if (!isNaN(parsed) && parsed > 0) {
+            gridSpacing = parsed;
+          }
         }
       }
-      if (Object.keys(displayState).length > 0) {
-        set(displayState);
+      if (Object.keys(displayState).length > 0 || gridSpacing !== undefined) {
+        set({ ...displayState, ...(gridSpacing !== undefined ? { gridSpacing } : {}) });
       }
     } catch (e) {
       // No project open or other error - use defaults
@@ -359,6 +375,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showScaleBar: true,
       showSatellite: false,
       showDepthGradient: false,
+      gridSpacing: 10,
     });
   },
 
