@@ -332,5 +332,77 @@ test.describe('UI Components', () => {
       await spacingSelect.selectOption('100');
       await expect(spacingSelect).toHaveValue('100');
     });
+
+    test('should toggle satellite imagery visibility', async ({ page }) => {
+      // Open Display menu
+      await page.click('button:has-text("Display")');
+      await expect(page.locator('button:has-text("Satellite")')).toBeVisible({ timeout: 2000 });
+
+      // Satellite is off by default (showSatellite: false in uiStore)
+      const satelliteButton = page.locator('[data-testid="display-toggle-showSatellite"]');
+      await expect(satelliteButton).toBeVisible();
+
+      // Verify initial state - checkbox indicator should NOT have bg-accent (off state)
+      const checkbox = satelliteButton.locator('div.rounded').last();
+      await expect(checkbox).not.toHaveClass(/bg-accent/);
+
+      // Toggle satellite on
+      await satelliteButton.click();
+
+      // Verify the toggle is now on - checkbox should have bg-accent class
+      await expect(checkbox).toHaveClass(/bg-accent/);
+
+      // Wait for satellite layer to be added (source should be added to map)
+      await page.waitForTimeout(500);
+
+      // Toggle back off
+      await satelliteButton.click();
+
+      // Verify the toggle is back off - checkbox should NOT have bg-accent
+      await expect(checkbox).not.toHaveClass(/bg-accent/);
+
+      // Button should still be visible and functional
+      await expect(satelliteButton).toBeVisible();
+    });
+
+    test('should show satellite option in Display menu', async ({ page }) => {
+      // Open Display menu
+      await page.click('button:has-text("Display")');
+
+      // The Satellite button should exist with proper label and description
+      const satelliteButton = page.locator('[data-testid="display-toggle-showSatellite"]');
+      await expect(satelliteButton).toBeVisible();
+
+      // Check that label is correct (use .first() to get the main label, not description)
+      await expect(satelliteButton.locator('span.text-sm')).toHaveText('Satellite');
+
+      // Check that description is correct
+      await expect(satelliteButton.locator('span.text-xs')).toHaveText('Show satellite imagery');
+    });
+
+    test('should persist satellite toggle state during session', async ({ page }) => {
+      // Open Display menu and toggle satellite on
+      await page.click('button:has-text("Display")');
+      const satelliteButton = page.locator('[data-testid="display-toggle-showSatellite"]');
+      const checkbox = satelliteButton.locator('div.rounded').last();
+
+      // Verify initially off
+      await expect(checkbox).not.toHaveClass(/bg-accent/);
+
+      // Toggle on
+      await satelliteButton.click();
+      await expect(checkbox).toHaveClass(/bg-accent/);
+
+      // Close the menu (click outside)
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(200);
+
+      // Open the menu again
+      await page.click('button:has-text("Display")');
+
+      // Satellite should still be on (state persisted in store during session)
+      const checkbox2 = page.locator('[data-testid="display-toggle-showSatellite"]').locator('div.rounded').last();
+      await expect(checkbox2).toHaveClass(/bg-accent/);
+    });
   });
 });
