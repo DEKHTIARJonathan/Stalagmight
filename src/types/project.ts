@@ -107,6 +107,13 @@ export interface GpsCoordinates {
   depth_reference: number;
 }
 
+export interface GpsBounds {
+  min_lat: number;
+  max_lat: number;
+  min_lng: number;
+  max_lng: number;
+}
+
 export interface Coordinates {
   x: number;
   y: number;
@@ -178,6 +185,8 @@ export interface ProjectMetadata {
   modified_at: string;
   section_count: number;
   total_length: number;
+  gps_center: [number, number] | null;
+  gps_bounds: GpsBounds | null;
 }
 
 export interface ProjectState {

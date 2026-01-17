@@ -33,6 +33,15 @@ pub struct GpsCoordinates {
     pub depth_reference: f64,
 }
 
+/// GPS bounding box in WGS84 format
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct GpsBounds {
+    pub min_lat: f64,
+    pub max_lat: f64,
+    pub min_lng: f64,
+    pub max_lng: f64,
+}
+
 /// Internal XYZ coordinates (meters)
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Coordinates {
