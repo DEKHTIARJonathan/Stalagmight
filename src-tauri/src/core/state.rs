@@ -1383,4 +1383,25 @@ impl AppState {
         let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
         db.delete_resolved_warning(section_id, shot_id, warning_code)
     }
+
+    /// Load display settings from database
+    pub fn load_display_settings(&self) -> Result<std::collections::HashMap<String, String>> {
+        let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
+        let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
+        db.load_display_settings()
+    }
+
+    /// Save a display setting to database
+    pub fn save_display_setting(&self, key: &str, value: &str) -> Result<()> {
+        let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
+        let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
+        db.save_display_setting(key, value)
+    }
+
+    /// Get a single display setting from database
+    pub fn get_display_setting(&self, key: &str) -> Result<Option<String>> {
+        let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
+        let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
+        db.get_display_setting(key)
+    }
 }

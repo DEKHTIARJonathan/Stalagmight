@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
+import { useUIStore } from './uiStore';
 import type {
   Project,
   ProjectState,
@@ -139,6 +140,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         await get().refreshProjectState();
         console.log('[projectStore] refreshProjectState complete, project:', get().project?.name);
         await get().loadRecentProjects();
+        // Load display settings from the opened project
+        await useUIStore.getState().loadDisplaySettings();
         set({ isDirty: false });
       } else {
         console.error('[projectStore] open_project failed:', result.error);

@@ -195,35 +195,31 @@ test.describe('UI Components', () => {
   test.describe('Display Menu', () => {
     test('should toggle scale bar visibility', async ({ page }) => {
       // Scale bar is visible by default (showScaleBar: true in uiStore)
-      await page.waitForTimeout(500); // Wait for map to fully load
       const scaleBar = page.locator('.maplibregl-ctrl-scale');
-      await expect(scaleBar).toBeVisible();
+      await expect(scaleBar).toBeVisible({ timeout: 5000 });
 
       // Open Display menu and toggle scale bar off
       await page.click('button:has-text("Display")');
-      await page.waitForTimeout(100);
+      await expect(page.locator('button:has-text("Scale Bar")')).toBeVisible({ timeout: 2000 });
       await page.click('button:has-text("Scale Bar")');
-      await page.waitForTimeout(200);
 
       // Scale bar should be hidden
-      await expect(scaleBar).not.toBeVisible();
+      await expect(scaleBar).not.toBeVisible({ timeout: 2000 });
 
       // Toggle it back on
       await page.click('button:has-text("Scale Bar")');
-      await page.waitForTimeout(200);
 
       // Scale bar should be visible again
-      await expect(scaleBar).toBeVisible();
+      await expect(scaleBar).toBeVisible({ timeout: 2000 });
     });
 
     test('should have scale bar in bottom-left position', async ({ page }) => {
-      await page.waitForTimeout(500); // Wait for map to fully load
       const scaleBar = page.locator('.maplibregl-ctrl-scale');
-      await expect(scaleBar).toBeVisible();
+      await expect(scaleBar).toBeVisible({ timeout: 5000 });
 
       // Check that it's in a bottom-left control container
       const bottomLeftContainer = page.locator('.maplibregl-ctrl-bottom-left .maplibregl-ctrl-scale');
-      await expect(bottomLeftContainer).toBeVisible();
+      await expect(bottomLeftContainer).toBeVisible({ timeout: 2000 });
     });
   });
 });

@@ -620,6 +620,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'get_project_warnings':
             return [];
 
+          // Display settings (per-project)
+          case 'load_display_settings':
+            // Return empty settings for mocked tests (uses defaults)
+            return {};
+
+          case 'save_display_setting':
+            // No-op for mocked tests
+            return undefined;
+
+          case 'get_display_setting':
+            // Return undefined for mocked tests
+            return null;
+
           // Window plugin commands
           case 'plugin:window|set_title':
           case 'plugin:window|current':
