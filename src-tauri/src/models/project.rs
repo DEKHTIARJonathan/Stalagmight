@@ -531,11 +531,14 @@ impl Project {
     }
 
     /// Set a station as the zero datum
-    /// Returns Err if the station doesn't exist or if a connected station already has a zero datum
+    /// Returns Err if the station doesn't exist, GPS is invalid, or if a connected station already has a zero datum
     pub fn set_zero_datum(&mut self, station_ref: StationRef, gps: GpsCoordinates) -> Result<bool, String> {
         if !self.station_exists(station_ref) {
             return Err("Station does not exist".to_string());
         }
+
+        // Validate GPS coordinates to prevent serialization issues
+        GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference)?;
 
         // Check for connected zero datum
         if let Some(existing) = self.find_connected_zero_datum(station_ref) {
@@ -546,11 +549,12 @@ impl Project {
             ));
         }
 
-        // Remove any existing zero datum for this station
-        self.zero_datums
-            .retain(|zd| zd.station_ref != station_ref);
-
-        self.zero_datums.push(ZeroDatum { station_ref, gps });
+        // Update in-place if datum exists (preserves order/position for stable center)
+        if let Some(existing) = self.zero_datums.iter_mut().find(|zd| zd.station_ref == station_ref) {
+            existing.gps = gps;
+        } else {
+            self.zero_datums.push(ZeroDatum { station_ref, gps });
+        }
         self.touch();
         Ok(true)
     }
@@ -745,25 +749,33 @@ impl Project {
     }
 
     /// Compute GPS center and bounds from zero datums
-    /// Returns (center, bounds) where center is from first zero datum
-    /// and bounds encompass all zero datums
+    /// Returns (center, bounds) where center is from first valid zero datum
+    /// and bounds encompass all valid zero datums.
+    /// Returns (None, None) if no valid datums exist.
     fn compute_gps_info(&self) -> (Option<(f64, f64)>, Option<GpsBounds>) {
-        if self.zero_datums.is_empty() {
+        // Filter to valid datums only to prevent serialization issues
+        let valid_datums: Vec<_> = self
+            .zero_datums
+            .iter()
+            .filter(|zd| zd.gps.is_valid())
+            .collect();
+
+        if valid_datums.is_empty() {
             return (None, None);
         }
 
-        // Center from first zero datum
-        let first_gps = &self.zero_datums[0].gps;
+        // Center from first valid zero datum
+        let first_gps = &valid_datums[0].gps;
         let gps_center = Some((first_gps.latitude, first_gps.longitude));
 
-        // Bounds from all zero datums with dateline-aware longitude handling
+        // Bounds from all valid zero datums with dateline-aware longitude handling
         let mut south = f64::INFINITY;
         let mut north = f64::NEG_INFINITY;
 
         // Collect all longitudes for dateline-aware calculation
-        let mut longitudes: Vec<f64> = Vec::with_capacity(self.zero_datums.len());
+        let mut longitudes: Vec<f64> = Vec::with_capacity(valid_datums.len());
 
-        for zd in &self.zero_datums {
+        for zd in &valid_datums {
             south = south.min(zd.gps.latitude);
             north = north.max(zd.gps.latitude);
             longitudes.push(zd.gps.longitude);
