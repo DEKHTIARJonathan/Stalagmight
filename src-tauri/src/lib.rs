@@ -35,6 +35,7 @@ pub fn run() {
             commands::project::get_project_state,
             commands::project::list_recent_projects,
             commands::project::remove_from_recent_projects,
+            commands::project::merge_projects,
             // Section commands
             commands::section::create_section,
             commands::section::update_section,
