@@ -13,6 +13,7 @@ const displayOptions: { group: string; items: DisplayOption[] }[] = [
     items: [
       { key: 'showStations', label: 'Stations', description: 'Show station markers' },
       { key: 'showSectionNames', label: 'Section Names', description: 'Show labels for sections' },
+      { key: 'showStationLabels', label: 'Station Labels', description: 'Show station index numbers' },
       { key: 'showShotData', label: 'Shot Data', description: 'Show azimuth, length, depth labels' },
       { key: 'showVirtualShots', label: 'Virtual Shots', description: 'Show dashed virtual connections' },
       { key: 'showZeroDatum', label: 'Zero Datum', description: 'Highlight entrance markers' },
@@ -37,6 +38,7 @@ export default function DisplayMenu() {
   const {
     showStations,
     showSectionNames,
+    showStationLabels,
     showShotData,
     showVirtualShots,
     showZeroDatum,
@@ -50,6 +52,7 @@ export default function DisplayMenu() {
   const toggleValues: Record<DisplayToggleKey, boolean> = {
     showStations,
     showSectionNames,
+    showStationLabels,
     showShotData,
     showVirtualShots,
     showZeroDatum,
