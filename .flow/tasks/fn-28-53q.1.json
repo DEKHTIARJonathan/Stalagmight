@@ -5,10 +5,19 @@
   "created_at": "2026-01-17T08:39:32.622642Z",
   "depends_on": [],
   "epic": "fn-28-53q",
+  "evidence": {
+    "commits": [
+      "41fc3cda0df6affd53f467a1b20e843cfa0a0f69"
+    ],
+    "prs": [],
+    "tests": [
+      "cd src-tauri && cargo test"
+    ]
+  },
   "id": "fn-28-53q.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-28-53q.1.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add AppState unit tests",
-  "updated_at": "2026-01-17T17:04:00.908311Z"
+  "updated_at": "2026-01-17T17:07:11.033136Z"
 }
