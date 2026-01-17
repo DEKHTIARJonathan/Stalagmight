@@ -191,4 +191,39 @@ test.describe('UI Components', () => {
       await expect(page.locator('canvas').first()).toBeVisible();
     });
   });
+
+  test.describe('Display Menu', () => {
+    test('should toggle scale bar visibility', async ({ page }) => {
+      // Scale bar is visible by default (showScaleBar: true in uiStore)
+      await page.waitForTimeout(500); // Wait for map to fully load
+      const scaleBar = page.locator('.maplibregl-ctrl-scale');
+      await expect(scaleBar).toBeVisible();
+
+      // Open Display menu and toggle scale bar off
+      await page.click('button:has-text("Display")');
+      await page.waitForTimeout(100);
+      await page.click('button:has-text("Scale Bar")');
+      await page.waitForTimeout(200);
+
+      // Scale bar should be hidden
+      await expect(scaleBar).not.toBeVisible();
+
+      // Toggle it back on
+      await page.click('button:has-text("Scale Bar")');
+      await page.waitForTimeout(200);
+
+      // Scale bar should be visible again
+      await expect(scaleBar).toBeVisible();
+    });
+
+    test('should have scale bar in bottom-left position', async ({ page }) => {
+      await page.waitForTimeout(500); // Wait for map to fully load
+      const scaleBar = page.locator('.maplibregl-ctrl-scale');
+      await expect(scaleBar).toBeVisible();
+
+      // Check that it's in a bottom-left control container
+      const bottomLeftContainer = page.locator('.maplibregl-ctrl-bottom-left .maplibregl-ctrl-scale');
+      await expect(bottomLeftContainer).toBeVisible();
+    });
+  });
 });
