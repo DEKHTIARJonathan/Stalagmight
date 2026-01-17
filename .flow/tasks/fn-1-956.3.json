@@ -9,18 +9,20 @@
   ],
   "epic": "fn-1-956",
   "evidence": {
-    "notes": "Code fixes for originally failing tests verified present: data-testid attributes and Ctrl+I shortcut handler in place",
+    "commits": ["89f958d", "840698b", "266e945", "5931c34"],
+    "notes": "Code fixes verified present. WebdriverIO blocked due to WebKitGTK initialization timeout (25+ seconds) on headless server. libEGL DRI3 errors indicate missing hardware acceleration.",
     "tests": [
       "TypeScript compiles without errors",
       "Playwright 34/34 pass",
       "Rust 79/79 pass",
-      "WebdriverIO blocked by headless WebKitGTK limitation"
-    ]
+      "WebdriverIO: BLOCKED (Application did not load within 60 seconds)"
+    ],
+    "blocking_reason": "WebKitGTK fails to render React UI on headless server without hardware acceleration. Requires GPU or proper mesa/llvmpipe setup."
   },
   "id": "fn-1-956.3",
   "priority": null,
   "spec_path": ".flow/tasks/fn-1-956.3.md",
-  "status": "done",
-  "title": "Final verification - all WebdriverIO tests pass",
+  "status": "blocked",
+  "title": "Final verification - WebdriverIO tests (blocked by CI environment)",
   "updated_at": "2026-01-17T00:18:08.941928Z"
 }
