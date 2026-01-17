@@ -217,6 +217,7 @@ Located in `e2e/`. These tests run against the full Tauri application.
 
 - Linux or Windows (macOS not supported by tauri-driver)
 - tauri-driver installed: `cargo install tauri-driver`
+- Display server (X11/Wayland) or `xvfb` for headless environments
 
 ### Directory Structure
 
@@ -279,18 +280,36 @@ See `wdio.conf.ts`. Key settings:
 ### Running WebdriverIO Tests
 
 ```bash
-# Build and run
+# Standard run (builds app first)
 pnpm test:e2e
 
-# Or manually:
-# 1. Build the app
-pnpm tauri build --debug --no-bundle
+# Headless Linux (no display server)
+xvfb-run -a pnpm test:e2e
 
-# 2. Start tauri-driver
-tauri-driver &
+# Skip rebuild if binary already exists
+SKIP_BUILD=1 xvfb-run -a pnpm test:e2e
+```
 
-# 3. Run tests
-npx wdio run wdio.conf.ts
+#### Binary Path Configuration
+
+The test runner looks for the Tauri binary at `$CARGO_TARGET_DIR/debug/cavechef`. By default, `wdio.conf.ts` expects `~/.cargo_build/debug/cavechef`.
+
+If your project builds to a different location (e.g., the standard `src-tauri/target/`), set `CARGO_TARGET_DIR`:
+
+```bash
+# If binary is at src-tauri/target/debug/cavechef
+CARGO_TARGET_DIR=./src-tauri/target xvfb-run -a pnpm test:e2e
+
+# Combined with skip build
+CARGO_TARGET_DIR=./src-tauri/target SKIP_BUILD=1 xvfb-run -a pnpm test:e2e
+```
+
+#### Running Individual Specs
+
+```bash
+# Run a single spec file
+CARGO_TARGET_DIR=./src-tauri/target SKIP_BUILD=1 xvfb-run -a \
+  npx wdio run wdio.conf.ts --spec e2e/specs/keyboard-shortcuts.spec.ts
 ```
 
 ## Backend Rust Tests
@@ -471,10 +490,13 @@ All UI components must include proper attributes for tests to locate elements re
 
 ### WebdriverIO Tests Failing
 
-1. **Check tauri-driver**: Must be installed and running
-2. **Check build**: App must be built with `--debug --no-bundle`
-3. **Check platform**: Only Linux/Windows supported
-4. **Check ARIA attributes**: Dialogs must have `role="dialog"`
+1. **"No such file or directory" for cavechef binary**: Set `CARGO_TARGET_DIR` to point to where your binary was built (e.g., `CARGO_TARGET_DIR=./src-tauri/target`)
+2. **"No display available" or display errors**: Use `xvfb-run -a` to provide a virtual display
+3. **Port 4444 already in use**: A previous tauri-driver is still running. Kill it with `pkill tauri-driver`
+4. **Check tauri-driver**: Must be installed (`cargo install tauri-driver`)
+5. **Check build**: App must be built with `--debug --no-bundle`
+6. **Check platform**: Only Linux/Windows supported (not macOS)
+7. **Check ARIA attributes**: Dialogs must have `role="dialog"`
 
 ### Rust Tests Failing
 
