@@ -42,6 +42,7 @@ export default function MapCanvas() {
     showSatellite,
     showShotData,
     showScaleBar,
+    showSectionNames,
     selection,
     mergeStationA,
     measureStart,
@@ -406,6 +407,12 @@ export default function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setShowShotLabels(showShotData);
   }, [showShotData, mapLoaded]);
+
+  // Sync section name labels visibility with SurveyLayer
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setShowSectionNames(showSectionNames);
+  }, [showSectionNames, mapLoaded]);
 
   // Handle scale bar toggle
   useEffect(() => {
