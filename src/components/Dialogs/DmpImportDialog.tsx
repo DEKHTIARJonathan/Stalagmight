@@ -378,8 +378,10 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
         }
       } else {
         next.add(index);
-        // Update preview to show the newly expanded section
-        setPreviewSectionIndex(index);
+        // Only update preview if the expanded section is selected (aligns with "auto-fit on selection")
+        if (selectedSections.has(index)) {
+          setPreviewSectionIndex(index);
+        }
       }
       return next;
     });
