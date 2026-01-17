@@ -1790,3 +1790,1041 @@ impl AppState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{ShotData, SurveyDirection};
+
+    /// Helper to create a basic shot data for testing
+    fn test_shot_data(length: f64) -> ShotData {
+        ShotData {
+            azimuth_in: 45.0,
+            azimuth_out: 225.0,
+            length,
+            depth_in: 10.0,
+            depth_out: 11.0,
+            ..Default::default()
+        }
+    }
+
+    // === Project Operations Tests ===
+
+    #[test]
+    fn test_create_project() {
+        let state = AppState::new().unwrap();
+
+        let result = state.execute(Command::CreateProject {
+            name: "Test Cave".to_string(),
+            location: Some("Test Location".to_string()),
+        });
+
+        assert!(result.success);
+        assert!(result.error.is_none());
+
+        let project = state.get_project_state();
+        assert!(project.is_some());
+
+        let project = project.unwrap();
+        assert_eq!(project.name, "Test Cave");
+        assert_eq!(project.location, Some("Test Location".to_string()));
+    }
+
+    #[test]
+    fn test_create_project_without_location() {
+        let state = AppState::new().unwrap();
+
+        let result = state.execute(Command::CreateProject {
+            name: "Unnamed Cave".to_string(),
+            location: None,
+        });
+
+        assert!(result.success);
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.name, "Unnamed Cave");
+        assert!(project.location.is_none());
+    }
+
+    #[test]
+    fn test_close_project() {
+        let state = AppState::new().unwrap();
+
+        // Create a project first
+        state.execute(Command::CreateProject {
+            name: "To Close".to_string(),
+            location: None,
+        });
+
+        // Close it
+        let result = state.execute(Command::CloseProject);
+        assert!(result.success);
+
+        // Project should be None
+        assert!(state.get_project_state().is_none());
+    }
+
+    // === Section Operations Tests ===
+
+    #[test]
+    fn test_create_section() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let result = state.execute(Command::CreateSection {
+            name: Some("Section A".to_string()),
+            surveyor: Some("John".to_string()),
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        });
+
+        assert!(result.success);
+        assert!(result.section_id.is_some());
+
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections.len(), 1);
+        assert_eq!(project.sections[0].name, Some("Section A".to_string()));
+        assert_eq!(project.sections[0].shots.len(), 2);
+    }
+
+    #[test]
+    fn test_create_section_returns_id() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let result = state.execute(Command::CreateSection {
+            name: Some("First".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        assert!(result.success);
+        assert_eq!(result.section_id, Some(0));
+
+        // Create another section
+        let result2 = state.execute(Command::CreateSection {
+            name: Some("Second".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        assert!(result2.success);
+        assert_eq!(result2.section_id, Some(1));
+    }
+
+    #[test]
+    fn test_create_section_no_project() {
+        let state = AppState::new().unwrap();
+
+        let result = state.execute(Command::CreateSection {
+            name: Some("Orphan".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#000000".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        assert!(!result.success);
+        assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_delete_section() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: Some("To Delete".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(3.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+
+        let result = state.execute(Command::DeleteSection { section_id });
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        assert!(project.sections.is_empty());
+    }
+
+    #[test]
+    fn test_delete_nonexistent_section() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let result = state.execute(Command::DeleteSection { section_id: 999 });
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_update_section_metadata() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: Some("Original".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+
+        let result = state.execute(Command::UpdateSectionMetadata {
+            section_id,
+            updates: SectionUpdates {
+                name: Some(Some("Updated".to_string())),
+                color: Some("#00ff00".to_string()),
+                ..Default::default()
+            },
+        });
+
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        assert_eq!(
+            project.sections[0].name,
+            Some("Updated".to_string())
+        );
+        assert_eq!(project.sections[0].color, "#00ff00");
+    }
+
+    // === Shot Operations Tests ===
+
+    #[test]
+    fn test_create_shot() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: Some("Section".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+
+        let result = state.execute(Command::CreateShot {
+            section_id,
+            shot: test_shot_data(10.0),
+            after_shot_id: None,
+        });
+
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections[0].shots.len(), 1);
+        assert_eq!(project.sections[0].shots[0].length, 10.0);
+    }
+
+    #[test]
+    fn test_update_shot() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+        let project = state.get_project_state().unwrap();
+        let shot_id = project.sections[0].shots[0].id;
+
+        let result = state.execute(Command::UpdateShot {
+            section_id,
+            shot_id,
+            updates: ShotUpdates {
+                length: Some(15.0),
+                comment: Some(Some("Updated shot".to_string())),
+                ..Default::default()
+            },
+        });
+
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections[0].shots[0].length, 15.0);
+        assert_eq!(
+            project.sections[0].shots[0].comment,
+            Some("Updated shot".to_string())
+        );
+    }
+
+    #[test]
+    fn test_delete_shot() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+        let project = state.get_project_state().unwrap();
+        let shot_id = project.sections[0].shots[0].id;
+
+        let result = state.execute(Command::DeleteShot {
+            section_id,
+            shot_id,
+        });
+
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections[0].shots.len(), 1);
+    }
+
+    #[test]
+    fn test_set_shot_virtual() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+        let project = state.get_project_state().unwrap();
+        let shot_id = project.sections[0].shots[0].id;
+
+        // Initially not virtual
+        assert!(!project.sections[0].shots[0].is_virtual);
+
+        let result = state.execute(Command::SetShotVirtual {
+            section_id,
+            shot_id,
+            is_virtual: true,
+        });
+
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        assert!(project.sections[0].shots[0].is_virtual);
+    }
+
+    // === Undo/Redo Tests ===
+
+    #[test]
+    fn test_undo_create_section() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        state.execute(Command::CreateSection {
+            name: Some("To Undo".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+
+        assert_eq!(state.get_project_state().unwrap().sections.len(), 1);
+        assert!(state.can_undo());
+
+        let result = state.undo();
+        assert!(result.success);
+
+        assert!(state.get_project_state().unwrap().sections.is_empty());
+    }
+
+    #[test]
+    fn test_undo_delete_section() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: Some("Will Delete".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+
+        state.execute(Command::DeleteSection { section_id });
+        assert!(state.get_project_state().unwrap().sections.is_empty());
+
+        // Undo the delete
+        let result = state.undo();
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections.len(), 1);
+        assert_eq!(
+            project.sections[0].name,
+            Some("Will Delete".to_string())
+        );
+    }
+
+    #[test]
+    fn test_undo_update_shot() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+        let project = state.get_project_state().unwrap();
+        let shot_id = project.sections[0].shots[0].id;
+
+        state.execute(Command::UpdateShot {
+            section_id,
+            shot_id,
+            updates: ShotUpdates {
+                length: Some(15.0),
+                ..Default::default()
+            },
+        });
+
+        assert_eq!(
+            state.get_project_state().unwrap().sections[0].shots[0].length,
+            15.0
+        );
+
+        let result = state.undo();
+        assert!(result.success);
+
+        assert_eq!(
+            state.get_project_state().unwrap().sections[0].shots[0].length,
+            5.0
+        );
+    }
+
+    #[test]
+    fn test_redo_create_section() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        state.execute(Command::CreateSection {
+            name: Some("Redo Me".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        state.undo();
+        assert!(state.get_project_state().unwrap().sections.is_empty());
+        assert!(state.can_redo());
+
+        let result = state.redo();
+        assert!(result.success);
+
+        assert_eq!(state.get_project_state().unwrap().sections.len(), 1);
+    }
+
+    #[test]
+    fn test_undo_nothing() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        assert!(!state.can_undo());
+
+        let result = state.undo();
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_redo_nothing() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        assert!(!state.can_redo());
+
+        let result = state.redo();
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_redo_cleared_on_new_command() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        state.execute(Command::CreateSection {
+            name: Some("First".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        state.undo();
+        assert!(state.can_redo());
+
+        // New command clears redo stack
+        state.execute(Command::CreateSection {
+            name: Some("Different".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        assert!(!state.can_redo());
+    }
+
+    // === State Transition Tests ===
+
+    #[test]
+    fn test_project_modification_tracking() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let initial_modified = state.get_project_state().unwrap().modified_at;
+
+        // Sleep a tiny bit to ensure timestamp changes
+        std::thread::sleep(std::time::Duration::from_millis(1));
+
+        state.execute(Command::CreateSection {
+            name: Some("Section".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        let after_section = state.get_project_state().unwrap().modified_at;
+        assert!(after_section > initial_modified);
+    }
+
+    #[test]
+    fn test_is_undoable_commands() {
+        // Non-undoable commands
+        assert!(!AppState::is_undoable(&Command::OpenProject {
+            path: PathBuf::from("/test.cvproj"),
+        }));
+        assert!(!AppState::is_undoable(&Command::SaveProject { path: None }));
+        assert!(!AppState::is_undoable(&Command::CloseProject));
+        assert!(!AppState::is_undoable(&Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        }));
+
+        // Undoable commands
+        assert!(AppState::is_undoable(&Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#000000".to_string(),
+            direction: None,
+            shots: vec![],
+        }));
+        assert!(AppState::is_undoable(&Command::DeleteSection { section_id: 0 }));
+        assert!(AppState::is_undoable(&Command::CreateShot {
+            section_id: 0,
+            shot: ShotData::default(),
+            after_shot_id: None,
+        }));
+    }
+
+    #[test]
+    fn test_is_modifying_commands() {
+        // Non-modifying commands
+        assert!(!AppState::is_modifying(&Command::OpenProject {
+            path: PathBuf::from("/test.cvproj"),
+        }));
+        assert!(!AppState::is_modifying(&Command::SaveProject { path: None }));
+        assert!(!AppState::is_modifying(&Command::CloseProject));
+
+        // Modifying commands
+        assert!(AppState::is_modifying(&Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        }));
+        assert!(AppState::is_modifying(&Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#000000".to_string(),
+            direction: None,
+            shots: vec![],
+        }));
+    }
+
+    // === Config Tests ===
+
+    #[test]
+    fn test_get_config() {
+        let state = AppState::new().unwrap();
+        let config = state.get_config();
+
+        // Should have default values
+        assert!(config.general.auto_save);
+        assert_eq!(config.general.undo_history_limit, 100);
+    }
+
+    #[test]
+    fn test_display_settings_cache() {
+        let state = AppState::new().unwrap();
+
+        // Create a project (no database, so settings go to cache)
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        // Save a display setting
+        let result = state.save_display_setting("test_key", "test_value");
+        assert!(result.is_ok());
+
+        // Retrieve it
+        let value = state.get_display_setting("test_key").unwrap();
+        assert_eq!(value, Some("test_value".to_string()));
+
+        // Load all settings
+        let settings = state.load_display_settings().unwrap();
+        assert_eq!(settings.get("test_key"), Some(&"test_value".to_string()));
+    }
+
+    // === Batch Command Tests ===
+
+    #[test]
+    fn test_batch_create_sections() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let result = state.execute(Command::Batch {
+            commands: vec![
+                Command::CreateSection {
+                    name: Some("First".to_string()),
+                    surveyor: None,
+                    date: None,
+                    color: "#ff0000".to_string(),
+                    direction: None,
+                    shots: vec![test_shot_data(5.0)],
+                },
+                Command::CreateSection {
+                    name: Some("Second".to_string()),
+                    surveyor: None,
+                    date: None,
+                    color: "#00ff00".to_string(),
+                    direction: None,
+                    shots: vec![test_shot_data(7.0)],
+                },
+            ],
+        });
+
+        assert!(result.success);
+        assert_eq!(result.section_ids.len(), 2);
+
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections.len(), 2);
+    }
+
+    #[test]
+    fn test_batch_fails_on_first_error() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        // First command succeeds, second fails (delete nonexistent section)
+        let result = state.execute(Command::Batch {
+            commands: vec![
+                Command::CreateSection {
+                    name: Some("First".to_string()),
+                    surveyor: None,
+                    date: None,
+                    color: "#ff0000".to_string(),
+                    direction: None,
+                    shots: vec![],
+                },
+                Command::DeleteSection { section_id: 999 },
+            ],
+        });
+
+        assert!(!result.success);
+    }
+
+    // === Station Merge Tests ===
+
+    #[test]
+    fn test_merge_stations_same_section_fails() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+
+        // Try to merge stations from the same section
+        let result = state.execute(Command::MergeStations {
+            station_a: StationRef::new(section_id, 0),
+            station_b: StationRef::new(section_id, 1),
+            closure_strategy: ClosureStrategy::ProportionalByLength,
+        });
+
+        assert!(!result.success);
+        assert!(result
+            .error
+            .unwrap()
+            .contains("Cannot merge stations from the same section"));
+    }
+
+    // === Zero Datum Tests ===
+
+    #[test]
+    fn test_set_and_remove_zero_datum() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+        let station_ref = StationRef::new(section_id, 0);
+
+        // Set zero datum
+        let result = state.execute(Command::SetZeroDatum {
+            station_ref,
+            coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        });
+
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.zero_datums.len(), 1);
+        assert_eq!(project.zero_datums[0].gps.latitude, 45.0);
+
+        // Remove zero datum
+        let result = state.execute(Command::RemoveZeroDatum { station_ref });
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        assert!(project.zero_datums.is_empty());
+    }
+
+    #[test]
+    fn test_remove_nonexistent_zero_datum() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+
+        // Try to remove a datum that was never set
+        let result = state.execute(Command::RemoveZeroDatum {
+            station_ref: StationRef::new(section_id, 0),
+        });
+
+        assert!(!result.success);
+    }
+
+    // === Move Section Tests ===
+
+    #[test]
+    fn test_move_section() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+
+        let result = state.execute(Command::MoveSection {
+            section_id,
+            offset: Coordinates::new(10.0, 20.0, 0.0),
+        });
+
+        assert!(result.success);
+    }
+
+    #[test]
+    fn test_move_nonexistent_section() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let result = state.execute(Command::MoveSection {
+            section_id: 999,
+            offset: Coordinates::new(10.0, 20.0, 0.0),
+        });
+
+        assert!(!result.success);
+    }
+
+    // === Validation Tests ===
+
+    #[test]
+    fn test_create_section_with_validation_warnings() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        // Create a section with a zero-length shot (should trigger warning)
+        let result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![ShotData {
+                azimuth_in: 45.0,
+                azimuth_out: 225.0,
+                length: 0.0, // Zero length triggers warning
+                depth_in: 10.0,
+                depth_out: 10.0,
+                ..Default::default()
+            }],
+        });
+
+        assert!(result.success);
+        assert!(!result.warnings.is_empty());
+        assert!(result.warnings.iter().any(|w| w.code == "ZERO_LENGTH"));
+    }
+
+    // === Undo/Redo with Shot Restoration ===
+
+    #[test]
+    fn test_undo_delete_shot_restores_at_correct_position() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![
+                test_shot_data(5.0),
+                test_shot_data(7.0),
+                test_shot_data(9.0),
+            ],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+        let project = state.get_project_state().unwrap();
+        let middle_shot_id = project.sections[0].shots[1].id;
+
+        // Delete the middle shot
+        state.execute(Command::DeleteShot {
+            section_id,
+            shot_id: middle_shot_id,
+        });
+
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections[0].shots.len(), 2);
+
+        // Undo the delete
+        let result = state.undo();
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections[0].shots.len(), 3);
+        // The shot should be restored at position 1
+        assert_eq!(project.sections[0].shots[1].length, 7.0);
+    }
+
+    // === Multiple Undo/Redo Sequence ===
+
+    #[test]
+    fn test_multiple_undo_redo_sequence() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        // Create 3 sections
+        for i in 1..=3 {
+            state.execute(Command::CreateSection {
+                name: Some(format!("Section {}", i)),
+                surveyor: None,
+                date: None,
+                color: "#ff0000".to_string(),
+                direction: None,
+                shots: vec![],
+            });
+        }
+
+        assert_eq!(state.get_project_state().unwrap().sections.len(), 3);
+
+        // Undo all 3 creates
+        state.undo();
+        state.undo();
+        state.undo();
+
+        assert!(state.get_project_state().unwrap().sections.is_empty());
+
+        // Redo 2 of them
+        state.redo();
+        state.redo();
+
+        assert_eq!(state.get_project_state().unwrap().sections.len(), 2);
+    }
+}

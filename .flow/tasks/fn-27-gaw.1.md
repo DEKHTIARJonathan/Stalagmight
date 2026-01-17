@@ -7,9 +7,8 @@ TBD
 - [ ] TBD
 
 ## Done summary
-TBD
-
+Added configurable satellite imagery toggle with ESRI satellite tiles, offline fallback error handling, and Playwright E2E tests for the Display Menu satellite option.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: a22ec9debc46dfb79450c174b583667b549f7283
+- Tests: pnpm tsc --noEmit, pnpm test:ui --grep satellite, cd src-tauri && cargo test
 - PRs:
