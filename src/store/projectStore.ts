@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
+import { useUIStore } from './uiStore';
 import type {
   Project,
   ProjectState,
@@ -47,6 +48,8 @@ interface ProjectStore {
   resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<void>;
   unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
+  removeFromRecentProjects: (path: string) => Promise<CommandResult>;
+  mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandResult>;
 
   createSection: (data: SectionData) => Promise<CommandResult>;
   updateSection: (sectionId: SectionId, updates: SectionUpdates) => Promise<CommandResult>;
@@ -118,6 +121,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         console.log('[projectStore] Calling refreshProjectState...');
         await get().refreshProjectState();
         console.log('[projectStore] refreshProjectState done');
+        // Reset display settings to defaults for new project
+        useUIStore.getState().resetDisplaySettings();
         set({ isDirty: false });
       } else {
         set({ error: result.error ?? 'Failed to create project' });
@@ -139,6 +144,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         await get().refreshProjectState();
         console.log('[projectStore] refreshProjectState complete, project:', get().project?.name);
         await get().loadRecentProjects();
+        // Load display settings from the opened project
+        await useUIStore.getState().loadDisplaySettings();
         set({ isDirty: false });
       } else {
         console.error('[projectStore] open_project failed:', result.error);
@@ -232,6 +239,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       set({ recentProjects: recent });
     } catch (e) {
       console.error('Failed to load recent projects:', e);
+    }
+  },
+
+  removeFromRecentProjects: async (path: string) => {
+    try {
+      const result = await invoke<CommandResult>('remove_from_recent_projects', { path });
+      if (result.success) {
+        // Refresh the list after removal
+        await get().loadRecentProjects();
+      }
+      return result;
+    } catch (e) {
+      console.error('Failed to remove from recent projects:', e);
+      return { success: false, error: String(e), warnings: [] };
     }
   },
 
@@ -415,5 +436,24 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   exportImage: async (path: string, options: ExportImageOptions) => {
     await invoke('export_image', { path, options });
+  },
+
+  mergeProjects: async (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => {
+    try {
+      const result = await invoke<CommandResult>('merge_projects', {
+        sourcePaths,
+        outputPath,
+        outputName,
+        archiveOriginals,
+      });
+      if (result.success) {
+        // Refresh recent projects to reflect any changes (archived files removed, new file added)
+        await get().loadRecentProjects();
+      }
+      return result;
+    } catch (e) {
+      console.error('Failed to merge projects:', e);
+      return { success: false, error: String(e), warnings: [] };
+    }
   },
 }));

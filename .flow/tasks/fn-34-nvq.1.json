@@ -1,0 +1,38 @@
+{
+  "assignee": "cavechef@example.com",
+  "claim_note": "",
+  "claimed_at": "2026-01-17T17:28:23.524189Z",
+  "created_at": "2026-01-17T14:27:51.067036Z",
+  "depends_on": [],
+  "epic": "fn-34-nvq",
+  "evidence": {
+    "clippy_status": "No new warnings introduced",
+    "files_modified": [
+      "src-tauri/src/core/state.rs"
+    ],
+    "test_command": "cd src-tauri && cargo test state::tests -- --nocapture",
+    "test_results": {
+      "failed": 0,
+      "passed": 45,
+      "total": 45
+    },
+    "tests_added": [
+      "test_execute_create_section_command",
+      "test_execute_merge_stations_command",
+      "test_execute_set_zero_datum_command",
+      "test_execute_update_shot_command",
+      "test_execute_delete_shot_command",
+      "test_execute_create_shot_command",
+      "test_execute_delete_section_command",
+      "test_execute_update_section_metadata_command",
+      "test_execute_command_no_project_open",
+      "test_execute_commands_with_invalid_ids"
+    ]
+  },
+  "id": "fn-34-nvq.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-34-nvq.1.md",
+  "status": "done",
+  "title": "Implement 8 AppState command tests",
+  "updated_at": "2026-01-17T17:32:53.735767Z"
+}

@@ -55,6 +55,31 @@ pub fn list_recent_projects(state: State<AppState>) -> Vec<ProjectMetadata> {
     state.get_recent_projects()
 }
 
+/// Remove a project from the recent projects list
+#[tauri::command]
+pub fn remove_from_recent_projects(state: State<AppState>, path: PathBuf) -> CommandResult {
+    state.remove_from_recent_projects(path)
+}
+
+/// Merge multiple projects into a new project file
+/// This creates a NEW output file, appends all sections with renumbered IDs,
+/// keeps all zero datums, and optionally archives the original files.
+#[tauri::command]
+pub fn merge_projects(
+    state: State<AppState>,
+    source_paths: Vec<PathBuf>,
+    output_path: PathBuf,
+    output_name: String,
+    archive_originals: bool,
+) -> CommandResult {
+    state.execute(Command::MergeProjects {
+        source_paths,
+        output_path,
+        output_name,
+        archive_originals,
+    })
+}
+
 /// Combined project state for frontend
 #[derive(serde::Serialize)]
 pub struct ProjectState {

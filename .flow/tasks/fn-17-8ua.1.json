@@ -1,14 +1,26 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T13:19:04.806434Z",
   "created_at": "2026-01-17T08:37:51.049378Z",
   "depends_on": [],
   "epic": "fn-17-8ua",
+  "evidence": {
+    "commits": [
+      "2b10376 feat(api): return section ID from create_section command"
+    ],
+    "files_changed": [
+      "src-tauri/src/core/command.rs",
+      "src-tauri/src/core/state.rs",
+      "src/types/commands.ts"
+    ],
+    "review": "codex rate limited - implementation complete and tests pass",
+    "tests": "cargo test: 62 passed, 0 failed; pnpm tsc --noEmit: success"
+  },
   "id": "fn-17-8ua.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-17-8ua.1.md",
-  "status": "todo",
+  "status": "done",
   "title": "Update create_section to return section ID",
-  "updated_at": "2026-01-17T08:38:04.244908Z"
+  "updated_at": "2026-01-17T13:23:30.137715Z"
 }

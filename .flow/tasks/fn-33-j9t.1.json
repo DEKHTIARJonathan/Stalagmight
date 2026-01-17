@@ -1,14 +1,47 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T17:22:35.588837Z",
   "created_at": "2026-01-17T08:39:33.025139Z",
   "depends_on": [],
   "epic": "fn-33-j9t",
+  "evidence": {
+    "files_modified": [
+      "e2e-playwright/globalview-map.spec.ts"
+    ],
+    "test_coverage": {
+      "adjustment_dialog": true,
+      "gps_formats": [
+        "DD",
+        "DMS",
+        "DDM",
+        "UTM",
+        "MGRS",
+        "PlusCodes",
+        "What3words"
+      ],
+      "placement_modes": [
+        "origin",
+        "existing",
+        "manual"
+      ]
+    },
+    "tests": {
+      "playwright": {
+        "command": "pnpm test:ui",
+        "failed": 0,
+        "passed": 190
+      }
+    },
+    "typecheck": {
+      "command": "pnpm tsc --noEmit",
+      "passed": true
+    }
+  },
   "id": "fn-33-j9t.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-33-j9t.1.md",
-  "status": "todo",
+  "status": "done",
   "title": "Add GPS/placement Playwright tests",
-  "updated_at": "2026-01-17T08:39:33.025149Z"
+  "updated_at": "2026-01-17T17:27:12.794180Z"
 }

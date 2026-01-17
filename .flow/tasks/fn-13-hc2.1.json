@@ -1,14 +1,29 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T11:52:36.727015Z",
   "created_at": "2026-01-17T08:37:04.437326Z",
   "depends_on": [],
   "epic": "fn-13-hc2",
+  "evidence": {
+    "commits": [
+      "5cb984a fix(gps): require explicit direction for DMS parsing and remove unused mgrsToUtm",
+      "0b1a709 fix(gps): fix signed DMS parsing and add tests for edge cases"
+    ],
+    "files": [
+      "src/utils/gps.ts",
+      "src/utils/gps.test.ts"
+    ],
+    "tests": {
+      "e2e": "87 tests pass (pnpm test:ui)",
+      "unit": "66 tests pass (pnpm vitest run src/utils/gps.test.ts)"
+    },
+    "typecheck": "pnpm tsc --noEmit passes"
+  },
   "id": "fn-13-hc2.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-13-hc2.1.md",
-  "status": "todo",
+  "status": "done",
   "title": "Create GPS parsing utilities",
-  "updated_at": "2026-01-17T08:37:17.943004Z"
+  "updated_at": "2026-01-17T12:32:58.604922Z"
 }

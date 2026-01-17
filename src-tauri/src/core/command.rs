@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,
-    ShotUpdates, StationRef,
+    ShotUpdates, StationRef, SurveyDirection,
 };
 
 /// All persistent commands that modify project state
@@ -30,6 +30,8 @@ pub enum Command {
         surveyor: Option<String>,
         date: Option<NaiveDate>,
         color: String,
+        #[serde(default)]
+        direction: Option<SurveyDirection>,
         shots: Vec<ShotData>,
     },
     DeleteSection {
@@ -92,6 +94,18 @@ pub enum Command {
     Batch {
         commands: Vec<Command>,
     },
+
+    // Project merge command
+    MergeProjects {
+        /// Paths to the source projects to merge
+        source_paths: Vec<PathBuf>,
+        /// Path for the merged output project
+        output_path: PathBuf,
+        /// Name for the merged project
+        output_name: String,
+        /// Whether to archive (rename) the original files
+        archive_originals: bool,
+    },
 }
 
 /// Result of command execution
@@ -100,6 +114,12 @@ pub struct CommandResult {
     pub success: bool,
     pub warnings: Vec<ValidationWarning>,
     pub error: Option<String>,
+    /// ID of the created section (for CreateSection command)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<u32>,
+    /// IDs of created sections (for Batch commands containing CreateSection)
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub section_ids: Vec<u32>,
 }
 
 /// Validation warning from command execution
@@ -123,6 +143,8 @@ impl CommandResult {
             success: true,
             warnings: Vec::new(),
             error: None,
+            section_id: None,
+            section_ids: Vec::new(),
         }
     }
 
@@ -131,6 +153,52 @@ impl CommandResult {
             success: true,
             warnings,
             error: None,
+            section_id: None,
+            section_ids: Vec::new(),
+        }
+    }
+
+    /// Create a success result with the created section ID
+    pub fn success_with_section_id(section_id: u32) -> Self {
+        Self {
+            success: true,
+            warnings: Vec::new(),
+            error: None,
+            section_id: Some(section_id),
+            section_ids: Vec::new(),
+        }
+    }
+
+    /// Create a success result with the created section ID and warnings
+    pub fn success_with_section_id_and_warnings(section_id: u32, warnings: Vec<ValidationWarning>) -> Self {
+        Self {
+            success: true,
+            warnings,
+            error: None,
+            section_id: Some(section_id),
+            section_ids: Vec::new(),
+        }
+    }
+
+    /// Create a success result with multiple section IDs (for batch operations)
+    pub fn success_with_section_ids(section_ids: Vec<u32>) -> Self {
+        Self {
+            success: true,
+            warnings: Vec::new(),
+            error: None,
+            section_id: None,
+            section_ids,
+        }
+    }
+
+    /// Create a success result with multiple section IDs and warnings (for batch operations)
+    pub fn success_with_section_ids_and_warnings(section_ids: Vec<u32>, warnings: Vec<ValidationWarning>) -> Self {
+        Self {
+            success: true,
+            warnings,
+            error: None,
+            section_id: None,
+            section_ids,
         }
     }
 
@@ -139,6 +207,8 @@ impl CommandResult {
             success: false,
             warnings: Vec::new(),
             error: Some(error),
+            section_id: None,
+            section_ids: Vec::new(),
         }
     }
 }
@@ -210,6 +280,17 @@ impl Command {
             }
             Command::Batch { commands } => {
                 format!("Batch of {} commands", commands.len())
+            }
+            Command::MergeProjects {
+                source_paths,
+                output_name,
+                ..
+            } => {
+                format!(
+                    "Merge {} projects into '{}'",
+                    source_paths.len(),
+                    output_name
+                )
             }
         }
     }

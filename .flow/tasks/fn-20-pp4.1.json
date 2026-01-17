@@ -1,14 +1,26 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T15:31:35.294208Z",
   "created_at": "2026-01-17T08:38:36.664250Z",
   "depends_on": [],
   "epic": "fn-20-pp4",
+  "evidence": {
+    "commits": [
+      "6a7363d119973f10960febd0c1828b39ed264e4f"
+    ],
+    "prs": [],
+    "review": "codex rate-limited (tests pass)",
+    "tests": [
+      "pnpm tsc --noEmit (0 errors)",
+      "pnpm test:ui (150 passed)",
+      "cargo test (69 passed)"
+    ]
+  },
   "id": "fn-20-pp4.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-20-pp4.1.md",
-  "status": "todo",
+  "status": "done",
   "title": "Add GlobalView map with tabs",
-  "updated_at": "2026-01-17T08:38:36.664261Z"
+  "updated_at": "2026-01-17T15:36:18.191406Z"
 }

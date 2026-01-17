@@ -66,167 +66,6 @@ function createMockSection(overrides?: Partial<MockSection>): MockSection {
 }
 
 /**
- * Mock Tauri IPC command handler.
- * Maps command names to mock responses.
- */
-function createMockCommandHandler() {
-  // State to track the current project
-  let currentProject: MockProject | null = null;
-  let projectPath: string | null = null;
-  let sectionCounter = 0;
-
-  return function mockCommand(cmd: string, args?: Record<string, unknown>): unknown {
-    console.log(`[Mock IPC] Command: ${cmd}`, args);
-
-    switch (cmd) {
-      // Project commands
-      case 'create_project': {
-        const name = (args?.name as string) ?? 'Untitled Project';
-        currentProject = createMockProject({ name });
-        return currentProject;
-      }
-
-      case 'load_project': {
-        projectPath = (args?.path as string) ?? null;
-        if (!currentProject) {
-          currentProject = createMockProject();
-        }
-        return currentProject;
-      }
-
-      case 'save_project': {
-        projectPath = (args?.path as string) ?? projectPath;
-        return { success: true, path: projectPath };
-      }
-
-      case 'close_project': {
-        currentProject = null;
-        projectPath = null;
-        return { success: true };
-      }
-
-      case 'get_project': {
-        return currentProject;
-      }
-
-      // Section commands
-      case 'create_section': {
-        if (!currentProject) {
-          throw new Error('No project open');
-        }
-        sectionCounter++;
-        const section = createMockSection({
-          id: `section-${sectionCounter}`,
-          name: (args?.name as string) ?? `Section ${sectionCounter}`,
-          shots: (args?.shots as MockShot[]) ?? [],
-        });
-        currentProject.sections.push(section);
-        return section;
-      }
-
-      case 'update_section': {
-        const sectionId = args?.section_id as string;
-        const section = currentProject?.sections.find((s) => s.id === sectionId);
-        if (section) {
-          Object.assign(section, args);
-        }
-        return section;
-      }
-
-      case 'delete_section': {
-        const deleteId = args?.section_id as string;
-        if (currentProject) {
-          currentProject.sections = currentProject.sections.filter(
-            (s) => s.id !== deleteId
-          );
-        }
-        return { success: true };
-      }
-
-      // DMP Import
-      case 'import_dmp':
-      case 'parse_dmp': {
-        return createMockSection({
-          id: `imported-${Date.now()}`,
-          name: (args?.name as string) ?? 'Imported Section',
-          shots: [
-            { id: 1, azimuth: 45, length: 10, depth: -2 },
-            { id: 2, azimuth: 90, length: 15, depth: -5 },
-            { id: 3, azimuth: 135, length: 8, depth: -3 },
-          ],
-        });
-      }
-
-      // Undo/Redo
-      case 'undo': {
-        return { success: true, can_undo: true, can_redo: true };
-      }
-
-      case 'redo': {
-        return { success: true, can_undo: true, can_redo: true };
-      }
-
-      case 'can_undo': {
-        return true;
-      }
-
-      case 'can_redo': {
-        return true;
-      }
-
-      // Config
-      case 'get_config': {
-        return {
-          auto_save: true,
-          recent_projects: [],
-          recent_projects_max: 10,
-        };
-      }
-
-      case 'update_config': {
-        return { success: true };
-      }
-
-      // Recent projects
-      case 'get_recent_projects': {
-        return [];
-      }
-
-      case 'add_recent_project': {
-        return { success: true };
-      }
-
-      // File dialogs (these return null to indicate cancelled)
-      case 'plugin:dialog|open':
-      case 'plugin:dialog|save': {
-        // Return null to simulate cancelled dialog
-        // In real tests, you might want to return a mock path
-        return null;
-      }
-
-      // File system operations
-      case 'plugin:fs|read':
-      case 'plugin:fs|readFile': {
-        return new Uint8Array([]);
-      }
-
-      case 'plugin:fs|write':
-      case 'plugin:fs|writeFile': {
-        return { success: true };
-      }
-
-      case 'plugin:fs|exists': {
-        return false;
-      }
-
-      default:
-        console.warn(`[Mock IPC] Unhandled command: ${cmd}`);
-        return null;
-    }
-  };
-}
-
-/**
  * Set up Tauri IPC mocks before the page loads.
  * This intercepts all Tauri API calls and returns mock data.
  */
@@ -314,16 +153,44 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'get_project':
           case 'get_project_state': {
+            // Generate mock stations from sections
+            const mockStations: Array<{
+              station_ref: { section_id: number; station_index: number };
+              coordinates: { x: number; y: number; z: number };
+              is_zero_datum: boolean;
+              gps_coordinates: null;
+              merged_with: never[];
+            }> = [];
+
+            if (currentProject?.sections) {
+              for (const section of currentProject.sections as Array<{ id: number; shots: unknown[] }>) {
+                // Each section gets (shots.length + 1) stations
+                const shotCount = section.shots?.length ?? 0;
+                for (let i = 0; i <= shotCount; i++) {
+                  mockStations.push({
+                    station_ref: {
+                      section_id: section.id,
+                      station_index: i,
+                    },
+                    coordinates: { x: i * 10, y: 0, z: 0 },
+                    is_zero_datum: i === 0,
+                    gps_coordinates: null,
+                    merged_with: [],
+                  });
+                }
+              }
+            }
+
             return {
               project: currentProject,
-              stations: [],
+              stations: mockStations,
               stats: {
                 section_count: currentProject?.sections.length ?? 0,
-                shot_count: 0,
+                shot_count: mockStations.length > 0 ? mockStations.length - 1 : 0,
                 total_length: 0,
                 min_depth: 0,
                 max_depth: 0,
-                station_count: 0,
+                station_count: mockStations.length,
                 loop_count: 0,
                 penetration_distance: 0,
               },
@@ -347,18 +214,338 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'import_dmp':
           case 'parse_dmp': {
             return {
-              sections: [{
-                name: (args?.name as string) ?? 'Imported Section',
-                surveyor: 'Imported',
-                date: new Date().toISOString().split('T')[0],
-                shots: [
-                  { azimuth: 45, length: 10, depth: -2 },
-                  { azimuth: 90, length: 15, depth: -5 },
-                  { azimuth: 135, length: 8, depth: -3 },
-                ],
-              }],
+              version: 5,
+              sections: [
+                {
+                  name: 'Main Passage',
+                  direction: 'in',
+                  date: new Date().toISOString().split('T')[0],
+                  shots: [
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 45,
+                      heading_out: 225, // ~180° apart (valid backsight)
+                      length: 10.5,
+                      depth_in: -2.0,
+                      depth_out: -2.5,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 1.5,
+                      right: 2.3,
+                      up: 3.0,
+                      down: 0.8,
+                      temperature: 18.5,
+                      hour: 10,
+                      minute: 30,
+                      second: 0,
+                      marker_index: 0,
+                      comment: 'Entrance point with good visibility',
+                    },
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 90,
+                      heading_out: 270, // ~180° apart (valid backsight)
+                      length: 15.2,
+                      depth_in: -2.5,
+                      depth_out: -5.0,
+                      pitch_in: 5,
+                      pitch_out: 5,
+                      left: 0.5,
+                      right: 0.7,
+                      up: 1.2,
+                      down: 1.5,
+                      temperature: 18.3,
+                      hour: 10,
+                      minute: 35,
+                      second: 0,
+                      marker_index: 1,
+                      // No comment - testing undefined case
+                    },
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 135,
+                      heading_out: 315, // ~180° apart (valid backsight)
+                      length: 8.0,
+                      depth_in: -5.0,
+                      depth_out: -3.0,
+                      pitch_in: -10,
+                      pitch_out: -10,
+                      left: 4.2,
+                      right: 3.8,
+                      up: 5.0,
+                      down: 2.0,
+                      temperature: 18.0,
+                      hour: 10,
+                      minute: 40,
+                      second: 0,
+                      marker_index: 2,
+                      comment: 'Large chamber with stalactites on ceiling, white formations visible on right wall',
+                    },
+                  ],
+                },
+                {
+                  name: 'Side Tunnel',
+                  direction: 'out',
+                  date: new Date().toISOString().split('T')[0],
+                  shots: [
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 270,
+                      heading_out: 90, // ~180° apart (valid backsight)
+                      length: 5.0,
+                      depth_in: -3.0,
+                      depth_out: -4.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 0,
+                      right: 0,
+                      up: 0,
+                      down: 0,
+                      temperature: 17.5,
+                      hour: 11,
+                      minute: 0,
+                      second: 0,
+                      marker_index: 0,
+                      comment: 'Narrow restriction',
+                    },
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 280,
+                      heading_out: 100, // ~180° apart (valid backsight)
+                      length: 7.5,
+                      depth_in: -4.0,
+                      depth_out: -6.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 0,
+                      right: 0,
+                      up: 0,
+                      down: 0,
+                      temperature: 17.2,
+                      hour: 11,
+                      minute: 5,
+                      second: 0,
+                      marker_index: 1,
+                      // No comment
+                    },
+                  ],
+                },
+                {
+                  name: 'Mixed LRUD Section',
+                  direction: 'in',
+                  date: new Date().toISOString().split('T')[0],
+                  shots: [
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 180,
+                      heading_out: 0, // ~180° apart (valid backsight)
+                      length: 12.0,
+                      depth_in: -1.0,
+                      depth_out: -2.0,
+                      pitch_in: 8.0,
+                      pitch_out: 0,
+                      left: 2.5,
+                      right: 0,
+                      up: 4.0,
+                      down: 0,
+                      temperature: 19.0,
+                      hour: 12,
+                      minute: 0,
+                      second: 0,
+                      marker_index: 0,
+                    },
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 190,
+                      heading_out: 10, // ~180° apart (valid backsight)
+                      length: 9.0,
+                      depth_in: -2.0,
+                      depth_out: -3.0,
+                      pitch_in: 0,
+                      pitch_out: 12.0,
+                      left: 0,
+                      right: 1.8,
+                      up: 0,
+                      down: 3.2,
+                      temperature: 18.8,
+                      hour: 12,
+                      minute: 5,
+                      second: 0,
+                      marker_index: 1,
+                    },
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 200,
+                      heading_out: 20, // ~180° apart (valid backsight)
+                      length: 50.5,
+                      depth_in: -3.0,
+                      depth_out: -8.0,
+                      pitch_in: 6.0,
+                      pitch_out: 10.0,
+                      left: 10.5,
+                      right: 15.2,
+                      up: 20.0,
+                      down: 8.5,
+                      temperature: 18.5,
+                      hour: 12,
+                      minute: 10,
+                      second: 0,
+                      marker_index: 2,
+                    },
+                  ],
+                },
+                {
+                  name: 'Undefined LRUD Section',
+                  direction: 'in',
+                  date: new Date().toISOString().split('T')[0],
+                  shots: [
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 90,
+                      heading_out: 270, // ~180° apart (valid backsight)
+                      length: 6.0,
+                      depth_in: -2.0,
+                      depth_out: -3.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      // LRUD fields completely omitted (undefined)
+                      temperature: 18.0,
+                      hour: 14,
+                      minute: 0,
+                      second: 0,
+                      marker_index: 0,
+                    },
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 100,
+                      heading_out: 280, // ~180° apart (valid backsight)
+                      length: 8.0,
+                      depth_in: -3.0,
+                      depth_out: -4.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      // Partial LRUD - only left and up defined
+                      left: 1.2,
+                      up: 2.5,
+                      // right and down are undefined
+                      temperature: 17.8,
+                      hour: 14,
+                      minute: 5,
+                      second: 0,
+                      marker_index: 1,
+                    },
+                  ],
+                },
+                {
+                  name: 'Empty Section',
+                  direction: 'in',
+                  date: new Date().toISOString().split('T')[0],
+                  shots: [],
+                },
+                {
+                  name: 'Validation Test Section',
+                  direction: 'in',
+                  date: new Date().toISOString().split('T')[0],
+                  shots: [
+                    {
+                      // Shot with warning: length exceeds max (50.0m)
+                      shot_type: 'Standard',
+                      heading_in: 45,
+                      heading_out: 46,
+                      length: 55.0,
+                      depth_in: -1.0,
+                      depth_out: -2.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 1.0,
+                      right: 1.0,
+                      up: 1.0,
+                      down: 1.0,
+                      temperature: 18.0,
+                      hour: 15,
+                      minute: 0,
+                      second: 0,
+                      marker_index: 0,
+                      comment: 'Long shot - exceeds max length',
+                    },
+                    {
+                      // Shot with error: azimuth out of range
+                      shot_type: 'Standard',
+                      heading_in: 400,
+                      heading_out: 45,
+                      length: 10.0,
+                      depth_in: -2.0,
+                      depth_out: -3.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 1.0,
+                      right: 1.0,
+                      up: 1.0,
+                      down: 1.0,
+                      temperature: 18.0,
+                      hour: 15,
+                      minute: 5,
+                      second: 0,
+                      marker_index: 1,
+                      comment: 'Invalid azimuth - out of range',
+                    },
+                    {
+                      // Shot with warning: excessive depth change
+                      shot_type: 'Standard',
+                      heading_in: 90,
+                      heading_out: 91,
+                      length: 8.0,
+                      depth_in: -3.0,
+                      depth_out: -15.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 1.0,
+                      right: 1.0,
+                      up: 1.0,
+                      down: 1.0,
+                      temperature: 18.0,
+                      hour: 15,
+                      minute: 10,
+                      second: 0,
+                      marker_index: 2,
+                      comment: 'Excessive depth change',
+                    },
+                    {
+                      // Shot with warning: LRUD exceeds max
+                      shot_type: 'Standard',
+                      heading_in: 120,
+                      heading_out: 121,
+                      length: 6.0,
+                      depth_in: -15.0,
+                      depth_out: -16.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 60.0,
+                      right: 1.0,
+                      up: 1.0,
+                      down: 1.0,
+                      temperature: 18.0,
+                      hour: 15,
+                      minute: 15,
+                      second: 0,
+                      marker_index: 3,
+                      comment: 'Large LRUD value',
+                    },
+                  ],
+                },
+              ],
             };
           }
+
+          case 'merge_stations':
+            // Mock merge stations - just return success
+            console.log('[Mock IPC] merge_stations called with:', args);
+            return { success: true };
+
+          case 'move_section':
+            // Mock move section - just return success
+            console.log('[Mock IPC] move_section called with:', args);
+            return { success: true };
 
           case 'undo':
           case 'redo':
@@ -465,11 +652,80 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'get_recent_projects':
           case 'list_recent_projects':
-            return [];
+            return [
+              {
+                name: 'Cave System Alpha',
+                location: 'Yucatan, Mexico',
+                file_path: '/projects/cave-alpha.cvproj',
+                modified_at: new Date().toISOString(),
+                section_count: 5,
+                total_length: 1250.5,
+                gps_center: [-87.4631, 20.2137],
+                gps_bounds: {
+                  north: 20.2200,
+                  south: 20.2074,
+                  east: -87.4568,
+                  west: -87.4694,
+                },
+              },
+              {
+                name: 'Underwater Cave Beta',
+                location: 'Florida, USA',
+                file_path: '/projects/cave-beta.cvproj',
+                modified_at: new Date(Date.now() - 86400000).toISOString(),
+                section_count: 3,
+                total_length: 820.0,
+                gps_center: [-82.4584, 29.6516],
+                gps_bounds: {
+                  north: 29.6550,
+                  south: 29.6482,
+                  east: -82.4521,
+                  west: -82.4647,
+                },
+              },
+              {
+                name: 'Deep Cave Gamma',
+                location: 'Bahamas',
+                file_path: '/projects/cave-gamma.cvproj',
+                modified_at: new Date(Date.now() - 172800000).toISOString(),
+                section_count: 8,
+                total_length: 2100.3,
+                gps_center: [-77.3963, 25.0343],
+                gps_bounds: null,
+              },
+              {
+                name: 'Local Survey (No GPS)',
+                location: 'Unknown',
+                file_path: '/projects/local-survey.cvproj',
+                modified_at: new Date(Date.now() - 259200000).toISOString(),
+                section_count: 2,
+                total_length: 350.0,
+                gps_center: null,
+                gps_bounds: null,
+              },
+            ];
 
           case 'get_warnings':
           case 'get_project_warnings':
             return [];
+
+          case 'remove_from_recent_projects':
+            // Mock remove from recent - just return success
+            console.log('[Mock IPC] remove_from_recent_projects called with:', args);
+            return { success: true };
+
+          // Display settings (per-project)
+          case 'load_display_settings':
+            // Return empty settings for mocked tests (uses defaults)
+            return {};
+
+          case 'save_display_setting':
+            // No-op for mocked tests
+            return undefined;
+
+          case 'get_display_setting':
+            // Return undefined for mocked tests
+            return null;
 
           // Window plugin commands
           case 'plugin:window|set_title':
@@ -481,8 +737,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           // Plugin commands
           case 'plugin:dialog|open':
+            // Return a mock file path for testing
+            return '/mock/test-survey.dmp';
           case 'plugin:dialog|save':
-            return null;
+            return '/mock/saved-project.cvproj';
 
           case 'plugin:fs|read':
           case 'plugin:fs|readFile':
@@ -494,6 +752,53 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'plugin:fs|exists':
             return false;
+
+          // Opener plugin commands
+          case 'plugin:opener|reveal_item_in_dir':
+            console.log('[Mock IPC] reveal_item_in_dir called with:', args);
+            return undefined;
+
+          case 'plugin:opener|open_path':
+            console.log('[Mock IPC] open_path called with:', args);
+            return undefined;
+
+          // Export commands
+          case 'export_csv':
+            console.log('[Mock IPC] export_csv called with:', args);
+            return { success: true, path: args?.path };
+
+          case 'export_json':
+            console.log('[Mock IPC] export_json called with:', args);
+            return { success: true, path: args?.path };
+
+          case 'export_image':
+            console.log('[Mock IPC] export_image called with:', args);
+            return { success: true, path: args?.path };
+
+          // Section and shot editing commands
+          case 'update_shot':
+            console.log('[Mock IPC] update_shot called with:', args);
+            return { success: true };
+
+          case 'delete_shot':
+            console.log('[Mock IPC] delete_shot called with:', args);
+            return { success: true };
+
+          case 'update_section':
+            console.log('[Mock IPC] update_section called with:', args);
+            return { success: true };
+
+          case 'delete_section':
+            console.log('[Mock IPC] delete_section called with:', args);
+            return { success: true };
+
+          case 'create_shot':
+            console.log('[Mock IPC] create_shot called with:', args);
+            return { success: true, shot_id: Date.now() };
+
+          case 'set_shot_virtual':
+            console.log('[Mock IPC] set_shot_virtual called with:', args);
+            return { success: true };
 
           default:
             console.warn(`[Mock IPC] Unhandled command: ${cmd}`);
@@ -539,6 +844,34 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         label: 'main',
       },
     };
+
+    // Mock Tauri dialog plugin for dynamic import
+    // This is needed because @tauri-apps/plugin-dialog uses its own invoke mechanism
+    const mockDialogModule = {
+      open: async (_options?: unknown) => {
+        console.log('[Mock Dialog] open called');
+        return '/mock/test-survey.dmp';
+      },
+      save: async (_options?: unknown) => {
+        console.log('[Mock Dialog] save called');
+        return '/mock/saved-project.cvproj';
+      },
+      message: async (_message: string, _options?: unknown) => {
+        console.log('[Mock Dialog] message called');
+        return undefined;
+      },
+      ask: async (_message: string, _options?: unknown) => {
+        console.log('[Mock Dialog] ask called');
+        return true;
+      },
+      confirm: async (_message: string, _options?: unknown) => {
+        console.log('[Mock Dialog] confirm called');
+        return true;
+      },
+    };
+
+    // Store the mock module for potential interception
+    (window as unknown as Record<string, unknown>).__TAURI_DIALOG_MOCK__ = mockDialogModule;
 
     console.log('[Mock IPC] Tauri mocks installed');
   });

@@ -50,9 +50,8 @@ When section is expanded, show nested table with columns:
 - [ ] TypeScript types pass (`pnpm tsc --noEmit`)
 - [ ] Visual styling matches existing table
 ## Done summary
-TBD
-
+Added expandable section rows with LRUD columns to DmpImportDialog. Section rows now have expand/collapse chevrons and clicking the row toggles shot preview with L, R, U, D columns. All values display with 1 decimal place, showing "-" for zero/null values.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 2bf4668, 10076a3
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:

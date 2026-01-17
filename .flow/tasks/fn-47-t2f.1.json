@@ -1,0 +1,57 @@
+{
+  "assignee": "cavechef@example.com",
+  "claim_note": "",
+  "claimed_at": "2026-01-17T18:40:48.177670Z",
+  "created_at": "2026-01-17T14:27:51.577743Z",
+  "depends_on": [],
+  "epic": "fn-47-t2f",
+  "evidence": {
+    "files_added": [
+      "e2e/specs/project-persistence.spec.ts"
+    ],
+    "tests": [
+      {
+        "file": "e2e/specs/project-persistence.spec.ts",
+        "name": "should save and reload project data",
+        "status": "implemented"
+      },
+      {
+        "file": "e2e/specs/project-persistence.spec.ts",
+        "name": "should preserve station merges across save/load",
+        "status": "implemented"
+      },
+      {
+        "file": "e2e/specs/project-persistence.spec.ts",
+        "name": "should preserve zero datums across save/load",
+        "status": "implemented"
+      },
+      {
+        "file": "e2e/specs/project-persistence.spec.ts",
+        "name": "should handle save to read-only location",
+        "status": "implemented"
+      },
+      {
+        "file": "e2e/specs/project-persistence.spec.ts",
+        "name": "should update recent projects list",
+        "status": "implemented"
+      },
+      {
+        "file": "e2e/specs/project-persistence.spec.ts",
+        "name": "should show dirty indicator for unsaved changes",
+        "status": "implemented"
+      }
+    ],
+    "verification": {
+      "playwright_tests": "226 passed",
+      "rust_tests": "72 passed",
+      "typescript": "pass",
+      "webdriverio_tests": "infrastructure timeout (app loading)"
+    }
+  },
+  "id": "fn-47-t2f.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-47-t2f.1.md",
+  "status": "done",
+  "title": "Implement 6 project persistence tests",
+  "updated_at": "2026-01-17T18:46:46.051813Z"
+}

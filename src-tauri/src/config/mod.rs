@@ -95,11 +95,18 @@ pub enum AngleUnit {
 pub struct DisplayConfig {
     pub default_background: String,
     pub grid_color: String,
+    /// Grid spacing in meters (e.g., 1, 5, 10, 25, 50)
+    #[serde(default = "default_grid_spacing")]
+    pub grid_spacing: f64,
     pub station_size: u32,
     pub line_thickness: u32,
     pub font_size: u32,
     pub font_color: String,
     pub depth_gradient: DepthGradientConfig,
+}
+
+fn default_grid_spacing() -> f64 {
+    10.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

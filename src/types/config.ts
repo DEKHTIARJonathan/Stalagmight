@@ -35,6 +35,8 @@ export interface UnitsConfig {
 export interface DisplayConfig {
   default_background: string;
   grid_color: string;
+  /** Grid spacing in meters (e.g., 1, 5, 10, 25, 50) */
+  grid_spacing: number;
   station_size: number;
   line_thickness: number;
   font_size: number;
@@ -135,6 +137,7 @@ export const defaultConfig: Config = {
   display: {
     default_background: '#1a1a2e',
     grid_color: '#333366',
+    grid_spacing: 10,
     station_size: 6,
     line_thickness: 2,
     font_size: 12,

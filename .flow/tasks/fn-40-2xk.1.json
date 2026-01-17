@@ -1,0 +1,23 @@
+{
+  "assignee": "cavechef@example.com",
+  "claim_note": "",
+  "claimed_at": "2026-01-17T17:55:22.414644Z",
+  "created_at": "2026-01-17T14:27:51.303292Z",
+  "depends_on": [],
+  "epic": "fn-40-2xk",
+  "evidence": {
+    "commits": [
+      "39b4231a8ef669a33e59d78516611bb1c26dc616"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm test:ui e2e-playwright/export-dialog.spec.ts"
+    ]
+  },
+  "id": "fn-40-2xk.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-40-2xk.1.md",
+  "status": "done",
+  "title": "Implement 6 export dialog tests",
+  "updated_at": "2026-01-17T17:58:41.658310Z"
+}

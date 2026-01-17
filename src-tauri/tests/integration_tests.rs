@@ -1,7 +1,6 @@
 //! Comprehensive integration tests for CaveChef
 //!
-//! This test suite covers 51 tests as specified in the implementation plan.
-//! Tests are organized by category and numbered for reference.
+//! Tests are organized by category. Run `cargo test` to execute all tests.
 
 use cavechef_lib::config::ValidationConfig;
 use cavechef_lib::core::{Command, UndoData, UndoEntry, UndoStack, Validator};
@@ -41,6 +40,7 @@ fn create_section_with_shots(name: &str, shots: Vec<ShotData>) -> SectionData {
         surveyor: Some("Test Surveyor".to_string()),
         date: None,
         color: "#4ecdc4".to_string(),
+        direction: None,
         shots,
     }
 }
@@ -482,6 +482,7 @@ fn test_undo_redo_chain() {
         surveyor: None,
         date: None,
         color: "#4ecdc4".to_string(),
+        direction: None,
         shots: vec![],
     });
     stack.push(Command::CreateShot {
@@ -520,6 +521,7 @@ fn test_undo_stack_limit() {
             surveyor: None,
             date: None,
             color: "#4ecdc4".to_string(),
+            direction: None,
             shots: vec![],
         });
     }
@@ -538,6 +540,7 @@ fn test_undo_clears_redo_stack() {
         surveyor: None,
         date: None,
         color: "#4ecdc4".to_string(),
+        direction: None,
         shots: vec![],
     });
 
@@ -552,6 +555,7 @@ fn test_undo_clears_redo_stack() {
         surveyor: None,
         date: None,
         color: "#4ecdc4".to_string(),
+        direction: None,
         shots: vec![],
     });
     assert!(!stack.can_redo());
@@ -566,6 +570,7 @@ fn test_batch_command_structure() {
             surveyor: None,
             date: None,
             color: "#4ecdc4".to_string(),
+            direction: None,
             shots: vec![],
         },
         undo_data: UndoData::ProjectSnapshot("{}".to_string()),
@@ -595,6 +600,7 @@ fn test_undo_persistence() {
             surveyor: None,
             date: None,
             color: "#4ecdc4".to_string(),
+            direction: None,
             shots: vec![],
         },
         UndoData::InverseCommand(Command::DeleteSection { section_id: 0 }),
@@ -727,6 +733,7 @@ fn test_section_metadata_update() {
         surveyor: Some(Some("New Surveyor".to_string())),
         color: Some("#ff0000".to_string()),
         date: None,
+        direction: None,
     };
 
     project.update_section(0, &updates);
@@ -750,6 +757,7 @@ fn test_section_colors_unique() {
             surveyor: None,
             date: None,
             color: color.to_string(),
+            direction: None,
             shots: vec![],
         });
     }
@@ -772,6 +780,7 @@ fn test_section_date_storage() {
         surveyor: None,
         date: Some(date),
         color: "#4ecdc4".to_string(),
+        direction: None,
         shots: vec![],
     });
 
@@ -1606,6 +1615,7 @@ fn test_section_insert_shot_after() {
             surveyor: None,
             date: None,
             color: "#4ecdc4".to_string(),
+            direction: None,
             shots: vec![
                 create_shot_data(0.0, 10.0, 5.0, 5.0),
                 create_shot_data(90.0, 10.0, 5.0, 5.0),
@@ -1633,6 +1643,7 @@ fn test_section_to_section_data() {
             surveyor: Some("John".to_string()),
             date: None,
             color: "#ff0000".to_string(),
+            direction: None,
             shots: vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
         },
     );
@@ -1691,4 +1702,590 @@ fn test_project_update_shot() {
     assert!((shot.length - 20.0).abs() < 0.001);
     assert_eq!(shot.comment, Some("Updated comment".to_string()));
     assert!(shot.is_virtual);
+}
+
+// ============================================================================
+// GPS Metadata Tests (5 tests)
+// ============================================================================
+
+/// Test GPS metadata with no zero datums returns None
+#[test]
+fn test_gps_metadata_no_datums() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+    project.add_section(create_section_with_shots(
+        "Main",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    let metadata = project.metadata().unwrap();
+
+    assert!(metadata.gps_center.is_none());
+    assert!(metadata.gps_bounds.is_none());
+}
+
+/// Test GPS metadata with single zero datum
+#[test]
+fn test_gps_metadata_single_datum() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+    project.add_section(create_section_with_shots(
+        "Main",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    let gps = GpsCoordinates {
+        latitude: 45.5,
+        longitude: -122.7,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(0, 0), gps).unwrap();
+
+    let metadata = project.metadata().unwrap();
+
+    // Center should be from first (and only) datum
+    let (lat, lng) = metadata.gps_center.unwrap();
+    assert!((lat - 45.5).abs() < 0.0001);
+    assert!((lng - (-122.7)).abs() < 0.0001);
+
+    // Bounds should be a point (same as center for single datum)
+    let bounds = metadata.gps_bounds.unwrap();
+    assert!((bounds.north - 45.5).abs() < 0.0001);
+    assert!((bounds.south - 45.5).abs() < 0.0001);
+    assert!((bounds.east - (-122.7)).abs() < 0.0001);
+    assert!((bounds.west - (-122.7)).abs() < 0.0001);
+}
+
+/// Test GPS metadata with multiple zero datums
+#[test]
+fn test_gps_metadata_multiple_datums() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+
+    // Create two disconnected sections
+    project.add_section(create_section_with_shots(
+        "Section A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project.add_section(create_section_with_shots(
+        "Section B",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    // Set zero datums on different sections (allowed because disconnected)
+    let gps_a = GpsCoordinates {
+        latitude: 45.0,
+        longitude: -122.0,
+        depth_reference: 0.0,
+    };
+    let gps_b = GpsCoordinates {
+        latitude: 46.0,
+        longitude: -123.0,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(0, 0), gps_a).unwrap();
+    project.set_zero_datum(StationRef::new(1, 0), gps_b).unwrap();
+
+    let metadata = project.metadata().unwrap();
+
+    // Center should be from first datum
+    let (lat, lng) = metadata.gps_center.unwrap();
+    assert!((lat - 45.0).abs() < 0.0001);
+    assert!((lng - (-122.0)).abs() < 0.0001);
+
+    // Bounds should encompass both datums
+    let bounds = metadata.gps_bounds.unwrap();
+    assert!((bounds.north - 46.0).abs() < 0.0001);
+    assert!((bounds.south - 45.0).abs() < 0.0001);
+    // For non-dateline-crossing, west is smaller longitude
+    assert!((bounds.west - (-123.0)).abs() < 0.0001);
+    assert!((bounds.east - (-122.0)).abs() < 0.0001);
+}
+
+/// Test GPS bounds calculation handles dateline crossing
+#[test]
+fn test_gps_metadata_dateline_crossing() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+
+    // Create three disconnected sections
+    project.add_section(create_section_with_shots(
+        "Section A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project.add_section(create_section_with_shots(
+        "Section B",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project.add_section(create_section_with_shots(
+        "Section C",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    // Set zero datums spanning the dateline (179 and -179 are close together)
+    let gps_a = GpsCoordinates {
+        latitude: 50.0,
+        longitude: 179.0,
+        depth_reference: 0.0,
+    };
+    let gps_b = GpsCoordinates {
+        latitude: 50.0,
+        longitude: -179.0,
+        depth_reference: 0.0,
+    };
+    let gps_c = GpsCoordinates {
+        latitude: 50.0,
+        longitude: 178.0,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(0, 0), gps_a).unwrap();
+    project.set_zero_datum(StationRef::new(1, 0), gps_b).unwrap();
+    project.set_zero_datum(StationRef::new(2, 0), gps_c).unwrap();
+
+    let metadata = project.metadata().unwrap();
+
+    let bounds = metadata.gps_bounds.unwrap();
+
+    // The bounds should span the small arc across the dateline (178 to -179)
+    // not the large arc (178 to 179 to ... to -179)
+    // west should be 178, east should be -179 (crossing dateline)
+    assert!((bounds.west - 178.0).abs() < 0.0001);
+    assert!((bounds.east - (-179.0)).abs() < 0.0001);
+}
+
+/// Test GPS metadata center is stable across updates to other datums
+#[test]
+fn test_gps_metadata_center_stability() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+
+    // Create two disconnected sections
+    project.add_section(create_section_with_shots(
+        "Section A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project.add_section(create_section_with_shots(
+        "Section B",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    let gps_a = GpsCoordinates {
+        latitude: 45.0,
+        longitude: -122.0,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(0, 0), gps_a).unwrap();
+
+    // Get initial center
+    let metadata = project.metadata().unwrap();
+    let (initial_lat, initial_lng) = metadata.gps_center.unwrap();
+
+    // Add another zero datum
+    let gps_b = GpsCoordinates {
+        latitude: 46.0,
+        longitude: -123.0,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(1, 0), gps_b).unwrap();
+
+    // Center should still be from first datum
+    let metadata = project.metadata().unwrap();
+    let (final_lat, final_lng) = metadata.gps_center.unwrap();
+
+    assert!((initial_lat - final_lat).abs() < 0.0001);
+    assert!((initial_lng - final_lng).abs() < 0.0001);
+}
+
+/// Test that updating the first datum preserves center position (in-place update)
+#[test]
+fn test_gps_metadata_update_preserves_order() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+
+    // Create two disconnected sections
+    project.add_section(create_section_with_shots(
+        "Section A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project.add_section(create_section_with_shots(
+        "Section B",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    // Set first datum
+    let gps_a = GpsCoordinates {
+        latitude: 45.0,
+        longitude: -122.0,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(0, 0), gps_a).unwrap();
+
+    // Add second datum
+    let gps_b = GpsCoordinates {
+        latitude: 46.0,
+        longitude: -123.0,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(1, 0), gps_b).unwrap();
+
+    // Update the first datum with new GPS (should update in-place, not reorder)
+    let gps_a_updated = GpsCoordinates {
+        latitude: 45.5,
+        longitude: -122.5,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(0, 0), gps_a_updated).unwrap();
+
+    // Center should still be from first datum (now with updated values)
+    let metadata = project.metadata().unwrap();
+    let (center_lat, center_lng) = metadata.gps_center.unwrap();
+
+    // Verify center is the updated first datum, not the second
+    assert!((center_lat - 45.5).abs() < 0.0001, "Center should be updated first datum lat");
+    assert!((center_lng - (-122.5)).abs() < 0.0001, "Center should be updated first datum lng");
+}
+
+/// Test that invalid GPS coordinates are rejected
+#[test]
+fn test_gps_invalid_coordinates_rejected() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.add_section(create_section_with_shots(
+        "Section A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    // NaN latitude should be rejected
+    let gps_nan = GpsCoordinates {
+        latitude: f64::NAN,
+        longitude: -122.0,
+        depth_reference: 0.0,
+    };
+    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_nan).is_err());
+
+    // Infinity longitude should be rejected
+    let gps_inf = GpsCoordinates {
+        latitude: 45.0,
+        longitude: f64::INFINITY,
+        depth_reference: 0.0,
+    };
+    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_inf).is_err());
+
+    // Out of range latitude should be rejected
+    let gps_oob_lat = GpsCoordinates {
+        latitude: 91.0,
+        longitude: -122.0,
+        depth_reference: 0.0,
+    };
+    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_oob_lat).is_err());
+
+    // Out of range longitude should be rejected
+    let gps_oob_lng = GpsCoordinates {
+        latitude: 45.0,
+        longitude: 181.0,
+        depth_reference: 0.0,
+    };
+    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_oob_lng).is_err());
+
+    // Valid coordinates should work
+    let gps_valid = GpsCoordinates {
+        latitude: 45.0,
+        longitude: -122.0,
+        depth_reference: 0.0,
+    };
+    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_valid).is_ok());
+}
+
+// ============================================================================
+// Merge Projects Tests
+// ============================================================================
+
+/// Test: Merge two projects into a new project
+#[test]
+fn test_merge_projects_basic() {
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+
+    // Create first project with 2 sections
+    let path1 = dir.path().join("project1.cvproj");
+    let mut project1 = Project::new("Cave A".to_string(), Some("Location A".to_string()));
+    project1.add_section(create_section_with_shots(
+        "A-Main",
+        vec![
+            create_shot_data(0.0, 10.0, 5.0, 5.0),
+            create_shot_data(45.0, 8.0, 5.0, 6.0),
+        ],
+    ));
+    project1.add_section(create_section_with_shots(
+        "A-Side",
+        vec![create_shot_data(90.0, 5.0, 6.0, 7.0)],
+    ));
+
+    let mut db1 = Database::open(&path1).unwrap();
+    db1.save_project(&project1).unwrap();
+    drop(db1);
+
+    // Create second project with 1 section
+    let path2 = dir.path().join("project2.cvproj");
+    let mut project2 = Project::new("Cave B".to_string(), Some("Location B".to_string()));
+    project2.add_section(create_section_with_shots(
+        "B-Main",
+        vec![
+            create_shot_data(180.0, 12.0, 4.0, 4.0),
+            create_shot_data(270.0, 6.0, 4.0, 5.0),
+        ],
+    ));
+
+    let mut db2 = Database::open(&path2).unwrap();
+    db2.save_project(&project2).unwrap();
+    drop(db2);
+
+    // Merge projects
+    let output_path = dir.path().join("merged.cvproj");
+
+    // Load both projects
+    let db1 = Database::open_existing(&path1).unwrap();
+    let loaded1 = db1.load_project().unwrap();
+    let db2 = Database::open_existing(&path2).unwrap();
+    let loaded2 = db2.load_project().unwrap();
+
+    // Create merged project
+    let mut merged = Project::new("Merged Cave".to_string(), Some("Location A, Location B".to_string()));
+
+    // Add sections from project 1
+    for section in &loaded1.sections {
+        merged.add_section(section.to_section_data());
+    }
+
+    // Add sections from project 2
+    for section in &loaded2.sections {
+        merged.add_section(section.to_section_data());
+    }
+
+    // Save merged project
+    let mut db_merged = Database::open(&output_path).unwrap();
+    db_merged.save_project(&merged).unwrap();
+
+    // Verify merged project
+    let db_verify = Database::open_existing(&output_path).unwrap();
+    let loaded_merged = db_verify.load_project().unwrap();
+
+    assert_eq!(loaded_merged.name, "Merged Cave");
+    assert_eq!(loaded_merged.sections.len(), 3); // 2 from project1 + 1 from project2
+    assert_eq!(loaded_merged.sections[0].name, Some("A-Main".to_string()));
+    assert_eq!(loaded_merged.sections[1].name, Some("A-Side".to_string()));
+    assert_eq!(loaded_merged.sections[2].name, Some("B-Main".to_string()));
+
+    // Verify section IDs are renumbered correctly (0, 1, 2)
+    assert_eq!(loaded_merged.sections[0].id, 0);
+    assert_eq!(loaded_merged.sections[1].id, 1);
+    assert_eq!(loaded_merged.sections[2].id, 2);
+
+    // Verify shots are preserved
+    assert_eq!(loaded_merged.sections[0].shots.len(), 2);
+    assert_eq!(loaded_merged.sections[1].shots.len(), 1);
+    assert_eq!(loaded_merged.sections[2].shots.len(), 2);
+
+    // Verify total stats
+    let stats = loaded_merged.stats();
+    assert_eq!(stats.section_count, 3);
+    assert_eq!(stats.shot_count, 5);
+}
+
+/// Test: Merge projects preserves zero datums with remapped IDs
+#[test]
+fn test_merge_projects_preserves_zero_datums() {
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+
+    // Create first project with zero datum
+    let path1 = dir.path().join("project_zd1.cvproj");
+    let mut project1 = Project::new("Cave ZD1".to_string(), None);
+    project1.add_section(create_section_with_shots(
+        "ZD1-Main",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project1
+        .set_zero_datum(
+            StationRef::new(0, 0),
+            GpsCoordinates {
+                latitude: 45.0,
+                longitude: -122.0,
+                depth_reference: 0.0,
+            },
+        )
+        .unwrap();
+
+    let mut db1 = Database::open(&path1).unwrap();
+    db1.save_project(&project1).unwrap();
+    drop(db1);
+
+    // Create second project with zero datum
+    let path2 = dir.path().join("project_zd2.cvproj");
+    let mut project2 = Project::new("Cave ZD2".to_string(), None);
+    project2.add_section(create_section_with_shots(
+        "ZD2-Main",
+        vec![create_shot_data(90.0, 8.0, 4.0, 4.0)],
+    ));
+    project2
+        .set_zero_datum(
+            StationRef::new(0, 1), // End of section
+            GpsCoordinates {
+                latitude: 46.0,
+                longitude: -123.0,
+                depth_reference: 5.0,
+            },
+        )
+        .unwrap();
+
+    let mut db2 = Database::open(&path2).unwrap();
+    db2.save_project(&project2).unwrap();
+    drop(db2);
+
+    // Load and merge
+    let db1 = Database::open_existing(&path1).unwrap();
+    let loaded1 = db1.load_project().unwrap();
+    let db2 = Database::open_existing(&path2).unwrap();
+    let loaded2 = db2.load_project().unwrap();
+
+    let mut merged = Project::new("Merged ZD".to_string(), None);
+
+    // Add sections and zero datums from project 1
+    for section in &loaded1.sections {
+        let old_id = section.id;
+        let new_section = merged.add_section(section.to_section_data());
+        let new_id = new_section.id;
+
+        // Remap zero datums
+        for zd in &loaded1.zero_datums {
+            if zd.station_ref.section_id == old_id {
+                let _ = merged.set_zero_datum(
+                    StationRef::new(new_id, zd.station_ref.station_index),
+                    zd.gps,
+                );
+            }
+        }
+    }
+
+    // Add sections and zero datums from project 2
+    for section in &loaded2.sections {
+        let old_id = section.id;
+        let new_section = merged.add_section(section.to_section_data());
+        let new_id = new_section.id;
+
+        // Remap zero datums
+        for zd in &loaded2.zero_datums {
+            if zd.station_ref.section_id == old_id {
+                let _ = merged.set_zero_datum(
+                    StationRef::new(new_id, zd.station_ref.station_index),
+                    zd.gps,
+                );
+            }
+        }
+    }
+
+    // Verify zero datums were preserved with remapped section IDs
+    assert_eq!(merged.zero_datums.len(), 2);
+
+    // First zero datum from project 1 (section 0, station 0)
+    assert_eq!(merged.zero_datums[0].station_ref.section_id, 0);
+    assert_eq!(merged.zero_datums[0].station_ref.station_index, 0);
+    assert!((merged.zero_datums[0].gps.latitude - 45.0).abs() < 0.001);
+
+    // Second zero datum from project 2 (section 1, station 1)
+    assert_eq!(merged.zero_datums[1].station_ref.section_id, 1);
+    assert_eq!(merged.zero_datums[1].station_ref.station_index, 1);
+    assert!((merged.zero_datums[1].gps.latitude - 46.0).abs() < 0.001);
+}
+
+/// Test: Merge projects with station merges preserves them with remapped IDs
+#[test]
+fn test_merge_projects_preserves_station_merges() {
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+
+    // Create project with 2 sections and a station merge
+    let path1 = dir.path().join("project_merge1.cvproj");
+    let mut project1 = Project::new("Cave Merge".to_string(), None);
+
+    project1.add_section(create_section_with_shots(
+        "Section A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project1.add_section(create_section_with_shots(
+        "Section B",
+        vec![create_shot_data(90.0, 8.0, 4.0, 4.0)],
+    ));
+
+    // Merge last station of section 0 with first station of section 1
+    project1
+        .merge_stations(
+            StationRef::new(0, 1), // End of section 0
+            StationRef::new(1, 0), // Start of section 1
+            ClosureStrategy::ProportionalByLength,
+        )
+        .unwrap();
+
+    let mut db1 = Database::open(&path1).unwrap();
+    db1.save_project(&project1).unwrap();
+    drop(db1);
+
+    // Create second project (empty)
+    let path2 = dir.path().join("project_merge2.cvproj");
+    let mut project2 = Project::new("Empty Cave".to_string(), None);
+    project2.add_section(create_section_with_shots(
+        "Section C",
+        vec![create_shot_data(180.0, 6.0, 3.0, 3.0)],
+    ));
+
+    let mut db2 = Database::open(&path2).unwrap();
+    db2.save_project(&project2).unwrap();
+    drop(db2);
+
+    // Load and merge
+    let db1 = Database::open_existing(&path1).unwrap();
+    let loaded1 = db1.load_project().unwrap();
+    let db2 = Database::open_existing(&path2).unwrap();
+    let loaded2 = db2.load_project().unwrap();
+
+    let mut merged = Project::new("Merged Stations".to_string(), None);
+    let mut section_id_map: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+
+    // Add sections from project 1
+    for section in &loaded1.sections {
+        let old_id = section.id;
+        let new_section = merged.add_section(section.to_section_data());
+        section_id_map.insert(old_id, new_section.id);
+    }
+
+    // Copy station merges from project 1
+    for sm in &loaded1.station_merges {
+        if let (Some(&new_a), Some(&new_b)) = (
+            section_id_map.get(&sm.station_a.section_id),
+            section_id_map.get(&sm.station_b.section_id),
+        ) {
+            merged.station_merges.push(StationMerge {
+                station_a: StationRef::new(new_a, sm.station_a.station_index),
+                station_b: StationRef::new(new_b, sm.station_b.station_index),
+                merged_at: sm.merged_at,
+            });
+        }
+    }
+
+    // Add sections from project 2
+    for section in &loaded2.sections {
+        merged.add_section(section.to_section_data());
+    }
+
+    // Verify station merge was preserved with remapped IDs
+    assert_eq!(merged.station_merges.len(), 1);
+    assert_eq!(merged.station_merges[0].station_a.section_id, 0);
+    assert_eq!(merged.station_merges[0].station_a.station_index, 1);
+    assert_eq!(merged.station_merges[0].station_b.section_id, 1);
+    assert_eq!(merged.station_merges[0].station_b.station_index, 0);
+
+    // Verify 3 sections total
+    assert_eq!(merged.sections.len(), 3);
 }
