@@ -1,28 +1,16 @@
 {
   "assignee": "cavechef@example.com",
-  "claim_note": "",
-  "claimed_at": "2026-01-16T23:54:20.550206Z",
+  "claimed_at": "2026-01-17T04:46:15.249547Z",
   "created_at": "2026-01-16T21:51:02.658658Z",
   "depends_on": [
     "fn-1-956.1",
     "fn-1-956.2"
   ],
   "epic": "fn-1-956",
-  "evidence": {
-    "commits": ["89f958d", "840698b", "266e945", "5931c34"],
-    "notes": "Code fixes verified present. WebdriverIO blocked due to WebKitGTK initialization timeout (25+ seconds) on headless server. libEGL DRI3 errors indicate missing hardware acceleration.",
-    "tests": [
-      "TypeScript compiles without errors",
-      "Playwright 34/34 pass",
-      "Rust 79/79 pass",
-      "WebdriverIO: BLOCKED (Application did not load within 60 seconds)"
-    ],
-    "blocking_reason": "WebKitGTK fails to render React UI on headless server without hardware acceleration. Requires GPU or proper mesa/llvmpipe setup."
-  },
   "id": "fn-1-956.3",
   "priority": null,
   "spec_path": ".flow/tasks/fn-1-956.3.md",
-  "status": "blocked",
+  "status": "in_progress",
   "title": "Final verification - WebdriverIO tests (blocked by CI environment)",
-  "updated_at": "2026-01-17T00:18:08.941928Z"
+  "updated_at": "2026-01-17T04:46:15.249560Z"
 }
