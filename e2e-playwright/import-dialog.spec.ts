@@ -399,14 +399,14 @@ test.describe('Pitch Column', () => {
     await expect(page.locator('[data-testid="pitch-0-0"]')).toHaveText('-');
   });
 
-  test('pitch shows dash for undefined values', async ({ page }) => {
+  test('pitch shows dash for zero/unmeasured values in different section', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
     // Expand "Undefined LRUD Section" (index 3) which has zero pitch values
     const expandButton = page.locator('[data-testid="section-expand-3"]');
     await expandButton.click();
 
-    // Shots have pitch_in: 0, pitch_out: 0 => shows "-"
+    // Shots have pitch_in: 0, pitch_out: 0 => shows "-" (zero means "not measured" in DMP)
     await expect(page.locator('[data-testid="pitch-3-0"]')).toHaveText('-');
     await expect(page.locator('[data-testid="pitch-3-1"]')).toHaveText('-');
   });
