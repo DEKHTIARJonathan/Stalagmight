@@ -1,14 +1,14 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T08:42:21.617935Z",
   "created_at": "2026-01-17T08:29:35.752577Z",
   "depends_on": [],
   "epic": "fn-4-qe3",
   "id": "fn-4-qe3.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-4-qe3.1.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Add expandable section rows with LRUD columns",
-  "updated_at": "2026-01-17T08:29:57.633612Z"
+  "updated_at": "2026-01-17T08:42:21.617948Z"
 }

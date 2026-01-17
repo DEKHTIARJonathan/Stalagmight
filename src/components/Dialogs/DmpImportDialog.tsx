@@ -18,6 +18,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
   const [filePath, setFilePath] = useState<string>(initialPath ?? (dialogData.filePath as string) ?? '');
   const [dmpFile, setDmpFile] = useState<DmpFile | null>(null);
   const [selectedSections, setSelectedSections] = useState<Set<number>>(new Set());
+  const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createNewProject, setCreateNewProject] = useState(!project);
@@ -94,6 +95,16 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
       newSelected.add(index);
     }
     setSelectedSections(newSelected);
+  };
+
+  const handleToggleExpand = (index: number) => {
+    const newExpanded = new Set(expandedSections);
+    if (newExpanded.has(index)) {
+      newExpanded.delete(index);
+    } else {
+      newExpanded.add(index);
+    }
+    setExpandedSections(newExpanded);
   };
 
   const handleSelectAll = () => {
@@ -275,10 +286,11 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                 </div>
               }
             >
-              <div className="max-h-48 overflow-auto">
+              <div className="max-h-64 overflow-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr>
+                      <th className="w-8"></th>
                       <th className="w-8"></th>
                       <th className="text-left">Name</th>
                       <th className="text-left">Date</th>
@@ -292,23 +304,92 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                         (s) => s.shot_type === 'Standard'
                       );
                       const hasShots = standardShots.length > 0;
+                      const isExpanded = expandedSections.has(index);
                       return (
-                        <tr
-                          key={index}
-                          className={`${!hasShots ? 'opacity-50' : ''} ${selectedSections.has(index) ? 'bg-accent/10' : ''}`}
-                        >
-                          <td>
-                            <input
-                              type="checkbox"
-                              checked={selectedSections.has(index)}
-                              onChange={() => handleToggleSection(index)}
-                            />
-                          </td>
-                          <td>{section.name}</td>
-                          <td>{section.date?.split(' ')[0] ?? '-'}</td>
-                          <td>{section.direction}</td>
-                          <td className="text-right">{standardShots.length}</td>
-                        </tr>
+                        <>
+                          <tr
+                            key={index}
+                            className={`${!hasShots ? 'opacity-50' : ''} ${selectedSections.has(index) ? 'bg-accent/10' : ''}`}
+                          >
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={selectedSections.has(index)}
+                                onChange={() => handleToggleSection(index)}
+                              />
+                            </td>
+                            <td>
+                              {hasShots && (
+                                <button
+                                  data-testid={`section-expand-${index}`}
+                                  onClick={() => handleToggleExpand(index)}
+                                  className="text-text-secondary hover:text-text-primary transition-colors"
+                                  aria-label={isExpanded ? 'Collapse section' : 'Expand section'}
+                                >
+                                  {isExpanded ? '▼' : '▶'}
+                                </button>
+                              )}
+                            </td>
+                            <td>{section.name}</td>
+                            <td>{section.date?.split(' ')[0] ?? '-'}</td>
+                            <td>{section.direction}</td>
+                            <td className="text-right">{standardShots.length}</td>
+                          </tr>
+                          {isExpanded && hasShots && (
+                            <tr key={`${index}-expanded`}>
+                              <td colSpan={6} className="p-0">
+                                <div className="ml-8 my-1 border-l-2 border-border pl-2">
+                                  <table className="w-full text-xs">
+                                    <thead>
+                                      <tr className="text-text-secondary">
+                                        <th className="text-left py-1 px-1">Index</th>
+                                        <th className="text-right py-1 px-1">L</th>
+                                        <th className="text-right py-1 px-1">R</th>
+                                        <th className="text-right py-1 px-1">U</th>
+                                        <th className="text-right py-1 px-1">D</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {standardShots.map((shot, shotIndex) => (
+                                        <tr
+                                          key={shotIndex}
+                                          data-testid={`shot-row-${index}-${shotIndex}`}
+                                          className="hover:bg-background/30"
+                                        >
+                                          <td className="py-0.5 px-1">{shotIndex + 1}</td>
+                                          <td
+                                            className="text-right py-0.5 px-1"
+                                            data-testid={`lrud-left-${index}-${shotIndex}`}
+                                          >
+                                            {shot.left ? shot.left.toFixed(1) : '-'}
+                                          </td>
+                                          <td
+                                            className="text-right py-0.5 px-1"
+                                            data-testid={`lrud-right-${index}-${shotIndex}`}
+                                          >
+                                            {shot.right ? shot.right.toFixed(1) : '-'}
+                                          </td>
+                                          <td
+                                            className="text-right py-0.5 px-1"
+                                            data-testid={`lrud-up-${index}-${shotIndex}`}
+                                          >
+                                            {shot.up ? shot.up.toFixed(1) : '-'}
+                                          </td>
+                                          <td
+                                            className="text-right py-0.5 px-1"
+                                            data-testid={`lrud-down-${index}-${shotIndex}`}
+                                          >
+                                            {shot.down ? shot.down.toFixed(1) : '-'}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </>
                       );
                     })}
                   </tbody>
