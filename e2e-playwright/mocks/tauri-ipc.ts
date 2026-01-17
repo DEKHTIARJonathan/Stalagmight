@@ -775,6 +775,31 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] export_image called with:', args);
             return { success: true, path: args?.path };
 
+          // Section and shot editing commands
+          case 'update_shot':
+            console.log('[Mock IPC] update_shot called with:', args);
+            return { success: true };
+
+          case 'delete_shot':
+            console.log('[Mock IPC] delete_shot called with:', args);
+            return { success: true };
+
+          case 'update_section':
+            console.log('[Mock IPC] update_section called with:', args);
+            return { success: true };
+
+          case 'delete_section':
+            console.log('[Mock IPC] delete_section called with:', args);
+            return { success: true };
+
+          case 'create_shot':
+            console.log('[Mock IPC] create_shot called with:', args);
+            return { success: true, shot_id: Date.now() };
+
+          case 'set_shot_virtual':
+            console.log('[Mock IPC] set_shot_virtual called with:', args);
+            return { success: true };
+
           default:
             console.warn(`[Mock IPC] Unhandled command: ${cmd}`);
             return null;

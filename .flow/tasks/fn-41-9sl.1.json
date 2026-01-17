@@ -1,14 +1,25 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T17:59:43.743330Z",
   "created_at": "2026-01-17T14:27:51.342565Z",
   "depends_on": [],
   "epic": "fn-41-9sl",
+  "evidence": {
+    "all_tests_pass": true,
+    "files_created": [
+      "e2e-playwright/section-shot-editing.spec.ts"
+    ],
+    "files_modified": [
+      "e2e-playwright/mocks/tauri-ipc.ts"
+    ],
+    "test_command": "pnpm test:ui --grep 'Section and Shot Editing'",
+    "tests_added": 6
+  },
   "id": "fn-41-9sl.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-41-9sl.1.md",
-  "status": "todo",
+  "status": "done",
   "title": "Implement 6 section/shot editing tests",
-  "updated_at": "2026-01-17T14:27:51.342582Z"
+  "updated_at": "2026-01-17T18:03:33.885689Z"
 }
