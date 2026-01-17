@@ -153,16 +153,44 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'get_project':
           case 'get_project_state': {
+            // Generate mock stations from sections
+            const mockStations: Array<{
+              station_ref: { section_id: number; station_index: number };
+              coordinates: { x: number; y: number; z: number };
+              is_zero_datum: boolean;
+              gps_coordinates: null;
+              merged_with: never[];
+            }> = [];
+
+            if (currentProject?.sections) {
+              for (const section of currentProject.sections as Array<{ id: number; shots: unknown[] }>) {
+                // Each section gets (shots.length + 1) stations
+                const shotCount = section.shots?.length ?? 0;
+                for (let i = 0; i <= shotCount; i++) {
+                  mockStations.push({
+                    station_ref: {
+                      section_id: section.id,
+                      station_index: i,
+                    },
+                    coordinates: { x: i * 10, y: 0, z: 0 },
+                    is_zero_datum: i === 0,
+                    gps_coordinates: null,
+                    merged_with: [],
+                  });
+                }
+              }
+            }
+
             return {
               project: currentProject,
-              stations: [],
+              stations: mockStations,
               stats: {
                 section_count: currentProject?.sections.length ?? 0,
-                shot_count: 0,
+                shot_count: mockStations.length > 0 ? mockStations.length - 1 : 0,
                 total_length: 0,
                 min_depth: 0,
                 max_depth: 0,
-                station_count: 0,
+                station_count: mockStations.length,
                 loop_count: 0,
                 penetration_distance: 0,
               },
@@ -508,6 +536,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ],
             };
           }
+
+          case 'merge_stations':
+            // Mock merge stations - just return success
+            console.log('[Mock IPC] merge_stations called with:', args);
+            return { success: true };
 
           case 'undo':
           case 'redo':

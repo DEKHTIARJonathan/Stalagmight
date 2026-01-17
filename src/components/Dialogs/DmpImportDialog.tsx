@@ -19,7 +19,7 @@ import {
   detectFormat,
   type GpsFormat,
 } from '../../utils/gps';
-import type { GpsCoordinates } from '../../types/project';
+import type { GpsCoordinates, StationRef, Station } from '../../types/project';
 
 /**
  * Maximum comment length before truncation is applied.
@@ -195,9 +195,16 @@ interface DmpImportDialogProps {
   filePath?: string;
 }
 
+/**
+ * Placement mode for imported sections.
+ * - 'origin': Place section at origin (0,0) - default behavior
+ * - 'existing': Connect to an existing station in the current project
+ */
+type PlacementMode = 'origin' | 'existing';
+
 export default function DmpImportDialog({ filePath: initialPath }: DmpImportDialogProps) {
   const { closeDialog, dialogData, setView, triggerFitToBounds } = useUIStore();
-  const { importDmp, createSection, createProject, project, config } = useProjectStore();
+  const { importDmp, createSection, createProject, mergeStations, project, stations, config } = useProjectStore();
 
   const [filePath, setFilePath] = useState<string>(initialPath ?? (dialogData.filePath as string) ?? '');
   const [dmpFile, setDmpFile] = useState<DmpFile | null>(null);
@@ -234,6 +241,13 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
   const [gpsFormat, setGpsFormat] = useState<GpsFormat | undefined>(undefined);
   // Station selection for zero datum: 'first' or 'last' station of first section
   const [gpsStation, setGpsStation] = useState<'first' | 'last'>('first');
+
+  // Placement mode state
+  const [placementMode, setPlacementMode] = useState<PlacementMode>('origin');
+  // Import station to connect: 'first' or 'last' station of first imported section
+  const [importStation, setImportStation] = useState<'first' | 'last'>('first');
+  // Selected existing station from the current project to connect to
+  const [existingStation, setExistingStation] = useState<StationRef | null>(null);
 
   // Validation configuration from app config (fallback to defaults)
   const validationConfig = config?.validation ?? defaultConfig.validation;
@@ -324,14 +338,67 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
     }
   }, []);
 
-  // Clear GPS input when file changes
+  // Clear GPS input and reset placement when file changes
   useEffect(() => {
     setGpsInput('');
     setGpsError(null);
     setGpsCoords(null);
     setGpsFormat(undefined);
     setGpsStation('first');
+    // Reset placement mode and selections
+    setPlacementMode('origin');
+    setImportStation('first');
+    setExistingStation(null);
   }, [dmpFile]);
+
+  // Build list of available stations for the dropdown (memoized)
+  const availableStations = useMemo((): Array<{ ref: StationRef; label: string; station: Station }> => {
+    if (!project || stations.length === 0) return [];
+
+    const result: Array<{ ref: StationRef; label: string; station: Station }> = [];
+
+    for (const station of stations) {
+      const section = project.sections.find((s) => s.id === station.station_ref.section_id);
+      const sectionName = section?.name ?? `Section ${station.station_ref.section_id}`;
+      const label = `${sectionName} #${station.station_ref.station_index}`;
+      result.push({
+        ref: station.station_ref,
+        label,
+        station,
+      });
+    }
+
+    // Sort by section name, then by station index
+    result.sort((a, b) => {
+      if (a.label < b.label) return -1;
+      if (a.label > b.label) return 1;
+      return 0;
+    });
+
+    return result;
+  }, [project, stations]);
+
+  // Reset existing station selection if it becomes invalid
+  useEffect(() => {
+    if (existingStation && availableStations.length > 0) {
+      const stillValid = availableStations.some(
+        (s) =>
+          s.ref.section_id === existingStation.section_id &&
+          s.ref.station_index === existingStation.station_index
+      );
+      if (!stillValid) {
+        setExistingStation(null);
+      }
+    }
+  }, [availableStations, existingStation]);
+
+  // Reset placement mode to 'origin' when creating a new project (no existing stations)
+  useEffect(() => {
+    if (createNewProject && placementMode === 'existing') {
+      setPlacementMode('origin');
+      setExistingStation(null);
+    }
+  }, [createNewProject, placementMode]);
 
   const handleLoadFile = useCallback(async (path: string) => {
     if (!path) return;
@@ -479,8 +546,31 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
       // Get existing colors to avoid duplicates
       const usedColors = project?.sections.map((s) => s.color) ?? [];
 
+      // Track the number of sections before import for merge operation
+      const sectionCountBefore = project?.sections.length ?? 0;
+
+      // Get sorted selection indices
+      const sortedIndices = Array.from(selectedSections).sort();
+
+      // Find the first selected section with shots (for merge operation)
+      const firstSelectedIndex = sortedIndices.find((index) => {
+        const section = dmpFile.sections[index];
+        return section && section.shots.filter((s) => s.shot_type === 'Standard').length > 0;
+      });
+
+      // Calculate which station to merge (first or last)
+      let firstImportedSectionShotCount = 0;
+      if (firstSelectedIndex !== undefined) {
+        const firstSection = dmpFile.sections[firstSelectedIndex];
+        if (firstSection) {
+          firstImportedSectionShotCount = firstSection.shots.filter(
+            (s) => s.shot_type === 'Standard'
+          ).length;
+        }
+      }
+
       // Import selected sections
-      for (const index of Array.from(selectedSections).sort()) {
+      for (const index of sortedIndices) {
         const section = dmpFile.sections[index];
         if (!section) continue;
 
@@ -521,6 +611,38 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
         const result = await createSection(sectionData);
         if (!result.success) {
           throw new Error(result.error ?? `Failed to create section ${section.name}`);
+        }
+      }
+
+      // If placement mode is 'existing' and we have a valid selection, merge stations
+      if (
+        placementMode === 'existing' &&
+        existingStation &&
+        firstImportedSectionShotCount > 0
+      ) {
+        // Get the refreshed project to find the newly created section
+        // The new section should be the one at index sectionCountBefore (0-indexed)
+        // We need to access the current project store state
+        const currentProject = useProjectStore.getState().project;
+        if (currentProject && currentProject.sections.length > sectionCountBefore) {
+          const newSection = currentProject.sections[sectionCountBefore];
+          if (newSection) {
+            // Determine which station of the new section to merge
+            // Station index: 0 = first station, shotCount = last station
+            const importStationIndex =
+              importStation === 'first' ? 0 : firstImportedSectionShotCount;
+
+            const importRef: StationRef = {
+              section_id: newSection.id,
+              station_index: importStationIndex,
+            };
+
+            const mergeResult = await mergeStations(importRef, existingStation, 'KeepRaw');
+            if (!mergeResult.success) {
+              // Log warning but don't fail the import
+              console.warn('Failed to merge stations:', mergeResult.error);
+            }
+          }
         }
       }
 
@@ -897,6 +1019,126 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
               </div>
             </Panel>
 
+            {/* Placement Mode Section */}
+            <Panel title="Placement">
+              <div className="space-y-3 p-1">
+                {/* Placement mode selector */}
+                <div>
+                  <label className="block text-sm text-text-secondary mb-2">
+                    Place imported section
+                  </label>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="placement-mode"
+                        value="origin"
+                        checked={placementMode === 'origin'}
+                        onChange={() => {
+                          setPlacementMode('origin');
+                          setExistingStation(null);
+                        }}
+                        data-testid="placement-mode-origin"
+                      />
+                      <span>At origin (0, 0)</span>
+                    </label>
+                    <label
+                      className={`flex items-center gap-2 ${
+                        !project || createNewProject || availableStations.length === 0
+                          ? 'opacity-50 cursor-not-allowed'
+                          : 'cursor-pointer'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="placement-mode"
+                        value="existing"
+                        checked={placementMode === 'existing'}
+                        onChange={() => setPlacementMode('existing')}
+                        disabled={!project || createNewProject || availableStations.length === 0}
+                        data-testid="placement-mode-existing"
+                      />
+                      <span>From existing station</span>
+                      {(!project || createNewProject) && (
+                        <span className="text-xs text-text-secondary">
+                          (requires existing project)
+                        </span>
+                      )}
+                      {project && !createNewProject && availableStations.length === 0 && (
+                        <span className="text-xs text-text-secondary">
+                          (no stations in project)
+                        </span>
+                      )}
+                    </label>
+                  </div>
+                </div>
+
+                {/* Station selection (only when 'existing' mode is selected) */}
+                {placementMode === 'existing' && (
+                  <div className="ml-6 space-y-3 border-l-2 border-border pl-3">
+                    {/* Import station selector */}
+                    <div>
+                      <label className="block text-sm text-text-secondary mb-1">
+                        Import station to connect
+                      </label>
+                      <select
+                        value={importStation}
+                        onChange={(e) => setImportStation(e.target.value as 'first' | 'last')}
+                        className="bg-surface border border-border rounded px-3 py-1.5 text-sm w-full"
+                        data-testid="import-station-selector"
+                      >
+                        <option value="first">First station of imported section</option>
+                        <option value="last">Last station of imported section</option>
+                      </select>
+                    </div>
+
+                    {/* Existing station dropdown */}
+                    <div>
+                      <label className="block text-sm text-text-secondary mb-1">
+                        Connect to existing station
+                      </label>
+                      <select
+                        value={
+                          existingStation
+                            ? `${existingStation.section_id}-${existingStation.station_index}`
+                            : ''
+                        }
+                        onChange={(e) => {
+                          if (!e.target.value) {
+                            setExistingStation(null);
+                            return;
+                          }
+                          const [sectionIdStr, stationIndexStr] = e.target.value.split('-');
+                          if (sectionIdStr && stationIndexStr) {
+                            setExistingStation({
+                              section_id: parseInt(sectionIdStr, 10),
+                              station_index: parseInt(stationIndexStr, 10),
+                            });
+                          }
+                        }}
+                        className="bg-surface border border-border rounded px-3 py-1.5 text-sm w-full"
+                        data-testid="existing-station-selector"
+                      >
+                        <option value="">Select a station...</option>
+                        {availableStations.map((s) => (
+                          <option
+                            key={`${s.ref.section_id}-${s.ref.station_index}`}
+                            value={`${s.ref.section_id}-${s.ref.station_index}`}
+                          >
+                            {s.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <p className="text-xs text-text-secondary">
+                      The imported section will be positioned so the selected stations connect.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </Panel>
+
             {/* Section preview - shows the most recently expanded section */}
             <div className="flex justify-center">
               <SectionPreview
@@ -905,6 +1147,16 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                     ? dmpFile.sections[previewSectionIndex] ?? null
                     : null
                 }
+                existingStation={
+                  placementMode === 'existing' && existingStation
+                    ? availableStations.find(
+                        (s) =>
+                          s.ref.section_id === existingStation.section_id &&
+                          s.ref.station_index === existingStation.station_index
+                      )?.station ?? null
+                    : null
+                }
+                importStationIndex={placementMode === 'existing' ? importStation : null}
               />
             </div>
           </>

@@ -1390,3 +1390,280 @@ test.describe('GPS Input UI', () => {
     await expect(formatIndicator).toContainText('Format: —');
   });
 });
+
+test.describe('Placement Mode - From Existing Station', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+  });
+
+  test('placement panel visible after loading DMP file', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Placement mode radio buttons should be visible
+    const originRadio = page.locator('[data-testid="placement-mode-origin"]');
+    const existingRadio = page.locator('[data-testid="placement-mode-existing"]');
+
+    await expect(originRadio).toBeVisible();
+    await expect(existingRadio).toBeVisible();
+
+    // Origin should be selected by default
+    await expect(originRadio).toBeChecked();
+    await expect(existingRadio).not.toBeChecked();
+  });
+
+  test('origin mode is selected by default', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    const originRadio = page.locator('[data-testid="placement-mode-origin"]');
+    await expect(originRadio).toBeChecked();
+
+    // Station selectors should NOT be visible in origin mode
+    const importStationSelector = page.locator('[data-testid="import-station-selector"]');
+    const existingStationSelector = page.locator('[data-testid="existing-station-selector"]');
+
+    await expect(importStationSelector).not.toBeVisible();
+    await expect(existingStationSelector).not.toBeVisible();
+  });
+
+  test('existing mode disabled when creating new project', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Select "Create new project" radio
+    const createNewProjectRadio = page.locator('input[type="radio"]').filter({ has: page.locator('xpath=..//span[contains(text(),"Create new project")]') }).first();
+    // Actually, let's find it by the sibling text
+    const createNewLabel = page.locator('label:has-text("Create new project") input[type="radio"]');
+    await createNewLabel.click();
+
+    // "From existing station" should be disabled
+    const existingRadio = page.locator('[data-testid="placement-mode-existing"]');
+    await expect(existingRadio).toBeDisabled();
+  });
+
+  test('existing mode shows station selectors when selected', async ({ page }) => {
+    // First we need an existing project with sections
+    // Create project with a section first
+    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
+    await newProjectBtn.click();
+    await page.waitForSelector('.fixed.inset-0');
+    await page.locator('.fixed.inset-0 input').first().fill('Existing Project');
+    await page.click('.fixed.inset-0 button:has-text("Create")');
+    await page.waitForSelector('canvas', { timeout: 10000 });
+
+    // Import a section first to create existing stations
+    await page.keyboard.press('Control+i');
+    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
+    const dialog = page.locator('[role="dialog"]');
+    await expect(dialog).toBeVisible();
+    const browseButton = dialog.locator('button:has-text("Browse...")');
+    await browseButton.click();
+    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
+
+    // Deselect problematic sections (validation errors)
+    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
+    const checkbox = validationSection.locator('input[type="checkbox"]');
+    await checkbox.click();
+
+    // Also deselect Mixed LRUD section (has warning for long shot)
+    const mixedLrudSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
+    const mixedCheckbox = mixedLrudSection.locator('input[type="checkbox"]');
+    await mixedCheckbox.click();
+
+    // Import to create existing stations
+    const importButton = page.locator('[data-testid="import-button"]');
+    await importButton.click();
+
+    // Wait for dialog to close and stations to be created
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    // Re-open import dialog
+    await page.keyboard.press('Control+i');
+    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
+    const dialog2 = page.locator('[role="dialog"]');
+    await expect(dialog2).toBeVisible();
+    const browseButton2 = dialog2.locator('button:has-text("Browse...")');
+    await browseButton2.click();
+    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
+
+    // Make sure "Add to current project" is selected
+    const addToCurrentLabel = page.locator('label:has-text("Add to current project") input[type="radio"]');
+    await addToCurrentLabel.click();
+
+    // Now "From existing station" should be enabled
+    const existingRadio = page.locator('[data-testid="placement-mode-existing"]');
+    await expect(existingRadio).toBeEnabled();
+
+    // Click it
+    await existingRadio.click();
+    await expect(existingRadio).toBeChecked();
+
+    // Station selectors should now be visible
+    const importStationSelector = page.locator('[data-testid="import-station-selector"]');
+    const existingStationSelector = page.locator('[data-testid="existing-station-selector"]');
+
+    await expect(importStationSelector).toBeVisible();
+    await expect(existingStationSelector).toBeVisible();
+  });
+
+  test('import station selector has first/last options', async ({ page }) => {
+    // Setup with existing stations
+    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
+    await newProjectBtn.click();
+    await page.waitForSelector('.fixed.inset-0');
+    await page.locator('.fixed.inset-0 input').first().fill('Station Options Test');
+    await page.click('.fixed.inset-0 button:has-text("Create")');
+    await page.waitForSelector('canvas', { timeout: 10000 });
+
+    // Import to create stations
+    await page.keyboard.press('Control+i');
+    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
+    const dialog = page.locator('[role="dialog"]');
+    const browseButton = dialog.locator('button:has-text("Browse...")');
+    await browseButton.click();
+    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
+
+    // Deselect problematic sections
+    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
+    await validationSection.locator('input[type="checkbox"]').click();
+    const mixedSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
+    await mixedSection.locator('input[type="checkbox"]').click();
+
+    const importButton = page.locator('[data-testid="import-button"]');
+    await importButton.click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    // Re-open
+    await page.keyboard.press('Control+i');
+    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
+    const dialog2 = page.locator('[role="dialog"]');
+    const browseButton2 = dialog2.locator('button:has-text("Browse...")');
+    await browseButton2.click();
+    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
+
+    // Make sure "Add to current project" is selected
+    const addToCurrentLabel = page.locator('label:has-text("Add to current project") input[type="radio"]');
+    await addToCurrentLabel.click();
+
+    // Select existing mode
+    const existingRadio = page.locator('[data-testid="placement-mode-existing"]');
+    await existingRadio.click();
+
+    // Check import station selector options
+    const importStationSelector = page.locator('[data-testid="import-station-selector"]');
+    await expect(importStationSelector.locator('option')).toHaveCount(2);
+
+    const firstOption = importStationSelector.locator('option[value="first"]');
+    const lastOption = importStationSelector.locator('option[value="last"]');
+    await expect(firstOption).toHaveText('First station of imported section');
+    await expect(lastOption).toHaveText('Last station of imported section');
+  });
+
+  test('existing station dropdown populated from project', async ({ page }) => {
+    // Setup with existing stations
+    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
+    await newProjectBtn.click();
+    await page.waitForSelector('.fixed.inset-0');
+    await page.locator('.fixed.inset-0 input').first().fill('Dropdown Test');
+    await page.click('.fixed.inset-0 button:has-text("Create")');
+    await page.waitForSelector('canvas', { timeout: 10000 });
+
+    // Import to create stations
+    await page.keyboard.press('Control+i');
+    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
+    const dialog = page.locator('[role="dialog"]');
+    const browseButton = dialog.locator('button:has-text("Browse...")');
+    await browseButton.click();
+    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
+
+    // Deselect problematic sections
+    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
+    await validationSection.locator('input[type="checkbox"]').click();
+    const mixedSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
+    await mixedSection.locator('input[type="checkbox"]').click();
+
+    const importButton = page.locator('[data-testid="import-button"]');
+    await importButton.click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    // Re-open
+    await page.keyboard.press('Control+i');
+    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
+    const dialog2 = page.locator('[role="dialog"]');
+    const browseButton2 = dialog2.locator('button:has-text("Browse...")');
+    await browseButton2.click();
+    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
+
+    // Make sure "Add to current project" is selected
+    const addToCurrentLabel = page.locator('label:has-text("Add to current project") input[type="radio"]');
+    await addToCurrentLabel.click();
+
+    // Select existing mode
+    const existingRadio = page.locator('[data-testid="placement-mode-existing"]');
+    await existingRadio.click();
+
+    // Check that existing station dropdown has options (populated from project)
+    const existingStationSelector = page.locator('[data-testid="existing-station-selector"]');
+    await expect(existingStationSelector).toBeVisible();
+
+    // Should have at least the default "Select a station..." option plus some stations
+    const options = existingStationSelector.locator('option');
+    const optionCount = await options.count();
+    expect(optionCount).toBeGreaterThan(1); // At least "Select..." + 1 station
+  });
+
+  test('switching back to origin mode hides station selectors', async ({ page }) => {
+    // Setup with existing stations
+    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
+    await newProjectBtn.click();
+    await page.waitForSelector('.fixed.inset-0');
+    await page.locator('.fixed.inset-0 input').first().fill('Switch Mode Test');
+    await page.click('.fixed.inset-0 button:has-text("Create")');
+    await page.waitForSelector('canvas', { timeout: 10000 });
+
+    // Import to create stations
+    await page.keyboard.press('Control+i');
+    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
+    const dialog = page.locator('[role="dialog"]');
+    const browseButton = dialog.locator('button:has-text("Browse...")');
+    await browseButton.click();
+    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
+
+    // Deselect problematic sections
+    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
+    await validationSection.locator('input[type="checkbox"]').click();
+    const mixedSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
+    await mixedSection.locator('input[type="checkbox"]').click();
+
+    const importButton = page.locator('[data-testid="import-button"]');
+    await importButton.click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    // Re-open
+    await page.keyboard.press('Control+i');
+    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
+    const dialog2 = page.locator('[role="dialog"]');
+    const browseButton2 = dialog2.locator('button:has-text("Browse...")');
+    await browseButton2.click();
+    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
+
+    // Make sure "Add to current project" is selected
+    const addToCurrentLabel = page.locator('label:has-text("Add to current project") input[type="radio"]');
+    await addToCurrentLabel.click();
+
+    // Select existing mode
+    const existingRadio = page.locator('[data-testid="placement-mode-existing"]');
+    await existingRadio.click();
+
+    // Station selectors should be visible
+    const importStationSelector = page.locator('[data-testid="import-station-selector"]');
+    await expect(importStationSelector).toBeVisible();
+
+    // Switch back to origin mode
+    const originRadio = page.locator('[data-testid="placement-mode-origin"]');
+    await originRadio.click();
+
+    // Station selectors should be hidden
+    await expect(importStationSelector).not.toBeVisible();
+  });
+});
