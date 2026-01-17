@@ -40,6 +40,46 @@ function formatPitch(shot: DmpShot): string {
 }
 
 /**
+ * Statistics calculated from selected sections.
+ */
+interface SectionStats {
+  totalLength: number;
+  shotCount: number;
+  minDepth: number | null;
+  maxDepth: number | null;
+}
+
+/**
+ * Calculate statistics for selected sections.
+ */
+function calculateStats(
+  sections: DmpFile['sections'],
+  selectedIndices: Set<number>
+): SectionStats {
+  const selectedSections = sections.filter((_, i) => selectedIndices.has(i));
+  const allShots = selectedSections.flatMap((s) =>
+    s.shots.filter((shot) => shot.shot_type === 'Standard')
+  );
+
+  if (allShots.length === 0) {
+    return { totalLength: 0, shotCount: 0, minDepth: null, maxDepth: null };
+  }
+
+  const totalLength = allShots.reduce((sum, shot) => sum + shot.length, 0);
+  const shotCount = allShots.length;
+
+  // Collect all valid depth values (both depth_in and depth_out)
+  const depthValues = allShots
+    .flatMap((shot) => [shot.depth_in, shot.depth_out])
+    .filter((d): d is number => d != null && Number.isFinite(d));
+
+  const minDepth = depthValues.length > 0 ? Math.min(...depthValues) : null;
+  const maxDepth = depthValues.length > 0 ? Math.max(...depthValues) : null;
+
+  return { totalLength, shotCount, minDepth, maxDepth };
+}
+
+/**
  * Props for the TruncatedComment component.
  */
 interface TruncatedCommentProps {
@@ -115,6 +155,29 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
 
   // Track if auto-load has been attempted for initial path
   const autoLoadAttempted = useRef(false);
+
+  // Debounced statistics for selected sections
+  const [stats, setStats] = useState<SectionStats>({
+    totalLength: 0,
+    shotCount: 0,
+    minDepth: null,
+    maxDepth: null,
+  });
+
+  // Calculate stats with 500ms debounce when selection changes
+  useEffect(() => {
+    if (!dmpFile) {
+      setStats({ totalLength: 0, shotCount: 0, minDepth: null, maxDepth: null });
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      const calculatedStats = calculateStats(dmpFile.sections, selectedSections);
+      setStats(calculatedStats);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [dmpFile, selectedSections]);
 
   const handleLoadFile = useCallback(async (path: string) => {
     if (!path) return;
@@ -510,6 +573,24 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                     })}
                   </tbody>
                 </table>
+              </div>
+              {/* Statistics footer */}
+              <div
+                className="border-t border-border p-3 text-sm text-text-secondary select-text"
+                data-testid="stats-footer"
+              >
+                <span data-testid="stats-total-length">
+                  Total: {stats.totalLength.toFixed(1)}m
+                </span>
+                <span className="mx-2">|</span>
+                <span data-testid="stats-shot-count">Shots: {stats.shotCount}</span>
+                <span className="mx-2">|</span>
+                <span data-testid="stats-depth-range">
+                  Depth:{' '}
+                  {stats.minDepth != null && stats.maxDepth != null
+                    ? `${stats.minDepth.toFixed(1)}m to ${stats.maxDepth.toFixed(1)}m`
+                    : '--'}
+                </span>
               </div>
             </Panel>
           </>
