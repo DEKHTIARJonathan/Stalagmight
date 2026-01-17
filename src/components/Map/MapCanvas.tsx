@@ -23,6 +23,7 @@ export default function MapCanvas() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const surveyLayerRef = useRef<SurveyLayer | null>(null);
+  const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const [measureResult, setMeasureResult] = useState<{ distance: number; depthDiff: number } | null>(null);
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
@@ -39,6 +40,7 @@ export default function MapCanvas() {
     showGrid,
     showSatellite,
     showShotData,
+    showScaleBar,
     selection,
     mergeStationA,
     measureStart,
@@ -332,11 +334,8 @@ export default function MapCanvas() {
       'top-right'
     );
 
-    // Add scale control (coordinates are transformed to pseudo-degrees so scale is accurate)
-    map.current.addControl(
-      new maplibregl.ScaleControl({ maxWidth: 100, unit: 'metric' }),
-      'bottom-left'
-    );
+    // Create scale control instance (will be added/removed based on showScaleBar state)
+    scaleControlRef.current = new maplibregl.ScaleControl({ maxWidth: 100, unit: 'metric' });
 
     // Track map movement
     map.current.on('move', () => {
@@ -406,6 +405,30 @@ export default function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setShowShotLabels(showShotData);
   }, [showShotData, mapLoaded]);
+
+  // Handle scale bar toggle
+  useEffect(() => {
+    if (!map.current || !scaleControlRef.current || !mapLoaded) return;
+
+    try {
+      if (showScaleBar) {
+        // Check if control is already added by looking for its container
+        const existingControl = map.current.getContainer().querySelector('.maplibregl-ctrl-scale');
+        if (!existingControl) {
+          map.current.addControl(scaleControlRef.current, 'bottom-left');
+        }
+      } else {
+        // Check if control exists before removing
+        const existingControl = map.current.getContainer().querySelector('.maplibregl-ctrl-scale');
+        if (existingControl) {
+          map.current.removeControl(scaleControlRef.current);
+        }
+      }
+    } catch (e) {
+      // Control may not be in a state to be added/removed - ignore errors
+      console.warn('[MapCanvas] Scale control toggle error:', e);
+    }
+  }, [showScaleBar, mapLoaded]);
 
   // Update cursor based on tool (and Ctrl state for select mode)
   useEffect(() => {
