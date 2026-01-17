@@ -762,6 +762,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] open_path called with:', args);
             return undefined;
 
+          // Export commands
+          case 'export_csv':
+            console.log('[Mock IPC] export_csv called with:', args);
+            return { success: true, path: args?.path };
+
+          case 'export_json':
+            console.log('[Mock IPC] export_json called with:', args);
+            return { success: true, path: args?.path };
+
+          case 'export_image':
+            console.log('[Mock IPC] export_image called with:', args);
+            return { success: true, path: args?.path };
+
           default:
             console.warn(`[Mock IPC] Unhandled command: ${cmd}`);
             return null;
