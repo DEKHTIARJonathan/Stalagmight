@@ -343,8 +343,15 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
       const next = new Set(prev);
       if (next.has(index)) {
         next.delete(index);
+        // If deselecting the current preview section, update preview to another selected one
+        if (previewSectionIndex === index) {
+          const remaining = Array.from(next);
+          setPreviewSectionIndex(remaining.length > 0 ? remaining[remaining.length - 1] ?? null : null);
+        }
       } else {
         next.add(index);
+        // Update preview to show the newly selected section
+        setPreviewSectionIndex(index);
       }
       return next;
     });
