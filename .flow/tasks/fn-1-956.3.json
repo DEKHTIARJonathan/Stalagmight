@@ -10,7 +10,7 @@
   "id": "fn-1-956.3",
   "priority": null,
   "spec_path": ".flow/tasks/fn-1-956.3.md",
-  "status": "in_progress",
+  "status": "blocked",
   "title": "Final verification - WebdriverIO tests (blocked by CI environment)",
   "updated_at": "2026-01-17T04:46:15.249560Z"
 }
