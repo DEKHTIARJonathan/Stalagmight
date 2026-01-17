@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
+import { useState, useEffect, useRef, useCallback, Fragment, useMemo } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
@@ -6,6 +6,13 @@ import { Panel } from '../common/Panel';
 import { DialogWrapper } from './DialogWrapper';
 import type { DmpFile, DmpShot } from '../../types/commands';
 import { getNextSectionColor } from '../../utils/colors';
+import {
+  validateSection,
+  countIssues,
+  getHighestSeverity,
+  type ValidationIssue,
+} from '../../utils/validation';
+import { defaultConfig } from '../../types/config';
 
 /**
  * Maximum comment length before truncation is applied.
@@ -138,13 +145,52 @@ function TruncatedComment({ comment, sectionIndex, shotIndex }: TruncatedComment
   );
 }
 
+/**
+ * Props for the ValidationIcon component.
+ */
+interface ValidationIconProps {
+  issues: ValidationIssue[];
+  sectionIndex: number;
+  shotIndex: number;
+}
+
+/**
+ * Displays a warning/error icon with tooltip for validation issues.
+ * - Red exclamation for errors (blocks import)
+ * - Yellow warning triangle for warnings (can bypass)
+ * - Uses native title attribute for tooltip
+ */
+function ValidationIcon({ issues, sectionIndex, shotIndex }: ValidationIconProps) {
+  if (issues.length === 0) {
+    return <span className="w-4">&nbsp;</span>;
+  }
+
+  const severity = getHighestSeverity(issues);
+  const isError = severity === 'error';
+  const tooltipText = issues.map((i) => i.message).join('\n');
+
+  return (
+    <span
+      data-testid={`validation-icon-${sectionIndex}-${shotIndex}`}
+      className={`inline-flex items-center justify-center w-4 h-4 text-xs font-bold rounded-full ${
+        isError ? 'bg-error text-white' : 'bg-warning text-black'
+      }`}
+      title={tooltipText}
+      role="img"
+      aria-label={isError ? 'Error' : 'Warning'}
+    >
+      {isError ? '!' : '⚠'}
+    </span>
+  );
+}
+
 interface DmpImportDialogProps {
   filePath?: string;
 }
 
 export default function DmpImportDialog({ filePath: initialPath }: DmpImportDialogProps) {
   const { closeDialog, dialogData, setView, triggerFitToBounds } = useUIStore();
-  const { importDmp, createSection, createProject, project } = useProjectStore();
+  const { importDmp, createSection, createProject, project, config } = useProjectStore();
 
   const [filePath, setFilePath] = useState<string>(initialPath ?? (dialogData.filePath as string) ?? '');
   const [dmpFile, setDmpFile] = useState<DmpFile | null>(null);
@@ -168,6 +214,50 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
     minDepth: null,
     maxDepth: null,
   });
+
+  // Checkbox to acknowledge warnings and proceed with import
+  const [acknowledgeWarnings, setAcknowledgeWarnings] = useState(false);
+
+  // Validation configuration from app config (fallback to defaults)
+  const validationConfig = config?.validation ?? defaultConfig.validation;
+
+  // Calculate validation issues for all sections (memoized)
+  const validationIssues = useMemo(() => {
+    if (!dmpFile) return new Map<number, Map<number, ValidationIssue[]>>();
+
+    const result = new Map<number, Map<number, ValidationIssue[]>>();
+    dmpFile.sections.forEach((section, sectionIndex) => {
+      const standardShots = section.shots.filter((s) => s.shot_type === 'Standard');
+      const sectionIssues = validateSection(standardShots, validationConfig);
+      if (sectionIssues.size > 0) {
+        result.set(sectionIndex, sectionIssues);
+      }
+    });
+    return result;
+  }, [dmpFile, validationConfig]);
+
+  // Reset acknowledge checkbox when file, selection, or config changes
+  useEffect(() => {
+    setAcknowledgeWarnings(false);
+  }, [dmpFile, selectedSections, validationConfig]);
+
+  // Count issues for selected sections only
+  const issueCounts = useMemo(() => {
+    if (!dmpFile) return { errors: 0, warnings: 0 };
+
+    const filteredIssues = new Map<number, Map<number, ValidationIssue[]>>();
+    for (const [sectionIndex, shotIssues] of validationIssues) {
+      if (selectedSections.has(sectionIndex)) {
+        filteredIssues.set(sectionIndex, shotIssues);
+      }
+    }
+    return countIssues(filteredIssues);
+  }, [validationIssues, selectedSections, dmpFile]);
+
+  // Check if import should be blocked (has errors OR has warnings without acknowledgement)
+  const hasErrors = issueCounts.errors > 0;
+  const hasWarnings = issueCounts.warnings > 0;
+  const canImport = !hasErrors && (!hasWarnings || acknowledgeWarnings);
 
   // Calculate stats with 500ms debounce when selection changes
   useEffect(() => {
@@ -312,8 +402,6 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
         // Handle both "2016-10-03T18:42:00" and "2016-10-03 18:42:00" formats
         const dateStr = section.date?.split(/[T ]/)[0] ?? null;
 
-        console.log(`[DmpImport] Creating section ${section.name} with ${standardShots.length} shots, date: ${dateStr}`);
-
         const sectionData = {
           name: section.name,
           surveyor: null,
@@ -338,11 +426,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
           })),
         };
 
-        console.log('[DmpImport] Section data:', JSON.stringify(sectionData, null, 2));
-
         const result = await createSection(sectionData);
-        console.log('[DmpImport] Result:', result);
-
         if (!result.success) {
           throw new Error(result.error ?? `Failed to create section ${section.name}`);
         }
@@ -508,6 +592,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                                   <table className="w-full text-xs">
                                     <thead>
                                       <tr className="text-text-secondary">
+                                        <th className="w-4 py-1 px-1"></th>
                                         <th className="text-left py-1 px-1">Index</th>
                                         <th className="text-right py-1 px-1">L</th>
                                         <th className="text-right py-1 px-1">R</th>
@@ -518,33 +603,47 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                                       </tr>
                                     </thead>
                                     <tbody>
-                                      {standardShots.map((shot, shotIndex) => (
+                                      {standardShots.map((shot, shotIndex) => {
+                                        const shotIssues = validationIssues.get(index)?.get(shotIndex) ?? [];
+                                        const hasLrudIssue = shotIssues.some((i) => i.field === 'lrud');
+                                        const lrudHasError = shotIssues.some((i) => i.field === 'lrud' && i.severity === 'error');
+                                        // Only highlight LRUD columns since those are visible in the table
+                                        // Other fields (length, azimuth, depth) are shown via the validation icon
+                                        const lrudHighlight = hasLrudIssue ? (lrudHasError ? 'bg-error/20' : 'bg-warning/20') : '';
+                                        return (
                                         <tr
                                           key={shotIndex}
                                           data-testid={`shot-row-${index}-${shotIndex}`}
                                           className="hover:bg-background/30"
                                         >
+                                          <td className="py-0.5 px-1">
+                                            <ValidationIcon
+                                              issues={shotIssues}
+                                              sectionIndex={index}
+                                              shotIndex={shotIndex}
+                                            />
+                                          </td>
                                           <td className="py-0.5 px-1">{shotIndex + 1}</td>
                                           <td
-                                            className="text-right py-0.5 px-1"
+                                            className={`text-right py-0.5 px-1 ${lrudHighlight}`}
                                             data-testid={`lrud-left-${index}-${shotIndex}`}
                                           >
                                             {shot.left ? shot.left.toFixed(1) : '-'}
                                           </td>
                                           <td
-                                            className="text-right py-0.5 px-1"
+                                            className={`text-right py-0.5 px-1 ${lrudHighlight}`}
                                             data-testid={`lrud-right-${index}-${shotIndex}`}
                                           >
                                             {shot.right ? shot.right.toFixed(1) : '-'}
                                           </td>
                                           <td
-                                            className="text-right py-0.5 px-1"
+                                            className={`text-right py-0.5 px-1 ${lrudHighlight}`}
                                             data-testid={`lrud-up-${index}-${shotIndex}`}
                                           >
                                             {shot.up ? shot.up.toFixed(1) : '-'}
                                           </td>
                                           <td
-                                            className="text-right py-0.5 px-1"
+                                            className={`text-right py-0.5 px-1 ${lrudHighlight}`}
                                             data-testid={`lrud-down-${index}-${shotIndex}`}
                                           >
                                             {shot.down ? shot.down.toFixed(1) : '-'}
@@ -566,7 +665,8 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                                             />
                                           </td>
                                         </tr>
-                                      ))}
+                                        );
+                                      })}
                                     </tbody>
                                   </table>
                                 </div>
@@ -597,6 +697,44 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                     : '--'}
                 </span>
               </div>
+              {/* Validation summary */}
+              {(hasErrors || hasWarnings) && (
+                <div
+                  className="border-t border-border p-3 text-sm"
+                  data-testid="validation-summary"
+                >
+                  <div className="flex items-center gap-4">
+                    {hasErrors && (
+                      <span className="text-error" data-testid="validation-error-count">
+                        {issueCounts.errors} error{issueCounts.errors !== 1 ? 's' : ''}
+                      </span>
+                    )}
+                    {hasWarnings && (
+                      <span className="text-warning" data-testid="validation-warning-count">
+                        {issueCounts.warnings} warning{issueCounts.warnings !== 1 ? 's' : ''}
+                      </span>
+                    )}
+                  </div>
+                  {hasErrors && (
+                    <p className="mt-1 text-error text-xs" data-testid="validation-error-message">
+                      Errors must be resolved before import.
+                    </p>
+                  )}
+                  {!hasErrors && hasWarnings && (
+                    <label className="flex items-center gap-2 mt-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={acknowledgeWarnings}
+                        onChange={(e) => setAcknowledgeWarnings(e.target.checked)}
+                        data-testid="acknowledge-warnings-checkbox"
+                      />
+                      <span className="text-text-secondary">
+                        I acknowledge these warnings and want to proceed
+                      </span>
+                    </label>
+                  )}
+                </div>
+              )}
             </Panel>
           </>
         )}
@@ -609,7 +747,8 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
           <Button
             variant="primary"
             onClick={handleImport}
-            disabled={isLoading || !dmpFile || selectedSections.size === 0}
+            disabled={isLoading || !dmpFile || selectedSections.size === 0 || !canImport}
+            data-testid="import-button"
           >
             {isLoading ? 'Importing...' : `Import ${selectedSections.size} Section${selectedSections.size !== 1 ? 's' : ''}`}
           </Button>

@@ -196,7 +196,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 45,
-                      heading_out: 46,
+                      heading_out: 225, // ~180° apart (valid backsight)
                       length: 10.5,
                       depth_in: -2.0,
                       depth_out: -2.5,
@@ -216,7 +216,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 90,
-                      heading_out: 91,
+                      heading_out: 270, // ~180° apart (valid backsight)
                       length: 15.2,
                       depth_in: -2.5,
                       depth_out: -5.0,
@@ -236,7 +236,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 135,
-                      heading_out: 136,
+                      heading_out: 315, // ~180° apart (valid backsight)
                       length: 8.0,
                       depth_in: -5.0,
                       depth_out: -3.0,
@@ -263,7 +263,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 270,
-                      heading_out: 271,
+                      heading_out: 90, // ~180° apart (valid backsight)
                       length: 5.0,
                       depth_in: -3.0,
                       depth_out: -4.0,
@@ -283,7 +283,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 280,
-                      heading_out: 281,
+                      heading_out: 100, // ~180° apart (valid backsight)
                       length: 7.5,
                       depth_in: -4.0,
                       depth_out: -6.0,
@@ -310,7 +310,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 180,
-                      heading_out: 181,
+                      heading_out: 0, // ~180° apart (valid backsight)
                       length: 12.0,
                       depth_in: -1.0,
                       depth_out: -2.0,
@@ -329,7 +329,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 190,
-                      heading_out: 191,
+                      heading_out: 10, // ~180° apart (valid backsight)
                       length: 9.0,
                       depth_in: -2.0,
                       depth_out: -3.0,
@@ -348,7 +348,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 200,
-                      heading_out: 201,
+                      heading_out: 20, // ~180° apart (valid backsight)
                       length: 50.5,
                       depth_in: -3.0,
                       depth_out: -8.0,
@@ -374,7 +374,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 90,
-                      heading_out: 91,
+                      heading_out: 270, // ~180° apart (valid backsight)
                       length: 6.0,
                       depth_in: -2.0,
                       depth_out: -3.0,
@@ -390,7 +390,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 100,
-                      heading_out: 101,
+                      heading_out: 280, // ~180° apart (valid backsight)
                       length: 8.0,
                       depth_in: -3.0,
                       depth_out: -4.0,
@@ -413,6 +413,97 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   direction: 'in',
                   date: new Date().toISOString().split('T')[0],
                   shots: [],
+                },
+                {
+                  name: 'Validation Test Section',
+                  direction: 'in',
+                  date: new Date().toISOString().split('T')[0],
+                  shots: [
+                    {
+                      // Shot with warning: length exceeds max (50.0m)
+                      shot_type: 'Standard',
+                      heading_in: 45,
+                      heading_out: 46,
+                      length: 55.0,
+                      depth_in: -1.0,
+                      depth_out: -2.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 1.0,
+                      right: 1.0,
+                      up: 1.0,
+                      down: 1.0,
+                      temperature: 18.0,
+                      hour: 15,
+                      minute: 0,
+                      second: 0,
+                      marker_index: 0,
+                      comment: 'Long shot - exceeds max length',
+                    },
+                    {
+                      // Shot with error: azimuth out of range
+                      shot_type: 'Standard',
+                      heading_in: 400,
+                      heading_out: 45,
+                      length: 10.0,
+                      depth_in: -2.0,
+                      depth_out: -3.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 1.0,
+                      right: 1.0,
+                      up: 1.0,
+                      down: 1.0,
+                      temperature: 18.0,
+                      hour: 15,
+                      minute: 5,
+                      second: 0,
+                      marker_index: 1,
+                      comment: 'Invalid azimuth - out of range',
+                    },
+                    {
+                      // Shot with warning: excessive depth change
+                      shot_type: 'Standard',
+                      heading_in: 90,
+                      heading_out: 91,
+                      length: 8.0,
+                      depth_in: -3.0,
+                      depth_out: -15.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 1.0,
+                      right: 1.0,
+                      up: 1.0,
+                      down: 1.0,
+                      temperature: 18.0,
+                      hour: 15,
+                      minute: 10,
+                      second: 0,
+                      marker_index: 2,
+                      comment: 'Excessive depth change',
+                    },
+                    {
+                      // Shot with warning: LRUD exceeds max
+                      shot_type: 'Standard',
+                      heading_in: 120,
+                      heading_out: 121,
+                      length: 6.0,
+                      depth_in: -15.0,
+                      depth_out: -16.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 60.0,
+                      right: 1.0,
+                      up: 1.0,
+                      down: 1.0,
+                      temperature: 18.0,
+                      hour: 15,
+                      minute: 15,
+                      second: 0,
+                      marker_index: 3,
+                      comment: 'Large LRUD value',
+                    },
+                  ],
                 },
               ],
             };
