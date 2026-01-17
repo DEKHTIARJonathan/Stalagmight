@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, Fragment, KeyboardEvent } from 'react';
+import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
@@ -52,13 +52,14 @@ interface TruncatedCommentProps {
  * A component that displays a comment with truncation and expand/collapse functionality.
  * - Short comments (<=50 chars) display in full
  * - Long comments are truncated with "..." and an expand button
- * - Keyboard accessible: Tab to focus, Enter/Space to toggle
+ * - Keyboard accessible: Tab to focus, Enter/Space to toggle (native button behavior)
  */
 function TruncatedComment({ comment, sectionIndex, shotIndex }: TruncatedCommentProps) {
   const [expanded, setExpanded] = useState(false);
 
-  // No comment - show empty cell
-  if (!comment) {
+  // No comment (null/undefined) - show dash to indicate empty
+  // Note: Empty string is treated as no comment per DMP format
+  if (comment == null || comment === '') {
     return <span>-</span>;
   }
 
@@ -70,19 +71,12 @@ function TruncatedComment({ comment, sectionIndex, shotIndex }: TruncatedComment
   }
 
   const handleToggle = () => {
-    setExpanded(!expanded);
-  };
-
-  const handleKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      handleToggle();
-    }
+    setExpanded((prev) => !prev);
   };
 
   return (
-    <div className="flex items-start gap-1">
-      <span className={expanded ? '' : 'break-all'}>
+    <div className="flex items-start gap-1 min-w-0">
+      <span className={expanded ? 'break-words whitespace-normal' : 'truncate'}>
         {expanded ? comment : `${comment.slice(0, MAX_COMMENT_LENGTH)}...`}
       </span>
       <button
@@ -90,7 +84,6 @@ function TruncatedComment({ comment, sectionIndex, shotIndex }: TruncatedComment
         aria-expanded={expanded}
         aria-label={expanded ? 'Collapse comment' : 'Expand comment'}
         onClick={handleToggle}
-        onKeyDown={handleKeyDown}
         data-testid={`comment-expand-${sectionIndex}-${shotIndex}`}
         className="text-text-secondary hover:text-text-primary transition-colors focus:outline-none focus:ring-1 focus:ring-accent rounded flex-shrink-0"
       >
@@ -175,6 +168,8 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
         setSelectedSections(new Set());
         setExpandedSections(new Set());
         setError(null);
+        // Reset auto-load flag so the new file gets loaded
+        autoLoadAttempted.current = false;
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to open file dialog');

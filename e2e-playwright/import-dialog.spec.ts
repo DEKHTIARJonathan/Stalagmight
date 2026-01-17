@@ -514,7 +514,7 @@ test.describe('Comment Column', () => {
     await expect(commentCell).not.toContainText('right wall');
   });
 
-  test('keyboard accessible - Tab and Enter to toggle', async ({ page }) => {
+  test('keyboard accessible - Enter and Space to toggle when focused', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
     // Expand first section (Main Passage)
@@ -523,18 +523,18 @@ test.describe('Comment Column', () => {
 
     const expandCommentBtn = page.locator('[data-testid="comment-expand-0-2"]');
 
-    // Focus the expand button
+    // Focus the expand button (simulating Tab navigation to the button)
     await expandCommentBtn.focus();
     await expect(expandCommentBtn).toBeFocused();
 
     // Initially collapsed
     await expect(expandCommentBtn).toHaveText('▶');
 
-    // Press Enter to expand
+    // Press Enter to expand (native button behavior)
     await page.keyboard.press('Enter');
     await expect(expandCommentBtn).toHaveText('▼');
 
-    // Press Space to collapse
+    // Press Space to collapse (native button behavior)
     await page.keyboard.press('Space');
     await expect(expandCommentBtn).toHaveText('▶');
   });
