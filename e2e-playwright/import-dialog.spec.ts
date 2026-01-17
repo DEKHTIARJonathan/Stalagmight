@@ -750,16 +750,21 @@ test.describe('Section Preview', () => {
     await expect(preview).toBeVisible();
   });
 
-  test('preview shows placeholder when no section expanded', async ({ page }) => {
+  test('preview shows section on initial load (first selected)', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Initially no section is expanded, so preview should show placeholder text
-    const preview = page.locator('[data-testid="section-preview"]');
-    await expect(preview).toContainText('Select a section to preview');
-
-    // The map container is always mounted (for proper lifecycle), but overlay hides it
+    // On file load, non-empty sections are auto-selected and preview shows first one
+    // The map container should be visible with a canvas
     const mapContainer = page.locator('[data-testid="section-preview-map"]');
-    await expect(mapContainer).toBeVisible(); // Container exists
+    await expect(mapContainer).toBeVisible();
+
+    // MapLibre canvas should be initialized
+    const canvas = mapContainer.locator('canvas.maplibregl-canvas');
+    await expect(canvas).toBeVisible({ timeout: 5000 });
+
+    // Placeholder should NOT be visible since sections are auto-selected
+    const preview = page.locator('[data-testid="section-preview"]');
+    await expect(preview).not.toContainText('Select a section to preview');
   });
 
   test('preview shows map when section is expanded', async ({ page }) => {
@@ -855,21 +860,18 @@ test.describe('Section Preview', () => {
     await expect(canvas).toBeVisible();
   });
 
-  test('collapsing all sections shows placeholder again', async ({ page }) => {
+  test('deselecting all sections shows placeholder', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Expand and then collapse first section
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    const mapContainer = page.locator('[data-testid="section-preview-map"]');
-    await expect(mapContainer).toBeVisible();
-
-    // Collapse the section
-    await expandButton.click();
-
-    // Placeholder should be visible again
+    // On load, sections are auto-selected, preview shows first one
     const preview = page.locator('[data-testid="section-preview"]');
+    await expect(preview).not.toContainText('Select a section to preview');
+
+    // Click "None" to deselect all sections
+    const noneButton = page.locator('button:has-text("None")');
+    await noneButton.click();
+
+    // Placeholder should be visible after deselecting all
     await expect(preview).toContainText('Select a section to preview');
   });
 });
