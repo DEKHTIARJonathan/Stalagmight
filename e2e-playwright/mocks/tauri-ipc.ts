@@ -542,6 +542,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] merge_stations called with:', args);
             return { success: true };
 
+          case 'move_section':
+            // Mock move section - just return success
+            console.log('[Mock IPC] move_section called with:', args);
+            return { success: true };
+
           case 'undo':
           case 'redo':
             return { success: true };
