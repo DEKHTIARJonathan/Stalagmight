@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-17T08:37:51.228336Z",
+  "depends_on": [],
+  "epic": "fn-18-8yi",
+  "id": "fn-18-8yi.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-18-8yi.1.md",
+  "status": "todo",
+  "title": "Add direction field with database migration",
+  "updated_at": "2026-01-17T08:38:04.284019Z"
+}

@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-8-wdq",
+  "created_at": "2026-01-17T08:35:57.567725Z",
+  "depends_on_epics": [],
+  "id": "fn-8-wdq",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-8-wdq.md",
+  "status": "open",
+  "title": "Add inline validation warnings to DMP Import Dialog",
+  "updated_at": "2026-01-17T08:36:16.372047Z"
+}

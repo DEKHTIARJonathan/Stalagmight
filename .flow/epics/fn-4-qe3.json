@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-4-qe3",
+  "created_at": "2026-01-17T08:29:05.708020Z",
+  "depends_on_epics": [],
+  "id": "fn-4-qe3",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-4-qe3.md",
+  "status": "open",
+  "title": "Add LRUD columns to DMP Import Dialog",
+  "updated_at": "2026-01-17T08:29:27.890999Z"
+}

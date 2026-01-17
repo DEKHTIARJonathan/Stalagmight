@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-17T08:34:40.228442Z",
+  "depends_on": [
+    "fn-6-2i0.1"
+  ],
+  "epic": "fn-6-2i0",
+  "id": "fn-6-2i0.2",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-6-2i0.2.md",
+  "status": "todo",
+  "title": "Add expandable comment column UI",
+  "updated_at": "2026-01-17T08:35:04.780668Z"
+}
