@@ -481,8 +481,15 @@ function utmToLatLon(
  * Parse MGRS (Military Grid Reference System) format.
  * Examples: "31UDQ4825111932", "31U DQ 48251 11932"
  *
- * Note: Uses simplified conversion via UTM. May have small errors
- * in edge cases. For survey-grade accuracy, use a dedicated library.
+ * WARNING: This implementation uses a SIMPLIFIED conversion algorithm.
+ * It does not implement the full MGRS specification with proper band
+ * minimum northing tables and 100km square rollover logic. Results may
+ * be inaccurate (potentially kilometers off) for coordinates in certain
+ * zones or near band boundaries.
+ *
+ * For survey-grade accuracy, use a dedicated MGRS library such as the
+ * npm 'mgrs' package. This simplified version is suitable for format
+ * validation and approximate location estimation only.
  */
 export function parseMGRS(input: string): GpsParseResult | GpsParseError {
   const trimmed = input.trim().replace(/\s+/g, '').toUpperCase();
@@ -799,12 +806,17 @@ function decodeOpenLocationCode(code: string): { lat: number; lon: number } | { 
 }
 
 /**
- * Parse What3words format.
+ * Validate What3words format.
  * Examples: "///filled.count.soap", "filled.count.soap"
  *
- * Note: What3words requires API access for actual conversion.
- * This function validates the format but cannot convert offline.
- * Returns an error indicating API is required.
+ * IMPORTANT: What3words is a proprietary encoding that requires API access
+ * for coordinate conversion. This function validates the format only.
+ * Per the spec "Works offline (API optional for Plus Codes/What3words)",
+ * offline format validation is the expected behavior.
+ *
+ * Returns an error with format='What3words' for valid formats (to indicate
+ * the format was recognized but conversion requires API) or an error
+ * with a different message for invalid formats.
  */
 export function parseWhat3words(input: string): GpsParseResult | GpsParseError {
   const trimmed = input.trim().toLowerCase();
@@ -1067,7 +1079,10 @@ export function parseGps(input: string): GpsParseResult | GpsParseError {
  * Format GPS coordinates to a specific format.
  * Supports DD, DMS, and DDM output formats.
  *
- * @throws Error for unsupported output formats (UTM, MGRS, PlusCodes, What3words)
+ * For unsupported formats (UTM, MGRS, PlusCodes, What3words), falls back
+ * to DD format silently. This is intentional to avoid breaking UI code
+ * that may pass any format. For strict format handling, check the format
+ * before calling this function.
  */
 export function formatGpsCoordinates(
   coords: GpsCoordinates,
