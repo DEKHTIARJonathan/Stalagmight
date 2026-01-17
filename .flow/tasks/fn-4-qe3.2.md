@@ -50,9 +50,8 @@ test.describe('LRUD Columns', () => {
 - [ ] Test: "-" shown for undefined/missing LRUD (per epic fn-4-qe3 spec)
 - [ ] All Playwright tests pass (`pnpm test:ui`)
 ## Done summary
-TBD
-
+Added comprehensive Playwright E2E tests for LRUD columns feature, including mock data with varied LRUD scenarios (full values, all zeros, mixed, undefined) and 10 test cases covering expansion, display, and edge cases.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: b35405f, f8220ba, ec68a97, 490e435
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
