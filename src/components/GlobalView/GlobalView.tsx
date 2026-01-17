@@ -1,10 +1,11 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useProject } from '../../hooks/useProject';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { Button } from '../common/Button';
 import SystemCard from './SystemCard';
 import GlobalViewMap from './GlobalViewMap';
+import MetadataPanel from './MetadataPanel';
 
 type ViewTab = 'map' | 'list';
 
@@ -17,10 +18,11 @@ export default function GlobalView() {
     handleImportDmp,
   } = useProject();
 
-  const { loadRecentProjects, openProject } = useProjectStore();
+  const { loadRecentProjects, openProject, removeFromRecentProjects } = useProjectStore();
   const { setView } = useUIStore();
   const [activeTab, setActiveTab] = useState<ViewTab>('list');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [metadataPanelCollapsed, setMetadataPanelCollapsed] = useState(false);
 
   useEffect(() => {
     loadRecentProjects();
@@ -36,13 +38,28 @@ export default function GlobalView() {
     setSelectedProjectId(filePath);
   }, []);
 
-  // Handle project open (double-click on map)
+  // Handle project open (double-click on map or from metadata panel)
   const handleProjectOpen = useCallback(async (filePath: string) => {
     const result = await openProject(filePath);
     if (result.success) {
       setView('single');
     }
   }, [openProject, setView]);
+
+  // Handle remove from recent (from metadata panel)
+  const handleRemoveFromRecent = useCallback(async (filePath: string) => {
+    await removeFromRecentProjects(filePath);
+    // Clear selection if the removed project was selected
+    if (selectedProjectId === filePath) {
+      setSelectedProjectId(null);
+    }
+  }, [removeFromRecentProjects, selectedProjectId]);
+
+  // Get the selected project metadata
+  const selectedProject = useMemo(() => {
+    if (!selectedProjectId) return null;
+    return recentProjects.find(p => p.file_path === selectedProjectId) || null;
+  }, [selectedProjectId, recentProjects]);
 
   return (
     <div data-testid="global-view" className="h-full flex flex-col">
@@ -85,43 +102,59 @@ export default function GlobalView() {
       )}
 
       {/* Content */}
-      <main className="flex-1 overflow-hidden">
-        {isLoading ? (
-          <div className="flex items-center justify-center h-full">
-            <div className="text-text-secondary">Loading...</div>
-          </div>
-        ) : recentProjects.length === 0 ? (
-          <div className="h-full overflow-auto p-6">
-            <EmptyState
-              onImport={handleImportDmp}
-              onNew={handleNewProject}
-              onOpen={handleOpenProject}
-            />
-          </div>
-        ) : activeTab === 'map' ? (
-          <GlobalViewMap
-            projects={recentProjects}
-            selectedProjectId={selectedProjectId}
-            onProjectSelect={handleProjectSelect}
-            onProjectOpen={handleProjectOpen}
-          />
-        ) : (
-          <div className="h-full overflow-auto p-6">
-            <h2 className="text-lg font-medium mb-4">Recent Projects</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {recentProjects.map((project) => (
-                <SystemCard
-                  key={project.file_path}
-                  name={project.name}
-                  location={project.location}
-                  filePath={project.file_path}
-                  modifiedAt={project.modified_at}
-                  sectionCount={project.section_count}
-                  totalLength={project.total_length}
-                />
-              ))}
+      <main className="flex-1 overflow-hidden flex">
+        {/* Main content area */}
+        <div className="flex-1 overflow-hidden">
+          {isLoading ? (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-text-secondary">Loading...</div>
             </div>
-          </div>
+          ) : recentProjects.length === 0 ? (
+            <div className="h-full overflow-auto p-6">
+              <EmptyState
+                onImport={handleImportDmp}
+                onNew={handleNewProject}
+                onOpen={handleOpenProject}
+              />
+            </div>
+          ) : activeTab === 'map' ? (
+            <GlobalViewMap
+              projects={recentProjects}
+              selectedProjectId={selectedProjectId}
+              onProjectSelect={handleProjectSelect}
+              onProjectOpen={handleProjectOpen}
+            />
+          ) : (
+            <div className="h-full overflow-auto p-6">
+              <h2 className="text-lg font-medium mb-4">Recent Projects</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {recentProjects.map((project) => (
+                  <SystemCard
+                    key={project.file_path}
+                    name={project.name}
+                    location={project.location}
+                    filePath={project.file_path}
+                    modifiedAt={project.modified_at}
+                    sectionCount={project.section_count}
+                    totalLength={project.total_length}
+                    isSelected={project.file_path === selectedProjectId}
+                    onSelect={() => handleProjectSelect(project.file_path)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Metadata Panel - only show when projects exist */}
+        {recentProjects.length > 0 && (
+          <MetadataPanel
+            project={selectedProject}
+            onOpenProject={handleProjectOpen}
+            onRemoveFromRecent={handleRemoveFromRecent}
+            collapsed={metadataPanelCollapsed}
+            onCollapseChange={setMetadataPanelCollapsed}
+          />
         )}
       </main>
 

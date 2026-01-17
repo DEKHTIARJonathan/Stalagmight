@@ -8,6 +8,8 @@ interface SystemCardProps {
   modifiedAt: string;
   sectionCount: number;
   totalLength: number;
+  isSelected?: boolean;
+  onSelect?: () => void;
 }
 
 export default function SystemCard({
@@ -17,19 +19,25 @@ export default function SystemCard({
   modifiedAt,
   sectionCount,
   totalLength,
+  isSelected,
+  onSelect,
 }: SystemCardProps) {
   const { openProject } = useProjectStore();
   const { setView } = useUIStore();
 
-  const handleClick = async () => {
-    const result = await openProject(filePath);
-    if (result.success) {
-      setView('single');
+  const handleClick = () => {
+    // Single click selects the card
+    if (onSelect) {
+      onSelect();
     }
   };
 
   const handleDoubleClick = async () => {
-    await handleClick();
+    // Double click opens the project
+    const result = await openProject(filePath);
+    if (result.success) {
+      setView('single');
+    }
   };
 
   const formatDate = (dateStr: string) => {
@@ -54,12 +62,26 @@ export default function SystemCard({
 
   return (
     <div
-      className="
-        bg-panel border border-border rounded-lg p-4
-        cursor-pointer hover:border-accent transition-colors
-      "
+      className={`
+        bg-panel border rounded-lg p-4
+        cursor-pointer transition-colors
+        ${isSelected
+          ? 'border-accent ring-1 ring-accent'
+          : 'border-border hover:border-accent'
+        }
+      `}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
+      data-testid={`system-card-${filePath}`}
+      role="button"
+      tabIndex={0}
+      aria-pressed={isSelected}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          handleClick();
+        }
+      }}
     >
       <h3 className="text-lg font-medium mb-1">{name}</h3>
       {location && (

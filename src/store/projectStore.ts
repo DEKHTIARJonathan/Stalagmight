@@ -48,6 +48,7 @@ interface ProjectStore {
   resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<void>;
   unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
+  removeFromRecentProjects: (path: string) => Promise<CommandResult>;
 
   createSection: (data: SectionData) => Promise<CommandResult>;
   updateSection: (sectionId: SectionId, updates: SectionUpdates) => Promise<CommandResult>;
@@ -237,6 +238,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       set({ recentProjects: recent });
     } catch (e) {
       console.error('Failed to load recent projects:', e);
+    }
+  },
+
+  removeFromRecentProjects: async (path: string) => {
+    try {
+      const result = await invoke<CommandResult>('remove_from_recent_projects', { path });
+      if (result.success) {
+        // Refresh the list after removal
+        await get().loadRecentProjects();
+      }
+      return result;
+    } catch (e) {
+      console.error('Failed to remove from recent projects:', e);
+      return { success: false, error: String(e), warnings: [] };
     }
   },
 
