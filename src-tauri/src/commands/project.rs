@@ -55,6 +55,12 @@ pub fn list_recent_projects(state: State<AppState>) -> Vec<ProjectMetadata> {
     state.get_recent_projects()
 }
 
+/// Remove a project from the recent projects list
+#[tauri::command]
+pub fn remove_from_recent_projects(state: State<AppState>, path: PathBuf) -> CommandResult {
+    state.remove_from_recent_projects(path)
+}
+
 /// Combined project state for frontend
 #[derive(serde::Serialize)]
 pub struct ProjectState {

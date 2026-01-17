@@ -165,12 +165,21 @@ test.describe('GlobalView Map', () => {
       await expect(page.locator('h3:has-text("Local Survey (No GPS)")')).toBeVisible();
     });
 
-    test('should open project when clicking on card', async ({ page }) => {
-      // Click on a project card
-      await page.locator('h3:has-text("Cave System Alpha")').click();
+    test('should open project when double-clicking on card', async ({ page }) => {
+      // Double-click on a project card to open it
+      await page.locator('h3:has-text("Cave System Alpha")').dblclick();
 
       // Should transition to SingleSystemView
       await expect(page.locator('canvas').first()).toBeVisible({ timeout: 10000 });
+    });
+
+    test('should select project on single click (for metadata panel)', async ({ page }) => {
+      // Single click on a project card to select it
+      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.cvproj"]');
+      await card.click();
+
+      // Card should show selected state
+      await expect(card).toHaveClass(/ring-accent/);
     });
   });
 });

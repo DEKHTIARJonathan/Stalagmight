@@ -709,6 +709,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'get_project_warnings':
             return [];
 
+          case 'remove_from_recent_projects':
+            // Mock remove from recent - just return success
+            console.log('[Mock IPC] remove_from_recent_projects called with:', args);
+            return { success: true };
+
           // Display settings (per-project)
           case 'load_display_settings':
             // Return empty settings for mocked tests (uses defaults)
@@ -747,6 +752,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'plugin:fs|exists':
             return false;
+
+          // Opener plugin commands
+          case 'plugin:opener|reveal_item_in_dir':
+            console.log('[Mock IPC] reveal_item_in_dir called with:', args);
+            return undefined;
+
+          case 'plugin:opener|open_path':
+            console.log('[Mock IPC] open_path called with:', args);
+            return undefined;
 
           default:
             console.warn(`[Mock IPC] Unhandled command: ${cmd}`);
