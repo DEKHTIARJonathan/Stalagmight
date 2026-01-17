@@ -9,3 +9,6 @@ Math.min/max with spread operator can cause stack overflow on large arrays - use
 
 ## 2026-01-17 manual [pitfall]
 Frontend validation rules must match backend Validator exactly to avoid preview/import mismatches
+
+## 2026-01-17 manual [pitfall]
+Per-project settings need in-memory cache for new unsaved projects (no DB exists until first save)
