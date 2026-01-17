@@ -1,14 +1,14 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T13:19:04.806434Z",
   "created_at": "2026-01-17T08:37:51.049378Z",
   "depends_on": [],
   "epic": "fn-17-8ua",
   "id": "fn-17-8ua.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-17-8ua.1.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Update create_section to return section ID",
-  "updated_at": "2026-01-17T08:38:04.244908Z"
+  "updated_at": "2026-01-17T13:19:04.806446Z"
 }

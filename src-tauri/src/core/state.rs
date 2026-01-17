@@ -730,9 +730,14 @@ impl AppState {
         };
 
         let section = project.add_section(data);
-        tracing::info!(section_id = section.id, "Section created");
+        let section_id = section.id;
+        tracing::info!(section_id = section_id, "Section created");
 
-        CommandResult::success_with_warnings(warnings)
+        if warnings.is_empty() {
+            CommandResult::success_with_section_id(section_id)
+        } else {
+            CommandResult::success_with_section_id_and_warnings(section_id, warnings)
+        }
     }
 
     fn delete_section(&self, section_id: SectionId) -> CommandResult {
@@ -1050,6 +1055,7 @@ impl AppState {
 
     fn execute_batch(&self, commands: Vec<Command>) -> CommandResult {
         let mut all_warnings = Vec::new();
+        let mut section_ids = Vec::new();
 
         for cmd in commands {
             let result = self.execute(cmd);
@@ -1057,9 +1063,18 @@ impl AppState {
                 return result;
             }
             all_warnings.extend(result.warnings);
+            // Collect section IDs from CreateSection commands
+            if let Some(id) = result.section_id {
+                section_ids.push(id);
+            }
+            section_ids.extend(result.section_ids);
         }
 
-        CommandResult::success_with_warnings(all_warnings)
+        if section_ids.is_empty() {
+            CommandResult::success_with_warnings(all_warnings)
+        } else {
+            CommandResult::success_with_section_ids_and_warnings(section_ids, all_warnings)
+        }
     }
 
     // === Undo/Redo operations ===
