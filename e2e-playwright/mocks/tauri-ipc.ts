@@ -211,6 +211,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                       minute: 30,
                       second: 0,
                       marker_index: 0,
+                      comment: 'Entrance point with good visibility',
                     },
                     {
                       shot_type: 'Standard',
@@ -230,6 +231,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                       minute: 35,
                       second: 0,
                       marker_index: 1,
+                      // No comment - testing undefined case
                     },
                     {
                       shot_type: 'Standard',
@@ -249,6 +251,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                       minute: 40,
                       second: 0,
                       marker_index: 2,
+                      comment: 'Large chamber with stalactites on ceiling, white formations visible on right wall',
                     },
                   ],
                 },
@@ -275,6 +278,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                       minute: 0,
                       second: 0,
                       marker_index: 0,
+                      comment: 'Narrow restriction',
                     },
                     {
                       shot_type: 'Standard',
@@ -294,6 +298,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                       minute: 5,
                       second: 0,
                       marker_index: 1,
+                      // No comment
                     },
                   ],
                 },
