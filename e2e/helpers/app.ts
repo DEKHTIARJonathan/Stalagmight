@@ -446,3 +446,145 @@ export async function elementWithTextExists(text: string): Promise<boolean> {
   const element = await $(`//*[contains(text(), "${text}")]`);
   return await element.isExisting();
 }
+
+/**
+ * Import a DMP file by providing the path directly to the store.
+ * This bypasses the file dialog for E2E testing.
+ * Returns the import result (DmpFile or error).
+ */
+export async function importDmpFile(path: string): Promise<{ success: boolean; error?: string; sectionCount?: number }> {
+  return await browser.executeAsync(
+    async (
+      filePath: string,
+      done: (result: { success: boolean; error?: string; sectionCount?: number }) => void
+    ) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              importDmp: (path: string) => Promise<{ sections: unknown[] }>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!e2e) {
+        done({ success: false, error: 'E2E helpers not found' });
+        return;
+      }
+
+      try {
+        const result = await e2e.projectStore.getState().importDmp(filePath);
+        done({ success: true, sectionCount: result.sections.length });
+      } catch (err) {
+        done({ success: false, error: String(err) });
+      }
+    },
+    path
+  );
+}
+
+/**
+ * Open DMP import dialog and load a file using the dialog.
+ * This simulates the user entering a file path directly (since we can't use the file dialog in tests).
+ */
+export async function openDmpImportWithFile(filePath: string): Promise<void> {
+  // Open the DMP Import Dialog
+  await openDmpImportDialog();
+
+  // Set the file path directly via store and trigger load
+  await browser.executeAsync(
+    async (
+      path: string,
+      done: (result: { success: boolean; error?: string }) => void
+    ) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: {
+            getState: () => {
+              openDialog: (name: string, data?: unknown) => void;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!e2e) {
+        done({ success: false, error: 'E2E helpers not found' });
+        return;
+      }
+
+      try {
+        // Re-open dialog with file path data
+        e2e.uiStore.getState().openDialog('dmp-import', { filePath: path });
+        done({ success: true });
+      } catch (err) {
+        done({ success: false, error: String(err) });
+      }
+    },
+    filePath
+  );
+
+  // Wait for file to load (sections become visible)
+  await browser.pause(2000);
+}
+
+/**
+ * Get the current project state including sections.
+ */
+export async function getProjectSections(): Promise<Array<{ id: number; name: string; shots: unknown[] }>> {
+  return await browser.executeAsync(
+    (done: (sections: Array<{ id: number; name: string; shots: unknown[] }>) => void) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              project: { sections: Array<{ id: number; name: string; shots: unknown[] }> } | null;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!e2e || !e2e.projectStore.getState().project) {
+        done([]);
+        return;
+      }
+
+      done(e2e.projectStore.getState().project?.sections ?? []);
+    }
+  );
+}
+
+/**
+ * Get project statistics from the store.
+ */
+export async function getProjectStats(): Promise<{ totalLength: number; stationCount: number; sectionCount: number } | null> {
+  return await browser.executeAsync(
+    (done: (stats: { totalLength: number; stationCount: number; sectionCount: number } | null) => void) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              stats: { total_length: number; station_count: number; section_count: number } | null;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!e2e || !e2e.projectStore.getState().stats) {
+        done(null);
+        return;
+      }
+
+      const stats = e2e.projectStore.getState().stats;
+      if (stats) {
+        done({
+          totalLength: stats.total_length,
+          stationCount: stats.station_count,
+          sectionCount: stats.section_count,
+        });
+      } else {
+        done(null);
+      }
+    }
+  );
+}
