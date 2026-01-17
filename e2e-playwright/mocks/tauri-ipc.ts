@@ -523,6 +523,48 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ],
                 },
                 {
+                  name: 'Undefined LRUD Section',
+                  direction: 'in',
+                  date: new Date().toISOString().split('T')[0],
+                  shots: [
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 90,
+                      heading_out: 91,
+                      length: 6.0,
+                      depth_in: -2.0,
+                      depth_out: -3.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      // LRUD fields completely omitted (undefined)
+                      temperature: 18.0,
+                      hour: 14,
+                      minute: 0,
+                      second: 0,
+                      marker_index: 0,
+                    },
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 100,
+                      heading_out: 101,
+                      length: 8.0,
+                      depth_in: -3.0,
+                      depth_out: -4.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      // Partial LRUD - only left and up defined
+                      left: 1.2,
+                      up: 2.5,
+                      // right and down are undefined
+                      temperature: 17.8,
+                      hour: 14,
+                      minute: 5,
+                      second: 0,
+                      marker_index: 1,
+                    },
+                  ],
+                },
+                {
                   name: 'Empty Section',
                   direction: 'in',
                   date: new Date().toISOString().split('T')[0],

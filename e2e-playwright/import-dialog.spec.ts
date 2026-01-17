@@ -280,13 +280,33 @@ test.describe('LRUD Columns', () => {
     await expect(page.locator('[data-testid="shot-row-1-0"]')).toBeVisible();
   });
 
+  test('undefined LRUD shows as dash', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand "Undefined LRUD Section" (index 3) which has shots with missing LRUD fields
+    const expandButton = page.locator('[data-testid="section-expand-3"]');
+    await expandButton.click();
+
+    // First shot has all LRUD fields undefined - should show "-" for all
+    await expect(page.locator('[data-testid="lrud-left-3-0"]')).toHaveText('-');
+    await expect(page.locator('[data-testid="lrud-right-3-0"]')).toHaveText('-');
+    await expect(page.locator('[data-testid="lrud-up-3-0"]')).toHaveText('-');
+    await expect(page.locator('[data-testid="lrud-down-3-0"]')).toHaveText('-');
+
+    // Second shot has partial LRUD: left=1.2, up=2.5, right and down undefined
+    await expect(page.locator('[data-testid="lrud-left-3-1"]')).toHaveText('1.2');
+    await expect(page.locator('[data-testid="lrud-right-3-1"]')).toHaveText('-');
+    await expect(page.locator('[data-testid="lrud-up-3-1"]')).toHaveText('2.5');
+    await expect(page.locator('[data-testid="lrud-down-3-1"]')).toHaveText('-');
+  });
+
   test('empty section has no expand button', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Empty Section (index 3) should not have an expand button
-    // The expand button should not exist for empty sections
-    const expandButton = page.locator('[data-testid="section-expand-3"]');
-    await expect(expandButton).not.toBeVisible();
+    // Empty Section (index 4) should not have an expand button
+    // Use toHaveCount(0) since the element should not be rendered at all
+    const expandButton = page.locator('[data-testid="section-expand-4"]');
+    await expect(expandButton).toHaveCount(0);
 
     // Verify the section row still shows the name
     await expect(page.locator('text=Empty Section')).toBeVisible();
@@ -307,7 +327,7 @@ test.describe('LRUD Columns', () => {
     await expandButton.click();
 
     // Shot rows should be hidden
-    await expect(shotRow).not.toBeVisible();
+    await expect(shotRow).toHaveCount(0);
     await expect(expandButton).toHaveText('▶');
   });
 });
