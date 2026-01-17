@@ -424,3 +424,182 @@ test.describe('Pitch Column', () => {
     await expect(page.locator('[data-testid="pitch-0-2"]')).toBeVisible();
   });
 });
+
+test.describe('Comment Column', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+  });
+
+  test('comment column visible in shot preview', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand first section
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    // Verify Comment column header is visible
+    const dialog = page.locator('[role="dialog"]');
+    await expect(dialog.locator('th', { hasText: /^Comment$/ })).toBeVisible();
+
+    // Verify comment cells exist with data-testid
+    await expect(page.locator('[data-testid="comment-0-0"]')).toBeVisible();
+    await expect(page.locator('[data-testid="comment-0-1"]')).toBeVisible();
+    await expect(page.locator('[data-testid="comment-0-2"]')).toBeVisible();
+  });
+
+  test('short comment displays in full', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand first section (Main Passage)
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    // First shot has short comment: "Entrance point with good visibility" (36 chars < 50)
+    const commentCell = page.locator('[data-testid="comment-0-0"]');
+    await expect(commentCell).toContainText('Entrance point with good visibility');
+
+    // No expand button should be present for short comments
+    const expandCommentBtn = page.locator('[data-testid="comment-expand-0-0"]');
+    await expect(expandCommentBtn).toHaveCount(0);
+  });
+
+  test('long comment truncated at 50 chars with expand button', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand first section (Main Passage)
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    // Third shot has long comment (81 chars): "Large chamber with stalactites on ceiling, white formations visible on right wall"
+    const commentCell = page.locator('[data-testid="comment-0-2"]');
+
+    // Should show truncated text with "..."
+    await expect(commentCell).toContainText('Large chamber with stalactites on ceiling, white');
+    await expect(commentCell).toContainText('...');
+
+    // Expand button should be visible
+    const expandCommentBtn = page.locator('[data-testid="comment-expand-0-2"]');
+    await expect(expandCommentBtn).toBeVisible();
+    await expect(expandCommentBtn).toHaveText('▶');
+  });
+
+  test('click expands and collapses long comment', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand first section (Main Passage)
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    const commentCell = page.locator('[data-testid="comment-0-2"]');
+    const expandCommentBtn = page.locator('[data-testid="comment-expand-0-2"]');
+
+    // Initially collapsed
+    await expect(expandCommentBtn).toHaveText('▶');
+    await expect(commentCell).not.toContainText('right wall');
+
+    // Click to expand
+    await expandCommentBtn.click();
+
+    // Now expanded - shows full text and down arrow
+    await expect(expandCommentBtn).toHaveText('▼');
+    await expect(commentCell).toContainText('right wall');
+
+    // Click to collapse again
+    await expandCommentBtn.click();
+
+    // Back to collapsed state
+    await expect(expandCommentBtn).toHaveText('▶');
+    await expect(commentCell).not.toContainText('right wall');
+  });
+
+  test('keyboard accessible - Tab and Enter to toggle', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand first section (Main Passage)
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    const expandCommentBtn = page.locator('[data-testid="comment-expand-0-2"]');
+
+    // Focus the expand button
+    await expandCommentBtn.focus();
+    await expect(expandCommentBtn).toBeFocused();
+
+    // Initially collapsed
+    await expect(expandCommentBtn).toHaveText('▶');
+
+    // Press Enter to expand
+    await page.keyboard.press('Enter');
+    await expect(expandCommentBtn).toHaveText('▼');
+
+    // Press Space to collapse
+    await page.keyboard.press('Space');
+    await expect(expandCommentBtn).toHaveText('▶');
+  });
+
+  test('aria-expanded attribute present and correct', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand first section (Main Passage)
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    const expandCommentBtn = page.locator('[data-testid="comment-expand-0-2"]');
+
+    // Initially collapsed - aria-expanded should be false
+    await expect(expandCommentBtn).toHaveAttribute('aria-expanded', 'false');
+
+    // Click to expand
+    await expandCommentBtn.click();
+
+    // Now expanded - aria-expanded should be true
+    await expect(expandCommentBtn).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  test('empty cell for no comment', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand first section (Main Passage)
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    // Second shot has no comment (undefined)
+    const commentCell = page.locator('[data-testid="comment-0-1"]');
+    await expect(commentCell).toHaveText('-');
+
+    // No expand button for empty comment
+    const expandCommentBtn = page.locator('[data-testid="comment-expand-0-1"]');
+    await expect(expandCommentBtn).toHaveCount(0);
+  });
+
+  test('comment data-testid follows expected format', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand first section
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    // Verify data-testid format: comment-{sectionIndex}-{shotIndex}
+    await expect(page.locator('[data-testid="comment-0-0"]')).toBeVisible();
+    await expect(page.locator('[data-testid="comment-0-1"]')).toBeVisible();
+    await expect(page.locator('[data-testid="comment-0-2"]')).toBeVisible();
+  });
+
+  test('short comment in different section displays correctly', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand second section (Side Tunnel)
+    const expandButton = page.locator('[data-testid="section-expand-1"]');
+    await expandButton.click();
+
+    // First shot has comment: "Narrow restriction" (18 chars < 50)
+    const commentCell = page.locator('[data-testid="comment-1-0"]');
+    await expect(commentCell).toContainText('Narrow restriction');
+
+    // No expand button for short comment
+    const expandCommentBtn = page.locator('[data-testid="comment-expand-1-0"]');
+    await expect(expandCommentBtn).toHaveCount(0);
+  });
+});

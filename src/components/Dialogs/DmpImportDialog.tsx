@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
+import { useState, useEffect, useRef, useCallback, Fragment, KeyboardEvent } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
@@ -6,6 +6,11 @@ import { Panel } from '../common/Panel';
 import { DialogWrapper } from './DialogWrapper';
 import type { DmpFile, DmpShot } from '../../types/commands';
 import { getNextSectionColor } from '../../utils/colors';
+
+/**
+ * Maximum comment length before truncation is applied.
+ */
+const MAX_COMMENT_LENGTH = 50;
 
 /**
  * Normalize DMP sentinel value (0.0 means "not measured") to null.
@@ -32,6 +37,67 @@ function formatPitch(shot: DmpShot): string {
   if (pitchOut === 0) return pitchIn.toFixed(1);
 
   return ((pitchIn + pitchOut) / 2).toFixed(1);
+}
+
+/**
+ * Props for the TruncatedComment component.
+ */
+interface TruncatedCommentProps {
+  comment: string | undefined;
+  sectionIndex: number;
+  shotIndex: number;
+}
+
+/**
+ * A component that displays a comment with truncation and expand/collapse functionality.
+ * - Short comments (<=50 chars) display in full
+ * - Long comments are truncated with "..." and an expand button
+ * - Keyboard accessible: Tab to focus, Enter/Space to toggle
+ */
+function TruncatedComment({ comment, sectionIndex, shotIndex }: TruncatedCommentProps) {
+  const [expanded, setExpanded] = useState(false);
+
+  // No comment - show empty cell
+  if (!comment) {
+    return <span>-</span>;
+  }
+
+  const needsTruncation = comment.length > MAX_COMMENT_LENGTH;
+
+  // Short comment - display in full
+  if (!needsTruncation) {
+    return <span>{comment}</span>;
+  }
+
+  const handleToggle = () => {
+    setExpanded(!expanded);
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleToggle();
+    }
+  };
+
+  return (
+    <div className="flex items-start gap-1">
+      <span className={expanded ? '' : 'break-all'}>
+        {expanded ? comment : `${comment.slice(0, MAX_COMMENT_LENGTH)}...`}
+      </span>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-label={expanded ? 'Collapse comment' : 'Expand comment'}
+        onClick={handleToggle}
+        onKeyDown={handleKeyDown}
+        data-testid={`comment-expand-${sectionIndex}-${shotIndex}`}
+        className="text-text-secondary hover:text-text-primary transition-colors focus:outline-none focus:ring-1 focus:ring-accent rounded flex-shrink-0"
+      >
+        {expanded ? '▼' : '▶'}
+      </button>
+    </div>
+  );
 }
 
 interface DmpImportDialogProps {
@@ -385,6 +451,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                                         <th className="text-right py-1 px-1">U</th>
                                         <th className="text-right py-1 px-1">D</th>
                                         <th className="text-right py-1 px-1">Pitch</th>
+                                        <th className="text-left py-1 px-1">Comment</th>
                                       </tr>
                                     </thead>
                                     <tbody>
@@ -424,6 +491,16 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                                             data-testid={`pitch-${index}-${shotIndex}`}
                                           >
                                             {formatPitch(shot)}
+                                          </td>
+                                          <td
+                                            className="text-left py-0.5 px-1"
+                                            data-testid={`comment-${index}-${shotIndex}`}
+                                          >
+                                            <TruncatedComment
+                                              comment={shot.comment}
+                                              sectionIndex={index}
+                                              shotIndex={shotIndex}
+                                            />
                                           </td>
                                         </tr>
                                       ))}
