@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
-import type { Coordinates, SectionId, ShotId, StationRef } from '../types/project';
+import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 import type { PanelsConfig } from '../types/config';
 
 export type ViewType = 'global' | 'single';
@@ -17,6 +17,21 @@ export type ToolType =
   | 'measure'
   | 'move_section'
   | 'move_station';
+
+/**
+ * Placement mode state for manually placing a newly imported section on the map.
+ * The section preview follows the cursor until the user clicks to confirm placement.
+ */
+export interface PlacementModeState {
+  /** The section data to be created (not yet in the project) */
+  sectionData: SectionData;
+  /** Which station of the new section aligns to cursor ('first' or 'last') */
+  alignStation: 'first' | 'last';
+  /** Current cursor position in map coordinates (meters) */
+  cursorPosition: Coordinates | null;
+  /** Snapped station reference (if cursor is near an existing station) */
+  snappedToStation: StationRef | null;
+}
 
 export interface Selection {
   type: 'station' | 'shot' | 'section';
@@ -147,6 +162,14 @@ interface UIStore {
   dialogData: Record<string, unknown>;
   openDialog: (dialog: string, data?: Record<string, unknown>) => void;
   closeDialog: () => void;
+
+  // Placement mode state (for manual map placement of imported sections)
+  placementMode: PlacementModeState | null;
+  startPlacementMode: (sectionData: SectionData, alignStation: 'first' | 'last') => void;
+  updatePlacementCursor: (position: Coordinates | null) => void;
+  updatePlacementSnap: (stationRef: StationRef | null) => void;
+  cancelPlacementMode: () => void;
+  confirmPlacement: () => PlacementModeState | null;
 }
 
 export type DisplayToggleKey =
@@ -365,4 +388,45 @@ export const useUIStore = create<UIStore>((set) => ({
   dialogData: {},
   openDialog: (activeDialog, dialogData = {}) => set({ activeDialog, dialogData }),
   closeDialog: () => set({ activeDialog: null, dialogData: {} }),
+
+  // Placement mode state
+  placementMode: null,
+  startPlacementMode: (sectionData, alignStation) =>
+    set({
+      placementMode: {
+        sectionData,
+        alignStation,
+        cursorPosition: null,
+        snappedToStation: null,
+      },
+    }),
+  updatePlacementCursor: (position) =>
+    set((state) =>
+      state.placementMode
+        ? {
+            placementMode: {
+              ...state.placementMode,
+              cursorPosition: position,
+            },
+          }
+        : state
+    ),
+  updatePlacementSnap: (stationRef) =>
+    set((state) =>
+      state.placementMode
+        ? {
+            placementMode: {
+              ...state.placementMode,
+              snappedToStation: stationRef,
+            },
+          }
+        : state
+    ),
+  cancelPlacementMode: () => set({ placementMode: null }),
+  confirmPlacement: (): PlacementModeState | null => {
+    const currentPlacement = useUIStore.getState().placementMode;
+    // Clear placement mode and return the state for the caller to use
+    set({ placementMode: null });
+    return currentPlacement;
+  },
 }));

@@ -1667,3 +1667,147 @@ test.describe('Placement Mode - From Existing Station', () => {
     await expect(importStationSelector).not.toBeVisible();
   });
 });
+
+test.describe('Placement Mode - Manual Map Placement', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+  });
+
+  test('manual mode option visible after loading DMP file', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Check manual mode radio is visible
+    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
+    await expect(manualRadio).toBeVisible();
+  });
+
+  test('manual mode shows station selector when selected', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Select manual mode
+    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
+    await manualRadio.click();
+
+    // Station selector should be visible
+    const manualStationSelector = page.locator('[data-testid="manual-import-station-selector"]');
+    await expect(manualStationSelector).toBeVisible();
+
+    // Should have first/last options
+    await expect(manualStationSelector.locator('option')).toHaveCount(2);
+    await expect(manualStationSelector.locator('option').first()).toHaveText('First station of imported section');
+    await expect(manualStationSelector.locator('option').last()).toHaveText('Last station of imported section');
+  });
+
+  test('import button changes text to "Place on Map" in manual mode', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Initially should show "Import X Sections"
+    const importButton = page.locator('[data-testid="import-button"]');
+    const initialText = await importButton.textContent();
+    expect(initialText).toContain('Import');
+
+    // Select manual mode
+    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
+    await manualRadio.click();
+
+    // Button should now say "Place on Map"
+    await expect(importButton).toHaveText('Place on Map');
+  });
+
+  test('clicking "Place on Map" closes dialog and shows placement indicator', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Deselect problematic sections
+    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
+    await validationSection.locator('input[type="checkbox"]').click();
+    const mixedSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
+    await mixedSection.locator('input[type="checkbox"]').click();
+
+    // Select manual mode
+    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
+    await manualRadio.click();
+
+    // Click "Place on Map"
+    const dialog = page.locator('[role="dialog"]');
+    const importButton = page.locator('[data-testid="import-button"]');
+    await importButton.click();
+
+    // Dialog should close
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    // Placement mode indicator should be visible on map
+    const placementIndicator = page.locator('[data-testid="placement-mode-indicator"]');
+    await expect(placementIndicator).toBeVisible();
+    await expect(placementIndicator).toContainText('Placement Mode');
+  });
+
+  test('Escape key cancels placement mode', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Deselect problematic sections
+    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
+    await validationSection.locator('input[type="checkbox"]').click();
+    const mixedSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
+    await mixedSection.locator('input[type="checkbox"]').click();
+
+    // Select manual mode and place
+    const dialog = page.locator('[role="dialog"]');
+    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
+    await manualRadio.click();
+    await page.locator('[data-testid="import-button"]').click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    // Placement indicator should be visible
+    const placementIndicator = page.locator('[data-testid="placement-mode-indicator"]');
+    await expect(placementIndicator).toBeVisible();
+
+    // Press Escape to cancel
+    await page.keyboard.press('Escape');
+
+    // Placement indicator should be gone
+    await expect(placementIndicator).not.toBeVisible();
+  });
+
+  test('manual station selector can be changed', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Select manual mode
+    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
+    await manualRadio.click();
+
+    // Station selector should default to 'first'
+    const manualStationSelector = page.locator('[data-testid="manual-import-station-selector"]');
+    await expect(manualStationSelector).toHaveValue('first');
+
+    // Change to 'last'
+    await manualStationSelector.selectOption('last');
+    await expect(manualStationSelector).toHaveValue('last');
+  });
+
+  test('switching from manual to origin hides manual options', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Select manual mode
+    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
+    await manualRadio.click();
+
+    // Manual station selector should be visible
+    const manualStationSelector = page.locator('[data-testid="manual-import-station-selector"]');
+    await expect(manualStationSelector).toBeVisible();
+
+    // Switch to origin mode
+    const originRadio = page.locator('[data-testid="placement-mode-origin"]');
+    await originRadio.click();
+
+    // Manual station selector should be hidden
+    await expect(manualStationSelector).not.toBeVisible();
+
+    // Import button should show normal text
+    const importButton = page.locator('[data-testid="import-button"]');
+    const buttonText = await importButton.textContent();
+    expect(buttonText).toContain('Import');
+    expect(buttonText).not.toBe('Place on Map');
+  });
+});
