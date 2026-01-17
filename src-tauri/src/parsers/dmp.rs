@@ -552,6 +552,16 @@ impl DmpShot {
     }
 }
 
+impl DmpDirection {
+    /// Convert to internal SurveyDirection
+    pub fn to_survey_direction(&self) -> crate::models::SurveyDirection {
+        match self {
+            DmpDirection::In => crate::models::SurveyDirection::In,
+            DmpDirection::Out => crate::models::SurveyDirection::Out,
+        }
+    }
+}
+
 impl DmpSection {
     /// Convert to our internal SectionData format
     pub fn to_section_data(&self, color: String) -> crate::models::SectionData {
@@ -560,6 +570,7 @@ impl DmpSection {
             surveyor: None,
             date: Some(self.date.date()),
             color,
+            direction: Some(self.direction.to_survey_direction()),
             shots: self
                 .shots
                 .iter()

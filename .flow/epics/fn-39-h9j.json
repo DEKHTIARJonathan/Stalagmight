@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-39-h9j",
+  "created_at": "2026-01-17T14:22:13.942807Z",
+  "depends_on_epics": [],
+  "id": "fn-39-h9j",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-39-h9j.md",
+  "status": "open",
+  "title": "Playwright E2E: DMP Import Dialog",
+  "updated_at": "2026-01-17T14:22:13.942818Z"
+}

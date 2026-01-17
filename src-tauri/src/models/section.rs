@@ -1,10 +1,42 @@
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
 
 use super::{Shot, ShotData, ShotId};
 
 /// Unique identifier for a section
 pub type SectionId = u32;
+
+/// Survey direction (In = going into cave, Out = returning)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SurveyDirection {
+    #[default]
+    In,
+    Out,
+}
+
+impl fmt::Display for SurveyDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SurveyDirection::In => write!(f, "in"),
+            SurveyDirection::Out => write!(f, "out"),
+        }
+    }
+}
+
+impl FromStr for SurveyDirection {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "in" => Ok(SurveyDirection::In),
+            "out" => Ok(SurveyDirection::Out),
+            _ => Err(format!("Invalid direction: {}", s)),
+        }
+    }
+}
 
 /// A group of consecutive shots collected during a single survey session
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +51,8 @@ pub struct Section {
     pub date: Option<NaiveDate>,
     /// Display color (hex format, e.g., "#4ecdc4")
     pub color: String,
+    /// Survey direction (In = entering cave, Out = exiting)
+    pub direction: SurveyDirection,
     /// Shots in this section, in order
     pub shots: Vec<Shot>,
     /// Next shot ID to assign
@@ -32,6 +66,9 @@ pub struct SectionData {
     pub surveyor: Option<String>,
     pub date: Option<NaiveDate>,
     pub color: String,
+    /// Survey direction (defaults to In if not specified)
+    #[serde(default)]
+    pub direction: Option<SurveyDirection>,
     pub shots: Vec<ShotData>,
 }
 
@@ -46,6 +83,8 @@ pub struct SectionUpdates {
     pub date: Option<Option<NaiveDate>>,
     #[serde(default)]
     pub color: Option<String>,
+    #[serde(default)]
+    pub direction: Option<SurveyDirection>,
 }
 
 /// Section statistics (computed, not stored)
@@ -67,6 +106,7 @@ impl Section {
             surveyor: data.surveyor,
             date: data.date,
             color: data.color,
+            direction: data.direction.unwrap_or_default(),
             shots: Vec::new(),
             next_shot_id: 0,
         };
@@ -90,6 +130,7 @@ impl Section {
             surveyor: self.surveyor.clone(),
             date: self.date,
             color: self.color.clone(),
+            direction: Some(self.direction),
             shots: self.shots.iter().map(|s| s.to_shot_data()).collect(),
         }
     }
@@ -140,6 +181,9 @@ impl Section {
         }
         if let Some(v) = &updates.color {
             self.color = v.clone();
+        }
+        if let Some(v) = updates.direction {
+            self.direction = v;
         }
     }
 

@@ -41,6 +41,7 @@ fn create_section_with_shots(name: &str, shots: Vec<ShotData>) -> SectionData {
         surveyor: Some("Test Surveyor".to_string()),
         date: None,
         color: "#4ecdc4".to_string(),
+        direction: None,
         shots,
     }
 }
@@ -482,6 +483,7 @@ fn test_undo_redo_chain() {
         surveyor: None,
         date: None,
         color: "#4ecdc4".to_string(),
+        direction: None,
         shots: vec![],
     });
     stack.push(Command::CreateShot {
@@ -520,6 +522,7 @@ fn test_undo_stack_limit() {
             surveyor: None,
             date: None,
             color: "#4ecdc4".to_string(),
+            direction: None,
             shots: vec![],
         });
     }
@@ -538,6 +541,7 @@ fn test_undo_clears_redo_stack() {
         surveyor: None,
         date: None,
         color: "#4ecdc4".to_string(),
+        direction: None,
         shots: vec![],
     });
 
@@ -552,6 +556,7 @@ fn test_undo_clears_redo_stack() {
         surveyor: None,
         date: None,
         color: "#4ecdc4".to_string(),
+        direction: None,
         shots: vec![],
     });
     assert!(!stack.can_redo());
@@ -566,6 +571,7 @@ fn test_batch_command_structure() {
             surveyor: None,
             date: None,
             color: "#4ecdc4".to_string(),
+            direction: None,
             shots: vec![],
         },
         undo_data: UndoData::ProjectSnapshot("{}".to_string()),
@@ -595,6 +601,7 @@ fn test_undo_persistence() {
             surveyor: None,
             date: None,
             color: "#4ecdc4".to_string(),
+            direction: None,
             shots: vec![],
         },
         UndoData::InverseCommand(Command::DeleteSection { section_id: 0 }),
@@ -727,6 +734,7 @@ fn test_section_metadata_update() {
         surveyor: Some(Some("New Surveyor".to_string())),
         color: Some("#ff0000".to_string()),
         date: None,
+        direction: None,
     };
 
     project.update_section(0, &updates);
@@ -750,6 +758,7 @@ fn test_section_colors_unique() {
             surveyor: None,
             date: None,
             color: color.to_string(),
+            direction: None,
             shots: vec![],
         });
     }
@@ -772,6 +781,7 @@ fn test_section_date_storage() {
         surveyor: None,
         date: Some(date),
         color: "#4ecdc4".to_string(),
+        direction: None,
         shots: vec![],
     });
 
@@ -1606,6 +1616,7 @@ fn test_section_insert_shot_after() {
             surveyor: None,
             date: None,
             color: "#4ecdc4".to_string(),
+            direction: None,
             shots: vec![
                 create_shot_data(0.0, 10.0, 5.0, 5.0),
                 create_shot_data(90.0, 10.0, 5.0, 5.0),
@@ -1633,6 +1644,7 @@ fn test_section_to_section_data() {
             surveyor: Some("John".to_string()),
             date: None,
             color: "#ff0000".to_string(),
+            direction: None,
             shots: vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
         },
     );

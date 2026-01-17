@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-17T14:27:51.616975Z",
+  "depends_on": [],
+  "epic": "fn-48-6as",
+  "id": "fn-48-6as.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-48-6as.1.md",
+  "status": "todo",
+  "title": "Implement 4 undo/redo integration tests",
+  "updated_at": "2026-01-17T14:27:51.616986Z"
+}

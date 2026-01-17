@@ -3,6 +3,9 @@
 export type ShotId = number;
 export type SectionId = number;
 
+/** Survey direction - In = entering cave, Out = exiting */
+export type SurveyDirection = 'in' | 'out';
+
 export interface Shot {
   id: ShotId;
   azimuth_in: number;
@@ -64,6 +67,7 @@ export interface Section {
   surveyor: string | null;
   date: string | null;
   color: string;
+  direction: SurveyDirection;
   shots: Shot[];
 }
 
@@ -72,6 +76,7 @@ export interface SectionData {
   surveyor?: string | null;
   date?: string | null;
   color: string;
+  direction?: SurveyDirection;
   shots: ShotData[];
 }
 
@@ -80,6 +85,7 @@ export interface SectionUpdates {
   surveyor?: string | null;
   date?: string | null;
   color?: string;
+  direction?: SurveyDirection;
 }
 
 export interface SectionStats {
