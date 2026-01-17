@@ -1,3 +1,4 @@
+import { type MouseEvent } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 
@@ -9,7 +10,10 @@ interface SystemCardProps {
   sectionCount: number;
   totalLength: number;
   isSelected?: boolean;
-  onSelect?: () => void;
+  /** Called when the card is clicked. Receives true if Ctrl/Cmd was held. */
+  onSelect?: (ctrlKey: boolean) => void;
+  /** Called on right-click to show context menu */
+  onContextMenu?: (e: MouseEvent) => void;
 }
 
 export default function SystemCard({
@@ -21,14 +25,16 @@ export default function SystemCard({
   totalLength,
   isSelected,
   onSelect,
+  onContextMenu,
 }: SystemCardProps) {
   const { openProject } = useProjectStore();
   const { setView } = useUIStore();
 
-  const handleClick = () => {
+  const handleClick = (e: MouseEvent) => {
     // Single click selects the card
+    // Pass ctrlKey (or metaKey for Mac) to support multi-select
     if (onSelect) {
-      onSelect();
+      onSelect(e.ctrlKey || e.metaKey);
     }
   };
 
@@ -37,6 +43,12 @@ export default function SystemCard({
     const result = await openProject(filePath);
     if (result.success) {
       setView('single');
+    }
+  };
+
+  const handleContextMenu = (e: MouseEvent) => {
+    if (onContextMenu) {
+      onContextMenu(e);
     }
   };
 
@@ -72,6 +84,7 @@ export default function SystemCard({
       `}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
+      onContextMenu={handleContextMenu}
       data-testid={`system-card-${filePath}`}
       role="button"
       tabIndex={0}
@@ -79,7 +92,7 @@ export default function SystemCard({
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          handleClick();
+          handleClick(e as unknown as MouseEvent);
         }
       }}
     >

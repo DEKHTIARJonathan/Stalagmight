@@ -49,6 +49,7 @@ interface ProjectStore {
   unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandResult>;
+  mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandResult>;
 
   createSection: (data: SectionData) => Promise<CommandResult>;
   updateSection: (sectionId: SectionId, updates: SectionUpdates) => Promise<CommandResult>;
@@ -435,5 +436,24 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   exportImage: async (path: string, options: ExportImageOptions) => {
     await invoke('export_image', { path, options });
+  },
+
+  mergeProjects: async (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => {
+    try {
+      const result = await invoke<CommandResult>('merge_projects', {
+        sourcePaths,
+        outputPath,
+        outputName,
+        archiveOriginals,
+      });
+      if (result.success) {
+        // Refresh recent projects to reflect any changes (archived files removed, new file added)
+        await get().loadRecentProjects();
+      }
+      return result;
+    } catch (e) {
+      console.error('Failed to merge projects:', e);
+      return { success: false, error: String(e), warnings: [] };
+    }
   },
 }));
