@@ -347,16 +347,188 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'import_dmp':
           case 'parse_dmp': {
             return {
-              sections: [{
-                name: (args?.name as string) ?? 'Imported Section',
-                surveyor: 'Imported',
-                date: new Date().toISOString().split('T')[0],
-                shots: [
-                  { azimuth: 45, length: 10, depth: -2 },
-                  { azimuth: 90, length: 15, depth: -5 },
-                  { azimuth: 135, length: 8, depth: -3 },
-                ],
-              }],
+              version: 5,
+              sections: [
+                {
+                  name: 'Main Passage',
+                  direction: 'in',
+                  date: new Date().toISOString().split('T')[0],
+                  shots: [
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 45,
+                      heading_out: 46,
+                      length: 10.5,
+                      depth_in: -2.0,
+                      depth_out: -2.5,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 1.5,
+                      right: 2.3,
+                      up: 3.0,
+                      down: 0.8,
+                      temperature: 18.5,
+                      hour: 10,
+                      minute: 30,
+                      second: 0,
+                      marker_index: 0,
+                    },
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 90,
+                      heading_out: 91,
+                      length: 15.2,
+                      depth_in: -2.5,
+                      depth_out: -5.0,
+                      pitch_in: 5,
+                      pitch_out: 5,
+                      left: 0.5,
+                      right: 0.7,
+                      up: 1.2,
+                      down: 1.5,
+                      temperature: 18.3,
+                      hour: 10,
+                      minute: 35,
+                      second: 0,
+                      marker_index: 1,
+                    },
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 135,
+                      heading_out: 136,
+                      length: 8.0,
+                      depth_in: -5.0,
+                      depth_out: -3.0,
+                      pitch_in: -10,
+                      pitch_out: -10,
+                      left: 4.2,
+                      right: 3.8,
+                      up: 5.0,
+                      down: 2.0,
+                      temperature: 18.0,
+                      hour: 10,
+                      minute: 40,
+                      second: 0,
+                      marker_index: 2,
+                    },
+                  ],
+                },
+                {
+                  name: 'Side Tunnel',
+                  direction: 'out',
+                  date: new Date().toISOString().split('T')[0],
+                  shots: [
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 270,
+                      heading_out: 271,
+                      length: 5.0,
+                      depth_in: -3.0,
+                      depth_out: -4.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 0,
+                      right: 0,
+                      up: 0,
+                      down: 0,
+                      temperature: 17.5,
+                      hour: 11,
+                      minute: 0,
+                      second: 0,
+                      marker_index: 0,
+                    },
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 280,
+                      heading_out: 281,
+                      length: 7.5,
+                      depth_in: -4.0,
+                      depth_out: -6.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 0,
+                      right: 0,
+                      up: 0,
+                      down: 0,
+                      temperature: 17.2,
+                      hour: 11,
+                      minute: 5,
+                      second: 0,
+                      marker_index: 1,
+                    },
+                  ],
+                },
+                {
+                  name: 'Mixed LRUD Section',
+                  direction: 'in',
+                  date: new Date().toISOString().split('T')[0],
+                  shots: [
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 180,
+                      heading_out: 181,
+                      length: 12.0,
+                      depth_in: -1.0,
+                      depth_out: -2.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 2.5,
+                      right: 0,
+                      up: 4.0,
+                      down: 0,
+                      temperature: 19.0,
+                      hour: 12,
+                      minute: 0,
+                      second: 0,
+                      marker_index: 0,
+                    },
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 190,
+                      heading_out: 191,
+                      length: 9.0,
+                      depth_in: -2.0,
+                      depth_out: -3.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 0,
+                      right: 1.8,
+                      up: 0,
+                      down: 3.2,
+                      temperature: 18.8,
+                      hour: 12,
+                      minute: 5,
+                      second: 0,
+                      marker_index: 1,
+                    },
+                    {
+                      shot_type: 'Standard',
+                      heading_in: 200,
+                      heading_out: 201,
+                      length: 50.5,
+                      depth_in: -3.0,
+                      depth_out: -8.0,
+                      pitch_in: 0,
+                      pitch_out: 0,
+                      left: 10.5,
+                      right: 15.2,
+                      up: 20.0,
+                      down: 8.5,
+                      temperature: 18.5,
+                      hour: 12,
+                      minute: 10,
+                      second: 0,
+                      marker_index: 2,
+                    },
+                  ],
+                },
+                {
+                  name: 'Empty Section',
+                  direction: 'in',
+                  date: new Date().toISOString().split('T')[0],
+                  shots: [],
+                },
+              ],
             };
           }
 
@@ -481,8 +653,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           // Plugin commands
           case 'plugin:dialog|open':
+            // Return a mock file path for testing
+            return '/mock/test-survey.dmp';
           case 'plugin:dialog|save':
-            return null;
+            return '/mock/saved-project.cvproj';
 
           case 'plugin:fs|read':
           case 'plugin:fs|readFile':
@@ -539,6 +713,34 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         label: 'main',
       },
     };
+
+    // Mock Tauri dialog plugin for dynamic import
+    // This is needed because @tauri-apps/plugin-dialog uses its own invoke mechanism
+    const mockDialogModule = {
+      open: async (_options?: unknown) => {
+        console.log('[Mock Dialog] open called');
+        return '/mock/test-survey.dmp';
+      },
+      save: async (_options?: unknown) => {
+        console.log('[Mock Dialog] save called');
+        return '/mock/saved-project.cvproj';
+      },
+      message: async (_message: string, _options?: unknown) => {
+        console.log('[Mock Dialog] message called');
+        return undefined;
+      },
+      ask: async (_message: string, _options?: unknown) => {
+        console.log('[Mock Dialog] ask called');
+        return true;
+      },
+      confirm: async (_message: string, _options?: unknown) => {
+        console.log('[Mock Dialog] confirm called');
+        return true;
+      },
+    };
+
+    // Store the mock module for potential interception
+    (window as unknown as Record<string, unknown>).__TAURI_DIALOG_MOCK__ = mockDialogModule;
 
     console.log('[Mock IPC] Tauri mocks installed');
   });
