@@ -4,7 +4,7 @@ import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
-import { ImportDialog, ExportDialog, NewProjectDialog, DmpImportDialog, ConfirmDialog, MergeDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, DmpImportDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 
 function App() {
@@ -64,6 +64,7 @@ function App() {
       {activeDialog === 'import-dmp' && <DmpImportDialog />}
       {activeDialog === 'confirm-delete' && <ConfirmDialog />}
       {activeDialog === 'merge' && <MergeDialog />}
+      {activeDialog === 'merge-projects' && <MergeProjectsDialog />}
       {activeDialog === 'draw-shot' && <DrawShotDialog />}
       {activeDialog === 'edit-section' && <EditSectionDialog />}
       {activeDialog === 'edit-shot' && <EditShotDialog />}

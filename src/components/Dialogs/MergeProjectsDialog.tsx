@@ -1,0 +1,234 @@
+import { useState, useMemo, useCallback } from 'react';
+import { save } from '@tauri-apps/plugin-dialog';
+import { useUIStore } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
+import { Button } from '../common/Button';
+import { DialogWrapper } from './DialogWrapper';
+import type { ProjectMetadata } from '../../types/project';
+
+/**
+ * MergeProjectsDialog allows users to merge multiple projects into a single new project.
+ * It receives the selected projects via dialogData.selectedProjects.
+ */
+export default function MergeProjectsDialog() {
+  const { closeDialog, dialogData } = useUIStore();
+  const { mergeProjects, openProject } = useProjectStore();
+  const { setView } = useUIStore();
+
+  const selectedProjects = dialogData.selectedProjects as ProjectMetadata[] | undefined;
+
+  const [outputName, setOutputName] = useState(() => {
+    // Generate a default name from the first project
+    if (selectedProjects && selectedProjects.length > 0 && selectedProjects[0]) {
+      return `${selectedProjects[0].name}_merged`;
+    }
+    return 'merged_project';
+  });
+  const [archiveOriginals, setArchiveOriginals] = useState(false);
+  const [openAfterMerge, setOpenAfterMerge] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Calculate totals for display
+  const totals = useMemo(() => {
+    if (!selectedProjects || selectedProjects.length === 0) {
+      return { sections: 0, length: 0 };
+    }
+    return selectedProjects.reduce(
+      (acc, p) => ({
+        sections: acc.sections + p.section_count,
+        length: acc.length + p.total_length,
+      }),
+      { sections: 0, length: 0 }
+    );
+  }, [selectedProjects]);
+
+  // Format length for display
+  const formatLength = (meters: number): string => {
+    if (meters >= 1000) {
+      return `${(meters / 1000).toFixed(2)} km`;
+    }
+    return `${meters.toFixed(1)} m`;
+  };
+
+  const handleClose = useCallback(() => {
+    closeDialog();
+  }, [closeDialog]);
+
+  const handleMerge = useCallback(async () => {
+    if (!selectedProjects || selectedProjects.length < 2) return;
+    if (!outputName.trim()) {
+      setError('Please enter a name for the merged project');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // Get output directory from the first project's location
+      const firstProject = selectedProjects[0];
+      if (!firstProject) {
+        setError('No projects selected');
+        setIsLoading(false);
+        return;
+      }
+      const firstProjectPath = firstProject.file_path;
+      const defaultDir = firstProjectPath.substring(0, firstProjectPath.lastIndexOf('/'));
+      const defaultFileName = `${outputName.trim()}.cvchef`;
+
+      // Show save dialog to let user choose output location
+      const outputPath = await save({
+        title: 'Save Merged Project',
+        defaultPath: `${defaultDir}/${defaultFileName}`,
+        filters: [{ name: 'CaveChef Project', extensions: ['cvchef'] }],
+      });
+
+      if (!outputPath) {
+        // User cancelled the save dialog
+        setIsLoading(false);
+        return;
+      }
+
+      const sourcePaths = selectedProjects.map((p) => p.file_path);
+      const result = await mergeProjects(sourcePaths, outputPath, outputName.trim(), archiveOriginals);
+
+      if (result.success) {
+        closeDialog();
+        // Open the merged project if requested
+        if (openAfterMerge) {
+          const openResult = await openProject(outputPath);
+          if (openResult.success) {
+            setView('single');
+          }
+        }
+      } else {
+        setError(result.error ?? 'Failed to merge projects');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to merge projects');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedProjects, outputName, archiveOriginals, openAfterMerge, mergeProjects, closeDialog, openProject, setView]);
+
+  if (!selectedProjects || selectedProjects.length < 2) {
+    return null;
+  }
+
+  return (
+    <DialogWrapper
+      title="Merge Projects"
+      onClose={handleClose}
+      size="lg"
+      data-testid="merge-projects-dialog"
+    >
+      <div className="space-y-4">
+        {error && (
+          <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">
+            {error}
+          </div>
+        )}
+
+        {/* Projects to merge */}
+        <div>
+          <h3 className="text-sm font-medium text-text-secondary mb-2">
+            Projects to merge ({selectedProjects.length})
+          </h3>
+          <div className="space-y-2 max-h-48 overflow-auto border border-border rounded p-2">
+            {selectedProjects.map((project) => (
+              <div
+                key={project.file_path}
+                className="flex justify-between items-center py-1 px-2 bg-background/50 rounded"
+              >
+                <div className="truncate flex-1">
+                  <span className="font-medium">{project.name}</span>
+                  <span className="text-text-secondary text-xs ml-2">
+                    ({project.section_count} sections, {formatLength(project.total_length)})
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Totals */}
+        <div className="p-3 bg-background rounded">
+          <div className="flex justify-between text-sm">
+            <span className="text-text-secondary">Total sections:</span>
+            <span className="font-medium">{totals.sections}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-text-secondary">Total length:</span>
+            <span className="font-medium">{formatLength(totals.length)}</span>
+          </div>
+        </div>
+
+        {/* Output name */}
+        <div>
+          <label htmlFor="merge-output-name" className="block text-sm font-medium mb-1">
+            Merged project name
+          </label>
+          <input
+            id="merge-output-name"
+            type="text"
+            value={outputName}
+            onChange={(e) => setOutputName(e.target.value)}
+            className="w-full px-3 py-2 bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-accent"
+            placeholder="Enter project name"
+            data-testid="merge-output-name-input"
+          />
+        </div>
+
+        {/* Options */}
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={archiveOriginals}
+              onChange={(e) => setArchiveOriginals(e.target.checked)}
+              className="rounded border-border"
+              data-testid="merge-archive-checkbox"
+            />
+            <span className="text-sm">
+              Archive original project files (rename to .cvchef.bak)
+            </span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={openAfterMerge}
+              onChange={(e) => setOpenAfterMerge(e.target.checked)}
+              className="rounded border-border"
+              data-testid="merge-open-checkbox"
+            />
+            <span className="text-sm">Open merged project after creation</span>
+          </label>
+        </div>
+
+        {/* Info about merge behavior */}
+        <div className="p-3 bg-accent/10 border border-accent/20 rounded text-sm">
+          <p className="text-text-secondary">
+            Merging will combine all sections from the selected projects into a new project file.
+            Section IDs will be renumbered to avoid conflicts. Zero datums will be preserved.
+          </p>
+        </div>
+
+        {/* Actions */}
+        <div className="flex justify-end gap-2 pt-4 border-t border-border">
+          <Button onClick={handleClose} disabled={isLoading}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={handleMerge}
+            disabled={isLoading || !outputName.trim()}
+            data-testid="merge-projects-confirm-button"
+          >
+            {isLoading ? 'Merging...' : 'Merge Projects'}
+          </Button>
+        </div>
+      </div>
+    </DialogWrapper>
+  );
+}

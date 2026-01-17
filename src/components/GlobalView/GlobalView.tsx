@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent } from 'react';
 import { useProject } from '../../hooks/useProject';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -6,8 +6,16 @@ import { Button } from '../common/Button';
 import SystemCard from './SystemCard';
 import GlobalViewMap from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
+import type { ProjectMetadata } from '../../types/project';
 
 type ViewTab = 'map' | 'list';
+
+interface ContextMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  projectPath: string | null;
+}
 
 export default function GlobalView() {
   const {
@@ -19,24 +27,90 @@ export default function GlobalView() {
   } = useProject();
 
   const { loadRecentProjects, openProject, removeFromRecentProjects } = useProjectStore();
-  const { setView } = useUIStore();
+  const { setView, openDialog } = useUIStore();
   const [activeTab, setActiveTab] = useState<ViewTab>('list');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
   const [metadataPanelCollapsed, setMetadataPanelCollapsed] = useState(false);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    projectPath: null,
+  });
+  const contextMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadRecentProjects();
   }, [loadRecentProjects]);
+
+  // Close context menu on click outside
+  useEffect(() => {
+    if (!contextMenu.visible) {
+      return;
+    }
+    const handleClickOutside = (e: globalThis.MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu((prev) => ({ ...prev, visible: false }));
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [contextMenu.visible]);
+
+  // Close context menu on escape
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && contextMenu.visible) {
+        setContextMenu((prev) => ({ ...prev, visible: false }));
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [contextMenu.visible]);
 
   // Check if there are any GPS-positioned projects
   const hasGpsProjects = recentProjects.some(
     (p) => p.gps_center !== null && p.gps_center[0] !== 0 && p.gps_center[1] !== 0
   );
 
-  // Handle project selection on map
-  const handleProjectSelect = useCallback((filePath: string) => {
-    setSelectedProjectId(filePath);
+  // Handle project selection (single click)
+  const handleProjectSelect = useCallback((filePath: string, ctrlKey?: boolean) => {
+    if (ctrlKey) {
+      // Ctrl+click: toggle selection in multi-select mode
+      setMultiSelectedIds((prev) => {
+        const newSet = new Set(prev);
+        if (newSet.has(filePath)) {
+          newSet.delete(filePath);
+        } else {
+          newSet.add(filePath);
+        }
+        return newSet;
+      });
+      // Also set as primary selection for metadata panel
+      setSelectedProjectId(filePath);
+    } else {
+      // Regular click: single select, clear multi-select
+      setSelectedProjectId(filePath);
+      setMultiSelectedIds(new Set([filePath]));
+    }
   }, []);
+
+  // Handle right-click context menu
+  const handleContextMenu = useCallback((e: MouseEvent, filePath: string) => {
+    e.preventDefault();
+    // If right-clicked project isn't selected, select it
+    if (!multiSelectedIds.has(filePath)) {
+      setSelectedProjectId(filePath);
+      setMultiSelectedIds(new Set([filePath]));
+    }
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      projectPath: filePath,
+    });
+  }, [multiSelectedIds]);
 
   // Handle project open (double-click on map or from metadata panel)
   const handleProjectOpen = useCallback(async (filePath: string) => {
@@ -53,13 +127,33 @@ export default function GlobalView() {
     if (selectedProjectId === filePath) {
       setSelectedProjectId(null);
     }
+    // Remove from multi-selection
+    setMultiSelectedIds((prev) => {
+      const newSet = new Set(prev);
+      newSet.delete(filePath);
+      return newSet;
+    });
   }, [removeFromRecentProjects, selectedProjectId]);
+
+  // Handle merge projects
+  const handleMergeProjects = useCallback(() => {
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+    const selectedProjects: ProjectMetadata[] = recentProjects.filter((p) =>
+      multiSelectedIds.has(p.file_path)
+    );
+    if (selectedProjects.length >= 2) {
+      openDialog('merge-projects', { selectedProjects });
+    }
+  }, [multiSelectedIds, recentProjects, openDialog]);
 
   // Get the selected project metadata
   const selectedProject = useMemo(() => {
     if (!selectedProjectId) return null;
     return recentProjects.find(p => p.file_path === selectedProjectId) || null;
   }, [selectedProjectId, recentProjects]);
+
+  // Get selected projects count
+  const selectedCount = multiSelectedIds.size;
 
   return (
     <div data-testid="global-view" className="h-full flex flex-col">
@@ -121,12 +215,26 @@ export default function GlobalView() {
             <GlobalViewMap
               projects={recentProjects}
               selectedProjectId={selectedProjectId}
-              onProjectSelect={handleProjectSelect}
+              onProjectSelect={(path) => handleProjectSelect(path, false)}
               onProjectOpen={handleProjectOpen}
             />
           ) : (
             <div className="h-full overflow-auto p-6">
-              <h2 className="text-lg font-medium mb-4">Recent Projects</h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-medium">Recent Projects</h2>
+                {selectedCount >= 2 && (
+                  <Button
+                    onClick={handleMergeProjects}
+                    data-testid="merge-projects-button"
+                    aria-label={`Merge ${selectedCount} selected projects`}
+                  >
+                    Merge {selectedCount} Projects
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs text-text-secondary mb-4">
+                Ctrl+click to select multiple projects. Right-click for options.
+              </p>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {recentProjects.map((project) => (
                   <SystemCard
@@ -137,8 +245,9 @@ export default function GlobalView() {
                     modifiedAt={project.modified_at}
                     sectionCount={project.section_count}
                     totalLength={project.total_length}
-                    isSelected={project.file_path === selectedProjectId}
-                    onSelect={() => handleProjectSelect(project.file_path)}
+                    isSelected={multiSelectedIds.has(project.file_path)}
+                    onSelect={(ctrlKey) => handleProjectSelect(project.file_path, ctrlKey)}
+                    onContextMenu={(e) => handleContextMenu(e, project.file_path)}
                   />
                 ))}
               </div>
@@ -162,9 +271,60 @@ export default function GlobalView() {
       <footer className="px-4 py-2 border-t border-border text-sm text-text-secondary flex justify-between">
         <span>
           Systems: {recentProjects.length}
+          {selectedCount > 1 && ` | Selected: ${selectedCount}`}
         </span>
         <span>Status: Ready</span>
       </footer>
+
+      {/* Context Menu */}
+      {contextMenu.visible && (
+        <div
+          ref={contextMenuRef}
+          className="fixed z-50 bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[160px]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          role="menu"
+          aria-label="Project context menu"
+          data-testid="project-context-menu"
+        >
+          <button
+            className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 flex items-center gap-2"
+            onClick={() => {
+              if (contextMenu.projectPath) {
+                handleProjectOpen(contextMenu.projectPath);
+              }
+              setContextMenu((prev) => ({ ...prev, visible: false }));
+            }}
+            role="menuitem"
+            data-testid="context-menu-open"
+          >
+            Open Project
+          </button>
+          {selectedCount >= 2 && (
+            <button
+              className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 flex items-center gap-2"
+              onClick={handleMergeProjects}
+              role="menuitem"
+              data-testid="context-menu-merge"
+            >
+              Merge {selectedCount} Projects
+            </button>
+          )}
+          <div className="border-t border-border my-1" />
+          <button
+            className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 text-error flex items-center gap-2"
+            onClick={() => {
+              if (contextMenu.projectPath) {
+                handleRemoveFromRecent(contextMenu.projectPath);
+              }
+              setContextMenu((prev) => ({ ...prev, visible: false }));
+            }}
+            role="menuitem"
+            data-testid="context-menu-remove"
+          >
+            Remove from Recent
+          </button>
+        </div>
+      )}
     </div>
   );
 }
