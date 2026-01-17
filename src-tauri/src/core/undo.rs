@@ -240,4 +240,866 @@ impl UndoStack {
     pub fn is_empty(&self) -> bool {
         self.undo_stack.is_empty()
     }
+
+    /// Get the number of entries in the redo stack
+    pub fn redo_len(&self) -> usize {
+        self.redo_stack.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::ShotData;
+
+    /// Helper to create a test command
+    fn test_create_section_command(name: &str) -> Command {
+        Command::CreateSection {
+            name: Some(name.to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![],
+        }
+    }
+
+    /// Helper to create a test delete section command
+    fn test_delete_section_command(section_id: SectionId) -> Command {
+        Command::DeleteSection { section_id }
+    }
+
+    /// Helper to create test section data
+    fn test_section_data(name: &str) -> SectionData {
+        SectionData {
+            name: Some(name.to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![],
+        }
+    }
+
+    // === Undo Stack Basic Tests ===
+
+    #[test]
+    fn test_new_undo_stack_is_empty() {
+        let stack = UndoStack::new();
+        assert!(stack.is_empty());
+        assert!(!stack.can_undo());
+        assert!(!stack.can_redo());
+        assert_eq!(stack.len(), 0);
+        assert_eq!(stack.redo_len(), 0);
+    }
+
+    #[test]
+    fn test_new_with_limit() {
+        let stack = UndoStack::new_with_limit(50);
+        assert_eq!(stack.history_limit(), 50);
+        assert!(stack.is_empty());
+    }
+
+    #[test]
+    fn test_default_history_limit() {
+        let stack = UndoStack::new();
+        assert_eq!(stack.history_limit(), 100);
+    }
+
+    #[test]
+    fn test_push_enables_undo() {
+        let mut stack = UndoStack::new();
+        let cmd = test_create_section_command("Test");
+
+        stack.push_with_data(cmd, UndoData::None);
+
+        assert!(stack.can_undo());
+        assert_eq!(stack.len(), 1);
+    }
+
+    #[test]
+    fn test_push_multiple_commands() {
+        let mut stack = UndoStack::new();
+
+        stack.push_with_data(test_create_section_command("First"), UndoData::None);
+        stack.push_with_data(test_create_section_command("Second"), UndoData::None);
+        stack.push_with_data(test_create_section_command("Third"), UndoData::None);
+
+        assert_eq!(stack.len(), 3);
+        assert!(stack.can_undo());
+    }
+
+    #[test]
+    fn test_pop_undo_returns_last_command() {
+        let mut stack = UndoStack::new();
+
+        stack.push_with_data(test_create_section_command("First"), UndoData::None);
+        stack.push_with_data(test_create_section_command("Second"), UndoData::None);
+
+        let entry = stack.pop_undo().unwrap();
+        if let Command::CreateSection { name, .. } = entry.command {
+            assert_eq!(name, Some("Second".to_string()));
+        } else {
+            panic!("Expected CreateSection command");
+        }
+
+        assert_eq!(stack.len(), 1);
+    }
+
+    #[test]
+    fn test_pop_undo_empty_returns_none() {
+        let mut stack = UndoStack::new();
+        assert!(stack.pop_undo().is_none());
+    }
+
+    #[test]
+    fn test_peek_undo_does_not_modify_stack() {
+        let mut stack = UndoStack::new();
+        let cmd = test_create_section_command("Test");
+
+        stack.push_with_data(cmd.clone(), UndoData::None);
+
+        let peeked = stack.peek_undo();
+        assert!(peeked.is_some());
+        assert_eq!(stack.len(), 1); // Stack unchanged
+    }
+
+    #[test]
+    fn test_clear_removes_all_entries() {
+        let mut stack = UndoStack::new();
+
+        stack.push_with_data(test_create_section_command("First"), UndoData::None);
+        stack.push_with_data(test_create_section_command("Second"), UndoData::None);
+        stack.push_redo(UndoEntry {
+            command: test_create_section_command("Redo"),
+            undo_data: UndoData::None,
+        });
+
+        stack.clear();
+
+        assert!(!stack.can_undo());
+        assert!(!stack.can_redo());
+        assert_eq!(stack.len(), 0);
+        assert_eq!(stack.redo_len(), 0);
+    }
+
+    // === Redo Stack Tests ===
+
+    #[test]
+    fn test_push_redo_enables_redo() {
+        let mut stack = UndoStack::new();
+        let entry = UndoEntry {
+            command: test_create_section_command("Test"),
+            undo_data: UndoData::None,
+        };
+
+        stack.push_redo(entry);
+
+        assert!(stack.can_redo());
+        assert_eq!(stack.redo_len(), 1);
+    }
+
+    #[test]
+    fn test_pop_redo_returns_last_entry() {
+        let mut stack = UndoStack::new();
+
+        stack.push_redo(UndoEntry {
+            command: test_create_section_command("First"),
+            undo_data: UndoData::None,
+        });
+        stack.push_redo(UndoEntry {
+            command: test_create_section_command("Second"),
+            undo_data: UndoData::None,
+        });
+
+        let entry = stack.pop_redo().unwrap();
+        if let Command::CreateSection { name, .. } = entry.command {
+            assert_eq!(name, Some("Second".to_string()));
+        } else {
+            panic!("Expected CreateSection command");
+        }
+
+        assert_eq!(stack.redo_len(), 1);
+    }
+
+    #[test]
+    fn test_pop_redo_empty_returns_none() {
+        let mut stack = UndoStack::new();
+        assert!(stack.pop_redo().is_none());
+    }
+
+    #[test]
+    fn test_peek_redo_does_not_modify_stack() {
+        let mut stack = UndoStack::new();
+        let entry = UndoEntry {
+            command: test_create_section_command("Test"),
+            undo_data: UndoData::None,
+        };
+
+        stack.push_redo(entry);
+
+        let peeked = stack.peek_redo();
+        assert!(peeked.is_some());
+        assert_eq!(stack.redo_len(), 1); // Stack unchanged
+    }
+
+    #[test]
+    fn test_push_clears_redo_stack() {
+        let mut stack = UndoStack::new();
+
+        // Add some redo entries
+        stack.push_redo(UndoEntry {
+            command: test_create_section_command("Redo1"),
+            undo_data: UndoData::None,
+        });
+        stack.push_redo(UndoEntry {
+            command: test_create_section_command("Redo2"),
+            undo_data: UndoData::None,
+        });
+
+        assert!(stack.can_redo());
+
+        // New command should clear redo stack
+        stack.push_with_data(test_create_section_command("New"), UndoData::None);
+
+        assert!(!stack.can_redo());
+        assert_eq!(stack.redo_len(), 0);
+    }
+
+    #[test]
+    fn test_push_undo_does_not_clear_redo_stack() {
+        let mut stack = UndoStack::new();
+
+        // Add redo entries
+        stack.push_redo(UndoEntry {
+            command: test_create_section_command("Redo"),
+            undo_data: UndoData::None,
+        });
+
+        // push_undo is used for redo operations and should NOT clear redo
+        stack.push_undo(UndoEntry {
+            command: test_create_section_command("Restored"),
+            undo_data: UndoData::None,
+        });
+
+        assert!(stack.can_redo()); // Redo stack preserved
+    }
+
+    // === History Limit Tests ===
+
+    #[test]
+    fn test_history_limit_enforced_on_push() {
+        let mut stack = UndoStack::new_with_limit(3);
+
+        for i in 0..5 {
+            stack.push_with_data(
+                test_create_section_command(&format!("Section {}", i)),
+                UndoData::None,
+            );
+        }
+
+        assert_eq!(stack.len(), 3);
+
+        // The oldest entries should be removed
+        let entry = stack.pop_undo().unwrap();
+        if let Command::CreateSection { name, .. } = entry.command {
+            assert_eq!(name, Some("Section 4".to_string()));
+        } else {
+            panic!("Expected Section 4");
+        }
+    }
+
+    #[test]
+    fn test_set_history_limit_trims_stack() {
+        let mut stack = UndoStack::new();
+
+        for i in 0..10 {
+            stack.push_with_data(
+                test_create_section_command(&format!("Section {}", i)),
+                UndoData::None,
+            );
+        }
+
+        assert_eq!(stack.len(), 10);
+
+        // Reduce limit - should trim oldest entries
+        stack.set_history_limit(5);
+
+        assert_eq!(stack.len(), 5);
+        assert_eq!(stack.history_limit(), 5);
+
+        // Verify we have the most recent entries
+        let entry = stack.pop_undo().unwrap();
+        if let Command::CreateSection { name, .. } = entry.command {
+            assert_eq!(name, Some("Section 9".to_string()));
+        } else {
+            panic!("Expected Section 9");
+        }
+    }
+
+    #[test]
+    fn test_set_history_limit_zero() {
+        let mut stack = UndoStack::new();
+        stack.push_with_data(test_create_section_command("Test"), UndoData::None);
+
+        stack.set_history_limit(0);
+
+        assert_eq!(stack.len(), 0);
+        assert!(!stack.can_undo());
+    }
+
+    // === UndoData Tests ===
+
+    #[test]
+    fn test_undo_data_inverse_command() {
+        let mut stack = UndoStack::new();
+
+        let inverse = Command::DeleteSection { section_id: 42 };
+        stack.push_with_data(
+            test_create_section_command("Test"),
+            UndoData::InverseCommand(inverse.clone()),
+        );
+
+        let data = stack.peek_undo_data().unwrap();
+        if let UndoData::InverseCommand(cmd) = data {
+            if let Command::DeleteSection { section_id } = cmd {
+                assert_eq!(*section_id, 42);
+            } else {
+                panic!("Expected DeleteSection");
+            }
+        } else {
+            panic!("Expected InverseCommand");
+        }
+    }
+
+    #[test]
+    fn test_undo_data_section_snapshot() {
+        let mut stack = UndoStack::new();
+
+        let section_data = test_section_data("Snapshot Test");
+        stack.push_with_data(
+            test_delete_section_command(5),
+            UndoData::SectionSnapshot {
+                section_id: 5,
+                section_data: section_data.clone(),
+            },
+        );
+
+        let data = stack.peek_undo_data().unwrap();
+        if let UndoData::SectionSnapshot {
+            section_id,
+            section_data: stored_data,
+        } = data
+        {
+            assert_eq!(*section_id, 5);
+            assert_eq!(stored_data.name, Some("Snapshot Test".to_string()));
+        } else {
+            panic!("Expected SectionSnapshot");
+        }
+    }
+
+    #[test]
+    fn test_undo_data_shot_snapshot() {
+        let mut stack = UndoStack::new();
+
+        let shot_data = ShotData {
+            azimuth_in: 45.0,
+            azimuth_out: 225.0,
+            length: 10.0,
+            depth_in: 5.0,
+            depth_out: 6.0,
+            ..Default::default()
+        };
+
+        stack.push_with_data(
+            Command::DeleteShot {
+                section_id: 1,
+                shot_id: 100,
+            },
+            UndoData::ShotSnapshot {
+                section_id: 1,
+                shot_id: 100,
+                shot_data: shot_data.clone(),
+                position: 2,
+            },
+        );
+
+        let data = stack.peek_undo_data().unwrap();
+        if let UndoData::ShotSnapshot {
+            section_id,
+            shot_id,
+            shot_data: stored_data,
+            position,
+        } = data
+        {
+            assert_eq!(*section_id, 1);
+            assert_eq!(*shot_id, 100);
+            assert_eq!(stored_data.length, 10.0);
+            assert_eq!(*position, 2);
+        } else {
+            panic!("Expected ShotSnapshot");
+        }
+    }
+
+    #[test]
+    fn test_undo_data_merge_info() {
+        let mut stack = UndoStack::new();
+
+        stack.push_with_data(
+            Command::MergeStations {
+                station_a: StationRef::new(1, 0),
+                station_b: StationRef::new(2, 3),
+                closure_strategy: ClosureStrategy::ProportionalByLength,
+            },
+            UndoData::MergeInfo {
+                station_a: StationRef::new(1, 0),
+                station_b: StationRef::new(2, 3),
+                strategy: ClosureStrategy::ProportionalByLength,
+            },
+        );
+
+        let data = stack.peek_undo_data().unwrap();
+        if let UndoData::MergeInfo {
+            station_a,
+            station_b,
+            strategy,
+        } = data
+        {
+            assert_eq!(station_a.section_id, 1);
+            assert_eq!(station_a.station_index, 0);
+            assert_eq!(station_b.section_id, 2);
+            assert_eq!(station_b.station_index, 3);
+            assert!(matches!(strategy, ClosureStrategy::ProportionalByLength));
+        } else {
+            panic!("Expected MergeInfo");
+        }
+    }
+
+    #[test]
+    fn test_undo_data_zero_datum_info() {
+        let mut stack = UndoStack::new();
+
+        let gps = GpsCoordinates::new(45.0, -73.5, 100.0).unwrap();
+        stack.push_with_data(
+            Command::SetZeroDatum {
+                station_ref: StationRef::new(1, 0),
+                coordinates: gps,
+            },
+            UndoData::ZeroDatumInfo {
+                station_ref: StationRef::new(1, 0),
+                previous_gps: Some(GpsCoordinates::new(40.0, -70.0, 50.0).unwrap()),
+            },
+        );
+
+        let data = stack.peek_undo_data().unwrap();
+        if let UndoData::ZeroDatumInfo {
+            station_ref,
+            previous_gps,
+        } = data
+        {
+            assert_eq!(station_ref.section_id, 1);
+            let prev = previous_gps.as_ref().unwrap();
+            assert_eq!(prev.latitude, 40.0);
+        } else {
+            panic!("Expected ZeroDatumInfo");
+        }
+    }
+
+    // === Serialization / Persistence Tests ===
+
+    #[test]
+    fn test_serialize_entry_basic() {
+        let entry = UndoEntry {
+            command: test_create_section_command("Serialize Test"),
+            undo_data: UndoData::None,
+        };
+
+        let result = UndoStack::serialize_entry(&entry);
+        assert!(result.is_some());
+
+        let (cmd_json, undo_json) = result.unwrap();
+        assert!(cmd_json.contains("Serialize Test"));
+        assert!(undo_json.contains("None"));
+    }
+
+    #[test]
+    fn test_deserialize_entry_basic() {
+        let entry = UndoEntry {
+            command: test_create_section_command("Deserialize Test"),
+            undo_data: UndoData::InverseCommand(test_delete_section_command(42)),
+        };
+
+        let (cmd_json, undo_json) = UndoStack::serialize_entry(&entry).unwrap();
+        let restored = UndoStack::deserialize_entry(&cmd_json, &undo_json).unwrap();
+
+        if let Command::CreateSection { name, .. } = restored.command {
+            assert_eq!(name, Some("Deserialize Test".to_string()));
+        } else {
+            panic!("Expected CreateSection");
+        }
+
+        if let UndoData::InverseCommand(Command::DeleteSection { section_id }) = restored.undo_data
+        {
+            assert_eq!(section_id, 42);
+        } else {
+            panic!("Expected InverseCommand with DeleteSection");
+        }
+    }
+
+    #[test]
+    fn test_deserialize_entry_invalid_json() {
+        let result = UndoStack::deserialize_entry("not valid json", "{}");
+        assert!(result.is_none());
+
+        let result = UndoStack::deserialize_entry("{}", "not valid json");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_serialize_entry_with_section_snapshot() {
+        let entry = UndoEntry {
+            command: test_delete_section_command(5),
+            undo_data: UndoData::SectionSnapshot {
+                section_id: 5,
+                section_data: test_section_data("Snapshot"),
+            },
+        };
+
+        let result = UndoStack::serialize_entry(&entry);
+        assert!(result.is_some());
+
+        let (cmd_json, undo_json) = result.unwrap();
+        let restored = UndoStack::deserialize_entry(&cmd_json, &undo_json).unwrap();
+
+        if let UndoData::SectionSnapshot {
+            section_id,
+            section_data,
+        } = restored.undo_data
+        {
+            assert_eq!(section_id, 5);
+            assert_eq!(section_data.name, Some("Snapshot".to_string()));
+        } else {
+            panic!("Expected SectionSnapshot");
+        }
+    }
+
+    #[test]
+    fn test_load_from_persisted() {
+        let mut stack = UndoStack::new();
+
+        // Create serialized entries
+        let entries: Vec<(String, String)> = (0..3)
+            .map(|i| {
+                let entry = UndoEntry {
+                    command: test_create_section_command(&format!("Section {}", i)),
+                    undo_data: UndoData::InverseCommand(test_delete_section_command(i as u32)),
+                };
+                UndoStack::serialize_entry(&entry).unwrap()
+            })
+            .collect();
+
+        stack.load_from_persisted(entries);
+
+        assert_eq!(stack.len(), 3);
+        assert!(stack.can_undo());
+        assert!(!stack.can_redo()); // Redo should be cleared
+
+        // Verify entries loaded in correct order
+        let entry = stack.pop_undo().unwrap();
+        if let Command::CreateSection { name, .. } = entry.command {
+            assert_eq!(name, Some("Section 2".to_string()));
+        } else {
+            panic!("Expected Section 2");
+        }
+    }
+
+    #[test]
+    fn test_load_from_persisted_respects_limit() {
+        let mut stack = UndoStack::new_with_limit(2);
+
+        // Create more entries than the limit
+        let entries: Vec<(String, String)> = (0..5)
+            .map(|i| {
+                let entry = UndoEntry {
+                    command: test_create_section_command(&format!("Section {}", i)),
+                    undo_data: UndoData::None,
+                };
+                UndoStack::serialize_entry(&entry).unwrap()
+            })
+            .collect();
+
+        stack.load_from_persisted(entries);
+
+        assert_eq!(stack.len(), 2);
+
+        // Should have the most recent entries
+        let entry = stack.pop_undo().unwrap();
+        if let Command::CreateSection { name, .. } = entry.command {
+            assert_eq!(name, Some("Section 4".to_string()));
+        } else {
+            panic!("Expected Section 4");
+        }
+    }
+
+    #[test]
+    fn test_load_from_persisted_clears_existing() {
+        let mut stack = UndoStack::new();
+
+        // Add some entries
+        stack.push_with_data(test_create_section_command("Existing"), UndoData::None);
+        stack.push_redo(UndoEntry {
+            command: test_create_section_command("Existing Redo"),
+            undo_data: UndoData::None,
+        });
+
+        // Load persisted data should clear existing
+        let entries: Vec<(String, String)> = vec![UndoStack::serialize_entry(&UndoEntry {
+            command: test_create_section_command("Loaded"),
+            undo_data: UndoData::None,
+        })
+        .unwrap()];
+
+        stack.load_from_persisted(entries);
+
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack.redo_len(), 0);
+    }
+
+    #[test]
+    fn test_load_from_persisted_skips_invalid() {
+        let mut stack = UndoStack::new();
+
+        let valid_entry = UndoStack::serialize_entry(&UndoEntry {
+            command: test_create_section_command("Valid"),
+            undo_data: UndoData::None,
+        })
+        .unwrap();
+
+        let entries = vec![
+            ("invalid json".to_string(), "{}".to_string()),
+            valid_entry,
+            ("{}".to_string(), "also invalid".to_string()),
+        ];
+
+        stack.load_from_persisted(entries);
+
+        // Only the valid entry should be loaded
+        assert_eq!(stack.len(), 1);
+    }
+
+    #[test]
+    fn test_entries_to_persist_all_entries() {
+        let mut stack = UndoStack::new();
+
+        for i in 0..5 {
+            stack.push_with_data(
+                test_create_section_command(&format!("Section {}", i)),
+                UndoData::None,
+            );
+        }
+
+        let persisted: Vec<_> = stack.entries_to_persist(10).collect();
+        assert_eq!(persisted.len(), 5);
+    }
+
+    #[test]
+    fn test_entries_to_persist_limited() {
+        let mut stack = UndoStack::new();
+
+        for i in 0..10 {
+            stack.push_with_data(
+                test_create_section_command(&format!("Section {}", i)),
+                UndoData::None,
+            );
+        }
+
+        let persisted: Vec<_> = stack.entries_to_persist(3).collect();
+        assert_eq!(persisted.len(), 3);
+
+        // Should be the most recent 3
+        if let Command::CreateSection { name, .. } = &persisted[0].command {
+            assert_eq!(*name, Some("Section 7".to_string()));
+        } else {
+            panic!("Expected Section 7");
+        }
+    }
+
+    // === Complex Operation Sequences ===
+
+    #[test]
+    fn test_undo_redo_cycle() {
+        let mut stack = UndoStack::new();
+
+        // Push command
+        let entry = UndoEntry {
+            command: test_create_section_command("Test"),
+            undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+        };
+        stack.push_with_data(entry.command.clone(), entry.undo_data.clone());
+
+        assert!(stack.can_undo());
+        assert!(!stack.can_redo());
+
+        // Simulate undo: pop from undo, push to redo
+        let undone = stack.pop_undo().unwrap();
+        stack.push_redo(undone.clone());
+
+        assert!(!stack.can_undo());
+        assert!(stack.can_redo());
+
+        // Simulate redo: pop from redo, push to undo
+        let redone = stack.pop_redo().unwrap();
+        stack.push_undo(redone);
+
+        assert!(stack.can_undo());
+        assert!(!stack.can_redo());
+    }
+
+    #[test]
+    fn test_multiple_undo_redo_cycles() {
+        let mut stack = UndoStack::new();
+
+        // Push 3 commands
+        for i in 0..3 {
+            stack.push_with_data(
+                test_create_section_command(&format!("Section {}", i)),
+                UndoData::InverseCommand(test_delete_section_command(i as u32)),
+            );
+        }
+
+        assert_eq!(stack.len(), 3);
+
+        // Undo all 3
+        for _ in 0..3 {
+            let entry = stack.pop_undo().unwrap();
+            stack.push_redo(entry);
+        }
+
+        assert_eq!(stack.len(), 0);
+        assert_eq!(stack.redo_len(), 3);
+
+        // Redo 2
+        for _ in 0..2 {
+            let entry = stack.pop_redo().unwrap();
+            stack.push_undo(entry);
+        }
+
+        assert_eq!(stack.len(), 2);
+        assert_eq!(stack.redo_len(), 1);
+    }
+
+    #[test]
+    fn test_new_command_after_undo_clears_redo() {
+        let mut stack = UndoStack::new();
+
+        // Create -> Undo -> New action (should clear redo)
+        stack.push_with_data(test_create_section_command("Original"), UndoData::None);
+
+        let entry = stack.pop_undo().unwrap();
+        stack.push_redo(entry);
+
+        assert!(stack.can_redo());
+
+        // New command should clear redo
+        stack.push_with_data(test_create_section_command("New"), UndoData::None);
+
+        assert!(!stack.can_redo());
+        assert!(stack.can_undo());
+    }
+
+    #[test]
+    fn test_roundtrip_serialization_all_undo_data_types() {
+        // Test that all UndoData variants can be serialized and deserialized
+
+        let test_cases: Vec<UndoEntry> = vec![
+            UndoEntry {
+                command: test_create_section_command("None"),
+                undo_data: UndoData::None,
+            },
+            UndoEntry {
+                command: test_create_section_command("Inverse"),
+                undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+            },
+            UndoEntry {
+                command: test_delete_section_command(2),
+                undo_data: UndoData::SectionSnapshot {
+                    section_id: 2,
+                    section_data: test_section_data("Snapshot"),
+                },
+            },
+            UndoEntry {
+                command: Command::DeleteShot {
+                    section_id: 1,
+                    shot_id: 100,
+                },
+                undo_data: UndoData::ShotSnapshot {
+                    section_id: 1,
+                    shot_id: 100,
+                    shot_data: ShotData {
+                        length: 5.0,
+                        ..Default::default()
+                    },
+                    position: 0,
+                },
+            },
+            UndoEntry {
+                command: Command::SetZeroDatum {
+                    station_ref: StationRef::new(1, 0),
+                    coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+                },
+                undo_data: UndoData::ZeroDatumInfo {
+                    station_ref: StationRef::new(1, 0),
+                    previous_gps: None,
+                },
+            },
+            UndoEntry {
+                command: Command::MergeStations {
+                    station_a: StationRef::new(1, 0),
+                    station_b: StationRef::new(2, 1),
+                    closure_strategy: ClosureStrategy::ProportionalByLength,
+                },
+                undo_data: UndoData::MergeInfo {
+                    station_a: StationRef::new(1, 0),
+                    station_b: StationRef::new(2, 1),
+                    strategy: ClosureStrategy::ProportionalByLength,
+                },
+            },
+            UndoEntry {
+                command: Command::Batch { commands: vec![] },
+                undo_data: UndoData::ProjectSnapshot("{}".to_string()),
+            },
+            UndoEntry {
+                command: Command::UpdateShot {
+                    section_id: 1,
+                    shot_id: 100,
+                    updates: crate::models::ShotUpdates {
+                        length: Some(10.0),
+                        ..Default::default()
+                    },
+                },
+                undo_data: UndoData::PreviousValues {
+                    section_id: 1,
+                    shot_id: Some(100),
+                    values_json: r#"{"length":5.0}"#.to_string(),
+                },
+            },
+        ];
+
+        for (i, original) in test_cases.iter().enumerate() {
+            let serialized = UndoStack::serialize_entry(original);
+            assert!(
+                serialized.is_some(),
+                "Failed to serialize test case {}",
+                i
+            );
+
+            let (cmd_json, undo_json) = serialized.unwrap();
+            let deserialized = UndoStack::deserialize_entry(&cmd_json, &undo_json);
+            assert!(
+                deserialized.is_some(),
+                "Failed to deserialize test case {}",
+                i
+            );
+        }
+    }
 }
