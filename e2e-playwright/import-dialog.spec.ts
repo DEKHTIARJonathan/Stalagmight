@@ -627,19 +627,19 @@ test.describe('Statistics Footer', () => {
   test('stats calculated correctly for all selected sections', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // By default, sections with shots are selected (Main Passage, Side Tunnel, Mixed LRUD, Undefined LRUD)
-    // Total length: 33.7 + 12.5 + 71.5 + 14.0 = 131.7m
-    // Shot count: 3 + 2 + 3 + 2 = 10
-    // Depth range: -1.0 to -8.0 (from all sections)
+    // By default, sections with shots are selected (Main Passage, Side Tunnel, Mixed LRUD, Undefined LRUD, Validation Test)
+    // Total length: 33.7 + 12.5 + 71.5 + 14.0 + 79.0 = 210.7m
+    // Shot count: 3 + 2 + 3 + 2 + 4 = 14
+    // Depth range: -1.0 to -16.0 (from all sections including Validation Test)
     // Use polling expectations instead of waitForTimeout to avoid flaky tests
     const totalLength = page.locator('[data-testid="stats-total-length"]');
-    await expect(totalLength).toContainText('131.7m', { timeout: 2000 });
+    await expect(totalLength).toContainText('210.7m', { timeout: 2000 });
 
     const shotCount = page.locator('[data-testid="stats-shot-count"]');
-    await expect(shotCount).toContainText('10', { timeout: 2000 });
+    await expect(shotCount).toContainText('14', { timeout: 2000 });
 
     const depthRange = page.locator('[data-testid="stats-depth-range"]');
-    await expect(depthRange).toContainText('-8.0m to -1.0m', { timeout: 2000 });
+    await expect(depthRange).toContainText('-16.0m to -1.0m', { timeout: 2000 });
   });
 
   test('stats update when selection changes', async ({ page }) => {
@@ -647,7 +647,7 @@ test.describe('Statistics Footer', () => {
 
     // Wait for initial stats to be calculated (poll for non-zero value)
     const totalLength = page.locator('[data-testid="stats-total-length"]');
-    await expect(totalLength).toContainText('131.7m', { timeout: 2000 });
+    await expect(totalLength).toContainText('210.7m', { timeout: 2000 });
 
     // Click "None" to deselect all (scoped to import dialog)
     const dialog = page.locator('[role="dialog"]');
@@ -722,7 +722,7 @@ test.describe('Statistics Footer', () => {
 
     // Depth range should show in format "Xm to Ym" (poll for expected value)
     const depthRange = page.locator('[data-testid="stats-depth-range"]');
-    await expect(depthRange).toContainText('-8.0m to -1.0m', { timeout: 2000 });
+    await expect(depthRange).toContainText('-16.0m to -1.0m', { timeout: 2000 });
 
     // Verify the format
     const text = await depthRange.textContent();
@@ -732,5 +732,208 @@ test.describe('Statistics Footer', () => {
 
     // When there's data, should show min to max format
     expect(text).toMatch(/-?\d+\.\d+m to -?\d+\.\d+m/);
+  });
+});
+
+test.describe('Validation Warnings', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+  });
+
+  test('validation summary shows error and warning counts', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // The "Validation Test Section" (index 5) contains validation issues
+    // Wait for validation summary to appear (it should show errors and warnings)
+    const validationSummary = page.locator('[data-testid="validation-summary"]');
+    await expect(validationSummary).toBeVisible({ timeout: 2000 });
+
+    // Should show error count (1 error from invalid azimuth)
+    const errorCount = page.locator('[data-testid="validation-error-count"]');
+    await expect(errorCount).toBeVisible();
+    await expect(errorCount).toContainText('1 error');
+
+    // Should show warning count (multiple warnings from length, depth, LRUD issues + Mixed LRUD section shot)
+    const warningCount = page.locator('[data-testid="validation-warning-count"]');
+    await expect(warningCount).toBeVisible();
+    // At least 4 warnings: long shot, depth change, LRUD, plus Mixed LRUD section shot
+    const warningText = await warningCount.textContent();
+    expect(warningText).toMatch(/\d+ warnings?/);
+  });
+
+  test('validation icons appear on shots with issues', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand the "Validation Test Section" (index 5)
+    const expandButton = page.locator('[data-testid="section-expand-5"]');
+    await expandButton.click();
+
+    // Check for validation icons
+    // Shot 0 has warning (length exceeds max)
+    const warningIcon0 = page.locator('[data-testid="validation-icon-5-0"]');
+    await expect(warningIcon0).toBeVisible();
+    await expect(warningIcon0).toHaveAttribute('aria-label', 'Warning');
+
+    // Shot 1 has error (azimuth out of range)
+    const errorIcon1 = page.locator('[data-testid="validation-icon-5-1"]');
+    await expect(errorIcon1).toBeVisible();
+    await expect(errorIcon1).toHaveAttribute('aria-label', 'Error');
+  });
+
+  test('validation icon has tooltip with message', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand the "Validation Test Section" (index 5)
+    const expandButton = page.locator('[data-testid="section-expand-5"]');
+    await expandButton.click();
+
+    // Check that the warning icon has a title attribute with message
+    const warningIcon = page.locator('[data-testid="validation-icon-5-0"]');
+    const title = await warningIcon.getAttribute('title');
+    expect(title).toContain('Shot length');
+    expect(title).toContain('exceeds maximum');
+  });
+
+  test('errors block import button', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Import button should be disabled when there are errors
+    const importButton = page.locator('[data-testid="import-button"]');
+    await expect(importButton).toBeDisabled();
+
+    // Error message should be shown
+    const errorMessage = page.locator('[data-testid="validation-error-message"]');
+    await expect(errorMessage).toBeVisible();
+    await expect(errorMessage).toContainText('Errors must be resolved');
+  });
+
+  test('deselecting section with errors enables import', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Initially import is disabled due to errors
+    const importButton = page.locator('[data-testid="import-button"]');
+    await expect(importButton).toBeDisabled();
+
+    // Deselect the "Validation Test Section" (index 5) which has the error
+    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
+    await validationSection.locator('input[type="checkbox"]').click();
+
+    // Now there should only be warnings (from Mixed LRUD section shot that exceeds length)
+    // The acknowledge checkbox should appear (poll for visibility instead of timeout)
+    const acknowledgeCheckbox = page.locator('[data-testid="acknowledge-warnings-checkbox"]');
+    await expect(acknowledgeCheckbox).toBeVisible({ timeout: 2000 });
+  });
+
+  test('acknowledge checkbox enables import for warnings only', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Deselect the "Validation Test Section" to remove errors
+    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
+    await validationSection.locator('input[type="checkbox"]').click();
+
+    // Import button should still be disabled (warnings need acknowledgement)
+    const importButton = page.locator('[data-testid="import-button"]');
+
+    // Wait for the checkbox to appear
+    const acknowledgeCheckbox = page.locator('[data-testid="acknowledge-warnings-checkbox"]');
+    await expect(acknowledgeCheckbox).toBeVisible({ timeout: 2000 });
+
+    // Button disabled before checking
+    await expect(importButton).toBeDisabled();
+
+    // Check the acknowledge checkbox
+    await acknowledgeCheckbox.check();
+
+    // Now import should be enabled
+    await expect(importButton).toBeEnabled();
+  });
+
+  test('cell highlighting for LRUD issues', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand the "Validation Test Section" (index 5)
+    const expandButton = page.locator('[data-testid="section-expand-5"]');
+    await expandButton.click();
+
+    // Shot 3 (index 3) has LRUD issue (left=60.0 exceeds max 50.0)
+    const lrudCell = page.locator('[data-testid="lrud-left-5-3"]');
+    await expect(lrudCell).toBeVisible();
+
+    // Check that the cell has highlight class
+    await expect(lrudCell).toHaveClass(/bg-warning/);
+  });
+
+  test('no validation summary when no issues', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Deselect all sections with issues
+    const dialog = page.locator('[role="dialog"]');
+    await dialog.locator('button:has-text("None")').click();
+
+    // Select only "Main Passage" which has no validation issues
+    const mainPassageRow = page.locator('tr').filter({ hasText: 'Main Passage' });
+    await mainPassageRow.locator('input[type="checkbox"]').click();
+
+    // Import button should be enabled (poll for state change instead of timeout)
+    const importButton = page.locator('[data-testid="import-button"]');
+    await expect(importButton).toBeEnabled({ timeout: 2000 });
+
+    // Validation summary should not be visible
+    const validationSummary = page.locator('[data-testid="validation-summary"]');
+    await expect(validationSummary).not.toBeVisible();
+  });
+
+  test('validation updates when selection changes', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Initially we have errors
+    const errorCount = page.locator('[data-testid="validation-error-count"]');
+    await expect(errorCount).toBeVisible();
+
+    // Deselect the validation test section
+    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
+    await validationSection.locator('input[type="checkbox"]').click();
+
+    // Error count should disappear (only warnings remain from other sections)
+    await expect(errorCount).not.toBeVisible({ timeout: 2000 });
+  });
+
+  test('acknowledge checkbox resets when selection changes', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Deselect the "Validation Test Section" to remove errors (only warnings remain)
+    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
+    await validationSection.locator('input[type="checkbox"]').click();
+
+    // Wait for the acknowledge checkbox to appear
+    const acknowledgeCheckbox = page.locator('[data-testid="acknowledge-warnings-checkbox"]');
+    await expect(acknowledgeCheckbox).toBeVisible({ timeout: 2000 });
+
+    // Check the acknowledge checkbox
+    await acknowledgeCheckbox.check();
+    await expect(acknowledgeCheckbox).toBeChecked();
+
+    // Import button should be enabled
+    const importButton = page.locator('[data-testid="import-button"]');
+    await expect(importButton).toBeEnabled();
+
+    // Now re-select the validation test section (adds back errors)
+    await validationSection.locator('input[type="checkbox"]').click();
+
+    // Wait for error to appear
+    const errorCount = page.locator('[data-testid="validation-error-count"]');
+    await expect(errorCount).toBeVisible({ timeout: 2000 });
+
+    // Deselect it again to go back to warnings only
+    await validationSection.locator('input[type="checkbox"]').click();
+
+    // The acknowledge checkbox should have reset (unchecked) due to selection change
+    await expect(acknowledgeCheckbox).toBeVisible({ timeout: 2000 });
+    await expect(acknowledgeCheckbox).not.toBeChecked();
+
+    // Import button should be disabled again (need to re-acknowledge)
+    await expect(importButton).toBeDisabled();
   });
 });
