@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-35-f4v",
+  "created_at": "2026-01-17T14:21:16.960354Z",
+  "depends_on_epics": [],
+  "id": "fn-35-f4v",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-35-f4v.md",
+  "status": "open",
+  "title": "Rust Tests: Undo/Redo System",
+  "updated_at": "2026-01-17T14:21:16.960364Z"
+}

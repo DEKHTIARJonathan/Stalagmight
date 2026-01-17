@@ -35,3 +35,21 @@ pub fn update_panel_sizes(
     }
     state.update_config(config).map_err(|e| e.to_string())
 }
+
+/// Load all display settings from the current project database
+#[tauri::command]
+pub fn load_display_settings(state: State<AppState>) -> Result<std::collections::HashMap<String, String>, String> {
+    state.load_display_settings().map_err(|e| e.to_string())
+}
+
+/// Save a display setting to the current project database
+#[tauri::command]
+pub fn save_display_setting(state: State<AppState>, key: String, value: String) -> Result<(), String> {
+    state.save_display_setting(&key, &value).map_err(|e| e.to_string())
+}
+
+/// Get a single display setting from the current project database
+#[tauri::command]
+pub fn get_display_setting(state: State<AppState>, key: String) -> Result<Option<String>, String> {
+    state.get_display_setting(&key).map_err(|e| e.to_string())
+}

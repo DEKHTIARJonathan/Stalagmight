@@ -4,6 +4,10 @@ export interface CommandResult {
   success: boolean;
   warnings: ValidationWarning[];
   error: string | null;
+  /** ID of the created section (for CreateSection command) */
+  section_id?: number;
+  /** IDs of created sections (for Batch commands containing CreateSection) */
+  section_ids?: number[];
 }
 
 export interface ValidationWarning {
@@ -53,6 +57,7 @@ export interface DmpShot {
   minute: number;
   second: number;
   marker_index: number;
+  comment?: string;
 }
 
 // Export types

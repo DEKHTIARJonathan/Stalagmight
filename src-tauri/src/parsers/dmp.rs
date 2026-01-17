@@ -229,6 +229,9 @@ pub struct DmpShot {
     pub second: u8,
     /// Physical marker index
     pub marker_index: u8,
+    /// User comment (not parsed from DMP format; defaults to None)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
 }
 
 // ============================================================================
@@ -243,10 +246,16 @@ fn split_into_sections(data: &[u8], version: u8) -> Vec<Vec<u8>> {
     }
 
     let pattern_len = patterns[0].len();
+
+    // If data is shorter than pattern, no sections can be found
+    if data.len() < pattern_len {
+        return vec![];
+    }
+
     let mut sections = Vec::new();
     let mut start_idx = 0;
 
-    for current_idx in 0..=data.len().saturating_sub(pattern_len) {
+    for current_idx in 0..=data.len() - pattern_len {
         let window = &data[current_idx..current_idx + pattern_len];
 
         // Check if window matches any end pattern
@@ -343,6 +352,7 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
         minute,
         second,
         marker_index,
+        comment: None,
     })
 }
 
@@ -540,10 +550,20 @@ impl DmpShot {
             right: Some(self.right),
             up: Some(self.up),
             down: Some(self.down),
-            comment: None,
+            comment: self.comment.clone(),
             is_virtual: false,
             marker_index: Some(self.marker_index as u32),
             temperature: Some(self.temperature),
+        }
+    }
+}
+
+impl DmpDirection {
+    /// Convert to internal SurveyDirection
+    pub fn to_survey_direction(&self) -> crate::models::SurveyDirection {
+        match self {
+            DmpDirection::In => crate::models::SurveyDirection::In,
+            DmpDirection::Out => crate::models::SurveyDirection::Out,
         }
     }
 }
@@ -556,6 +576,7 @@ impl DmpSection {
             surveyor: None,
             date: Some(self.date.date()),
             color,
+            direction: Some(self.direction.to_survey_direction()),
             shots: self
                 .shots
                 .iter()
@@ -573,6 +594,7 @@ impl DmpSection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -655,6 +677,44 @@ mod tests {
         assert_eq!(shot_size(1), 0);
     }
 
+    #[test]
+    fn test_dmp_shot_comment_serialization() {
+        // Test that None comment is omitted from JSON (not serialized as null)
+        let shot_no_comment = DmpShot {
+            shot_type: DmpShotType::Standard,
+            heading_in: 45.0,
+            heading_out: 46.0,
+            length: 10.0,
+            depth_in: 2.0,
+            depth_out: 3.0,
+            pitch_in: 0.0,
+            pitch_out: 0.0,
+            left: 1.0,
+            right: 1.0,
+            up: 1.0,
+            down: 1.0,
+            temperature: 18.0,
+            hour: 10,
+            minute: 30,
+            second: 0,
+            marker_index: 0,
+            comment: None,
+        };
+
+        let json = serde_json::to_string(&shot_no_comment).unwrap();
+        // With skip_serializing_if, None should be omitted entirely
+        assert!(!json.contains("comment"), "None comment should be omitted from JSON");
+
+        // Test that Some comment is serialized
+        let shot_with_comment = DmpShot {
+            comment: Some("Test comment".to_string()),
+            ..shot_no_comment.clone()
+        };
+
+        let json = serde_json::to_string(&shot_with_comment).unwrap();
+        assert!(json.contains(r#""comment":"Test comment""#), "Some comment should be serialized");
+    }
+
     // Integration tests with real DMP files
     #[test]
     fn test_parse_v2_dmp() {
@@ -722,5 +782,397 @@ mod tests {
                 i, section.name, section.direction, section.shots.len(), standard_shots
             );
         }
+    }
+
+    // ============================================================================
+    // Edge Case Tests (fn-37-rxr.1)
+    // ============================================================================
+
+    /// Helper to create a DMP file with given content
+    fn create_dmp_file(content: &str) -> (NamedTempFile, std::path::PathBuf) {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+        let path = file.path().with_extension("dmp");
+        std::fs::copy(file.path(), &path).unwrap();
+        (file, path)
+    }
+
+    /// Helper to build v3 format section data as semicolon-separated string
+    /// V3 format: version(1) + magic(3) + date(5) + name(3) + direction(1) + shots(21 bytes each) + EOS marker
+    fn build_v3_section_data() -> String {
+        let mut values: Vec<i32> = Vec::new();
+
+        // Version 3
+        values.push(3);
+
+        // Section magic (version > 2)
+        values.extend(&[68, 89, 101]);
+
+        // Date: year offset from 2000 (24 = 2024), month, day, hour, minute
+        values.extend(&[24, 6, 15, 10, 30]);
+
+        // Name: "TST" as ASCII
+        values.extend(&[84, 83, 84]);
+
+        // Direction: 0 = In
+        values.push(0);
+
+        // Shot 1 (v3 = 21 bytes: type + 7*int16 + marker)
+        // type=2 (standard), heading_in=450 (45.0°), heading_out=460 (46.0°)
+        // length=1000 (10.00m), depth_in=200 (2.00m), depth_out=300 (3.00m)
+        // pitch_in=0, pitch_out=0, marker=1
+        // int16 BE format: (val >> 8, val & 0xFF)
+        values.push(2); // shot type
+        values.extend(&[1, 194]); // heading_in 450: (1 << 8) + 194 = 450
+        values.extend(&[1, 204]); // heading_out 460
+        values.extend(&[3, 232]); // length 1000: (3 << 8) + 232 = 1000
+        values.extend(&[0, 200]); // depth_in 200
+        values.extend(&[1, 44]);  // depth_out 300: (1 << 8) + 44 = 300
+        values.extend(&[0, 0]);   // pitch_in 0
+        values.extend(&[0, 0]);   // pitch_out 0
+        values.push(1); // marker_index
+
+        // End-of-section marker for v3 (type=3 followed by zeros, total 21 bytes)
+        values.push(3); // EOS type
+        values.extend(vec![0; 20]); // zeros to complete 21-byte shot
+
+        values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";")
+    }
+
+    /// Helper to build v4 format section data as semicolon-separated string
+    /// V4 format: version(1) + magic(3) + date(5) + name(3) + direction(1) + shots(29 bytes each) + EOS marker
+    fn build_v4_section_data() -> String {
+        let mut values: Vec<i32> = Vec::new();
+
+        // Version 4
+        values.push(4);
+
+        // Section magic (version > 2)
+        values.extend(&[68, 89, 101]);
+
+        // Date: year offset from 2000 (24 = 2024), month, day, hour, minute
+        values.extend(&[24, 8, 20, 14, 45]);
+
+        // Name: "V4S" as ASCII
+        values.extend(&[86, 52, 83]);
+
+        // Direction: 1 = Out
+        values.push(1);
+
+        // Shot 1 (v4 = 29 bytes: type + 7*int16 + 4*int16 LRUD + int16 temp + 3 time bytes + marker)
+        // type=2 (standard)
+        values.push(2);
+
+        // heading_in=900 (90.0°)
+        values.extend(&[3, 132]); // 900 = (3 << 8) + 132
+        // heading_out=910 (91.0°)
+        values.extend(&[3, 142]); // 910
+        // length=500 (5.00m)
+        values.extend(&[1, 244]); // 500 = (1 << 8) + 244
+        // depth_in=100 (1.00m)
+        values.extend(&[0, 100]);
+        // depth_out=150 (1.50m)
+        values.extend(&[0, 150]);
+        // pitch_in=50 (5.0°)
+        values.extend(&[0, 50]);
+        // pitch_out=-50 (-5.0°) - signed as two's complement
+        values.extend(&[255, 206]); // -50 in BE int16
+
+        // LRUD values (v4+): left=100 (1.00m), right=150 (1.50m), up=200 (2.00m), down=80 (0.80m)
+        values.extend(&[0, 100]); // left
+        values.extend(&[0, 150]); // right
+        values.extend(&[0, 200]); // up
+        values.extend(&[0, 80]);  // down
+
+        // Temperature: 185 (18.5°C)
+        values.extend(&[0, 185]);
+
+        // Time: hour=14, minute=45, second=30
+        values.extend(&[14, 45, 30]);
+
+        // Marker index
+        values.push(2);
+
+        // End-of-section marker for v4 (type=3 followed by zeros, total 29 bytes)
+        values.push(3); // EOS type
+        values.extend(vec![0; 28]); // zeros to complete 29-byte shot
+
+        values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";")
+    }
+
+    /// Test 4.1: Verify DMP version 3 files (21-byte shots) are correctly parsed without LRUD data
+    #[test]
+    fn test_parse_dmp_v3_format() {
+        let content = build_v3_section_data();
+        let (_file, path) = create_dmp_file(&content);
+
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+
+        assert!(result.is_ok(), "Failed to parse v3 DMP: {:?}", result.err());
+
+        let dmp = result.unwrap();
+        assert_eq!(dmp.version, 3, "Version should be 3");
+        assert_eq!(dmp.sections.len(), 1, "Should have 1 section");
+
+        let section = &dmp.sections[0];
+        assert_eq!(section.version, 3, "Section version should be 3");
+        assert_eq!(section.name, "TST", "Section name should be TST");
+        assert_eq!(section.direction, DmpDirection::In, "Direction should be In");
+
+        // Check date parsing
+        assert_eq!(section.date.year(), 2024, "Year should be 2024");
+        assert_eq!(section.date.month(), 6, "Month should be 6");
+        assert_eq!(section.date.day(), 15, "Day should be 15");
+
+        // Should have at least one shot (excluding EOS)
+        assert!(!section.shots.is_empty(), "Should have shots");
+
+        // V3 does not have LRUD data - check that LRUD values are zero
+        let shot = &section.shots[0];
+        assert_eq!(shot.left, 0.0, "V3 should have no left LRUD");
+        assert_eq!(shot.right, 0.0, "V3 should have no right LRUD");
+        assert_eq!(shot.up, 0.0, "V3 should have no up LRUD");
+        assert_eq!(shot.down, 0.0, "V3 should have no down LRUD");
+
+        // But basic shot data should be parsed
+        assert!(shot.heading_in > 0.0, "Should have heading_in");
+        assert!(shot.length > 0.0, "Should have length");
+    }
+
+    /// Test 4.2: Verify DMP version 4 files (29-byte shots) correctly extract LRUD data and direction field
+    #[test]
+    fn test_parse_dmp_v4_with_lrud() {
+        let content = build_v4_section_data();
+        let (_file, path) = create_dmp_file(&content);
+
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+
+        assert!(result.is_ok(), "Failed to parse v4 DMP: {:?}", result.err());
+
+        let dmp = result.unwrap();
+        assert_eq!(dmp.version, 4, "Version should be 4");
+        assert_eq!(dmp.sections.len(), 1, "Should have 1 section");
+
+        let section = &dmp.sections[0];
+        assert_eq!(section.version, 4, "Section version should be 4");
+        assert_eq!(section.name, "V4S", "Section name should be V4S");
+        assert_eq!(section.direction, DmpDirection::Out, "Direction should be Out");
+
+        // Check date parsing
+        assert_eq!(section.date.year(), 2024, "Year should be 2024");
+        assert_eq!(section.date.month(), 8, "Month should be 8");
+        assert_eq!(section.date.day(), 20, "Day should be 20");
+
+        // Should have at least one shot
+        assert!(!section.shots.is_empty(), "Should have shots");
+
+        let shot = &section.shots[0];
+
+        // V4 should have LRUD data
+        assert_eq!(shot.left, 1.0, "Left LRUD should be 1.0m");
+        assert_eq!(shot.right, 1.5, "Right LRUD should be 1.5m");
+        assert_eq!(shot.up, 2.0, "Up LRUD should be 2.0m");
+        assert_eq!(shot.down, 0.8, "Down LRUD should be 0.8m");
+
+        // V4 should have temperature
+        assert!((shot.temperature - 18.5).abs() < 0.1, "Temperature should be 18.5°C");
+
+        // V4 should have time
+        assert_eq!(shot.hour, 14, "Hour should be 14");
+        assert_eq!(shot.minute, 45, "Minute should be 45");
+        assert_eq!(shot.second, 30, "Second should be 30");
+
+        // Basic shot data
+        assert_eq!(shot.heading_in, 90.0, "Heading in should be 90.0°");
+        assert_eq!(shot.length, 5.0, "Length should be 5.0m");
+        assert_eq!(shot.pitch_in, 5.0, "Pitch in should be 5.0°");
+    }
+
+    /// Test 4.3: Verify graceful error handling for files with invalid magic bytes or corrupted headers
+    #[test]
+    fn test_parse_dmp_corrupted_header() {
+        // Test case 1: Wrong magic bytes
+        let mut values: Vec<i32> = Vec::new();
+        values.push(3); // Version 3 (expects magic)
+        values.extend(&[99, 99, 99]); // Wrong magic (should be [68, 89, 101])
+        values.extend(&[24, 6, 15, 10, 30]); // Valid date
+        values.extend(&[84, 83, 84]); // Name "TST"
+        values.push(0); // Direction
+        let content = values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";");
+
+        let (_file1, path1) = create_dmp_file(&content);
+        let result1 = parse_dmp(&path1);
+        std::fs::remove_file(&path1).ok();
+
+        // Should fail with invalid magic
+        assert!(result1.is_err(), "Should fail with wrong magic bytes");
+        let err_msg = result1.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("magic") || err_msg.contains("section"),
+            "Error should mention magic or section issue: {}",
+            err_msg
+        );
+
+        // Test case 2: Truncated magic (not enough bytes)
+        let content2 = "3;68;89"; // Version + incomplete magic
+        let (_file2, path2) = create_dmp_file(content2);
+        let result2 = parse_dmp(&path2);
+        std::fs::remove_file(&path2).ok();
+
+        assert!(result2.is_err(), "Should fail with truncated magic");
+
+        // Test case 3: Invalid version (unsupported version 1)
+        let content3 = "1;0;0;0;0;0;0;0;0;0";
+        let (_file3, path3) = create_dmp_file(content3);
+        let result3 = parse_dmp(&path3);
+        std::fs::remove_file(&path3).ok();
+
+        assert!(result3.is_err(), "Should fail with unsupported version");
+        let err_msg3 = result3.unwrap_err().to_string();
+        assert!(
+            err_msg3.contains("version") || err_msg3.contains("Unsupported"),
+            "Error should mention version issue: {}",
+            err_msg3
+        );
+
+        // Test case 4: Version 0 (completely invalid)
+        let content4 = "0;0;0;0;0;0;0;0;0;0";
+        let (_file4, path4) = create_dmp_file(content4);
+        let result4 = parse_dmp(&path4);
+        std::fs::remove_file(&path4).ok();
+
+        assert!(result4.is_err(), "Should fail with version 0");
+    }
+
+    /// Test 4.4: Verify graceful handling when file ends unexpectedly mid-section or mid-shot
+    #[test]
+    fn test_parse_dmp_truncated_file() {
+        // Test case 1: Mid-header truncation (version present but header incomplete)
+        let content1 = "3;68;89;101;24;6"; // Version + magic + partial date
+        let (_file1, path1) = create_dmp_file(content1);
+        let result1 = parse_dmp(&path1);
+        std::fs::remove_file(&path1).ok();
+
+        assert!(result1.is_err(), "Should fail with truncated header");
+
+        // Test case 2: Header complete but no shots (missing EOS marker too)
+        let mut values2: Vec<i32> = Vec::new();
+        values2.push(3); // Version 3
+        values2.extend(&[68, 89, 101]); // Magic
+        values2.extend(&[24, 6, 15, 10, 30]); // Date
+        values2.extend(&[84, 83, 84]); // Name "TST"
+        values2.push(0); // Direction
+        // No shots, no EOS marker
+        let content2 = values2.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";");
+
+        let (_file2, path2) = create_dmp_file(&content2);
+        let result2 = parse_dmp(&path2);
+        std::fs::remove_file(&path2).ok();
+
+        // Should fail because no sections found (no EOS marker to split on)
+        assert!(result2.is_err(), "Should fail with no sections/shots");
+
+        // Test case 3: Mid-shot truncation (partial shot data)
+        let mut values3: Vec<i32> = Vec::new();
+        values3.push(3); // Version 3
+        values3.extend(&[68, 89, 101]); // Magic
+        values3.extend(&[24, 6, 15, 10, 30]); // Date
+        values3.extend(&[84, 83, 84]); // Name "TST"
+        values3.push(0); // Direction
+        // Partial shot - only type and first heading bytes
+        values3.push(2); // Shot type
+        values3.extend(&[1, 194]); // heading_in
+        values3.extend(&[1, 204]); // heading_out
+        // Missing the rest of shot data and EOS marker
+        let content3 = values3.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";");
+
+        let (_file3, path3) = create_dmp_file(&content3);
+        let result3 = parse_dmp(&path3);
+        std::fs::remove_file(&path3).ok();
+
+        // Should fail because incomplete data won't find EOS marker
+        assert!(result3.is_err(), "Should fail with truncated shot data");
+    }
+
+    /// Test 4.5: Verify no panic and graceful handling when date fields contain invalid values
+    ///
+    /// Note: The parser catches section-level errors and logs them as warnings, then continues.
+    /// If all sections fail to parse (due to invalid dates), the overall parse fails with
+    /// "No valid sections found". The key requirement is that invalid dates don't cause panics.
+    #[test]
+    fn test_parse_dmp_invalid_date_values() {
+        // Helper to create section data with specific date values
+        fn make_section_with_date(year_offset: i32, month: i32, day: i32, hour: i32, minute: i32) -> String {
+            let mut values: Vec<i32> = Vec::new();
+            values.push(3); // Version 3
+            values.extend(&[68, 89, 101]); // Magic
+            values.extend(&[year_offset, month, day, hour, minute]); // Date
+            values.extend(&[84, 83, 84]); // Name "TST"
+            values.push(0); // Direction
+            // Valid shot
+            values.push(2); // type
+            values.extend(&[1, 194, 1, 204, 3, 232, 0, 200, 1, 44, 0, 0, 0, 0]); // shot data
+            values.push(1); // marker
+            // EOS marker
+            values.push(3);
+            values.extend(vec![0; 20]);
+            values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";")
+        }
+
+        // Test case 1: Month 13 (invalid)
+        let content1 = make_section_with_date(24, 13, 15, 10, 30);
+        let (_file1, path1) = create_dmp_file(&content1);
+        let result1 = parse_dmp(&path1);
+        std::fs::remove_file(&path1).ok();
+
+        // Should not panic, and should return error (either specific or "no valid sections")
+        assert!(result1.is_err(), "Should fail with month 13");
+        // Just verify we got an error without panicking - the actual message depends on implementation
+
+        // Test case 2: Day 32 (invalid for any month)
+        let content2 = make_section_with_date(24, 6, 32, 10, 30);
+        let (_file2, path2) = create_dmp_file(&content2);
+        let result2 = parse_dmp(&path2);
+        std::fs::remove_file(&path2).ok();
+
+        assert!(result2.is_err(), "Should fail with day 32");
+
+        // Test case 3: February 30 (invalid - Feb never has 30 days)
+        let content3 = make_section_with_date(24, 2, 30, 10, 30);
+        let (_file3, path3) = create_dmp_file(&content3);
+        let result3 = parse_dmp(&path3);
+        std::fs::remove_file(&path3).ok();
+
+        assert!(result3.is_err(), "Should fail with Feb 30");
+
+        // Test case 4: Year 0 (year offset of -200 would be year 1800, but we validate 2016-2100)
+        // Using year offset 10 = year 2010, which is outside 2016-2100 range
+        let content4 = make_section_with_date(10, 6, 15, 10, 30); // year 2010 - before 2016
+        let (_file4, path4) = create_dmp_file(&content4);
+        let result4 = parse_dmp(&path4);
+        std::fs::remove_file(&path4).ok();
+
+        assert!(result4.is_err(), "Should fail with year outside valid range");
+
+        // Test case 5: Hour 25 (invalid)
+        let content5 = make_section_with_date(24, 6, 15, 25, 30);
+        let (_file5, path5) = create_dmp_file(&content5);
+        let result5 = parse_dmp(&path5);
+        std::fs::remove_file(&path5).ok();
+
+        assert!(result5.is_err(), "Should fail with hour 25");
+
+        // Test case 6: Minute 60 (invalid)
+        let content6 = make_section_with_date(24, 6, 15, 10, 60);
+        let (_file6, path6) = create_dmp_file(&content6);
+        let result6 = parse_dmp(&path6);
+        std::fs::remove_file(&path6).ok();
+
+        assert!(result6.is_err(), "Should fail with minute 60");
+
+        // All tests completed without panicking - that's the key requirement
+        println!("All invalid date tests completed without panicking");
     }
 }

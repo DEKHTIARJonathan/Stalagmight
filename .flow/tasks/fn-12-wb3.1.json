@@ -1,14 +1,31 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T11:23:37.550314Z",
   "created_at": "2026-01-17T08:37:04.256130Z",
   "depends_on": [],
   "epic": "fn-12-wb3",
+  "evidence": {
+    "files_changed": [
+      "src/store/uiStore.ts",
+      "src/components/Map/SurveyLayer.tsx",
+      "src/components/Map/MapCanvas.tsx",
+      "src/components/SingleSystemView/DisplayMenu.tsx",
+      "e2e-playwright/ui-components.spec.ts"
+    ],
+    "tests_added": [
+      "e2e-playwright/ui-components.spec.ts: should toggle station labels visibility"
+    ],
+    "tests_passed": {
+      "playwright": "87 tests passed",
+      "rust": "62 tests passed",
+      "typescript": "pnpm tsc --noEmit - passed"
+    }
+  },
   "id": "fn-12-wb3.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-12-wb3.1.md",
-  "status": "todo",
+  "status": "done",
   "title": "Add station index labels to SurveyLayer",
-  "updated_at": "2026-01-17T08:37:17.903323Z"
+  "updated_at": "2026-01-17T11:28:55.039836Z"
 }

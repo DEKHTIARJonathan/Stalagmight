@@ -12,9 +12,8 @@ Add section name labels at first station with color + halo.
 - [ ] Toggle works
 - [ ] Tests pass
 ## Done summary
-TBD
-
+Added section name labels at first station position with section color and dark halo for contrast. Toggle controlled by showSectionNames setting, persisted per project.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 8d9cf41, 45829a9
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:

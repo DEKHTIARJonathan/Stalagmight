@@ -1,3 +1,4 @@
+import { type MouseEvent } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 
@@ -8,6 +9,11 @@ interface SystemCardProps {
   modifiedAt: string;
   sectionCount: number;
   totalLength: number;
+  isSelected?: boolean;
+  /** Called when the card is clicked. Receives true if Ctrl/Cmd was held. */
+  onSelect?: (ctrlKey: boolean) => void;
+  /** Called on right-click to show context menu */
+  onContextMenu?: (e: MouseEvent) => void;
 }
 
 export default function SystemCard({
@@ -17,19 +23,33 @@ export default function SystemCard({
   modifiedAt,
   sectionCount,
   totalLength,
+  isSelected,
+  onSelect,
+  onContextMenu,
 }: SystemCardProps) {
   const { openProject } = useProjectStore();
   const { setView } = useUIStore();
 
-  const handleClick = async () => {
+  const handleClick = (e: MouseEvent) => {
+    // Single click selects the card
+    // Pass ctrlKey (or metaKey for Mac) to support multi-select
+    if (onSelect) {
+      onSelect(e.ctrlKey || e.metaKey);
+    }
+  };
+
+  const handleDoubleClick = async () => {
+    // Double click opens the project
     const result = await openProject(filePath);
     if (result.success) {
       setView('single');
     }
   };
 
-  const handleDoubleClick = async () => {
-    await handleClick();
+  const handleContextMenu = (e: MouseEvent) => {
+    if (onContextMenu) {
+      onContextMenu(e);
+    }
   };
 
   const formatDate = (dateStr: string) => {
@@ -54,12 +74,27 @@ export default function SystemCard({
 
   return (
     <div
-      className="
-        bg-panel border border-border rounded-lg p-4
-        cursor-pointer hover:border-accent transition-colors
-      "
+      className={`
+        bg-panel border rounded-lg p-4
+        cursor-pointer transition-colors
+        ${isSelected
+          ? 'border-accent ring-1 ring-accent'
+          : 'border-border hover:border-accent'
+        }
+      `}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
+      onContextMenu={handleContextMenu}
+      data-testid={`system-card-${filePath}`}
+      role="button"
+      tabIndex={0}
+      aria-pressed={isSelected}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          handleClick(e as unknown as MouseEvent);
+        }
+      }}
     >
       <h3 className="text-lg font-medium mb-1">{name}</h3>
       {location && (

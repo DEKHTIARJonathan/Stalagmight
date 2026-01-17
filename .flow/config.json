@@ -3,9 +3,9 @@
     "enabled": true
   },
   "planSync": {
-    "enabled": false
+    "enabled": true
   },
   "review": {
-    "backend": "codex"
+    "backend": "none"
   }
 }

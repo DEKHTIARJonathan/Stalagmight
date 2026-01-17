@@ -30,6 +30,7 @@ export default class SurveyLayer {
   private stationsLayerId = 'survey-stations';
   private labelsLayerId = 'survey-labels';
   private shotLabelsLayerId = 'survey-shot-labels';
+  private stationLabelsLayerId = 'survey-station-labels';
   private mergesLayerId = 'survey-merges';
   private loopClosuresLayerId = 'survey-loop-closures';
   private callbacks: SurveyLayerCallbacks;
@@ -92,6 +93,24 @@ export default class SurveyLayer {
 
     // Shot labels point source (midpoint of each shot)
     this.map.addSource(this.sourceId + '-shot-labels', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    });
+
+    // Section name labels point source (first station of each section)
+    this.map.addSource(this.sourceId + '-section-labels', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    });
+
+    // Station index labels point source (at each station)
+    this.map.addSource(this.sourceId + '-station-labels', {
       type: 'geojson',
       data: {
         type: 'FeatureCollection',
@@ -214,6 +233,86 @@ export default class SurveyLayer {
       ],
     });
 
+    // Section name labels layer - shows section name at first station
+    // Visibility controlled by showSectionNames toggle
+    this.map.addLayer({
+      id: this.labelsLayerId,
+      type: 'symbol',
+      source: this.sourceId + '-section-labels',
+      layout: {
+        'text-field': ['get', 'name'],
+        'text-font': ['Open Sans Regular'],
+        'text-size': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          12, 11,
+          18, 14,
+        ],
+        'text-offset': [0, -1.2],
+        'text-anchor': 'bottom',
+        'text-allow-overlap': false, // Avoid clutter in dense areas
+        'visibility': 'visible', // Start visible, controlled by setShowSectionNames
+      },
+      paint: {
+        'text-color': ['get', 'color'],
+        'text-halo-color': '#1a1a2e', // Dark halo for contrast with any section color
+        'text-halo-width': 1.5,
+        'text-opacity': 1,
+      },
+    });
+
+    // Station index labels layer - shows station index (0, 1, 2...) near each station
+    // Visibility controlled by showStationLabels toggle and zoom-dependent density
+    this.map.addLayer({
+      id: this.stationLabelsLayerId,
+      type: 'symbol',
+      source: this.sourceId + '-station-labels',
+      layout: {
+        'text-field': ['get', 'label'],
+        'text-font': ['Open Sans Regular'],
+        'text-size': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          14, 9,
+          18, 11,
+        ],
+        'text-offset': [0.8, -0.8], // Offset to top-right of station dot
+        'text-anchor': 'bottom-left',
+        'text-allow-overlap': false, // Avoid clutter with overlapping labels
+        'visibility': 'none', // Start hidden, controlled by setShowStationLabels
+      },
+      paint: {
+        'text-color': '#ffffff',
+        'text-halo-color': '#000000',
+        'text-halo-width': 1.5,
+        'text-opacity': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          14, 0.7,
+          18, 1,
+        ],
+      },
+      // Zoom-dependent filtering using globalOrdinal (stable sequential index)
+      // Always show first station in each section (isFirstInSection) to avoid empty-looking sections
+      filter: [
+        'case',
+        // At zoom < 14: show nothing
+        ['<', ['zoom'], 14],
+        false,
+        // At zoom 14-16: show first station + every 5th (globalOrdinal % 5 == 0)
+        ['all', ['>=', ['zoom'], 14], ['<', ['zoom'], 16]],
+        ['any', ['get', 'isFirstInSection'], ['==', ['%', ['get', 'globalOrdinal'], 5], 0]],
+        // At zoom 16-18: show first station + every 2nd
+        ['all', ['>=', ['zoom'], 16], ['<', ['zoom'], 18]],
+        ['any', ['get', 'isFirstInSection'], ['==', ['%', ['get', 'globalOrdinal'], 2], 0]],
+        // At zoom >= 18: show all
+        true,
+      ],
+    });
+
   }
 
   private initializeEventHandlers() {
@@ -243,11 +342,12 @@ export default class SurveyLayer {
 
     // Empty click handler (on map, not on features)
     this.map.on('click', (e) => {
-      // Check if we clicked on a feature
+      // Check if we clicked on a feature (including label layers)
       const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsLayerId] });
       const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsLayerId] });
+      const labelFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.labelsLayerId, this.shotLabelsLayerId, this.stationLabelsLayerId] });
 
-      if (stationFeatures.length === 0 && shotFeatures.length === 0) {
+      if (stationFeatures.length === 0 && shotFeatures.length === 0 && labelFeatures.length === 0) {
         this.callbacks.onEmptyClick?.(e);
       }
     });
@@ -400,29 +500,39 @@ export default class SurveyLayer {
     );
   }
 
+  // Control section name labels visibility
+  setShowSectionNames(show: boolean) {
+    this.map.setLayoutProperty(
+      this.labelsLayerId,
+      'visibility',
+      show ? 'visible' : 'none'
+    );
+  }
+
+  // Control station index labels visibility
+  setShowStationLabels(show: boolean) {
+    this.map.setLayoutProperty(
+      this.stationLabelsLayerId,
+      'visibility',
+      show ? 'visible' : 'none'
+    );
+  }
+
   update(sections: Section[], stations: Station[], stationMerges?: StationMerge[], loopClosures?: LoopClosure[]) {
     // Build shot features and shot label features
     const shotFeatures: GeoJSON.Feature[] = [];
     const shotLabelFeatures: GeoJSON.Feature[] = [];
     let globalShotIndex = 0;
 
-    console.log('[SurveyLayer] update called', { sectionsCount: sections.length, stationsCount: stations.length, mergesCount: stationMerges?.length ?? 0, loopClosuresCount: loopClosures?.length ?? 0 });
-
     for (const section of sections) {
       const sectionStations = stations
         .filter((s) => s.station_ref.section_id === section.id)
         .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index);
 
-      console.log(`[SurveyLayer] Section ${section.id}: ${section.shots.length} shots, ${sectionStations.length} stations`);
-
       for (let i = 0; i < section.shots.length; i++) {
         const shot = section.shots[i];
         const fromStation = sectionStations[i];
         const toStation = sectionStations[i + 1];
-
-        if (!fromStation || !toStation) {
-          console.warn(`[SurveyLayer] Missing station for shot ${i}: from=${!!fromStation}, to=${!!toStation}`);
-        }
 
         if (fromStation && toStation && shot) {
           shotFeatures.push({
@@ -528,10 +638,62 @@ export default class SurveyLayer {
       }
     }
 
-    console.log(`[SurveyLayer] Created ${shotFeatures.length} shot features, ${stationFeatures.length} station features, ${mergeFeatures.length} merge features`);
-    if (shotFeatures.length > 0) {
-      console.log('[SurveyLayer] First shot feature:', JSON.stringify(shotFeatures[0]));
+    // Build section name label features (at first station of each section)
+    const sectionLabelFeatures: GeoJSON.Feature[] = [];
+    for (const section of sections) {
+      // Find the station with the minimum index for this section
+      // (don't assume index 0 exists - data may start at 1 or have gaps)
+      const sectionStations = stations.filter(
+        (s) => s.station_ref.section_id === section.id
+      );
+      if (sectionStations.length > 0) {
+        // Find station with minimum index using reduce for type safety
+        const firstStation = sectionStations.reduce((min, s) =>
+          s.station_ref.station_index < min.station_ref.station_index ? s : min
+        );
+        sectionLabelFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: metersToMapCoords(firstStation.coordinates.x, firstStation.coordinates.y),
+          },
+          properties: {
+            name: section.name,
+            color: section.color,
+            sectionId: section.id,
+          },
+        });
+      }
     }
+
+    // Build station index label features (at each station)
+    // Group stations by section to determine first station in each section
+    const sectionMinIndices = new Map<number, number>();
+    for (const station of stations) {
+      const sectionId = station.station_ref.section_id;
+      const currentMin = sectionMinIndices.get(sectionId);
+      if (currentMin === undefined || station.station_ref.station_index < currentMin) {
+        sectionMinIndices.set(sectionId, station.station_ref.station_index);
+      }
+    }
+
+    const stationLabelFeatures: GeoJSON.Feature[] = stations.map((station, globalOrdinal) => {
+      const isFirstInSection = station.station_ref.station_index === sectionMinIndices.get(station.station_ref.section_id);
+      return {
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: metersToMapCoords(station.coordinates.x, station.coordinates.y),
+        },
+        properties: {
+          label: String(station.station_ref.station_index),
+          stationIndex: station.station_ref.station_index,
+          sectionId: station.station_ref.section_id,
+          globalOrdinal, // Stable sequential index for filtering
+          isFirstInSection, // Always show first station in section
+        },
+      };
+    });
 
     // Update sources
     const shotsSource = this.map.getSource(this.sourceId + '-shots');
@@ -564,6 +726,24 @@ export default class SurveyLayer {
       (shotLabelsSource as maplibregl.GeoJSONSource).setData({
         type: 'FeatureCollection',
         features: shotLabelFeatures,
+      });
+    }
+
+    // Update section labels source
+    const sectionLabelsSource = this.map.getSource(this.sourceId + '-section-labels');
+    if (sectionLabelsSource && 'setData' in sectionLabelsSource) {
+      (sectionLabelsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: sectionLabelFeatures,
+      });
+    }
+
+    // Update station labels source
+    const stationLabelsSource = this.map.getSource(this.sourceId + '-station-labels');
+    if (stationLabelsSource && 'setData' in stationLabelsSource) {
+      (stationLabelsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: stationLabelFeatures,
       });
     }
 
@@ -615,8 +795,15 @@ export default class SurveyLayer {
   }
 
   destroy() {
+    // Remove all layers first (must be done before removing their sources)
     if (this.map.getLayer(this.labelsLayerId)) {
       this.map.removeLayer(this.labelsLayerId);
+    }
+    if (this.map.getLayer(this.shotLabelsLayerId)) {
+      this.map.removeLayer(this.shotLabelsLayerId);
+    }
+    if (this.map.getLayer(this.stationLabelsLayerId)) {
+      this.map.removeLayer(this.stationLabelsLayerId);
     }
     if (this.map.getLayer(this.stationsLayerId)) {
       this.map.removeLayer(this.stationsLayerId);
@@ -630,6 +817,8 @@ export default class SurveyLayer {
     if (this.map.getLayer(this.loopClosuresLayerId)) {
       this.map.removeLayer(this.loopClosuresLayerId);
     }
+
+    // Remove all sources after layers are removed
     if (this.map.getSource(this.sourceId + '-shots')) {
       this.map.removeSource(this.sourceId + '-shots');
     }
@@ -641,6 +830,15 @@ export default class SurveyLayer {
     }
     if (this.map.getSource(this.sourceId + '-loop-closures')) {
       this.map.removeSource(this.sourceId + '-loop-closures');
+    }
+    if (this.map.getSource(this.sourceId + '-section-labels')) {
+      this.map.removeSource(this.sourceId + '-section-labels');
+    }
+    if (this.map.getSource(this.sourceId + '-shot-labels')) {
+      this.map.removeSource(this.sourceId + '-shot-labels');
+    }
+    if (this.map.getSource(this.sourceId + '-station-labels')) {
+      this.map.removeSource(this.sourceId + '-station-labels');
     }
   }
 }

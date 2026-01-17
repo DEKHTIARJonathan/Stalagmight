@@ -71,9 +71,8 @@ useEffect(() => {
 - [ ] Playwright tests added
 - [ ] TypeScript types pass
 ## Done summary
-TBD
-
+Added statistics footer to DMP Import Dialog showing total length, shot count, and depth range for selected sections. Stats update with 500ms debounce when selection changes.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 6b856b48e1c7f5dce61af1b24ee2d1ecf00bd3fc, 4cbc292abcad30d074e5360ce29864395cea24e8
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:

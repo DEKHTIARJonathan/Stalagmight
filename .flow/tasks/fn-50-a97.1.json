@@ -1,0 +1,25 @@
+{
+  "assignee": "cavechef@example.com",
+  "claim_note": "",
+  "claimed_at": "2026-01-17T20:20:17.178833Z",
+  "created_at": "2026-01-17T14:27:51.695627Z",
+  "depends_on": [],
+  "epic": "fn-50-a97",
+  "evidence": {
+    "commits": [
+      "02e2fce21fe50c0b7c7aa5c335a831abd298f61e"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit (passed)",
+      "cd src-tauri && cargo test (72 passed)",
+      "pnpm test:ui (225/226 passed)"
+    ]
+  },
+  "id": "fn-50-a97.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-50-a97.1.md",
+  "status": "done",
+  "title": "Implement 4 multi-section workflow tests",
+  "updated_at": "2026-01-17T20:30:01.772517Z"
+}

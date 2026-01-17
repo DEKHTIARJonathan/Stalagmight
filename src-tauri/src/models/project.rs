@@ -4,9 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::{
-    ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure, Section, SectionData, SectionId,
-    SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station, StationMerge, StationRef,
-    ZeroDatum,
+    ClosureStrategy, Coordinates, GpsBounds, GpsCoordinates, LoopClosure, Section, SectionData,
+    SectionId, SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station, StationMerge,
+    StationRef, ZeroDatum,
 };
 
 /// A complete cave survey project
@@ -47,6 +47,10 @@ pub struct ProjectMetadata {
     pub modified_at: DateTime<Utc>,
     pub section_count: usize,
     pub total_length: f64,
+    /// GPS center from first zero datum (lat, lng)
+    pub gps_center: Option<(f64, f64)>,
+    /// GPS bounds including all zero datums
+    pub gps_bounds: Option<GpsBounds>,
 }
 
 /// Overall project statistics
@@ -527,11 +531,14 @@ impl Project {
     }
 
     /// Set a station as the zero datum
-    /// Returns Err if the station doesn't exist or if a connected station already has a zero datum
+    /// Returns Err if the station doesn't exist, GPS is invalid, or if a connected station already has a zero datum
     pub fn set_zero_datum(&mut self, station_ref: StationRef, gps: GpsCoordinates) -> Result<bool, String> {
         if !self.station_exists(station_ref) {
             return Err("Station does not exist".to_string());
         }
+
+        // Validate GPS coordinates to prevent serialization issues
+        GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference)?;
 
         // Check for connected zero datum
         if let Some(existing) = self.find_connected_zero_datum(station_ref) {
@@ -542,11 +549,12 @@ impl Project {
             ));
         }
 
-        // Remove any existing zero datum for this station
-        self.zero_datums
-            .retain(|zd| zd.station_ref != station_ref);
-
-        self.zero_datums.push(ZeroDatum { station_ref, gps });
+        // Update in-place if datum exists (preserves order/position for stable center)
+        if let Some(existing) = self.zero_datums.iter_mut().find(|zd| zd.station_ref == station_ref) {
+            existing.gps = gps;
+        } else {
+            self.zero_datums.push(ZeroDatum { station_ref, gps });
+        }
         self.touch();
         Ok(true)
     }
@@ -725,6 +733,9 @@ impl Project {
         let file_path = self.file_path.clone()?;
         let stats = self.stats();
 
+        // Compute GPS center and bounds from zero datums
+        let (gps_center, gps_bounds) = self.compute_gps_info();
+
         Some(ProjectMetadata {
             name: self.name.clone(),
             location: self.location.clone(),
@@ -732,7 +743,98 @@ impl Project {
             modified_at: self.modified_at,
             section_count: stats.section_count,
             total_length: stats.total_length,
+            gps_center,
+            gps_bounds,
         })
+    }
+
+    /// Compute GPS center and bounds from zero datums
+    /// Returns (center, bounds) where center is from first valid zero datum
+    /// and bounds encompass all valid zero datums.
+    /// Returns (None, None) if no valid datums exist.
+    fn compute_gps_info(&self) -> (Option<(f64, f64)>, Option<GpsBounds>) {
+        // Filter to valid datums only to prevent serialization issues
+        let valid_datums: Vec<_> = self
+            .zero_datums
+            .iter()
+            .filter(|zd| zd.gps.is_valid())
+            .collect();
+
+        if valid_datums.is_empty() {
+            return (None, None);
+        }
+
+        // Center from first valid zero datum
+        let first_gps = &valid_datums[0].gps;
+        let gps_center = Some((first_gps.latitude, first_gps.longitude));
+
+        // Bounds from all valid zero datums with dateline-aware longitude handling
+        let mut south = f64::INFINITY;
+        let mut north = f64::NEG_INFINITY;
+
+        // Collect all longitudes for dateline-aware calculation
+        let mut longitudes: Vec<f64> = Vec::with_capacity(valid_datums.len());
+
+        for zd in &valid_datums {
+            south = south.min(zd.gps.latitude);
+            north = north.max(zd.gps.latitude);
+            longitudes.push(zd.gps.longitude);
+        }
+
+        // Calculate longitude bounds with dateline awareness
+        // Sort longitudes and find the largest gap - the bounds are on the opposite side
+        let (west, east) = Self::compute_longitude_bounds(&longitudes);
+
+        let gps_bounds = Some(GpsBounds {
+            north,
+            south,
+            east,
+            west,
+        });
+
+        (gps_center, gps_bounds)
+    }
+
+    /// Compute longitude bounds with dateline awareness
+    /// Returns (west, east) where east < west indicates crossing the dateline
+    fn compute_longitude_bounds(longitudes: &[f64]) -> (f64, f64) {
+        if longitudes.is_empty() {
+            return (0.0, 0.0);
+        }
+        if longitudes.len() == 1 {
+            return (longitudes[0], longitudes[0]);
+        }
+
+        // Sort longitudes
+        let mut sorted = longitudes.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Find the largest gap between consecutive longitudes (including wrap-around)
+        let mut max_gap = 0.0f64;
+        let mut max_gap_end_idx = 0;
+
+        for i in 0..sorted.len() {
+            let next_idx = (i + 1) % sorted.len();
+            let gap = if next_idx == 0 {
+                // Wrap-around gap from last to first (crossing -180/180)
+                (sorted[0] + 360.0) - sorted[sorted.len() - 1]
+            } else {
+                sorted[next_idx] - sorted[i]
+            };
+
+            if gap > max_gap {
+                max_gap = gap;
+                max_gap_end_idx = next_idx;
+            }
+        }
+
+        // The bounds are on the opposite side of the largest gap
+        // west is at max_gap_end_idx, east is at (max_gap_end_idx - 1 + len) % len
+        let west = sorted[max_gap_end_idx];
+        let east_idx = (max_gap_end_idx + sorted.len() - 1) % sorted.len();
+        let east = sorted[east_idx];
+
+        (west, east)
     }
 }
 

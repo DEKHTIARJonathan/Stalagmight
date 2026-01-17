@@ -8,9 +8,10 @@ Test DMP files for CaveChef E2E testing. These are binary files from the mNemo c
 
 | File | Version | Description |
 |------|---------|-------------|
-| `test_v2.dmp` | 2 | DMP version 2 format |
-| `test_v5.dmp` | 5 | DMP version 5 format |
+| `test_v2.dmp` | 2 | DMP version 2 format with multiple sections |
+| `test_v5.dmp` | 5 | DMP version 5 format with LRUD data |
 | `test_v5_buggy_EOS.dmp` | 5 | Version 5 with buggy end-of-section marker |
+| `test_corrupted.dmp` | N/A | Invalid file for error handling tests |
 
 ### DMP Format
 

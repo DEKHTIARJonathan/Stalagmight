@@ -1,14 +1,25 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T12:41:26.364769Z",
   "created_at": "2026-01-17T08:37:04.659718Z",
   "depends_on": [],
   "epic": "fn-14-fzq",
+  "evidence": {
+    "commits": [
+      "a80d600ac78f56fba0fa1d968987192c523c652f"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui (112 passed)",
+      "cargo test (62 passed)"
+    ]
+  },
   "id": "fn-14-fzq.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-14-fzq.1.md",
-  "status": "todo",
+  "status": "done",
   "title": "Add existing station placement to Import Dialog",
-  "updated_at": "2026-01-17T08:37:18.022271Z"
+  "updated_at": "2026-01-17T12:48:26.568407Z"
 }

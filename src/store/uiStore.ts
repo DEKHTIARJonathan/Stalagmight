@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
-import type { Coordinates, SectionId, ShotId, StationRef } from '../types/project';
+import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 import type { PanelsConfig } from '../types/config';
 
 export type ViewType = 'global' | 'single';
@@ -17,6 +17,21 @@ export type ToolType =
   | 'measure'
   | 'move_section'
   | 'move_station';
+
+/**
+ * Placement mode state for manually placing a newly imported section on the map.
+ * The section preview follows the cursor until the user clicks to confirm placement.
+ */
+export interface PlacementModeState {
+  /** The section data to be created (not yet in the project) */
+  sectionData: SectionData;
+  /** Which station of the new section aligns to cursor ('first' or 'last') */
+  alignStation: 'first' | 'last';
+  /** Current cursor position in map coordinates (meters) */
+  cursorPosition: Coordinates | null;
+  /** Snapped station reference (if cursor is near an existing station) */
+  snappedToStation: StationRef | null;
+}
 
 export interface Selection {
   type: 'station' | 'shot' | 'section';
@@ -113,6 +128,7 @@ interface UIStore {
   // Display toggles
   showStations: boolean;
   showSectionNames: boolean;
+  showStationLabels: boolean;
   showShotData: boolean;
   showVirtualShots: boolean;
   showZeroDatum: boolean;
@@ -120,7 +136,12 @@ interface UIStore {
   showScaleBar: boolean;
   showSatellite: boolean;
   showDepthGradient: boolean;
+  gridSpacing: number;
   toggleDisplay: (key: DisplayToggleKey) => void;
+  setGridSpacing: (spacing: number) => void;
+  loadDisplaySettings: () => Promise<void>;
+  saveDisplaySetting: (key: DisplayToggleKey, value: boolean) => Promise<void>;
+  resetDisplaySettings: () => void;
 
   // Hover state
   hoveredStation: StationRef | null;
@@ -143,11 +164,20 @@ interface UIStore {
   dialogData: Record<string, unknown>;
   openDialog: (dialog: string, data?: Record<string, unknown>) => void;
   closeDialog: () => void;
+
+  // Placement mode state (for manual map placement of imported sections)
+  placementMode: PlacementModeState | null;
+  startPlacementMode: (sectionData: SectionData, alignStation: 'first' | 'last') => void;
+  updatePlacementCursor: (position: Coordinates | null) => void;
+  updatePlacementSnap: (stationRef: StationRef | null) => void;
+  cancelPlacementMode: () => void;
+  confirmPlacement: () => PlacementModeState | null;
 }
 
 export type DisplayToggleKey =
   | 'showStations'
   | 'showSectionNames'
+  | 'showStationLabels'
   | 'showShotData'
   | 'showVirtualShots'
   | 'showZeroDatum'
@@ -279,6 +309,7 @@ export const useUIStore = create<UIStore>((set) => ({
   // Display toggles
   showStations: true,
   showSectionNames: true,
+  showStationLabels: false,
   showShotData: false,
   showVirtualShots: true,
   showZeroDatum: true,
@@ -286,7 +317,67 @@ export const useUIStore = create<UIStore>((set) => ({
   showScaleBar: true,
   showSatellite: false,
   showDepthGradient: false,
-  toggleDisplay: (key) => set((state) => ({ [key]: !state[key] })),
+  gridSpacing: 10,
+  toggleDisplay: (key) => {
+    const state = useUIStore.getState();
+    const newValue = !state[key];
+    set({ [key]: newValue });
+    // Persist the setting asynchronously via the helper
+    state.saveDisplaySetting(key, newValue);
+  },
+  setGridSpacing: (spacing) => {
+    set({ gridSpacing: spacing });
+    // Persist the spacing setting
+    invoke('save_display_setting', { key: 'gridSpacing', value: String(spacing) }).catch((e) => {
+      console.warn('Failed to save grid spacing:', e);
+    });
+  },
+  loadDisplaySettings: async () => {
+    try {
+      const settings = await invoke<Record<string, string>>('load_display_settings');
+      const displayState: Partial<Record<DisplayToggleKey, boolean>> = {};
+      let gridSpacing: number | undefined;
+      for (const [key, value] of Object.entries(settings)) {
+        if (key.startsWith('show')) {
+          displayState[key as DisplayToggleKey] = value === 'true';
+        } else if (key === 'gridSpacing') {
+          const parsed = parseFloat(value);
+          if (!isNaN(parsed) && parsed > 0) {
+            gridSpacing = parsed;
+          }
+        }
+      }
+      if (Object.keys(displayState).length > 0 || gridSpacing !== undefined) {
+        set({ ...displayState, ...(gridSpacing !== undefined ? { gridSpacing } : {}) });
+      }
+    } catch (e) {
+      // No project open or other error - use defaults
+      console.warn('Failed to load display settings:', e);
+    }
+  },
+  saveDisplaySetting: async (key, value) => {
+    try {
+      await invoke('save_display_setting', { key, value: String(value) });
+    } catch (e) {
+      console.warn('Failed to save display setting:', e);
+    }
+  },
+  resetDisplaySettings: () => {
+    // Reset all display toggles to their default values
+    set({
+      showStations: true,
+      showSectionNames: true,
+      showStationLabels: false,
+      showShotData: false,
+      showVirtualShots: true,
+      showZeroDatum: true,
+      showGrid: false,
+      showScaleBar: true,
+      showSatellite: false,
+      showDepthGradient: false,
+      gridSpacing: 10,
+    });
+  },
 
   // Hover state
   hoveredStation: null,
@@ -314,4 +405,45 @@ export const useUIStore = create<UIStore>((set) => ({
   dialogData: {},
   openDialog: (activeDialog, dialogData = {}) => set({ activeDialog, dialogData }),
   closeDialog: () => set({ activeDialog: null, dialogData: {} }),
+
+  // Placement mode state
+  placementMode: null,
+  startPlacementMode: (sectionData, alignStation) =>
+    set({
+      placementMode: {
+        sectionData,
+        alignStation,
+        cursorPosition: null,
+        snappedToStation: null,
+      },
+    }),
+  updatePlacementCursor: (position) =>
+    set((state) =>
+      state.placementMode
+        ? {
+            placementMode: {
+              ...state.placementMode,
+              cursorPosition: position,
+            },
+          }
+        : state
+    ),
+  updatePlacementSnap: (stationRef) =>
+    set((state) =>
+      state.placementMode
+        ? {
+            placementMode: {
+              ...state.placementMode,
+              snappedToStation: stationRef,
+            },
+          }
+        : state
+    ),
+  cancelPlacementMode: () => set({ placementMode: null }),
+  confirmPlacement: (): PlacementModeState | null => {
+    const currentPlacement = useUIStore.getState().placementMode;
+    // Clear placement mode and return the state for the caller to use
+    set({ placementMode: null });
+    return currentPlacement;
+  },
 }));

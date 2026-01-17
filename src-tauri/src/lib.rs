@@ -16,6 +16,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             tracing::info!("CaveChef starting up");
 
@@ -33,6 +34,8 @@ pub fn run() {
             commands::project::close_project,
             commands::project::get_project_state,
             commands::project::list_recent_projects,
+            commands::project::remove_from_recent_projects,
+            commands::project::merge_projects,
             // Section commands
             commands::section::create_section,
             commands::section::update_section,
@@ -64,6 +67,10 @@ pub fn run() {
             commands::config::get_config,
             commands::config::update_config,
             commands::config::update_panel_sizes,
+            // Display settings (per-project)
+            commands::config::load_display_settings,
+            commands::config::save_display_setting,
+            commands::config::get_display_setting,
             // Validation
             commands::validation::get_project_warnings,
             commands::validation::resolve_warning,
