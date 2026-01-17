@@ -295,18 +295,19 @@ export default class SurveyLayer {
           18, 1,
         ],
       },
-      // Zoom-dependent filtering: hide at low zoom to prevent clutter
+      // Zoom-dependent filtering using globalOrdinal (stable sequential index)
+      // Always show first station in each section (isFirstInSection) to avoid empty-looking sections
       filter: [
         'case',
         // At zoom < 14: show nothing
         ['<', ['zoom'], 14],
         false,
-        // At zoom 14-16: show every 5th label (index % 5 == 0)
+        // At zoom 14-16: show first station + every 5th (globalOrdinal % 5 == 0)
         ['all', ['>=', ['zoom'], 14], ['<', ['zoom'], 16]],
-        ['==', ['%', ['get', 'stationIndex'], 5], 0],
-        // At zoom 16-18: show every 2nd label
+        ['any', ['get', 'isFirstInSection'], ['==', ['%', ['get', 'globalOrdinal'], 5], 0]],
+        // At zoom 16-18: show first station + every 2nd
         ['all', ['>=', ['zoom'], 16], ['<', ['zoom'], 18]],
-        ['==', ['%', ['get', 'stationIndex'], 2], 0],
+        ['any', ['get', 'isFirstInSection'], ['==', ['%', ['get', 'globalOrdinal'], 2], 0]],
         // At zoom >= 18: show all
         true,
       ],
@@ -344,7 +345,7 @@ export default class SurveyLayer {
       // Check if we clicked on a feature (including label layers)
       const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsLayerId] });
       const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsLayerId] });
-      const labelFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.labelsLayerId, this.shotLabelsLayerId] });
+      const labelFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.labelsLayerId, this.shotLabelsLayerId, this.stationLabelsLayerId] });
 
       if (stationFeatures.length === 0 && shotFeatures.length === 0 && labelFeatures.length === 0) {
         this.callbacks.onEmptyClick?.(e);
@@ -666,7 +667,18 @@ export default class SurveyLayer {
     }
 
     // Build station index label features (at each station)
-    const stationLabelFeatures: GeoJSON.Feature[] = stations.map((station) => {
+    // Group stations by section to determine first station in each section
+    const sectionMinIndices = new Map<number, number>();
+    for (const station of stations) {
+      const sectionId = station.station_ref.section_id;
+      const currentMin = sectionMinIndices.get(sectionId);
+      if (currentMin === undefined || station.station_ref.station_index < currentMin) {
+        sectionMinIndices.set(sectionId, station.station_ref.station_index);
+      }
+    }
+
+    const stationLabelFeatures: GeoJSON.Feature[] = stations.map((station, globalOrdinal) => {
+      const isFirstInSection = station.station_ref.station_index === sectionMinIndices.get(station.station_ref.section_id);
       return {
         type: 'Feature',
         geometry: {
@@ -677,6 +689,8 @@ export default class SurveyLayer {
           label: String(station.station_ref.station_index),
           stationIndex: station.station_ref.station_index,
           sectionId: station.station_ref.section_id,
+          globalOrdinal, // Stable sequential index for filtering
+          isFirstInSection, // Always show first station in section
         },
       };
     });
