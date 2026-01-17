@@ -735,6 +735,131 @@ test.describe('Statistics Footer', () => {
   });
 });
 
+test.describe('Section Preview', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+  });
+
+  test('preview component visible after loading DMP file', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // The section preview component should be visible
+    const preview = page.locator('[data-testid="section-preview"]');
+    await expect(preview).toBeVisible();
+  });
+
+  test('preview shows placeholder when no section expanded', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Initially no section is expanded, so preview should show placeholder text
+    const preview = page.locator('[data-testid="section-preview"]');
+    await expect(preview).toContainText('Select a section to preview');
+
+    // The map container should not be visible
+    const mapContainer = page.locator('[data-testid="section-preview-map"]');
+    await expect(mapContainer).not.toBeVisible();
+  });
+
+  test('preview shows map when section is expanded', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand the first section
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    // Now the map should be visible
+    const mapContainer = page.locator('[data-testid="section-preview-map"]');
+    await expect(mapContainer).toBeVisible();
+
+    // Placeholder text should be gone
+    const preview = page.locator('[data-testid="section-preview"]');
+    await expect(preview).not.toContainText('Select a section to preview');
+  });
+
+  test('preview updates when different section is expanded', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand the first section
+    const expandButton0 = page.locator('[data-testid="section-expand-0"]');
+    await expandButton0.click();
+
+    // Map should be visible
+    const mapContainer = page.locator('[data-testid="section-preview-map"]');
+    await expect(mapContainer).toBeVisible();
+
+    // Collapse first section and expand second
+    await expandButton0.click();
+    const expandButton1 = page.locator('[data-testid="section-expand-1"]');
+    await expandButton1.click();
+
+    // Map should still be visible (showing second section now)
+    await expect(mapContainer).toBeVisible();
+  });
+
+  test('preview has correct size (250x250)', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    const preview = page.locator('[data-testid="section-preview"]');
+
+    // Check the inline style for dimensions
+    const width = await preview.evaluate((el) => el.style.width);
+    const height = await preview.evaluate((el) => el.style.height);
+
+    expect(width).toBe('250px');
+    expect(height).toBe('250px');
+  });
+
+  test('preview supports zoom and pan', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand first section to show map
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    const mapContainer = page.locator('[data-testid="section-preview-map"]');
+    await expect(mapContainer).toBeVisible();
+
+    // Get the bounding box
+    const box = await mapContainer.boundingBox();
+    if (!box) throw new Error('Map container not found');
+
+    // Perform mouse wheel to zoom (just verify no errors)
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, -100);
+
+    // Verify map is still visible after interaction
+    await expect(mapContainer).toBeVisible();
+
+    // Perform drag for pan (just verify no errors)
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 50, box.y + box.height / 2 + 50);
+    await page.mouse.up();
+
+    // Verify map is still visible after interaction
+    await expect(mapContainer).toBeVisible();
+  });
+
+  test('collapsing all sections shows placeholder again', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand and then collapse first section
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    const mapContainer = page.locator('[data-testid="section-preview-map"]');
+    await expect(mapContainer).toBeVisible();
+
+    // Collapse the section
+    await expandButton.click();
+
+    // Placeholder should be visible again
+    const preview = page.locator('[data-testid="section-preview"]');
+    await expect(preview).toContainText('Select a section to preview');
+  });
+});
+
 test.describe('Validation Warnings', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);

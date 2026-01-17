@@ -4,6 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
 import { DialogWrapper } from './DialogWrapper';
+import SectionPreview from './SectionPreview';
 import type { DmpFile, DmpShot } from '../../types/commands';
 import { getNextSectionColor } from '../../utils/colors';
 import {
@@ -736,6 +737,17 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                 </div>
               )}
             </Panel>
+
+            {/* Section preview */}
+            <div className="flex justify-center">
+              <SectionPreview
+                section={
+                  expandedSections.size > 0
+                    ? dmpFile.sections[Array.from(expandedSections)[0] ?? -1] ?? null
+                    : null
+                }
+              />
+            </div>
           </>
         )}
 
