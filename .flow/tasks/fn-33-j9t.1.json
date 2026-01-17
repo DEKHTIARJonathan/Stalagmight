@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-17T08:39:33.025139Z",
+  "depends_on": [],
+  "epic": "fn-33-j9t",
+  "id": "fn-33-j9t.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-33-j9t.1.md",
+  "status": "todo",
+  "title": "Add GPS/placement Playwright tests",
+  "updated_at": "2026-01-17T08:39:33.025149Z"
+}

@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-17T08:36:16.781227Z",
+  "depends_on": [],
+  "epic": "fn-10-r0g",
+  "id": "fn-10-r0g.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-10-r0g.1.md",
+  "status": "todo",
+  "title": "Wire showScaleBar toggle to ScaleControl",
+  "updated_at": "2026-01-17T08:36:30.779023Z"
+}

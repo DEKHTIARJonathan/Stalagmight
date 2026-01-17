@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-17T08:37:04.478200Z",
+  "depends_on": [
+    "fn-13-hc2.1"
+  ],
+  "epic": "fn-13-hc2",
+  "id": "fn-13-hc2.2",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-13-hc2.2.md",
+  "status": "todo",
+  "title": "Add GPS input UI to Import Dialog",
+  "updated_at": "2026-01-17T08:37:17.982957Z"
+}

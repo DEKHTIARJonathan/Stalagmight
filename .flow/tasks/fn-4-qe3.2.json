@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-17T08:29:36.768206Z",
+  "depends_on": [
+    "fn-4-qe3.1"
+  ],
+  "epic": "fn-4-qe3",
+  "id": "fn-4-qe3.2",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-4-qe3.2.md",
+  "status": "todo",
+  "title": "Add Playwright tests for LRUD columns",
+  "updated_at": "2026-01-17T08:30:03.105805Z"
+}

@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-20-pp4",
+  "created_at": "2026-01-17T08:38:16.375342Z",
+  "depends_on_epics": [],
+  "id": "fn-20-pp4",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-20-pp4.md",
+  "status": "open",
+  "title": "Add GPS-based map to GlobalView",
+  "updated_at": "2026-01-17T08:38:36.624335Z"
+}

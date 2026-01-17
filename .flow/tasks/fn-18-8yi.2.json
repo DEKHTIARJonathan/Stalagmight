@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-17T08:37:51.269276Z",
+  "depends_on": [
+    "fn-18-8yi.1"
+  ],
+  "epic": "fn-18-8yi",
+  "id": "fn-18-8yi.2",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-18-8yi.2.md",
+  "status": "todo",
+  "title": "Add direction UI to Import Dialog",
+  "updated_at": "2026-01-17T08:38:04.323334Z"
+}

@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-21-53i",
+  "created_at": "2026-01-17T08:38:16.416250Z",
+  "depends_on_epics": [],
+  "id": "fn-21-53i",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-21-53i.md",
+  "status": "open",
+  "title": "Add metadata side panel to GlobalView",
+  "updated_at": "2026-01-17T08:38:36.811432Z"
+}
