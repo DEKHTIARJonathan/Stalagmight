@@ -5,10 +5,21 @@
   "created_at": "2026-01-17T08:29:35.752577Z",
   "depends_on": [],
   "epic": "fn-4-qe3",
+  "evidence": {
+    "commits": [
+      "2bf4668",
+      "10076a3"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui"
+    ]
+  },
   "id": "fn-4-qe3.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-4-qe3.1.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add expandable section rows with LRUD columns",
-  "updated_at": "2026-01-17T08:42:21.617948Z"
+  "updated_at": "2026-01-17T08:51:53.305917Z"
 }
