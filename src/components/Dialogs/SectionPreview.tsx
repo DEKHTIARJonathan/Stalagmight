@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import maplibregl from 'maplibre-gl';
 import type { DmpSection, DmpShot } from '../../types/commands';
+import type { Station } from '../../types/project';
 import { metersToMapCoords, getBounds } from '../../utils/coordinates';
 
 /**
@@ -66,6 +67,10 @@ interface SectionPreviewProps {
   section: DmpSection | null;
   /** Color for the section lines and stations */
   color?: string;
+  /** Existing station to connect to (for "From Existing Station" placement mode) */
+  existingStation?: Station | null;
+  /** Which station of the import to connect: 'first' or 'last' */
+  importStationIndex?: 'first' | 'last' | null;
 }
 
 /**
@@ -75,8 +80,14 @@ interface SectionPreviewProps {
  * - Zoom (wheel) + pan (drag)
  * - Auto-fits bounds when section changes
  * - No labels (minimal view)
+ * - Shows connection line when existingStation is provided
  */
-export default function SectionPreview({ section, color = '#4ecdc4' }: SectionPreviewProps) {
+export default function SectionPreview({
+  section,
+  color = '#4ecdc4',
+  existingStation,
+  importStationIndex,
+}: SectionPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -135,6 +146,16 @@ export default function SectionPreview({ section, color = '#4ecdc4' }: SectionPr
         data: { type: 'FeatureCollection', features: [] },
       });
 
+      map.addSource('preview-connection', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+
+      map.addSource('preview-existing-station', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+
       // Add shot lines layer
       map.addLayer({
         id: 'preview-shots-layer',
@@ -143,6 +164,18 @@ export default function SectionPreview({ section, color = '#4ecdc4' }: SectionPr
         paint: {
           'line-color': ['get', 'color'],
           'line-width': 2,
+        },
+      });
+
+      // Add connection line layer (dashed line)
+      map.addLayer({
+        id: 'preview-connection-layer',
+        type: 'line',
+        source: 'preview-connection',
+        paint: {
+          'line-color': '#ffcc00',
+          'line-width': 2,
+          'line-dasharray': [4, 4],
         },
       });
 
@@ -155,6 +188,19 @@ export default function SectionPreview({ section, color = '#4ecdc4' }: SectionPr
           'circle-radius': 4,
           'circle-color': ['get', 'color'],
           'circle-stroke-width': 1,
+          'circle-stroke-color': '#000000',
+        },
+      });
+
+      // Add existing station layer (different color)
+      map.addLayer({
+        id: 'preview-existing-station-layer',
+        type: 'circle',
+        source: 'preview-existing-station',
+        paint: {
+          'circle-radius': 6,
+          'circle-color': '#ffcc00',
+          'circle-stroke-width': 2,
           'circle-stroke-color': '#000000',
         },
       });
@@ -207,6 +253,50 @@ export default function SectionPreview({ section, color = '#4ecdc4' }: SectionPr
       properties: { color },
     }));
 
+    // Build connection line and existing station features
+    const connectionFeatures: GeoJSON.Feature[] = [];
+    const existingStationFeatures: GeoJSON.Feature[] = [];
+
+    if (existingStation && stations.length > 0 && importStationIndex) {
+      // Determine which import station to connect
+      const importStationCoords =
+        importStationIndex === 'first' ? stations[0] : stations[stations.length - 1];
+
+      if (importStationCoords) {
+        // For visualization, we'll show a simple connection indicator
+        // by placing the existing station at an offset from the import station
+        // (In the actual import, the merge will position them correctly)
+        const offsetX = 10; // Show existing station 10m to the side for visibility
+        const offsetY = 10;
+
+        const existingX = importStationCoords.x + offsetX;
+        const existingY = importStationCoords.y + offsetY;
+
+        // Add connection line
+        connectionFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates: [
+              metersToMapCoords(importStationCoords.x, importStationCoords.y),
+              metersToMapCoords(existingX, existingY),
+            ],
+          },
+          properties: {},
+        });
+
+        // Add existing station marker
+        existingStationFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: metersToMapCoords(existingX, existingY),
+          },
+          properties: { label: 'Existing' },
+        });
+      }
+    }
+
     // Update sources
     const shotsSource = map.getSource('preview-shots');
     if (shotsSource && 'setData' in shotsSource) {
@@ -224,9 +314,39 @@ export default function SectionPreview({ section, color = '#4ecdc4' }: SectionPr
       });
     }
 
+    const connectionSource = map.getSource('preview-connection');
+    if (connectionSource && 'setData' in connectionSource) {
+      (connectionSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: connectionFeatures,
+      });
+    }
+
+    const existingStationSource = map.getSource('preview-existing-station');
+    if (existingStationSource && 'setData' in existingStationSource) {
+      (existingStationSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: existingStationFeatures,
+      });
+    }
+
     // Fit bounds if we have stations
     if (stations.length > 0) {
       const bounds = getBounds(stations);
+
+      // Include existing station in bounds if present
+      if (existingStationFeatures.length > 0) {
+        const importStation =
+          importStationIndex === 'first' ? stations[0] : stations[stations.length - 1];
+        if (importStation) {
+          const existingX = importStation.x + 10;
+          const existingY = importStation.y + 10;
+          bounds.minX = Math.min(bounds.minX, existingX);
+          bounds.maxX = Math.max(bounds.maxX, existingX);
+          bounds.minY = Math.min(bounds.minY, existingY);
+          bounds.maxY = Math.max(bounds.maxY, existingY);
+        }
+      }
 
       // Check for degenerate bounds (single point or very small extent)
       const extentX = bounds.maxX - bounds.minX;
@@ -253,7 +373,7 @@ export default function SectionPreview({ section, color = '#4ecdc4' }: SectionPr
         });
       }
     }
-  }, [section, stations, color, mapLoaded]);
+  }, [section, stations, color, mapLoaded, existingStation, importStationIndex]);
 
   // Always render the container, overlay placeholder when no section
   return (
