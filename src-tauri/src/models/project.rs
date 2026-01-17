@@ -4,9 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::{
-    ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure, Section, SectionData, SectionId,
-    SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station, StationMerge, StationRef,
-    ZeroDatum,
+    ClosureStrategy, Coordinates, GpsBounds, GpsCoordinates, LoopClosure, Section, SectionData,
+    SectionId, SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station, StationMerge,
+    StationRef, ZeroDatum,
 };
 
 /// A complete cave survey project
@@ -47,6 +47,10 @@ pub struct ProjectMetadata {
     pub modified_at: DateTime<Utc>,
     pub section_count: usize,
     pub total_length: f64,
+    /// GPS center from first zero datum (lat, lng)
+    pub gps_center: Option<(f64, f64)>,
+    /// GPS bounds including all zero datums
+    pub gps_bounds: Option<GpsBounds>,
 }
 
 /// Overall project statistics
@@ -725,6 +729,9 @@ impl Project {
         let file_path = self.file_path.clone()?;
         let stats = self.stats();
 
+        // Compute GPS center and bounds from zero datums
+        let (gps_center, gps_bounds) = self.compute_gps_info();
+
         Some(ProjectMetadata {
             name: self.name.clone(),
             location: self.location.clone(),
@@ -732,7 +739,44 @@ impl Project {
             modified_at: self.modified_at,
             section_count: stats.section_count,
             total_length: stats.total_length,
+            gps_center,
+            gps_bounds,
         })
+    }
+
+    /// Compute GPS center and bounds from zero datums
+    /// Returns (center, bounds) where center is from first zero datum
+    /// and bounds encompass all zero datums
+    fn compute_gps_info(&self) -> (Option<(f64, f64)>, Option<GpsBounds>) {
+        if self.zero_datums.is_empty() {
+            return (None, None);
+        }
+
+        // Center from first zero datum
+        let first_gps = &self.zero_datums[0].gps;
+        let gps_center = Some((first_gps.latitude, first_gps.longitude));
+
+        // Bounds from all zero datums
+        let mut min_lat = f64::MAX;
+        let mut max_lat = f64::MIN;
+        let mut min_lng = f64::MAX;
+        let mut max_lng = f64::MIN;
+
+        for zd in &self.zero_datums {
+            min_lat = min_lat.min(zd.gps.latitude);
+            max_lat = max_lat.max(zd.gps.latitude);
+            min_lng = min_lng.min(zd.gps.longitude);
+            max_lng = max_lng.max(zd.gps.longitude);
+        }
+
+        let gps_bounds = Some(GpsBounds {
+            min_lat,
+            max_lat,
+            min_lng,
+            max_lng,
+        });
+
+        (gps_center, gps_bounds)
     }
 }
 
