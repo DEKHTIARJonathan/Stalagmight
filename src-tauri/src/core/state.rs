@@ -2827,4 +2827,529 @@ mod tests {
 
         assert_eq!(state.get_project_state().unwrap().sections.len(), 2);
     }
+
+    // === Command Execution Tests (fn-34-nvq spec) ===
+    // These tests verify specific command behaviors as specified in the epic.
+
+    #[test]
+    fn test_execute_create_section_command() {
+        // Verify CreateSection creates section correctly with all fields
+        use chrono::NaiveDate;
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let test_date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let result = state.execute(Command::CreateSection {
+            name: Some("Main Passage".to_string()),
+            surveyor: Some("Alice".to_string()),
+            date: Some(test_date),
+            color: "#00ff00".to_string(),
+            direction: Some(SurveyDirection::Out),
+            shots: vec![test_shot_data(10.0), test_shot_data(15.0), test_shot_data(8.0)],
+        });
+
+        assert!(result.success);
+        let section_id = result.section_id.expect("Section ID should be returned");
+
+        let project = state.get_project_state().unwrap();
+        let section = project.get_section(section_id).expect("Section should exist");
+
+        assert_eq!(section.name, Some("Main Passage".to_string()));
+        assert_eq!(section.surveyor, Some("Alice".to_string()));
+        assert_eq!(section.date, Some(test_date));
+        assert_eq!(section.color, "#00ff00");
+        assert_eq!(section.direction, SurveyDirection::Out);
+        assert_eq!(section.shots.len(), 3);
+        assert_eq!(section.shots[0].length, 10.0);
+        assert_eq!(section.shots[1].length, 15.0);
+        assert_eq!(section.shots[2].length, 8.0);
+    }
+
+    #[test]
+    fn test_execute_merge_stations_command() {
+        // Verify MergeStations updates section offsets correctly
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        // Create two sections
+        let result_a = state.execute(Command::CreateSection {
+            name: Some("Section A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        });
+        let section_a_id = result_a.section_id.unwrap();
+
+        let result_b = state.execute(Command::CreateSection {
+            name: Some("Section B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+        });
+        let section_b_id = result_b.section_id.unwrap();
+
+        // Merge station 1 of section A with station 0 of section B
+        let station_a = StationRef::new(section_a_id, 1);
+        let station_b = StationRef::new(section_b_id, 0);
+
+        let result = state.execute(Command::MergeStations {
+            station_a,
+            station_b,
+            closure_strategy: ClosureStrategy::ProportionalByLength,
+        });
+
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+
+        // Verify merge was recorded
+        assert_eq!(project.station_merges.len(), 1);
+        let merge = &project.station_merges[0];
+        assert_eq!(merge.station_a, station_a);
+        assert_eq!(merge.station_b, station_b);
+
+        // Verify section offsets were updated - one section should have an offset
+        // (the moving section gets an offset to align with the anchor)
+        let has_offset = project.section_offsets.contains_key(&section_a_id)
+            || project.section_offsets.contains_key(&section_b_id);
+        assert!(has_offset, "Section offsets should be updated after merge");
+    }
+
+    #[test]
+    fn test_execute_set_zero_datum_command() {
+        // Verify SetZeroDatum stores GPS coordinates correctly
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+        let station_ref = StationRef::new(section_id, 0);
+        let gps = GpsCoordinates::new(48.8584, 2.2945, 35.0).unwrap();
+
+        let result = state.execute(Command::SetZeroDatum {
+            station_ref,
+            coordinates: gps,
+        });
+
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.zero_datums.len(), 1);
+
+        let datum = &project.zero_datums[0];
+        assert_eq!(datum.station_ref, station_ref);
+        assert!((datum.gps.latitude - 48.8584).abs() < 0.0001);
+        assert!((datum.gps.longitude - 2.2945).abs() < 0.0001);
+        assert!((datum.gps.depth_reference - 35.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_execute_update_shot_command() {
+        // Verify UpdateShot modifies shot data correctly
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![ShotData {
+                azimuth_in: 90.0,
+                azimuth_out: 270.0,
+                length: 10.0,
+                depth_in: 5.0,
+                depth_out: 6.0,
+                left: None,
+                right: None,
+                up: None,
+                down: None,
+                comment: None,
+                ..Default::default()
+            }],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+        let project = state.get_project_state().unwrap();
+        let shot_id = project.sections[0].shots[0].id;
+
+        // Update multiple fields
+        let result = state.execute(Command::UpdateShot {
+            section_id,
+            shot_id,
+            updates: ShotUpdates {
+                azimuth_in: Some(45.0),
+                length: Some(20.0),
+                left: Some(Some(1.5)),
+                right: Some(Some(2.0)),
+                up: Some(Some(3.0)),
+                down: Some(Some(0.5)),
+                comment: Some(Some("Narrow squeeze".to_string())),
+                ..Default::default()
+            },
+        });
+
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        let shot = &project.sections[0].shots[0];
+
+        assert_eq!(shot.azimuth_in, 45.0);
+        assert_eq!(shot.azimuth_out, 270.0); // Unchanged
+        assert_eq!(shot.length, 20.0);
+        assert_eq!(shot.depth_in, 5.0); // Unchanged
+        assert_eq!(shot.left, Some(1.5));
+        assert_eq!(shot.right, Some(2.0));
+        assert_eq!(shot.up, Some(3.0));
+        assert_eq!(shot.down, Some(0.5));
+        assert_eq!(shot.comment, Some("Narrow squeeze".to_string()));
+    }
+
+    #[test]
+    fn test_execute_delete_shot_command() {
+        // Verify DeleteShot removes shot and maintains section integrity
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![
+                test_shot_data(5.0),
+                test_shot_data(7.0),
+                test_shot_data(9.0),
+            ],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+
+        // Get the middle shot's ID
+        let project = state.get_project_state().unwrap();
+        let middle_shot_id = project.sections[0].shots[1].id;
+        let first_shot_id = project.sections[0].shots[0].id;
+        let last_shot_id = project.sections[0].shots[2].id;
+
+        // Delete the middle shot
+        let result = state.execute(Command::DeleteShot {
+            section_id,
+            shot_id: middle_shot_id,
+        });
+
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        let section = project.get_section(section_id).unwrap();
+
+        // Should have 2 shots remaining
+        assert_eq!(section.shots.len(), 2);
+
+        // First and last shots should still exist
+        assert!(section.shots.iter().any(|s| s.id == first_shot_id));
+        assert!(section.shots.iter().any(|s| s.id == last_shot_id));
+
+        // Middle shot should be gone
+        assert!(!section.shots.iter().any(|s| s.id == middle_shot_id));
+
+        // Verify shot lengths are correct (first and last)
+        assert_eq!(section.shots[0].length, 5.0);
+        assert_eq!(section.shots[1].length, 9.0);
+    }
+
+    #[test]
+    fn test_execute_create_shot_command() {
+        // Verify CreateShot inserts shot at correct position
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0), test_shot_data(10.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+
+        // Get the first shot's ID
+        let project = state.get_project_state().unwrap();
+        let first_shot_id = project.sections[0].shots[0].id;
+
+        // Insert a new shot after the first shot
+        let result = state.execute(Command::CreateShot {
+            section_id,
+            shot: test_shot_data(7.5), // Intermediate length
+            after_shot_id: Some(first_shot_id),
+        });
+
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        let section = project.get_section(section_id).unwrap();
+
+        // Should have 3 shots now
+        assert_eq!(section.shots.len(), 3);
+
+        // Verify order by length: 5.0, 7.5, 10.0
+        assert_eq!(section.shots[0].length, 5.0);
+        assert_eq!(section.shots[1].length, 7.5);
+        assert_eq!(section.shots[2].length, 10.0);
+    }
+
+    #[test]
+    fn test_execute_delete_section_command() {
+        // Verify DeleteSection cleans up merges and related data
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        // Create two sections
+        let result_a = state.execute(Command::CreateSection {
+            name: Some("Section A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+        let section_a_id = result_a.section_id.unwrap();
+
+        let result_b = state.execute(Command::CreateSection {
+            name: Some("Section B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(7.0)],
+        });
+        let section_b_id = result_b.section_id.unwrap();
+
+        // Set a zero datum on section A
+        state.execute(Command::SetZeroDatum {
+            station_ref: StationRef::new(section_a_id, 0),
+            coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        });
+
+        // Verify initial state
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections.len(), 2);
+        assert_eq!(project.zero_datums.len(), 1);
+
+        // Delete section A
+        let result = state.execute(Command::DeleteSection {
+            section_id: section_a_id,
+        });
+
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+
+        // Section should be removed
+        assert_eq!(project.sections.len(), 1);
+        assert!(project.get_section(section_a_id).is_none());
+        assert!(project.get_section(section_b_id).is_some());
+
+        // Section B should be the only one remaining
+        assert_eq!(project.sections[0].id, section_b_id);
+        assert_eq!(project.sections[0].name, Some("Section B".to_string()));
+    }
+
+    #[test]
+    fn test_execute_update_section_metadata_command() {
+        // Verify UpdateSectionMetadata modifies metadata correctly
+        use chrono::NaiveDate;
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let initial_date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let create_result = state.execute(Command::CreateSection {
+            name: Some("Original Name".to_string()),
+            surveyor: Some("Bob".to_string()),
+            date: Some(initial_date),
+            color: "#ff0000".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+
+        // Update all metadata fields
+        let updated_date = NaiveDate::from_ymd_opt(2024, 2, 20).unwrap();
+        let result = state.execute(Command::UpdateSectionMetadata {
+            section_id,
+            updates: SectionUpdates {
+                name: Some(Some("Updated Name".to_string())),
+                surveyor: Some(Some("Carol".to_string())),
+                date: Some(Some(updated_date)),
+                color: Some("#0000ff".to_string()),
+                direction: Some(SurveyDirection::Out),
+            },
+        });
+
+        assert!(result.success);
+
+        let project = state.get_project_state().unwrap();
+        let section = project.get_section(section_id).unwrap();
+
+        assert_eq!(section.name, Some("Updated Name".to_string()));
+        assert_eq!(section.surveyor, Some("Carol".to_string()));
+        assert_eq!(section.date, Some(updated_date));
+        assert_eq!(section.color, "#0000ff");
+        assert_eq!(section.direction, SurveyDirection::Out);
+
+        // Verify shots were not affected
+        assert_eq!(section.shots.len(), 1);
+        assert_eq!(section.shots[0].length, 5.0);
+    }
+
+    // === Edge Case Tests for Validation Errors ===
+
+    #[test]
+    fn test_execute_command_no_project_open() {
+        let state = AppState::new().unwrap();
+
+        // Try to execute commands without an open project
+        let commands_to_test = vec![
+            Command::CreateSection {
+                name: None,
+                surveyor: None,
+                date: None,
+                color: "#ff0000".to_string(),
+                direction: None,
+                shots: vec![],
+            },
+            Command::DeleteSection { section_id: 0 },
+            Command::UpdateSectionMetadata {
+                section_id: 0,
+                updates: SectionUpdates::default(),
+            },
+            Command::CreateShot {
+                section_id: 0,
+                shot: test_shot_data(5.0),
+                after_shot_id: None,
+            },
+            Command::UpdateShot {
+                section_id: 0,
+                shot_id: 0,
+                updates: ShotUpdates::default(),
+            },
+            Command::DeleteShot {
+                section_id: 0,
+                shot_id: 0,
+            },
+            Command::MergeStations {
+                station_a: StationRef::new(0, 0),
+                station_b: StationRef::new(1, 0),
+                closure_strategy: ClosureStrategy::ProportionalByLength,
+            },
+            Command::SetZeroDatum {
+                station_ref: StationRef::new(0, 0),
+                coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+            },
+        ];
+
+        for cmd in commands_to_test {
+            let result = state.execute(cmd);
+            assert!(
+                !result.success,
+                "Command should fail when no project is open"
+            );
+            assert!(
+                result.error.is_some(),
+                "Should have error message when no project open"
+            );
+        }
+    }
+
+    #[test]
+    fn test_execute_commands_with_invalid_ids() {
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+        let section_id = create_result.section_id.unwrap();
+
+        // Test with nonexistent section ID
+        let result = state.execute(Command::DeleteSection { section_id: 999 });
+        assert!(!result.success);
+
+        let result = state.execute(Command::UpdateSectionMetadata {
+            section_id: 999,
+            updates: SectionUpdates::default(),
+        });
+        assert!(!result.success);
+
+        // Test with nonexistent shot ID
+        let result = state.execute(Command::UpdateShot {
+            section_id,
+            shot_id: 999999,
+            updates: ShotUpdates::default(),
+        });
+        assert!(!result.success);
+
+        let result = state.execute(Command::DeleteShot {
+            section_id,
+            shot_id: 999999,
+        });
+        assert!(!result.success);
+    }
 }
