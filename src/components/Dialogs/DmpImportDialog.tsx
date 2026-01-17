@@ -252,6 +252,9 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
   // Import station for manual placement: which station aligns to cursor
   const [manualImportStation, setManualImportStation] = useState<'first' | 'last'>('first');
 
+  // Track edited directions per section (key: section index, value: direction)
+  const [sectionDirections, setSectionDirections] = useState<Map<number, 'in' | 'out'>>(new Map());
+
   // Validation configuration from app config (fallback to defaults)
   const validationConfig = config?.validation ?? defaultConfig.validation;
 
@@ -353,6 +356,8 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
     setImportStation('first');
     setExistingStation(null);
     setManualImportStation('first');
+    // Reset section directions to initial values from parsed file
+    setSectionDirections(new Map());
   }, [dmpFile]);
 
   // Build list of available stations for the dropdown (memoized)
@@ -532,19 +537,45 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
   };
 
   /**
+   * Get the effective direction for a section, considering user edits.
+   */
+  const getEffectiveDirection = useCallback(
+    (sectionIndex: number): 'in' | 'out' => {
+      const edited = sectionDirections.get(sectionIndex);
+      if (edited !== undefined) return edited;
+      // Fall back to parsed value from DMP file
+      return dmpFile?.sections[sectionIndex]?.direction ?? 'in';
+    },
+    [dmpFile, sectionDirections]
+  );
+
+  /**
+   * Handle direction change for a section.
+   */
+  const handleDirectionChange = useCallback((sectionIndex: number, direction: 'in' | 'out') => {
+    setSectionDirections((prev) => {
+      const next = new Map(prev);
+      next.set(sectionIndex, direction);
+      return next;
+    });
+  }, []);
+
+  /**
    * Build section data from DMP file for a given section index.
    * Returns the section data in our internal format.
    */
-  const buildSectionData = useCallback((dmpSection: DmpFile['sections'][number], usedColors: string[]) => {
+  const buildSectionData = useCallback((dmpSection: DmpFile['sections'][number], usedColors: string[], sectionIndex: number) => {
     const color = getNextSectionColor(usedColors);
     const standardShots = dmpSection.shots.filter((s) => s.shot_type === 'Standard');
     const dateStr = dmpSection.date?.split(/[T ]/)[0] ?? null;
+    const direction = getEffectiveDirection(sectionIndex);
 
     return {
       name: dmpSection.name,
       surveyor: null,
       date: dateStr ?? null,
       color,
+      direction,
       shots: standardShots.map((shot) => ({
         azimuth_in: shot.heading_in,
         azimuth_out: shot.heading_out,
@@ -563,7 +594,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
         temperature: shot.temperature ?? null,
       })),
     };
-  }, []);
+  }, [getEffectiveDirection]);
 
   const handleImport = async () => {
     if (!dmpFile || selectedSections.size === 0) return;
@@ -598,7 +629,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
         // Only support single section for manual placement
         const firstSection = dmpFile.sections[firstSelectedIndex];
         if (firstSection) {
-          const sectionData = buildSectionData(firstSection, usedColors);
+          const sectionData = buildSectionData(firstSection, usedColors, firstSelectedIndex);
 
           // Switch to single view and start placement mode
           setView('single');
@@ -627,7 +658,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
         const section = dmpFile.sections[index];
         if (!section) continue;
 
-        const sectionData = buildSectionData(section, usedColors);
+        const sectionData = buildSectionData(section, usedColors, index);
         usedColors.push(sectionData.color);
 
         const result = await createSection(sectionData);
@@ -818,7 +849,18 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                             </td>
                             <td>{section.name}</td>
                             <td>{section.date?.split(/[T ]/)[0] ?? '-'}</td>
-                            <td>{section.direction}</td>
+                            <td onClick={(e) => e.stopPropagation()}>
+                              <select
+                                value={getEffectiveDirection(index)}
+                                onChange={(e) => handleDirectionChange(index, e.target.value as 'in' | 'out')}
+                                className="bg-surface border border-border rounded px-1 py-0.5 text-xs"
+                                data-testid={`direction-select-${index}`}
+                                aria-label={`Direction for section ${section.name}`}
+                              >
+                                <option value="in">In</option>
+                                <option value="out">Out</option>
+                              </select>
+                            </td>
                             <td className="text-right">{standardShots.length}</td>
                           </tr>
                           {isExpanded && hasShots && (
