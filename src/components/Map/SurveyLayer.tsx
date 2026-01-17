@@ -98,6 +98,15 @@ export default class SurveyLayer {
         features: [],
       },
     });
+
+    // Section name labels point source (first station of each section)
+    this.map.addSource(this.sourceId + '-section-labels', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    });
   }
 
   private initializeLayers() {
@@ -212,6 +221,35 @@ export default class SurveyLayer {
         // At zoom >= 18: show all
         true,
       ],
+    });
+
+    // Section name labels layer - shows section name at first station
+    // Visibility controlled by showSectionNames toggle
+    this.map.addLayer({
+      id: this.labelsLayerId,
+      type: 'symbol',
+      source: this.sourceId + '-section-labels',
+      layout: {
+        'text-field': ['get', 'name'],
+        'text-font': ['Open Sans Regular'],
+        'text-size': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          12, 11,
+          18, 14,
+        ],
+        'text-offset': [0, -1.2],
+        'text-anchor': 'bottom',
+        'text-allow-overlap': true,
+        'visibility': 'visible', // Start visible, controlled by setShowSectionNames
+      },
+      paint: {
+        'text-color': ['get', 'color'],
+        'text-halo-color': '#ffffff',
+        'text-halo-width': 1.5,
+        'text-opacity': 1,
+      },
     });
 
   }
@@ -400,6 +438,15 @@ export default class SurveyLayer {
     );
   }
 
+  // Control section name labels visibility
+  setShowSectionNames(show: boolean) {
+    this.map.setLayoutProperty(
+      this.labelsLayerId,
+      'visibility',
+      show ? 'visible' : 'none'
+    );
+  }
+
   update(sections: Section[], stations: Station[], stationMerges?: StationMerge[], loopClosures?: LoopClosure[]) {
     // Build shot features and shot label features
     const shotFeatures: GeoJSON.Feature[] = [];
@@ -528,7 +575,30 @@ export default class SurveyLayer {
       }
     }
 
-    console.log(`[SurveyLayer] Created ${shotFeatures.length} shot features, ${stationFeatures.length} station features, ${mergeFeatures.length} merge features`);
+    // Build section name label features (at first station of each section)
+    const sectionLabelFeatures: GeoJSON.Feature[] = [];
+    for (const section of sections) {
+      // Find the first station (station_index === 0) for this section
+      const firstStation = stations.find(
+        (s) => s.station_ref.section_id === section.id && s.station_ref.station_index === 0
+      );
+      if (firstStation) {
+        sectionLabelFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: metersToMapCoords(firstStation.coordinates.x, firstStation.coordinates.y),
+          },
+          properties: {
+            name: section.name,
+            color: section.color,
+            sectionId: section.id,
+          },
+        });
+      }
+    }
+
+    console.log(`[SurveyLayer] Created ${shotFeatures.length} shot features, ${stationFeatures.length} station features, ${mergeFeatures.length} merge features, ${sectionLabelFeatures.length} section label features`);
     if (shotFeatures.length > 0) {
       console.log('[SurveyLayer] First shot feature:', JSON.stringify(shotFeatures[0]));
     }
@@ -564,6 +634,15 @@ export default class SurveyLayer {
       (shotLabelsSource as maplibregl.GeoJSONSource).setData({
         type: 'FeatureCollection',
         features: shotLabelFeatures,
+      });
+    }
+
+    // Update section labels source
+    const sectionLabelsSource = this.map.getSource(this.sourceId + '-section-labels');
+    if (sectionLabelsSource && 'setData' in sectionLabelsSource) {
+      (sectionLabelsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: sectionLabelFeatures,
       });
     }
 
@@ -641,6 +720,15 @@ export default class SurveyLayer {
     }
     if (this.map.getSource(this.sourceId + '-loop-closures')) {
       this.map.removeSource(this.sourceId + '-loop-closures');
+    }
+    if (this.map.getSource(this.sourceId + '-section-labels')) {
+      this.map.removeSource(this.sourceId + '-section-labels');
+    }
+    if (this.map.getSource(this.sourceId + '-shot-labels')) {
+      this.map.removeSource(this.sourceId + '-shot-labels');
+    }
+    if (this.map.getLayer(this.shotLabelsLayerId)) {
+      this.map.removeLayer(this.shotLabelsLayerId);
     }
   }
 }
