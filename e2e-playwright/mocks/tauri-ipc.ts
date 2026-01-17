@@ -652,7 +652,58 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'get_recent_projects':
           case 'list_recent_projects':
-            return [];
+            return [
+              {
+                name: 'Cave System Alpha',
+                location: 'Yucatan, Mexico',
+                file_path: '/projects/cave-alpha.cvproj',
+                modified_at: new Date().toISOString(),
+                section_count: 5,
+                total_length: 1250.5,
+                gps_center: [-87.4631, 20.2137],
+                gps_bounds: {
+                  north: 20.2200,
+                  south: 20.2074,
+                  east: -87.4568,
+                  west: -87.4694,
+                },
+              },
+              {
+                name: 'Underwater Cave Beta',
+                location: 'Florida, USA',
+                file_path: '/projects/cave-beta.cvproj',
+                modified_at: new Date(Date.now() - 86400000).toISOString(),
+                section_count: 3,
+                total_length: 820.0,
+                gps_center: [-82.4584, 29.6516],
+                gps_bounds: {
+                  north: 29.6550,
+                  south: 29.6482,
+                  east: -82.4521,
+                  west: -82.4647,
+                },
+              },
+              {
+                name: 'Deep Cave Gamma',
+                location: 'Bahamas',
+                file_path: '/projects/cave-gamma.cvproj',
+                modified_at: new Date(Date.now() - 172800000).toISOString(),
+                section_count: 8,
+                total_length: 2100.3,
+                gps_center: [-77.3963, 25.0343],
+                gps_bounds: null,
+              },
+              {
+                name: 'Local Survey (No GPS)',
+                location: 'Unknown',
+                file_path: '/projects/local-survey.cvproj',
+                modified_at: new Date(Date.now() - 259200000).toISOString(),
+                section_count: 2,
+                total_length: 350.0,
+                gps_center: null,
+                gps_bounds: null,
+              },
+            ];
 
           case 'get_warnings':
           case 'get_project_warnings':

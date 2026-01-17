@@ -1,8 +1,12 @@
-import { useEffect } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useProject } from '../../hooks/useProject';
 import { useProjectStore } from '../../store/projectStore';
+import { useUIStore } from '../../store/uiStore';
 import { Button } from '../common/Button';
 import SystemCard from './SystemCard';
+import GlobalViewMap from './GlobalViewMap';
+
+type ViewTab = 'map' | 'list';
 
 export default function GlobalView() {
   const {
@@ -13,11 +17,32 @@ export default function GlobalView() {
     handleImportDmp,
   } = useProject();
 
-  const { loadRecentProjects } = useProjectStore();
+  const { loadRecentProjects, openProject } = useProjectStore();
+  const { setView } = useUIStore();
+  const [activeTab, setActiveTab] = useState<ViewTab>('list');
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
   useEffect(() => {
     loadRecentProjects();
   }, [loadRecentProjects]);
+
+  // Check if there are any GPS-positioned projects
+  const hasGpsProjects = recentProjects.some(
+    (p) => p.gps_center !== null && p.gps_center[0] !== 0 && p.gps_center[1] !== 0
+  );
+
+  // Handle project selection on map
+  const handleProjectSelect = useCallback((filePath: string) => {
+    setSelectedProjectId(filePath);
+  }, []);
+
+  // Handle project open (double-click on map)
+  const handleProjectOpen = useCallback(async (filePath: string) => {
+    const result = await openProject(filePath);
+    if (result.success) {
+      setView('single');
+    }
+  }, [openProject, setView]);
 
   return (
     <div data-testid="global-view" className="h-full flex flex-col">
@@ -31,20 +56,57 @@ export default function GlobalView() {
         <h1 className="text-xl font-bold">CaveChef</h1>
       </header>
 
+      {/* Tabs - only show if there are projects */}
+      {recentProjects.length > 0 && (
+        <div className="flex border-b border-border px-4">
+          <button
+            data-testid="globalview-map-tab"
+            onClick={() => setActiveTab('map')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'map'
+                ? 'border-accent text-accent'
+                : 'border-transparent text-text-secondary hover:text-text'
+            }`}
+          >
+            Map {hasGpsProjects ? `(${recentProjects.filter(p => p.gps_center !== null && p.gps_center[0] !== 0 && p.gps_center[1] !== 0).length})` : ''}
+          </button>
+          <button
+            data-testid="globalview-list-tab"
+            onClick={() => setActiveTab('list')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'list'
+                ? 'border-accent text-accent'
+                : 'border-transparent text-text-secondary hover:text-text'
+            }`}
+          >
+            List ({recentProjects.length})
+          </button>
+        </div>
+      )}
+
       {/* Content */}
-      <main className="flex-1 overflow-auto p-6">
+      <main className="flex-1 overflow-hidden">
         {isLoading ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-text-secondary">Loading...</div>
           </div>
         ) : recentProjects.length === 0 ? (
-          <EmptyState
-            onImport={handleImportDmp}
-            onNew={handleNewProject}
-            onOpen={handleOpenProject}
+          <div className="h-full overflow-auto p-6">
+            <EmptyState
+              onImport={handleImportDmp}
+              onNew={handleNewProject}
+              onOpen={handleOpenProject}
+            />
+          </div>
+        ) : activeTab === 'map' ? (
+          <GlobalViewMap
+            projects={recentProjects}
+            selectedProjectId={selectedProjectId}
+            onProjectSelect={handleProjectSelect}
+            onProjectOpen={handleProjectOpen}
           />
         ) : (
-          <div>
+          <div className="h-full overflow-auto p-6">
             <h2 className="text-lg font-medium mb-4">Recent Projects</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {recentProjects.map((project) => (
