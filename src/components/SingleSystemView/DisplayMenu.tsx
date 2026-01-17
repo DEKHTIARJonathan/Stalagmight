@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useUIStore, type DisplayToggleKey } from '../../store/uiStore';
+import { GRID_SPACING_OPTIONS } from '../Map/GridOverlay';
 
 interface DisplayOption {
   key: DisplayToggleKey;
@@ -46,7 +47,9 @@ export default function DisplayMenu() {
     showScaleBar,
     showSatellite,
     showDepthGradient,
+    gridSpacing,
     toggleDisplay,
+    setGridSpacing,
   } = useUIStore();
 
   const toggleValues: Record<DisplayToggleKey, boolean> = {
@@ -135,29 +138,52 @@ export default function DisplayMenu() {
               </div>
               <div className="pb-1">
                 {group.items.map((item) => (
-                  <button
-                    key={item.key}
-                    onClick={() => toggleDisplay(item.key)}
-                    className="w-full px-3 py-2 flex items-center justify-between hover:bg-background/50 transition-colors"
-                  >
-                    <div className="flex flex-col items-start">
-                      <span className="text-sm">{item.label}</span>
-                      {item.description && (
-                        <span className="text-xs text-text-secondary">{item.description}</span>
-                      )}
-                    </div>
-                    <div
-                      className={`
-                        w-5 h-5 rounded flex items-center justify-center text-xs
-                        ${toggleValues[item.key]
-                          ? 'bg-accent text-white'
-                          : 'bg-background border border-border text-transparent'
-                        }
-                      `}
+                  <div key={item.key}>
+                    <button
+                      onClick={() => toggleDisplay(item.key)}
+                      className="w-full px-3 py-2 flex items-center justify-between hover:bg-background/50 transition-colors"
+                      data-testid={`display-toggle-${item.key}`}
                     >
-                      ✓
-                    </div>
-                  </button>
+                      <div className="flex flex-col items-start">
+                        <span className="text-sm">{item.label}</span>
+                        {item.description && (
+                          <span className="text-xs text-text-secondary">{item.description}</span>
+                        )}
+                      </div>
+                      <div
+                        className={`
+                          w-5 h-5 rounded flex items-center justify-center text-xs
+                          ${toggleValues[item.key]
+                            ? 'bg-accent text-white'
+                            : 'bg-background border border-border text-transparent'
+                          }
+                        `}
+                      >
+                        ✓
+                      </div>
+                    </button>
+                    {/* Grid spacing options - shown when grid is enabled */}
+                    {item.key === 'showGrid' && showGrid && (
+                      <div className="px-3 py-2 pl-6 bg-background/30">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-text-secondary">Spacing:</span>
+                          <select
+                            value={gridSpacing}
+                            onChange={(e) => setGridSpacing(Number(e.target.value))}
+                            onClick={(e) => e.stopPropagation()}
+                            className="flex-1 px-2 py-1 text-xs bg-background border border-border rounded text-text-primary"
+                            data-testid="grid-spacing-select"
+                          >
+                            {GRID_SPACING_OPTIONS.map((spacing) => (
+                              <option key={spacing} value={spacing}>
+                                {spacing}m
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
             </div>

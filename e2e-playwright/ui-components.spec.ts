@@ -271,5 +271,66 @@ test.describe('UI Components', () => {
       // Button should still be visible and functional
       await expect(stationLabelsButton).toBeVisible();
     });
+
+    test('should toggle grid overlay visibility', async ({ page }) => {
+      // Open Display menu
+      await page.click('button:has-text("Display")');
+      await expect(page.locator('button:has-text("Grid")')).toBeVisible({ timeout: 2000 });
+
+      // Grid is off by default (showGrid: false in uiStore)
+      const gridButton = page.locator('[data-testid="display-toggle-showGrid"]');
+      await expect(gridButton).toBeVisible();
+
+      // Verify initial state - checkbox indicator should NOT have bg-accent (off state)
+      const initialCheckbox = gridButton.locator('div.rounded').last();
+      await expect(initialCheckbox).not.toHaveClass(/bg-accent/);
+
+      // Toggle grid on
+      await gridButton.click();
+
+      // Verify the toggle is now on - checkbox should have bg-accent class
+      await expect(initialCheckbox).toHaveClass(/bg-accent/);
+
+      // Grid spacing options should appear when grid is enabled
+      const spacingSelect = page.locator('[data-testid="grid-spacing-select"]');
+      await expect(spacingSelect).toBeVisible({ timeout: 2000 });
+
+      // Default spacing should be 10m
+      await expect(spacingSelect).toHaveValue('10');
+
+      // Toggle back off
+      await gridButton.click();
+
+      // Verify the toggle is back off - checkbox should NOT have bg-accent
+      await expect(initialCheckbox).not.toHaveClass(/bg-accent/);
+
+      // Grid spacing options should be hidden
+      await expect(spacingSelect).not.toBeVisible();
+    });
+
+    test('should change grid spacing', async ({ page }) => {
+      // Open Display menu and enable grid
+      await page.click('button:has-text("Display")');
+      await page.locator('[data-testid="display-toggle-showGrid"]').click();
+
+      // Grid spacing select should be visible
+      const spacingSelect = page.locator('[data-testid="grid-spacing-select"]');
+      await expect(spacingSelect).toBeVisible({ timeout: 2000 });
+
+      // Default is 10m
+      await expect(spacingSelect).toHaveValue('10');
+
+      // Change to 25m
+      await spacingSelect.selectOption('25');
+      await expect(spacingSelect).toHaveValue('25');
+
+      // Change to 5m
+      await spacingSelect.selectOption('5');
+      await expect(spacingSelect).toHaveValue('5');
+
+      // Change to 100m
+      await spacingSelect.selectOption('100');
+      await expect(spacingSelect).toHaveValue('100');
+    });
   });
 });

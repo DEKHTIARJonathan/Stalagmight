@@ -6,6 +6,7 @@ import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coo
 import { useMapTools } from '../../hooks/useMapTools';
 import SurveyLayer from './SurveyLayer';
 import PlacementOverlay from './PlacementOverlay';
+import GridOverlay from './GridOverlay';
 
 interface BoxSelectState {
   start: { x: number; y: number } | null;
@@ -41,7 +42,6 @@ export default function MapCanvas() {
     setMapCenter,
     setMapZoom,
     activeTool,
-    showGrid,
     showSatellite,
     showShotData,
     showScaleBar,
@@ -834,19 +834,8 @@ export default function MapCanvas() {
         />
       )}
 
-      {/* Grid overlay (simple CSS grid for now) */}
-      {showGrid && (
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            backgroundImage: `
-              linear-gradient(to right, ${config?.display.grid_color ?? '#333366'}22 1px, transparent 1px),
-              linear-gradient(to bottom, ${config?.display.grid_color ?? '#333366'}22 1px, transparent 1px)
-            `,
-            backgroundSize: '50px 50px',
-          }}
-        />
-      )}
+      {/* Grid overlay using MapLibre layer */}
+      {mapLoaded && map.current && <GridOverlay map={map.current} />}
 
       {/* Placement mode overlay */}
       {placementMode && placementCursor && (

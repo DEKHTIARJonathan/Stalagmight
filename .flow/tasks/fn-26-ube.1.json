@@ -1,14 +1,14 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T16:49:25.981021Z",
   "created_at": "2026-01-17T08:39:04.491905Z",
   "depends_on": [],
   "epic": "fn-26-ube",
   "id": "fn-26-ube.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-26-ube.1.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Add grid overlay layer",
-  "updated_at": "2026-01-17T08:39:04.491916Z"
+  "updated_at": "2026-01-17T16:49:25.981034Z"
 }
