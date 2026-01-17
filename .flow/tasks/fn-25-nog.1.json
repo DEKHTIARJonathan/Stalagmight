@@ -1,14 +1,14 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T16:43:36.538931Z",
   "created_at": "2026-01-17T08:39:04.412898Z",
   "depends_on": [],
   "epic": "fn-25-nog",
   "id": "fn-25-nog.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-25-nog.1.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Add export preview component",
-  "updated_at": "2026-01-17T08:39:04.412908Z"
+  "updated_at": "2026-01-17T16:43:36.538943Z"
 }
