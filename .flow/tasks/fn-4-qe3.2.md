@@ -22,7 +22,8 @@ test.describe('LRUD Columns', () => {
   test('LRUD columns visible in shot preview', async ({ page }) => {});
   test('correct LRUD values displayed', async ({ page }) => {});
   test('zero LRUD shows as dash', async ({ page }) => {});
-  test('empty cells for missing LRUD', async ({ page }) => {});
+  test('undefined LRUD shows as dash', async ({ page }) => {});
+  // Note: Per epic fn-4-qe3, both zero and undefined/null show "-" to indicate "not measured"
 });
 ```
 
@@ -46,6 +47,7 @@ test.describe('LRUD Columns', () => {
 - [ ] Test: LRUD columns visible
 - [ ] Test: correct values displayed
 - [ ] Test: "-" shown for zero values
+- [ ] Test: "-" shown for undefined/missing LRUD (per epic fn-4-qe3 spec)
 - [ ] All Playwright tests pass (`pnpm test:ui`)
 ## Done summary
 TBD
