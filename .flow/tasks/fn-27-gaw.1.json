@@ -1,14 +1,14 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T16:58:18.047655Z",
   "created_at": "2026-01-17T08:39:04.573372Z",
   "depends_on": [],
   "epic": "fn-27-gaw",
   "id": "fn-27-gaw.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-27-gaw.1.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Add satellite imagery toggle",
-  "updated_at": "2026-01-17T08:39:04.573382Z"
+  "updated_at": "2026-01-17T16:58:18.047670Z"
 }

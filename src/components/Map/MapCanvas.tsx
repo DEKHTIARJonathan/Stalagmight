@@ -638,41 +638,94 @@ export default function MapCanvas() {
     };
   }, [activeTool]);
 
+  // Get satellite tile URL based on provider config
+  const getSatelliteTileConfig = useCallback(() => {
+    const provider = config?.map?.satellite_provider ?? 'openstreetmap';
+
+    switch (provider.toLowerCase()) {
+      case 'esri':
+        return {
+          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+          attribution: '&copy; Esri, Maxar, Earthstar Geographics',
+          tileSize: 256,
+        };
+      case 'mapbox':
+        // Mapbox requires an access token - fall back to ESRI if not available
+        return {
+          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+          attribution: '&copy; Esri, Maxar, Earthstar Geographics',
+          tileSize: 256,
+        };
+      case 'openstreetmap':
+      default:
+        // OSM doesn't have satellite - use ESRI as default satellite provider
+        return {
+          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+          attribution: '&copy; Esri, Maxar, Earthstar Geographics',
+          tileSize: 256,
+        };
+    }
+  }, [config?.map?.satellite_provider]);
+
   // Handle satellite toggle
   useEffect(() => {
     if (!map.current) return;
 
+    // Store reference for cleanup
+    const currentMap = map.current;
+    let errorHandler: ((e: { error?: { status?: number }; sourceId?: string }) => void) | null = null;
+
     if (showSatellite) {
-      // Add OSM satellite layer
-      if (!map.current.getSource('osm-tiles')) {
-        map.current.addSource('osm-tiles', {
+      // Add satellite layer if not already present
+      if (!currentMap.getSource('satellite-tiles')) {
+        const tileConfig = getSatelliteTileConfig();
+
+        currentMap.addSource('satellite-tiles', {
           type: 'raster',
-          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-          tileSize: 256,
-          attribution: '© OpenStreetMap contributors',
+          tiles: tileConfig.tiles,
+          tileSize: tileConfig.tileSize,
+          attribution: tileConfig.attribution,
         });
 
-        map.current.addLayer(
+        currentMap.addLayer(
           {
-            id: 'osm-tiles',
+            id: 'satellite-tiles',
             type: 'raster',
-            source: 'osm-tiles',
+            source: 'satellite-tiles',
             paint: {
-              'raster-opacity': 0.5,
+              'raster-opacity': 0.7,
             },
           },
           'background'
         );
+
+        // Add error handler for offline fallback
+        const sourceId = 'satellite-tiles';
+        errorHandler = (e: { error?: { status?: number }; sourceId?: string }) => {
+          if (e.sourceId === sourceId) {
+            console.warn('[MapCanvas] Satellite tile load failed - tiles may be unavailable offline');
+            // The map will gracefully show the background color where tiles fail to load
+          }
+        };
+
+        currentMap.on('error', errorHandler);
       }
     } else {
-      if (map.current.getLayer('osm-tiles')) {
-        map.current.removeLayer('osm-tiles');
+      if (currentMap.getLayer('satellite-tiles')) {
+        currentMap.removeLayer('satellite-tiles');
       }
-      if (map.current.getSource('osm-tiles')) {
-        map.current.removeSource('osm-tiles');
+      if (currentMap.getSource('satellite-tiles')) {
+        currentMap.removeSource('satellite-tiles');
       }
     }
-  }, [showSatellite]);
+
+    // Cleanup function
+    return () => {
+      if (errorHandler) {
+        currentMap.off('error', errorHandler);
+      }
+    };
+  }, [showSatellite, getSatelliteTileConfig]);
 
   // Fit to survey bounds using transformed coordinates
   const fitToBounds = useCallback(() => {
