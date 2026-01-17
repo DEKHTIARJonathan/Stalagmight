@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
@@ -80,6 +80,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
         setFilePath(path);
         setDmpFile(null);
         setSelectedSections(new Set());
+        setExpandedSections(new Set());
         setError(null);
       }
     } catch (e) {
@@ -88,23 +89,27 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
   };
 
   const handleToggleSection = (index: number) => {
-    const newSelected = new Set(selectedSections);
-    if (newSelected.has(index)) {
-      newSelected.delete(index);
-    } else {
-      newSelected.add(index);
-    }
-    setSelectedSections(newSelected);
+    setSelectedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
   };
 
   const handleToggleExpand = (index: number) => {
-    const newExpanded = new Set(expandedSections);
-    if (newExpanded.has(index)) {
-      newExpanded.delete(index);
-    } else {
-      newExpanded.add(index);
-    }
-    setExpandedSections(newExpanded);
+    setExpandedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
   };
 
   const handleSelectAll = () => {
@@ -277,10 +282,10 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
               title={`Sections (${selectedSections.size}/${dmpFile.sections.length} selected)`}
               headerActions={
                 <div className="flex gap-2 text-sm">
-                  <button onClick={handleSelectAll} className="text-accent">
+                  <button type="button" onClick={handleSelectAll} className="text-accent">
                     All
                   </button>
-                  <button onClick={handleSelectNone} className="text-accent">
+                  <button type="button" onClick={handleSelectNone} className="text-accent">
                     None
                   </button>
                 </div>
@@ -306,12 +311,12 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                       const hasShots = standardShots.length > 0;
                       const isExpanded = expandedSections.has(index);
                       return (
-                        <>
+                        <Fragment key={index}>
                           <tr
-                            key={index}
-                            className={`${!hasShots ? 'opacity-50' : ''} ${selectedSections.has(index) ? 'bg-accent/10' : ''}`}
+                            className={`${!hasShots ? 'opacity-50' : 'cursor-pointer'} ${selectedSections.has(index) ? 'bg-accent/10' : ''}`}
+                            onClick={hasShots ? () => handleToggleExpand(index) : undefined}
                           >
-                            <td>
+                            <td onClick={(e) => e.stopPropagation()}>
                               <input
                                 type="checkbox"
                                 checked={selectedSections.has(index)}
@@ -321,8 +326,12 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                             <td>
                               {hasShots && (
                                 <button
+                                  type="button"
                                   data-testid={`section-expand-${index}`}
-                                  onClick={() => handleToggleExpand(index)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleExpand(index);
+                                  }}
                                   className="text-text-secondary hover:text-text-primary transition-colors"
                                   aria-label={isExpanded ? 'Collapse section' : 'Expand section'}
                                 >
@@ -331,12 +340,12 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                               )}
                             </td>
                             <td>{section.name}</td>
-                            <td>{section.date?.split(' ')[0] ?? '-'}</td>
+                            <td>{section.date?.split(/[T ]/)[0] ?? '-'}</td>
                             <td>{section.direction}</td>
                             <td className="text-right">{standardShots.length}</td>
                           </tr>
                           {isExpanded && hasShots && (
-                            <tr key={`${index}-expanded`}>
+                            <tr>
                               <td colSpan={6} className="p-0">
                                 <div className="ml-8 my-1 border-l-2 border-border pl-2">
                                   <table className="w-full text-xs">
@@ -389,7 +398,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                               </td>
                             </tr>
                           )}
-                        </>
+                        </Fragment>
                       );
                     })}
                   </tbody>
