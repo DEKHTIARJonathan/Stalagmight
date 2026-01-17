@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-40-2xk",
+  "created_at": "2026-01-17T14:22:13.981205Z",
+  "depends_on_epics": [],
+  "id": "fn-40-2xk",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-40-2xk.md",
+  "status": "open",
+  "title": "Playwright E2E: Export Dialog",
+  "updated_at": "2026-01-17T14:22:13.981215Z"
+}

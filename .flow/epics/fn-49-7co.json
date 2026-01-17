@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-49-7co",
+  "created_at": "2026-01-17T14:22:14.334045Z",
+  "depends_on_epics": [],
+  "id": "fn-49-7co",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-49-7co.md",
+  "status": "open",
+  "title": "WebdriverIO E2E: Export Integration",
+  "updated_at": "2026-01-17T14:22:14.334056Z"
+}

@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-17T14:27:51.342565Z",
+  "depends_on": [],
+  "epic": "fn-41-9sl",
+  "id": "fn-41-9sl.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-41-9sl.1.md",
+  "status": "todo",
+  "title": "Implement 6 section/shot editing tests",
+  "updated_at": "2026-01-17T14:27:51.342582Z"
+}

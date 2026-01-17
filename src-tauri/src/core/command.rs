@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,
-    ShotUpdates, StationRef,
+    ShotUpdates, StationRef, SurveyDirection,
 };
 
 /// All persistent commands that modify project state
@@ -30,6 +30,8 @@ pub enum Command {
         surveyor: Option<String>,
         date: Option<NaiveDate>,
         color: String,
+        #[serde(default)]
+        direction: Option<SurveyDirection>,
         shots: Vec<ShotData>,
     },
     DeleteSection {

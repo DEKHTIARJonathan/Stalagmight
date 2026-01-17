@@ -69,12 +69,14 @@ impl AppState {
                 surveyor,
                 date,
                 color,
+                direction,
                 shots,
             } => self.create_section(SectionData {
                 name: name.clone(),
                 surveyor: surveyor.clone(),
                 date: *date,
                 color: color.clone(),
+                direction: *direction,
                 shots: shots.clone(),
             }),
             Command::DeleteSection { section_id } => self.delete_section(*section_id),
@@ -259,6 +261,7 @@ impl AppState {
                         surveyor: updates.surveyor.as_ref().map(|_| section.surveyor.clone()),
                         date: updates.date.as_ref().map(|_| section.date),
                         color: updates.color.as_ref().map(|_| section.color.clone()),
+                        direction: updates.direction.map(|_| section.direction),
                     };
 
                     if let Ok(json) = serde_json::to_string(&prev_updates) {
@@ -1243,12 +1246,14 @@ impl AppState {
                 surveyor,
                 date,
                 color,
+                direction,
                 shots,
             } => self.create_section(SectionData {
                 name: name.clone(),
                 surveyor: surveyor.clone(),
                 date: *date,
                 color: color.clone(),
+                direction: *direction,
                 shots: shots.clone(),
             }),
             Command::DeleteSection { section_id } => self.delete_section(*section_id),

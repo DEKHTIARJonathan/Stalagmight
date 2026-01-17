@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-47-t2f",
+  "created_at": "2026-01-17T14:22:14.255671Z",
+  "depends_on_epics": [],
+  "id": "fn-47-t2f",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-47-t2f.md",
+  "status": "open",
+  "title": "WebdriverIO E2E: Project Persistence",
+  "updated_at": "2026-01-17T14:22:14.255681Z"
+}

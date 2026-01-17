@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::models::{
     GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot, StationMerge, StationRef,
-    ZeroDatum,
+    SurveyDirection, ZeroDatum,
 };
 
 #[cfg(test)]
@@ -90,6 +90,26 @@ impl Database {
             )",
             [],
         )?;
+
+        // Add direction column to sections table if it doesn't exist (added for direction field)
+        // Check if column exists first
+        let has_direction_column: bool = self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='direction'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_direction_column {
+            self.conn.execute(
+                "ALTER TABLE sections ADD COLUMN direction TEXT NOT NULL DEFAULT 'in'",
+                [],
+            )?;
+            tracing::info!("Added direction column to sections table");
+        }
+
         tracing::debug!("Schema migration complete");
         Ok(())
     }
@@ -151,6 +171,7 @@ impl Database {
                 surveyor TEXT,
                 date TEXT,
                 color TEXT NOT NULL,
+                direction TEXT NOT NULL DEFAULT 'in',
                 created_at TEXT NOT NULL
             );
 
@@ -300,13 +321,14 @@ impl Database {
         // Save sections and shots
         for section in &project.sections {
             tx.execute(
-                "INSERT INTO sections (id, name, surveyor, date, color, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO sections (id, name, surveyor, date, color, direction, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     section.id,
                     section.name,
                     section.surveyor,
                     section.date.map(|d| d.to_string()),
                     section.color,
+                    section.direction.to_string(),
                     Utc::now().to_rfc3339()
                 ],
             )?;
@@ -446,7 +468,7 @@ impl Database {
         {
             let mut stmt = self
                 .conn
-                .prepare("SELECT id, name, surveyor, date, color FROM sections ORDER BY id")?;
+                .prepare("SELECT id, name, surveyor, date, color, direction FROM sections ORDER BY id")?;
             let section_rows = stmt.query_map([], |row| {
                 Ok((
                     row.get::<_, u32>(0)?,
@@ -454,18 +476,23 @@ impl Database {
                     row.get::<_, Option<String>>(2)?,
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
                 ))
             })?;
 
             for section_row in section_rows {
-                let (id, name, surveyor, date_str, color) = section_row?;
+                let (id, name, surveyor, date_str, color, direction_str) = section_row?;
                 let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
+                let direction = direction_str
+                    .and_then(|s| s.parse::<SurveyDirection>().ok())
+                    .unwrap_or_default();
 
                 let section_data = SectionData {
                     name,
                     surveyor,
                     date,
                     color,
+                    direction: Some(direction),
                     shots: Vec::new(),
                 };
 
@@ -833,6 +860,7 @@ mod tests {
             surveyor: Some("Test Surveyor".to_string()),
             date: None,
             color: "#4ecdc4".to_string(),
+            direction: None,
             shots: vec![ShotData {
                 azimuth_in: 45.0,
                 azimuth_out: 225.0,

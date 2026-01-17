@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
-use crate::models::{Coordinates, Section, SectionId, SectionUpdates, ShotData};
+use crate::models::{Coordinates, Section, SectionId, SectionUpdates, ShotData, SurveyDirection};
 
 /// Create a new section
 #[tauri::command]
@@ -12,6 +12,7 @@ pub fn create_section(
     surveyor: Option<String>,
     date: Option<NaiveDate>,
     color: String,
+    direction: Option<SurveyDirection>,
     shots: Vec<ShotData>,
 ) -> CommandResult {
     state.execute(Command::CreateSection {
@@ -19,6 +20,7 @@ pub fn create_section(
         surveyor,
         date,
         color,
+        direction,
         shots,
     })
 }

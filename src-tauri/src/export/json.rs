@@ -121,6 +121,7 @@ mod tests {
             surveyor: Some("Tester".to_string()),
             date: None,
             color: "#4ecdc4".to_string(),
+            direction: None,
             shots: vec![ShotData {
                 azimuth_in: 45.0,
                 azimuth_out: 225.0,
