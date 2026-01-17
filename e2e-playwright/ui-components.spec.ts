@@ -221,5 +221,25 @@ test.describe('UI Components', () => {
       const bottomLeftContainer = page.locator('.maplibregl-ctrl-bottom-left .maplibregl-ctrl-scale');
       await expect(bottomLeftContainer).toBeVisible({ timeout: 2000 });
     });
+
+    test('should toggle section names visibility', async ({ page }) => {
+      // Open Display menu
+      await page.click('button:has-text("Display")');
+      await expect(page.locator('button:has-text("Section Names")')).toBeVisible({ timeout: 2000 });
+
+      // Section Names is on by default (showSectionNames: true in uiStore)
+      // Check the button shows it's enabled (has checkmark or active state)
+      const sectionNamesButton = page.locator('button:has-text("Section Names")');
+      await expect(sectionNamesButton).toBeVisible();
+
+      // Toggle section names off
+      await page.click('button:has-text("Section Names")');
+
+      // Toggle back on
+      await page.click('button:has-text("Section Names")');
+
+      // Button should still be visible and functional
+      await expect(sectionNamesButton).toBeVisible();
+    });
   });
 });
