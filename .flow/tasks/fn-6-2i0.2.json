@@ -7,10 +7,22 @@
     "fn-6-2i0.1"
   ],
   "epic": "fn-6-2i0",
+  "evidence": {
+    "commits": [
+      "1f9d137",
+      "2d5a26b",
+      "ea0517e"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui"
+    ]
+  },
   "id": "fn-6-2i0.2",
   "priority": null,
   "spec_path": ".flow/tasks/fn-6-2i0.2.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add expandable comment column UI",
-  "updated_at": "2026-01-17T09:32:37.662085Z"
+  "updated_at": "2026-01-17T09:42:20.669247Z"
 }

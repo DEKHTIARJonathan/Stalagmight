@@ -603,3 +603,140 @@ test.describe('Comment Column', () => {
     await expect(expandCommentBtn).toHaveCount(0);
   });
 });
+
+test.describe('Statistics Footer', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+  });
+
+  test('stats footer visible below section table', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Stats footer should be visible
+    const statsFooter = page.locator('[data-testid="stats-footer"]');
+    await expect(statsFooter).toBeVisible();
+
+    // Verify all stat elements exist
+    await expect(page.locator('[data-testid="stats-total-length"]')).toBeVisible();
+    await expect(page.locator('[data-testid="stats-shot-count"]')).toBeVisible();
+    await expect(page.locator('[data-testid="stats-depth-range"]')).toBeVisible();
+  });
+
+  test('stats calculated correctly for all selected sections', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Wait for debounce (500ms) plus some buffer
+    await page.waitForTimeout(600);
+
+    // By default, sections with shots are selected (Main Passage, Side Tunnel, Mixed LRUD, Undefined LRUD)
+    // Total length: 33.7 + 12.5 + 71.5 + 14.0 = 131.7m
+    // Shot count: 3 + 2 + 3 + 2 = 10
+    // Depth range: -1.0 to -8.0 (from all sections)
+    const totalLength = page.locator('[data-testid="stats-total-length"]');
+    await expect(totalLength).toContainText('131.7m');
+
+    const shotCount = page.locator('[data-testid="stats-shot-count"]');
+    await expect(shotCount).toContainText('10');
+
+    const depthRange = page.locator('[data-testid="stats-depth-range"]');
+    await expect(depthRange).toContainText('-8.0m to -1.0m');
+  });
+
+  test('stats update when selection changes', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Wait for initial stats
+    await page.waitForTimeout(600);
+
+    // Click "None" to deselect all
+    await page.click('button:has-text("None")');
+
+    // Wait for debounce
+    await page.waitForTimeout(600);
+
+    // Stats should show zero/placeholder values
+    const totalLength = page.locator('[data-testid="stats-total-length"]');
+    await expect(totalLength).toContainText('0.0m');
+
+    const shotCount = page.locator('[data-testid="stats-shot-count"]');
+    await expect(shotCount).toContainText('0');
+
+    const depthRange = page.locator('[data-testid="stats-depth-range"]');
+    await expect(depthRange).toContainText('--');
+  });
+
+  test('stats for single section selection', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Deselect all first
+    await page.click('button:has-text("None")');
+    await page.waitForTimeout(600);
+
+    // Select only Main Passage (first section)
+    // Find the checkbox for the first section (Main Passage)
+    const mainPassageRow = page.locator('tr').filter({ hasText: 'Main Passage' });
+    await mainPassageRow.locator('input[type="checkbox"]').click();
+
+    // Wait for debounce
+    await page.waitForTimeout(600);
+
+    // Main Passage: 3 shots, lengths 10.5 + 15.2 + 8.0 = 33.7m
+    // Depths: -2.0, -2.5, -5.0, -3.0 => min -5.0, max -2.0
+    const totalLength = page.locator('[data-testid="stats-total-length"]');
+    await expect(totalLength).toContainText('33.7m');
+
+    const shotCount = page.locator('[data-testid="stats-shot-count"]');
+    await expect(shotCount).toContainText('3');
+
+    const depthRange = page.locator('[data-testid="stats-depth-range"]');
+    await expect(depthRange).toContainText('-5.0m to -2.0m');
+  });
+
+  test('text is selectable in stats footer', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // The stats footer should have select-text class
+    const statsFooter = page.locator('[data-testid="stats-footer"]');
+    await expect(statsFooter).toHaveClass(/select-text/);
+  });
+
+  test('stats show placeholder for no selection', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Click "None" to deselect all sections
+    await page.click('button:has-text("None")');
+
+    // Wait for debounce
+    await page.waitForTimeout(600);
+
+    // Verify placeholder values
+    const totalLength = page.locator('[data-testid="stats-total-length"]');
+    await expect(totalLength).toHaveText('Total: 0.0m');
+
+    const shotCount = page.locator('[data-testid="stats-shot-count"]');
+    await expect(shotCount).toHaveText('Shots: 0');
+
+    const depthRange = page.locator('[data-testid="stats-depth-range"]');
+    await expect(depthRange).toContainText('--');
+  });
+
+  test('stats format depth range correctly', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Wait for stats to calculate
+    await page.waitForTimeout(600);
+
+    // Depth range should show in format "Xm to Ym"
+    const depthRange = page.locator('[data-testid="stats-depth-range"]');
+    const text = await depthRange.textContent();
+
+    // Should contain "Depth:" label
+    expect(text).toContain('Depth:');
+
+    // When there's data, should show min to max format
+    // Since we have selected sections, it should show actual values
+    expect(text).toMatch(/(-?\d+\.\d+m to -?\d+\.\d+m|--)/);
+  });
+});
