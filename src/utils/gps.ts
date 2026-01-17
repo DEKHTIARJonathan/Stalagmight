@@ -145,61 +145,75 @@ export function parseDD(input: string): GpsParseResult | GpsParseError {
 export function parseDMS(input: string): GpsParseResult | GpsParseError {
   const trimmed = input.trim();
 
+  // We'll extract these values from whichever pattern matches
+  let latDegStr: string | undefined;
+  let latMinStr: string | undefined;
+  let latSecStr: string | undefined;
+  let latDir: string | undefined;
+  let lonDegStr: string | undefined;
+  let lonMinStr: string | undefined;
+  let lonSecStr: string | undefined;
+  let lonDir: string | undefined;
+
   // Pattern 1: With degree/minute/second symbols AND direction letters
   // Matches: 48°51'30"N 2°17'40"E (or with spaces)
   const dmsSymbolWithDirRegex =
     /(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([NSns])[,\s]+(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([EWew])/i;
 
-  // Pattern 2: With degree/minute/second symbols and SIGNED degrees (no direction letters)
-  // Matches: -48°51'30" 2°17'40" or 48°51'30" -2°17'40"
-  const dmsSymbolSignedRegex =
-    /(-\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"][,\s]+(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]|(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"][,\s]+(-\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]/i;
-
-  // Pattern 3: Space-separated with direction letters (required for disambiguation)
+  // Pattern 2: Space-separated with direction letters (required for disambiguation)
   // Matches: 48 51 30 N 2 17 40 E
   const dmsSpaceRegex =
     /(-?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([NSns])\s+(-?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([EWew])/i;
 
-  let match = trimmed.match(dmsSymbolWithDirRegex);
-  let latDir: string | undefined;
-  let lonDir: string | undefined;
+  // Pattern 3: Signed degrees with symbols (no direction letters)
+  // Matches: -33°51'54" 151°12'33" or 33°51'54" -151°12'33"
+  const dmsSignedRegex =
+    /(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"][,\s]+(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]/i;
 
+  let match = trimmed.match(dmsSymbolWithDirRegex);
   if (match) {
     // Pattern 1: has direction letters
+    latDegStr = match[1];
+    latMinStr = match[2];
+    latSecStr = match[3];
     latDir = match[4]?.toUpperCase();
+    lonDegStr = match[5];
+    lonMinStr = match[6];
+    lonSecStr = match[7];
     lonDir = match[8]?.toUpperCase();
   } else {
     match = trimmed.match(dmsSpaceRegex);
     if (match) {
-      // Pattern 3: space-separated with direction letters
+      // Pattern 2: space-separated with direction letters
+      latDegStr = match[1];
+      latMinStr = match[2];
+      latSecStr = match[3];
       latDir = match[4]?.toUpperCase();
+      lonDegStr = match[5];
+      lonMinStr = match[6];
+      lonSecStr = match[7];
       lonDir = match[8]?.toUpperCase();
     } else {
-      // Pattern 2: check for signed degrees
-      const signedMatch = trimmed.match(dmsSymbolSignedRegex);
-      if (signedMatch) {
-        // Use signed values to determine direction
-        // This regex has two alternations - find which one matched
-        if (signedMatch[1] !== undefined) {
-          // First alternation: -lat, +/-lon
-          match = signedMatch;
-          latDir = parseInt(signedMatch[1], 10) < 0 ? 'S' : 'N';
-          lonDir = signedMatch[4] !== undefined && parseInt(signedMatch[4], 10) < 0 ? 'W' : 'E';
-        } else if (signedMatch[7] !== undefined) {
-          // Second alternation: +lat, -lon
-          match = [
-            signedMatch[0],
-            signedMatch[7],
-            signedMatch[8],
-            signedMatch[9],
-            undefined,
-            signedMatch[10],
-            signedMatch[11],
-            signedMatch[12],
-            undefined,
-          ] as RegExpMatchArray;
-          latDir = signedMatch[7] !== undefined && parseInt(signedMatch[7], 10) < 0 ? 'S' : 'N';
-          lonDir = 'W'; // Second alternation requires negative lon
+      match = trimmed.match(dmsSignedRegex);
+      if (match) {
+        // Pattern 3: signed degrees - at least one must be negative
+        latDegStr = match[1];
+        latMinStr = match[2];
+        latSecStr = match[3];
+        lonDegStr = match[4];
+        lonMinStr = match[5];
+        lonSecStr = match[6];
+
+        // Derive direction from sign
+        const latDegVal = parseInt(latDegStr || '0', 10);
+        const lonDegVal = parseInt(lonDegStr || '0', 10);
+
+        // Require at least one negative value for signed format to avoid ambiguity
+        if (latDegVal >= 0 && lonDegVal >= 0) {
+          match = null; // Both positive = ambiguous, reject
+        } else {
+          latDir = latDegVal < 0 ? 'S' : 'N';
+          lonDir = lonDegVal < 0 ? 'W' : 'E';
         }
       }
     }
@@ -207,12 +221,12 @@ export function parseDMS(input: string): GpsParseResult | GpsParseError {
 
   if (
     !match ||
-    match[1] === undefined ||
-    match[2] === undefined ||
-    match[3] === undefined ||
-    match[5] === undefined ||
-    match[6] === undefined ||
-    match[7] === undefined ||
+    latDegStr === undefined ||
+    latMinStr === undefined ||
+    latSecStr === undefined ||
+    lonDegStr === undefined ||
+    lonMinStr === undefined ||
+    lonSecStr === undefined ||
     latDir === undefined ||
     lonDir === undefined
   ) {
@@ -224,13 +238,13 @@ export function parseDMS(input: string): GpsParseResult | GpsParseError {
     };
   }
 
-  const latDeg = parseInt(match[1], 10);
-  const latMin = parseInt(match[2], 10);
-  const latSec = parseFloat(match[3]);
+  const latDeg = parseInt(latDegStr, 10);
+  const latMin = parseInt(latMinStr, 10);
+  const latSec = parseFloat(latSecStr);
 
-  const lonDeg = parseInt(match[5], 10);
-  const lonMin = parseInt(match[6], 10);
-  const lonSec = parseFloat(match[7]);
+  const lonDeg = parseInt(lonDegStr, 10);
+  const lonMin = parseInt(lonMinStr, 10);
+  const lonSec = parseFloat(lonSecStr);
 
   // Validate minutes and seconds
   if (latMin < 0 || latMin >= 60 || lonMin < 0 || lonMin >= 60) {

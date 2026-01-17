@@ -137,6 +137,39 @@ describe('parseDMS', () => {
     const result = parseDMS('48°51\'60"N 2°17\'40"E');
     expect(isSuccess(result)).toBe(false);
   });
+
+  it('parses signed DMS with negative latitude', () => {
+    // -33°51'54" 151°12'33" (Sydney) - negative lat, positive lon
+    const result = parseDMS('-33°51\'54" 151°12\'33"');
+    expectCoordsClose(result, -33.865, 151.2092);
+    if (isSuccess(result)) {
+      expect(result.format).toBe('DMS');
+    }
+  });
+
+  it('parses signed DMS with negative longitude', () => {
+    // 40°42'46" -74°0'22" (New York) - positive lat, negative lon
+    const result = parseDMS('40°42\'46" -74°0\'22"');
+    expectCoordsClose(result, 40.7128, -74.0061);
+    if (isSuccess(result)) {
+      expect(result.format).toBe('DMS');
+    }
+  });
+
+  it('parses signed DMS with both negative', () => {
+    // -33°26'16" -70°39'1" (Santiago, Chile)
+    const result = parseDMS('-33°26\'16" -70°39\'1"');
+    expectCoordsClose(result, -33.4378, -70.6503);
+    if (isSuccess(result)) {
+      expect(result.format).toBe('DMS');
+    }
+  });
+
+  it('rejects ambiguous DMS without direction or sign', () => {
+    // Both positive without direction letters = ambiguous
+    const result = parseDMS('33°51\'54" 151°12\'33"');
+    expect(isSuccess(result)).toBe(false);
+  });
 });
 
 describe('parseDDM', () => {
