@@ -68,13 +68,18 @@ function calculateStats(
   const totalLength = allShots.reduce((sum, shot) => sum + shot.length, 0);
   const shotCount = allShots.length;
 
-  // Collect all valid depth values (both depth_in and depth_out)
-  const depthValues = allShots
-    .flatMap((shot) => [shot.depth_in, shot.depth_out])
-    .filter((d): d is number => d != null && Number.isFinite(d));
+  // Calculate min/max depth in a single pass to avoid stack overflow on large arrays
+  let minDepth: number | null = null;
+  let maxDepth: number | null = null;
 
-  const minDepth = depthValues.length > 0 ? Math.min(...depthValues) : null;
-  const maxDepth = depthValues.length > 0 ? Math.max(...depthValues) : null;
+  for (const shot of allShots) {
+    for (const depth of [shot.depth_in, shot.depth_out]) {
+      if (depth != null && Number.isFinite(depth)) {
+        if (minDepth === null || depth < minDepth) minDepth = depth;
+        if (maxDepth === null || depth > maxDepth) maxDepth = depth;
+      }
+    }
+  }
 
   return { totalLength, shotCount, minDepth, maxDepth };
 }
