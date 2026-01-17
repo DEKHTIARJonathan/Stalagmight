@@ -202,6 +202,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
             right: normalizeDmpValue(shot.right),
             up: normalizeDmpValue(shot.up),
             down: normalizeDmpValue(shot.down),
+            comment: shot.comment ?? null,
             is_virtual: false,
             marker_index: shot.marker_index ?? null,
             temperature: shot.temperature ?? null,

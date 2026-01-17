@@ -229,7 +229,8 @@ pub struct DmpShot {
     pub second: u8,
     /// Physical marker index
     pub marker_index: u8,
-    /// User comment (not in DMP format, always None when parsed)
+    /// User comment (not parsed from DMP format; defaults to None)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
 }
 
@@ -656,6 +657,44 @@ mod tests {
         assert_eq!(shot_size(4), 29);
         assert_eq!(shot_size(5), 35);
         assert_eq!(shot_size(1), 0);
+    }
+
+    #[test]
+    fn test_dmp_shot_comment_serialization() {
+        // Test that None comment is omitted from JSON (not serialized as null)
+        let shot_no_comment = DmpShot {
+            shot_type: DmpShotType::Standard,
+            heading_in: 45.0,
+            heading_out: 46.0,
+            length: 10.0,
+            depth_in: 2.0,
+            depth_out: 3.0,
+            pitch_in: 0.0,
+            pitch_out: 0.0,
+            left: 1.0,
+            right: 1.0,
+            up: 1.0,
+            down: 1.0,
+            temperature: 18.0,
+            hour: 10,
+            minute: 30,
+            second: 0,
+            marker_index: 0,
+            comment: None,
+        };
+
+        let json = serde_json::to_string(&shot_no_comment).unwrap();
+        // With skip_serializing_if, None should be omitted entirely
+        assert!(!json.contains("comment"), "None comment should be omitted from JSON");
+
+        // Test that Some comment is serialized
+        let shot_with_comment = DmpShot {
+            comment: Some("Test comment".to_string()),
+            ..shot_no_comment.clone()
+        };
+
+        let json = serde_json::to_string(&shot_with_comment).unwrap();
+        assert!(json.contains(r#""comment":"Test comment""#), "Some comment should be serialized");
     }
 
     // Integration tests with real DMP files
