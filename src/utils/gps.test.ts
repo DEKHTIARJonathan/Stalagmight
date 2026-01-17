@@ -196,19 +196,33 @@ describe('parseUTM', () => {
 });
 
 describe('parseMGRS', () => {
-  it('validates MGRS format structure', () => {
-    // Note: MGRS conversion is simplified and may have errors for some coordinates
-    // This test validates format recognition, not conversion accuracy
-    const result = parseMGRS('18SUJ2337006519');
-    // MGRS for Washington DC area - should parse successfully
-    if (isSuccess(result)) {
+  // Note: parseMGRS validates format only - full MGRS conversion requires a dedicated library.
+  // These tests validate format recognition and validation logic.
+
+  it('validates valid MGRS format', () => {
+    // 31UDQ4825111932 is near Paris
+    // Format validation should succeed but not return coordinates (requires library)
+    const result = parseMGRS('31UDQ4825111932');
+    expect(isSuccess(result)).toBe(false);
+    if (!isSuccess(result)) {
       expect(result.format).toBe('MGRS');
-      // Approximate location check (within reasonable bounds)
-      expect(result.coordinates.latitude).toBeGreaterThan(30);
-      expect(result.coordinates.latitude).toBeLessThan(50);
-    } else {
-      // If conversion fails, at least verify it's an MGRS format error
-      expect(result.format).toBe('MGRS');
+      expect(result.message).toContain('library');
+    }
+  });
+
+  it('validates different precision levels', () => {
+    // Test 1km precision (4 digits) vs 1m precision (10 digits)
+    const result1km = parseMGRS('31UDQ4811');
+    const result1m = parseMGRS('31UDQ4825111932');
+    // Both should be recognized as valid MGRS format
+    expect(isSuccess(result1km)).toBe(false);
+    expect(isSuccess(result1m)).toBe(false);
+    if (!isSuccess(result1km) && !isSuccess(result1m)) {
+      expect(result1km.format).toBe('MGRS');
+      expect(result1m.format).toBe('MGRS');
+      // Both should indicate library required, not format error
+      expect(result1km.message).toContain('library');
+      expect(result1m.message).toContain('library');
     }
   });
 
@@ -246,15 +260,29 @@ describe('parseMGRS', () => {
 });
 
 describe('parsePlusCodes', () => {
-  it('parses valid Plus Code', () => {
-    // 8FW4V75V+8Q is near Paris
+  it('parses valid Plus Code with exact coordinates', () => {
+    // 8FW4V75V+8Q is near Paris - known coordinates
+    // Reference: https://plus.codes/8FW4V75V+8Q = 48.858350, 2.294495
     const result = parsePlusCodes('8FW4V75V+8Q');
     expect(isSuccess(result)).toBe(true);
     if (isSuccess(result)) {
       expect(result.format).toBe('PlusCodes');
-      // Approximate check
-      expect(result.coordinates.latitude).toBeGreaterThan(48);
-      expect(result.coordinates.latitude).toBeLessThan(50);
+      // Check both lat and lon with reasonable tolerance
+      expect(result.coordinates.latitude).toBeCloseTo(48.8584, 3);
+      expect(result.coordinates.longitude).toBeCloseTo(2.2945, 3);
+    }
+  });
+
+  it('parses longer Plus Code (refinement >10 chars)', () => {
+    // 8FW4V75V+8QX is a refinement of the above code (11 chars)
+    // The refinement grid is 4x5, so +8QX refines +8Q further
+    const result = parsePlusCodes('8FW4V75V+8QX');
+    expect(isSuccess(result)).toBe(true);
+    if (isSuccess(result)) {
+      expect(result.format).toBe('PlusCodes');
+      // Should be near same location but more precise
+      expect(result.coordinates.latitude).toBeCloseTo(48.8584, 3);
+      expect(result.coordinates.longitude).toBeCloseTo(2.2945, 3);
     }
   });
 

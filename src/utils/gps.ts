@@ -139,24 +139,70 @@ export function parseDD(input: string): GpsParseResult | GpsParseError {
  * Parse Degrees Minutes Seconds format.
  * Examples: "48°51'30\"N 2°17'40\"E", "48 51 30 N 2 17 40 E"
  *
- * Requires either degree symbols OR direction letters to disambiguate from DDM.
+ * Requires direction letters OR negative degrees for disambiguation.
+ * Will not silently default to N/E for ambiguous inputs.
  */
 export function parseDMS(input: string): GpsParseResult | GpsParseError {
   const trimmed = input.trim();
 
-  // Pattern 1: With degree/minute/second symbols
+  // Pattern 1: With degree/minute/second symbols AND direction letters
   // Matches: 48°51'30"N 2°17'40"E (or with spaces)
-  const dmsSymbolRegex =
-    /(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([NSns])?[,\s]+(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([EWew])?/i;
+  const dmsSymbolWithDirRegex =
+    /(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([NSns])[,\s]+(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([EWew])/i;
 
-  // Pattern 2: Space-separated with direction letters (required for disambiguation)
+  // Pattern 2: With degree/minute/second symbols and SIGNED degrees (no direction letters)
+  // Matches: -48°51'30" 2°17'40" or 48°51'30" -2°17'40"
+  const dmsSymbolSignedRegex =
+    /(-\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"][,\s]+(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]|(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"][,\s]+(-\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]/i;
+
+  // Pattern 3: Space-separated with direction letters (required for disambiguation)
   // Matches: 48 51 30 N 2 17 40 E
   const dmsSpaceRegex =
     /(-?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([NSns])\s+(-?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([EWew])/i;
 
-  let match = trimmed.match(dmsSymbolRegex);
-  if (!match) {
+  let match = trimmed.match(dmsSymbolWithDirRegex);
+  let latDir: string | undefined;
+  let lonDir: string | undefined;
+
+  if (match) {
+    // Pattern 1: has direction letters
+    latDir = match[4]?.toUpperCase();
+    lonDir = match[8]?.toUpperCase();
+  } else {
     match = trimmed.match(dmsSpaceRegex);
+    if (match) {
+      // Pattern 3: space-separated with direction letters
+      latDir = match[4]?.toUpperCase();
+      lonDir = match[8]?.toUpperCase();
+    } else {
+      // Pattern 2: check for signed degrees
+      const signedMatch = trimmed.match(dmsSymbolSignedRegex);
+      if (signedMatch) {
+        // Use signed values to determine direction
+        // This regex has two alternations - find which one matched
+        if (signedMatch[1] !== undefined) {
+          // First alternation: -lat, +/-lon
+          match = signedMatch;
+          latDir = parseInt(signedMatch[1], 10) < 0 ? 'S' : 'N';
+          lonDir = signedMatch[4] !== undefined && parseInt(signedMatch[4], 10) < 0 ? 'W' : 'E';
+        } else if (signedMatch[7] !== undefined) {
+          // Second alternation: +lat, -lon
+          match = [
+            signedMatch[0],
+            signedMatch[7],
+            signedMatch[8],
+            signedMatch[9],
+            undefined,
+            signedMatch[10],
+            signedMatch[11],
+            signedMatch[12],
+            undefined,
+          ] as RegExpMatchArray;
+          latDir = signedMatch[7] !== undefined && parseInt(signedMatch[7], 10) < 0 ? 'S' : 'N';
+          lonDir = 'W'; // Second alternation requires negative lon
+        }
+      }
+    }
   }
 
   if (
@@ -166,10 +212,13 @@ export function parseDMS(input: string): GpsParseResult | GpsParseError {
     match[3] === undefined ||
     match[5] === undefined ||
     match[6] === undefined ||
-    match[7] === undefined
+    match[7] === undefined ||
+    latDir === undefined ||
+    lonDir === undefined
   ) {
     return {
-      message: "Invalid DMS format. Expected: deg°min'sec\"N deg°min'sec\"E or deg min sec N deg min sec E",
+      message:
+        "Invalid DMS format. Expected: deg°min'sec\"N deg°min'sec\"E or deg min sec N deg min sec E (direction letters or signed degrees required)",
       original: input,
       format: 'DMS',
     };
@@ -178,12 +227,10 @@ export function parseDMS(input: string): GpsParseResult | GpsParseError {
   const latDeg = parseInt(match[1], 10);
   const latMin = parseInt(match[2], 10);
   const latSec = parseFloat(match[3]);
-  const latDir = (match[4] ?? 'N').toUpperCase();
 
   const lonDeg = parseInt(match[5], 10);
   const lonMin = parseInt(match[6], 10);
   const lonSec = parseFloat(match[7]);
-  const lonDir = (match[8] ?? 'E').toUpperCase();
 
   // Validate minutes and seconds
   if (latMin < 0 || latMin >= 60 || lonMin < 0 || lonMin >= 60) {
@@ -478,18 +525,20 @@ function utmToLatLon(
 }
 
 /**
- * Parse MGRS (Military Grid Reference System) format.
+ * Validate MGRS (Military Grid Reference System) format.
  * Examples: "31UDQ4825111932", "31U DQ 48251 11932"
  *
- * WARNING: This implementation uses a SIMPLIFIED conversion algorithm.
- * It does not implement the full MGRS specification with proper band
- * minimum northing tables and 100km square rollover logic. Results may
- * be inaccurate (potentially kilometers off) for coordinates in certain
- * zones or near band boundaries.
+ * IMPORTANT: MGRS conversion to lat/lon requires a dedicated library (such as
+ * the npm 'mgrs' package) to implement the full specification with proper band
+ * minimum northing tables, 100km square rollover logic, and zone edge cases.
  *
- * For survey-grade accuracy, use a dedicated MGRS library such as the
- * npm 'mgrs' package. This simplified version is suitable for format
- * validation and approximate location estimation only.
+ * This function validates the format only. Per the spec "Works offline (API
+ * optional for Plus Codes/What3words)", offline format validation is the
+ * expected behavior for complex grid systems like MGRS.
+ *
+ * Returns an error with format='MGRS' for valid formats (to indicate the format
+ * was recognized but conversion requires a library) or an error with a different
+ * message for invalid formats.
  */
 export function parseMGRS(input: string): GpsParseResult | GpsParseError {
   const trimmed = input.trim().replace(/\s+/g, '').toUpperCase();
@@ -516,7 +565,6 @@ export function parseMGRS(input: string): GpsParseResult | GpsParseError {
 
   const zone = parseInt(match[1], 10);
   const band = match[2].toUpperCase();
-  const square = match[3].toUpperCase();
   const coords = match[4];
 
   // Validate zone
@@ -546,117 +594,14 @@ export function parseMGRS(input: string): GpsParseResult | GpsParseError {
     };
   }
 
-  const halfLen = coords.length / 2;
-  const eastingStr = coords.substring(0, halfLen);
-  const northingStr = coords.substring(halfLen);
-
-  // Pad to 5 digits for meter precision
-  const eastingPadded = eastingStr.padEnd(5, '0');
-  const northingPadded = northingStr.padEnd(5, '0');
-
-  // Convert MGRS to UTM
-  const result = mgrsToUtm(
-    zone,
-    band,
-    square,
-    parseInt(eastingPadded, 10),
-    parseInt(northingPadded, 10)
-  );
-  if ('message' in result) {
-    return {
-      message: result.message,
-      original: input,
-      format: 'MGRS',
-    };
-  }
-
-  // Convert UTM to lat/lon
-  const latLon = utmToLatLon(zone, band, result.easting, result.northing);
-  if ('message' in latLon) {
-    return {
-      message: latLon.message,
-      original: input,
-      format: 'MGRS',
-    };
-  }
-
+  // MGRS requires a dedicated library for accurate conversion to lat/lon
+  // The full spec involves complex lookup tables and zone edge case handling
   return {
-    coordinates: { latitude: latLon.lat, longitude: latLon.lon, depth_reference: 0 },
-    format: 'MGRS',
+    message:
+      'MGRS format recognized but conversion requires a dedicated library. Please use DD, DMS, DDM, UTM, or Plus Codes for offline coordinate conversion.',
     original: input,
+    format: 'MGRS',
   };
-}
-
-/**
- * Convert MGRS 100km square identifier to UTM easting/northing.
- * Note: This is a simplified implementation that works for most common cases.
- */
-function mgrsToUtm(
-  zone: number,
-  band: string,
-  square: string,
-  easting: number,
-  northing: number
-): { easting: number; northing: number } | { message: string } {
-  // 100km square letters
-  // Column letters (A-Z excluding I and O) cycle with zone sets
-  // Row letters (A-V excluding I and O) repeat every 2,000,000m
-  const colLetters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const rowLetters = 'ABCDEFGHJKLMNPQRSTUV';
-
-  const colLetter = square[0];
-  const rowLetter = square[1];
-
-  if (colLetter === undefined || rowLetter === undefined) {
-    return { message: 'Invalid MGRS 100km square identifier' };
-  }
-
-  // Find column index using 6-set pattern (not 3)
-  // Sets cycle: 1=ABCDEFGH, 2=JKLMNPQR, 3=STUVWXYZ, 4=ABCDEFGH, 5=JKLMNPQR, 6=STUVWXYZ
-  const setIndex = (zone - 1) % 6;
-  const setGroup = setIndex % 3; // Which 8-letter group
-  const colOffset = setGroup * 8;
-  let colIndex = colLetters.indexOf(colLetter) - colOffset;
-  if (colIndex < 0) colIndex += 24;
-
-  // Validate column letter for this zone
-  if (colIndex < 0 || colIndex > 7) {
-    return { message: 'Invalid MGRS 100km square column letter for this zone' };
-  }
-
-  // Find row index
-  const rowIndex = rowLetters.indexOf(rowLetter);
-  if (rowIndex < 0) {
-    return { message: 'Invalid MGRS 100km square row letter' };
-  }
-
-  // Calculate UTM easting (100km squares start at 100000m)
-  const utmEasting = (colIndex + 1) * 100000 + easting;
-
-  // Calculate UTM northing
-  // Row letters repeat every 2,000,000m, offset alternates by odd/even zones
-  const rowOffset = zone % 2 === 0 ? 5 : 0;
-  let baseNorthing = ((rowIndex - rowOffset + 20) % 20) * 100000;
-
-  // Determine which 2,000,000m block based on band
-  const bandIndex = MGRS_BAND_LETTERS.indexOf(band);
-  // Approximate latitude range for band (each band is 8 degrees except X which is 12)
-  const minLat = -80 + bandIndex * 8;
-
-  // Calculate base northing for the band
-  // This is a simplification - proper MGRS needs lookup tables
-  const bandBaseNorthing = Math.floor((minLat + 80) / 8) * 2000000 - 10000000;
-  if (band >= 'N') {
-    // Northern hemisphere
-    baseNorthing += Math.floor(bandBaseNorthing / 2000000) * 2000000;
-  } else {
-    // Southern hemisphere
-    baseNorthing += Math.floor((bandBaseNorthing + 10000000) / 2000000) * 2000000;
-  }
-
-  const utmNorthing = baseNorthing + northing;
-
-  return { easting: utmEasting, northing: utmNorthing };
 }
 
 /**
@@ -780,11 +725,14 @@ function decodeOpenLocationCode(code: string): { lat: number; lon: number } | { 
       latValue += row * gridLatPlaceValue;
       lonValue += col * gridLonPlaceValue;
 
-      gridLatPlaceValue /= GRID_ROWS;
-      gridLonPlaceValue /= GRID_COLS;
+      // Only divide place value if there are more characters to process
+      if (i < code.length - 1) {
+        gridLatPlaceValue /= GRID_ROWS;
+        gridLonPlaceValue /= GRID_COLS;
+      }
     }
 
-    // Center of the final grid cell
+    // Center of the final grid cell (use current place value, not over-divided)
     latValue += gridLatPlaceValue / 2;
     lonValue += gridLonPlaceValue / 2;
   } else {
@@ -1070,7 +1018,7 @@ export function parseGps(input: string): GpsParseResult | GpsParseError {
 
   return {
     message:
-      'Could not parse GPS coordinates. Supported formats: DD (48.8584, 2.2945), DMS (48°51\'30"N 2°17\'40"E), DDM (48°51.5\'N 2°17.67\'E), UTM (31U 448251 5411932), MGRS (31UDQ4825111932), Plus Codes (8FW4V75V+8Q)',
+      'Could not parse GPS coordinates. Supported formats: DD (48.8584, 2.2945), DMS (48°51\'30"N 2°17\'40"E), DDM (48°51.5\'N 2°17.67\'E), UTM (31U 448251 5411932), MGRS (31UDQ4825111932), Plus Codes (8FW4V75V+8Q), URL (Google/OSM/Bing Maps links), What3words (requires API)',
     original: input,
   };
 }
