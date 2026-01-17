@@ -33,17 +33,70 @@ pub struct GpsCoordinates {
     pub depth_reference: f64,
 }
 
+impl GpsCoordinates {
+    /// Creates new GPS coordinates after validation
+    /// Returns Err if values are non-finite or out of range
+    pub fn new(latitude: f64, longitude: f64, depth_reference: f64) -> Result<Self, String> {
+        Self::validate(latitude, longitude, depth_reference)?;
+        Ok(Self {
+            latitude,
+            longitude: Self::normalize_longitude(longitude),
+            depth_reference,
+        })
+    }
+
+    /// Validates GPS coordinate values
+    /// Latitude must be in [-90, 90], longitude in [-180, 180]
+    /// All values must be finite (not NaN or ±infinity)
+    pub fn validate(latitude: f64, longitude: f64, depth_reference: f64) -> Result<(), String> {
+        if !latitude.is_finite() {
+            return Err(format!("Latitude must be finite, got {}", latitude));
+        }
+        if !longitude.is_finite() {
+            return Err(format!("Longitude must be finite, got {}", longitude));
+        }
+        if !depth_reference.is_finite() {
+            return Err(format!("Depth reference must be finite, got {}", depth_reference));
+        }
+        if !(-90.0..=90.0).contains(&latitude) {
+            return Err(format!("Latitude must be in [-90, 90], got {}", latitude));
+        }
+        if !(-180.0..=180.0).contains(&longitude) {
+            return Err(format!("Longitude must be in [-180, 180], got {}", longitude));
+        }
+        Ok(())
+    }
+
+    /// Checks if coordinates are valid (finite and in range)
+    pub fn is_valid(&self) -> bool {
+        Self::validate(self.latitude, self.longitude, self.depth_reference).is_ok()
+    }
+
+    /// Normalizes longitude to [-180, 180) range
+    fn normalize_longitude(mut lon: f64) -> f64 {
+        while lon >= 180.0 {
+            lon -= 360.0;
+        }
+        while lon < -180.0 {
+            lon += 360.0;
+        }
+        lon
+    }
+}
+
 /// GPS bounding box in WGS84 format
 /// Uses cardinal directions: north/south for latitude, east/west for longitude
+/// Note: When bounds cross the international dateline, `east < west`.
+/// For example, bounds spanning from 170°E to 170°W would have west=170, east=-170.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct GpsBounds {
     /// Northern boundary (max latitude)
     pub north: f64,
     /// Southern boundary (min latitude)
     pub south: f64,
-    /// Eastern boundary (max longitude, may be < west if crossing dateline)
+    /// Eastern boundary longitude. If `east < west`, bounds cross the dateline.
     pub east: f64,
-    /// Western boundary (min longitude)
+    /// Western boundary longitude
     pub west: f64,
 }
 

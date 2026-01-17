@@ -1,7 +1,6 @@
 //! Comprehensive integration tests for CaveChef
 //!
-//! This test suite covers 51 tests as specified in the implementation plan.
-//! Tests are organized by category and numbered for reference.
+//! Tests are organized by category. Run `cargo test` to execute all tests.
 
 use cavechef_lib::config::ValidationConfig;
 use cavechef_lib::core::{Command, UndoData, UndoEntry, UndoStack, Validator};
@@ -1895,4 +1894,103 @@ fn test_gps_metadata_center_stability() {
 
     assert!((initial_lat - final_lat).abs() < 0.0001);
     assert!((initial_lng - final_lng).abs() < 0.0001);
+}
+
+/// Test that updating the first datum preserves center position (in-place update)
+#[test]
+fn test_gps_metadata_update_preserves_order() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+
+    // Create two disconnected sections
+    project.add_section(create_section_with_shots(
+        "Section A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project.add_section(create_section_with_shots(
+        "Section B",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    // Set first datum
+    let gps_a = GpsCoordinates {
+        latitude: 45.0,
+        longitude: -122.0,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(0, 0), gps_a).unwrap();
+
+    // Add second datum
+    let gps_b = GpsCoordinates {
+        latitude: 46.0,
+        longitude: -123.0,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(1, 0), gps_b).unwrap();
+
+    // Update the first datum with new GPS (should update in-place, not reorder)
+    let gps_a_updated = GpsCoordinates {
+        latitude: 45.5,
+        longitude: -122.5,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(0, 0), gps_a_updated).unwrap();
+
+    // Center should still be from first datum (now with updated values)
+    let metadata = project.metadata().unwrap();
+    let (center_lat, center_lng) = metadata.gps_center.unwrap();
+
+    // Verify center is the updated first datum, not the second
+    assert!((center_lat - 45.5).abs() < 0.0001, "Center should be updated first datum lat");
+    assert!((center_lng - (-122.5)).abs() < 0.0001, "Center should be updated first datum lng");
+}
+
+/// Test that invalid GPS coordinates are rejected
+#[test]
+fn test_gps_invalid_coordinates_rejected() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.add_section(create_section_with_shots(
+        "Section A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    // NaN latitude should be rejected
+    let gps_nan = GpsCoordinates {
+        latitude: f64::NAN,
+        longitude: -122.0,
+        depth_reference: 0.0,
+    };
+    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_nan).is_err());
+
+    // Infinity longitude should be rejected
+    let gps_inf = GpsCoordinates {
+        latitude: 45.0,
+        longitude: f64::INFINITY,
+        depth_reference: 0.0,
+    };
+    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_inf).is_err());
+
+    // Out of range latitude should be rejected
+    let gps_oob_lat = GpsCoordinates {
+        latitude: 91.0,
+        longitude: -122.0,
+        depth_reference: 0.0,
+    };
+    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_oob_lat).is_err());
+
+    // Out of range longitude should be rejected
+    let gps_oob_lng = GpsCoordinates {
+        latitude: 45.0,
+        longitude: 181.0,
+        depth_reference: 0.0,
+    };
+    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_oob_lng).is_err());
+
+    // Valid coordinates should work
+    let gps_valid = GpsCoordinates {
+        latitude: 45.0,
+        longitude: -122.0,
+        depth_reference: 0.0,
+    };
+    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_valid).is_ok());
 }
