@@ -14,9 +14,8 @@ Section adjustment dialog with dx/dy.
 - [ ] Undo works
 - [ ] Tests pass
 ## Done summary
-TBD
-
+Added section adjustment dialog with dx/dy offset inputs accessible from the sections panel context menu. Includes live preview, Cancel/Apply buttons, and comprehensive Playwright E2E tests.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: ebac5c8aa6d36ca36830e65026709462196a2f31
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
