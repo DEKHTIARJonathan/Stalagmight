@@ -8,16 +8,19 @@
   "evidence": {
     "commits": [
       "336b7e1",
-      "4826aaf"
+      "4826aaf",
+      "0e9337f"
     ],
     "tests": [
       "test_gps_metadata_dateline_crossing",
       "test_gps_metadata_multiple_datums",
       "test_gps_metadata_no_datums",
       "test_gps_metadata_center_stability",
-      "test_gps_metadata_single_datum"
+      "test_gps_metadata_single_datum",
+      "test_gps_metadata_update_preserves_order",
+      "test_gps_invalid_coordinates_rejected"
     ],
-    "verification": "All 85 tests pass (cargo test), TypeScript typecheck passes"
+    "verification": "All 69 tests pass (cargo test), TypeScript typecheck passes"
   },
   "id": "fn-19-5b1.1",
   "priority": null,
