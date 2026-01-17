@@ -1,14 +1,31 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T18:04:32.352241Z",
   "created_at": "2026-01-17T14:27:51.382249Z",
   "depends_on": [],
   "epic": "fn-42-53w",
+  "evidence": {
+    "all_tests_passing": true,
+    "test_cases": [
+      "Test 9.1: should display error notification on save failure",
+      "Test 9.2: should display error on file open failure",
+      "Test 9.3: should display DMP parse errors",
+      "Test 9.4: should handle network/IPC timeout gracefully",
+      "Test 9.5: should display validation errors in forms",
+      "Test 9.6: should recover from undo/redo errors"
+    ],
+    "tests": {
+      "failed": 0,
+      "passed": 6,
+      "test_file": "e2e-playwright/error-handling.spec.ts"
+    },
+    "total_tests_in_suite": 214
+  },
   "id": "fn-42-53w.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-42-53w.1.md",
-  "status": "todo",
+  "status": "done",
   "title": "Implement 6 error handling tests",
-  "updated_at": "2026-01-17T14:27:51.382260Z"
+  "updated_at": "2026-01-17T18:09:44.880972Z"
 }
