@@ -241,5 +241,24 @@ test.describe('UI Components', () => {
       // Button should still be visible and functional
       await expect(sectionNamesButton).toBeVisible();
     });
+
+    test('should toggle station labels visibility', async ({ page }) => {
+      // Open Display menu
+      await page.click('button:has-text("Display")');
+      await expect(page.locator('button:has-text("Station Labels")')).toBeVisible({ timeout: 2000 });
+
+      // Station Labels is off by default (showStationLabels: false in uiStore)
+      const stationLabelsButton = page.locator('button:has-text("Station Labels")');
+      await expect(stationLabelsButton).toBeVisible();
+
+      // Toggle station labels on
+      await page.click('button:has-text("Station Labels")');
+
+      // Toggle back off
+      await page.click('button:has-text("Station Labels")');
+
+      // Button should still be visible and functional
+      await expect(stationLabelsButton).toBeVisible();
+    });
   });
 });

@@ -113,6 +113,7 @@ interface UIStore {
   // Display toggles
   showStations: boolean;
   showSectionNames: boolean;
+  showStationLabels: boolean;
   showShotData: boolean;
   showVirtualShots: boolean;
   showZeroDatum: boolean;
@@ -151,6 +152,7 @@ interface UIStore {
 export type DisplayToggleKey =
   | 'showStations'
   | 'showSectionNames'
+  | 'showStationLabels'
   | 'showShotData'
   | 'showVirtualShots'
   | 'showZeroDatum'
@@ -282,6 +284,7 @@ export const useUIStore = create<UIStore>((set) => ({
   // Display toggles
   showStations: true,
   showSectionNames: true,
+  showStationLabels: false,
   showShotData: false,
   showVirtualShots: true,
   showZeroDatum: true,
@@ -325,6 +328,7 @@ export const useUIStore = create<UIStore>((set) => ({
     set({
       showStations: true,
       showSectionNames: true,
+      showStationLabels: false,
       showShotData: false,
       showVirtualShots: true,
       showZeroDatum: true,
