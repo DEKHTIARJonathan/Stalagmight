@@ -2,9 +2,10 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
-import { getBounds, metersToMapCoords } from '../../utils/coordinates';
+import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { useMapTools } from '../../hooks/useMapTools';
 import SurveyLayer from './SurveyLayer';
+import PlacementOverlay from './PlacementOverlay';
 
 interface BoxSelectState {
   start: { x: number; y: number } | null;
@@ -31,8 +32,10 @@ export default function MapCanvas() {
   const [mapLoaded, setMapLoaded] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
   const [isHoveringFeature, setIsHoveringFeature] = useState(false);
+  // Placement mode cursor position (screen pixels)
+  const [placementCursor, setPlacementCursor] = useState<{ x: number; y: number } | null>(null);
 
-  const { project, stations, config, moveSection, moveStation } = useProjectStore();
+  const { project, stations, config, moveSection, moveStation, createSection, mergeStations } = useProjectStore();
   const {
     mapZoom,
     setMapCenter,
@@ -54,6 +57,11 @@ export default function MapCanvas() {
     clearFitToBoundsRequest,
     snappedStation,
     setSnappedStation,
+    placementMode,
+    updatePlacementCursor,
+    updatePlacementSnap,
+    cancelPlacementMode,
+    confirmPlacement,
   } = useUIStore();
 
   // Snap-to-station detection
@@ -111,6 +119,111 @@ export default function MapCanvas() {
     },
     [activeTool, config, stations, snappedStation, setSnappedStation]
   );
+
+  // Check snap for placement mode
+  const checkPlacementSnap = useCallback(
+    (screenX: number, screenY: number) => {
+      if (!map.current || !config || !placementMode) {
+        return null;
+      }
+
+      const threshold = config.snap.threshold_pixels;
+      let nearestStation = null;
+      let nearestDistance = Infinity;
+
+      // Check each existing station's screen position
+      for (const station of stations) {
+        const mapCoords = metersToMapCoords(station.coordinates.x, station.coordinates.y);
+        const screenPos = map.current.project(mapCoords as [number, number]);
+
+        const dx = screenPos.x - screenX;
+        const dy = screenPos.y - screenY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance < threshold && distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestStation = station.station_ref;
+        }
+      }
+
+      return nearestStation;
+    },
+    [config, stations, placementMode]
+  );
+
+  // Handle placement confirmation
+  const handlePlacementConfirm = useCallback(async () => {
+    if (!map.current || !placementMode || !mapContainer.current) return;
+
+    const placement = confirmPlacement();
+    if (!placement || !placement.cursorPosition) return;
+
+    try {
+      // Create the section
+      const result = await createSection(placement.sectionData);
+      if (!result.success) {
+        console.error('Failed to create section during placement:', result.error);
+        return;
+      }
+
+      // If snapped to a station, merge the stations
+      if (placement.snappedToStation) {
+        // Get the newly created section
+        const currentProject = useProjectStore.getState().project;
+        const currentStations = useProjectStore.getState().stations;
+        if (currentProject && currentProject.sections.length > 0) {
+          const newSection = currentProject.sections[currentProject.sections.length - 1];
+          if (newSection) {
+            // Determine which station to merge based on alignStation
+            const stationCount = newSection.shots.length;
+            const importStationIndex = placement.alignStation === 'first' ? 0 : stationCount;
+
+            // Find if the new station actually exists
+            const newStationExists = currentStations.some(
+              (s) =>
+                s.station_ref.section_id === newSection.id &&
+                s.station_ref.station_index === importStationIndex
+            );
+
+            if (newStationExists) {
+              const importRef = {
+                section_id: newSection.id,
+                station_index: importStationIndex,
+              };
+
+              const mergeResult = await mergeStations(importRef, placement.snappedToStation, 'KeepRaw');
+              if (!mergeResult.success) {
+                console.warn('Failed to merge stations after placement:', mergeResult.error);
+              }
+            }
+          }
+        }
+      } else {
+        // Not snapped - need to move the section to the cursor position
+        const currentProject = useProjectStore.getState().project;
+        if (currentProject && currentProject.sections.length > 0) {
+          const newSection = currentProject.sections[currentProject.sections.length - 1];
+          if (newSection) {
+            // Move section to align the anchor station with cursor position
+            const offset = {
+              x: placement.cursorPosition.x,
+              y: placement.cursorPosition.y,
+              z: 0,
+            };
+            await moveSection(newSection.id, offset);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error during placement confirmation:', e);
+    }
+  }, [placementMode, confirmPlacement, createSection, mergeStations, moveSection]);
+
+  // Handle placement cancel
+  const handlePlacementCancel = useCallback(() => {
+    cancelPlacementMode();
+    setPlacementCursor(null);
+  }, [cancelPlacementMode]);
 
   // Clear snap when tool changes to non-snap tool
   useEffect(() => {
@@ -590,6 +703,32 @@ export default function MapCanvas() {
     }
   }, [requestFitToBounds, mapLoaded, stations.length, clearFitToBoundsRequest]);
 
+  // Handle Escape key for placement mode
+  useEffect(() => {
+    if (!placementMode) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handlePlacementCancel();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [placementMode, handlePlacementCancel]);
+
+  // Update cursor style for placement mode
+  useEffect(() => {
+    if (!map.current) return;
+
+    if (placementMode) {
+      map.current.getCanvas().style.cursor = 'crosshair';
+      // Disable drag pan during placement
+      map.current.dragPan.disable();
+    }
+  }, [placementMode]);
+
   // Calculate box select overlay style
   const boxSelectStyle = boxSelect.start && boxSelect.end
     ? {
@@ -603,6 +742,26 @@ export default function MapCanvas() {
   // Combined mouse handlers
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      // Handle placement mode
+      if (placementMode && mapContainer.current && map.current) {
+        const rect = mapContainer.current.getBoundingClientRect();
+        const screenX = e.clientX - rect.left;
+        const screenY = e.clientY - rect.top;
+
+        // Update cursor position for overlay
+        setPlacementCursor({ x: screenX, y: screenY });
+
+        // Convert screen position to map coordinates (meters)
+        const lngLat = map.current.unproject([screenX, screenY]);
+        const meters = mapCoordsToMeters(lngLat.lng, lngLat.lat);
+        updatePlacementCursor({ x: meters.x, y: meters.y, z: 0 });
+
+        // Check for snap to existing station
+        const snapped = checkPlacementSnap(screenX, screenY);
+        updatePlacementSnap(snapped);
+        return;
+      }
+
       if (moveDrag) {
         handleMoveDragMove(e);
       } else if (boxSelect.start) {
@@ -617,7 +776,7 @@ export default function MapCanvas() {
         checkSnapToStation(x, y);
       }
     },
-    [moveDrag, boxSelect.start, handleMoveDragMove, handleBoxSelectMove, checkSnapToStation]
+    [moveDrag, boxSelect.start, handleMoveDragMove, handleBoxSelectMove, checkSnapToStation, placementMode, checkPlacementSnap, updatePlacementCursor, updatePlacementSnap]
   );
 
   const handleMouseUp = useCallback(() => {
@@ -628,14 +787,42 @@ export default function MapCanvas() {
     }
   }, [moveDrag, boxSelect.start, handleMoveDragEnd, handleBoxSelectEnd]);
 
+  // Handle placement mode click
+  const handlePlacementClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (!placementMode) return;
+
+      // Left click confirms placement
+      if (e.button === 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        handlePlacementConfirm();
+      }
+    },
+    [placementMode, handlePlacementConfirm]
+  );
+
+  // Handle placement mode right-click (cancel)
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (placementMode) {
+        e.preventDefault();
+        e.stopPropagation();
+        handlePlacementCancel();
+      }
+    },
+    [placementMode, handlePlacementCancel]
+  );
+
   // Mouse handlers always attached - they check e.ctrlKey internally to decide behavior
   return (
     <div
       className="relative w-full h-full"
-      onMouseDown={handleBoxSelectStart}
+      onMouseDown={placementMode ? handlePlacementClick : handleBoxSelectStart}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
+      onContextMenu={handleContextMenu}
     >
       <div ref={mapContainer} className="w-full h-full" />
 
@@ -661,6 +848,16 @@ export default function MapCanvas() {
         />
       )}
 
+      {/* Placement mode overlay */}
+      {placementMode && placementCursor && (
+        <PlacementOverlay
+          sectionData={placementMode.sectionData}
+          alignStation={placementMode.alignStation}
+          cursorPosition={placementCursor}
+          isSnapped={placementMode.snappedToStation !== null}
+        />
+      )}
+
       {/* Fit to view button */}
       <button
         onClick={fitToBounds}
@@ -670,22 +867,36 @@ export default function MapCanvas() {
         ⊞
       </button>
 
+      {/* Placement mode indicator */}
+      {placementMode && (
+        <div
+          className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-accent rounded px-3 py-2 text-sm"
+          data-testid="placement-mode-indicator"
+        >
+          <span className="text-accent">Placement Mode:</span>{' '}
+          Click to place section, Escape to cancel
+          {placementMode.snappedToStation && (
+            <span className="ml-2 text-success">(Snapped)</span>
+          )}
+        </div>
+      )}
+
       {/* Merge tool indicator */}
-      {activeTool === 'merge' && mergeStationA && (
+      {activeTool === 'merge' && mergeStationA && !placementMode && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-accent rounded px-3 py-2 text-sm">
           <span className="text-accent">Merge Tool:</span> Click another station to merge, or click empty to cancel
         </div>
       )}
 
       {/* Measure tool indicator */}
-      {activeTool === 'measure' && measureStart && !measureEnd && (
+      {activeTool === 'measure' && measureStart && !measureEnd && !placementMode && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-accent rounded px-3 py-2 text-sm">
           <span className="text-accent">Measure Tool:</span> Click another point to measure distance
         </div>
       )}
 
       {/* Measurement result display */}
-      {measureResult && (
+      {measureResult && !placementMode && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-border rounded px-3 py-2 text-sm">
           <span className="font-medium">Distance:</span> {measureResult.distance.toFixed(2)}m
           <span className="mx-2">|</span>
@@ -694,7 +905,7 @@ export default function MapCanvas() {
       )}
 
       {/* Move drag indicator */}
-      {moveDrag && (
+      {moveDrag && !placementMode && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-accent rounded px-3 py-2 text-sm">
           <span className="text-accent">
             {moveDrag.type === 'section' ? 'Move Section' : 'Move Station'}:

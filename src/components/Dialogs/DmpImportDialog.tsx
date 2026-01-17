@@ -199,11 +199,12 @@ interface DmpImportDialogProps {
  * Placement mode for imported sections.
  * - 'origin': Place section at origin (0,0) - default behavior
  * - 'existing': Connect to an existing station in the current project
+ * - 'manual': Manually place on map by clicking
  */
-type PlacementMode = 'origin' | 'existing';
+type PlacementMode = 'origin' | 'existing' | 'manual';
 
 export default function DmpImportDialog({ filePath: initialPath }: DmpImportDialogProps) {
-  const { closeDialog, dialogData, setView, triggerFitToBounds } = useUIStore();
+  const { closeDialog, dialogData, setView, triggerFitToBounds, startPlacementMode } = useUIStore();
   const { importDmp, createSection, createProject, mergeStations, project, stations, config } = useProjectStore();
 
   const [filePath, setFilePath] = useState<string>(initialPath ?? (dialogData.filePath as string) ?? '');
@@ -248,6 +249,8 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
   const [importStation, setImportStation] = useState<'first' | 'last'>('first');
   // Selected existing station from the current project to connect to
   const [existingStation, setExistingStation] = useState<StationRef | null>(null);
+  // Import station for manual placement: which station aligns to cursor
+  const [manualImportStation, setManualImportStation] = useState<'first' | 'last'>('first');
 
   // Validation configuration from app config (fallback to defaults)
   const validationConfig = config?.validation ?? defaultConfig.validation;
@@ -349,6 +352,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
     setPlacementMode('origin');
     setImportStation('first');
     setExistingStation(null);
+    setManualImportStation('first');
   }, [dmpFile]);
 
   // Build list of available stations for the dropdown (memoized)
@@ -527,6 +531,40 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
     setPreviewSectionIndex(null);
   };
 
+  /**
+   * Build section data from DMP file for a given section index.
+   * Returns the section data in our internal format.
+   */
+  const buildSectionData = useCallback((dmpSection: DmpFile['sections'][number], usedColors: string[]) => {
+    const color = getNextSectionColor(usedColors);
+    const standardShots = dmpSection.shots.filter((s) => s.shot_type === 'Standard');
+    const dateStr = dmpSection.date?.split(/[T ]/)[0] ?? null;
+
+    return {
+      name: dmpSection.name,
+      surveyor: null,
+      date: dateStr ?? null,
+      color,
+      shots: standardShots.map((shot) => ({
+        azimuth_in: shot.heading_in,
+        azimuth_out: shot.heading_out,
+        length: shot.length,
+        depth_in: shot.depth_in,
+        depth_out: shot.depth_out,
+        pitch_in: normalizeDmpValue(shot.pitch_in),
+        pitch_out: normalizeDmpValue(shot.pitch_out),
+        left: normalizeDmpValue(shot.left),
+        right: normalizeDmpValue(shot.right),
+        up: normalizeDmpValue(shot.up),
+        down: normalizeDmpValue(shot.down),
+        comment: shot.comment ?? null,
+        is_virtual: false,
+        marker_index: shot.marker_index ?? null,
+        temperature: shot.temperature ?? null,
+      })),
+    };
+  }, []);
+
   const handleImport = async () => {
     if (!dmpFile || selectedSections.size === 0) return;
 
@@ -546,17 +584,32 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
       // Get existing colors to avoid duplicates
       const usedColors = project?.sections.map((s) => s.color) ?? [];
 
-      // Track the number of sections before import for merge operation
-      const sectionCountBefore = project?.sections.length ?? 0;
-
       // Get sorted selection indices
       const sortedIndices = Array.from(selectedSections).sort();
 
-      // Find the first selected section with shots (for merge operation)
+      // Find the first selected section with shots
       const firstSelectedIndex = sortedIndices.find((index) => {
         const section = dmpFile.sections[index];
         return section && section.shots.filter((s) => s.shot_type === 'Standard').length > 0;
       });
+
+      // Handle manual placement mode differently
+      if (placementMode === 'manual' && firstSelectedIndex !== undefined) {
+        // Only support single section for manual placement
+        const firstSection = dmpFile.sections[firstSelectedIndex];
+        if (firstSection) {
+          const sectionData = buildSectionData(firstSection, usedColors);
+
+          // Switch to single view and start placement mode
+          setView('single');
+          startPlacementMode(sectionData, manualImportStation);
+          closeDialog();
+          return;
+        }
+      }
+
+      // Track the number of sections before import for merge operation
+      const sectionCountBefore = useProjectStore.getState().project?.sections.length ?? 0;
 
       // Calculate which station to merge (first or last)
       let firstImportedSectionShotCount = 0;
@@ -574,39 +627,8 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
         const section = dmpFile.sections[index];
         if (!section) continue;
 
-        // Get next available color
-        const color = getNextSectionColor(usedColors);
-        usedColors.push(color);
-
-        // Convert DMP section to our format
-        const standardShots = section.shots.filter((s) => s.shot_type === 'Standard');
-        // Extract date part (format: "YYYY-MM-DD" or null)
-        // Handle both "2016-10-03T18:42:00" and "2016-10-03 18:42:00" formats
-        const dateStr = section.date?.split(/[T ]/)[0] ?? null;
-
-        const sectionData = {
-          name: section.name,
-          surveyor: null,
-          date: dateStr ?? null,
-          color,
-          shots: standardShots.map((shot) => ({
-            azimuth_in: shot.heading_in,
-            azimuth_out: shot.heading_out,
-            length: shot.length,
-            depth_in: shot.depth_in,
-            depth_out: shot.depth_out,
-            pitch_in: normalizeDmpValue(shot.pitch_in),
-            pitch_out: normalizeDmpValue(shot.pitch_out),
-            left: normalizeDmpValue(shot.left),
-            right: normalizeDmpValue(shot.right),
-            up: normalizeDmpValue(shot.up),
-            down: normalizeDmpValue(shot.down),
-            comment: shot.comment ?? null,
-            is_virtual: false,
-            marker_index: shot.marker_index ?? null,
-            temperature: shot.temperature ?? null,
-          })),
-        };
+        const sectionData = buildSectionData(section, usedColors);
+        usedColors.push(sectionData.color);
 
         const result = await createSection(sectionData);
         if (!result.success) {
@@ -1070,6 +1092,20 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                         </span>
                       )}
                     </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="placement-mode"
+                        value="manual"
+                        checked={placementMode === 'manual'}
+                        onChange={() => {
+                          setPlacementMode('manual');
+                          setExistingStation(null);
+                        }}
+                        data-testid="placement-mode-manual"
+                      />
+                      <span>Manual placement on map</span>
+                    </label>
                   </div>
                 </div>
 
@@ -1136,6 +1172,29 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                     </p>
                   </div>
                 )}
+
+                {/* Manual placement options (only when 'manual' mode is selected) */}
+                {placementMode === 'manual' && (
+                  <div className="ml-6 space-y-3 border-l-2 border-border pl-3">
+                    <div>
+                      <label className="block text-sm text-text-secondary mb-1">
+                        Station to align with cursor
+                      </label>
+                      <select
+                        value={manualImportStation}
+                        onChange={(e) => setManualImportStation(e.target.value as 'first' | 'last')}
+                        className="bg-surface border border-border rounded px-3 py-1.5 text-sm w-full"
+                        data-testid="manual-import-station-selector"
+                      >
+                        <option value="first">First station of imported section</option>
+                        <option value="last">Last station of imported section</option>
+                      </select>
+                    </div>
+                    <p className="text-xs text-text-secondary">
+                      Click on the map to place the section. Press Escape or right-click to cancel.
+                    </p>
+                  </div>
+                )}
               </div>
             </Panel>
 
@@ -1173,7 +1232,11 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
             disabled={isLoading || !dmpFile || selectedSections.size === 0 || !canImport}
             data-testid="import-button"
           >
-            {isLoading ? 'Importing...' : `Import ${selectedSections.size} Section${selectedSections.size !== 1 ? 's' : ''}`}
+            {isLoading
+              ? 'Importing...'
+              : placementMode === 'manual'
+                ? 'Place on Map'
+                : `Import ${selectedSections.size} Section${selectedSections.size !== 1 ? 's' : ''}`}
           </Button>
         </div>
       </div>
