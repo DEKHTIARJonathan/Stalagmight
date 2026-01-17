@@ -281,6 +281,9 @@ test.describe('LRUD Columns', () => {
   });
 
   test('undefined LRUD shows as dash', async ({ page }) => {
+    // Per epic spec fn-4-qe3: "Show '-' for zero/null LRUD values (indicates 'not measured')"
+    // Both zero and undefined/null should render as "-" - this is intentional design
+    // to indicate the measurement was not taken, regardless of explicit 0 vs missing field
     await createProjectAndOpenImportDialog(page);
 
     // Expand "Undefined LRUD Section" (index 3) which has shots with missing LRUD fields
