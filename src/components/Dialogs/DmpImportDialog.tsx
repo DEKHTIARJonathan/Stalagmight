@@ -356,6 +356,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                                         <th className="text-right py-1 px-1">R</th>
                                         <th className="text-right py-1 px-1">U</th>
                                         <th className="text-right py-1 px-1">D</th>
+                                        <th className="text-right py-1 px-1">Pitch</th>
                                       </tr>
                                     </thead>
                                     <tbody>
@@ -389,6 +390,19 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                                             data-testid={`lrud-down-${index}-${shotIndex}`}
                                           >
                                             {shot.down ? shot.down.toFixed(1) : '-'}
+                                          </td>
+                                          <td
+                                            className="text-right py-0.5 px-1"
+                                            data-testid={`pitch-${index}-${shotIndex}`}
+                                          >
+                                            {(() => {
+                                              const pitchIn = shot.pitch_in || 0;
+                                              const pitchOut = shot.pitch_out || 0;
+                                              if (pitchIn === 0 && pitchOut === 0) return '-';
+                                              if (pitchIn === 0) return pitchOut.toFixed(1);
+                                              if (pitchOut === 0) return pitchIn.toFixed(1);
+                                              return ((pitchIn + pitchOut) / 2).toFixed(1);
+                                            })()}
                                           </td>
                                         </tr>
                                       ))}

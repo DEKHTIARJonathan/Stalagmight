@@ -334,3 +334,93 @@ test.describe('LRUD Columns', () => {
     await expect(expandButton).toHaveText('▶');
   });
 });
+
+test.describe('Pitch Column', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+  });
+
+  test('pitch column visible in shot preview', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand first section
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    // Verify Pitch column header is visible
+    const dialog = page.locator('[role="dialog"]');
+    await expect(dialog.locator('th', { hasText: /^Pitch$/ })).toBeVisible();
+
+    // Verify pitch cells exist with data-testid
+    await expect(page.locator('[data-testid="pitch-0-0"]')).toBeVisible();
+  });
+
+  test('pitch average calculation - both values present', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand first section (Main Passage)
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    // Second shot has pitch_in: 5, pitch_out: 5 => average = 5.0
+    await expect(page.locator('[data-testid="pitch-0-1"]')).toHaveText('5.0');
+
+    // Third shot has pitch_in: -10, pitch_out: -10 => average = -10.0
+    await expect(page.locator('[data-testid="pitch-0-2"]')).toHaveText('-10.0');
+  });
+
+  test('pitch single value shown when only one present', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand "Mixed LRUD Section" (index 2) which has varied pitch values
+    const expandButton = page.locator('[data-testid="section-expand-2"]');
+    await expandButton.click();
+
+    // First shot: pitch_in: 8.0, pitch_out: 0 => shows 8.0 (only pitch_in)
+    await expect(page.locator('[data-testid="pitch-2-0"]')).toHaveText('8.0');
+
+    // Second shot: pitch_in: 0, pitch_out: 12.0 => shows 12.0 (only pitch_out)
+    await expect(page.locator('[data-testid="pitch-2-1"]')).toHaveText('12.0');
+
+    // Third shot: pitch_in: 6.0, pitch_out: 10.0 => average = 8.0
+    await expect(page.locator('[data-testid="pitch-2-2"]')).toHaveText('8.0');
+  });
+
+  test('pitch shows dash for zero values', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand first section (Main Passage)
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    // First shot has pitch_in: 0, pitch_out: 0 => shows "-"
+    await expect(page.locator('[data-testid="pitch-0-0"]')).toHaveText('-');
+  });
+
+  test('pitch shows dash for undefined values', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand "Undefined LRUD Section" (index 3) which has zero pitch values
+    const expandButton = page.locator('[data-testid="section-expand-3"]');
+    await expandButton.click();
+
+    // Shots have pitch_in: 0, pitch_out: 0 => shows "-"
+    await expect(page.locator('[data-testid="pitch-3-0"]')).toHaveText('-');
+    await expect(page.locator('[data-testid="pitch-3-1"]')).toHaveText('-');
+  });
+
+  test('pitch data-testid follows expected format', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Expand first section
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    await expandButton.click();
+
+    // Verify data-testid format: pitch-{sectionIndex}-{shotIndex}
+    await expect(page.locator('[data-testid="pitch-0-0"]')).toBeVisible();
+    await expect(page.locator('[data-testid="pitch-0-1"]')).toBeVisible();
+    await expect(page.locator('[data-testid="pitch-0-2"]')).toBeVisible();
+  });
+});
