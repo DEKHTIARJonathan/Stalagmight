@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -23,6 +24,8 @@ pub struct AppState {
     config: Mutex<Config>,
     /// Recent projects list
     recent_projects: Mutex<Vec<PathBuf>>,
+    /// In-memory display settings cache (used when no DB is open, e.g., new unsaved project)
+    display_settings_cache: Mutex<HashMap<String, String>>,
 }
 
 impl AppState {
@@ -39,6 +42,7 @@ impl AppState {
             undo_stack: Mutex::new(UndoStack::new_with_limit(undo_limit)),
             config: Mutex::new(config),
             recent_projects: Mutex::new(recent),
+            display_settings_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -454,6 +458,9 @@ impl AppState {
             undo_stack.clear();
         }
 
+        // Clear display settings cache for new project
+        self.clear_display_settings_cache();
+
         tracing::info!("Project created");
         CommandResult::success()
     }
@@ -491,6 +498,9 @@ impl AppState {
         if let Ok(mut database) = self.database.lock() {
             *database = Some(db);
         }
+
+        // Clear display settings cache (settings will be loaded from DB by frontend)
+        self.clear_display_settings_cache();
 
         // Restore persisted undo stack
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
@@ -549,12 +559,21 @@ impl AppState {
         let temp_path = save_path.with_extension("cvproj.tmp");
         tracing::info!(final_path = ?save_path, temp_path = ?temp_path, "Starting safe save operation");
 
-        // Load display settings from current database before creating new one
+        // Load display settings from current database or in-memory cache
         let display_settings = {
             let db_guard = self.database.lock().ok();
-            db_guard.as_ref().and_then(|db| db.as_ref())
+            let from_db = db_guard.as_ref().and_then(|db| db.as_ref())
                 .and_then(|db| db.load_display_settings().ok())
-                .unwrap_or_default()
+                .unwrap_or_default();
+
+            // If DB had settings, use those; otherwise use the in-memory cache
+            if from_db.is_empty() {
+                self.display_settings_cache.lock()
+                    .map(|cache| cache.clone())
+                    .unwrap_or_default()
+            } else {
+                from_db
+            }
         };
 
         // Remove any leftover temp file from previous failed saves
@@ -637,6 +656,9 @@ impl AppState {
             *database = Some(db);
         }
 
+        // Clear in-memory cache since settings are now persisted to DB
+        self.clear_display_settings_cache();
+
         // Add to recent projects and persist to config
         if let Ok(mut recent) = self.recent_projects.lock() {
             recent.retain(|p| p != &save_path);
@@ -675,6 +697,9 @@ impl AppState {
             undo_stack.clear();
             tracing::debug!("close_project: undo stack cleared");
         }
+
+        // Clear display settings cache
+        self.clear_display_settings_cache();
 
         tracing::info!("Project closed");
         tracing::debug!("close_project: returning success");
@@ -1399,24 +1424,56 @@ impl AppState {
         db.delete_resolved_warning(section_id, shot_id, warning_code)
     }
 
-    /// Load display settings from database
-    pub fn load_display_settings(&self) -> Result<std::collections::HashMap<String, String>> {
+    /// Load display settings from database or in-memory cache
+    pub fn load_display_settings(&self) -> Result<HashMap<String, String>> {
+        // Try database first
         let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
-        let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
-        db.load_display_settings()
+        if let Some(db) = db_guard.as_ref() {
+            return db.load_display_settings();
+        }
+        drop(db_guard);
+
+        // Fall back to in-memory cache for new unsaved projects
+        let cache = self.display_settings_cache.lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock display settings cache"))?;
+        Ok(cache.clone())
     }
 
-    /// Save a display setting to database
+    /// Save a display setting to database or in-memory cache
     pub fn save_display_setting(&self, key: &str, value: &str) -> Result<()> {
+        // Try database first
         let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
-        let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
-        db.save_display_setting(key, value)
+        if let Some(db) = db_guard.as_ref() {
+            return db.save_display_setting(key, value);
+        }
+        drop(db_guard);
+
+        // Fall back to in-memory cache for new unsaved projects
+        let mut cache = self.display_settings_cache.lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock display settings cache"))?;
+        cache.insert(key.to_string(), value.to_string());
+        Ok(())
     }
 
-    /// Get a single display setting from database
+    /// Get a single display setting from database or in-memory cache
     pub fn get_display_setting(&self, key: &str) -> Result<Option<String>> {
+        // Try database first
         let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
-        let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
-        db.get_display_setting(key)
+        if let Some(db) = db_guard.as_ref() {
+            return db.get_display_setting(key);
+        }
+        drop(db_guard);
+
+        // Fall back to in-memory cache for new unsaved projects
+        let cache = self.display_settings_cache.lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock display settings cache"))?;
+        Ok(cache.get(key).cloned())
+    }
+
+    /// Clear the in-memory display settings cache (called after save when settings are persisted to DB)
+    fn clear_display_settings_cache(&self) {
+        if let Ok(mut cache) = self.display_settings_cache.lock() {
+            cache.clear();
+        }
     }
 }
