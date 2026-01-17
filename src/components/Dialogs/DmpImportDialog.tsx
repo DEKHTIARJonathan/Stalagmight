@@ -295,6 +295,8 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
         .filter((s) => s.hasShots)
         .map((s) => s.index);
       setSelectedSections(new Set(nonEmptyIndices));
+      // Initialize preview to first selected section
+      setPreviewSectionIndex(nonEmptyIndices.length > 0 ? nonEmptyIndices[0] ?? null : null);
       // Use filename as default project name
       const fileName = path.split(/[/\\]/).pop()?.replace('.dmp', '') ?? 'Imported';
       setNewProjectName(fileName);
@@ -362,10 +364,17 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
       const next = new Set(prev);
       if (next.has(index)) {
         next.delete(index);
-        // If collapsing the current preview section, clear it or pick another expanded one
+        // If collapsing the current preview section, pick another from selected sections
         if (previewSectionIndex === index) {
-          const remaining = Array.from(next);
-          setPreviewSectionIndex(remaining.length > 0 ? remaining[remaining.length - 1] ?? null : null);
+          // Prefer selected sections that are still expanded
+          const selectedAndExpanded = Array.from(next).filter((i) => selectedSections.has(i));
+          if (selectedAndExpanded.length > 0) {
+            setPreviewSectionIndex(selectedAndExpanded[selectedAndExpanded.length - 1] ?? null);
+          } else {
+            // Fall back to any selected section
+            const selected = Array.from(selectedSections);
+            setPreviewSectionIndex(selected.length > 0 ? selected[selected.length - 1] ?? null : null);
+          }
         }
       } else {
         next.add(index);
@@ -378,12 +387,19 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
 
   const handleSelectAll = () => {
     if (dmpFile) {
-      setSelectedSections(new Set(dmpFile.sections.map((_, i) => i)));
+      const allIndices = dmpFile.sections.map((_, i) => i);
+      setSelectedSections(new Set(allIndices));
+      // Update preview to first section if currently no preview
+      if (previewSectionIndex === null && allIndices.length > 0) {
+        setPreviewSectionIndex(allIndices[0] ?? null);
+      }
     }
   };
 
   const handleSelectNone = () => {
     setSelectedSections(new Set());
+    // Clear preview when no sections selected
+    setPreviewSectionIndex(null);
   };
 
   const handleImport = async () => {
