@@ -356,7 +356,6 @@ export default function MapCanvas() {
       if (!map.current) return;
       surveyLayerRef.current = new SurveyLayer(map.current, toolCallbacks);
       setMapLoaded(true);
-      console.log('[MapCanvas] Map loaded, SurveyLayer created');
     });
 
     return () => {
@@ -368,7 +367,6 @@ export default function MapCanvas() {
   // Update survey layer when data changes or map loads
   useEffect(() => {
     if (surveyLayerRef.current && project) {
-      console.log('[MapCanvas] Updating SurveyLayer with', project.sections.length, 'sections,', stations.length, 'stations,', project.station_merges.length, 'merges,', project.loop_closures.length, 'loop closures');
       surveyLayerRef.current.update(project.sections, stations, project.station_merges, project.loop_closures);
     }
   }, [project, stations, mapLoaded]);
@@ -566,11 +564,6 @@ export default function MapCanvas() {
     // Transform bounds to map coordinates
     const sw = metersToMapCoords(bounds.minX, bounds.minY);
     const ne = metersToMapCoords(bounds.maxX, bounds.maxY);
-
-    console.log('[MapCanvas] fitToBounds:', {
-      metersExtent: { x: bounds.maxX - bounds.minX, y: bounds.maxY - bounds.minY },
-      sw, ne
-    });
 
     // Use MapLibre's fitBounds with padding
     map.current.fitBounds([sw, ne], {
