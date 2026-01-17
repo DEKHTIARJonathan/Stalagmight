@@ -171,6 +171,12 @@ export default function ContextMenu() {
             openDialog('edit-section', { sectionId: target.sectionId });
           },
         },
+        {
+          label: 'Adjust Position...',
+          action: () => {
+            openDialog('section-adjust', { sectionId: target.sectionId });
+          },
+        },
         { label: '', action: () => {}, separator: true },
         {
           label: 'Delete Section',

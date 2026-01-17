@@ -11,3 +11,4 @@ export { default as EditStationDialog } from './EditStationDialog';
 export { default as UnsavedChangesDialog } from './UnsavedChangesDialog';
 export { default as ErrorDialog } from './ErrorDialog';
 export { default as OverwriteConfirmDialog } from './OverwriteConfirmDialog';
+export { default as SectionAdjustDialog } from './SectionAdjustDialog';
