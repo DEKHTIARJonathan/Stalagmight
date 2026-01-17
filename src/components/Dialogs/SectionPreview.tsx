@@ -4,8 +4,26 @@ import type { DmpSection, DmpShot } from '../../types/commands';
 import { metersToMapCoords, getBounds } from '../../utils/coordinates';
 
 /**
+ * Compute circular mean of two angles in degrees.
+ * Handles wrap-around correctly (e.g., 350 and 10 averages to 0, not 180).
+ */
+function circularMeanDegrees(a: number, b: number): number {
+  const aRad = (a * Math.PI) / 180;
+  const bRad = (b * Math.PI) / 180;
+
+  // Average the unit vectors
+  const x = (Math.cos(aRad) + Math.cos(bRad)) / 2;
+  const y = (Math.sin(aRad) + Math.sin(bRad)) / 2;
+
+  // Convert back to angle
+  let result = Math.atan2(y, x) * (180 / Math.PI);
+  if (result < 0) result += 360;
+  return result;
+}
+
+/**
  * Compute station coordinates from DMP shots.
- * Each station is positioned relative to the previous one based on shot heading and length.
+ * Each station is positioned relative to the previous one based on shot heading, length, and pitch.
  */
 function computeStations(shots: DmpShot[]): Array<{ x: number; y: number; z: number }> {
   // Start at origin
@@ -17,14 +35,25 @@ function computeStations(shots: DmpShot[]): Array<{ x: number; y: number; z: num
     const prev = stations[stations.length - 1];
     if (!prev) continue;
 
-    // Average heading (foresight and backsight)
-    const azimuth = (shot.heading_in + shot.heading_out) / 2;
+    // Use circular mean for heading to handle wrap-around correctly
+    const azimuth = circularMeanDegrees(shot.heading_in, shot.heading_out);
     const azimuthRad = (azimuth * Math.PI) / 180;
 
+    // Average pitch (0 means horizontal, positive means upward)
+    const pitchIn = shot.pitch_in ?? 0;
+    const pitchOut = shot.pitch_out ?? 0;
+    const avgPitch = (pitchIn + pitchOut) / 2;
+    const pitchRad = (avgPitch * Math.PI) / 180;
+
+    // Project length onto horizontal plane using pitch
+    const horizontalLength = shot.length * Math.cos(pitchRad);
+    const verticalChange = shot.length * Math.sin(pitchRad);
+
     // Compute next station position
-    const x = prev.x + shot.length * Math.sin(azimuthRad);
-    const y = prev.y + shot.length * Math.cos(azimuthRad);
-    const z = shot.depth_out;
+    const x = prev.x + horizontalLength * Math.sin(azimuthRad);
+    const y = prev.y + horizontalLength * Math.cos(azimuthRad);
+    // Use depth from shot if available, otherwise compute from pitch
+    const z = shot.depth_out !== 0 ? shot.depth_out : prev.z - verticalChange;
 
     stations.push({ x, y, z });
   }
@@ -59,7 +88,7 @@ export default function SectionPreview({ section, color = '#4ecdc4' }: SectionPr
     return computeStations(standardShots);
   }, [section]);
 
-  // Initialize MapLibre instance
+  // Initialize MapLibre instance - container is always mounted
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
@@ -84,11 +113,17 @@ export default function SectionPreview({ section, color = '#4ecdc4' }: SectionPr
       interactive: true,
     });
 
+    // Store map ref immediately for cleanup support
+    mapRef.current = map;
+
     // Disable rotation
     map.dragRotate.disable();
     map.touchPitch.disable();
 
     map.on('load', () => {
+      // Check if map was removed during async load
+      if (!mapRef.current) return;
+
       // Add sources
       map.addSource('preview-shots', {
         type: 'geojson',
@@ -124,14 +159,13 @@ export default function SectionPreview({ section, color = '#4ecdc4' }: SectionPr
         },
       });
 
-      mapRef.current = map;
       setMapLoaded(true);
     });
 
     return () => {
-      map.remove();
       mapRef.current = null;
       setMapLoaded(false);
+      map.remove();
     };
   }, []);
 
@@ -193,30 +227,49 @@ export default function SectionPreview({ section, color = '#4ecdc4' }: SectionPr
     // Fit bounds if we have stations
     if (stations.length > 0) {
       const bounds = getBounds(stations);
-      const sw = metersToMapCoords(bounds.minX, bounds.minY);
-      const ne = metersToMapCoords(bounds.maxX, bounds.maxY);
 
-      // Add padding and fit
-      map.fitBounds([sw, ne], {
-        padding: 30,
-        maxZoom: 18,
-        duration: 300,
-      });
+      // Check for degenerate bounds (single point or very small extent)
+      const extentX = bounds.maxX - bounds.minX;
+      const extentY = bounds.maxY - bounds.minY;
+      const minExtent = 1; // 1 meter minimum extent
+
+      if (extentX < minExtent && extentY < minExtent) {
+        // Single point or very small area - use setCenter with fixed zoom
+        const centerX = (bounds.minX + bounds.maxX) / 2;
+        const centerY = (bounds.minY + bounds.maxY) / 2;
+        map.jumpTo({
+          center: metersToMapCoords(centerX, centerY),
+          zoom: 16,
+        });
+      } else {
+        const sw = metersToMapCoords(bounds.minX, bounds.minY);
+        const ne = metersToMapCoords(bounds.maxX, bounds.maxY);
+
+        // Add padding and fit
+        map.fitBounds([sw, ne], {
+          padding: 30,
+          maxZoom: 18,
+          duration: 300,
+        });
+      }
     }
   }, [section, stations, color, mapLoaded]);
 
+  // Always render the container, overlay placeholder when no section
   return (
     <div
       data-testid="section-preview"
-      className="border border-border rounded overflow-hidden bg-background"
+      className="relative border border-border rounded overflow-hidden bg-background"
       style={{ width: 250, height: 250 }}
     >
-      {!section ? (
-        <div className="w-full h-full flex items-center justify-center text-text-secondary text-sm">
+      {/* Map container is always mounted for proper lifecycle */}
+      <div ref={containerRef} className="w-full h-full" data-testid="section-preview-map" />
+
+      {/* Overlay placeholder when no section selected */}
+      {!section && (
+        <div className="absolute inset-0 flex items-center justify-center bg-background text-text-secondary text-sm">
           Select a section to preview
         </div>
-      ) : (
-        <div ref={containerRef} className="w-full h-full" data-testid="section-preview-map" />
       )}
     </div>
   );

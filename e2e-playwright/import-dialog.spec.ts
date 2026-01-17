@@ -757,9 +757,9 @@ test.describe('Section Preview', () => {
     const preview = page.locator('[data-testid="section-preview"]');
     await expect(preview).toContainText('Select a section to preview');
 
-    // The map container should not be visible
+    // The map container is always mounted (for proper lifecycle), but overlay hides it
     const mapContainer = page.locator('[data-testid="section-preview-map"]');
-    await expect(mapContainer).not.toBeVisible();
+    await expect(mapContainer).toBeVisible(); // Container exists
   });
 
   test('preview shows map when section is expanded', async ({ page }) => {
@@ -773,7 +773,11 @@ test.describe('Section Preview', () => {
     const mapContainer = page.locator('[data-testid="section-preview-map"]');
     await expect(mapContainer).toBeVisible();
 
-    // Placeholder text should be gone
+    // MapLibre canvas should be initialized
+    const canvas = mapContainer.locator('canvas.maplibregl-canvas');
+    await expect(canvas).toBeVisible({ timeout: 5000 });
+
+    // Placeholder text should be gone (overlay hidden)
     const preview = page.locator('[data-testid="section-preview"]');
     await expect(preview).not.toContainText('Select a section to preview');
   });
@@ -821,7 +825,17 @@ test.describe('Section Preview', () => {
     const mapContainer = page.locator('[data-testid="section-preview-map"]');
     await expect(mapContainer).toBeVisible();
 
-    // Get the bounding box
+    // Wait for MapLibre canvas to be created (indicates map is initialized)
+    const canvas = mapContainer.locator('canvas.maplibregl-canvas');
+    await expect(canvas).toBeVisible({ timeout: 5000 });
+
+    // Verify canvas has non-zero dimensions
+    const canvasBox = await canvas.boundingBox();
+    expect(canvasBox).toBeTruthy();
+    expect(canvasBox!.width).toBeGreaterThan(0);
+    expect(canvasBox!.height).toBeGreaterThan(0);
+
+    // Get the bounding box for interactions
     const box = await mapContainer.boundingBox();
     if (!box) throw new Error('Map container not found');
 
@@ -829,16 +843,16 @@ test.describe('Section Preview', () => {
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.wheel(0, -100);
 
-    // Verify map is still visible after interaction
-    await expect(mapContainer).toBeVisible();
+    // Verify canvas still exists after zoom
+    await expect(canvas).toBeVisible();
 
     // Perform drag for pan (just verify no errors)
     await page.mouse.down();
     await page.mouse.move(box.x + box.width / 2 + 50, box.y + box.height / 2 + 50);
     await page.mouse.up();
 
-    // Verify map is still visible after interaction
-    await expect(mapContainer).toBeVisible();
+    // Verify canvas still exists after pan
+    await expect(canvas).toBeVisible();
   });
 
   test('collapsing all sections shows placeholder again', async ({ page }) => {

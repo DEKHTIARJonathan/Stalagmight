@@ -197,6 +197,8 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
   const [dmpFile, setDmpFile] = useState<DmpFile | null>(null);
   const [selectedSections, setSelectedSections] = useState<Set<number>>(new Set());
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set());
+  // Track the section to show in preview - uses the most recently expanded section
+  const [previewSectionIndex, setPreviewSectionIndex] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createNewProject, setCreateNewProject] = useState(!project);
@@ -326,6 +328,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
         setDmpFile(null);
         setSelectedSections(new Set());
         setExpandedSections(new Set());
+        setPreviewSectionIndex(null);
         setError(null);
         // Reset auto-load flag so the new file gets loaded
         autoLoadAttempted.current = false;
@@ -352,8 +355,15 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
       const next = new Set(prev);
       if (next.has(index)) {
         next.delete(index);
+        // If collapsing the current preview section, clear it or pick another expanded one
+        if (previewSectionIndex === index) {
+          const remaining = Array.from(next);
+          setPreviewSectionIndex(remaining.length > 0 ? remaining[remaining.length - 1] ?? null : null);
+        }
       } else {
         next.add(index);
+        // Update preview to show the newly expanded section
+        setPreviewSectionIndex(index);
       }
       return next;
     });
@@ -738,12 +748,12 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
               )}
             </Panel>
 
-            {/* Section preview */}
+            {/* Section preview - shows the most recently expanded section */}
             <div className="flex justify-center">
               <SectionPreview
                 section={
-                  expandedSections.size > 0
-                    ? dmpFile.sections[Array.from(expandedSections)[0] ?? -1] ?? null
+                  previewSectionIndex !== null
+                    ? dmpFile.sections[previewSectionIndex] ?? null
                     : null
                 }
               />
