@@ -1,14 +1,25 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-17T17:37:03.495274Z",
   "created_at": "2026-01-17T14:27:51.107606Z",
   "depends_on": [],
   "epic": "fn-35-f4v",
+  "evidence": {
+    "commits": [
+      "432396d58dea5b0b0cd04a1cce72c3cba0c26e5b"
+    ],
+    "prs": [],
+    "tests": [
+      "cargo test state::tests::test_undo",
+      "cargo test state::tests::test_redo",
+      "cargo test state::tests::test_multiple"
+    ]
+  },
   "id": "fn-35-f4v.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-35-f4v.1.md",
-  "status": "todo",
+  "status": "done",
   "title": "Implement 8 undo/redo tests",
-  "updated_at": "2026-01-17T14:27:51.107618Z"
+  "updated_at": "2026-01-17T17:37:06.526616Z"
 }
