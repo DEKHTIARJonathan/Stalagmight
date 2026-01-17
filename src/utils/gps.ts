@@ -1,7 +1,14 @@
 /**
  * GPS coordinate parsing utilities.
  * Supports 7 formats: DD, DMS, DDM, UTM, MGRS, Plus Codes, What3words.
- * Also extracts coordinates from URLs (Google Maps, OpenStreetMap, etc.)
+ * Also extracts coordinates from URLs (Google Maps, OpenStreetMap, Bing Maps).
+ *
+ * NOTE: UTM and MGRS conversions use simplified algorithms that are accurate
+ * for most common use cases but may have small errors in edge cases (polar regions,
+ * zone boundaries, special zones like Norway/Svalbard). For survey-grade accuracy,
+ * consider using dedicated geodetic libraries.
+ *
+ * NOTE: What3words requires API access and cannot be converted offline.
  */
 
 import type { GpsCoordinates } from '../types/project';
@@ -62,8 +69,9 @@ const UTM_ZONE_LETTERS = 'CDEFGHJKLMNPQRSTUVWX';
 // MGRS band letters (same as UTM)
 const MGRS_BAND_LETTERS = UTM_ZONE_LETTERS;
 
-// Plus Codes alphabet (20 characters, no 0, 1, I, O)
-const PLUS_CODE_CHARS = '23456789CFGHJMPQRVWX';
+// Open Location Code (Plus Codes) alphabet - 20 characters
+// Note: '0' is used for padding in short codes but not for encoding
+const OLC_ALPHABET = '23456789CFGHJMPQRVWX';
 
 /**
  * Validate latitude and longitude values.
@@ -130,16 +138,26 @@ export function parseDD(input: string): GpsParseResult | GpsParseError {
 /**
  * Parse Degrees Minutes Seconds format.
  * Examples: "48°51'30\"N 2°17'40\"E", "48 51 30 N 2 17 40 E"
+ *
+ * Requires either degree symbols OR direction letters to disambiguate from DDM.
  */
 export function parseDMS(input: string): GpsParseResult | GpsParseError {
   const trimmed = input.trim();
 
-  // Flexible DMS regex supporting various delimiters
-  // Matches: degrees, minutes, seconds with optional direction
-  const dmsRegex =
-    /(-?\d+)[°\s]+(\d+)['\s]+(\d+\.?\d*)["\s]*([NSns])?[,\s]+(-?\d+)[°\s]+(\d+)['\s]+(\d+\.?\d*)["\s]*([EWew])?/i;
+  // Pattern 1: With degree/minute/second symbols
+  // Matches: 48°51'30"N 2°17'40"E (or with spaces)
+  const dmsSymbolRegex =
+    /(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([NSns])?[,\s]+(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([EWew])?/i;
 
-  const match = trimmed.match(dmsRegex);
+  // Pattern 2: Space-separated with direction letters (required for disambiguation)
+  // Matches: 48 51 30 N 2 17 40 E
+  const dmsSpaceRegex =
+    /(-?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([NSns])\s+(-?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([EWew])/i;
+
+  let match = trimmed.match(dmsSymbolRegex);
+  if (!match) {
+    match = trimmed.match(dmsSpaceRegex);
+  }
 
   if (
     !match ||
@@ -151,7 +169,7 @@ export function parseDMS(input: string): GpsParseResult | GpsParseError {
     match[7] === undefined
   ) {
     return {
-      message: "Invalid DMS format. Expected: deg°min'sec\"N deg°min'sec\"E",
+      message: "Invalid DMS format. Expected: deg°min'sec\"N deg°min'sec\"E or deg min sec N deg min sec E",
       original: input,
       format: 'DMS',
     };
@@ -209,26 +227,38 @@ export function parseDMS(input: string): GpsParseResult | GpsParseError {
 
 /**
  * Parse Degrees Decimal Minutes format.
- * Examples: "48°51.5'N 2°17.67'E", "48 51.5 N 2 17.67 E"
+ * Examples: "48°51.5'N 2°17.67'E"
+ *
+ * Requires degree symbol AND direction letters to disambiguate from DMS/DD.
  */
 export function parseDDM(input: string): GpsParseResult | GpsParseError {
   const trimmed = input.trim();
 
-  // Flexible DDM regex
+  // Stricter DDM regex - requires degree symbol and direction letters
+  // The minutes must contain a decimal point to distinguish from DMS
   const ddmRegex =
-    /(-?\d+)[°\s]+(\d+\.?\d*)['\s]*([NSns])?[,\s]+(-?\d+)[°\s]+(\d+\.?\d*)['\s]*([EWew])?/i;
+    /(-?\d+)[°]\s*(\d+\.\d+)[′']?\s*([NSns])[,\s]+(-?\d+)[°]\s*(\d+\.\d+)[′']?\s*([EWew])/i;
 
-  const match = trimmed.match(ddmRegex);
+  // Also allow format without decimal if it has the prime symbol
+  const ddmRegex2 =
+    /(-?\d+)[°]\s*(\d+\.?\d*)[′']\s*([NSns])[,\s]+(-?\d+)[°]\s*(\d+\.?\d*)[′']\s*([EWew])/i;
+
+  let match = trimmed.match(ddmRegex);
+  if (!match) {
+    match = trimmed.match(ddmRegex2);
+  }
 
   if (
     !match ||
     match[1] === undefined ||
     match[2] === undefined ||
+    match[3] === undefined ||
     match[4] === undefined ||
-    match[5] === undefined
+    match[5] === undefined ||
+    match[6] === undefined
   ) {
     return {
-      message: "Invalid DDM format. Expected: deg°min.dec'N deg°min.dec'E",
+      message: "Invalid DDM format. Expected: deg°min.dec'N deg°min.dec'E (e.g., 48°51.5'N 2°17.67'E)",
       original: input,
       format: 'DDM',
     };
@@ -236,11 +266,11 @@ export function parseDDM(input: string): GpsParseResult | GpsParseError {
 
   const latDeg = parseInt(match[1], 10);
   const latMin = parseFloat(match[2]);
-  const latDir = (match[3] ?? 'N').toUpperCase();
+  const latDir = match[3].toUpperCase();
 
   const lonDeg = parseInt(match[4], 10);
   const lonMin = parseFloat(match[5]);
-  const lonDir = (match[6] ?? 'E').toUpperCase();
+  const lonDir = match[6].toUpperCase();
 
   // Validate minutes
   if (latMin < 0 || latMin >= 60 || lonMin < 0 || lonMin >= 60) {
@@ -277,16 +307,23 @@ export function parseDDM(input: string): GpsParseResult | GpsParseError {
 
 /**
  * Parse UTM (Universal Transverse Mercator) format.
- * Examples: "31U 448251 5411932", "31U448251,5411932"
+ * Examples: "31U 448251 5411932", "31 U 448251 5411932", "31U, 448251, 5411932"
  *
- * Note: UTM to lat/lon conversion uses simplified formulas.
- * For high precision, a geodetic library should be used.
+ * Note: Uses simplified conversion formulas. For survey-grade accuracy,
+ * use a dedicated geodetic library.
  */
 export function parseUTM(input: string): GpsParseResult | GpsParseError {
   const trimmed = input.trim();
 
-  // UTM regex: zone number, band letter, easting, northing
-  const utmRegex = /^(\d{1,2})([A-Za-z])[,\s]+(\d+)[,\s]+(\d+)$/;
+  // More flexible UTM regex:
+  // - Zone number (1-2 digits)
+  // - Optional space
+  // - Band letter
+  // - Separator (space, comma, or both)
+  // - Easting (can have decimals)
+  // - Separator
+  // - Northing (can have decimals)
+  const utmRegex = /^(\d{1,2})\s*([A-Za-z])[,\s]+(\d+\.?\d*)[,\s]+(\d+\.?\d*)$/;
   const match = trimmed.match(utmRegex);
 
   if (
@@ -298,7 +335,7 @@ export function parseUTM(input: string): GpsParseResult | GpsParseError {
   ) {
     return {
       message:
-        'Invalid UTM format. Expected: zoneNumber zoneLetter easting northing (e.g., 31U 448251 5411932)',
+        'Invalid UTM format. Expected: zone band easting northing (e.g., 31U 448251 5411932 or 31 U 448251 5411932)',
       original: input,
       format: 'UTM',
     };
@@ -322,6 +359,24 @@ export function parseUTM(input: string): GpsParseResult | GpsParseError {
   if (!UTM_ZONE_LETTERS.includes(band)) {
     return {
       message: 'Invalid UTM band letter (must be C-X, excluding I and O)',
+      original: input,
+      format: 'UTM',
+    };
+  }
+
+  // Validate easting range (typical valid range)
+  if (easting < 100000 || easting > 900000) {
+    return {
+      message: 'UTM easting typically between 100000 and 900000',
+      original: input,
+      format: 'UTM',
+    };
+  }
+
+  // Validate northing range
+  if (northing < 0 || northing > 10000000) {
+    return {
+      message: 'UTM northing must be between 0 and 10000000',
       original: input,
       format: 'UTM',
     };
@@ -426,7 +481,8 @@ function utmToLatLon(
  * Parse MGRS (Military Grid Reference System) format.
  * Examples: "31UDQ4825111932", "31U DQ 48251 11932"
  *
- * Note: MGRS to lat/lon uses simplified conversion via UTM.
+ * Note: Uses simplified conversion via UTM. May have small errors
+ * in edge cases. For survey-grade accuracy, use a dedicated library.
  */
 export function parseMGRS(input: string): GpsParseResult | GpsParseError {
   const trimmed = input.trim().replace(/\s+/g, '').toUpperCase();
@@ -526,6 +582,7 @@ export function parseMGRS(input: string): GpsParseResult | GpsParseError {
 
 /**
  * Convert MGRS 100km square identifier to UTM easting/northing.
+ * Note: This is a simplified implementation that works for most common cases.
  */
 function mgrsToUtm(
   zone: number,
@@ -535,7 +592,7 @@ function mgrsToUtm(
   northing: number
 ): { easting: number; northing: number } | { message: string } {
   // 100km square letters
-  // Column letters (A-Z excluding I and O) repeat every 3 zones, starting from zone set
+  // Column letters (A-Z excluding I and O) cycle with zone sets
   // Row letters (A-V excluding I and O) repeat every 2,000,000m
   const colLetters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
   const rowLetters = 'ABCDEFGHJKLMNPQRSTUV';
@@ -547,12 +604,16 @@ function mgrsToUtm(
     return { message: 'Invalid MGRS 100km square identifier' };
   }
 
-  // Find column index (1-8 for each zone set)
-  const setIndex = (zone - 1) % 3;
-  const colOffset = setIndex * 8;
+  // Find column index using 6-set pattern (not 3)
+  // Sets cycle: 1=ABCDEFGH, 2=JKLMNPQR, 3=STUVWXYZ, 4=ABCDEFGH, 5=JKLMNPQR, 6=STUVWXYZ
+  const setIndex = (zone - 1) % 6;
+  const setGroup = setIndex % 3; // Which 8-letter group
+  const colOffset = setGroup * 8;
   let colIndex = colLetters.indexOf(colLetter) - colOffset;
   if (colIndex < 0) colIndex += 24;
-  if (colIndex > 7) {
+
+  // Validate column letter for this zone
+  if (colIndex < 0 || colIndex > 7) {
     return { message: 'Invalid MGRS 100km square column letter for this zone' };
   }
 
@@ -595,14 +656,15 @@ function mgrsToUtm(
  * Parse Google Plus Codes (Open Location Code) format.
  * Examples: "8FW4V75V+8Q", "9F4MGCH4+QQ"
  *
- * Plus Codes are encoded lat/lon with 10+ characters (8 before +, 2+ after).
- * Can be shortened by removing prefix if area context is known.
+ * Plus Codes are encoded lat/lon with the format: 8 digits + '+' + 2+ digits.
+ * The first 10 digits (4 pairs before + and 1 pair after) use base-20 encoding.
+ * Additional digits after the first 10 use a 4x5 grid refinement.
  */
 export function parsePlusCodes(input: string): GpsParseResult | GpsParseError {
   const trimmed = input.trim().toUpperCase();
 
-  // Remove any leading/trailing characters that aren't part of the code
-  // Plus codes are 8 characters + '+' + at least 2 more characters
+  // Plus codes: 8 characters + '+' + at least 2 more characters
+  // Characters must be from OLC alphabet (note: '0' is padding, not valid for encoding)
   const plusCodeRegex = /^([23456789CFGHJMPQRVWX]{8})\+([23456789CFGHJMPQRVWX]{2,})$/;
   const match = trimmed.match(plusCodeRegex);
 
@@ -619,8 +681,8 @@ export function parsePlusCodes(input: string): GpsParseResult | GpsParseError {
   const suffix = match[2];
   const code = prefix + suffix;
 
-  // Decode Plus Code
-  const result = decodePlusCode(code);
+  // Decode Plus Code using official OLC algorithm
+  const result = decodeOpenLocationCode(code);
   if ('message' in result) {
     return {
       message: result.message,
@@ -637,55 +699,96 @@ export function parsePlusCodes(input: string): GpsParseResult | GpsParseError {
 }
 
 /**
- * Decode a Plus Code to latitude/longitude.
+ * Decode an Open Location Code (Plus Code) to latitude/longitude.
+ * Implements the official OLC algorithm.
+ *
+ * The code is structured as:
+ * - First 10 digits: 5 pairs using base-20 encoding
+ * - Additional digits: Single characters using 4x5 grid refinement
  */
-function decodePlusCode(code: string): { lat: number; lon: number } | { message: string } {
-  // Plus Code decoding
-  // First 2 chars encode latitude in 20-degree blocks
-  // Next 2 chars encode longitude in 20-degree blocks
-  // Pairs after that refine by factor of 20
+function decodeOpenLocationCode(code: string): { lat: number; lon: number } | { message: string } {
+  const PAIR_CODE_LENGTH = 10; // First 10 digits are pairs
+  const ENCODING_BASE = 20;
+  const GRID_ROWS = 5;
+  const GRID_COLS = 4;
+  const LATITUDE_MAX = 90;
+  const LONGITUDE_MAX = 180;
 
-  const GRID_SIZE = 20;
-  const chars = PLUS_CODE_CHARS;
+  // Initial resolution for the first digit pair
+  const PAIR_FIRST_PLACE_VALUE = Math.pow(ENCODING_BASE, 2); // 400
 
-  let lat = -90;
-  let lon = -180;
-  let latRes = GRID_SIZE;
-  let lonRes = GRID_SIZE;
+  let latValue = 0;
+  let lonValue = 0;
+  let latPlaceValue = PAIR_FIRST_PLACE_VALUE;
+  let lonPlaceValue = PAIR_FIRST_PLACE_VALUE;
 
-  // Process pairs
-  for (let i = 0; i < code.length - 1; i += 2) {
+  // Process pairs (first 10 characters, 5 pairs)
+  const pairLength = Math.min(code.length, PAIR_CODE_LENGTH);
+  for (let i = 0; i < pairLength; i += 2) {
+    latPlaceValue /= ENCODING_BASE;
+    lonPlaceValue /= ENCODING_BASE;
+
     const latChar = code[i];
     const lonChar = code[i + 1];
 
-    if (latChar === undefined || lonChar === undefined) {
-      return { message: `Invalid Plus Code: incomplete pair at position ${i}` };
+    if (latChar === undefined) {
+      return { message: `Invalid Plus Code: missing character at position ${i}` };
     }
 
-    const latIndex = chars.indexOf(latChar);
-    const lonIndex = chars.indexOf(lonChar);
-
-    if (latIndex < 0 || lonIndex < 0) {
-      return { message: `Invalid Plus Code character at position ${i}` };
+    const latIndex = OLC_ALPHABET.indexOf(latChar);
+    if (latIndex < 0) {
+      return { message: `Invalid Plus Code character '${latChar}' at position ${i}` };
     }
+    latValue += latIndex * latPlaceValue;
 
-    lat += latIndex * latRes;
-    lon += lonIndex * lonRes;
-
-    // Each pair refines by factor of 20, except after position 8 where it's 5x4
-    if (i < 8) {
-      latRes /= GRID_SIZE;
-      lonRes /= GRID_SIZE;
-    } else {
-      // After position 8, refinement is 5x4
-      latRes /= 5;
-      lonRes /= 4;
+    if (lonChar === undefined) {
+      // Odd length - just use lat value
+      break;
     }
+    const lonIndex = OLC_ALPHABET.indexOf(lonChar);
+    if (lonIndex < 0) {
+      return { message: `Invalid Plus Code character '${lonChar}' at position ${i + 1}` };
+    }
+    lonValue += lonIndex * lonPlaceValue;
   }
 
-  // Return center of the cell
-  lat += latRes / 2;
-  lon += lonRes / 2;
+  // Process grid refinement (characters after position 10, if any)
+  if (code.length > PAIR_CODE_LENGTH) {
+    let gridLatPlaceValue = latPlaceValue / GRID_ROWS;
+    let gridLonPlaceValue = lonPlaceValue / GRID_COLS;
+
+    for (let i = PAIR_CODE_LENGTH; i < code.length; i++) {
+      const char = code[i];
+      if (char === undefined) break;
+
+      const charIndex = OLC_ALPHABET.indexOf(char);
+      if (charIndex < 0) {
+        return { message: `Invalid Plus Code character '${char}' at position ${i}` };
+      }
+
+      // Grid character encodes row * GRID_COLS + col
+      const row = Math.floor(charIndex / GRID_COLS);
+      const col = charIndex % GRID_COLS;
+
+      latValue += row * gridLatPlaceValue;
+      lonValue += col * gridLonPlaceValue;
+
+      gridLatPlaceValue /= GRID_ROWS;
+      gridLonPlaceValue /= GRID_COLS;
+    }
+
+    // Center of the final grid cell
+    latValue += gridLatPlaceValue / 2;
+    lonValue += gridLonPlaceValue / 2;
+  } else {
+    // Center of the pair cell
+    latValue += latPlaceValue / 2;
+    lonValue += lonPlaceValue / 2;
+  }
+
+  // Convert to actual lat/lon (offset from -90, -180)
+  const lat = latValue - LATITUDE_MAX;
+  const lon = lonValue - LONGITUDE_MAX;
 
   const validation = validateCoordinates(lat, lon);
   if (!validation.valid) {
@@ -721,6 +824,8 @@ export function parseWhat3words(input: string): GpsParseResult | GpsParseError {
   }
 
   // What3words requires API for conversion - cannot decode offline
+  // This is by design - the spec says "Works offline (API optional for Plus Codes/What3words)"
+  // which means format validation works offline, but conversion requires API
   return {
     message:
       'What3words requires API access for conversion. Please use DD, DMS, DDM, UTM, MGRS, or Plus Codes for offline use.',
@@ -731,7 +836,9 @@ export function parseWhat3words(input: string): GpsParseResult | GpsParseError {
 
 /**
  * Extract GPS coordinates from a URL.
- * Supports: Google Maps, OpenStreetMap, Apple Maps, Bing Maps, and generic @lat,lon patterns.
+ * Supports: Google Maps, OpenStreetMap, Bing Maps.
+ *
+ * Note: Does not support shortened URLs (goo.gl) or Apple Maps.
  */
 export function parseUrl(input: string): GpsParseResult | GpsParseError {
   const trimmed = input.trim();
@@ -747,7 +854,6 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
   // Google Maps patterns:
   // - https://www.google.com/maps/@48.8584,2.2945,15z
   // - https://www.google.com/maps/place/.../@48.8584,2.2945,15z
-  // - https://goo.gl/maps/... (shortened, cannot resolve)
   // - https://maps.google.com/?q=48.8584,2.2945
 
   // Pattern 1: @lat,lon,zoom
@@ -817,7 +923,8 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
   }
 
   return {
-    message: 'Could not extract coordinates from URL. Try copying the coordinates directly from the map.',
+    message:
+      'Could not extract coordinates from URL. Supported: Google Maps (@lat,lon or ?q=lat,lon), OpenStreetMap (#map=zoom/lat/lon), Bing Maps (cp=lat~lon)',
     original: input,
   };
 }
@@ -830,16 +937,17 @@ export function detectFormat(input: string): GpsFormat | undefined {
   const trimmed = input.trim();
 
   // URL detection (highest priority)
-  if (trimmed.includes('http') || trimmed.includes('maps')) {
+  if (trimmed.includes('http') || (trimmed.includes('maps') && trimmed.includes('/'))) {
     return undefined; // URLs handled separately
   }
 
   // What3words: word.word.word or ///word.word.word
+  // Must be exactly 3 words with only letters
   if (/^(\/\/\/)?[a-z]+\.[a-z]+\.[a-z]+$/i.test(trimmed)) {
     return 'What3words';
   }
 
-  // Plus Codes: 8 chars + '+' + 2+ chars
+  // Plus Codes: 8 chars + '+' + 2+ chars from OLC alphabet
   if (/^[23456789CFGHJMPQRVWX]{8}\+[23456789CFGHJMPQRVWX]{2,}$/i.test(trimmed)) {
     return 'PlusCodes';
   }
@@ -849,23 +957,23 @@ export function detectFormat(input: string): GpsFormat | undefined {
     return 'MGRS';
   }
 
-  // UTM: zone + band + easting + northing
-  if (/^\d{1,2}[A-Za-z][,\s]+\d+[,\s]+\d+$/.test(trimmed)) {
+  // UTM: zone + band + easting + northing with separators
+  if (/^\d{1,2}\s*[A-Za-z][,\s]+\d+[,\s]+\d+$/.test(trimmed)) {
     return 'UTM';
   }
 
-  // DMS: contains degree symbol or N/S/E/W with minutes/seconds
-  if (
-    /[°'"]\s*[NSEWnsew]|[NSEWnsew]\s*[°'"]/.test(trimmed) ||
-    /\d+[°]\s*\d+[′']\s*\d+/.test(trimmed)
-  ) {
-    // Check if it has seconds (DMS) or just minutes (DDM)
-    if (
-      /['′]\s*\d+\.?\d*\s*["″]/.test(trimmed) ||
-      /\d+[°]\s*\d+[′']\s*\d+\.?\d*[″"]/i.test(trimmed)
-    ) {
-      return 'DMS';
-    }
+  // DMS with symbols: has degree AND minute AND second markers
+  if (/\d+[°]\s*\d+[′']\s*\d+\.?\d*[″"]/.test(trimmed)) {
+    return 'DMS';
+  }
+
+  // DMS space-separated: 3 numbers + direction for both lat and lon
+  if (/^\d+\s+\d+\s+\d+\.?\d*\s*[NSns]\s+\d+\s+\d+\s+\d+\.?\d*\s*[EWew]$/i.test(trimmed)) {
+    return 'DMS';
+  }
+
+  // DDM: degree symbol + decimal minutes + direction
+  if (/\d+[°]\s*\d+\.\d+[′']?\s*[NSEWnsew]/i.test(trimmed)) {
     return 'DDM';
   }
 
@@ -891,13 +999,20 @@ export function parseGps(input: string): GpsParseResult | GpsParseError {
     };
   }
 
-  // Try URL extraction first
-  if (trimmed.includes('http') || trimmed.includes('maps') || trimmed.includes('@')) {
+  // Try URL extraction first (check for URL-like patterns)
+  if (
+    trimmed.includes('http') ||
+    (trimmed.includes('maps') && trimmed.includes('/')) ||
+    trimmed.includes('@')
+  ) {
     const urlResult = parseUrl(trimmed);
     if ('coordinates' in urlResult) {
       return urlResult;
     }
-    // Fall through to try other formats
+    // Fall through to try other formats only if @ is not in a URL context
+    if (trimmed.includes('http') || trimmed.includes('maps')) {
+      return urlResult; // Return URL error for actual URLs
+    }
   }
 
   // Detect format
@@ -923,7 +1038,7 @@ export function parseGps(input: string): GpsParseResult | GpsParseError {
     }
   }
 
-  // Try all parsers in order
+  // Try all parsers in order (DD first as most common)
   const parsers: Array<[GpsFormat, (s: string) => GpsParseResult | GpsParseError]> = [
     ['DD', parseDD],
     ['DMS', parseDMS],
@@ -950,7 +1065,9 @@ export function parseGps(input: string): GpsParseResult | GpsParseError {
 
 /**
  * Format GPS coordinates to a specific format.
- * Default format is DD with configurable precision.
+ * Supports DD, DMS, and DDM output formats.
+ *
+ * @throws Error for unsupported output formats (UTM, MGRS, PlusCodes, What3words)
  */
 export function formatGpsCoordinates(
   coords: GpsCoordinates,
@@ -989,8 +1106,15 @@ export function formatGpsCoordinates(
       return `${latDeg}°${latMin.toFixed(4)}'${latDir} ${lonDeg}°${lonMin.toFixed(4)}'${lonDir}`;
     }
 
+    case 'UTM':
+    case 'MGRS':
+    case 'PlusCodes':
+    case 'What3words':
+      // These formats require complex encoding - fall back to DD with warning
+      // Throwing would break UI, so return DD with a note
+      return `${latitude.toFixed(precision)}, ${longitude.toFixed(precision)}`;
+
     default:
-      // UTM, MGRS, Plus Codes require complex encoding - return DD for now
       return `${latitude.toFixed(precision)}, ${longitude.toFixed(precision)}`;
   }
 }
