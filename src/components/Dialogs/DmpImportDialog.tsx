@@ -76,7 +76,7 @@ function TruncatedComment({ comment, sectionIndex, shotIndex }: TruncatedComment
 
   return (
     <div className="flex items-start gap-1 min-w-0">
-      <span className={expanded ? 'break-words whitespace-normal' : 'truncate'}>
+      <span className={expanded ? 'flex-1 min-w-0 break-words whitespace-normal' : 'flex-1 min-w-0 truncate'}>
         {expanded ? comment : `${comment.slice(0, MAX_COMMENT_LENGTH)}...`}
       </span>
       <button
