@@ -756,27 +756,73 @@ impl Project {
         let first_gps = &self.zero_datums[0].gps;
         let gps_center = Some((first_gps.latitude, first_gps.longitude));
 
-        // Bounds from all zero datums
-        let mut min_lat = f64::MAX;
-        let mut max_lat = f64::MIN;
-        let mut min_lng = f64::MAX;
-        let mut max_lng = f64::MIN;
+        // Bounds from all zero datums with dateline-aware longitude handling
+        let mut south = f64::INFINITY;
+        let mut north = f64::NEG_INFINITY;
+
+        // Collect all longitudes for dateline-aware calculation
+        let mut longitudes: Vec<f64> = Vec::with_capacity(self.zero_datums.len());
 
         for zd in &self.zero_datums {
-            min_lat = min_lat.min(zd.gps.latitude);
-            max_lat = max_lat.max(zd.gps.latitude);
-            min_lng = min_lng.min(zd.gps.longitude);
-            max_lng = max_lng.max(zd.gps.longitude);
+            south = south.min(zd.gps.latitude);
+            north = north.max(zd.gps.latitude);
+            longitudes.push(zd.gps.longitude);
         }
 
+        // Calculate longitude bounds with dateline awareness
+        // Sort longitudes and find the largest gap - the bounds are on the opposite side
+        let (west, east) = Self::compute_longitude_bounds(&longitudes);
+
         let gps_bounds = Some(GpsBounds {
-            min_lat,
-            max_lat,
-            min_lng,
-            max_lng,
+            north,
+            south,
+            east,
+            west,
         });
 
         (gps_center, gps_bounds)
+    }
+
+    /// Compute longitude bounds with dateline awareness
+    /// Returns (west, east) where east < west indicates crossing the dateline
+    fn compute_longitude_bounds(longitudes: &[f64]) -> (f64, f64) {
+        if longitudes.is_empty() {
+            return (0.0, 0.0);
+        }
+        if longitudes.len() == 1 {
+            return (longitudes[0], longitudes[0]);
+        }
+
+        // Sort longitudes
+        let mut sorted = longitudes.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Find the largest gap between consecutive longitudes (including wrap-around)
+        let mut max_gap = 0.0f64;
+        let mut max_gap_end_idx = 0;
+
+        for i in 0..sorted.len() {
+            let next_idx = (i + 1) % sorted.len();
+            let gap = if next_idx == 0 {
+                // Wrap-around gap from last to first (crossing -180/180)
+                (sorted[0] + 360.0) - sorted[sorted.len() - 1]
+            } else {
+                sorted[next_idx] - sorted[i]
+            };
+
+            if gap > max_gap {
+                max_gap = gap;
+                max_gap_end_idx = next_idx;
+            }
+        }
+
+        // The bounds are on the opposite side of the largest gap
+        // west is at max_gap_end_idx, east is at (max_gap_end_idx - 1 + len) % len
+        let west = sorted[max_gap_end_idx];
+        let east_idx = (max_gap_end_idx + sorted.len() - 1) % sorted.len();
+        let east = sorted[east_idx];
+
+        (west, east)
     }
 }
 

@@ -108,10 +108,10 @@ export interface GpsCoordinates {
 }
 
 export interface GpsBounds {
-  min_lat: number;
-  max_lat: number;
-  min_lng: number;
-  max_lng: number;
+  north: number;
+  south: number;
+  east: number;
+  west: number;
 }
 
 export interface Coordinates {

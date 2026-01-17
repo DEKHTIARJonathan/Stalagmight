@@ -1704,3 +1704,195 @@ fn test_project_update_shot() {
     assert_eq!(shot.comment, Some("Updated comment".to_string()));
     assert!(shot.is_virtual);
 }
+
+// ============================================================================
+// GPS Metadata Tests (5 tests)
+// ============================================================================
+
+/// Test GPS metadata with no zero datums returns None
+#[test]
+fn test_gps_metadata_no_datums() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+    project.add_section(create_section_with_shots(
+        "Main",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    let metadata = project.metadata().unwrap();
+
+    assert!(metadata.gps_center.is_none());
+    assert!(metadata.gps_bounds.is_none());
+}
+
+/// Test GPS metadata with single zero datum
+#[test]
+fn test_gps_metadata_single_datum() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+    project.add_section(create_section_with_shots(
+        "Main",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    let gps = GpsCoordinates {
+        latitude: 45.5,
+        longitude: -122.7,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(0, 0), gps).unwrap();
+
+    let metadata = project.metadata().unwrap();
+
+    // Center should be from first (and only) datum
+    let (lat, lng) = metadata.gps_center.unwrap();
+    assert!((lat - 45.5).abs() < 0.0001);
+    assert!((lng - (-122.7)).abs() < 0.0001);
+
+    // Bounds should be a point (same as center for single datum)
+    let bounds = metadata.gps_bounds.unwrap();
+    assert!((bounds.north - 45.5).abs() < 0.0001);
+    assert!((bounds.south - 45.5).abs() < 0.0001);
+    assert!((bounds.east - (-122.7)).abs() < 0.0001);
+    assert!((bounds.west - (-122.7)).abs() < 0.0001);
+}
+
+/// Test GPS metadata with multiple zero datums
+#[test]
+fn test_gps_metadata_multiple_datums() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+
+    // Create two disconnected sections
+    project.add_section(create_section_with_shots(
+        "Section A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project.add_section(create_section_with_shots(
+        "Section B",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    // Set zero datums on different sections (allowed because disconnected)
+    let gps_a = GpsCoordinates {
+        latitude: 45.0,
+        longitude: -122.0,
+        depth_reference: 0.0,
+    };
+    let gps_b = GpsCoordinates {
+        latitude: 46.0,
+        longitude: -123.0,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(0, 0), gps_a).unwrap();
+    project.set_zero_datum(StationRef::new(1, 0), gps_b).unwrap();
+
+    let metadata = project.metadata().unwrap();
+
+    // Center should be from first datum
+    let (lat, lng) = metadata.gps_center.unwrap();
+    assert!((lat - 45.0).abs() < 0.0001);
+    assert!((lng - (-122.0)).abs() < 0.0001);
+
+    // Bounds should encompass both datums
+    let bounds = metadata.gps_bounds.unwrap();
+    assert!((bounds.north - 46.0).abs() < 0.0001);
+    assert!((bounds.south - 45.0).abs() < 0.0001);
+    // For non-dateline-crossing, west is smaller longitude
+    assert!((bounds.west - (-123.0)).abs() < 0.0001);
+    assert!((bounds.east - (-122.0)).abs() < 0.0001);
+}
+
+/// Test GPS bounds calculation handles dateline crossing
+#[test]
+fn test_gps_metadata_dateline_crossing() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+
+    // Create three disconnected sections
+    project.add_section(create_section_with_shots(
+        "Section A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project.add_section(create_section_with_shots(
+        "Section B",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project.add_section(create_section_with_shots(
+        "Section C",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    // Set zero datums spanning the dateline (179 and -179 are close together)
+    let gps_a = GpsCoordinates {
+        latitude: 50.0,
+        longitude: 179.0,
+        depth_reference: 0.0,
+    };
+    let gps_b = GpsCoordinates {
+        latitude: 50.0,
+        longitude: -179.0,
+        depth_reference: 0.0,
+    };
+    let gps_c = GpsCoordinates {
+        latitude: 50.0,
+        longitude: 178.0,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(0, 0), gps_a).unwrap();
+    project.set_zero_datum(StationRef::new(1, 0), gps_b).unwrap();
+    project.set_zero_datum(StationRef::new(2, 0), gps_c).unwrap();
+
+    let metadata = project.metadata().unwrap();
+
+    let bounds = metadata.gps_bounds.unwrap();
+
+    // The bounds should span the small arc across the dateline (178 to -179)
+    // not the large arc (178 to 179 to ... to -179)
+    // west should be 178, east should be -179 (crossing dateline)
+    assert!((bounds.west - 178.0).abs() < 0.0001);
+    assert!((bounds.east - (-179.0)).abs() < 0.0001);
+}
+
+/// Test GPS metadata center is stable across updates to other datums
+#[test]
+fn test_gps_metadata_center_stability() {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+
+    // Create two disconnected sections
+    project.add_section(create_section_with_shots(
+        "Section A",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+    project.add_section(create_section_with_shots(
+        "Section B",
+        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+    ));
+
+    let gps_a = GpsCoordinates {
+        latitude: 45.0,
+        longitude: -122.0,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(0, 0), gps_a).unwrap();
+
+    // Get initial center
+    let metadata = project.metadata().unwrap();
+    let (initial_lat, initial_lng) = metadata.gps_center.unwrap();
+
+    // Add another zero datum
+    let gps_b = GpsCoordinates {
+        latitude: 46.0,
+        longitude: -123.0,
+        depth_reference: 0.0,
+    };
+    project.set_zero_datum(StationRef::new(1, 0), gps_b).unwrap();
+
+    // Center should still be from first datum
+    let metadata = project.metadata().unwrap();
+    let (final_lat, final_lng) = metadata.gps_center.unwrap();
+
+    assert!((initial_lat - final_lat).abs() < 0.0001);
+    assert!((initial_lng - final_lng).abs() < 0.0001);
+}

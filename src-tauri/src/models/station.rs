@@ -34,12 +34,17 @@ pub struct GpsCoordinates {
 }
 
 /// GPS bounding box in WGS84 format
+/// Uses cardinal directions: north/south for latitude, east/west for longitude
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct GpsBounds {
-    pub min_lat: f64,
-    pub max_lat: f64,
-    pub min_lng: f64,
-    pub max_lng: f64,
+    /// Northern boundary (max latitude)
+    pub north: f64,
+    /// Southern boundary (min latitude)
+    pub south: f64,
+    /// Eastern boundary (max longitude, may be < west if crossing dateline)
+    pub east: f64,
+    /// Western boundary (min longitude)
+    pub west: f64,
 }
 
 /// Internal XYZ coordinates (meters)
