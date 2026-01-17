@@ -3352,4 +3352,272 @@ mod tests {
         });
         assert!(!result.success);
     }
+
+    // === Undo/Redo Tests for fn-35-f4v.1 ===
+
+    #[test]
+    fn test_undo_delete_shot() {
+        // Verify undoing DeleteShot restores the shot
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let create_result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0), test_shot_data(10.0)],
+        });
+
+        let section_id = create_result.section_id.unwrap();
+        let project = state.get_project_state().unwrap();
+        let shot_id = project.sections[0].shots[0].id;
+
+        // Delete the shot
+        state.execute(Command::DeleteShot { section_id, shot_id });
+
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections[0].shots.len(), 1);
+        assert_eq!(project.sections[0].shots[0].length, 10.0);
+
+        // Undo the delete
+        let result = state.undo();
+        assert!(result.success);
+
+        // Shot should be restored
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections[0].shots.len(), 2);
+        assert!(project.sections[0].shots.iter().any(|s| s.length == 5.0));
+    }
+
+    #[test]
+    fn test_undo_merge_stations() {
+        // Verify undoing MergeStations removes the merge
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        // Create two sections
+        let result_a = state.execute(Command::CreateSection {
+            name: Some("Section A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        });
+        let section_a_id = result_a.section_id.unwrap();
+
+        let result_b = state.execute(Command::CreateSection {
+            name: Some("Section B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+        });
+        let section_b_id = result_b.section_id.unwrap();
+
+        // Verify no merges exist before
+        let project_before = state.get_project_state().unwrap();
+        assert!(project_before.station_merges.is_empty());
+
+        // Merge stations
+        let station_a = StationRef::new(section_a_id, 1);
+        let station_b = StationRef::new(section_b_id, 0);
+
+        let result = state.execute(Command::MergeStations {
+            station_a,
+            station_b,
+            closure_strategy: ClosureStrategy::ProportionalByLength,
+        });
+        assert!(result.success);
+
+        // Verify merge was created
+        let project_after = state.get_project_state().unwrap();
+        assert_eq!(project_after.station_merges.len(), 1);
+        assert_eq!(project_after.station_merges[0].station_a, station_a);
+        assert_eq!(project_after.station_merges[0].station_b, station_b);
+
+        // Undo the merge
+        let result = state.undo();
+        assert!(result.success);
+
+        // Verify merge is gone
+        let project_undone = state.get_project_state().unwrap();
+        assert!(project_undone.station_merges.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_undo_sequence() {
+        // Verify multiple undos in LIFO order
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        // Create sections in sequence
+        state.execute(Command::CreateSection {
+            name: Some("First".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        state.execute(Command::CreateSection {
+            name: Some("Second".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        state.execute(Command::CreateSection {
+            name: Some("Third".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#0000ff".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        assert_eq!(state.get_project_state().unwrap().sections.len(), 3);
+
+        // Undo should remove Third first (LIFO)
+        let result = state.undo();
+        assert!(result.success);
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections.len(), 2);
+        assert!(!project.sections.iter().any(|s| s.name == Some("Third".to_string())));
+
+        // Undo should remove Second
+        let result = state.undo();
+        assert!(result.success);
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections.len(), 1);
+        assert!(!project.sections.iter().any(|s| s.name == Some("Second".to_string())));
+
+        // Undo should remove First
+        let result = state.undo();
+        assert!(result.success);
+        assert!(state.get_project_state().unwrap().sections.is_empty());
+    }
+
+    #[test]
+    fn test_redo_clears_on_new_command() {
+        // Verify new command clears redo stack
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        // Create a section
+        state.execute(Command::CreateSection {
+            name: Some("Original".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        // Undo it
+        state.undo();
+        assert!(state.can_redo());
+
+        // Execute a new command (should clear redo stack)
+        state.execute(Command::CreateSection {
+            name: Some("New".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![],
+        });
+
+        // Redo should no longer be available
+        assert!(!state.can_redo());
+
+        // Verify we have the new section, not the original
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections.len(), 1);
+        assert_eq!(project.sections[0].name, Some("New".to_string()));
+    }
+
+    #[test]
+    fn test_undo_stack_limits() {
+        // Verify stack limits and overflow handling
+        // Use a small limit to test overflow behavior
+        let state = AppState::new().unwrap();
+
+        // Set a small undo history limit via config
+        {
+            let mut config = state.config.lock().unwrap();
+            config.general.undo_history_limit = 3;
+        }
+
+        // Reinitialize undo stack with new limit
+        {
+            let mut undo_stack = state.undo_stack.lock().unwrap();
+            undo_stack.set_history_limit(3);
+        }
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        // Create 5 sections (more than the limit of 3)
+        for i in 0..5 {
+            state.execute(Command::CreateSection {
+                name: Some(format!("Section {}", i)),
+                surveyor: None,
+                date: None,
+                color: "#ff0000".to_string(),
+                direction: None,
+                shots: vec![],
+            });
+        }
+
+        assert_eq!(state.get_project_state().unwrap().sections.len(), 5);
+
+        // We should only be able to undo 3 times (the limit)
+        // The first 2 section creates should have been dropped from the stack
+        let result1 = state.undo();
+        assert!(result1.success);
+        assert_eq!(state.get_project_state().unwrap().sections.len(), 4);
+
+        let result2 = state.undo();
+        assert!(result2.success);
+        assert_eq!(state.get_project_state().unwrap().sections.len(), 3);
+
+        let result3 = state.undo();
+        assert!(result3.success);
+        assert_eq!(state.get_project_state().unwrap().sections.len(), 2);
+
+        // Fourth undo should fail (stack exhausted)
+        let result4 = state.undo();
+        assert!(!result4.success);
+
+        // Verify we still have the first 2 sections (they couldn't be undone)
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.sections.len(), 2);
+        assert!(project.sections.iter().any(|s| s.name == Some("Section 0".to_string())));
+        assert!(project.sections.iter().any(|s| s.name == Some("Section 1".to_string())));
+    }
 }
