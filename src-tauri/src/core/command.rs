@@ -94,6 +94,18 @@ pub enum Command {
     Batch {
         commands: Vec<Command>,
     },
+
+    // Project merge command
+    MergeProjects {
+        /// Paths to the source projects to merge
+        source_paths: Vec<PathBuf>,
+        /// Path for the merged output project
+        output_path: PathBuf,
+        /// Name for the merged project
+        output_name: String,
+        /// Whether to archive (rename) the original files
+        archive_originals: bool,
+    },
 }
 
 /// Result of command execution
@@ -268,6 +280,17 @@ impl Command {
             }
             Command::Batch { commands } => {
                 format!("Batch of {} commands", commands.len())
+            }
+            Command::MergeProjects {
+                source_paths,
+                output_name,
+                ..
+            } => {
+                format!(
+                    "Merge {} projects into '{}'",
+                    source_paths.len(),
+                    output_name
+                )
             }
         }
     }

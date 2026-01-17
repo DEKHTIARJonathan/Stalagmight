@@ -122,6 +122,17 @@ impl AppState {
                 new_position,
             } => self.move_station(*station_ref, *new_position),
             Command::Batch { commands } => self.execute_batch(commands.clone()),
+            Command::MergeProjects {
+                source_paths,
+                output_path,
+                output_name,
+                archive_originals,
+            } => self.merge_projects(
+                source_paths.clone(),
+                output_path.clone(),
+                output_name.clone(),
+                *archive_originals,
+            ),
         };
 
         // Push to undo stack if successful and undoable
@@ -437,6 +448,7 @@ impl AppState {
                 | Command::SaveProject { .. }
                 | Command::CloseProject
                 | Command::CreateProject { .. }
+                | Command::MergeProjects { .. }
         )
     }
 
@@ -444,7 +456,10 @@ impl AppState {
     fn is_modifying(cmd: &Command) -> bool {
         !matches!(
             cmd,
-            Command::OpenProject { .. } | Command::SaveProject { .. } | Command::CloseProject
+            Command::OpenProject { .. }
+                | Command::SaveProject { .. }
+                | Command::CloseProject
+                | Command::MergeProjects { .. }
         )
     }
 
@@ -1078,6 +1093,256 @@ impl AppState {
         } else {
             CommandResult::success_with_section_ids_and_warnings(section_ids, all_warnings)
         }
+    }
+
+    // === Project merge operations ===
+
+    /// Merge multiple projects into a new project file
+    /// This creates a NEW output file, appends all sections with renumbered IDs,
+    /// keeps all zero datums, and optionally archives the original files.
+    fn merge_projects(
+        &self,
+        source_paths: Vec<PathBuf>,
+        output_path: PathBuf,
+        output_name: String,
+        archive_originals: bool,
+    ) -> CommandResult {
+        // Validate inputs
+        if source_paths.is_empty() {
+            return CommandResult::failure("No source projects provided".to_string());
+        }
+
+        if source_paths.len() < 2 {
+            return CommandResult::failure("At least two projects are required for merge".to_string());
+        }
+
+        // Check that output path doesn't already exist
+        if output_path.exists() {
+            return CommandResult::failure(format!(
+                "Output file already exists: {}",
+                output_path.display()
+            ));
+        }
+
+        // Verify all source files exist
+        for path in &source_paths {
+            if !path.exists() {
+                return CommandResult::failure(format!("Source file not found: {}", path.display()));
+            }
+        }
+
+        // Load all source projects
+        let mut source_projects: Vec<Project> = Vec::new();
+        for path in &source_paths {
+            match Database::open_existing(path) {
+                Ok(db) => match db.load_project() {
+                    Ok(mut project) => {
+                        project.file_path = Some(path.clone());
+                        source_projects.push(project);
+                    }
+                    Err(e) => {
+                        return CommandResult::failure(format!(
+                            "Failed to load project '{}': {}",
+                            path.display(),
+                            e
+                        ));
+                    }
+                },
+                Err(e) => {
+                    return CommandResult::failure(format!(
+                        "Failed to open project '{}': {}",
+                        path.display(),
+                        e
+                    ));
+                }
+            }
+        }
+
+        // Create a new merged project
+        let mut merged_project = Project::new(output_name.clone(), None);
+
+        // Track section ID remapping: (old_project_idx, old_section_id) -> new_section_id
+        let mut section_id_map: std::collections::HashMap<(usize, SectionId), SectionId> =
+            std::collections::HashMap::new();
+
+        // Append sections from all projects
+        for (proj_idx, source_project) in source_projects.iter().enumerate() {
+            for section in &source_project.sections {
+                let old_section_id = section.id;
+                let new_section_id = merged_project.next_section_id;
+
+                // Clone section data and add to merged project
+                let section_data = section.to_section_data();
+                merged_project.add_section(section_data);
+
+                // Record the mapping
+                section_id_map.insert((proj_idx, old_section_id), new_section_id);
+            }
+
+            // Copy section offsets with remapped IDs
+            for (old_section_id, offset) in &source_project.section_offsets {
+                if let Some(&new_section_id) = section_id_map.get(&(proj_idx, *old_section_id)) {
+                    merged_project.section_offsets.insert(new_section_id, *offset);
+                }
+            }
+
+            // Copy zero datums with remapped section IDs
+            for zd in &source_project.zero_datums {
+                if let Some(&new_section_id) =
+                    section_id_map.get(&(proj_idx, zd.station_ref.section_id))
+                {
+                    let new_station_ref = StationRef::new(new_section_id, zd.station_ref.station_index);
+                    // Use set_zero_datum to properly validate and add
+                    let _ = merged_project.set_zero_datum(new_station_ref, zd.gps);
+                }
+            }
+
+            // Copy station merges with remapped section IDs (only within same source project)
+            for merge in &source_project.station_merges {
+                if let (Some(&new_a_section), Some(&new_b_section)) = (
+                    section_id_map.get(&(proj_idx, merge.station_a.section_id)),
+                    section_id_map.get(&(proj_idx, merge.station_b.section_id)),
+                ) {
+                    let new_station_a =
+                        StationRef::new(new_a_section, merge.station_a.station_index);
+                    let new_station_b =
+                        StationRef::new(new_b_section, merge.station_b.station_index);
+                    merged_project.station_merges.push(crate::models::StationMerge {
+                        station_a: new_station_a,
+                        station_b: new_station_b,
+                        merged_at: merge.merged_at,
+                    });
+                }
+            }
+
+            // Copy loop closures with remapped section IDs (only within same source project)
+            for closure in &source_project.loop_closures {
+                if let (Some(&new_a_section), Some(&new_b_section)) = (
+                    section_id_map.get(&(proj_idx, closure.station_a.section_id)),
+                    section_id_map.get(&(proj_idx, closure.station_b.section_id)),
+                ) {
+                    let new_station_a =
+                        StationRef::new(new_a_section, closure.station_a.station_index);
+                    let new_station_b =
+                        StationRef::new(new_b_section, closure.station_b.station_index);
+                    merged_project.loop_closures.push(crate::models::LoopClosure {
+                        station_a: new_station_a,
+                        station_b: new_station_b,
+                        path_length: closure.path_length,
+                        misclosure_distance: closure.misclosure_distance,
+                        error_percentage: closure.error_percentage,
+                        horizontal_misclosure: closure.horizontal_misclosure,
+                        vertical_misclosure: closure.vertical_misclosure,
+                    });
+                }
+            }
+
+            // Combine location if present
+            if let Some(ref loc) = source_project.location {
+                if merged_project.location.is_none() {
+                    merged_project.location = Some(loc.clone());
+                } else if let Some(ref mut merged_loc) = merged_project.location {
+                    if !merged_loc.contains(loc) {
+                        merged_loc.push_str(", ");
+                        merged_loc.push_str(loc);
+                    }
+                }
+            }
+        }
+
+        // Set the output file path
+        merged_project.file_path = Some(output_path.clone());
+
+        // Ensure .cvproj extension
+        let output_path = if output_path.extension().map_or(true, |ext| ext != "cvproj") {
+            output_path.with_extension("cvproj")
+        } else {
+            output_path
+        };
+
+        // Save the merged project using safe save pattern (temp file + atomic rename)
+        let temp_path = output_path.with_extension("cvproj.tmp");
+
+        // Remove any leftover temp file
+        if temp_path.exists() {
+            let _ = std::fs::remove_file(&temp_path);
+        }
+
+        // Save to temporary file
+        let mut db = match Database::open(&temp_path) {
+            Ok(db) => db,
+            Err(e) => {
+                let _ = std::fs::remove_file(&temp_path);
+                return CommandResult::failure(format!("Failed to create output file: {}", e));
+            }
+        };
+
+        if let Err(e) = db.save_project(&merged_project) {
+            drop(db);
+            let _ = std::fs::remove_file(&temp_path);
+            return CommandResult::failure(format!("Failed to save merged project: {}", e));
+        }
+
+        // Close database before rename
+        drop(db);
+
+        // Atomically rename temp file to final destination
+        if let Err(e) = std::fs::rename(&temp_path, &output_path) {
+            let _ = std::fs::remove_file(&temp_path);
+            return CommandResult::failure(format!("Failed to finalize save: {}", e));
+        }
+
+        tracing::info!(
+            output = ?output_path,
+            section_count = merged_project.sections.len(),
+            "Projects merged successfully"
+        );
+
+        // Archive original files if requested
+        if archive_originals {
+            for source_path in &source_paths {
+                if let Err(e) = Self::archive_project_file(source_path) {
+                    tracing::warn!(
+                        path = ?source_path,
+                        error = %e,
+                        "Failed to archive original project (merge completed)"
+                    );
+                    // Don't fail the operation - merge was successful
+                }
+            }
+        }
+
+        CommandResult::success()
+    }
+
+    /// Archive a project file by renaming it with .archived suffix
+    fn archive_project_file(path: &PathBuf) -> std::io::Result<()> {
+        // Create archive filename: original.cvproj -> original.cvproj.archived
+        // If archived file exists, add timestamp: original.cvproj.archived.20260117_123456
+        let mut archive_path = path.clone();
+        let mut new_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        new_name.push_str(".archived");
+        archive_path.set_file_name(&new_name);
+
+        // If archive already exists, add timestamp
+        if archive_path.exists() {
+            let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+            new_name.push('.');
+            new_name.push_str(&timestamp);
+            archive_path.set_file_name(&new_name);
+        }
+
+        std::fs::rename(path, &archive_path)?;
+        tracing::info!(
+            original = ?path,
+            archived = ?archive_path,
+            "Project file archived"
+        );
+        Ok(())
     }
 
     // === Undo/Redo operations ===
