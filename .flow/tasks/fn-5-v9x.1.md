@@ -66,9 +66,8 @@ In `e2e-playwright/mocks/tauri-ipc.ts`, add pitch values to mock shots:
 - [ ] TypeScript types pass
 - [ ] All tests pass
 ## Done summary
-TBD
-
+Added Pitch column to shot preview table in DMP Import Dialog showing average of pitch_in/pitch_out, with proper normalization of DMP sentinel values and extracted helper functions for cleaner code.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: ada3230, 4a1cab1
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:

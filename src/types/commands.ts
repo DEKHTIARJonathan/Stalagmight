@@ -53,6 +53,7 @@ export interface DmpShot {
   minute: number;
   second: number;
   marker_index: number;
+  comment?: string;
 }
 
 // Export types

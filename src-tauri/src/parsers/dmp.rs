@@ -229,6 +229,8 @@ pub struct DmpShot {
     pub second: u8,
     /// Physical marker index
     pub marker_index: u8,
+    /// User comment (not in DMP format, always None when parsed)
+    pub comment: Option<String>,
 }
 
 // ============================================================================
@@ -343,6 +345,7 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
         minute,
         second,
         marker_index,
+        comment: None,
     })
 }
 
@@ -540,7 +543,7 @@ impl DmpShot {
             right: Some(self.right),
             up: Some(self.up),
             down: Some(self.down),
-            comment: None,
+            comment: self.comment.clone(),
             is_virtual: false,
             marker_index: Some(self.marker_index as u32),
             temperature: Some(self.temperature),
