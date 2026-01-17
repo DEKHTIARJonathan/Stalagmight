@@ -12,3 +12,6 @@ Frontend validation rules must match backend Validator exactly to avoid preview/
 
 ## 2026-01-17 manual [pitfall]
 Per-project settings need in-memory cache for new unsaved projects (no DB exists until first save)
+
+## 2026-01-17 manual [pitfall]
+Regex alternations with different group positions create brittle code - use explicit variable extraction instead of complex index remapping

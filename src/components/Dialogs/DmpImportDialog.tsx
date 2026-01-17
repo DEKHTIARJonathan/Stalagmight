@@ -14,6 +14,12 @@ import {
   type ValidationIssue,
 } from '../../utils/validation';
 import { defaultConfig } from '../../types/config';
+import {
+  parseGps,
+  detectFormat,
+  type GpsFormat,
+} from '../../utils/gps';
+import type { GpsCoordinates } from '../../types/project';
 
 /**
  * Maximum comment length before truncation is applied.
@@ -221,6 +227,14 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
   // Checkbox to acknowledge warnings and proceed with import
   const [acknowledgeWarnings, setAcknowledgeWarnings] = useState(false);
 
+  // GPS input state
+  const [gpsInput, setGpsInput] = useState('');
+  const [gpsError, setGpsError] = useState<string | null>(null);
+  const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(null);
+  const [gpsFormat, setGpsFormat] = useState<GpsFormat | undefined>(undefined);
+  // Station selection for zero datum: 'first' or 'last' station of first section
+  const [gpsStation, setGpsStation] = useState<'first' | 'last'>('first');
+
   // Validation configuration from app config (fallback to defaults)
   const validationConfig = config?.validation ?? defaultConfig.validation;
 
@@ -276,6 +290,48 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
 
     return () => clearTimeout(timer);
   }, [dmpFile, selectedSections]);
+
+  // Handle GPS input changes with validation
+  const handleGpsInputChange = useCallback((value: string) => {
+    setGpsInput(value);
+    setGpsError(null);
+    setGpsCoords(null);
+
+    if (!value.trim()) {
+      setGpsFormat(undefined);
+      return;
+    }
+
+    // Try to detect format first (for display)
+    const detectedFormat = detectFormat(value);
+    setGpsFormat(detectedFormat);
+
+    // Parse and validate
+    const result = parseGps(value);
+    if ('coordinates' in result) {
+      // Successfully parsed
+      setGpsCoords(result.coordinates);
+      setGpsFormat(result.format);
+      setGpsError(null);
+    } else {
+      // Parse error
+      setGpsError(result.message);
+      setGpsCoords(null);
+      // Keep the detected format for display even on error
+      if (result.format) {
+        setGpsFormat(result.format);
+      }
+    }
+  }, []);
+
+  // Clear GPS input when file changes
+  useEffect(() => {
+    setGpsInput('');
+    setGpsError(null);
+    setGpsCoords(null);
+    setGpsFormat(undefined);
+    setGpsStation('first');
+  }, [dmpFile]);
 
   const handleLoadFile = useCallback(async (path: string) => {
     if (!path) return;
@@ -771,6 +827,74 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                   )}
                 </div>
               )}
+            </Panel>
+
+            {/* GPS Input Section */}
+            <Panel title="GPS Coordinates (Optional)">
+              <div className="space-y-3 p-1">
+                <div>
+                  <label className="block text-sm text-text-secondary mb-1">
+                    Enter GPS coordinates
+                  </label>
+                  <input
+                    type="text"
+                    value={gpsInput}
+                    onChange={(e) => handleGpsInputChange(e.target.value)}
+                    onBlur={() => handleGpsInputChange(gpsInput)}
+                    placeholder="48.8584, 2.2945 or 48°51'30&quot;N 2°17'40&quot;E or paste URL"
+                    className="w-full"
+                    data-testid="gps-input"
+                  />
+                </div>
+
+                {/* Format indicator and parsed coordinates */}
+                <div className="flex items-center gap-4 text-sm">
+                  <span
+                    className="text-text-secondary"
+                    data-testid="gps-format-indicator"
+                  >
+                    Format: {gpsFormat ? gpsFormat : '—'}
+                  </span>
+                  {gpsCoords && (
+                    <span
+                      className="text-success"
+                      data-testid="gps-parsed-coords"
+                    >
+                      {gpsCoords.latitude.toFixed(6)}, {gpsCoords.longitude.toFixed(6)}
+                    </span>
+                  )}
+                </div>
+
+                {/* GPS validation error */}
+                {gpsError && (
+                  <div
+                    className="text-error text-sm"
+                    data-testid="gps-error"
+                  >
+                    {gpsError}
+                  </div>
+                )}
+
+                {/* Station selector */}
+                <div>
+                  <label className="block text-sm text-text-secondary mb-1">
+                    Assign to station
+                  </label>
+                  <select
+                    value={gpsStation}
+                    onChange={(e) => setGpsStation(e.target.value as 'first' | 'last')}
+                    className="bg-surface border border-border rounded px-3 py-1.5 text-sm"
+                    data-testid="gps-station-selector"
+                    disabled={!gpsCoords}
+                  >
+                    <option value="first">First station</option>
+                    <option value="last">Last station</option>
+                  </select>
+                  <p className="text-xs text-text-secondary mt-1">
+                    GPS coordinates will be assigned to this station as the zero datum.
+                  </p>
+                </div>
+              </div>
             </Panel>
 
             {/* Section preview - shows the most recently expanded section */}
