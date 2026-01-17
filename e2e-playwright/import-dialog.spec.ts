@@ -1811,3 +1811,126 @@ test.describe('Placement Mode - Manual Map Placement', () => {
     expect(buttonText).not.toBe('Place on Map');
   });
 });
+
+test.describe('Direction Column', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+  });
+
+  test('direction dropdown visible in section table', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Find the direction dropdown for the first section (index 0)
+    const directionSelect = page.locator('[data-testid="direction-select-0"]');
+    await expect(directionSelect).toBeVisible();
+
+    // Verify it has In/Out options
+    const options = await directionSelect.locator('option').allTextContents();
+    expect(options).toContain('In');
+    expect(options).toContain('Out');
+  });
+
+  test('direction dropdown shows parsed value from DMP', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // First section (Main Passage) has direction 'in' from mock
+    const directionSelect0 = page.locator('[data-testid="direction-select-0"]');
+    await expect(directionSelect0).toHaveValue('in');
+
+    // Second section (Side Passage) has direction 'out' from mock
+    const directionSelect1 = page.locator('[data-testid="direction-select-1"]');
+    await expect(directionSelect1).toHaveValue('out');
+  });
+
+  test('direction can be changed via dropdown', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Find direction dropdown for first section
+    const directionSelect = page.locator('[data-testid="direction-select-0"]');
+    await expect(directionSelect).toHaveValue('in');
+
+    // Change direction to 'out'
+    await directionSelect.selectOption('out');
+    await expect(directionSelect).toHaveValue('out');
+  });
+
+  test('direction change persists across selection toggle', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    const directionSelect = page.locator('[data-testid="direction-select-0"]');
+
+    // Change direction
+    await directionSelect.selectOption('out');
+    await expect(directionSelect).toHaveValue('out');
+
+    // Deselect the section
+    const checkbox = page.locator('input[type="checkbox"]').first();
+    await checkbox.click();
+
+    // Re-select the section
+    await checkbox.click();
+
+    // Direction should still be 'out'
+    await expect(directionSelect).toHaveValue('out');
+  });
+
+  test('direction dropdown has proper aria-label', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // The dropdown should have an aria-label for accessibility
+    const directionSelect = page.locator('[data-testid="direction-select-0"]');
+    const ariaLabel = await directionSelect.getAttribute('aria-label');
+    expect(ariaLabel).toContain('Direction for section');
+    expect(ariaLabel).toContain('Main Passage');
+  });
+
+  test('direction dropdown does not trigger row expand/collapse', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    const dialog = page.locator('[role="dialog"]');
+
+    // Find the expand button and ensure section is collapsed
+    const expandButton = page.locator('[data-testid="section-expand-0"]');
+    const isExpanded = await expandButton.textContent();
+
+    // Section should start collapsed (arrow pointing right)
+    // If it's expanded, collapse it first
+    if (isExpanded === '▼') {
+      await expandButton.click();
+      await expect(expandButton).toHaveText('▶');
+    }
+
+    // Click on the direction dropdown
+    const directionSelect = page.locator('[data-testid="direction-select-0"]');
+    await directionSelect.click();
+
+    // The section should still be collapsed (clicking dropdown should not expand)
+    await expect(expandButton).toHaveText('▶');
+
+    // Select an option
+    await directionSelect.selectOption('out');
+
+    // Section should still be collapsed
+    await expect(expandButton).toHaveText('▶');
+  });
+
+  test('each section has its own direction dropdown', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    // Verify multiple direction dropdowns exist
+    const directionSelect0 = page.locator('[data-testid="direction-select-0"]');
+    const directionSelect1 = page.locator('[data-testid="direction-select-1"]');
+
+    await expect(directionSelect0).toBeVisible();
+    await expect(directionSelect1).toBeVisible();
+
+    // They can have different values
+    await directionSelect0.selectOption('out');
+    await directionSelect1.selectOption('in');
+
+    await expect(directionSelect0).toHaveValue('out');
+    await expect(directionSelect1).toHaveValue('in');
+  });
+});

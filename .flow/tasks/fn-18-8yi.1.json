@@ -5,10 +5,21 @@
   "created_at": "2026-01-17T08:37:51.228336Z",
   "depends_on": [],
   "epic": "fn-18-8yi",
+  "evidence": {
+    "commits": [
+      "0a70c2acde26f1769a1f795ec7ba24ce318c0d40"
+    ],
+    "prs": [],
+    "tests": [
+      "cargo test (18 unit tests, 62 integration tests passed)",
+      "pnpm tsc --noEmit (type check passed)",
+      "pnpm test:ui (127 Playwright E2E tests passed)"
+    ]
+  },
   "id": "fn-18-8yi.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-18-8yi.1.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add direction field with database migration",
-  "updated_at": "2026-01-17T14:29:06.341528Z"
+  "updated_at": "2026-01-17T14:36:46.172184Z"
 }
