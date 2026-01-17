@@ -4,8 +4,35 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
 import { DialogWrapper } from './DialogWrapper';
-import type { DmpFile } from '../../types/commands';
+import type { DmpFile, DmpShot } from '../../types/commands';
 import { getNextSectionColor } from '../../utils/colors';
+
+/**
+ * Normalize DMP sentinel value (0.0 means "not measured") to null.
+ * DMP files use 0.0 as a sentinel for "not measured", but we store null internally.
+ */
+function normalizeDmpValue(value: number | undefined | null): number | null {
+  if (value === undefined || value === null || value === 0) return null;
+  if (!Number.isFinite(value)) return null;
+  return value;
+}
+
+/**
+ * Format pitch for display in the preview table.
+ * - Both values present: shows average
+ * - One value present: shows that value
+ * - Zero/null values: shows "-" (indicates "not measured")
+ */
+function formatPitch(shot: DmpShot): string {
+  const pitchIn = Number.isFinite(shot.pitch_in) ? shot.pitch_in : 0;
+  const pitchOut = Number.isFinite(shot.pitch_out) ? shot.pitch_out : 0;
+
+  if (pitchIn === 0 && pitchOut === 0) return '-';
+  if (pitchIn === 0) return pitchOut.toFixed(1);
+  if (pitchOut === 0) return pitchIn.toFixed(1);
+
+  return ((pitchIn + pitchOut) / 2).toFixed(1);
+}
 
 interface DmpImportDialogProps {
   filePath?: string;
@@ -169,12 +196,12 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
             length: shot.length,
             depth_in: shot.depth_in,
             depth_out: shot.depth_out,
-            pitch_in: shot.pitch_in ?? null,
-            pitch_out: shot.pitch_out ?? null,
-            left: shot.left ?? null,
-            right: shot.right ?? null,
-            up: shot.up ?? null,
-            down: shot.down ?? null,
+            pitch_in: normalizeDmpValue(shot.pitch_in),
+            pitch_out: normalizeDmpValue(shot.pitch_out),
+            left: normalizeDmpValue(shot.left),
+            right: normalizeDmpValue(shot.right),
+            up: normalizeDmpValue(shot.up),
+            down: normalizeDmpValue(shot.down),
             is_virtual: false,
             marker_index: shot.marker_index ?? null,
             temperature: shot.temperature ?? null,
@@ -395,14 +422,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                                             className="text-right py-0.5 px-1"
                                             data-testid={`pitch-${index}-${shotIndex}`}
                                           >
-                                            {(() => {
-                                              const pitchIn = shot.pitch_in || 0;
-                                              const pitchOut = shot.pitch_out || 0;
-                                              if (pitchIn === 0 && pitchOut === 0) return '-';
-                                              if (pitchIn === 0) return pitchOut.toFixed(1);
-                                              if (pitchOut === 0) return pitchIn.toFixed(1);
-                                              return ((pitchIn + pitchOut) / 2).toFixed(1);
-                                            })()}
+                                            {formatPitch(shot)}
                                           </td>
                                         </tr>
                                       ))}
