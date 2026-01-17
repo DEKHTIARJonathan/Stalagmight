@@ -121,6 +121,8 @@ interface UIStore {
   showSatellite: boolean;
   showDepthGradient: boolean;
   toggleDisplay: (key: DisplayToggleKey) => void;
+  loadDisplaySettings: () => Promise<void>;
+  saveDisplaySetting: (key: DisplayToggleKey, value: boolean) => Promise<void>;
 
   // Hover state
   hoveredStation: StationRef | null;
@@ -286,7 +288,40 @@ export const useUIStore = create<UIStore>((set) => ({
   showScaleBar: true,
   showSatellite: false,
   showDepthGradient: false,
-  toggleDisplay: (key) => set((state) => ({ [key]: !state[key] })),
+  toggleDisplay: (key) => {
+    set((state) => {
+      const newValue = !state[key];
+      // Persist the setting asynchronously (fire-and-forget)
+      invoke('save_display_setting', { key, value: String(newValue) }).catch((e) => {
+        console.warn('Failed to save display setting:', e);
+      });
+      return { [key]: newValue };
+    });
+  },
+  loadDisplaySettings: async () => {
+    try {
+      const settings = await invoke<Record<string, string>>('load_display_settings');
+      const displayState: Partial<Record<DisplayToggleKey, boolean>> = {};
+      for (const [key, value] of Object.entries(settings)) {
+        if (key.startsWith('show')) {
+          displayState[key as DisplayToggleKey] = value === 'true';
+        }
+      }
+      if (Object.keys(displayState).length > 0) {
+        set(displayState);
+      }
+    } catch (e) {
+      // No project open or other error - use defaults
+      console.warn('Failed to load display settings:', e);
+    }
+  },
+  saveDisplaySetting: async (key, value) => {
+    try {
+      await invoke('save_display_setting', { key, value: String(value) });
+    } catch (e) {
+      console.warn('Failed to save display setting:', e);
+    }
+  },
 
   // Hover state
   hoveredStation: null,

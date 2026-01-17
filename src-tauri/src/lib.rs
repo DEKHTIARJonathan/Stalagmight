@@ -64,6 +64,10 @@ pub fn run() {
             commands::config::get_config,
             commands::config::update_config,
             commands::config::update_panel_sizes,
+            // Display settings (per-project)
+            commands::config::load_display_settings,
+            commands::config::save_display_setting,
+            commands::config::get_display_setting,
             // Validation
             commands::validation::get_project_warnings,
             commands::validation::resolve_warning,

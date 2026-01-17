@@ -752,6 +752,44 @@ impl Database {
         )?;
         Ok(())
     }
+
+    /// Load all display settings from database
+    pub fn load_display_settings(&self) -> Result<HashMap<String, String>> {
+        let mut stmt = self.conn.prepare("SELECT key, value FROM display_settings")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        let mut settings = HashMap::new();
+        for row in rows {
+            let (key, value) = row?;
+            settings.insert(key, value);
+        }
+        Ok(settings)
+    }
+
+    /// Save a display setting to database
+    pub fn save_display_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO display_settings (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Get a single display setting from database
+    pub fn get_display_setting(&self, key: &str) -> Result<Option<String>> {
+        let result = self.conn.query_row(
+            "SELECT value FROM display_settings WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 /// Resolved warning record

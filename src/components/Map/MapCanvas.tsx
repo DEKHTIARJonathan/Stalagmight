@@ -24,6 +24,7 @@ export default function MapCanvas() {
   const map = useRef<maplibregl.Map | null>(null);
   const surveyLayerRef = useRef<SurveyLayer | null>(null);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
+  const scaleControlAddedRef = useRef<boolean>(false);
   const [measureResult, setMeasureResult] = useState<{ distance: number; depthDiff: number } | null>(null);
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
@@ -411,18 +412,12 @@ export default function MapCanvas() {
     if (!map.current || !scaleControlRef.current || !mapLoaded) return;
 
     try {
-      if (showScaleBar) {
-        // Check if control is already added by looking for its container
-        const existingControl = map.current.getContainer().querySelector('.maplibregl-ctrl-scale');
-        if (!existingControl) {
-          map.current.addControl(scaleControlRef.current, 'bottom-left');
-        }
-      } else {
-        // Check if control exists before removing
-        const existingControl = map.current.getContainer().querySelector('.maplibregl-ctrl-scale');
-        if (existingControl) {
-          map.current.removeControl(scaleControlRef.current);
-        }
+      if (showScaleBar && !scaleControlAddedRef.current) {
+        map.current.addControl(scaleControlRef.current, 'bottom-left');
+        scaleControlAddedRef.current = true;
+      } else if (!showScaleBar && scaleControlAddedRef.current) {
+        map.current.removeControl(scaleControlRef.current);
+        scaleControlAddedRef.current = false;
       }
     } catch (e) {
       // Control may not be in a state to be added/removed - ignore errors
