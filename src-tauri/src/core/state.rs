@@ -549,6 +549,14 @@ impl AppState {
         let temp_path = save_path.with_extension("cvproj.tmp");
         tracing::info!(final_path = ?save_path, temp_path = ?temp_path, "Starting safe save operation");
 
+        // Load display settings from current database before creating new one
+        let display_settings = {
+            let db_guard = self.database.lock().ok();
+            db_guard.as_ref().and_then(|db| db.as_ref())
+                .and_then(|db| db.load_display_settings().ok())
+                .unwrap_or_default()
+        };
+
         // Remove any leftover temp file from previous failed saves
         if temp_path.exists() {
             let _ = std::fs::remove_file(&temp_path);
@@ -570,6 +578,13 @@ impl AppState {
             let _ = std::fs::remove_file(&temp_path);
             tracing::error!(error = %e, "Save failed, temp file cleaned up");
             return CommandResult::failure(format!("Failed to save project: {}", e));
+        }
+
+        // Copy display settings to the new database
+        for (key, value) in &display_settings {
+            if let Err(e) = db.save_display_setting(key, value) {
+                tracing::warn!(key = %key, error = %e, "Failed to copy display setting");
+            }
         }
 
         // Close the database before renaming

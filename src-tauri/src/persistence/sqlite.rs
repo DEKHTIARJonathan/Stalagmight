@@ -73,8 +73,25 @@ impl Database {
             anyhow::bail!("File does not contain a valid CaveChef project");
         }
 
+        // Run lightweight migrations to ensure newer tables exist in legacy projects
+        db.migrate_schema()?;
+
         tracing::info!("=== OPEN EXISTING END === Success");
         Ok(db)
+    }
+
+    /// Run lightweight schema migrations for tables added after initial release
+    fn migrate_schema(&self) -> Result<()> {
+        // Ensure display_settings table exists (added in v1.x for per-project display toggles)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS display_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+            [],
+        )?;
+        tracing::debug!("Schema migration complete");
+        Ok(())
     }
 
     /// Check if the database has valid project data

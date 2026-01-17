@@ -123,6 +123,7 @@ interface UIStore {
   toggleDisplay: (key: DisplayToggleKey) => void;
   loadDisplaySettings: () => Promise<void>;
   saveDisplaySetting: (key: DisplayToggleKey, value: boolean) => Promise<void>;
+  resetDisplaySettings: () => void;
 
   // Hover state
   hoveredStation: StationRef | null;
@@ -289,14 +290,11 @@ export const useUIStore = create<UIStore>((set) => ({
   showSatellite: false,
   showDepthGradient: false,
   toggleDisplay: (key) => {
-    set((state) => {
-      const newValue = !state[key];
-      // Persist the setting asynchronously (fire-and-forget)
-      invoke('save_display_setting', { key, value: String(newValue) }).catch((e) => {
-        console.warn('Failed to save display setting:', e);
-      });
-      return { [key]: newValue };
-    });
+    const state = useUIStore.getState();
+    const newValue = !state[key];
+    set({ [key]: newValue });
+    // Persist the setting asynchronously via the helper
+    state.saveDisplaySetting(key, newValue);
   },
   loadDisplaySettings: async () => {
     try {
@@ -321,6 +319,20 @@ export const useUIStore = create<UIStore>((set) => ({
     } catch (e) {
       console.warn('Failed to save display setting:', e);
     }
+  },
+  resetDisplaySettings: () => {
+    // Reset all display toggles to their default values
+    set({
+      showStations: true,
+      showSectionNames: true,
+      showShotData: false,
+      showVirtualShots: true,
+      showZeroDatum: true,
+      showGrid: false,
+      showScaleBar: true,
+      showSatellite: false,
+      showDepthGradient: false,
+    });
   },
 
   // Hover state

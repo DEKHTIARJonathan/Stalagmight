@@ -119,6 +119,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         console.log('[projectStore] Calling refreshProjectState...');
         await get().refreshProjectState();
         console.log('[projectStore] refreshProjectState done');
+        // Reset display settings to defaults for new project
+        useUIStore.getState().resetDisplaySettings();
         set({ isDirty: false });
       } else {
         set({ error: result.error ?? 'Failed to create project' });
