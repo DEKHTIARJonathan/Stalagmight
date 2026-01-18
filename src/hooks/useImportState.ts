@@ -1,7 +1,13 @@
 import { useReducer, useCallback, useMemo } from 'react';
 import type { DmpFile, DmpShot } from '../types/commands';
-import type { GpsCoordinates, StationRef, Coordinates } from '../types/project';
+import type { GpsCoordinates, StationRef, Coordinates, Section } from '../types/project';
 import type { EditableShot } from '../components/common/ShotTableEditor';
+import {
+  type ImportError,
+  validateEditableShot,
+  validatePlacement,
+  validateMergeTarget,
+} from '../utils/validation';
 
 /**
  * Configuration from Step 1 (DmpSelectionDialog).
@@ -793,13 +799,21 @@ export function useImportState(
     return Array.from(state.placedSections);
   }, [state.placedSections]);
 
-  // Get section status
+  // Get section status - now considers validation errors
   const getSectionStatus = useCallback((sectionIndex: number): 'placed' | 'not_placed' | 'errors' => {
     const config = state.sectionConfigs.get(sectionIndex);
     if (!config) return 'not_placed';
 
     const validShots = config.shots.filter((s) => !s.isDeleted);
     if (validShots.length === 0) return 'errors';
+
+    // Check for shot validation errors
+    for (let i = 0; i < config.shots.length; i++) {
+      const shot = config.shots[i];
+      if (!shot || shot.isDeleted) continue;
+      const shotErrors = validateEditableShot(shot, i, sectionIndex);
+      if (shotErrors.length > 0) return 'errors';
+    }
 
     if (state.placedSections.has(sectionIndex)) return 'placed';
 
@@ -813,6 +827,153 @@ export function useImportState(
       shots: config.shots.filter((s) => !s.isDeleted),
     }));
   }, [state.sectionConfigs]);
+
+  /**
+   * Get all errors for a specific section.
+   * Includes shot validation errors, placement errors, and merge conflicts.
+   */
+  const getSectionErrors = useCallback((
+    sectionIndex: number,
+    existingSections: Section[]
+  ): ImportError[] => {
+    const config = state.sectionConfigs.get(sectionIndex);
+    if (!config) return [];
+
+    const errors: ImportError[] = [];
+
+    // Validate each shot
+    config.shots.forEach((shot, shotIndex) => {
+      if (!shot.isDeleted) {
+        const shotErrors = validateEditableShot(shot, shotIndex, sectionIndex);
+        errors.push(...shotErrors);
+      }
+    });
+
+    // Check for empty section (no valid shots)
+    const validShots = config.shots.filter((s) => !s.isDeleted);
+    if (validShots.length === 0) {
+      errors.push({
+        type: 'invalidData',
+        sectionIndex,
+        message: 'Section has no valid shots',
+      });
+    }
+
+    // Validate placement
+    const isPlaced = state.placedSections.has(sectionIndex);
+    const placementError = validatePlacement(isPlaced, sectionIndex);
+    if (placementError) {
+      errors.push(placementError);
+    }
+
+    // Validate merge target if using fromExisting placement
+    if (config.placement.type === 'fromExisting') {
+      const existingSectionIds = new Set(existingSections.map((s) => s.id));
+      // Get target section id from placement config
+      const targetSectionId = config.placement.existingStation.section_id;
+
+      // Get set of section indices that have already been placed in this import
+      // (these could be valid merge targets)
+      const placedSectionIndices = state.placedSections;
+
+      const mergeError = validateMergeTarget(
+        config.placement.type,
+        targetSectionId,
+        existingSectionIds,
+        placedSectionIndices,
+        sectionIndex
+      );
+      if (mergeError) {
+        errors.push(mergeError);
+      }
+    }
+
+    return errors;
+  }, [state.sectionConfigs, state.placedSections]);
+
+  /**
+   * Get all errors for all sections.
+   * Returns a map of section index to array of errors.
+   */
+  const getAllSectionErrors = useCallback((
+    existingSections: Section[]
+  ): Map<number, ImportError[]> => {
+    const allErrors = new Map<number, ImportError[]>();
+
+    for (const sectionIndex of selectedIndices) {
+      const errors = getSectionErrors(sectionIndex, existingSections);
+      if (errors.length > 0) {
+        allErrors.set(sectionIndex, errors);
+      }
+    }
+
+    return allErrors;
+  }, [selectedIndices, getSectionErrors]);
+
+  /**
+   * Get the error count for a specific section.
+   */
+  const getSectionErrorCount = useCallback((
+    sectionIndex: number,
+    existingSections: Section[]
+  ): number => {
+    return getSectionErrors(sectionIndex, existingSections).length;
+  }, [getSectionErrors]);
+
+  /**
+   * Get total error count across all sections.
+   */
+  const getTotalErrorCount = useCallback((
+    existingSections: Section[]
+  ): number => {
+    let total = 0;
+    for (const sectionIndex of selectedIndices) {
+      total += getSectionErrors(sectionIndex, existingSections).length;
+    }
+    return total;
+  }, [selectedIndices, getSectionErrors]);
+
+  /**
+   * Check if all sections can be imported (no errors and all placed).
+   */
+  const canImport = useCallback((
+    existingSections: Section[]
+  ): boolean => {
+    for (const sectionIndex of selectedIndices) {
+      const config = state.sectionConfigs.get(sectionIndex);
+      if (!config) return false;
+
+      // Check for valid shots
+      const validShots = config.shots.filter((s) => !s.isDeleted);
+      if (validShots.length === 0) return false;
+
+      // Check for shot errors
+      for (let i = 0; i < config.shots.length; i++) {
+        const shot = config.shots[i];
+        if (!shot || shot.isDeleted) continue;
+        const shotErrors = validateEditableShot(shot, i, sectionIndex);
+        if (shotErrors.length > 0) return false;
+      }
+
+      // Check if placed
+      if (!state.placedSections.has(sectionIndex)) return false;
+
+      // Check merge target validity
+      if (config.placement.type === 'fromExisting') {
+        const existingSectionIds = new Set(existingSections.map((s) => s.id));
+        const targetSectionId = config.placement.existingStation.section_id;
+        const mergeError = validateMergeTarget(
+          config.placement.type,
+          targetSectionId,
+          existingSectionIds,
+          state.placedSections,
+          sectionIndex
+        );
+        if (mergeError) return false;
+      }
+    }
+    return true;
+  }, [selectedIndices, state.sectionConfigs, state.placedSections]);
 
   return {
     // State
@@ -864,6 +1025,13 @@ export function useImportState(
 
     // Export
     getAllConfigs,
+
+    // Error validation
+    getSectionErrors,
+    getAllSectionErrors,
+    getSectionErrorCount,
+    getTotalErrorCount,
+    canImport,
   };
 }
 
