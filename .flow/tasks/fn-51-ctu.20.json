@@ -1,0 +1,18 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-18T08:22:18.588268Z",
+  "depends_on": [
+    "fn-51-ctu.19",
+    "fn-51-ctu.14",
+    "fn-51-ctu.18"
+  ],
+  "epic": "fn-51-ctu",
+  "id": "fn-51-ctu.20",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-51-ctu.20.md",
+  "status": "todo",
+  "title": "Remove Old DmpImportDialog",
+  "updated_at": "2026-01-18T08:29:37.098844Z"
+}

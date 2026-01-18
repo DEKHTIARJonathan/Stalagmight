@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-18T08:22:18.628404Z",
+  "depends_on": [
+    "fn-51-ctu.11"
+  ],
+  "epic": "fn-51-ctu",
+  "id": "fn-51-ctu.21",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-51-ctu.21.md",
+  "status": "todo",
+  "title": "Implement App Close Confirmation",
+  "updated_at": "2026-01-18T08:31:02.045403Z"
+}

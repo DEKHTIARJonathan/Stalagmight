@@ -84,6 +84,20 @@ Right-click on row shows:
 - [ ] TypeScript compiles without errors (`pnpm tsc --noEmit`)
 - [ ] All existing tests pass
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Shot table tests need updating for new column layout (Azimuth as single column, Warnings column)
+- `e2e-playwright/section-shot-editing.spec.ts` - EditSectionDialog tests need updating since it will use the new ShotTableEditor component
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Shot table interaction tests need updating for new columns
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - No changes needed (uses existing shot data structure)
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

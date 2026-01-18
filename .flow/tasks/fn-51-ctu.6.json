@@ -1,0 +1,17 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-18T08:22:02.110649Z",
+  "depends_on": [
+    "fn-51-ctu.2",
+    "fn-51-ctu.5"
+  ],
+  "epic": "fn-51-ctu",
+  "id": "fn-51-ctu.6",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-51-ctu.6.md",
+  "status": "todo",
+  "title": "Add Section Parameters Panel to Step 2",
+  "updated_at": "2026-01-18T08:26:41.673389Z"
+}

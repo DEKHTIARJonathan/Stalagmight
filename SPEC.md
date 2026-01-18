@@ -2,8 +2,8 @@
 
 ## Specification Document v1.0
 
-**Last Updated**: 2026-01-17
-**Status**: Implementation Phase B
+**Last Updated**: 2026-01-18
+**Status**: Implementation Phase B - DMP Import Refactoring
 **Target Version**: 1.0 (Beta Release)
 
 ---
@@ -474,50 +474,110 @@ Primary view for survey work.
 
 ### 6.6 Dialogs
 
-#### Import/Create Section Dialog (Unified)
+#### DMP Import - Two-Step Flow
+
+The DMP import workflow uses a two-step process for improved UX:
+
+##### Step 1: Section Selection (DmpSelectionDialog)
 
 ```
-┌─ Import Section ─────────────────────────────────────────────────┐
+┌─ Import DMP File ────────────────────────────────────────────────┐
 │                                                                  │
-│  ┌────────────────────┐  Section Name: [Main Line___________]   │
-│  │                    │  Surveyor:     [J. Smith____________]   │
-│  │   Section Preview  │  Date:         [2024-01-12__________]   │
-│  │   (live rendering) │  Color:        [████ ▼] (auto-selected) │
-│  │                    │                                          │
-│  │       ●──●──●      │  Direction:    [IN ▼]                   │
-│  │          \         │                                          │
-│  │           ●──●     │  Statistics:                             │
-│  │                    │    Shots: 24                             │
-│  └────────────────────┘    Length: 187.3m                        │
-│                            Depth: 3.2m - 17.8m                   │
+│  File: cave_survey_2024.dmp                                     │
+│  Parsed: 3 sections, 156 shots total                            │
 │                                                                  │
-│  ┌─ Data Table ─────────────────────────────────────────────────┐│
-│  │ ID │ Len  │ Azi  │ Depth │ L   │ R   │ U   │ D   │ Virtual  ││
-│  │ 1  │ 3.2  │ 45.0 │ 5.1   │ 1.2 │ 0.8 │ 2.1 │ 1.5 │ [ ]     ││
-│  │ 2  │ 4.1  │ 52.3 │ 6.2   │ ... │ ... │ ... │ ... │ [ ]  ⚠  ││
-│  │ ...                                                          ││
-│  │ [+ Add Row]                                                  ││
+│  Default Values (apply to all sections):                        │
+│  Surveyor: [J. Smith____________] (remembered for session)      │
+│  Date:     [2024-01-12__________]                               │
+│                                                                  │
+│  ┌─ Sections ───────────────────────────────────────────────────┐│
+│  │ [✓] AAA - Main Line (42 shots, 187.3m)           [Preview]  ││
+│  │ [✓] AAB - Side Passage (28 shots, 94.5m)         [Preview]  ││
+│  │ [ ] ZZZ - Test Data (86 shots, 412.1m)           [Preview]  ││
 │  └──────────────────────────────────────────────────────────────┘│
 │                                                                  │
-│  Placement Method:                                               │
-│  (○) GPS Coordinates                                            │
-│      Latitude:  [________] Longitude: [________]                │
-│      Zero Datum Station: [First ▼]                              │
-│  (○) From Existing Station                                      │
-│      Connect: [Section ▼] Station [# ▼] to [Start/End ▼]       │
-│  (●) Manual Placement                                           │
-│      Click on map to position section                           │
+│  ⚠ File may have been imported before (same hash detected)     │
 │                                                                  │
-│  [ Cancel ]                                      [ Import ]      │
+│  [ Cancel ]                              [ Continue (2 of 3) ]   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-**Behavior:**
-- Same dialog for Import (DMP file loaded) and Manual Entry (empty table)
-- Live preview updates as user edits data
-- Color auto-selected from palette to minimize repetition
-- Validation warnings shown inline with ⚠ icon
-- "Mark as resolved" option for acknowledged warnings
+**Step 1 Behavior:**
+- Select/deselect sections for import
+- Set default surveyor and date (inherited by all sections)
+- Surveyor remembered for session (not persisted)
+- File hash tracking detects duplicate imports
+- Preview button shows section outline in popup
+
+##### Step 2: Section Configuration (DmpSectionConfigDialog)
+
+```
+┌─ Configure Section: AAA - Main Line ─────────────────────────────┐
+│                                                                  │
+│  Section: 1 of 2                    [◀ Previous] [Next ▶]       │
+│                                                                  │
+│  ┌─ Parameters ─────────┐  ┌─ Preview ──────────────────────────┐│
+│  │ Name:    [Main Line] │  │                                    ││
+│  │ Surveyor:[J. Smith ] │  │        ●──●──●                     ││
+│  │ Date:    [2024-01-12]│  │           \                        ││
+│  │ Color:   [████ ▼]    │  │            ●──●                    ││
+│  │ Direction:[IN ▼]     │  │   (pan/zoom enabled)               ││
+│  └──────────────────────┘  └────────────────────────────────────┘│
+│                                                                  │
+│  ┌─ Placement ───────────────────────────────────────────────────┐│
+│  │ (●) At Origin (0,0)                                          ││
+│  │ (○) GPS Coordinates                                          ││
+│  │     Latitude: [________] Longitude: [________]               ││
+│  │     Zero Datum Station: [First ▼]                            ││
+│  │ (○) From Existing Station                                    ││
+│  │     Connect [Section ▼] Station [# ▼] → [Start/End ▼]       ││
+│  │ (○) Manual Placement                                         ││
+│  │     Click on map to position                                 ││
+│  └───────────────────────────────────────────────────────────────┘│
+│                                                                  │
+│  ┌─ Shot Table ──────────────────────────────────────────────────┐│
+│  │ ID │ Len  │ Azi  │ DepIn│DepOut│ L  │ R  │ U  │ D  │ ⚠ │ ✕ ││
+│  │ 1  │ 3.2  │ 45.0 │ 5.1  │ 5.8  │1.2 │0.8 │2.1 │1.5 │   │ x ││
+│  │ 2  │ 4.1  │ 52.3 │ 5.8  │ 6.2  │1.0 │1.1 │1.8 │1.2 │ ⚠ │ x ││
+│  │ [+ Add Row]                                                  ││
+│  └───────────────────────────────────────────────────────────────┘│
+│                                                                  │
+│  Statistics: 42 shots │ 187.3m total │ Depth: 3.2m - 17.8m      │
+│                                                                  │
+│  [ Cancel ]   [ ↶ Undo ] [ Redo ↷ ]              [ Place Section ]│
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Step 2 Behavior:**
+- Per-section editing with navigation between sections
+- Parameters panel: name, surveyor (inherited), date, color, direction
+- Interactive preview with pan/zoom and click-to-select-station
+- 4 exclusive placement modes:
+  - **Origin**: Place at (0,0) - first section default
+  - **GPS**: Enter coordinates, select zero datum station
+  - **From Existing**: Merge with existing section's station
+  - **Manual**: Click on map to position
+- Shot table with:
+  - Azimuth as single column (shows average, edits set both in/out)
+  - Warning column (⚠) for azimuth/pitch discrepancies
+  - Right-click context menu: insert before/after, delete
+  - Keyboard navigation (Tab, Enter, Escape)
+- Local undo/redo within dialog
+- Section created on "Place Section" click
+- Warnings inform but don't block; errors block import
+
+**Design Decisions:**
+| Decision | Rationale |
+|----------|-----------|
+| Sections created on placement | Enables granular undo, immediate persistence |
+| Exclusive placement modes | Simpler UX, clearer mental model |
+| Warnings don't block, errors block | Warnings inform, don't impede workflow |
+| Session-only surveyor memory | Respects privacy, not persisted to config |
+| Azimuth as average column | Cleaner table, edit sets both in/out |
+
+##### Create Section Dialog (Manual Entry)
+
+For manual entry (no DMP file), goes directly to Step 2 (DmpSectionConfigDialog) with an empty shot table.
 
 #### Merge Stations Dialog
 
@@ -586,22 +646,45 @@ Primary view for survey work.
 5. If GPS provided: Single station with golden star visible
 6. User can now import sections or add manually
 
-### 7.3 Importing DMP File
+### 7.3 Importing DMP File (Two-Step Flow)
+
+**Step 1: Section Selection (DmpSelectionDialog)**
 
 1. User clicks [Import] or drags .dmp file onto application
-2. DMP parsed, Import Dialog opens with data populated
-3. User reviews/edits:
-   - Section metadata (name, surveyor, date, color)
-   - Shot data (can edit values, mark virtual)
-   - Validation warnings shown, can "mark as resolved"
-4. User selects placement method:
+2. DMP parsed, Step 1 dialog opens showing all sections
+3. User sets defaults:
+   - Default surveyor (remembered for session)
+   - Default date
+4. User selects which sections to import (checkboxes)
+5. If file hash matches previous import, warning shown
+6. User clicks [Continue] to proceed to Step 2
+
+**Step 2: Section Configuration (DmpSectionConfigDialog)**
+
+7. Step 2 dialog opens with first selected section
+8. User configures each section:
+   - Edit metadata (name, surveyor, date, color, direction)
+   - Review/edit shot data in table
+   - Azimuth shown as average; editing sets both in/out
+   - Warning icons for azimuth/pitch discrepancies
+9. User selects placement mode (exclusive):
+   - **Origin**: Place at (0,0) - default for first section
    - **GPS**: Enter coordinates, select zero datum station
-   - **From Station**: Select existing station to merge with
-   - **Manual**: Proceed to map placement
-5. User clicks [Import]
-6. If Manual: Section outline follows cursor, click to place
-7. Section added to project, visible on map
-8. Auto-saved
+   - **From Existing**: Merge with existing section's station
+   - **Manual**: Click on map to position
+10. User clicks [Place Section]
+11. Section created in backend immediately
+12. User navigates to next section or clicks [Done]
+13. Each placed section is auto-saved
+
+**Undo/Redo within Import:**
+- Local undo/redo tracks changes within the dialog
+- After placement, section becomes part of project undo stack
+- Closing app during import prompts confirmation to discard
+
+**Error Handling:**
+- Warnings (e.g., azimuth mismatch) are shown but don't block
+- Errors (e.g., invalid data) block the Place Section button
 
 ### 7.4 Manual Data Entry
 

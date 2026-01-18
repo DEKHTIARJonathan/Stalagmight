@@ -171,6 +171,36 @@ Remove tests that specifically test old single-dialog behavior that no longer ap
 - [ ] All tests pass with new dialog flow
 - [ ] Test coverage maintained or improved
 
+## Existing Tests to Modify
+
+This task is specifically about updating all existing tests. Here is the comprehensive list:
+
+### Playwright Tests (Priority Order)
+1. **`e2e-playwright/import-dialog.spec.ts`** (~1937 lines) - **Highest priority**
+   - Replace all `[data-testid="import-dmp-dialog"]` with `[data-testid="dmp-selection-dialog"]` (Step 1) or `[data-testid="dmp-section-config-dialog"]` (Step 2)
+   - Update shot table tests for new column layout (Azimuth as average, Warnings column)
+   - Add navigation between Step 1 and Step 2
+   - Update placement tests for new 4-mode panel
+   - Update validation/warning tests
+
+2. **`e2e-playwright/dmp-import.spec.ts`** (~395 lines)
+   - Update import flow tests for two-step process
+   - Add tests for Step 1 → Step 2 navigation
+
+3. **`e2e-playwright/section-shot-editing.spec.ts`** (~346 lines)
+   - Update for shared ShotTableEditor component
+   - Update for shared SectionMetadataForm component
+
+4. **`e2e-playwright/mocks/tauri-ipc.ts`**
+   - Add: `calculate_file_hash`, `check_duplicate_import`, `track_imported_file`
+   - Add: `createSection` (if not present with return ID)
+   - Ensure shot data uses `azimuth_in`, `azimuth_out`, `depth_in`, `depth_out` (per commit 5b7aa96)
+
+### WebdriverIO Tests
+1. **`e2e/specs/import-dmp-dialog.spec.ts`** - Update for two-step flow
+2. **`e2e/specs/import-section-dialog.spec.ts`** - Update for shared components
+3. **`e2e/specs/keyboard-shortcuts.spec.ts`** - Update Ctrl+I behavior
+
 ## Test Suggestions
 
 ### Playwright Tests to Update/Add

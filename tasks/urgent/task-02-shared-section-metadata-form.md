@@ -68,6 +68,20 @@ Horizontal grid layout with 4-5 columns:
 - [ ] TypeScript compiles without errors
 - [ ] All existing tests pass
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/section-shot-editing.spec.ts` - EditSectionDialog tests need updating since it will use the new SectionMetadataForm component
+- `e2e-playwright/import-dialog.spec.ts` - Section metadata editing tests need updating for new form component
+
+### WebdriverIO Tests
+- `e2e/specs/import-section-dialog.spec.ts` - Section metadata tests may need updating for new form layout
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - No changes needed
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

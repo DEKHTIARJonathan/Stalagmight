@@ -115,6 +115,21 @@ Preview updates live as user:
 - [ ] Preview updates live as dropdowns change
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Preview tests need updating for merge visualization in Step 2 dialog
+- `e2e-playwright/dmp-import.spec.ts` - May need updates for merge flow testing
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Merge preview tests need updating
+- `e2e/specs/map.spec.ts` - Ghost outline tests may need updates (if exists)
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - No changes needed for visualization
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

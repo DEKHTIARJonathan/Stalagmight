@@ -121,6 +121,21 @@ const [placedSections, setPlacedSections] = useState<Set<number>>(new Set());
 - [ ] Keyboard shortcuts work
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Tests for import dialog configuration need updating for new Step 2 dialog `[data-testid="dmp-section-config-dialog"]`
+- `e2e-playwright/dmp-import.spec.ts` - Import flow tests need updating for two-step process navigation
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Import dialog tests need updating for Step 2 dialog
+- `e2e/specs/import-section-dialog.spec.ts` - Section configuration tests may need updates
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - No changes needed for shell
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

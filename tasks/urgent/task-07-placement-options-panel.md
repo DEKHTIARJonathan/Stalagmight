@@ -107,6 +107,20 @@ When section is placed:
 - [ ] Placed sections show checkmark in left panel
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Placement tests need updating for new placement panel with 4 modes (Place at 0,0, Zero Datum, From Existing, Manual)
+- `e2e-playwright/dmp-import.spec.ts` - Import placement tests need updating
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Placement mode tests need updating
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - Add mock handlers for `createSection`, `setZeroDatum`, `mergeStations` if not already present
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)
