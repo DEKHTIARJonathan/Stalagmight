@@ -3,11 +3,12 @@ import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
 import type { DmpFile, DmpShot } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
-import type { Project, Station, StationRef, GpsCoordinates } from '../../types/project';
+import type { Project, Station, StationRef, GpsCoordinates, Coordinates } from '../../types/project';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import SectionPreview, { type MergePreviewConfig } from './SectionPreview';
 import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
+import { useUIStore, type PlacementResult } from '../../store/uiStore';
 
 /**
  * Placement configuration for a section.
@@ -16,7 +17,7 @@ export type PlacementConfig =
   | { type: 'origin' }
   | { type: 'zeroDatum'; coordinates: GpsCoordinates; stationIndex: number }
   | { type: 'fromExisting'; importStation: number; existingStation: StationRef }
-  | { type: 'manual'; alignStation: 'first' | 'last' };
+  | { type: 'manual'; alignStation: 'first' | 'last'; position?: Coordinates; snappedToStation?: StationRef | null };
 
 /**
  * Configuration for a single imported section.
@@ -114,13 +115,19 @@ export default function DmpSectionConfigDialog({
   project,
   stations: _stations,
 }: DmpSectionConfigDialogProps) {
+  // Get placement mode controls from UI store
+  const { startPlacementMode, closeDialog, openDialog, dialogData } = useUIStore();
+
   // Get selected section indices in order
   const selectedIndices = useMemo(() => {
     return Array.from(selectionConfig.selectedIndices).sort((a, b) => a - b);
   }, [selectionConfig.selectedIndices]);
 
+  // Check for saved state from dialogData (for restoring after placement mode)
+  const savedCurrentIndex = dialogData.savedCurrentIndex as number | undefined;
+
   // Current section index (within selectedIndices array)
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(savedCurrentIndex ?? 0);
 
   // Left panel collapsed state
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
@@ -183,8 +190,18 @@ export default function DmpSectionConfigDialog({
     return originals;
   }, [selectedIndices, dmpFile.sections]);
 
+  // Check for saved state from dialogData (for restoring after placement mode)
+  const savedSectionConfigs = dialogData.savedSectionConfigs as Array<[number, ImportedSectionConfig]> | undefined;
+  const savedPlacedSections = dialogData.savedPlacedSections as number[] | undefined;
+
   // Initialize section configs for all selected sections
   const [sectionConfigs, setSectionConfigs] = useState<Map<number, ImportedSectionConfig>>(() => {
+    // Restore from saved state if available (after placement mode)
+    if (savedSectionConfigs) {
+      return new Map(savedSectionConfigs);
+    }
+
+    // Otherwise initialize fresh from DMP data
     const configs = new Map<number, ImportedSectionConfig>();
     selectedIndices.forEach((sectionIdx, arrayIdx) => {
       const section = dmpFile.sections[sectionIdx];
@@ -215,7 +232,12 @@ export default function DmpSectionConfigDialog({
 
   // Track which sections have been "placed" (user has explicitly set placement)
   const [placedSections, setPlacedSections] = useState<Set<number>>(() => {
-    // First section defaults to placed at origin
+    // Restore from saved state if available (after placement mode)
+    if (savedPlacedSections) {
+      return new Set(savedPlacedSections);
+    }
+
+    // Otherwise first section defaults to placed at origin
     const placed = new Set<number>();
     if (selectedIndices.length > 0 && selectedIndices[0] !== undefined) {
       placed.add(selectedIndices[0]);
@@ -238,8 +260,6 @@ export default function DmpSectionConfigDialog({
 
   // Manual Placement fields
   const [manualAlignStation, setManualAlignStation] = useState<'first' | 'last'>('first');
-  // Note: isPlacingOnMap will be used by fn-51-ctu.10 (Manual Placement Mode)
-  const [_isPlacingOnMap, setIsPlacingOnMap] = useState(false);
 
   // Get current section data
   const currentSectionIndex = selectedIndices[currentIndex];
@@ -643,14 +663,128 @@ export default function DmpSectionConfigDialog({
   ]);
 
   /**
-   * Handle "Start Placement" button for Manual mode.
+   * Helper to serialize section configs for storage in dialogData.
+   */
+  const serializeSectionConfigs = useCallback(() => {
+    return Array.from(sectionConfigs.entries());
+  }, [sectionConfigs]);
+
+  /**
+   * Helper to serialize placed sections for storage in dialogData.
+   */
+  const serializePlacedSections = useCallback(() => {
+    return Array.from(placedSections);
+  }, [placedSections]);
+
+  /**
+   * Handle "Place on Map" button for Manual mode.
+   * Hides dialog and starts placement mode on the map.
    */
   const handleStartManualPlacement = useCallback(() => {
-    handlePlacementChange({ type: 'manual', alignStation: manualAlignStation });
-    setIsPlacingOnMap(true);
-    // Note: In a full implementation, this would hide the dialog and
-    // show a ghost outline on the map. For now, we just set the state.
-  }, [handlePlacementChange, manualAlignStation]);
+    if (!currentConfig || currentSectionIndex === undefined) return;
+
+    // Build SectionData from current config for the ghost outline
+    const sectionData = {
+      name: currentConfig.name,
+      surveyor: currentConfig.surveyor,
+      date: currentConfig.date,
+      color: currentConfig.color,
+      direction: currentConfig.direction,
+      shots: currentConfig.shots
+        .filter((s) => !s.isDeleted)
+        .map((s) => ({
+          azimuth_in: s.azimuth_in,
+          azimuth_out: s.azimuth_out,
+          length: s.length,
+          depth_in: s.depth_in,
+          depth_out: s.depth_out,
+          pitch_in: s.pitch_in,
+          pitch_out: s.pitch_out,
+          left: s.left,
+          right: s.right,
+          up: s.up,
+          down: s.down,
+          comment: s.comment,
+          is_virtual: s.is_virtual,
+        })),
+    };
+
+    // Store current state for restoration after placement
+    const savedState = {
+      sectionConfigs: serializeSectionConfigs(),
+      placedSections: serializePlacedSections(),
+      currentIndex,
+      currentSectionIndex,
+      manualAlignStation,
+    };
+
+    // Start placement mode on the map with callbacks
+    startPlacementMode(
+      sectionData,
+      manualAlignStation,
+      // onComplete callback
+      (result: PlacementResult) => {
+        // Update the saved state with the placement result
+        const updatedConfigs = new Map<number, ImportedSectionConfig>(savedState.sectionConfigs);
+        const current = updatedConfigs.get(savedState.currentSectionIndex);
+        if (current) {
+          updatedConfigs.set(savedState.currentSectionIndex, {
+            ...current,
+            placement: {
+              type: 'manual',
+              alignStation: savedState.manualAlignStation,
+              position: result.position,
+              snappedToStation: result.snappedToStation,
+            },
+          });
+        }
+
+        // Add to placed sections
+        const updatedPlaced = new Set<number>(savedState.placedSections);
+        updatedPlaced.add(savedState.currentSectionIndex);
+
+        // Reopen dialog with updated state
+        openDialog('dmp-section-config', {
+          dmpFile,
+          filePath: dialogData.filePath,
+          selectionConfig,
+          // Pass saved state to restore
+          savedSectionConfigs: Array.from(updatedConfigs.entries()),
+          savedPlacedSections: Array.from(updatedPlaced),
+          savedCurrentIndex: savedState.currentIndex,
+        });
+      },
+      // onCancel callback
+      () => {
+        // Reopen dialog with original state (no changes)
+        openDialog('dmp-section-config', {
+          dmpFile,
+          filePath: dialogData.filePath,
+          selectionConfig,
+          // Pass saved state to restore
+          savedSectionConfigs: savedState.sectionConfigs,
+          savedPlacedSections: savedState.placedSections,
+          savedCurrentIndex: savedState.currentIndex,
+        });
+      }
+    );
+
+    // Hide the dialog
+    closeDialog();
+  }, [
+    currentConfig,
+    currentSectionIndex,
+    currentIndex,
+    manualAlignStation,
+    serializeSectionConfigs,
+    serializePlacedSections,
+    startPlacementMode,
+    openDialog,
+    closeDialog,
+    dmpFile,
+    dialogData.filePath,
+    selectionConfig,
+  ]);
 
   /**
    * Handle station selection from preview click.

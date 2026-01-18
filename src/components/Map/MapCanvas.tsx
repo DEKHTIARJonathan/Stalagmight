@@ -36,7 +36,7 @@ export default function MapCanvas() {
   // Placement mode cursor position (screen pixels)
   const [placementCursor, setPlacementCursor] = useState<{ x: number; y: number } | null>(null);
 
-  const { project, stations, config, moveSection, moveStation, createSection, mergeStations } = useProjectStore();
+  const { project, stations, config, moveSection, moveStation } = useProjectStore();
   const {
     mapZoom,
     setMapCenter,
@@ -152,78 +152,35 @@ export default function MapCanvas() {
   );
 
   // Handle placement confirmation
-  const handlePlacementConfirm = useCallback(async () => {
+  const handlePlacementConfirm = useCallback(() => {
     if (!map.current || !placementMode || !mapContainer.current) return;
 
     const placement = confirmPlacement();
     if (!placement || !placement.cursorPosition) return;
 
-    try {
-      // Create the section
-      const result = await createSection(placement.sectionData);
-      if (!result.success) {
-        console.error('Failed to create section during placement:', result.error);
-        return;
-      }
-
-      // If snapped to a station, merge the stations
-      if (placement.snappedToStation) {
-        // Get the newly created section
-        const currentProject = useProjectStore.getState().project;
-        const currentStations = useProjectStore.getState().stations;
-        if (currentProject && currentProject.sections.length > 0) {
-          const newSection = currentProject.sections[currentProject.sections.length - 1];
-          if (newSection) {
-            // Determine which station to merge based on alignStation
-            const stationCount = newSection.shots.length;
-            const importStationIndex = placement.alignStation === 'first' ? 0 : stationCount;
-
-            // Find if the new station actually exists
-            const newStationExists = currentStations.some(
-              (s) =>
-                s.station_ref.section_id === newSection.id &&
-                s.station_ref.station_index === importStationIndex
-            );
-
-            if (newStationExists) {
-              const importRef = {
-                section_id: newSection.id,
-                station_index: importStationIndex,
-              };
-
-              const mergeResult = await mergeStations(importRef, placement.snappedToStation, 'KeepRaw');
-              if (!mergeResult.success) {
-                console.warn('Failed to merge stations after placement:', mergeResult.error);
-              }
-            }
-          }
-        }
-      } else {
-        // Not snapped - need to move the section to the cursor position
-        const currentProject = useProjectStore.getState().project;
-        if (currentProject && currentProject.sections.length > 0) {
-          const newSection = currentProject.sections[currentProject.sections.length - 1];
-          if (newSection) {
-            // Move section to align the anchor station with cursor position
-            const offset = {
-              x: placement.cursorPosition.x,
-              y: placement.cursorPosition.y,
-              z: 0,
-            };
-            await moveSection(newSection.id, offset);
-          }
-        }
-      }
-    } catch (e) {
-      console.error('Error during placement confirmation:', e);
+    // If there's a callback, call it with the result
+    // The caller is responsible for what to do with the placement
+    if (placement.onComplete) {
+      placement.onComplete({
+        position: placement.cursorPosition,
+        snappedToStation: placement.snappedToStation,
+      });
     }
-  }, [placementMode, confirmPlacement, createSection, mergeStations, moveSection]);
+
+    setPlacementCursor(null);
+  }, [placementMode, confirmPlacement]);
 
   // Handle placement cancel
   const handlePlacementCancel = useCallback(() => {
+    // Get the onCancel callback before canceling
+    const onCancel = placementMode?.onCancel;
     cancelPlacementMode();
     setPlacementCursor(null);
-  }, [cancelPlacementMode]);
+    // Call the cancel callback if provided
+    if (onCancel) {
+      onCancel();
+    }
+  }, [placementMode, cancelPlacementMode]);
 
   // Clear snap when tool changes to non-snap tool
   useEffect(() => {
