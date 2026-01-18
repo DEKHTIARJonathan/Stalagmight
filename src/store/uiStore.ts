@@ -19,6 +19,16 @@ export type ToolType =
   | 'move_station';
 
 /**
+ * Placement result returned when placement mode completes.
+ */
+export interface PlacementResult {
+  /** Final cursor position in map coordinates (meters) */
+  position: Coordinates;
+  /** If snapped to an existing station, its reference */
+  snappedToStation: StationRef | null;
+}
+
+/**
  * Placement mode state for manually placing a newly imported section on the map.
  * The section preview follows the cursor until the user clicks to confirm placement.
  */
@@ -31,6 +41,10 @@ export interface PlacementModeState {
   cursorPosition: Coordinates | null;
   /** Snapped station reference (if cursor is near an existing station) */
   snappedToStation: StationRef | null;
+  /** Callback when placement is confirmed */
+  onComplete?: (result: PlacementResult) => void;
+  /** Callback when placement is canceled */
+  onCancel?: () => void;
 }
 
 export interface Selection {
@@ -167,7 +181,12 @@ interface UIStore {
 
   // Placement mode state (for manual map placement of imported sections)
   placementMode: PlacementModeState | null;
-  startPlacementMode: (sectionData: SectionData, alignStation: 'first' | 'last') => void;
+  startPlacementMode: (
+    sectionData: SectionData,
+    alignStation: 'first' | 'last',
+    onComplete?: (result: PlacementResult) => void,
+    onCancel?: () => void
+  ) => void;
   updatePlacementCursor: (position: Coordinates | null) => void;
   updatePlacementSnap: (stationRef: StationRef | null) => void;
   cancelPlacementMode: () => void;
@@ -408,13 +427,15 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Placement mode state
   placementMode: null,
-  startPlacementMode: (sectionData, alignStation) =>
+  startPlacementMode: (sectionData, alignStation, onComplete, onCancel) =>
     set({
       placementMode: {
         sectionData,
         alignStation,
         cursorPosition: null,
         snappedToStation: null,
+        ...(onComplete !== undefined && { onComplete }),
+        ...(onCancel !== undefined && { onCancel }),
       },
     }),
   updatePlacementCursor: (position) =>
