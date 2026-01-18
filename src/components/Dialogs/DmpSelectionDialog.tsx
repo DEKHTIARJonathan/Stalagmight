@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
+import { useUIStore } from '../../store/uiStore';
 import type { DmpFile } from '../../types/commands';
 
 /**
@@ -94,12 +95,16 @@ export default function DmpSelectionDialog({
   // Calculate metadata for header
   const metadata = useMemo(() => calculateMetadata(dmpFile), [dmpFile]);
 
-  // Default values state
-  const [defaultSurveyor, setDefaultSurveyor] = useState('');
+  // Get last used surveyor from session memory
+  const lastUsedSurveyor = useUIStore((state) => state.lastUsedSurveyor);
+  const setLastUsedSurveyor = useUIStore((state) => state.setLastUsedSurveyor);
+
+  // Default values state - initialize surveyor with last used value from session
+  const [defaultSurveyor, setDefaultSurveyor] = useState(lastUsedSurveyor);
   const [defaultDate, setDefaultDate] = useState('');
 
   // Track initial state for isDirty calculation
-  const [initialSurveyor] = useState('');
+  const [initialSurveyor] = useState(lastUsedSurveyor);
   const [initialDate] = useState('');
 
   // Section selection state - default to all non-empty sections
@@ -216,6 +221,11 @@ export default function DmpSelectionDialog({
 
   // Handle Continue button click
   const handleContinue = useCallback(() => {
+    // Save surveyor to session memory for next import
+    if (defaultSurveyor.trim()) {
+      setLastUsedSurveyor(defaultSurveyor.trim());
+    }
+
     const config: DmpSelectionConfig = {
       selectedIndices,
       defaultSurveyor,
@@ -223,7 +233,7 @@ export default function DmpSelectionDialog({
       sectionDirections: new Map(sectionDirections),
     };
     onContinue(config);
-  }, [selectedIndices, defaultSurveyor, defaultDate, sectionDirections, onContinue]);
+  }, [selectedIndices, defaultSurveyor, defaultDate, sectionDirections, onContinue, setLastUsedSurveyor]);
 
   // Calculate section counts for display
   const nonEmptySectionCount = useMemo(() => {
