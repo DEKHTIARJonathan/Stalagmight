@@ -1,17 +1,27 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-18T09:47:22.583489Z",
   "created_at": "2026-01-18T08:22:18.214795Z",
   "depends_on": [
     "fn-51-ctu.7",
     "fn-51-ctu.11"
   ],
   "epic": "fn-51-ctu",
+  "evidence": {
+    "files_modified": [
+      "src/App.tsx"
+    ],
+    "tests": {
+      "playwright": "102/102 DMP import tests pass",
+      "rust": "72/72 backend tests pass",
+      "typescript": "pnpm tsc --noEmit passes"
+    }
+  },
   "id": "fn-51-ctu.12",
   "priority": null,
   "spec_path": ".flow/tasks/fn-51-ctu.12.md",
-  "status": "todo",
+  "status": "done",
   "title": "Implement Section Creation Logic",
-  "updated_at": "2026-01-18T08:28:31.681655Z"
+  "updated_at": "2026-01-18T09:51:25.298380Z"
 }

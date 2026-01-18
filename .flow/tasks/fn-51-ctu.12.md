@@ -30,9 +30,22 @@ Implement backend calls that create sections when placed. Each placement type ha
 - [ ] Subsequent edits persist immediately
 - [ ] TypeScript compiles without errors
 ## Done summary
-TBD
+Implemented section creation logic in App.tsx with support for all four placement types:
 
+1. **Origin (0,0)**: Creates section at origin, no additional operations needed
+2. **Zero Datum (GPS)**: Creates section, then calls setZeroDatum with coordinates
+3. **From Existing**: Creates section, then calls mergeStations to connect to existing station
+4. **Manual**: Creates section, then calls moveSection with calculated offset
+
+Added helper functions:
+- `editableShotToShotData`: Converts EditableShot to ShotData for backend
+- `calculateStationPositions`: Calculates local station positions for offset calculation
+- `handleImportSections`: Main callback that processes each section based on placement type
+
+Error handling:
+- Full failures show error dialog and continue to next section
+- Partial failures (section created but subsequent operation failed) show warning
 ## Evidence
 - Commits:
-- Tests:
+- Tests: typescript, playwright, rust
 - PRs:
