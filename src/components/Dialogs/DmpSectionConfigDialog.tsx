@@ -108,6 +108,9 @@ export default function DmpSectionConfigDialog({
     serializePlacedSections,
     getSectionStatus,
     getAllConfigs,
+    getSectionErrorCount,
+    getTotalErrorCount,
+    canImport: checkCanImport,
   } = importState;
 
   // Access sectionConfigs and placedSections via importState.state for manual placement callbacks
@@ -590,10 +593,15 @@ export default function DmpSectionConfigDialog({
     setShowBackConfirm(true);
   }, []);
 
-  // Count sections with errors
-  const errorCount = useMemo(() => {
-    return selectedIndices.filter((idx) => getSectionStatus(idx) === 'errors').length;
-  }, [selectedIndices, getSectionStatus]);
+  // Total error count across all sections (blocking errors only)
+  const totalErrorCount = useMemo(() => {
+    return getTotalErrorCount(existingSections);
+  }, [getTotalErrorCount, existingSections]);
+
+  // Count sections with errors (for display)
+  const sectionsWithErrorsCount = useMemo(() => {
+    return selectedIndices.filter((idx) => getSectionErrorCount(idx, existingSections) > 0).length;
+  }, [selectedIndices, getSectionErrorCount, existingSections]);
 
   // Count sections not yet placed
   const notPlacedCount = useMemo(() => {
@@ -604,7 +612,9 @@ export default function DmpSectionConfigDialog({
   const isLastSection = currentIndex === selectedIndices.length - 1;
 
   // Can import: all sections must be placed and no errors
-  const canImport = errorCount === 0 && notPlacedCount === 0;
+  const canImport = useMemo(() => {
+    return checkCanImport(existingSections);
+  }, [checkCanImport, existingSections]);
 
   /**
    * Keyboard shortcuts handler.
@@ -742,16 +752,17 @@ export default function DmpSectionConfigDialog({
                   const section = dmpFile.sections[sectionIdx];
                   const status = getSectionStatus(sectionIdx);
                   const isActive = arrayIdx === currentIndex;
+                  const sectionErrorCount = getSectionErrorCount(sectionIdx, existingSections);
 
                   // Status icon
                   let statusIcon: string;
                   let statusColor: string;
-                  if (status === 'placed') {
-                    statusIcon = '✓';
-                    statusColor = 'text-success';
-                  } else if (status === 'errors') {
+                  if (status === 'errors' || sectionErrorCount > 0) {
                     statusIcon = '!';
                     statusColor = 'text-error';
+                  } else if (status === 'placed') {
+                    statusIcon = '✓';
+                    statusColor = 'text-success';
                   } else {
                     statusIcon = '○';
                     statusColor = 'text-text-secondary';
@@ -771,6 +782,16 @@ export default function DmpSectionConfigDialog({
                         {statusIcon}
                       </span>
                       <span className="truncate flex-1">{section?.name ?? `Section ${arrayIdx + 1}`}</span>
+                      {/* Error count badge */}
+                      {sectionErrorCount > 0 && (
+                        <span
+                          className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 bg-error text-white rounded-full text-[10px] font-medium"
+                          data-testid={`section-error-count-${arrayIdx}`}
+                          title={`${sectionErrorCount} error${sectionErrorCount > 1 ? 's' : ''}`}
+                        >
+                          {sectionErrorCount}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -778,9 +799,9 @@ export default function DmpSectionConfigDialog({
             )}
 
             {/* Error count indicator */}
-            {!leftPanelCollapsed && errorCount > 0 && (
-              <div className="px-3 py-2 text-xs text-error border-t border-border">
-                {errorCount} section{errorCount > 1 ? 's' : ''} with errors
+            {!leftPanelCollapsed && sectionsWithErrorsCount > 0 && (
+              <div className="px-3 py-2 text-xs text-error border-t border-border" data-testid="error-summary">
+                {sectionsWithErrorsCount} section{sectionsWithErrorsCount > 1 ? 's' : ''} with errors ({totalErrorCount} total)
               </div>
             )}
           </div>
@@ -1173,8 +1194,8 @@ export default function DmpSectionConfigDialog({
               disabled={isLastSection && !canImport}
               data-testid={isLastSection ? 'import-button' : 'next-section-button'}
               title={isLastSection && !canImport
-                ? errorCount > 0
-                  ? `Cannot import: ${errorCount} section${errorCount > 1 ? 's have' : ' has'} errors`
+                ? totalErrorCount > 0
+                  ? `Cannot import: ${totalErrorCount} error${totalErrorCount > 1 ? 's' : ''} in ${sectionsWithErrorsCount} section${sectionsWithErrorsCount > 1 ? 's' : ''}`
                   : `Cannot import: ${notPlacedCount} section${notPlacedCount > 1 ? 's are' : ' is'} not placed`
                 : undefined
               }

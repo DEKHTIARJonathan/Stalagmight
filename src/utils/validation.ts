@@ -299,3 +299,158 @@ export function countIssues(
 
   return { errors, warnings };
 }
+
+// ============================================================================
+// Import-specific Error Types and Validation
+// ============================================================================
+
+/**
+ * Error types specific to the Import Dialog.
+ * These are blocking errors that prevent import.
+ */
+export type ImportErrorType = 'invalidData' | 'missingPlacement' | 'mergeConflict';
+
+/**
+ * An error for a section during import.
+ */
+export interface ImportError {
+  type: ImportErrorType;
+  sectionIndex: number;
+  shotIndex?: number;
+  field?: string;
+  message: string;
+}
+
+/**
+ * Errors for a single section.
+ */
+export interface SectionErrors {
+  sectionIndex: number;
+  errors: ImportError[];
+}
+
+/**
+ * Validate editable shot data for import errors.
+ * Only checks for blocking errors (not warnings).
+ *
+ * @param shot The editable shot to validate
+ * @param shotIndex The index of this shot
+ * @param sectionIndex The section this shot belongs to
+ * @returns Array of import errors (empty if valid)
+ */
+export function validateEditableShot(
+  shot: {
+    length: number;
+    azimuth_in: number;
+    azimuth_out: number;
+    isDeleted?: boolean;
+  },
+  shotIndex: number,
+  sectionIndex: number
+): ImportError[] {
+  const errors: ImportError[] = [];
+
+  // Skip deleted shots
+  if (shot.isDeleted) {
+    return errors;
+  }
+
+  // Length must be positive (zero or negative is an error)
+  if (shot.length <= 0) {
+    errors.push({
+      type: 'invalidData',
+      sectionIndex,
+      shotIndex,
+      field: 'length',
+      message: 'Length must be greater than 0',
+    });
+  }
+
+  // Azimuth in must be in range [0, 360)
+  if (shot.azimuth_in < 0 || shot.azimuth_in >= 360) {
+    errors.push({
+      type: 'invalidData',
+      sectionIndex,
+      shotIndex,
+      field: 'azimuth_in',
+      message: `Azimuth in (${shot.azimuth_in.toFixed(1)}°) must be between 0 and 360`,
+    });
+  }
+
+  // Azimuth out must be in range [0, 360)
+  if (shot.azimuth_out < 0 || shot.azimuth_out >= 360) {
+    errors.push({
+      type: 'invalidData',
+      sectionIndex,
+      shotIndex,
+      field: 'azimuth_out',
+      message: `Azimuth out (${shot.azimuth_out.toFixed(1)}°) must be between 0 and 360`,
+    });
+  }
+
+  return errors;
+}
+
+/**
+ * Validate placement for a section.
+ * Checks if section has been placed.
+ *
+ * @param isPlaced Whether the section has been placed
+ * @param sectionIndex The section index
+ * @returns ImportError if not placed, null otherwise
+ */
+export function validatePlacement(
+  isPlaced: boolean,
+  sectionIndex: number
+): ImportError | null {
+  if (!isPlaced) {
+    return {
+      type: 'missingPlacement',
+      sectionIndex,
+      message: 'Section must be placed before import',
+    };
+  }
+  return null;
+}
+
+/**
+ * Validate merge target exists.
+ * For "fromExisting" placement, the target section must exist.
+ *
+ * @param placementType The type of placement
+ * @param targetSectionId The target section ID for fromExisting placement
+ * @param existingSectionIds Set of existing section IDs in the project
+ * @param placedSectionIds Set of section IDs that have been placed in this import
+ * @param sectionIndex The current section index
+ * @returns ImportError if merge target doesn't exist, null otherwise
+ */
+export function validateMergeTarget(
+  placementType: string,
+  targetSectionId: number | undefined,
+  existingSectionIds: Set<number>,
+  placedSectionIds: Set<number>,
+  sectionIndex: number
+): ImportError | null {
+  if (placementType !== 'fromExisting') {
+    return null;
+  }
+
+  if (targetSectionId === undefined) {
+    return {
+      type: 'mergeConflict',
+      sectionIndex,
+      message: 'Target section for merge is not specified',
+    };
+  }
+
+  // Check if target exists in project or in already-placed sections
+  if (!existingSectionIds.has(targetSectionId) && !placedSectionIds.has(targetSectionId)) {
+    return {
+      type: 'mergeConflict',
+      sectionIndex,
+      message: 'Target section for merge does not exist',
+    };
+  }
+
+  return null;
+}

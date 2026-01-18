@@ -7,10 +7,20 @@
     "fn-51-ctu.1"
   ],
   "epic": "fn-51-ctu",
+  "evidence": {
+    "commits": [
+      "44698426e7ef079fadc873e5d6d919eba9595c7e"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "cd src-tauri && cargo test"
+    ]
+  },
   "id": "fn-51-ctu.17",
   "priority": null,
   "spec_path": ".flow/tasks/fn-51-ctu.17.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Implement Configurable Validation Thresholds",
-  "updated_at": "2026-01-18T11:13:05.229588Z"
+  "updated_at": "2026-01-18T11:33:30.541104Z"
 }
