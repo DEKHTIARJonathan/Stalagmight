@@ -590,6 +590,22 @@ export default function DmpSectionConfigDialog({
     setShowBackConfirm(true);
   }, []);
 
+  // Count sections with errors
+  const errorCount = useMemo(() => {
+    return selectedIndices.filter((idx) => getSectionStatus(idx) === 'errors').length;
+  }, [selectedIndices, getSectionStatus]);
+
+  // Count sections not yet placed
+  const notPlacedCount = useMemo(() => {
+    return selectedIndices.filter((idx) => getSectionStatus(idx) === 'not_placed').length;
+  }, [selectedIndices, getSectionStatus]);
+
+  // Is this the last section?
+  const isLastSection = currentIndex === selectedIndices.length - 1;
+
+  // Can import: all sections must be placed and no errors
+  const canImport = errorCount === 0 && notPlacedCount === 0;
+
   /**
    * Keyboard shortcuts handler.
    */
@@ -608,8 +624,13 @@ export default function DmpSectionConfigDialog({
       }
 
       // Ctrl+Enter - proceed (Next or Import)
+      // Don't allow if on last section and import is disabled
       if (e.key === 'Enter' && e.ctrlKey && !e.repeat) {
         e.preventDefault();
+        const onLastSection = currentIndex === selectedIndices.length - 1;
+        if (onLastSection && !canImport) {
+          return; // Import is disabled
+        }
         handleNext();
         return;
       }
@@ -659,15 +680,8 @@ export default function DmpSectionConfigDialog({
     showBackConfirm,
     handleUndo,
     handleRedo,
+    canImport,
   ]);
-
-  // Count sections with errors
-  const errorCount = useMemo(() => {
-    return selectedIndices.filter((idx) => getSectionStatus(idx) === 'errors').length;
-  }, [selectedIndices, getSectionStatus]);
-
-  // Is this the last section?
-  const isLastSection = currentIndex === selectedIndices.length - 1;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -1156,7 +1170,14 @@ export default function DmpSectionConfigDialog({
             <Button
               variant="primary"
               onClick={handleNext}
+              disabled={isLastSection && !canImport}
               data-testid={isLastSection ? 'import-button' : 'next-section-button'}
+              title={isLastSection && !canImport
+                ? errorCount > 0
+                  ? `Cannot import: ${errorCount} section${errorCount > 1 ? 's have' : ' has'} errors`
+                  : `Cannot import: ${notPlacedCount} section${notPlacedCount > 1 ? 's are' : ' is'} not placed`
+                : undefined
+              }
             >
               {isLastSection ? `Import ${selectedIndices.length} Section${selectedIndices.length > 1 ? 's' : ''}` : 'Next'}
             </Button>
