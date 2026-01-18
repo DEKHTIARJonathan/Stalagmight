@@ -5,7 +5,7 @@ import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, DuplicateImportDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, DuplicateImportDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
 import type { SectionData, ShotData } from './types/project';
@@ -384,7 +384,6 @@ function App() {
       {activeDialog === 'export' && <ExportDialog />}
       {activeDialog === 'new-project' && <NewProjectDialog />}
       {activeDialog === 'new-project-for-import' && <NewProjectForImportDialog />}
-      {activeDialog === 'import-dmp' && <DmpImportDialog />}
       {activeDialog === 'dmp-selection' && dialogData.dmpFile ? (
         <DmpSelectionDialog
           dmpFile={dialogData.dmpFile as import('./types/commands').DmpFile}

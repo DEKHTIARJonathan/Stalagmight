@@ -1,7 +1,7 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-18T12:14:50.494073Z",
   "created_at": "2026-01-18T08:22:18.588268Z",
   "depends_on": [
     "fn-51-ctu.19",
@@ -12,7 +12,7 @@
   "id": "fn-51-ctu.20",
   "priority": null,
   "spec_path": ".flow/tasks/fn-51-ctu.20.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Remove Old DmpImportDialog",
-  "updated_at": "2026-01-18T08:29:37.098844Z"
+  "updated_at": "2026-01-18T12:14:50.494084Z"
 }
