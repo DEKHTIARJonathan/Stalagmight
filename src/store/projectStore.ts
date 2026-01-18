@@ -146,6 +146,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         await get().loadRecentProjects();
         // Load display settings from the opened project
         await useUIStore.getState().loadDisplaySettings();
+        // Fit map to show all stations
+        useUIStore.getState().triggerFitToBounds();
         set({ isDirty: false });
       } else {
         console.error('[projectStore] open_project failed:', result.error);

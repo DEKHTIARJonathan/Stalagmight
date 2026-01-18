@@ -406,7 +406,10 @@ export default class SurveyLayer {
     });
 
     this.map.on('mouseleave', this.shotsLayerId, () => {
-      this.callbacks.onFeatureHover?.(false);
+      // Only clear feature hover if no station is being hovered
+      if (!this.hoveredStationId) {
+        this.callbacks.onFeatureHover?.(false);
+      }
       this.hoveredShotId = null;
       this.callbacks.onShotHover?.(null);
       this.updateVisualState();
