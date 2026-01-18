@@ -1,10 +1,11 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
-import { ImportDialog, ExportDialog, NewProjectDialog, DmpImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, DuplicateImportDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
 import type { SectionData, ShotData } from './types/project';
@@ -57,8 +58,11 @@ function calculateStationPositions(shots: ImportedSectionConfig['shots']): Array
 }
 
 function App() {
-  const { project, stations, loadConfig, config, isDirty, createSection, setZeroDatum, mergeStations, moveSection } = useProjectStore();
-  const { view, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes } = useUIStore();
+  const { project, stations, loadConfig, config, isDirty, createSection, setZeroDatum, mergeStations, moveSection, importDmp } = useProjectStore();
+  const { view, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, hasImportedDmpPath, addImportedDmpPath } = useUIStore();
+
+  // Track whether we're hovering with a valid DMP file
+  const [isDraggingDmp, setIsDraggingDmp] = useState(false);
 
   /**
    * Handle importing sections from the DMP Section Config Dialog.
@@ -242,8 +246,133 @@ function App() {
     updateTitle();
   }, [project, project?.file_path, project?.name, isDirty]);
 
+  /**
+   * Handle file drop events for DMP file import.
+   * - From home screen (no project): Creates new project, then opens import dialog
+   * - From existing project: Opens import dialog directly
+   */
+  const handleDmpFileDrop = useCallback(async (filePath: string) => {
+    // Determine context: are we creating a new project or adding to existing?
+    const currentProject = useProjectStore.getState().project;
+
+    if (currentProject) {
+      // Check for duplicate import
+      if (hasImportedDmpPath(filePath)) {
+        // Show confirmation dialog for duplicate import
+        openDialog('confirm-duplicate-import', {
+          filePath,
+        });
+        return;
+      }
+
+      // Existing project: parse DMP and open Step 1 (selection) directly
+      setImportContext('existing-project');
+
+      try {
+        const dmpFile = await importDmp(filePath);
+        if (dmpFile) {
+          // Track this file as imported
+          addImportedDmpPath(filePath);
+          openDialog('dmp-selection', {
+            dmpFile,
+            filePath,
+          });
+        }
+      } catch (e) {
+        openDialog('error', {
+          title: 'Import Failed',
+          message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+        });
+      }
+    } else {
+      // No project: parse DMP first, then show NewProjectDialog for import
+      setImportContext('new-project');
+
+      try {
+        const dmpFile = await importDmp(filePath);
+        if (dmpFile) {
+          // Track this file as imported
+          addImportedDmpPath(filePath);
+          // Extract filename for default project name
+          const fileName = filePath.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
+          openDialog('new-project-for-import', {
+            dmpFile,
+            filePath,
+            defaultName: fileName,
+          });
+        }
+      } catch (e) {
+        openDialog('error', {
+          title: 'Import Failed',
+          message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+        });
+      }
+    }
+  }, [importDmp, openDialog, setImportContext, hasImportedDmpPath, addImportedDmpPath]);
+
+  // Set up drag-drop event listener for DMP files
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    const setupDragDrop = async () => {
+      try {
+        const webview = getCurrentWebview();
+        unlisten = await webview.onDragDropEvent((event) => {
+          const payload = event.payload as DragDropEvent;
+
+          if (payload.type === 'enter') {
+            // User started hovering with files - check if any is a DMP file
+            const hasDmpFile = payload.paths?.some((path: string) =>
+              path.toLowerCase().endsWith('.dmp')
+            );
+            setIsDraggingDmp(hasDmpFile ?? false);
+          } else if (payload.type === 'drop') {
+            setIsDraggingDmp(false);
+            // Find the first DMP file in the dropped paths
+            const dmpPath = payload.paths?.find((path: string) =>
+              path.toLowerCase().endsWith('.dmp')
+            );
+            if (dmpPath) {
+              handleDmpFileDrop(dmpPath);
+            }
+          } else if (payload.type === 'leave') {
+            setIsDraggingDmp(false);
+          }
+          // 'over' events just update position, we don't need to handle them
+        });
+      } catch (e) {
+        // Drag-drop not available (dev mode without Tauri)
+        console.warn('Drag-drop not available:', e);
+      }
+    };
+
+    setupDragDrop();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [handleDmpFileDrop]);
+
   return (
-    <div className="h-full bg-background text-text-primary flex flex-col">
+    <div className="h-full bg-background text-text-primary flex flex-col relative">
+      {/* Drop indicator overlay */}
+      {isDraggingDmp && (
+        <div
+          className="absolute inset-0 z-50 bg-accent/20 border-4 border-dashed border-accent flex items-center justify-center pointer-events-none"
+          data-testid="dmp-drop-indicator"
+        >
+          <div className="bg-panel p-6 rounded-lg shadow-xl text-center">
+            <div className="text-4xl mb-2">📥</div>
+            <div className="text-lg font-semibold">Drop DMP file to import</div>
+            <div className="text-sm text-text-secondary mt-1">
+              {project ? 'Add sections to current project' : 'Create new project'}
+            </div>
+          </div>
+        </div>
+      )}
+
       {view === 'global' || !project ? (
         <GlobalView />
       ) : (
@@ -254,6 +383,7 @@ function App() {
       {activeDialog === 'import' && <ImportDialog />}
       {activeDialog === 'export' && <ExportDialog />}
       {activeDialog === 'new-project' && <NewProjectDialog />}
+      {activeDialog === 'new-project-for-import' && <NewProjectForImportDialog />}
       {activeDialog === 'import-dmp' && <DmpImportDialog />}
       {activeDialog === 'dmp-selection' && dialogData.dmpFile ? (
         <DmpSelectionDialog
@@ -299,6 +429,7 @@ function App() {
       {activeDialog === 'confirm-overwrite' && <OverwriteConfirmDialog />}
       {activeDialog === 'context-menu' && <ContextMenu />}
       {activeDialog === 'section-adjust' && <SectionAdjustDialog />}
+      {activeDialog === 'confirm-duplicate-import' && <DuplicateImportDialog />}
     </div>
   );
 }

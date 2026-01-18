@@ -179,6 +179,16 @@ interface UIStore {
   openDialog: (dialog: string, data?: Record<string, unknown>) => void;
   closeDialog: () => void;
 
+  // Import flow context
+  importContext: 'new-project' | 'existing-project' | null;
+  setImportContext: (context: 'new-project' | 'existing-project' | null) => void;
+
+  // Track imported DMP file paths for duplicate detection (session-based)
+  importedDmpPaths: Set<string>;
+  addImportedDmpPath: (path: string) => void;
+  hasImportedDmpPath: (path: string) => boolean;
+  clearImportedDmpPaths: () => void;
+
   // Placement mode state (for manual map placement of imported sections)
   placementMode: PlacementModeState | null;
   startPlacementMode: (
@@ -424,6 +434,23 @@ export const useUIStore = create<UIStore>((set) => ({
   dialogData: {},
   openDialog: (activeDialog, dialogData = {}) => set({ activeDialog, dialogData }),
   closeDialog: () => set({ activeDialog: null, dialogData: {} }),
+
+  // Import flow context
+  importContext: null,
+  setImportContext: (importContext) => set({ importContext }),
+
+  // Track imported DMP file paths for duplicate detection (session-based)
+  importedDmpPaths: new Set<string>(),
+  addImportedDmpPath: (path) =>
+    set((state) => {
+      const newSet = new Set(state.importedDmpPaths);
+      newSet.add(path);
+      return { importedDmpPaths: newSet };
+    }),
+  hasImportedDmpPath: (path): boolean => {
+    return useUIStore.getState().importedDmpPaths.has(path);
+  },
+  clearImportedDmpPaths: () => set({ importedDmpPaths: new Set<string>() }),
 
   // Placement mode state
   placementMode: null,
