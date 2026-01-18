@@ -63,6 +63,20 @@ When "Continue to Section Setup" is clicked:
 - [ ] Value cleared on app restart (session only)
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Surveyor field tests need updating for session memory in Step 1 dialog
+- `e2e-playwright/dmp-import.spec.ts` - May need tests for surveyor persistence across imports
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Surveyor memory tests need adding
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - No changes needed (frontend-only state)
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

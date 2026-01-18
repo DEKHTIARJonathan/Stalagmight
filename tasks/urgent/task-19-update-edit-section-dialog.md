@@ -111,6 +111,25 @@ Add direction field to EditSectionDialog if not already present:
 - [ ] TypeScript compiles without errors
 - [ ] Existing tests pass
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/section-shot-editing.spec.ts` - **Primary file to update** - EditSectionDialog tests need significant updates:
+  - Shot table column layout (Azimuth as single column showing average)
+  - Warnings column tests
+  - Insert before/after via context menu
+  - Direction field tests
+- `e2e-playwright/import-dialog.spec.ts` - Verify consistent behavior between EditSectionDialog and import dialogs
+
+### WebdriverIO Tests
+- `e2e/specs/import-section-dialog.spec.ts` - EditSectionDialog tests need updating for new column layout
+- `e2e/specs/section-editing.spec.ts` - Section editing flow tests need updating (if exists)
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - Ensure `updateSection` mock handles direction field
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

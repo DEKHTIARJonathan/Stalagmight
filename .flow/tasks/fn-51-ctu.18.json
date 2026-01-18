@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-18T08:22:18.508635Z",
+  "depends_on": [
+    "fn-51-ctu.13"
+  ],
+  "epic": "fn-51-ctu",
+  "id": "fn-51-ctu.18",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-51-ctu.18.md",
+  "status": "todo",
+  "title": "Implement Error Blocking Logic",
+  "updated_at": "2026-01-18T08:29:36.992530Z"
+}

@@ -202,6 +202,23 @@ useEffect(() => {
 - [ ] Drag-drop to existing project adds sections
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Ctrl+I tests need updating for context-aware behavior (home vs project)
+- `e2e-playwright/dmp-import.spec.ts` - Import trigger tests need updating
+- `e2e-playwright/keyboard-shortcuts.spec.ts` - Ctrl+I shortcut tests need updating for two-step flow (if exists)
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Import triggering tests need updating
+- `e2e/specs/keyboard-shortcuts.spec.ts` - Ctrl+I tests need updating for new flow
+- `e2e/specs/drag-drop.spec.ts` - Drag-drop DMP tests need updating (if exists)
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - Add mock handlers for `calculateFileHash`, `checkDuplicateImport` if not present
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

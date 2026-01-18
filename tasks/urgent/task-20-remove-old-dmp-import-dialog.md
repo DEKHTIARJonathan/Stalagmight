@@ -99,6 +99,22 @@ Remove any types that were specific to the old single-dialog flow.
 - [ ] No TypeScript errors
 - [ ] All tests pass with new dialog flow
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - **Major update required** - All tests referencing `DmpImportDialog` or `[data-testid="import-dmp-dialog"]` must be updated for two-step flow
+- `e2e-playwright/dmp-import.spec.ts` - **Major update required** - All import flow tests need rewriting for Step 1 → Step 2 flow
+- `e2e-playwright/keyboard-shortcuts.spec.ts` - Ctrl+I tests need updating (if exists)
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - **Major update required** - All import dialog tests need rewriting
+- `e2e/specs/keyboard-shortcuts.spec.ts` - Ctrl+I tests need updating
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - Remove obsolete mock handlers if any, add new ones for two-step flow
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

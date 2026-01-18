@@ -76,6 +76,19 @@ interface SectionPreviewProps {
 - [ ] TypeScript compiles without errors
 - [ ] Existing tests pass
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Section preview tests need updating for new pan/zoom/click behavior
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Preview interaction tests may need updating
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - No changes needed
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

@@ -127,6 +127,20 @@ useEffect(() => {
 - [ ] Works in dev mode (browser)
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - May need tests for beforeunload behavior during import
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Window close during import tests need adding
+- `e2e/specs/app-lifecycle.spec.ts` - App close confirmation tests (if exists)
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - May need mock for Tauri window close event handling
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

@@ -172,6 +172,21 @@ Section keeps original orientation (no rotation during placement per requirement
 - [ ] Section marked as placed in left panel
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Manual placement tests need adding/updating for dialog hide/show behavior
+- `e2e-playwright/dmp-import.spec.ts` - Import flow tests need updating for manual placement mode
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Manual placement flow tests need updating
+- `e2e/specs/map.spec.ts` - Map interaction during placement may need updates (if exists)
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - Add mock handlers for `setSectionOffset` if not present
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

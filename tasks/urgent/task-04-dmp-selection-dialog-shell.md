@@ -116,6 +116,21 @@ Empty sections (0 shots) shown grayed out and disabled.
 - [ ] Cancel shows confirmation if data changed
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - All tests using `[data-testid="import-dmp-dialog"]` need updating to use new Step 1 dialog `[data-testid="dmp-selection-dialog"]`
+- `e2e-playwright/dmp-import.spec.ts` - Import flow tests need updating for two-step process
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - All import dialog tests need updating for Step 1 dialog
+- `e2e/specs/keyboard-shortcuts.spec.ts` - Ctrl+I tests need updating for new dialog flow
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - Add mock handlers for new DMP file metadata commands if needed
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)
