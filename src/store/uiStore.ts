@@ -19,6 +19,16 @@ export type ToolType =
   | 'move_station';
 
 /**
+ * Placement result returned when placement mode completes.
+ */
+export interface PlacementResult {
+  /** Final cursor position in map coordinates (meters) */
+  position: Coordinates;
+  /** If snapped to an existing station, its reference */
+  snappedToStation: StationRef | null;
+}
+
+/**
  * Placement mode state for manually placing a newly imported section on the map.
  * The section preview follows the cursor until the user clicks to confirm placement.
  */
@@ -31,6 +41,10 @@ export interface PlacementModeState {
   cursorPosition: Coordinates | null;
   /** Snapped station reference (if cursor is near an existing station) */
   snappedToStation: StationRef | null;
+  /** Callback when placement is confirmed */
+  onComplete?: (result: PlacementResult) => void;
+  /** Callback when placement is canceled */
+  onCancel?: () => void;
 }
 
 export interface Selection {
@@ -165,9 +179,28 @@ interface UIStore {
   openDialog: (dialog: string, data?: Record<string, unknown>) => void;
   closeDialog: () => void;
 
+  // Import flow context
+  importContext: 'new-project' | 'existing-project' | null;
+  setImportContext: (context: 'new-project' | 'existing-project' | null) => void;
+
+  // Track imported DMP file paths for duplicate detection (session-based)
+  importedDmpPaths: Set<string>;
+  addImportedDmpPath: (path: string) => void;
+  hasImportedDmpPath: (path: string) => boolean;
+  clearImportedDmpPaths: () => void;
+
+  // Session surveyor memory (not persisted to config)
+  lastUsedSurveyor: string;
+  setLastUsedSurveyor: (surveyor: string) => void;
+
   // Placement mode state (for manual map placement of imported sections)
   placementMode: PlacementModeState | null;
-  startPlacementMode: (sectionData: SectionData, alignStation: 'first' | 'last') => void;
+  startPlacementMode: (
+    sectionData: SectionData,
+    alignStation: 'first' | 'last',
+    onComplete?: (result: PlacementResult) => void,
+    onCancel?: () => void
+  ) => void;
   updatePlacementCursor: (position: Coordinates | null) => void;
   updatePlacementSnap: (stationRef: StationRef | null) => void;
   cancelPlacementMode: () => void;
@@ -406,15 +439,38 @@ export const useUIStore = create<UIStore>((set) => ({
   openDialog: (activeDialog, dialogData = {}) => set({ activeDialog, dialogData }),
   closeDialog: () => set({ activeDialog: null, dialogData: {} }),
 
+  // Import flow context
+  importContext: null,
+  setImportContext: (importContext) => set({ importContext }),
+
+  // Track imported DMP file paths for duplicate detection (session-based)
+  importedDmpPaths: new Set<string>(),
+  addImportedDmpPath: (path) =>
+    set((state) => {
+      const newSet = new Set(state.importedDmpPaths);
+      newSet.add(path);
+      return { importedDmpPaths: newSet };
+    }),
+  hasImportedDmpPath: (path): boolean => {
+    return useUIStore.getState().importedDmpPaths.has(path);
+  },
+  clearImportedDmpPaths: () => set({ importedDmpPaths: new Set<string>() }),
+
+  // Session surveyor memory (not persisted to config)
+  lastUsedSurveyor: '',
+  setLastUsedSurveyor: (lastUsedSurveyor) => set({ lastUsedSurveyor }),
+
   // Placement mode state
   placementMode: null,
-  startPlacementMode: (sectionData, alignStation) =>
+  startPlacementMode: (sectionData, alignStation, onComplete, onCancel) =>
     set({
       placementMode: {
         sectionData,
         alignStation,
         cursorPosition: null,
         snappedToStation: null,
+        ...(onComplete !== undefined && { onComplete }),
+        ...(onCancel !== undefined && { onCancel }),
       },
     }),
   updatePlacementCursor: (position) =>

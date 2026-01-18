@@ -6,7 +6,7 @@ import { useUIStore } from '../store/uiStore';
 
 export function useProject() {
   const store = useProjectStore();
-  const { setView, openDialog } = useUIStore();
+  const { setView, openDialog, setImportContext } = useUIStore();
 
   const handleNewProject = useCallback(() => {
     // Show the new project dialog which handles name input
@@ -105,17 +105,77 @@ export function useProject() {
     return result;
   }, [store, setView, openDialog]);
 
-  const handleImportDmp = useCallback(async () => {
-    const selected = await open({
-      multiple: false,
-      filters: [{ name: 'mNemo DMP', extensions: ['dmp'] }],
-    });
+  /**
+   * Handle DMP file import with context-aware dialog flow.
+   * - From home screen (no project): Opens file picker, parses DMP, then shows NewProjectDialog,
+   *   which on completion opens DmpSelectionDialog.
+   * - From existing project: Opens file picker, parses DMP, then opens DmpSelectionDialog directly.
+   *
+   * @param skipFilePicker - If true, skip the file picker (used for drag-drop with pre-selected file)
+   * @param filePath - Pre-selected file path (used with skipFilePicker=true)
+   */
+  const handleImportDmp = useCallback(async (skipFilePicker = false, filePath?: string) => {
+    let selectedPath = filePath;
 
-    if (selected && typeof selected === 'string') {
-      // Open the import dialog with the file path
-      openDialog('import-dmp', { filePath: selected });
+    if (!skipFilePicker) {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: 'mNemo DMP', extensions: ['dmp'] }],
+      });
+
+      if (!selected || typeof selected !== 'string') {
+        return;
+      }
+      selectedPath = selected;
     }
-  }, [openDialog]);
+
+    if (!selectedPath) return;
+
+    // Determine context: are we creating a new project or adding to existing?
+    const hasProject = !!store.project;
+
+    if (hasProject) {
+      // Existing project: parse DMP and open Step 1 (selection) directly
+      setImportContext('existing-project');
+
+      try {
+        const dmpFile = await store.importDmp(selectedPath);
+        if (dmpFile) {
+          openDialog('dmp-selection', {
+            dmpFile,
+            filePath: selectedPath,
+          });
+        }
+      } catch (e) {
+        openDialog('error', {
+          title: 'Import Failed',
+          message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+        });
+      }
+    } else {
+      // No project: parse DMP first, then show NewProjectDialog for import
+      // The dialog will handle transitioning to DmpSelectionDialog after project creation
+      setImportContext('new-project');
+
+      try {
+        const dmpFile = await store.importDmp(selectedPath);
+        if (dmpFile) {
+          // Extract filename for default project name
+          const fileName = selectedPath.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
+          openDialog('new-project-for-import', {
+            dmpFile,
+            filePath: selectedPath,
+            defaultName: fileName,
+          });
+        }
+      } catch (e) {
+        openDialog('error', {
+          title: 'Import Failed',
+          message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+        });
+      }
+    }
+  }, [store, openDialog, setImportContext]);
 
   const handleExportCsv = useCallback(async () => {
     const selected = await save({

@@ -43,9 +43,40 @@ Configure Tauri to emit close-requested event instead of closing directly.
 - [ ] Works in dev mode (browser)
 - [ ] TypeScript compiles without errors
 ## Done summary
-TBD
+Implemented app close confirmation when import dialog is open.
 
+## Changes Made
+
+1. **Created `src/hooks/useBeforeUnload.ts`**: A new React hook that:
+   - Listens for Tauri `tauri://close-requested` events
+   - Shows a confirmation dialog when closing is blocked
+   - Handles browser `beforeunload` event for dev mode
+   - Runs optional cleanup callback on confirm
+
+2. **Modified `src-tauri/src/lib.rs`**: Added Tauri window event handler that:
+   - Intercepts `CloseRequested` events with `api.prevent_close()`
+   - Emits `tauri://close-requested` event for frontend handling
+   - Falls back to destroying window if emit fails
+
+3. **Modified `src/App.tsx`**: Integrated the hook to:
+   - Check if import dialog is open (`dmp-selection`, `dmp-section-config`, or `new-project-for-import`)
+   - Show confirmation when closing during active import flow
+   - Use `useMemo` to compute `isImportInProgress` state
+
+4. **Updated `src/hooks/index.ts`**: Exported the new hook
+
+5. **Added tests in `e2e-playwright/import-dialog.spec.ts`**: Two tests for the App Close Confirmation feature
+
+## Acceptance Criteria Met
+
+- [x] Closing app during import shows confirmation
+- [x] Confirmation message mentions discarding import data
+- [x] Cancel keeps the app open
+- [x] Confirm closes the app
+- [x] Works in Tauri production build (via tauri://close-requested)
+- [x] Works in dev mode (browser) (via beforeunload event)
+- [x] TypeScript compiles without errors
 ## Evidence
 - Commits:
-- Tests:
+- Tests: e2e-playwright/import-dialog.spec.ts: App Close Confirmation > beforeunload handler is set when import dialog is open, e2e-playwright/import-dialog.spec.ts: App Close Confirmation > import dialog shows when Ctrl+I is pressed from project view
 - PRs:

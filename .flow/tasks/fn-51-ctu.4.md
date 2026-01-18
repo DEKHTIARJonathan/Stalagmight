@@ -54,9 +54,8 @@ interface DmpSelectionConfig {
 - [ ] Cancel shows confirmation if data changed
 - [ ] TypeScript compiles without errors
 ## Done summary
-TBD
-
+Created DmpSelectionDialog component (Step 1 of the two-step DMP import flow). The dialog displays DMP file metadata, a section table with checkboxes for selection, direction dropdowns, bulk selection controls (All/None/Invert), and default surveyor/date inputs. Empty sections are grayed out and disabled. Continue button is disabled when no sections are selected. Dialog integrates with App.tsx and exports DmpSelectionConfig interface for Step 2.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 9ae8cf8cb665f5048043f6a3f728a7e3c0b6c2ec
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:

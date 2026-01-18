@@ -1,16 +1,30 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-18T11:34:35.978584Z",
   "created_at": "2026-01-18T08:22:18.508635Z",
   "depends_on": [
     "fn-51-ctu.13"
   ],
   "epic": "fn-51-ctu",
+  "evidence": {
+    "files_changed": [
+      "src/utils/validation.ts",
+      "src/hooks/useImportState.ts",
+      "src/components/Dialogs/DmpSectionConfigDialog.tsx",
+      "e2e-playwright/dmp-import.spec.ts"
+    ],
+    "tests": [
+      "e2e-playwright/dmp-import.spec.ts: 6 new tests for Step 2 error blocking",
+      "pnpm test:ui - 118 passed (1 skipped)",
+      "pnpm tsc --noEmit - passes",
+      "cargo test - 72 passed"
+    ]
+  },
   "id": "fn-51-ctu.18",
   "priority": null,
   "spec_path": ".flow/tasks/fn-51-ctu.18.md",
-  "status": "todo",
+  "status": "done",
   "title": "Implement Error Blocking Logic",
-  "updated_at": "2026-01-18T08:29:36.992530Z"
+  "updated_at": "2026-01-18T11:56:23.744001Z"
 }

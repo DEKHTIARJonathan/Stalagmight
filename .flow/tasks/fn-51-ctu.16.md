@@ -29,9 +29,8 @@ Pre-fill default surveyor in Step 1 with `lastUsedSurveyor`, update store on cha
 - [ ] Value cleared on app restart (session only)
 - [ ] TypeScript compiles without errors
 ## Done summary
-TBD
-
+Implemented session-based surveyor memory: added lastUsedSurveyor state to uiStore, initialized DmpSelectionDialog surveyor field from store, and save surveyor to session when continuing. Value is cleared on app restart (session only).
 ## Evidence
-- Commits:
-- Tests:
+- Commits: d1630783ef2d549b232efd58fe6e79a7b6bf7480
+- Tests: pnpm tsc --noEmit, pnpm test:ui (75 passed), cargo test (72 passed)
 - PRs:

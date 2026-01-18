@@ -109,6 +109,14 @@ fn default_grid_spacing() -> f64 {
     10.0
 }
 
+fn default_azimuth_diff_threshold() -> f64 {
+    10.0
+}
+
+fn default_pitch_diff_threshold() -> f64 {
+    5.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DepthGradientConfig {
     pub enabled: bool,
@@ -147,6 +155,13 @@ pub struct ValidationConfig {
     pub warn_shot_length_max: f64,
     pub warn_depth_change_per_shot_max: f64,
     pub warn_azimuth_deviation_max: f64,
+    /// Threshold for azimuth in/out difference warning (degrees).
+    /// If abs(diff - 180) > threshold, show warning.
+    #[serde(default = "default_azimuth_diff_threshold")]
+    pub azimuth_diff_threshold: f64,
+    /// Threshold for pitch in/out difference warning (degrees).
+    #[serde(default = "default_pitch_diff_threshold")]
+    pub pitch_diff_threshold: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

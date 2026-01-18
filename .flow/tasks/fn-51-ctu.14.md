@@ -37,9 +37,31 @@ Implement context-aware triggering: from home screen (creates new project) vs ex
 - [ ] Drag-drop to existing project adds sections
 - [ ] TypeScript compiles without errors
 ## Done summary
-TBD
+## Summary
+Implemented context-aware DMP import dialog triggering with:
 
+1. **Ctrl+I from home screen** - Opens NewProjectForImportDialog to prompt for project name, then proceeds to DmpSelectionDialog
+2. **Ctrl+I from existing project** - Opens DmpSelectionDialog (Step 1) directly with parsed DMP data
+3. **Duplicate file detection** - Session-based tracking of imported file paths; shows DuplicateImportDialog warning when re-importing the same file
+4. **Drag-drop support** - Same context-aware flow for drag-drop DMP files
+
+### Changes
+- `src/store/uiStore.ts`: Added `importedDmpPaths` Set and methods for tracking/checking imported files
+- `src/hooks/useKeyboardShortcuts.ts`: Updated Ctrl+I handler with duplicate detection and proper context routing
+- `src/App.tsx`: Updated drag-drop handler with duplicate detection
+- `src/components/Dialogs/DuplicateImportDialog.tsx`: New dialog for duplicate import warning
+- `src/components/Dialogs/index.ts`: Export DuplicateImportDialog
+- `e2e-playwright/dmp-import.spec.ts`: Added test for duplicate import warning, updated cancel test
+
+### Acceptance Criteria
+- [x] Ctrl+I from home screen prompts for project name
+- [x] Ctrl+I from existing project opens Step 1 directly
+- [x] Duplicate file check warns user
+- [x] Drag-drop DMP file triggers same flow
+- [x] Drag-drop from home screen creates project
+- [x] Drag-drop to existing project adds sections
+- [x] TypeScript compiles without errors
 ## Evidence
 - Commits:
-- Tests:
+- Tests: playwright, typescript, rust
 - PRs:
