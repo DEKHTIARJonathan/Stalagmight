@@ -36,6 +36,9 @@ pub struct Project {
     /// Section offsets (x, y) applied when sections are merged/aligned
     #[serde(default)]
     pub section_offsets: HashMap<SectionId, (f64, f64)>,
+    /// SHA256 hashes of imported DMP files (for duplicate detection)
+    #[serde(default)]
+    pub imported_file_hashes: Vec<String>,
 }
 
 /// Project metadata for listing
@@ -83,6 +86,7 @@ impl Project {
             file_path: None,
             next_section_id: 0,
             section_offsets: HashMap::new(),
+            imported_file_hashes: Vec::new(),
         }
     }
 
