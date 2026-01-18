@@ -4,11 +4,11 @@ import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
-import { ImportDialog, ExportDialog, NewProjectDialog, DmpImportDialog, DmpSelectionDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, DmpImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 
 function App() {
-  const { project, loadConfig, config, isDirty } = useProjectStore();
+  const { project, stations, loadConfig, config, isDirty } = useProjectStore();
   const { view, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes } = useUIStore();
 
   useEffect(() => {
@@ -68,13 +68,32 @@ function App() {
           filePath={dialogData.filePath as string}
           onCancel={closeDialog}
           onContinue={(config) => {
-            // For now, close and proceed to Step 2 (to be implemented in fn-51-ctu.5)
-            // The config will be passed to DmpSectionConfigDialog
+            // Proceed to Step 2
             openDialog('dmp-section-config', {
               dmpFile: dialogData.dmpFile,
               filePath: dialogData.filePath,
               selectionConfig: config,
             });
+          }}
+        />
+      ) : null}
+      {activeDialog === 'dmp-section-config' && dialogData.dmpFile && dialogData.selectionConfig ? (
+        <DmpSectionConfigDialog
+          dmpFile={dialogData.dmpFile as import('./types/commands').DmpFile}
+          selectionConfig={dialogData.selectionConfig as import('./components/Dialogs/DmpSelectionDialog').DmpSelectionConfig}
+          project={project}
+          stations={stations}
+          onCancel={closeDialog}
+          onBack={() => {
+            // Go back to Step 1
+            openDialog('dmp-selection', {
+              dmpFile: dialogData.dmpFile,
+              filePath: dialogData.filePath,
+            });
+          }}
+          onImport={(_sections) => {
+            // TODO: Actually import the sections (to be implemented in a later task)
+            closeDialog();
           }}
         />
       ) : null}
