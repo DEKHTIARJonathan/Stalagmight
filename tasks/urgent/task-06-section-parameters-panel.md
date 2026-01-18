@@ -79,6 +79,20 @@ When user navigates away (Previous, Next, or click in list):
 - [ ] Color picker works with hex input
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Section parameter editing tests need updating for new panel in Step 2 dialog
+- `e2e-playwright/section-shot-editing.spec.ts` - Section metadata tests may need updating to verify shared component behavior
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Section editing tests need updating for new Step 2 panel
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - No changes needed
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

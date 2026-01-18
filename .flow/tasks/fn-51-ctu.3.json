@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-18T08:22:01.958615Z",
+  "depends_on": [],
+  "epic": "fn-51-ctu",
+  "id": "fn-51-ctu.3",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-51-ctu.3.md",
+  "status": "todo",
+  "title": "Enhance SectionPreview with Pan/Zoom/Click",
+  "updated_at": "2026-01-18T08:25:57.496764Z"
+}

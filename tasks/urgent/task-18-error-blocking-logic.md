@@ -191,6 +191,20 @@ Previous/Next buttons work regardless of errors - only Import is blocked.
 - [ ] Navigation still works with errors
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Import button state tests need updating for error blocking logic
+- `e2e-playwright/dmp-import.spec.ts` - Validation tests need updating for blocking vs non-blocking errors
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Error display and import blocking tests need updating
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - No changes needed (frontend validation logic)
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

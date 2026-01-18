@@ -167,6 +167,20 @@ After placement, section exists in backend:
 - [ ] Subsequent edits persist immediately
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Section creation tests need updating for immediate placement behavior
+- `e2e-playwright/dmp-import.spec.ts` - Import flow tests need updating for section creation on placement
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Section creation and persistence tests need updating
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - Ensure mock handlers for `createSection`, `setZeroDatum`, `mergeStations`, `setSectionOffset` return correct section IDs and handle errors
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)
