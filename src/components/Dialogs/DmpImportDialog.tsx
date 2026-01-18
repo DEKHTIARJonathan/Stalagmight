@@ -441,6 +441,21 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
     }
   }, [importDmp]);
 
+  // Sync dialogData.filePath to local state when dialog opens with a file path
+  // This is needed because useState only initializes on first mount, not on re-renders
+  useEffect(() => {
+    if (dialogData.filePath && typeof dialogData.filePath === 'string' && dialogData.filePath !== filePath) {
+      setFilePath(dialogData.filePath);
+      // Reset state so the new file gets loaded
+      setDmpFile(null);
+      setSelectedSections(new Set());
+      setExpandedSections(new Set());
+      setPreviewSectionIndex(null);
+      setError(null);
+      autoLoadAttempted.current = false;
+    }
+  }, [dialogData.filePath, filePath]);
+
   // Auto-load if file path provided on mount
   useEffect(() => {
     if (filePath && !dmpFile && !autoLoadAttempted.current) {

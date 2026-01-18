@@ -119,13 +119,13 @@ describe('Map Integration', () => {
     await browser.keys(['Control', 'a']);
     await browser.pause(200);
 
-    // Check selection state via store
+    // Check selection state via store (multiSelection holds selected items)
     const selectionResult = await browser.execute(() => {
       const e2e = (window as unknown as {
         __E2E_TEST__?: {
           uiStore: {
             getState: () => {
-              selectedStations: unknown[];
+              multiSelection: unknown[];
             };
           };
         };
@@ -133,7 +133,7 @@ describe('Map Integration', () => {
 
       if (!e2e) return { hasSelection: false, count: 0 };
 
-      const selected = e2e.uiStore.getState().selectedStations;
+      const selected = e2e.uiStore.getState().multiSelection;
       return {
         hasSelection: Array.isArray(selected) && selected.length > 0,
         count: Array.isArray(selected) ? selected.length : 0,
@@ -256,7 +256,7 @@ describe('Map Integration', () => {
       return e2e.uiStore.getState().activeTool;
     });
 
-    expect(toolState).toBe('moveSection');
+    expect(toolState).toBe('move_section');
 
     // Get the canvas for drag operation
     const mapCanvas = await $('canvas');

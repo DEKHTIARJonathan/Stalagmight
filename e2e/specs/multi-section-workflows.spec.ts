@@ -196,7 +196,7 @@ async function mergeStations(
         const result = await e2e.projectStore.getState().mergeStations(
           { section_id: secA, station_index: staA },
           { section_id: secB, station_index: staB },
-          'none' // No closure adjustment for these tests
+          'KeepRaw' // No closure adjustment for these tests
         );
         done({ success: result.success, error: result.error });
       } catch (err) {
