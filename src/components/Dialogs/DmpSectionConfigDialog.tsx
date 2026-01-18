@@ -6,7 +6,7 @@ import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { Project, Station, StationRef, GpsCoordinates } from '../../types/project';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
-import SectionPreview from './SectionPreview';
+import SectionPreview, { type MergePreviewConfig } from './SectionPreview';
 import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
 
 /**
@@ -300,6 +300,26 @@ export default function DmpSectionConfigDialog({
     if (targetSectionId === null) return [];
     return getStationsForSection(targetSectionId);
   }, [targetSectionId, getStationsForSection]);
+
+  // Compute merge preview config for SectionPreview when "From Existing" is selected
+  const mergePreviewConfig = useMemo((): MergePreviewConfig | null => {
+    if (!currentConfig || currentConfig.placement.type !== 'fromExisting') {
+      return null;
+    }
+
+    const placement = currentConfig.placement;
+    const targetSection = existingSections.find((s) => s.id === placement.existingStation.section_id);
+
+    if (!targetSection) {
+      return null;
+    }
+
+    return {
+      targetSection,
+      importStationIndex: placement.importStation,
+      targetStationIndex: placement.existingStation.station_index,
+    };
+  }, [currentConfig, existingSections]);
 
   /**
    * Handle GPS input change with auto-detection.
@@ -958,6 +978,7 @@ export default function DmpSectionConfigDialog({
                       selectedStationIndex={
                         selectedShotIndex !== null ? selectedShotIndex + 1 : null
                       }
+                      mergePreview={mergePreviewConfig}
                       onStationClick={(stationIndex) => {
                         // Station N corresponds to shot N-1 (station 0 has no corresponding shot)
                         if (stationIndex > 0) {

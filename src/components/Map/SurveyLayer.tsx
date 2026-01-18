@@ -23,6 +23,20 @@ export interface SurveyLayerCallbacks {
  * For better performance with large datasets, this could be
  * replaced with deck.gl layers.
  */
+/**
+ * Ghost section data for merge preview visualization.
+ */
+export interface GhostSectionData {
+  /** Shot line coordinates (pairs of [from, to] positions in meters) */
+  shots: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }>;
+  /** Station positions in meters */
+  stations: Array<{ x: number; y: number }>;
+  /** Section color */
+  color: string;
+  /** Merge station highlight position (the station being merged) */
+  mergeStation?: { x: number; y: number };
+}
+
 export default class SurveyLayer {
   private map: MaplibreMap;
   private sourceId = 'survey-data';
@@ -33,6 +47,9 @@ export default class SurveyLayer {
   private stationLabelsLayerId = 'survey-station-labels';
   private mergesLayerId = 'survey-merges';
   private loopClosuresLayerId = 'survey-loop-closures';
+  private ghostShotsLayerId = 'survey-ghost-shots';
+  private ghostStationsLayerId = 'survey-ghost-stations';
+  private ghostMergeLayerId = 'survey-ghost-merge';
   private callbacks: SurveyLayerCallbacks;
 
   // Visual state
@@ -117,9 +134,75 @@ export default class SurveyLayer {
         features: [],
       },
     });
+
+    // Ghost section sources for merge preview
+    this.map.addSource(this.sourceId + '-ghost-shots', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    });
+
+    this.map.addSource(this.sourceId + '-ghost-stations', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    });
+
+    this.map.addSource(this.sourceId + '-ghost-merge', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    });
   }
 
   private initializeLayers() {
+    // Ghost section shots layer (dashed, semi-transparent) - rendered first so it's behind everything
+    this.map.addLayer({
+      id: this.ghostShotsLayerId,
+      type: 'line',
+      source: this.sourceId + '-ghost-shots',
+      paint: {
+        'line-color': ['get', 'color'],
+        'line-width': 2,
+        'line-opacity': 0.5,
+        'line-dasharray': [4, 2],
+      },
+    });
+
+    // Ghost section stations layer (semi-transparent)
+    this.map.addLayer({
+      id: this.ghostStationsLayerId,
+      type: 'circle',
+      source: this.sourceId + '-ghost-stations',
+      paint: {
+        'circle-radius': 4,
+        'circle-color': ['get', 'color'],
+        'circle-stroke-width': 1,
+        'circle-stroke-color': '#000000',
+        'circle-opacity': 0.5,
+      },
+    });
+
+    // Ghost merge station highlight layer
+    this.map.addLayer({
+      id: this.ghostMergeLayerId,
+      type: 'circle',
+      source: this.sourceId + '-ghost-merge',
+      paint: {
+        'circle-radius': 8,
+        'circle-color': '#4ecdc4',
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff',
+        'circle-opacity': 0.8,
+      },
+    });
+
     // Merge connections layer (dashed lines) - rendered first so it's behind everything
     this.map.addLayer({
       id: this.mergesLayerId,
@@ -518,6 +601,83 @@ export default class SurveyLayer {
     );
   }
 
+  /**
+   * Set ghost section data for merge preview visualization.
+   * Pass null to clear the ghost section.
+   */
+  setGhostSection(data: GhostSectionData | null) {
+    // Build ghost shot features
+    const shotFeatures: GeoJSON.Feature[] = [];
+    const stationFeatures: GeoJSON.Feature[] = [];
+    const mergeFeatures: GeoJSON.Feature[] = [];
+
+    if (data) {
+      // Build shot lines
+      for (const shot of data.shots) {
+        shotFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates: [
+              metersToMapCoords(shot.from.x, shot.from.y),
+              metersToMapCoords(shot.to.x, shot.to.y),
+            ],
+          },
+          properties: { color: data.color },
+        });
+      }
+
+      // Build station points
+      for (const station of data.stations) {
+        stationFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: metersToMapCoords(station.x, station.y),
+          },
+          properties: { color: data.color },
+        });
+      }
+
+      // Build merge station highlight
+      if (data.mergeStation) {
+        mergeFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: metersToMapCoords(data.mergeStation.x, data.mergeStation.y),
+          },
+          properties: {},
+        });
+      }
+    }
+
+    // Update sources
+    const ghostShotsSource = this.map.getSource(this.sourceId + '-ghost-shots');
+    if (ghostShotsSource && 'setData' in ghostShotsSource) {
+      (ghostShotsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: shotFeatures,
+      });
+    }
+
+    const ghostStationsSource = this.map.getSource(this.sourceId + '-ghost-stations');
+    if (ghostStationsSource && 'setData' in ghostStationsSource) {
+      (ghostStationsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: stationFeatures,
+      });
+    }
+
+    const ghostMergeSource = this.map.getSource(this.sourceId + '-ghost-merge');
+    if (ghostMergeSource && 'setData' in ghostMergeSource) {
+      (ghostMergeSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: mergeFeatures,
+      });
+    }
+  }
+
   update(sections: Section[], stations: Station[], stationMerges?: StationMerge[], loopClosures?: LoopClosure[]) {
     // Build shot features and shot label features
     const shotFeatures: GeoJSON.Feature[] = [];
@@ -817,6 +977,16 @@ export default class SurveyLayer {
     if (this.map.getLayer(this.loopClosuresLayerId)) {
       this.map.removeLayer(this.loopClosuresLayerId);
     }
+    // Remove ghost section layers
+    if (this.map.getLayer(this.ghostShotsLayerId)) {
+      this.map.removeLayer(this.ghostShotsLayerId);
+    }
+    if (this.map.getLayer(this.ghostStationsLayerId)) {
+      this.map.removeLayer(this.ghostStationsLayerId);
+    }
+    if (this.map.getLayer(this.ghostMergeLayerId)) {
+      this.map.removeLayer(this.ghostMergeLayerId);
+    }
 
     // Remove all sources after layers are removed
     if (this.map.getSource(this.sourceId + '-shots')) {
@@ -839,6 +1009,16 @@ export default class SurveyLayer {
     }
     if (this.map.getSource(this.sourceId + '-station-labels')) {
       this.map.removeSource(this.sourceId + '-station-labels');
+    }
+    // Remove ghost section sources
+    if (this.map.getSource(this.sourceId + '-ghost-shots')) {
+      this.map.removeSource(this.sourceId + '-ghost-shots');
+    }
+    if (this.map.getSource(this.sourceId + '-ghost-stations')) {
+      this.map.removeSource(this.sourceId + '-ghost-stations');
+    }
+    if (this.map.getSource(this.sourceId + '-ghost-merge')) {
+      this.map.removeSource(this.sourceId + '-ghost-merge');
     }
   }
 }
