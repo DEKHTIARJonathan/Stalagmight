@@ -1,42 +1,28 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
-import type { DmpFile, DmpShot } from '../../types/commands';
+import type { DmpFile } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
-import type { Project, Station, StationRef, GpsCoordinates, Coordinates } from '../../types/project';
+import type { Project, Station } from '../../types/project';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import SectionPreview, { type MergePreviewConfig } from './SectionPreview';
 import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
+import {
+  useImportState,
+  type PlacementConfig,
+  type SectionConfig,
+} from '../../hooks/useImportState';
 
-/**
- * Placement configuration for a section.
- */
-export type PlacementConfig =
-  | { type: 'origin' }
-  | { type: 'zeroDatum'; coordinates: GpsCoordinates; stationIndex: number }
-  | { type: 'fromExisting'; importStation: number; existingStation: StationRef }
-  | { type: 'manual'; alignStation: 'first' | 'last'; position?: Coordinates; snappedToStation?: StationRef | null };
+// Re-export types from the hook for backwards compatibility
+export type { PlacementConfig } from '../../hooks/useImportState';
 
 /**
  * Configuration for a single imported section.
+ * Alias to SectionConfig from useImportState for backwards compatibility.
  */
-export interface ImportedSectionConfig {
-  sectionIndex: number;
-  name: string;
-  surveyor: string | null;
-  date: string | null;
-  color: string;
-  direction: 'in' | 'out';
-  shots: EditableShot[];
-  placement: PlacementConfig;
-}
-
-/**
- * Section status for the left panel.
- */
-type SectionStatus = 'placed' | 'not_placed' | 'errors';
+export type ImportedSectionConfig = SectionConfig;
 
 interface DmpSectionConfigDialogProps {
   /** Parsed DMP file data */
@@ -53,44 +39,6 @@ interface DmpSectionConfigDialogProps {
   project: Project | null;
   /** Computed stations from the project */
   stations: Station[];
-}
-
-/**
- * Default section colors for import.
- */
-const SECTION_COLORS = [
-  '#4ecdc4',
-  '#ff6b6b',
-  '#95a5a6',
-  '#3498db',
-  '#9b59b6',
-  '#1abc9c',
-  '#e67e22',
-  '#f39c12',
-];
-
-/**
- * Convert DMP shots to EditableShots.
- */
-function convertToEditableShots(shots: DmpShot[]): EditableShot[] {
-  return shots
-    .filter((shot) => shot.shot_type === 'Standard')
-    .map((shot, index) => ({
-      id: index,
-      azimuth_in: shot.heading_in,
-      azimuth_out: shot.heading_out,
-      length: shot.length,
-      depth_in: shot.depth_in,
-      depth_out: shot.depth_out,
-      pitch_in: shot.pitch_in,
-      pitch_out: shot.pitch_out,
-      left: shot.left || null,
-      right: shot.right || null,
-      up: shot.up || null,
-      down: shot.down || null,
-      comment: shot.comment || null,
-      is_virtual: false,
-    }));
 }
 
 /**
@@ -118,16 +66,54 @@ export default function DmpSectionConfigDialog({
   // Get placement mode controls from UI store
   const { startPlacementMode, closeDialog, openDialog, dialogData } = useUIStore();
 
-  // Get selected section indices in order
-  const selectedIndices = useMemo(() => {
-    return Array.from(selectionConfig.selectedIndices).sort((a, b) => a - b);
-  }, [selectionConfig.selectedIndices]);
-
   // Check for saved state from dialogData (for restoring after placement mode)
+  const savedSectionConfigs = dialogData.savedSectionConfigs as Array<[number, SectionConfig]> | undefined;
+  const savedPlacedSections = dialogData.savedPlacedSections as number[] | undefined;
   const savedCurrentIndex = dialogData.savedCurrentIndex as number | undefined;
 
-  // Current section index (within selectedIndices array)
-  const [currentIndex, setCurrentIndex] = useState(savedCurrentIndex ?? 0);
+  // Use the import state hook for all state management
+  const importState = useImportState(
+    dmpFile,
+    selectionConfig,
+    savedSectionConfigs && savedPlacedSections && savedCurrentIndex !== undefined
+      ? {
+          sectionConfigs: savedSectionConfigs,
+          placedSections: savedPlacedSections,
+          currentSectionIndex: savedCurrentIndex,
+        }
+      : undefined
+  );
+
+  const {
+    currentConfig,
+    currentSectionIndex,
+    currentArrayIndex,
+    selectedIndices,
+    // canUndo and canRedo are available for UI indicators when needed
+    canUndo: _canUndo,
+    canRedo: _canRedo,
+    navigateToArrayIndex,
+    updateSectionField,
+    updateShot,
+    addShot,
+    deleteShot: deleteImportShot,
+    insertShotBefore,
+    insertShotAfter,
+    setPlacement,
+    markPlaced,
+    undo,
+    redo,
+    resetSection,
+    serializeSectionConfigs,
+    serializePlacedSections,
+    getSectionStatus,
+    getAllConfigs,
+  } = importState;
+
+  // Access sectionConfigs and placedSections via importState.state for manual placement callbacks
+  const { sectionConfigs: _sectionConfigs, placedSections: _placedSections } = importState.state;
+  void _sectionConfigs; // Used in manual placement serialization via hook functions
+  void _placedSections; // Used in manual placement serialization via hook functions
 
   // Left panel collapsed state
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
@@ -148,107 +134,10 @@ export default function DmpSectionConfigDialog({
   // Selected shot row index (syncs with preview)
   const [selectedShotIndex, setSelectedShotIndex] = useState<number | null>(null);
 
-  // Undo/redo history for the current section
-  type HistoryEntry = { shots: EditableShot[] };
-  const historyRef = useRef<Map<number, { past: HistoryEntry[]; future: HistoryEntry[] }>>(new Map());
-
-  // Get or initialize history for current section
-  const getHistory = useCallback((sectionIndex: number) => {
-    if (!historyRef.current.has(sectionIndex)) {
-      historyRef.current.set(sectionIndex, { past: [], future: [] });
-    }
-    return historyRef.current.get(sectionIndex)!;
-  }, []);
-
-  /**
-   * Store original DMP values for reset functionality.
-   * These values remain constant throughout the dialog lifecycle.
-   */
-  const originalSectionValues = useMemo(() => {
-    const originals = new Map<number, ImportedSectionConfig>();
-    selectedIndices.forEach((sectionIdx, arrayIdx) => {
-      const section = dmpFile.sections[sectionIdx];
-      if (!section) return;
-
-      // Get original direction from DMP
-      const direction = section.direction;
-
-      // Date from DMP only (not Step 1 override - that's for initial state)
-      const dateStr = section.date?.split(/[T ]/)[0] ?? null;
-
-      originals.set(sectionIdx, {
-        sectionIndex: sectionIdx,
-        name: section.name,
-        surveyor: section.name || null, // Original surveyor from DMP (section name by default)
-        date: dateStr,
-        color: SECTION_COLORS[arrayIdx % SECTION_COLORS.length] ?? '#4ecdc4',
-        direction,
-        shots: convertToEditableShots(section.shots),
-        placement: { type: 'origin' },
-      });
-    });
-    return originals;
-  }, [selectedIndices, dmpFile.sections]);
-
-  // Check for saved state from dialogData (for restoring after placement mode)
-  const savedSectionConfigs = dialogData.savedSectionConfigs as Array<[number, ImportedSectionConfig]> | undefined;
-  const savedPlacedSections = dialogData.savedPlacedSections as number[] | undefined;
-
-  // Initialize section configs for all selected sections
-  const [sectionConfigs, setSectionConfigs] = useState<Map<number, ImportedSectionConfig>>(() => {
-    // Restore from saved state if available (after placement mode)
-    if (savedSectionConfigs) {
-      return new Map(savedSectionConfigs);
-    }
-
-    // Otherwise initialize fresh from DMP data
-    const configs = new Map<number, ImportedSectionConfig>();
-    selectedIndices.forEach((sectionIdx, arrayIdx) => {
-      const section = dmpFile.sections[sectionIdx];
-      if (!section) return;
-
-      // Get effective direction (from Step 1 override or original)
-      const direction = selectionConfig.sectionDirections.get(sectionIdx) ?? section.direction;
-
-      // Get surveyor (from Step 1 default or section)
-      const surveyor = selectionConfig.defaultSurveyor || section.name || null;
-
-      // Get date (from Step 1 override, section, or null)
-      const dateStr = selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
-
-      configs.set(sectionIdx, {
-        sectionIndex: sectionIdx,
-        name: section.name,
-        surveyor,
-        date: dateStr,
-        color: SECTION_COLORS[arrayIdx % SECTION_COLORS.length] ?? '#4ecdc4',
-        direction,
-        shots: convertToEditableShots(section.shots),
-        placement: { type: 'origin' },
-      });
-    });
-    return configs;
-  });
-
-  // Track which sections have been "placed" (user has explicitly set placement)
-  const [placedSections, setPlacedSections] = useState<Set<number>>(() => {
-    // Restore from saved state if available (after placement mode)
-    if (savedPlacedSections) {
-      return new Set(savedPlacedSections);
-    }
-
-    // Otherwise first section defaults to placed at origin
-    const placed = new Set<number>();
-    if (selectedIndices.length > 0 && selectedIndices[0] !== undefined) {
-      placed.add(selectedIndices[0]);
-    }
-    return placed;
-  });
-
   // ===== Placement Mode State =====
   // Zero Datum fields
   const [gpsInput, setGpsInput] = useState('');
-  const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(null);
+  const [gpsCoords, setGpsCoords] = useState<{ latitude: number; longitude: number; depth_reference: number } | null>(null);
   const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [gpsStationIndex, setGpsStationIndex] = useState(0);
@@ -261,14 +150,13 @@ export default function DmpSectionConfigDialog({
   // Manual Placement fields
   const [manualAlignStation, setManualAlignStation] = useState<'first' | 'last'>('first');
 
-  // Get current section data
-  const currentSectionIndex = selectedIndices[currentIndex];
-  const currentConfig = currentSectionIndex !== undefined
-    ? sectionConfigs.get(currentSectionIndex)
-    : undefined;
+  // Get current DMP section data
   const currentDmpSection = currentSectionIndex !== undefined
     ? dmpFile.sections[currentSectionIndex]
     : undefined;
+
+  // Alias for backward compatibility with currentIndex
+  const currentIndex = currentArrayIndex;
 
   // Compute station count for the current section
   const currentShotCount = useMemo(() => {
@@ -370,128 +258,39 @@ export default function DmpSectionConfigDialog({
   }, []);
 
   /**
-   * Update a field in the current section config.
-   */
-  const updateCurrentConfig = useCallback(
-    (updates: Partial<ImportedSectionConfig>) => {
-      if (currentSectionIndex === undefined) return;
-      setSectionConfigs((prev) => {
-        const next = new Map(prev);
-        const current = next.get(currentSectionIndex);
-        if (current) {
-          next.set(currentSectionIndex, { ...current, ...updates });
-        }
-        return next;
-      });
-    },
-    [currentSectionIndex]
-  );
-
-  /**
-   * Save current state to undo history before making changes.
-   */
-  const saveToHistory = useCallback(() => {
-    if (currentSectionIndex === undefined || !currentConfig) return;
-    const history = getHistory(currentSectionIndex);
-    // Deep copy current shots
-    const snapshot = { shots: currentConfig.shots.map(s => ({ ...s })) };
-    history.past.push(snapshot);
-    // Clear future when new action is taken
-    history.future = [];
-    // Limit history size to 50 entries
-    if (history.past.length > 50) {
-      history.past.shift();
-    }
-  }, [currentSectionIndex, currentConfig, getHistory]);
-
-  // Track if we've saved for the current editing session (for debouncing field edits)
-  const lastSavedFieldRef = useRef<{ index: number; field: string } | null>(null);
-
-  /**
    * Handle shot field change.
-   * Saves to history on first change per field, debouncing subsequent edits.
+   * Uses the hook's updateShot action.
    */
   const handleShotChange = useCallback(
     (shotIndex: number, field: keyof EditableShot, value: number | string | boolean | null) => {
-      if (!currentConfig) return;
-
-      // Save to history if this is a different field/row than last time
-      const lastSaved = lastSavedFieldRef.current;
-      if (!lastSaved || lastSaved.index !== shotIndex || lastSaved.field !== field) {
-        saveToHistory();
-        lastSavedFieldRef.current = { index: shotIndex, field: field as string };
-      }
-
-      const newShots = [...currentConfig.shots];
-      const shot = newShots[shotIndex];
-      if (shot) {
-        newShots[shotIndex] = { ...shot, [field]: value };
-        updateCurrentConfig({ shots: newShots });
-      }
+      updateShot(shotIndex, field, value);
     },
-    [currentConfig, updateCurrentConfig, saveToHistory]
+    [updateShot]
   );
 
   /**
    * Add a new shot at the end.
+   * Uses the hook's addShot action.
    */
   const handleAddShot = useCallback(() => {
-    if (!currentConfig) return;
-    saveToHistory();
-    const newShot: EditableShot = {
-      id: -(currentConfig.shots.length + 1),
-      azimuth_in: 0,
-      azimuth_out: 180,
-      length: 1,
-      depth_in: 0,
-      depth_out: 0,
-      pitch_in: null,
-      pitch_out: null,
-      left: null,
-      right: null,
-      up: null,
-      down: null,
-      comment: null,
-      is_virtual: false,
-      isNew: true,
-      tempId: Date.now(),
-    };
-    updateCurrentConfig({ shots: [...currentConfig.shots, newShot] });
-  }, [currentConfig, updateCurrentConfig, saveToHistory]);
+    addShot();
+  }, [addShot]);
 
   /**
-   * Undo the last shot table change.
+   * Undo the last change.
+   * Uses the hook's undo action.
    */
   const handleUndo = useCallback(() => {
-    if (currentSectionIndex === undefined || !currentConfig) return;
-    const history = getHistory(currentSectionIndex);
-    if (history.past.length === 0) return;
-
-    // Save current state to future
-    const currentSnapshot = { shots: currentConfig.shots.map(s => ({ ...s })) };
-    history.future.push(currentSnapshot);
-
-    // Restore previous state
-    const previousState = history.past.pop()!;
-    updateCurrentConfig({ shots: previousState.shots });
-  }, [currentSectionIndex, currentConfig, getHistory, updateCurrentConfig]);
+    undo();
+  }, [undo]);
 
   /**
-   * Redo the last undone shot table change.
+   * Redo the last undone change.
+   * Uses the hook's redo action.
    */
   const handleRedo = useCallback(() => {
-    if (currentSectionIndex === undefined || !currentConfig) return;
-    const history = getHistory(currentSectionIndex);
-    if (history.future.length === 0) return;
-
-    // Save current state to past
-    const currentSnapshot = { shots: currentConfig.shots.map(s => ({ ...s })) };
-    history.past.push(currentSnapshot);
-
-    // Restore future state
-    const futureState = history.future.pop()!;
-    updateCurrentConfig({ shots: futureState.shots });
-  }, [currentSectionIndex, currentConfig, getHistory, updateCurrentConfig]);
+    redo();
+  }, [redo]);
 
   /**
    * Check if a shot is mid-section (not first or last visible shot).
@@ -518,15 +317,10 @@ export default function DmpSectionConfigDialog({
         setDeleteConfirmState({ visible: true, shotIndex, isMidSection: true });
       } else {
         // Delete directly for first/last shots
-        saveToHistory();
-        const newShots = [...currentConfig.shots];
-        if (newShots[shotIndex]) {
-          newShots[shotIndex] = { ...newShots[shotIndex]!, isDeleted: true };
-          updateCurrentConfig({ shots: newShots });
-        }
+        deleteImportShot(shotIndex);
       }
     },
-    [currentConfig, isMidSectionShot, saveToHistory, updateCurrentConfig]
+    [currentConfig, isMidSectionShot, deleteImportShot]
   );
 
   /**
@@ -534,92 +328,41 @@ export default function DmpSectionConfigDialog({
    */
   const handleConfirmDelete = useCallback(() => {
     if (!currentConfig || deleteConfirmState.shotIndex < 0) return;
-    saveToHistory();
-    const newShots = [...currentConfig.shots];
-    const idx = deleteConfirmState.shotIndex;
-    if (newShots[idx]) {
-      newShots[idx] = { ...newShots[idx]!, isDeleted: true };
-      updateCurrentConfig({ shots: newShots });
-    }
+    deleteImportShot(deleteConfirmState.shotIndex);
     setDeleteConfirmState({ visible: false, shotIndex: -1, isMidSection: false });
-  }, [currentConfig, deleteConfirmState.shotIndex, saveToHistory, updateCurrentConfig]);
+  }, [currentConfig, deleteConfirmState.shotIndex, deleteImportShot]);
 
   /**
    * Insert a new shot before the given index.
+   * Uses the hook's insertShotBefore action.
    */
   const handleInsertBefore = useCallback(
     (shotIndex: number) => {
-      if (!currentConfig) return;
-      saveToHistory();
-      const newShots = [...currentConfig.shots];
-      const newShot: EditableShot = {
-        id: -(Date.now()),
-        azimuth_in: 0,
-        azimuth_out: 180,
-        length: 1,
-        depth_in: 0,
-        depth_out: 0,
-        pitch_in: null,
-        pitch_out: null,
-        left: null,
-        right: null,
-        up: null,
-        down: null,
-        comment: null,
-        is_virtual: false,
-        isNew: true,
-        tempId: Date.now(),
-      };
-      newShots.splice(shotIndex, 0, newShot);
-      updateCurrentConfig({ shots: newShots });
+      insertShotBefore(shotIndex);
     },
-    [currentConfig, saveToHistory, updateCurrentConfig]
+    [insertShotBefore]
   );
 
   /**
    * Insert a new shot after the given index.
+   * Uses the hook's insertShotAfter action.
    */
   const handleInsertAfter = useCallback(
     (shotIndex: number) => {
-      if (!currentConfig) return;
-      saveToHistory();
-      const newShots = [...currentConfig.shots];
-      const newShot: EditableShot = {
-        id: -(Date.now()),
-        azimuth_in: 0,
-        azimuth_out: 180,
-        length: 1,
-        depth_in: 0,
-        depth_out: 0,
-        pitch_in: null,
-        pitch_out: null,
-        left: null,
-        right: null,
-        up: null,
-        down: null,
-        comment: null,
-        is_virtual: false,
-        isNew: true,
-        tempId: Date.now(),
-      };
-      newShots.splice(shotIndex + 1, 0, newShot);
-      updateCurrentConfig({ shots: newShots });
+      insertShotAfter(shotIndex);
     },
-    [currentConfig, saveToHistory, updateCurrentConfig]
+    [insertShotAfter]
   );
 
   /**
    * Handle placement change.
+   * Uses the hook's setPlacement action.
    */
   const handlePlacementChange = useCallback(
     (placement: PlacementConfig) => {
-      updateCurrentConfig({ placement });
-      // Mark section as placed
-      if (currentSectionIndex !== undefined) {
-        setPlacedSections((prev) => new Set(prev).add(currentSectionIndex));
-      }
+      setPlacement(placement);
     },
-    [updateCurrentConfig, currentSectionIndex]
+    [setPlacement]
   );
 
   /**
@@ -661,20 +404,6 @@ export default function DmpSectionConfigDialog({
     targetSectionId,
     targetStationIndex,
   ]);
-
-  /**
-   * Helper to serialize section configs for storage in dialogData.
-   */
-  const serializeSectionConfigs = useCallback(() => {
-    return Array.from(sectionConfigs.entries());
-  }, [sectionConfigs]);
-
-  /**
-   * Helper to serialize placed sections for storage in dialogData.
-   */
-  const serializePlacedSections = useCallback(() => {
-    return Array.from(placedSections);
-  }, [placedSections]);
 
   /**
    * Handle "Place on Map" button for Manual mode.
@@ -804,63 +533,21 @@ export default function DmpSectionConfigDialog({
 
   /**
    * Reset current section to original DMP values.
-   * Resets: name, surveyor, date, color, direction, shots, placement
+   * Uses the hook's resetSection action.
    */
   const handleResetSection = useCallback(() => {
-    if (currentSectionIndex === undefined) return;
-
-    const original = originalSectionValues.get(currentSectionIndex);
-    if (!original) return;
-
-    // Reset to original values (deep copy shots array)
-    setSectionConfigs((prev) => {
-      const next = new Map(prev);
-      next.set(currentSectionIndex, {
-        ...original,
-        shots: original.shots.map((shot) => ({ ...shot })),
-        placement: { type: 'origin' },
-      });
-      return next;
-    });
-
-    // Remove from placed sections (clear placement)
-    setPlacedSections((prev) => {
-      const next = new Set(prev);
-      next.delete(currentSectionIndex);
-      return next;
-    });
-  }, [currentSectionIndex, originalSectionValues]);
+    resetSection();
+  }, [resetSection]);
 
   /**
-   * Get section status for display in the left panel.
-   */
-  const getSectionStatus = useCallback(
-    (sectionIndex: number): SectionStatus => {
-      const config = sectionConfigs.get(sectionIndex);
-      if (!config) return 'not_placed';
-
-      // Check for errors (e.g., empty shots)
-      const validShots = config.shots.filter((s) => !s.isDeleted);
-      if (validShots.length === 0) return 'errors';
-
-      // Check if placed
-      if (placedSections.has(sectionIndex)) return 'placed';
-
-      return 'not_placed';
-    },
-    [sectionConfigs, placedSections]
-  );
-
-  /**
-   * Navigate to a specific section.
+   * Navigate to a specific section (by array index).
+   * Uses the hook's navigateToArrayIndex action.
    */
   const navigateToSection = useCallback(
     (arrayIndex: number) => {
-      if (arrayIndex >= 0 && arrayIndex < selectedIndices.length) {
-        setCurrentIndex(arrayIndex);
-      }
+      navigateToArrayIndex(arrayIndex);
     },
-    [selectedIndices.length]
+    [navigateToArrayIndex]
   );
 
   /**
@@ -868,9 +555,9 @@ export default function DmpSectionConfigDialog({
    */
   const handlePrevious = useCallback(() => {
     if (currentIndex > 0) {
-      setCurrentIndex(currentIndex - 1);
+      navigateToArrayIndex(currentIndex - 1);
     }
-  }, [currentIndex]);
+  }, [currentIndex, navigateToArrayIndex]);
 
   /**
    * Navigate to next section or trigger import.
@@ -879,18 +566,15 @@ export default function DmpSectionConfigDialog({
     if (currentIndex < selectedIndices.length - 1) {
       // Mark current section as placed if not already
       if (currentSectionIndex !== undefined) {
-        setPlacedSections((prev) => new Set(prev).add(currentSectionIndex));
+        markPlaced(currentSectionIndex);
       }
-      setCurrentIndex(currentIndex + 1);
+      navigateToArrayIndex(currentIndex + 1);
     } else {
-      // Last section - trigger import
-      const sections = Array.from(sectionConfigs.values()).map((config) => ({
-        ...config,
-        shots: config.shots.filter((s) => !s.isDeleted),
-      }));
+      // Last section - trigger import using hook's getAllConfigs
+      const sections = getAllConfigs();
       onImport(sections);
     }
-  }, [currentIndex, selectedIndices.length, currentSectionIndex, sectionConfigs, onImport]);
+  }, [currentIndex, selectedIndices.length, currentSectionIndex, markPlaced, navigateToArrayIndex, getAllConfigs, onImport]);
 
   /**
    * Handle cancel with confirmation.
@@ -1133,11 +817,11 @@ export default function DmpSectionConfigDialog({
                         date={currentConfig.date ?? ''}
                         color={currentConfig.color}
                         direction={currentConfig.direction}
-                        onNameChange={(value) => updateCurrentConfig({ name: value })}
-                        onSurveyorChange={(value) => updateCurrentConfig({ surveyor: value || null })}
-                        onDateChange={(value) => updateCurrentConfig({ date: value || null })}
-                        onColorChange={(value) => updateCurrentConfig({ color: value })}
-                        onDirectionChange={(value) => updateCurrentConfig({ direction: value })}
+                        onNameChange={(value) => updateSectionField('name', value)}
+                        onSurveyorChange={(value) => updateSectionField('surveyor', value || null)}
+                        onDateChange={(value) => updateSectionField('date', value || null)}
+                        onColorChange={(value) => updateSectionField('color', value)}
+                        onDirectionChange={(value) => updateSectionField('direction', value)}
                         showDirection
                       />
                       <div className="flex justify-end">
