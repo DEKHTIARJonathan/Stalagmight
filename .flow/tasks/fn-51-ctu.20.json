@@ -9,10 +9,21 @@
     "fn-51-ctu.18"
   ],
   "epic": "fn-51-ctu",
+  "evidence": {
+    "commits": [
+      "e6695d16fd690055bee64f8e65292e26b1ee3620"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui",
+      "cargo test"
+    ]
+  },
   "id": "fn-51-ctu.20",
   "priority": null,
   "spec_path": ".flow/tasks/fn-51-ctu.20.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Remove Old DmpImportDialog",
-  "updated_at": "2026-01-18T12:14:50.494084Z"
+  "updated_at": "2026-01-18T12:30:24.634447Z"
 }

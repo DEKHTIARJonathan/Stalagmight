@@ -7,7 +7,7 @@ pub mod models;
 pub mod parsers;
 pub mod persistence;
 
-use tauri::Manager;
+use tauri::{Manager, Emitter};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,6 +17,22 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| {
+            // Intercept window close requests to allow the frontend to show confirmation dialogs
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Prevent the default close behavior
+                api.prevent_close();
+                // Emit the close-requested event so the frontend can handle it
+                if let Err(e) = window.emit("tauri://close-requested", ()) {
+                    tracing::error!("Failed to emit close-requested event: {}", e);
+                    // If we can't emit the event, allow the close to proceed
+                    // by destroying the window
+                    if let Err(destroy_err) = window.destroy() {
+                        tracing::error!("Failed to destroy window: {}", destroy_err);
+                    }
+                }
+            }
+        })
         .setup(|app| {
             tracing::info!("CaveChef starting up");
 
