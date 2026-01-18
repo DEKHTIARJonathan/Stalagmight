@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
 import type { DmpFile, DmpShot } from '../../types/commands';
@@ -130,6 +130,28 @@ export default function DmpSectionConfigDialog({
 
   // Back confirmation dialog state
   const [showBackConfirm, setShowBackConfirm] = useState(false);
+
+  // Delete shot confirmation state
+  const [deleteConfirmState, setDeleteConfirmState] = useState<{
+    visible: boolean;
+    shotIndex: number;
+    isMidSection: boolean;
+  }>({ visible: false, shotIndex: -1, isMidSection: false });
+
+  // Selected shot row index (syncs with preview)
+  const [selectedShotIndex, setSelectedShotIndex] = useState<number | null>(null);
+
+  // Undo/redo history for the current section
+  type HistoryEntry = { shots: EditableShot[] };
+  const historyRef = useRef<Map<number, { past: HistoryEntry[]; future: HistoryEntry[] }>>(new Map());
+
+  // Get or initialize history for current section
+  const getHistory = useCallback((sectionIndex: number) => {
+    if (!historyRef.current.has(sectionIndex)) {
+      historyRef.current.set(sectionIndex, { past: [], future: [] });
+    }
+    return historyRef.current.get(sectionIndex)!;
+  }, []);
 
   /**
    * Store original DMP values for reset functionality.
@@ -326,11 +348,40 @@ export default function DmpSectionConfigDialog({
   );
 
   /**
+   * Save current state to undo history before making changes.
+   */
+  const saveToHistory = useCallback(() => {
+    if (currentSectionIndex === undefined || !currentConfig) return;
+    const history = getHistory(currentSectionIndex);
+    // Deep copy current shots
+    const snapshot = { shots: currentConfig.shots.map(s => ({ ...s })) };
+    history.past.push(snapshot);
+    // Clear future when new action is taken
+    history.future = [];
+    // Limit history size to 50 entries
+    if (history.past.length > 50) {
+      history.past.shift();
+    }
+  }, [currentSectionIndex, currentConfig, getHistory]);
+
+  // Track if we've saved for the current editing session (for debouncing field edits)
+  const lastSavedFieldRef = useRef<{ index: number; field: string } | null>(null);
+
+  /**
    * Handle shot field change.
+   * Saves to history on first change per field, debouncing subsequent edits.
    */
   const handleShotChange = useCallback(
     (shotIndex: number, field: keyof EditableShot, value: number | string | boolean | null) => {
       if (!currentConfig) return;
+
+      // Save to history if this is a different field/row than last time
+      const lastSaved = lastSavedFieldRef.current;
+      if (!lastSaved || lastSaved.index !== shotIndex || lastSaved.field !== field) {
+        saveToHistory();
+        lastSavedFieldRef.current = { index: shotIndex, field: field as string };
+      }
+
       const newShots = [...currentConfig.shots];
       const shot = newShots[shotIndex];
       if (shot) {
@@ -338,7 +389,7 @@ export default function DmpSectionConfigDialog({
         updateCurrentConfig({ shots: newShots });
       }
     },
-    [currentConfig, updateCurrentConfig]
+    [currentConfig, updateCurrentConfig, saveToHistory]
   );
 
   /**
@@ -346,6 +397,7 @@ export default function DmpSectionConfigDialog({
    */
   const handleAddShot = useCallback(() => {
     if (!currentConfig) return;
+    saveToHistory();
     const newShot: EditableShot = {
       id: -(currentConfig.shots.length + 1),
       azimuth_in: 0,
@@ -365,21 +417,155 @@ export default function DmpSectionConfigDialog({
       tempId: Date.now(),
     };
     updateCurrentConfig({ shots: [...currentConfig.shots, newShot] });
-  }, [currentConfig, updateCurrentConfig]);
+  }, [currentConfig, updateCurrentConfig, saveToHistory]);
 
   /**
-   * Delete a shot at the given index.
+   * Undo the last shot table change.
    */
-  const handleDeleteShot = useCallback(
+  const handleUndo = useCallback(() => {
+    if (currentSectionIndex === undefined || !currentConfig) return;
+    const history = getHistory(currentSectionIndex);
+    if (history.past.length === 0) return;
+
+    // Save current state to future
+    const currentSnapshot = { shots: currentConfig.shots.map(s => ({ ...s })) };
+    history.future.push(currentSnapshot);
+
+    // Restore previous state
+    const previousState = history.past.pop()!;
+    updateCurrentConfig({ shots: previousState.shots });
+  }, [currentSectionIndex, currentConfig, getHistory, updateCurrentConfig]);
+
+  /**
+   * Redo the last undone shot table change.
+   */
+  const handleRedo = useCallback(() => {
+    if (currentSectionIndex === undefined || !currentConfig) return;
+    const history = getHistory(currentSectionIndex);
+    if (history.future.length === 0) return;
+
+    // Save current state to past
+    const currentSnapshot = { shots: currentConfig.shots.map(s => ({ ...s })) };
+    history.past.push(currentSnapshot);
+
+    // Restore future state
+    const futureState = history.future.pop()!;
+    updateCurrentConfig({ shots: futureState.shots });
+  }, [currentSectionIndex, currentConfig, getHistory, updateCurrentConfig]);
+
+  /**
+   * Check if a shot is mid-section (not first or last visible shot).
+   */
+  const isMidSectionShot = useCallback((shotIndex: number) => {
+    if (!currentConfig) return false;
+    const visibleShots = currentConfig.shots
+      .map((s, i) => ({ shot: s, index: i }))
+      .filter(({ shot }) => !shot.isDeleted);
+    if (visibleShots.length <= 2) return false;
+    const visibleIdx = visibleShots.findIndex(({ index }) => index === shotIndex);
+    return visibleIdx > 0 && visibleIdx < visibleShots.length - 1;
+  }, [currentConfig]);
+
+  /**
+   * Request to delete a shot at the given index.
+   * Shows confirmation for mid-section shots.
+   */
+  const handleDeleteShotRequest = useCallback(
     (shotIndex: number) => {
       if (!currentConfig) return;
-      const newShots = [...currentConfig.shots];
-      if (newShots[shotIndex]) {
-        newShots[shotIndex] = { ...newShots[shotIndex]!, isDeleted: true };
-        updateCurrentConfig({ shots: newShots });
+      const midSection = isMidSectionShot(shotIndex);
+      if (midSection) {
+        setDeleteConfirmState({ visible: true, shotIndex, isMidSection: true });
+      } else {
+        // Delete directly for first/last shots
+        saveToHistory();
+        const newShots = [...currentConfig.shots];
+        if (newShots[shotIndex]) {
+          newShots[shotIndex] = { ...newShots[shotIndex]!, isDeleted: true };
+          updateCurrentConfig({ shots: newShots });
+        }
       }
     },
-    [currentConfig, updateCurrentConfig]
+    [currentConfig, isMidSectionShot, saveToHistory, updateCurrentConfig]
+  );
+
+  /**
+   * Confirm deletion of a mid-section shot.
+   */
+  const handleConfirmDelete = useCallback(() => {
+    if (!currentConfig || deleteConfirmState.shotIndex < 0) return;
+    saveToHistory();
+    const newShots = [...currentConfig.shots];
+    const idx = deleteConfirmState.shotIndex;
+    if (newShots[idx]) {
+      newShots[idx] = { ...newShots[idx]!, isDeleted: true };
+      updateCurrentConfig({ shots: newShots });
+    }
+    setDeleteConfirmState({ visible: false, shotIndex: -1, isMidSection: false });
+  }, [currentConfig, deleteConfirmState.shotIndex, saveToHistory, updateCurrentConfig]);
+
+  /**
+   * Insert a new shot before the given index.
+   */
+  const handleInsertBefore = useCallback(
+    (shotIndex: number) => {
+      if (!currentConfig) return;
+      saveToHistory();
+      const newShots = [...currentConfig.shots];
+      const newShot: EditableShot = {
+        id: -(Date.now()),
+        azimuth_in: 0,
+        azimuth_out: 180,
+        length: 1,
+        depth_in: 0,
+        depth_out: 0,
+        pitch_in: null,
+        pitch_out: null,
+        left: null,
+        right: null,
+        up: null,
+        down: null,
+        comment: null,
+        is_virtual: false,
+        isNew: true,
+        tempId: Date.now(),
+      };
+      newShots.splice(shotIndex, 0, newShot);
+      updateCurrentConfig({ shots: newShots });
+    },
+    [currentConfig, saveToHistory, updateCurrentConfig]
+  );
+
+  /**
+   * Insert a new shot after the given index.
+   */
+  const handleInsertAfter = useCallback(
+    (shotIndex: number) => {
+      if (!currentConfig) return;
+      saveToHistory();
+      const newShots = [...currentConfig.shots];
+      const newShot: EditableShot = {
+        id: -(Date.now()),
+        azimuth_in: 0,
+        azimuth_out: 180,
+        length: 1,
+        depth_in: 0,
+        depth_out: 0,
+        pitch_in: null,
+        pitch_out: null,
+        left: null,
+        right: null,
+        up: null,
+        down: null,
+        comment: null,
+        is_virtual: false,
+        isNew: true,
+        tempId: Date.now(),
+      };
+      newShots.splice(shotIndex + 1, 0, newShot);
+      updateCurrentConfig({ shots: newShots });
+    },
+    [currentConfig, saveToHistory, updateCurrentConfig]
   );
 
   /**
@@ -605,6 +791,21 @@ export default function DmpSectionConfigDialog({
         }
         return;
       }
+
+      // Ctrl+Z - undo (shot table changes)
+      if (e.key === 'z' && e.ctrlKey && !e.shiftKey && !e.repeat) {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+
+      // Ctrl+Shift+Z or Ctrl+Y - redo (shot table changes)
+      if (((e.key === 'z' || e.key === 'Z') && e.ctrlKey && e.shiftKey) ||
+          (e.key === 'y' && e.ctrlKey && !e.repeat)) {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
     };
 
     document.addEventListener('keydown', handleKeyDown);
@@ -618,6 +819,8 @@ export default function DmpSectionConfigDialog({
     navigateToSection,
     showCancelConfirm,
     showBackConfirm,
+    handleUndo,
+    handleRedo,
   ]);
 
   // Count sections with errors
@@ -752,6 +955,17 @@ export default function DmpSectionConfigDialog({
                       section={currentDmpSection}
                       color={currentConfig.color}
                       size={200}
+                      selectedStationIndex={
+                        selectedShotIndex !== null ? selectedShotIndex + 1 : null
+                      }
+                      onStationClick={(stationIndex) => {
+                        // Station N corresponds to shot N-1 (station 0 has no corresponding shot)
+                        if (stationIndex > 0) {
+                          setSelectedShotIndex(stationIndex - 1);
+                        } else {
+                          setSelectedShotIndex(null);
+                        }
+                      }}
                     />
                   </div>
 
@@ -1064,7 +1278,11 @@ export default function DmpSectionConfigDialog({
                       shots={currentConfig.shots}
                       onShotChange={handleShotChange}
                       onAddShot={handleAddShot}
-                      onDeleteShot={handleDeleteShot}
+                      onDeleteShot={handleDeleteShotRequest}
+                      onInsertBefore={handleInsertBefore}
+                      onInsertAfter={handleInsertAfter}
+                      selectedRowIndex={selectedShotIndex}
+                      onRowSelect={setSelectedShotIndex}
                       maxHeight="calc(100% - 2rem)"
                     />
                   </div>
@@ -1156,6 +1374,47 @@ export default function DmpSectionConfigDialog({
                 <Button onClick={() => setShowBackConfirm(false)}>Continue Editing</Button>
                 <Button variant="danger" onClick={onBack} data-testid="confirm-back-button">
                   Go Back
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete shot confirmation dialog (for mid-section shots) */}
+      {deleteConfirmState.visible && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setDeleteConfirmState({ visible: false, shotIndex: -1, isMidSection: false })}
+          />
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-shot-confirm-title"
+            className="relative bg-panel border border-border rounded-lg shadow-xl max-w-sm w-full mx-4"
+            data-testid="delete-shot-confirm-dialog"
+          >
+            <div className="px-4 py-3 border-b border-border">
+              <h2 id="delete-shot-confirm-title" className="text-lg font-medium">Delete Shot?</h2>
+            </div>
+            <div className="p-4 space-y-4">
+              <p>Are you sure you want to delete this shot?</p>
+              <p className="text-text-secondary text-sm">
+                This is a mid-section shot. Deleting it will affect the survey chain.
+              </p>
+              <div className="flex justify-end gap-2 pt-4 border-t border-border">
+                <Button
+                  onClick={() => setDeleteConfirmState({ visible: false, shotIndex: -1, isMidSection: false })}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={handleConfirmDelete}
+                  data-testid="confirm-delete-shot-button"
+                >
+                  Delete Shot
                 </Button>
               </div>
             </div>
