@@ -708,7 +708,7 @@ export default function DmpSectionConfigDialog({
         aria-labelledby="dmp-section-config-dialog-title"
         data-testid="dmp-section-config-dialog"
         className="relative bg-panel border border-border rounded-lg shadow-xl flex flex-col"
-        style={{ width: 900, height: 700 }}
+        style={{ width: 'min(900px, 95vw)', height: 'min(700px, 90vh)' }}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">

@@ -45,7 +45,7 @@ export default function Toolbar({
         <Button onClick={onSave} size="sm">
           Save
         </Button>
-        <Button onClick={onImport} size="sm">
+        <Button onClick={() => onImport()} size="sm">
           Import
         </Button>
         <Button onClick={() => openDialog('export')} size="sm">

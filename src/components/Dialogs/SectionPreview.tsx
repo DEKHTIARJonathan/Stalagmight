@@ -185,12 +185,11 @@ export default function SectionPreview({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
-    // Base zoom level 14 represents 1x, so:
-    // 0.25x = 14 - 2 = 12 (minZoom)
-    // 4x = 14 + 2 = 16 (maxZoom)
+    // Base zoom level 14 represents 1x
+    // Allow zooming out to 0.25x and in much further for detail
     const baseZoom = 14;
-    const minZoom = baseZoom - 2; // 0.25x
-    const maxZoom = baseZoom + 2; // 4x
+    const minZoom = baseZoom - 2; // 0.25x (zoom level 12)
+    const maxZoom = 22; // Maximum zoom for detailed inspection
 
     const map = new maplibregl.Map({
       container: containerRef.current,
@@ -675,63 +674,78 @@ export default function SectionPreview({
       });
     }
 
-    // Fit bounds if we have stations
+    // Fit bounds if we have stations - do this after a small delay to ensure
+    // the container has proper dimensions and the map is fully rendered
     if (stations.length > 0) {
-      // Get bounds for import section (with offset applied)
-      const offsetStations = stations.map((s) => ({
-        x: s.x + importOffset.x,
-        y: s.y + importOffset.y,
-        z: s.z,
-      }));
-      const bounds = getBounds(offsetStations);
+      const doFitBounds = () => {
+        // Get bounds for import section (with offset applied)
+        const offsetStations = stations.map((s) => ({
+          x: s.x + importOffset.x,
+          y: s.y + importOffset.y,
+          z: s.z,
+        }));
+        const bounds = getBounds(offsetStations);
 
-      // Include target section in bounds if merge preview is active
-      if (mergePreview && targetStations.length > 0) {
-        const targetBounds = getBounds(targetStations);
-        bounds.minX = Math.min(bounds.minX, targetBounds.minX);
-        bounds.maxX = Math.max(bounds.maxX, targetBounds.maxX);
-        bounds.minY = Math.min(bounds.minY, targetBounds.minY);
-        bounds.maxY = Math.max(bounds.maxY, targetBounds.maxY);
-      }
-
-      // Include existing station in bounds if present (legacy mode)
-      if (!mergePreview && existingStationFeatures.length > 0) {
-        const importStation =
-          importStationIndex === 'first' ? stations[0] : stations[stations.length - 1];
-        if (importStation) {
-          const existingX = importStation.x + 10;
-          const existingY = importStation.y + 10;
-          bounds.minX = Math.min(bounds.minX, existingX);
-          bounds.maxX = Math.max(bounds.maxX, existingX);
-          bounds.minY = Math.min(bounds.minY, existingY);
-          bounds.maxY = Math.max(bounds.maxY, existingY);
+        // Include target section in bounds if merge preview is active
+        if (mergePreview && targetStations.length > 0) {
+          const targetBounds = getBounds(targetStations);
+          bounds.minX = Math.min(bounds.minX, targetBounds.minX);
+          bounds.maxX = Math.max(bounds.maxX, targetBounds.maxX);
+          bounds.minY = Math.min(bounds.minY, targetBounds.minY);
+          bounds.maxY = Math.max(bounds.maxY, targetBounds.maxY);
         }
-      }
 
-      // Check for degenerate bounds (single point or very small extent)
-      const extentX = bounds.maxX - bounds.minX;
-      const extentY = bounds.maxY - bounds.minY;
-      const minExtent = 1; // 1 meter minimum extent
+        // Include existing station in bounds if present (legacy mode)
+        if (!mergePreview && existingStationFeatures.length > 0) {
+          const importStation =
+            importStationIndex === 'first' ? stations[0] : stations[stations.length - 1];
+          if (importStation) {
+            const existingX = importStation.x + 10;
+            const existingY = importStation.y + 10;
+            bounds.minX = Math.min(bounds.minX, existingX);
+            bounds.maxX = Math.max(bounds.maxX, existingX);
+            bounds.minY = Math.min(bounds.minY, existingY);
+            bounds.maxY = Math.max(bounds.maxY, existingY);
+          }
+        }
 
-      if (extentX < minExtent && extentY < minExtent) {
-        // Single point or very small area - use setCenter with fixed zoom
-        const centerX = (bounds.minX + bounds.maxX) / 2;
-        const centerY = (bounds.minY + bounds.maxY) / 2;
-        map.jumpTo({
-          center: metersToMapCoords(centerX, centerY),
-          zoom: 16,
-        });
-      } else {
-        const sw = metersToMapCoords(bounds.minX, bounds.minY);
-        const ne = metersToMapCoords(bounds.maxX, bounds.maxY);
+        // Check for degenerate bounds (single point or very small extent)
+        const extentX = bounds.maxX - bounds.minX;
+        const extentY = bounds.maxY - bounds.minY;
+        const minExtent = 1; // 1 meter minimum extent
 
-        // Add padding and fit
-        map.fitBounds([sw, ne], {
-          padding: 30,
-          maxZoom: 18,
-          duration: 300,
-        });
-      }
+        if (extentX < minExtent && extentY < minExtent) {
+          // Single point or very small area - use setCenter with fixed zoom
+          const centerX = (bounds.minX + bounds.maxX) / 2;
+          const centerY = (bounds.minY + bounds.maxY) / 2;
+          map.jumpTo({
+            center: metersToMapCoords(centerX, centerY),
+            zoom: 16,
+          });
+        } else {
+          const sw = metersToMapCoords(bounds.minX, bounds.minY);
+          const ne = metersToMapCoords(bounds.maxX, bounds.maxY);
+
+          // Calculate 10% padding based on container size
+          const container = map.getContainer();
+          const paddingX = Math.round(container.clientWidth * 0.1);
+          const paddingY = Math.round(container.clientHeight * 0.1);
+
+          // Add padding and fit (no animation for initial load)
+          map.fitBounds([sw, ne], {
+            padding: { top: paddingY, bottom: paddingY, left: paddingX, right: paddingX },
+            maxZoom: 20, // Don't auto-zoom too close, user can zoom in more if needed
+            duration: 0,
+          });
+        }
+      };
+
+      // Use requestAnimationFrame to ensure container has proper dimensions
+      requestAnimationFrame(() => {
+        if (mapRef.current) {
+          doFitBounds();
+        }
+      });
     }
   }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, selectedStationIndex]);
 

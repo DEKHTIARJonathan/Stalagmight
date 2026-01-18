@@ -60,7 +60,7 @@ function calculateStationPositions(shots: ImportedSectionConfig['shots']): Array
 
 function App() {
   const { project, stations, loadConfig, config, isDirty, createSection, setZeroDatum, mergeStations, moveSection, importDmp } = useProjectStore();
-  const { view, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, hasImportedDmpPath, addImportedDmpPath } = useUIStore();
+  const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, hasImportedDmpPath, addImportedDmpPath } = useUIStore();
 
   // Track whether we're hovering with a valid DMP file
   const [isDraggingDmp, setIsDraggingDmp] = useState(false);
@@ -223,8 +223,9 @@ function App() {
       }
     }
 
-    // Close the dialog first
+    // Close the dialog and switch to single view
     closeDialog();
+    setView('single');
 
     // Show errors if any occurred
     if (errors.length > 0) {
@@ -239,7 +240,7 @@ function App() {
         message: warnings.join('\n'),
       });
     }
-  }, [createSection, setZeroDatum, mergeStations, moveSection, closeDialog, openDialog]);
+  }, [createSection, setZeroDatum, mergeStations, moveSection, closeDialog, openDialog, setView]);
 
   useEffect(() => {
     // Load config on startup
