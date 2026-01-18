@@ -1,5 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import type { Shot } from '../../types/project';
+import { defaultConfig } from '../../types/config';
+import { hasAzimuthDiscrepancy, hasPitchDiscrepancy } from '../../utils/validation';
 
 /**
  * Editable shot type - extends Shot with editing state flags.
@@ -12,12 +14,13 @@ export interface EditableShot extends Omit<Shot, 'marker_index' | 'temperature'>
 
 /**
  * Validation configuration for shot data.
+ * Uses the same field names as the main config for consistency.
  */
 export interface ValidationConfig {
-  /** Maximum allowable difference between azimuth_in and azimuth_out - 180 */
-  azimuthDifferenceThreshold: number;
-  /** Maximum allowable difference between pitch_in and pitch_out */
-  pitchDifferenceThreshold: number;
+  /** Threshold for azimuth in/out difference warning (degrees). Default: 10 */
+  azimuth_diff_threshold: number;
+  /** Threshold for pitch in/out difference warning (degrees). Default: 5 */
+  pitch_diff_threshold: number;
 }
 
 /**
@@ -59,11 +62,11 @@ export interface ShotTableEditorProps {
 }
 
 /**
- * Default validation thresholds.
+ * Default validation thresholds from config.
  */
 const DEFAULT_VALIDATION_CONFIG: ValidationConfig = {
-  azimuthDifferenceThreshold: 5, // degrees
-  pitchDifferenceThreshold: 5, // degrees
+  azimuth_diff_threshold: defaultConfig.validation.azimuth_diff_threshold,
+  pitch_diff_threshold: defaultConfig.validation.pitch_diff_threshold,
 };
 
 /**
@@ -76,27 +79,19 @@ function calculateAverage(a: number | null | undefined, b: number | null | undef
 }
 
 /**
- * Check for azimuth warning (azimuth_in and azimuth_out should differ by ~180 degrees).
+ * Check for azimuth warning using the shared validation function.
  * Returns true if the difference from 180 exceeds the threshold.
  */
 function hasAzimuthWarning(shot: EditableShot, threshold: number): boolean {
-  const diff = Math.abs(shot.azimuth_in - shot.azimuth_out);
-  // Normalize to 0-360 range
-  const normalizedDiff = Math.abs(diff - 180);
-  // Handle wrap-around (e.g., 350 and 170 should be ~180 apart)
-  const adjustedDiff = normalizedDiff > 180 ? 360 - normalizedDiff : normalizedDiff;
-  return adjustedDiff > threshold;
+  return hasAzimuthDiscrepancy(shot.azimuth_in, shot.azimuth_out, threshold);
 }
 
 /**
- * Check for pitch warning (pitch_in and pitch_out should be similar).
+ * Check for pitch warning using the shared validation function.
  * Returns true if the absolute difference exceeds the threshold.
  */
 function hasPitchWarning(shot: EditableShot, threshold: number): boolean {
-  if (shot.pitch_in === null && shot.pitch_out === null) return false;
-  const pitchIn = shot.pitch_in ?? 0;
-  const pitchOut = shot.pitch_out ?? 0;
-  return Math.abs(pitchIn - pitchOut) > threshold;
+  return hasPitchDiscrepancy(shot.pitch_in, shot.pitch_out, threshold);
 }
 
 /**
@@ -105,17 +100,17 @@ function hasPitchWarning(shot: EditableShot, threshold: number): boolean {
 function getShotWarnings(shot: EditableShot, config: ValidationConfig): ShotWarning[] {
   const warnings: ShotWarning[] = [];
 
-  if (hasAzimuthWarning(shot, config.azimuthDifferenceThreshold)) {
+  if (hasAzimuthWarning(shot, config.azimuth_diff_threshold)) {
     warnings.push({
       type: 'azimuth',
-      message: `Azimuth in/out differ by more than ${config.azimuthDifferenceThreshold}° from 180°`,
+      message: `Azimuth in/out differ by more than ${config.azimuth_diff_threshold}° from 180°`,
     });
   }
 
-  if (hasPitchWarning(shot, config.pitchDifferenceThreshold)) {
+  if (hasPitchWarning(shot, config.pitch_diff_threshold)) {
     warnings.push({
       type: 'pitch',
-      message: `Pitch in/out differ by more than ${config.pitchDifferenceThreshold}°`,
+      message: `Pitch in/out differ by more than ${config.pitch_diff_threshold}°`,
     });
   }
 

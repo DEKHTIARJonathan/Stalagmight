@@ -7,10 +7,21 @@
     "fn-51-ctu.4"
   ],
   "epic": "fn-51-ctu",
+  "evidence": {
+    "commits": [
+      "d1630783ef2d549b232efd58fe6e79a7b6bf7480"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui (75 passed)",
+      "cargo test (72 passed)"
+    ]
+  },
   "id": "fn-51-ctu.16",
   "priority": null,
   "spec_path": ".flow/tasks/fn-51-ctu.16.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Implement Session Surveyor Memory",
-  "updated_at": "2026-01-18T11:00:28.043879Z"
+  "updated_at": "2026-01-18T11:12:13.247690Z"
 }
