@@ -7,6 +7,7 @@ import type { Project, Station, StationRef, GpsCoordinates } from '../../types/p
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import SectionPreview from './SectionPreview';
+import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
 
 /**
  * Placement configuration for a section.
@@ -111,7 +112,7 @@ export default function DmpSectionConfigDialog({
   onBack,
   onImport,
   project,
-  stations,
+  stations: _stations,
 }: DmpSectionConfigDialogProps) {
   // Get selected section indices in order
   const selectedIndices = useMemo(() => {
@@ -200,6 +201,24 @@ export default function DmpSectionConfigDialog({
     return placed;
   });
 
+  // ===== Placement Mode State =====
+  // Zero Datum fields
+  const [gpsInput, setGpsInput] = useState('');
+  const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(null);
+  const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(null);
+  const [gpsError, setGpsError] = useState<string | null>(null);
+  const [gpsStationIndex, setGpsStationIndex] = useState(0);
+
+  // From Existing fields
+  const [importStationIndex, setImportStationIndex] = useState(0); // 0=first, -1=last
+  const [targetSectionId, setTargetSectionId] = useState<number | null>(null);
+  const [targetStationIndex, setTargetStationIndex] = useState(0);
+
+  // Manual Placement fields
+  const [manualAlignStation, setManualAlignStation] = useState<'first' | 'last'>('first');
+  // Note: isPlacingOnMap will be used by fn-51-ctu.10 (Manual Placement Mode)
+  const [_isPlacingOnMap, setIsPlacingOnMap] = useState(false);
+
   // Get current section data
   const currentSectionIndex = selectedIndices[currentIndex];
   const currentConfig = currentSectionIndex !== undefined
@@ -208,6 +227,85 @@ export default function DmpSectionConfigDialog({
   const currentDmpSection = currentSectionIndex !== undefined
     ? dmpFile.sections[currentSectionIndex]
     : undefined;
+
+  // Compute station count for the current section
+  const currentShotCount = useMemo(() => {
+    if (!currentConfig) return 0;
+    return currentConfig.shots.filter((s) => !s.isDeleted).length;
+  }, [currentConfig]);
+
+  // Generate station options (0 to shotCount, since station N is after shot N-1)
+  const stationOptions = useMemo(() => {
+    const options: Array<{ value: number; label: string }> = [];
+    for (let i = 0; i <= currentShotCount; i++) {
+      options.push({ value: i, label: `Station ${i}` });
+    }
+    return options;
+  }, [currentShotCount]);
+
+  // Get existing sections from project (for "From Existing" mode)
+  const existingSections = useMemo(() => {
+    if (!project) return [];
+    return project.sections;
+  }, [project]);
+
+  // Get stations for a selected existing section
+  const getStationsForSection = useCallback(
+    (sectionId: number): Array<{ value: number; label: string }> => {
+      const section = existingSections.find((s) => s.id === sectionId);
+      if (!section) return [];
+      // Station count = shot count + 1
+      const count = section.shots.length + 1;
+      const options: Array<{ value: number; label: string }> = [];
+      for (let i = 0; i < count; i++) {
+        options.push({ value: i, label: `Station ${i}` });
+      }
+      return options;
+    },
+    [existingSections]
+  );
+
+  // Existing section options
+  const existingSectionOptions = useMemo(() => {
+    return existingSections.map((s) => ({
+      value: s.id,
+      label: s.name || `Section ${s.id}`,
+    }));
+  }, [existingSections]);
+
+  // Target section stations (when a target section is selected)
+  const targetSectionStations = useMemo(() => {
+    if (targetSectionId === null) return [];
+    return getStationsForSection(targetSectionId);
+  }, [targetSectionId, getStationsForSection]);
+
+  /**
+   * Handle GPS input change with auto-detection.
+   */
+  const handleGpsInputChange = useCallback((value: string) => {
+    setGpsInput(value);
+
+    if (!value.trim()) {
+      setGpsCoords(null);
+      setGpsFormat(null);
+      setGpsError(null);
+      return;
+    }
+
+    // Detect format for indicator
+    const detected = detectFormat(value);
+    setGpsFormat(detected || null);
+
+    // Try to parse
+    const result = parseGps(value);
+    if ('coordinates' in result) {
+      setGpsCoords(result.coordinates);
+      setGpsError(null);
+    } else {
+      setGpsCoords(null);
+      setGpsError(result.message);
+    }
+  }, []);
 
   /**
    * Update a field in the current section config.
@@ -296,6 +394,72 @@ export default function DmpSectionConfigDialog({
       }
     },
     [updateCurrentConfig, currentSectionIndex]
+  );
+
+  /**
+   * Handle "Place" button for Place at 0,0 mode.
+   */
+  const handlePlaceAtOrigin = useCallback(() => {
+    handlePlacementChange({ type: 'origin' });
+  }, [handlePlacementChange]);
+
+  /**
+   * Handle "Place" button for Zero Datum mode.
+   */
+  const handlePlaceZeroDatum = useCallback(() => {
+    if (!gpsCoords) return;
+    handlePlacementChange({
+      type: 'zeroDatum',
+      coordinates: gpsCoords,
+      stationIndex: gpsStationIndex,
+    });
+  }, [handlePlacementChange, gpsCoords, gpsStationIndex]);
+
+  /**
+   * Handle "Place" button for From Existing mode.
+   */
+  const handlePlaceFromExisting = useCallback(() => {
+    if (targetSectionId === null) return;
+    // Convert importStationIndex: 0=first, -1=last (actual index)
+    const actualImportStation =
+      importStationIndex === -1 ? currentShotCount : importStationIndex;
+    handlePlacementChange({
+      type: 'fromExisting',
+      importStation: actualImportStation,
+      existingStation: { section_id: targetSectionId, station_index: targetStationIndex },
+    });
+  }, [
+    handlePlacementChange,
+    importStationIndex,
+    currentShotCount,
+    targetSectionId,
+    targetStationIndex,
+  ]);
+
+  /**
+   * Handle "Start Placement" button for Manual mode.
+   */
+  const handleStartManualPlacement = useCallback(() => {
+    handlePlacementChange({ type: 'manual', alignStation: manualAlignStation });
+    setIsPlacingOnMap(true);
+    // Note: In a full implementation, this would hide the dialog and
+    // show a ghost outline on the map. For now, we just set the state.
+  }, [handlePlacementChange, manualAlignStation]);
+
+  /**
+   * Handle station selection from preview click.
+   * Used for Zero Datum mode station selection.
+   * Note: This will be wired to SectionPreview's onStationClick prop in a future task.
+   */
+  // @ts-expect-error - Will be used by SectionPreview onStationClick in future task
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const handlePreviewStationClick = useCallback(
+    (stationIndex: number) => {
+      if (currentConfig?.placement.type === 'zeroDatum') {
+        setGpsStationIndex(stationIndex);
+      }
+    },
+    [currentConfig?.placement.type]
   );
 
   /**
@@ -622,63 +786,274 @@ export default function DmpSectionConfigDialog({
                 </div>
 
                 {/* Placement options */}
-                <Panel title="Placement" className="mb-4">
-                  <div className="flex flex-wrap gap-4">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="placement"
-                        checked={currentConfig.placement.type === 'origin'}
-                        onChange={() => handlePlacementChange({ type: 'origin' })}
-                        data-testid="placement-origin"
-                      />
-                      <span>Place at 0,0</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="placement"
-                        checked={currentConfig.placement.type === 'zeroDatum'}
-                        onChange={() =>
-                          handlePlacementChange({
-                            type: 'zeroDatum',
-                            coordinates: { latitude: 0, longitude: 0, depth_reference: 0 },
-                            stationIndex: 0,
-                          })
-                        }
-                        data-testid="placement-zero-datum"
-                      />
-                      <span>Zero Datum (GPS)</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="placement"
-                        checked={currentConfig.placement.type === 'fromExisting'}
-                        onChange={() =>
-                          handlePlacementChange({
-                            type: 'fromExisting',
-                            importStation: 0,
-                            existingStation: { section_id: 0, station_index: 0 },
-                          })
-                        }
-                        disabled={!project || stations.length === 0}
-                        data-testid="placement-from-existing"
-                      />
-                      <span className={!project || stations.length === 0 ? 'text-text-secondary' : ''}>
-                        From Existing Station
-                      </span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="placement"
-                        checked={currentConfig.placement.type === 'manual'}
-                        onChange={() => handlePlacementChange({ type: 'manual', alignStation: 'first' })}
-                        data-testid="placement-manual"
-                      />
-                      <span>Manual Placement</span>
-                    </label>
+                <Panel title="Placement" className="mb-4" data-testid="placement-panel">
+                  <div className="space-y-3">
+                    {/* Place at 0,0 */}
+                    <div
+                      className={`p-3 rounded border ${
+                        currentConfig.placement.type === 'origin'
+                          ? 'border-accent bg-accent/5'
+                          : 'border-border'
+                      }`}
+                      data-testid="placement-mode-origin"
+                    >
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="placement"
+                          checked={currentConfig.placement.type === 'origin'}
+                          onChange={() => handlePlacementChange({ type: 'origin' })}
+                          data-testid="placement-origin"
+                        />
+                        <span className="font-medium">Place at 0,0</span>
+                      </label>
+                      {currentConfig.placement.type === 'origin' && (
+                        <div className="mt-2 ml-6 flex items-center justify-between">
+                          <span className="text-sm text-text-secondary">
+                            First station at origin
+                          </span>
+                          <Button
+                            size="sm"
+                            onClick={handlePlaceAtOrigin}
+                            data-testid="place-origin-button"
+                          >
+                            Place
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Zero Datum (GPS) */}
+                    <div
+                      className={`p-3 rounded border ${
+                        currentConfig.placement.type === 'zeroDatum'
+                          ? 'border-accent bg-accent/5'
+                          : 'border-border'
+                      }`}
+                      data-testid="placement-mode-zero-datum"
+                    >
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="placement"
+                          checked={currentConfig.placement.type === 'zeroDatum'}
+                          onChange={() =>
+                            handlePlacementChange({
+                              type: 'zeroDatum',
+                              coordinates: gpsCoords || { latitude: 0, longitude: 0, depth_reference: 0 },
+                              stationIndex: gpsStationIndex,
+                            })
+                          }
+                          data-testid="placement-zero-datum"
+                        />
+                        <span className="font-medium">Zero Datum (GPS)</span>
+                      </label>
+                      {currentConfig.placement.type === 'zeroDatum' && (
+                        <div className="mt-3 ml-6 space-y-3">
+                          {/* GPS Input */}
+                          <div className="flex items-center gap-2">
+                            <label className="text-sm text-text-secondary w-12">GPS:</label>
+                            <input
+                              type="text"
+                              value={gpsInput}
+                              onChange={(e) => handleGpsInputChange(e.target.value)}
+                              placeholder="48.8584, 2.2945"
+                              className="flex-1 px-2 py-1 bg-background border border-border rounded text-sm"
+                              data-testid="gps-input"
+                            />
+                            {gpsFormat && (
+                              <span
+                                className="text-xs px-2 py-1 bg-accent/10 text-accent rounded"
+                                data-testid="gps-format-indicator"
+                              >
+                                {gpsFormat}
+                              </span>
+                            )}
+                          </div>
+                          {gpsError && (
+                            <div className="text-xs text-error ml-14" data-testid="gps-error">
+                              {gpsError}
+                            </div>
+                          )}
+                          {gpsCoords && (
+                            <div className="text-xs text-success ml-14" data-testid="gps-parsed">
+                              Lat: {gpsCoords.latitude.toFixed(6)}, Lon: {gpsCoords.longitude.toFixed(6)}
+                            </div>
+                          )}
+
+                          {/* Station Selection */}
+                          <div className="flex items-center gap-2">
+                            <label className="text-sm text-text-secondary w-12">Station:</label>
+                            <select
+                              value={gpsStationIndex}
+                              onChange={(e) => setGpsStationIndex(parseInt(e.target.value, 10))}
+                              className="px-2 py-1 bg-background border border-border rounded text-sm"
+                              data-testid="gps-station-select"
+                            >
+                              {stationOptions.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                            <Button
+                              size="sm"
+                              onClick={handlePlaceZeroDatum}
+                              disabled={!gpsCoords}
+                              data-testid="place-zero-datum-button"
+                            >
+                              Place
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* From Existing */}
+                    <div
+                      className={`p-3 rounded border ${
+                        currentConfig.placement.type === 'fromExisting'
+                          ? 'border-accent bg-accent/5'
+                          : 'border-border'
+                      } ${!project || existingSections.length === 0 ? 'opacity-50' : ''}`}
+                      data-testid="placement-mode-existing"
+                    >
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="placement"
+                          checked={currentConfig.placement.type === 'fromExisting'}
+                          onChange={() =>
+                            handlePlacementChange({
+                              type: 'fromExisting',
+                              importStation: importStationIndex === -1 ? currentShotCount : importStationIndex,
+                              existingStation: {
+                                section_id: targetSectionId || 0,
+                                station_index: targetStationIndex,
+                              },
+                            })
+                          }
+                          disabled={!project || existingSections.length === 0}
+                          data-testid="placement-from-existing"
+                        />
+                        <span className="font-medium">From Existing Station</span>
+                        {(!project || existingSections.length === 0) && (
+                          <span className="text-xs text-text-secondary">(no existing sections)</span>
+                        )}
+                      </label>
+                      {currentConfig.placement.type === 'fromExisting' && (
+                        <div className="mt-3 ml-6 space-y-3">
+                          {/* This section station */}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <label className="text-sm text-text-secondary">Connect:</label>
+                            <select
+                              value={importStationIndex}
+                              onChange={(e) => setImportStationIndex(parseInt(e.target.value, 10))}
+                              className="px-2 py-1 bg-background border border-border rounded text-sm"
+                              data-testid="import-station-select"
+                            >
+                              <option value={0}>First station (0)</option>
+                              <option value={-1}>Last station ({currentShotCount})</option>
+                            </select>
+                            <span className="text-sm text-text-secondary">to</span>
+                          </div>
+
+                          {/* Target section and station */}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <select
+                              value={targetSectionId ?? ''}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setTargetSectionId(val ? parseInt(val, 10) : null);
+                                setTargetStationIndex(0);
+                              }}
+                              className="px-2 py-1 bg-background border border-border rounded text-sm"
+                              data-testid="target-section-select"
+                            >
+                              <option value="">Select section...</option>
+                              {existingSectionOptions.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={targetStationIndex}
+                              onChange={(e) => setTargetStationIndex(parseInt(e.target.value, 10))}
+                              className="px-2 py-1 bg-background border border-border rounded text-sm"
+                              disabled={targetSectionId === null}
+                              data-testid="target-station-select"
+                            >
+                              {targetSectionStations.length === 0 ? (
+                                <option value={0}>Select station...</option>
+                              ) : (
+                                targetSectionStations.map((opt) => (
+                                  <option key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                  </option>
+                                ))
+                              )}
+                            </select>
+                            <Button
+                              size="sm"
+                              onClick={handlePlaceFromExisting}
+                              disabled={targetSectionId === null}
+                              data-testid="place-from-existing-button"
+                            >
+                              Place
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Manual Placement */}
+                    <div
+                      className={`p-3 rounded border ${
+                        currentConfig.placement.type === 'manual'
+                          ? 'border-accent bg-accent/5'
+                          : 'border-border'
+                      }`}
+                      data-testid="placement-mode-manual"
+                    >
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="placement"
+                          checked={currentConfig.placement.type === 'manual'}
+                          onChange={() => handlePlacementChange({ type: 'manual', alignStation: manualAlignStation })}
+                          data-testid="placement-manual"
+                        />
+                        <span className="font-medium">Manual Placement</span>
+                      </label>
+                      {currentConfig.placement.type === 'manual' && (
+                        <div className="mt-3 ml-6 space-y-3">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <label className="text-sm text-text-secondary">Align:</label>
+                            <select
+                              value={manualAlignStation}
+                              onChange={(e) => setManualAlignStation(e.target.value as 'first' | 'last')}
+                              className="px-2 py-1 bg-background border border-border rounded text-sm"
+                              data-testid="manual-align-select"
+                            >
+                              <option value="first">First station</option>
+                              <option value="last">Last station</option>
+                            </select>
+                            <span className="text-sm text-text-secondary">with cursor</span>
+                            <Button
+                              size="sm"
+                              onClick={handleStartManualPlacement}
+                              data-testid="start-placement-button"
+                            >
+                              Place on Map
+                            </Button>
+                          </div>
+                          <p className="text-xs text-text-secondary">
+                            Click on the map to position the section. Press Esc or right-click to cancel.
+                          </p>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </Panel>
 
