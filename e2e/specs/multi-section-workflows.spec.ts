@@ -76,9 +76,11 @@ async function createTestSection(name: string): Promise<{ success: boolean; erro
                 date: string;
                 color: string;
                 shots: Array<{
-                  azimuth: number;
+                  azimuth_in: number;
+                  azimuth_out: number;
                   length: number;
-                  depth: number;
+                  depth_in: number;
+                  depth_out: number;
                 }>;
               }) => Promise<{ success: boolean; error?: string }>;
             };
@@ -98,8 +100,8 @@ async function createTestSection(name: string): Promise<{ success: boolean; erro
           date: '2026-01-01',
           color: '#FF0000',
           shots: [
-            { azimuth: 45, length: 10, depth: -2 },
-            { azimuth: 90, length: 15, depth: -5 },
+            { azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: 0, depth_out: -2 },
+            { azimuth_in: 90, azimuth_out: 270, length: 15, depth_in: -2, depth_out: -5 },
           ],
         });
         done({ success: result.success, error: result.error });

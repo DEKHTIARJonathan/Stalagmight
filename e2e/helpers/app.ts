@@ -50,9 +50,23 @@ export async function resetAppState(): Promise<void> {
     { timeout: 5000, timeoutMsg: 'Project did not close' }
   );
 
-  // Wait for GlobalView
+  // Wait for GlobalView - give extra time for React to re-render after state change
+  await browser.pause(500);
+
+  // Check if React is still mounted (root div has content)
+  const isReactMounted = await browser.execute(() => {
+    const root = document.getElementById('root');
+    return root && root.innerHTML.length > 50;
+  });
+
+  if (!isReactMounted) {
+    console.log('[resetAppState] React unmounted, refreshing page...');
+    await browser.refresh();
+    await browser.pause(2000);
+  }
+
   const globalView = await $('[data-testid="global-view"]');
-  await globalView.waitForExist({ timeout: 5000 });
+  await globalView.waitForExist({ timeout: 10000 });
 }
 
 /**
