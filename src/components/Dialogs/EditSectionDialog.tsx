@@ -4,6 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
+import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import type { Shot, ShotData } from '../../types/project';
 
 export default function EditSectionDialog() {
@@ -277,58 +278,17 @@ export default function EditSectionDialog() {
         )}
 
         {/* Section metadata */}
-        <div className="grid grid-cols-4 gap-4">
-          <div>
-            <label className="block text-sm text-text-secondary mb-1">Name</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full"
-              placeholder="Section name"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-text-secondary mb-1">Surveyor</label>
-            <input
-              type="text"
-              value={surveyor}
-              onChange={(e) => setSurveyor(e.target.value)}
-              className="w-full"
-              placeholder="Surveyor name"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-text-secondary mb-1">Date</label>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-text-secondary mb-1">Color</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                value={color}
-                onChange={(e) => setColor(e.target.value)}
-                className="w-8 h-8 rounded cursor-pointer"
-              />
-              <input
-                type="text"
-                value={color}
-                onChange={(e) => setColor(e.target.value)}
-                className="flex-1"
-                placeholder="#4ecdc4"
-              />
-            </div>
-          </div>
-        </div>
+        <SectionMetadataForm
+          name={name}
+          surveyor={surveyor}
+          date={date}
+          color={color}
+          onNameChange={setName}
+          onSurveyorChange={setSurveyor}
+          onDateChange={setDate}
+          onColorChange={setColor}
+          disabled={isLoading}
+        />
 
         {/* Shots table using ShotTableEditor */}
         <div className="border-t border-border pt-4">
