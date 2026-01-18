@@ -216,16 +216,21 @@ export async function createNewProject(projectName: string): Promise<void> {
 
 /**
  * Open the DMP Import Dialog using keyboard shortcut (Ctrl+I).
- * Note: This opens DmpImportDialog, NOT ImportDialog (section creation).
+ *
+ * With the new two-step import flow:
+ * - Ctrl+I triggers the file picker
+ * - After file selection, opens Step 1 (DmpSelectionDialog)
+ *
+ * Note: This opens DmpSelectionDialog (Step 1), NOT the deprecated DmpImportDialog.
  */
 export async function openDmpImportDialog(): Promise<void> {
   await browser.keys(['Control', 'i']);
 
-  // Wait for DMP import dialog to appear (use specific data-testid)
-  const importDialog = await $('[data-testid="import-dmp-dialog"]');
+  // Wait for Step 1 dialog (DmpSelectionDialog) to appear
+  const importDialog = await $('[data-testid="dmp-selection-dialog"]');
   await importDialog.waitForDisplayed({
     timeout: 5000,
-    timeoutMsg: 'DMP Import dialog did not appear',
+    timeoutMsg: 'DMP Selection dialog (Step 1) did not appear',
   });
 }
 
