@@ -624,6 +624,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 warn_shot_length_max: 50.0,
                 warn_depth_change_per_shot_max: 10.0,
                 warn_azimuth_deviation_max: 30.0,
+                azimuth_diff_threshold: 10.0,
+                pitch_diff_threshold: 5.0,
               },
               export: {
                 default_image_format: 'png',
