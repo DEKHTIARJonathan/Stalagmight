@@ -71,13 +71,21 @@ interface SectionPreviewProps {
   existingStation?: Station | null;
   /** Which station of the import to connect: 'first' or 'last' */
   importStationIndex?: 'first' | 'last' | null;
+  /** Callback when a station dot is clicked */
+  onStationClick?: (stationIndex: number) => void;
+  /** Index of the currently selected station (shows highlight ring) */
+  selectedStationIndex?: number | null;
+  /** Size of the preview container in pixels (default 250) */
+  size?: number;
 }
 
 /**
  * A minimal MapLibre preview component for showing section shape.
- * - Fixed 250x250 size
+ * - Configurable size (default 250x250)
  * - Station dots + shot lines
- * - Zoom (wheel) + pan (drag)
+ * - Zoom (wheel, 0.25x to 4x) + pan (drag)
+ * - Click on station to select (optional callback)
+ * - Selected station shows highlight ring
  * - Auto-fits bounds when section changes
  * - No labels (minimal view)
  * - Shows connection line when existingStation is provided
@@ -87,10 +95,19 @@ export default function SectionPreview({
   color = '#4ecdc4',
   existingStation,
   importStationIndex,
+  onStationClick,
+  selectedStationIndex,
+  size = 250,
 }: SectionPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const onStationClickRef = useRef(onStationClick);
+
+  // Keep ref updated
+  useEffect(() => {
+    onStationClickRef.current = onStationClick;
+  }, [onStationClick]);
 
   // Compute stations from shots
   const stations = useMemo(() => {
@@ -102,6 +119,13 @@ export default function SectionPreview({
   // Initialize MapLibre instance - container is always mounted
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
+
+    // Base zoom level 14 represents 1x, so:
+    // 0.25x = 14 - 2 = 12 (minZoom)
+    // 4x = 14 + 2 = 16 (maxZoom)
+    const baseZoom = 14;
+    const minZoom = baseZoom - 2; // 0.25x
+    const maxZoom = baseZoom + 2; // 4x
 
     const map = new maplibregl.Map({
       container: containerRef.current,
@@ -119,7 +143,9 @@ export default function SectionPreview({
         ],
       },
       center: [0, 0],
-      zoom: 14,
+      zoom: baseZoom,
+      minZoom,
+      maxZoom,
       attributionControl: false,
       interactive: true,
     });
@@ -152,6 +178,11 @@ export default function SectionPreview({
       });
 
       map.addSource('preview-existing-station', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+
+      map.addSource('preview-selected-station', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
       });
@@ -205,6 +236,39 @@ export default function SectionPreview({
         },
       });
 
+      // Add selected station highlight layer (ring around selected station)
+      map.addLayer({
+        id: 'preview-selected-station-layer',
+        type: 'circle',
+        source: 'preview-selected-station',
+        paint: {
+          'circle-radius': 8,
+          'circle-color': 'transparent',
+          'circle-stroke-width': 3,
+          'circle-stroke-color': '#ffffff',
+        },
+      });
+
+      // Cursor changes to pointer on station hover
+      map.on('mouseenter', 'preview-stations-layer', () => {
+        map.getCanvas().style.cursor = 'pointer';
+      });
+
+      map.on('mouseleave', 'preview-stations-layer', () => {
+        map.getCanvas().style.cursor = '';
+      });
+
+      // Click handler for station selection
+      map.on('click', 'preview-stations-layer', (e) => {
+        const feature = e.features?.[0];
+        if (feature) {
+          const stationIndex = feature.properties?.stationIndex;
+          if (typeof stationIndex === 'number' && onStationClickRef.current) {
+            onStationClickRef.current(stationIndex);
+          }
+        }
+      });
+
       setMapLoaded(true);
     });
 
@@ -243,14 +307,14 @@ export default function SectionPreview({
       });
     }
 
-    // Build station features
-    const stationFeatures: GeoJSON.Feature[] = stations.map((station) => ({
+    // Build station features with index for click handling
+    const stationFeatures: GeoJSON.Feature[] = stations.map((station, index) => ({
       type: 'Feature',
       geometry: {
         type: 'Point',
         coordinates: metersToMapCoords(station.x, station.y),
       },
-      properties: { color },
+      properties: { color, stationIndex: index },
     }));
 
     // Build connection line and existing station features
@@ -330,6 +394,35 @@ export default function SectionPreview({
       });
     }
 
+    // Build and update selected station highlight feature
+    const selectedStationFeatures: GeoJSON.Feature[] = [];
+    if (
+      selectedStationIndex !== null &&
+      selectedStationIndex !== undefined &&
+      selectedStationIndex >= 0 &&
+      selectedStationIndex < stations.length
+    ) {
+      const selectedStation = stations[selectedStationIndex];
+      if (selectedStation) {
+        selectedStationFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: metersToMapCoords(selectedStation.x, selectedStation.y),
+          },
+          properties: {},
+        });
+      }
+    }
+
+    const selectedStationSource = map.getSource('preview-selected-station');
+    if (selectedStationSource && 'setData' in selectedStationSource) {
+      (selectedStationSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: selectedStationFeatures,
+      });
+    }
+
     // Fit bounds if we have stations
     if (stations.length > 0) {
       const bounds = getBounds(stations);
@@ -373,14 +466,14 @@ export default function SectionPreview({
         });
       }
     }
-  }, [section, stations, color, mapLoaded, existingStation, importStationIndex]);
+  }, [section, stations, color, mapLoaded, existingStation, importStationIndex, selectedStationIndex]);
 
   // Always render the container, overlay placeholder when no section
   return (
     <div
       data-testid="section-preview"
       className="relative border border-border rounded overflow-hidden bg-background"
-      style={{ width: 250, height: 250 }}
+      style={{ width: size, height: size }}
     >
       {/* Map container is always mounted for proper lifecycle */}
       <div ref={containerRef} className="w-full h-full" data-testid="section-preview-map" />
