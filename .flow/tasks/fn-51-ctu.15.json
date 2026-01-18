@@ -1,14 +1,34 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-18T10:47:35.528687Z",
   "created_at": "2026-01-18T08:22:18.366136Z",
   "depends_on": [],
   "epic": "fn-51-ctu",
+  "evidence": {
+    "files_modified": [
+      "src-tauri/Cargo.toml",
+      "src-tauri/src/models/project.rs",
+      "src-tauri/src/persistence/sqlite.rs",
+      "src-tauri/src/commands/import.rs",
+      "src-tauri/src/core/state.rs",
+      "src-tauri/src/lib.rs",
+      "src/store/projectStore.ts",
+      "e2e-playwright/mocks/tauri-ipc.ts"
+    ],
+    "new_commands": [
+      "calculate_file_hash",
+      "check_duplicate_import",
+      "track_imported_file"
+    ],
+    "playwright_tests": "112 passed, 1 skipped",
+    "rust_tests": "161 passed",
+    "typescript_check": "passed"
+  },
   "id": "fn-51-ctu.15",
   "priority": null,
   "spec_path": ".flow/tasks/fn-51-ctu.15.md",
-  "status": "todo",
+  "status": "done",
   "title": "Implement File Hash Tracking",
-  "updated_at": "2026-01-18T08:29:07.093070Z"
+  "updated_at": "2026-01-18T10:59:33.367943Z"
 }

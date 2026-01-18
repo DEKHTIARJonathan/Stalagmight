@@ -211,6 +211,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, section };
           }
 
+          // File hash tracking for duplicate detection
+          case 'calculate_file_hash':
+            // Return a mock SHA256 hash based on path for consistency
+            return `mock_hash_${(args?.path as string)?.split('/').pop() ?? 'unknown'}`;
+
+          case 'check_duplicate_import':
+            // By default, no duplicates in mock
+            return false;
+
+          case 'track_imported_file':
+            console.log('[Mock IPC] track_imported_file called with:', args);
+            return { success: true };
+
           case 'import_dmp':
           case 'parse_dmp': {
             return {

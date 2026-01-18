@@ -60,6 +60,9 @@ pub fn run() {
             commands::history::can_redo,
             // Import/Export
             commands::import::import_dmp,
+            commands::import::calculate_file_hash,
+            commands::import::check_duplicate_import,
+            commands::import::track_imported_file,
             commands::export::export_csv,
             commands::export::export_json,
             commands::export::export_image,

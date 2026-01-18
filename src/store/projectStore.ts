@@ -72,6 +72,9 @@ interface ProjectStore {
   refreshUndoState: () => Promise<void>;
 
   importDmp: (path: string) => Promise<DmpFile>;
+  calculateFileHash: (path: string) => Promise<string>;
+  checkDuplicateImport: (hash: string) => Promise<boolean>;
+  trackImportedFile: (hash: string) => Promise<void>;
   exportCsv: (path: string) => Promise<void>;
   exportJson: (path: string) => Promise<void>;
   exportImage: (path: string, options: ExportImageOptions) => Promise<void>;
@@ -424,6 +427,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   // Import/Export
   importDmp: async (path: string) => {
     return await invoke<DmpFile>('import_dmp', { path });
+  },
+
+  calculateFileHash: async (path: string) => {
+    return await invoke<string>('calculate_file_hash', { path });
+  },
+
+  checkDuplicateImport: async (hash: string) => {
+    return await invoke<boolean>('check_duplicate_import', { hash });
+  },
+
+  trackImportedFile: async (hash: string) => {
+    await invoke('track_imported_file', { hash });
   },
 
   exportCsv: async (path: string) => {
