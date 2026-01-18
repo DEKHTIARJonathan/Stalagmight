@@ -189,6 +189,10 @@ interface UIStore {
   hasImportedDmpPath: (path: string) => boolean;
   clearImportedDmpPaths: () => void;
 
+  // Session surveyor memory (not persisted to config)
+  lastUsedSurveyor: string;
+  setLastUsedSurveyor: (surveyor: string) => void;
+
   // Placement mode state (for manual map placement of imported sections)
   placementMode: PlacementModeState | null;
   startPlacementMode: (
@@ -451,6 +455,10 @@ export const useUIStore = create<UIStore>((set) => ({
     return useUIStore.getState().importedDmpPaths.has(path);
   },
   clearImportedDmpPaths: () => set({ importedDmpPaths: new Set<string>() }),
+
+  // Session surveyor memory (not persisted to config)
+  lastUsedSurveyor: '',
+  setLastUsedSurveyor: (lastUsedSurveyor) => set({ lastUsedSurveyor }),
 
   // Placement mode state
   placementMode: null,
