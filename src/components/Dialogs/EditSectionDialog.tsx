@@ -1,19 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import type { Shot, ShotData } from '../../types/project';
-
-interface EditableShot extends Omit<Shot, 'marker_index' | 'temperature'> {
-  isNew?: boolean;
-  isDeleted?: boolean;
-  tempId?: number;
-}
 
 export default function EditSectionDialog() {
   const { closeDialog, dialogData } = useUIStore();
-  const { updateSection, createShot, updateShot, deleteShot, project } = useProjectStore();
+  const { updateSection, createShot, updateShot, deleteShot, project, config } = useProjectStore();
 
   const sectionId = dialogData.sectionId as number | undefined;
   const section = project?.sections.find((s) => s.id === sectionId);
@@ -30,6 +25,7 @@ export default function EditSectionDialog() {
   // Shots state
   const [shots, setShots] = useState<EditableShot[]>([]);
   const [nextTempId, setNextTempId] = useState(-1);
+  const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null);
 
   // Initialize form with section data
   useEffect(() => {
@@ -42,24 +38,25 @@ export default function EditSectionDialog() {
     }
   }, [section]);
 
-  const handleShotChange = (index: number, field: keyof EditableShot, value: number | string | boolean | null) => {
+  const handleShotChange = useCallback((index: number, field: keyof EditableShot, value: number | string | boolean | null) => {
     setShots(prev => {
       const updated = [...prev];
       const shot = updated[index];
+      if (!shot) return prev;
       updated[index] = {
         ...shot,
         [field]: value,
       } as EditableShot;
       return updated;
     });
-  };
+  }, []);
 
-  const handleAddShot = () => {
+  const handleAddShot = useCallback(() => {
     const newShot: EditableShot = {
       id: nextTempId,
       tempId: nextTempId,
       azimuth_in: 0,
-      azimuth_out: 0,
+      azimuth_out: 180,
       length: 1,
       depth_in: 0,
       depth_out: 0,
@@ -75,9 +72,9 @@ export default function EditSectionDialog() {
     };
     setShots(prev => [...prev, newShot]);
     setNextTempId(prev => prev - 1);
-  };
+  }, [nextTempId]);
 
-  const handleDeleteShot = (index: number) => {
+  const handleDeleteShot = useCallback((index: number) => {
     setShots(prev => {
       const shot = prev[index];
       if (!shot) return prev;
@@ -91,7 +88,65 @@ export default function EditSectionDialog() {
         return updated;
       }
     });
-  };
+    // Clear selection if deleted row was selected
+    if (selectedRowIndex === index) {
+      setSelectedRowIndex(null);
+    }
+  }, [selectedRowIndex]);
+
+  const handleInsertBefore = useCallback((index: number) => {
+    const newShot: EditableShot = {
+      id: nextTempId,
+      tempId: nextTempId,
+      azimuth_in: 0,
+      azimuth_out: 180,
+      length: 1,
+      depth_in: 0,
+      depth_out: 0,
+      pitch_in: null,
+      pitch_out: null,
+      left: null,
+      right: null,
+      up: null,
+      down: null,
+      comment: null,
+      is_virtual: false,
+      isNew: true,
+    };
+    setShots(prev => {
+      const updated = [...prev];
+      updated.splice(index, 0, newShot);
+      return updated;
+    });
+    setNextTempId(prev => prev - 1);
+  }, [nextTempId]);
+
+  const handleInsertAfter = useCallback((index: number) => {
+    const newShot: EditableShot = {
+      id: nextTempId,
+      tempId: nextTempId,
+      azimuth_in: 0,
+      azimuth_out: 180,
+      length: 1,
+      depth_in: 0,
+      depth_out: 0,
+      pitch_in: null,
+      pitch_out: null,
+      left: null,
+      right: null,
+      up: null,
+      down: null,
+      comment: null,
+      is_virtual: false,
+      isNew: true,
+    };
+    setShots(prev => {
+      const updated = [...prev];
+      updated.splice(index + 1, 0, newShot);
+      return updated;
+    });
+    setNextTempId(prev => prev - 1);
+  }, [nextTempId]);
 
   const handleSave = async () => {
     if (!sectionId) return;
@@ -198,6 +253,12 @@ export default function EditSectionDialog() {
     })
   ) : false;
 
+  // Validation config from app config
+  const validationConfig = {
+    azimuthDifferenceThreshold: config?.validation?.warn_azimuth_deviation_max ?? 5,
+    pitchDifferenceThreshold: 5, // Pitch tolerance not in config yet, use default
+  };
+
   if (!section) {
     return (
       <DialogWrapper title="Edit Section" onClose={closeDialog} size="5xl" data-testid="edit-section-dialog">
@@ -205,8 +266,6 @@ export default function EditSectionDialog() {
       </DialogWrapper>
     );
   }
-
-  const visibleShots = shots.filter(s => !s.isDeleted);
 
   return (
     <DialogWrapper title="Edit Section" onClose={closeDialog} size="5xl" isDirty={isDirty} data-testid="edit-section-dialog">
@@ -271,186 +330,20 @@ export default function EditSectionDialog() {
           </div>
         </div>
 
-        {/* Shots table */}
+        {/* Shots table using ShotTableEditor */}
         <div className="border-t border-border pt-4">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-medium">Shots ({visibleShots.length})</h3>
-            <Button size="sm" onClick={handleAddShot}>
-              + Add Shot
-            </Button>
-          </div>
-
-          <div className="max-h-64 overflow-auto border border-border rounded">
-            <table className="w-full text-sm">
-              <thead className="bg-background sticky top-0">
-                <tr className="border-b border-border">
-                  <th className="px-2 py-1 text-left">#</th>
-                  <th className="px-2 py-1 text-left">Az In</th>
-                  <th className="px-2 py-1 text-left">Az Out</th>
-                  <th className="px-2 py-1 text-left">Length</th>
-                  <th className="px-2 py-1 text-left">Depth In</th>
-                  <th className="px-2 py-1 text-left">Depth Out</th>
-                  <th className="px-2 py-1 text-left">Pitch In</th>
-                  <th className="px-2 py-1 text-left">Pitch Out</th>
-                  <th className="px-2 py-1 text-left">L</th>
-                  <th className="px-2 py-1 text-left">R</th>
-                  <th className="px-2 py-1 text-left">U</th>
-                  <th className="px-2 py-1 text-left">D</th>
-                  <th className="px-2 py-1 text-left">Virtual</th>
-                  <th className="px-2 py-1 text-left">Comment</th>
-                  <th className="px-2 py-1"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleShots.map((shot, idx) => {
-                  const actualIndex = shots.findIndex(s => s === shot || (s.id === shot.id && s.tempId === shot.tempId));
-                  return (
-                    <tr key={shot.tempId ?? shot.id} className="border-b border-border last:border-0 hover:bg-background/50">
-                      <td className="px-2 py-1 text-text-secondary">{idx + 1}</td>
-                      <td className="px-1 py-1">
-                        <input
-                          type="number"
-                          value={shot.azimuth_in}
-                          onChange={(e) => handleShotChange(actualIndex, 'azimuth_in', parseFloat(e.target.value) || 0)}
-                          className="w-14 text-xs px-1 py-0.5"
-                          step="0.1"
-                        />
-                      </td>
-                      <td className="px-1 py-1">
-                        <input
-                          type="number"
-                          value={shot.azimuth_out}
-                          onChange={(e) => handleShotChange(actualIndex, 'azimuth_out', parseFloat(e.target.value) || 0)}
-                          className="w-14 text-xs px-1 py-0.5"
-                          step="0.1"
-                        />
-                      </td>
-                      <td className="px-1 py-1">
-                        <input
-                          type="number"
-                          value={shot.length}
-                          onChange={(e) => handleShotChange(actualIndex, 'length', parseFloat(e.target.value) || 0)}
-                          className="w-14 text-xs px-1 py-0.5"
-                          step="0.1"
-                        />
-                      </td>
-                      <td className="px-1 py-1">
-                        <input
-                          type="number"
-                          value={shot.depth_in}
-                          onChange={(e) => handleShotChange(actualIndex, 'depth_in', parseFloat(e.target.value) || 0)}
-                          className="w-14 text-xs px-1 py-0.5"
-                          step="0.1"
-                        />
-                      </td>
-                      <td className="px-1 py-1">
-                        <input
-                          type="number"
-                          value={shot.depth_out}
-                          onChange={(e) => handleShotChange(actualIndex, 'depth_out', parseFloat(e.target.value) || 0)}
-                          className="w-14 text-xs px-1 py-0.5"
-                          step="0.1"
-                        />
-                      </td>
-                      <td className="px-1 py-1">
-                        <input
-                          type="number"
-                          value={shot.pitch_in ?? ''}
-                          onChange={(e) => handleShotChange(actualIndex, 'pitch_in', e.target.value === '' ? null : parseFloat(e.target.value))}
-                          className="w-12 text-xs px-1 py-0.5"
-                          step="0.1"
-                          placeholder="-"
-                        />
-                      </td>
-                      <td className="px-1 py-1">
-                        <input
-                          type="number"
-                          value={shot.pitch_out ?? ''}
-                          onChange={(e) => handleShotChange(actualIndex, 'pitch_out', e.target.value === '' ? null : parseFloat(e.target.value))}
-                          className="w-12 text-xs px-1 py-0.5"
-                          step="0.1"
-                          placeholder="-"
-                        />
-                      </td>
-                      <td className="px-1 py-1">
-                        <input
-                          type="number"
-                          value={shot.left ?? ''}
-                          onChange={(e) => handleShotChange(actualIndex, 'left', e.target.value === '' ? null : parseFloat(e.target.value))}
-                          className="w-10 text-xs px-1 py-0.5"
-                          step="0.1"
-                          placeholder="-"
-                        />
-                      </td>
-                      <td className="px-1 py-1">
-                        <input
-                          type="number"
-                          value={shot.right ?? ''}
-                          onChange={(e) => handleShotChange(actualIndex, 'right', e.target.value === '' ? null : parseFloat(e.target.value))}
-                          className="w-10 text-xs px-1 py-0.5"
-                          step="0.1"
-                          placeholder="-"
-                        />
-                      </td>
-                      <td className="px-1 py-1">
-                        <input
-                          type="number"
-                          value={shot.up ?? ''}
-                          onChange={(e) => handleShotChange(actualIndex, 'up', e.target.value === '' ? null : parseFloat(e.target.value))}
-                          className="w-10 text-xs px-1 py-0.5"
-                          step="0.1"
-                          placeholder="-"
-                        />
-                      </td>
-                      <td className="px-1 py-1">
-                        <input
-                          type="number"
-                          value={shot.down ?? ''}
-                          onChange={(e) => handleShotChange(actualIndex, 'down', e.target.value === '' ? null : parseFloat(e.target.value))}
-                          className="w-10 text-xs px-1 py-0.5"
-                          step="0.1"
-                          placeholder="-"
-                        />
-                      </td>
-                      <td className="px-1 py-1 text-center">
-                        <input
-                          type="checkbox"
-                          checked={shot.is_virtual}
-                          onChange={(e) => handleShotChange(actualIndex, 'is_virtual', e.target.checked)}
-                          className="w-4 h-4"
-                        />
-                      </td>
-                      <td className="px-1 py-1">
-                        <input
-                          type="text"
-                          value={shot.comment ?? ''}
-                          onChange={(e) => handleShotChange(actualIndex, 'comment', e.target.value || null)}
-                          className="w-20 text-xs px-1 py-0.5"
-                          placeholder="-"
-                        />
-                      </td>
-                      <td className="px-1 py-1">
-                        <button
-                          onClick={() => handleDeleteShot(actualIndex)}
-                          className="text-error hover:text-error/80 text-xs px-1"
-                          title="Delete shot"
-                        >
-                          x
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {visibleShots.length === 0 && (
-                  <tr>
-                    <td colSpan={15} className="px-2 py-4 text-center text-text-secondary">
-                      No shots in this section. Click "Add Shot" to create one.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          <ShotTableEditor
+            shots={shots}
+            onShotChange={handleShotChange}
+            onAddShot={handleAddShot}
+            onDeleteShot={handleDeleteShot}
+            onInsertBefore={handleInsertBefore}
+            onInsertAfter={handleInsertAfter}
+            validationConfig={validationConfig}
+            selectedRowIndex={selectedRowIndex}
+            onRowSelect={setSelectedRowIndex}
+            maxHeight="16rem"
+          />
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
