@@ -130,6 +130,36 @@ export default function DmpSectionConfigDialog({
   // Back confirmation dialog state
   const [showBackConfirm, setShowBackConfirm] = useState(false);
 
+  /**
+   * Store original DMP values for reset functionality.
+   * These values remain constant throughout the dialog lifecycle.
+   */
+  const originalSectionValues = useMemo(() => {
+    const originals = new Map<number, ImportedSectionConfig>();
+    selectedIndices.forEach((sectionIdx, arrayIdx) => {
+      const section = dmpFile.sections[sectionIdx];
+      if (!section) return;
+
+      // Get original direction from DMP
+      const direction = section.direction;
+
+      // Date from DMP only (not Step 1 override - that's for initial state)
+      const dateStr = section.date?.split(/[T ]/)[0] ?? null;
+
+      originals.set(sectionIdx, {
+        sectionIndex: sectionIdx,
+        name: section.name,
+        surveyor: section.name || null, // Original surveyor from DMP (section name by default)
+        date: dateStr,
+        color: SECTION_COLORS[arrayIdx % SECTION_COLORS.length] ?? '#4ecdc4',
+        direction,
+        shots: convertToEditableShots(section.shots),
+        placement: { type: 'origin' },
+      });
+    });
+    return originals;
+  }, [selectedIndices, dmpFile.sections]);
+
   // Initialize section configs for all selected sections
   const [sectionConfigs, setSectionConfigs] = useState<Map<number, ImportedSectionConfig>>(() => {
     const configs = new Map<number, ImportedSectionConfig>();
@@ -267,6 +297,35 @@ export default function DmpSectionConfigDialog({
     },
     [updateCurrentConfig, currentSectionIndex]
   );
+
+  /**
+   * Reset current section to original DMP values.
+   * Resets: name, surveyor, date, color, direction, shots, placement
+   */
+  const handleResetSection = useCallback(() => {
+    if (currentSectionIndex === undefined) return;
+
+    const original = originalSectionValues.get(currentSectionIndex);
+    if (!original) return;
+
+    // Reset to original values (deep copy shots array)
+    setSectionConfigs((prev) => {
+      const next = new Map(prev);
+      next.set(currentSectionIndex, {
+        ...original,
+        shots: original.shots.map((shot) => ({ ...shot })),
+        placement: { type: 'origin' },
+      });
+      return next;
+    });
+
+    // Remove from placed sections (clear placement)
+    setPlacedSections((prev) => {
+      const next = new Set(prev);
+      next.delete(currentSectionIndex);
+      return next;
+    });
+  }, [currentSectionIndex, originalSectionValues]);
 
   /**
    * Get section status for display in the left panel.
@@ -534,19 +593,31 @@ export default function DmpSectionConfigDialog({
 
                   {/* Parameters */}
                   <Panel title="Parameters" className="flex-1">
-                    <SectionMetadataForm
-                      name={currentConfig.name}
-                      surveyor={currentConfig.surveyor ?? ''}
-                      date={currentConfig.date ?? ''}
-                      color={currentConfig.color}
-                      direction={currentConfig.direction}
-                      onNameChange={(value) => updateCurrentConfig({ name: value })}
-                      onSurveyorChange={(value) => updateCurrentConfig({ surveyor: value || null })}
-                      onDateChange={(value) => updateCurrentConfig({ date: value || null })}
-                      onColorChange={(value) => updateCurrentConfig({ color: value })}
-                      onDirectionChange={(value) => updateCurrentConfig({ direction: value })}
-                      showDirection
-                    />
+                    <div className="space-y-3">
+                      <SectionMetadataForm
+                        name={currentConfig.name}
+                        surveyor={currentConfig.surveyor ?? ''}
+                        date={currentConfig.date ?? ''}
+                        color={currentConfig.color}
+                        direction={currentConfig.direction}
+                        onNameChange={(value) => updateCurrentConfig({ name: value })}
+                        onSurveyorChange={(value) => updateCurrentConfig({ surveyor: value || null })}
+                        onDateChange={(value) => updateCurrentConfig({ date: value || null })}
+                        onColorChange={(value) => updateCurrentConfig({ color: value })}
+                        onDirectionChange={(value) => updateCurrentConfig({ direction: value })}
+                        showDirection
+                      />
+                      <div className="flex justify-end">
+                        <Button
+                          size="sm"
+                          onClick={handleResetSection}
+                          data-testid="reset-section-button"
+                          title="Reset all fields and placement to original DMP values"
+                        >
+                          Reset Section
+                        </Button>
+                      </div>
+                    </div>
                   </Panel>
                 </div>
 
