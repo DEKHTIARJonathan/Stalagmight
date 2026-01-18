@@ -351,20 +351,20 @@ function EmptyState({ onImport, onNew, onOpen }: EmptyStateProps) {
           icon="📥"
           title="Import DMP"
           description="Import survey data from mNemo's .dmp file format"
-          onClick={onImport}
+          onClick={() => onImport()}
           primary
         />
         <EmptyStateCard
           icon="📝"
           title="New Project"
           description="Create a blank project and enter data manually"
-          onClick={onNew}
+          onClick={() => onNew()}
         />
         <EmptyStateCard
           icon="📂"
           title="Open Existing"
           description="Open a previously saved .cvchef project file"
-          onClick={onOpen}
+          onClick={() => onOpen()}
         />
       </div>
     </div>

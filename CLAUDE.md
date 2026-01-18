@@ -93,7 +93,22 @@ pnpm tsc --noEmit
 
 # Frontend build only
 pnpm build
+
+# Restart dev server (kills existing processes first)
+./scripts/dev.sh
 ```
+
+### Dev Server Helper Script
+
+Use `./scripts/dev.sh` to restart the dev server. This script:
+- Checks if processes exist before killing (avoids pkill errors)
+- Kills existing cavechef and vite processes
+- Starts a fresh `pnpm tauri dev`
+
+**Important rules for Claude:**
+- Always use `./scripts/dev.sh` instead of manual pkill commands
+- When using sleep for safety waits, never exceed 5 seconds
+- Check if process exists with `pgrep` before using `pkill`
 
 ## Test Commands
 
