@@ -153,6 +153,21 @@ When navigating to another section:
 - [ ] Reset Section deletes placed section from backend
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Add tests for undo/redo within Step 2 dialog
+- `e2e-playwright/dmp-import.spec.ts` - State management tests need updating for new import flow
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Undo/redo tests for import dialog
+- `e2e/specs/undo-redo.spec.ts` - May need updates for granular undo entries (if exists)
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - Add mock handlers for undo/redo commands if not present
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

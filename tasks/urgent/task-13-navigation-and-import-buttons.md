@@ -206,6 +206,21 @@ useEffect(() => {
 - [ ] Ctrl+Arrow navigates between sections
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Navigation button tests need updating for new Previous/Next/Import flow
+- `e2e-playwright/dmp-import.spec.ts` - Import completion tests need updating for new button behavior
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Navigation and import button tests need updating
+- `e2e/specs/keyboard-shortcuts.spec.ts` - Ctrl+Enter, Ctrl+Arrow shortcuts need updating for Step 2 dialog
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - No changes needed for navigation logic
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

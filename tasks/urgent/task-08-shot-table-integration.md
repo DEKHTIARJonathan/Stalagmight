@@ -119,6 +119,20 @@ const newShot: EditableShot = {
 - [ ] Undo/redo works within dialog
 - [ ] TypeScript compiles without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Shot table tests need updating for Step 2 dialog integration (uses ShotTableEditor from Task 01)
+- `e2e-playwright/section-shot-editing.spec.ts` - May need updates to verify consistent shot editing behavior across dialogs
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Shot table editing tests need updating for Step 2 dialog
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - Add mock handlers for `updateShot`, `createShot`, `deleteShot` commands
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

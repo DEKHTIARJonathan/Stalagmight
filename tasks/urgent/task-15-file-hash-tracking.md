@@ -132,6 +132,23 @@ await trackImportedFile(hash);
 - [ ] TypeScript compiles without errors
 - [ ] Rust tests pass
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Add tests for duplicate import warning
+- `e2e-playwright/dmp-import.spec.ts` - Import flow tests need updating for hash tracking
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Duplicate import warning tests need adding
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - Add mock handlers:
+  - `calculate_file_hash` - returns mock hash string
+  - `check_duplicate_import` - returns boolean
+  - `track_imported_file` - returns null/void
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)

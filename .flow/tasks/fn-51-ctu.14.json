@@ -1,0 +1,17 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-18T08:22:18.315470Z",
+  "depends_on": [
+    "fn-51-ctu.4",
+    "fn-51-ctu.5"
+  ],
+  "epic": "fn-51-ctu",
+  "id": "fn-51-ctu.14",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-51-ctu.14.md",
+  "status": "todo",
+  "title": "Wire Up Context-Aware Dialog Triggering",
+  "updated_at": "2026-01-18T08:29:07.039758Z"
+}

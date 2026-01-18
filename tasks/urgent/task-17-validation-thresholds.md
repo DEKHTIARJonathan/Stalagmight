@@ -139,6 +139,20 @@ Warning icon tooltip shows:
 - [ ] Thresholds read from config
 - [ ] TypeScript and Rust compile without errors
 
+## Existing Tests to Modify
+
+The following existing test files must be updated to account for changes made in this task:
+
+### Playwright Tests
+- `e2e-playwright/import-dialog.spec.ts` - Validation warning tests need updating for configurable thresholds
+- `e2e-playwright/section-shot-editing.spec.ts` - Shot table validation tests need updating for threshold-based warnings
+
+### WebdriverIO Tests
+- `e2e/specs/import-dmp-dialog.spec.ts` - Warning display tests need updating
+
+### Mock Updates
+- `e2e-playwright/mocks/tauri-ipc.ts` - Add mock config with azimuthDiffThreshold and pitchDiffThreshold values
+
 ## Test Suggestions
 
 ### Unit Tests (Rust)
