@@ -1,6 +1,7 @@
 export { default as ImportDialog } from './ImportDialog';
 export { default as ExportDialog } from './ExportDialog';
 export { default as NewProjectDialog } from './NewProjectDialog';
+export { default as NewProjectForImportDialog } from './NewProjectForImportDialog';
 export { default as DmpImportDialog } from './DmpImportDialog';
 export { default as DmpSelectionDialog } from './DmpSelectionDialog';
 export { default as DmpSectionConfigDialog } from './DmpSectionConfigDialog';
@@ -15,3 +16,4 @@ export { default as UnsavedChangesDialog } from './UnsavedChangesDialog';
 export { default as ErrorDialog } from './ErrorDialog';
 export { default as OverwriteConfirmDialog } from './OverwriteConfirmDialog';
 export { default as SectionAdjustDialog } from './SectionAdjustDialog';
+export { default as DuplicateImportDialog } from './DuplicateImportDialog';
