@@ -219,7 +219,21 @@ export async function createNewProject(projectName: string): Promise<void> {
  * Note: This opens DmpImportDialog, NOT ImportDialog (section creation).
  */
 export async function openDmpImportDialog(): Promise<void> {
-  await browser.keys(['Control', 'i']);
+  // Open dialog via store directly (more reliable than keyboard shortcut in WebDriver)
+  await browser.execute(() => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__?: {
+        uiStore: {
+          getState: () => {
+            openDialog: (name: string) => void;
+          };
+        };
+      };
+    }).__E2E_TEST__;
+    if (e2e) {
+      e2e.uiStore.getState().openDialog('import-dmp');
+    }
+  });
 
   // Wait for DMP import dialog to appear (use specific data-testid)
   const importDialog = await $('[data-testid="import-dmp-dialog"]');
@@ -464,10 +478,12 @@ export async function elementWithTextExists(text: string): Promise<boolean> {
 /**
  * Import a DMP file by providing the path directly to the store.
  * This bypasses the file dialog for E2E testing.
- * Returns the import result (DmpFile or error).
+ * It parses the DMP file and creates all sections in the project.
+ * Returns the import result including section count.
  */
 export async function importDmpFile(path: string): Promise<{ success: boolean; error?: string; sectionCount?: number }> {
-  return await browser.executeAsync(
+  try {
+    return await browser.executeAsync(
     async (
       filePath: string,
       done: (result: { success: boolean; error?: string; sectionCount?: number }) => void
@@ -476,7 +492,42 @@ export async function importDmpFile(path: string): Promise<{ success: boolean; e
         __E2E_TEST__?: {
           projectStore: {
             getState: () => {
-              importDmp: (path: string) => Promise<{ sections: unknown[] }>;
+              importDmp: (path: string) => Promise<{
+                sections: Array<{
+                  name: string;
+                  date?: string;
+                  surveyor?: string;
+                  shots: Array<{
+                    shot_type: string;
+                    heading_in: number;
+                    heading_out: number;
+                    length: number;
+                    depth_in: number;
+                    depth_out: number;
+                    left?: number;
+                    right?: number;
+                    up?: number;
+                    down?: number;
+                  }>;
+                }>;
+              }>;
+              createSection: (data: {
+                name: string;
+                surveyor: string;
+                date: string;
+                color: string;
+                shots: Array<{
+                  azimuth_in: number;
+                  azimuth_out: number;
+                  length: number;
+                  depth_in: number;
+                  depth_out: number;
+                  left?: number;
+                  right?: number;
+                  up?: number;
+                  down?: number;
+                }>;
+              }) => Promise<{ success: boolean; error?: string }>;
             };
           };
         };
@@ -487,15 +538,79 @@ export async function importDmpFile(path: string): Promise<{ success: boolean; e
         return;
       }
 
+      // Color palette for sections
+      const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F'];
+
       try {
-        const result = await e2e.projectStore.getState().importDmp(filePath);
-        done({ success: true, sectionCount: result.sections.length });
+        // Parse the DMP file
+        const dmpFile = await e2e.projectStore.getState().importDmp(filePath);
+        const sectionCount = dmpFile.sections.length;
+
+        // Create each section in the project
+        for (let i = 0; i < dmpFile.sections.length; i++) {
+          const section = dmpFile.sections[i];
+          // Filter to only standard shots with valid required fields
+          // Note: DMP parser uses heading_in/heading_out, createSection expects azimuth_in/azimuth_out
+          const standardShots = section.shots
+            .filter((s) => s.shot_type === 'Standard')
+            .filter((s) =>
+              typeof s.heading_in === 'number' &&
+              typeof s.heading_out === 'number' &&
+              typeof s.length === 'number' &&
+              typeof s.depth_in === 'number' &&
+              typeof s.depth_out === 'number'
+            )
+            .map((s) => ({
+              azimuth_in: s.heading_in,
+              azimuth_out: s.heading_out,
+              length: s.length,
+              depth_in: s.depth_in,
+              depth_out: s.depth_out,
+              left: typeof s.left === 'number' ? s.left : undefined,
+              right: typeof s.right === 'number' ? s.right : undefined,
+              up: typeof s.up === 'number' ? s.up : undefined,
+              down: typeof s.down === 'number' ? s.down : undefined,
+            }));
+
+          // Parse date - can be NaiveDateTime string like "2024-01-15T10:30:00" or null
+          // Backend expects YYYY-MM-DD format
+          let dateStr = new Date().toISOString().split('T')[0];
+          if (section.date) {
+            // Handle NaiveDateTime format from Rust (YYYY-MM-DDTHH:MM:SS or YYYY-MM-DD)
+            const dateMatch = String(section.date).match(/^(\d{4}-\d{2}-\d{2})/);
+            if (dateMatch) {
+              dateStr = dateMatch[1];
+            }
+          }
+
+          const sectionData = {
+            name: section.name || `Section ${i + 1}`,
+            surveyor: section.surveyor || 'Unknown',
+            date: dateStr,
+            color: colors[i % colors.length],
+            shots: standardShots,
+          };
+
+          const result = await e2e.projectStore.getState().createSection(sectionData);
+          if (!result.success) {
+            done({ success: false, error: result.error ?? `Failed to create section ${section.name}`, sectionCount: i });
+            return;
+          }
+        }
+
+        done({ success: true, sectionCount });
       } catch (err) {
         done({ success: false, error: String(err) });
       }
     },
     path
   );
+  } catch (err) {
+    // WebDriverError is thrown when the inner code throws before calling done()
+    // Extract the error message from the WebDriverError
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return { success: false, error: errorMessage };
+  }
 }
 
 /**
@@ -503,15 +618,26 @@ export async function importDmpFile(path: string): Promise<{ success: boolean; e
  * This simulates the user entering a file path directly (since we can't use the file dialog in tests).
  */
 export async function openDmpImportWithFile(filePath: string): Promise<void> {
-  // Open the DMP Import Dialog
-  await openDmpImportDialog();
+  // Close any existing dialog first to ensure clean state
+  await browser.execute(() => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__?: {
+        uiStore: {
+          getState: () => {
+            closeDialog: () => void;
+          };
+        };
+      };
+    }).__E2E_TEST__;
+    if (e2e) {
+      e2e.uiStore.getState().closeDialog();
+    }
+  });
+  await browser.pause(100);
 
-  // Set the file path directly via store and trigger load
-  await browser.executeAsync(
-    async (
-      path: string,
-      done: (result: { success: boolean; error?: string }) => void
-    ) => {
+  // Open the dialog directly with the file path (dialog reads filePath from dialogData on mount)
+  await browser.execute(
+    (path: string) => {
       const e2e = (window as unknown as {
         __E2E_TEST__?: {
           uiStore: {
@@ -522,24 +648,51 @@ export async function openDmpImportWithFile(filePath: string): Promise<void> {
         };
       }).__E2E_TEST__;
 
-      if (!e2e) {
-        done({ success: false, error: 'E2E helpers not found' });
-        return;
-      }
-
-      try {
-        // Re-open dialog with file path data
-        e2e.uiStore.getState().openDialog('dmp-import', { filePath: path });
-        done({ success: true });
-      } catch (err) {
-        done({ success: false, error: String(err) });
+      if (e2e) {
+        e2e.uiStore.getState().openDialog('import-dmp', { filePath: path });
       }
     },
     filePath
   );
 
-  // Wait for file to load (sections become visible)
-  await browser.pause(2000);
+  // Wait for dialog to open
+  const importDialog = await $('[data-testid="import-dmp-dialog"]');
+  await importDialog.waitForDisplayed({ timeout: 5000 });
+
+  // Wait for file to actually load by checking for section count in stats
+  await browser.waitUntil(
+    async () => {
+      const dialogText = await importDialog.getText();
+      // Check for version text which indicates successful parse
+      if (dialogText.toLowerCase().includes('version')) {
+        return true;
+      }
+      // Check for error state (also counts as "loaded")
+      if (dialogText.toLowerCase().includes('error') || dialogText.toLowerCase().includes('failed')) {
+        return true;
+      }
+      return false;
+    },
+    {
+      timeout: 15000,
+      timeoutMsg: 'DMP file did not load within 15 seconds',
+      interval: 500,
+    }
+  );
+
+  // Check if there's an "acknowledge warnings" checkbox and click it if present
+  // This is required when the DMP file has validation warnings
+  const acknowledgeCheckbox = await importDialog.$('[data-testid="acknowledge-warnings-checkbox"]');
+  if (await acknowledgeCheckbox.isExisting()) {
+    const isChecked = await acknowledgeCheckbox.isSelected();
+    if (!isChecked) {
+      await acknowledgeCheckbox.click();
+      await browser.pause(200);
+    }
+  }
+
+  // Extra pause for React to finish rendering
+  await browser.pause(300);
 }
 
 /**

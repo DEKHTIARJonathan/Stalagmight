@@ -488,32 +488,38 @@ describe('Project Persistence', () => {
 
     // Attempt to save to read-only location
     const readOnlyPath = path.join(readOnlyDir, 'test.cvproj');
-    const saveResult = await browser.executeAsync(
-      async (savePath: string, done: (result: { success: boolean; error?: string }) => void) => {
-        const e2e = (window as unknown as {
-          __E2E_TEST__?: {
-            projectStore: {
-              getState: () => {
-                saveProject: (path?: string) => Promise<{ success: boolean; error?: string }>;
+    let saveResult: { success: boolean; error?: string };
+    try {
+      saveResult = await browser.executeAsync(
+        async (savePath: string, done: (result: { success: boolean; error?: string }) => void) => {
+          const e2e = (window as unknown as {
+            __E2E_TEST__?: {
+              projectStore: {
+                getState: () => {
+                  saveProject: (path?: string) => Promise<{ success: boolean; error?: string }>;
+                };
               };
             };
-          };
-        }).__E2E_TEST__;
+          }).__E2E_TEST__;
 
-        if (!e2e) {
-          done({ success: false, error: 'E2E helpers not found' });
-          return;
-        }
+          if (!e2e) {
+            done({ success: false, error: 'E2E helpers not found' });
+            return;
+          }
 
-        try {
-          const result = await e2e.projectStore.getState().saveProject(savePath);
-          done(result);
-        } catch (err) {
-          done({ success: false, error: String(err) });
-        }
-      },
-      readOnlyPath
-    );
+          try {
+            const result = await e2e.projectStore.getState().saveProject(savePath);
+            done(result);
+          } catch (err) {
+            done({ success: false, error: String(err) });
+          }
+        },
+        readOnlyPath
+      );
+    } catch (err) {
+      // Handle case where the error propagates through WebDriver
+      saveResult = { success: false, error: String(err) };
+    }
 
     // Restore permissions for cleanup
     try {
