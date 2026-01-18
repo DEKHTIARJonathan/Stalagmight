@@ -57,9 +57,8 @@ interface ShotTableEditorProps {
 - [ ] TypeScript compiles without errors (`pnpm tsc --noEmit`)
 - [ ] All existing tests pass
 ## Done summary
-TBD
-
+Created ShotTableEditor component with single Azimuth column (shows average, edits set both in/out), Warnings column for azimuth/pitch discrepancies, right-click context menu for insert/delete, and refactored EditSectionDialog to use the shared component.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 46f0e0694275fa36d74fe7ab4547d552891521a0
+- Tests: pnpm tsc --noEmit, pnpm test:ui, cd src-tauri && cargo test
 - PRs:

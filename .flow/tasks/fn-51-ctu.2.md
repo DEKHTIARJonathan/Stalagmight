@@ -46,9 +46,18 @@ Horizontal grid: Name | Surveyor | Date | Color (picker + hex) | Direction (opti
 - [ ] TypeScript compiles without errors
 - [ ] All existing tests pass
 ## Done summary
-TBD
+## Summary
 
+Created a shared `SectionMetadataForm` component that encapsulates section metadata editing (name, surveyor, date, color, direction) into a reusable form. Refactored `EditSectionDialog` to use this component.
+
+### Changes
+- Created `src/components/common/SectionMetadataForm.tsx` with controlled props interface
+- Refactored `EditSectionDialog.tsx` to use `SectionMetadataForm` instead of inline form fields
+- Component supports optional direction dropdown via `showDirection` prop
+- Color picker syncs with hex input
+- All fields editable and controlled via callback props
+- Includes data-testid attributes for E2E testing
 ## Evidence
 - Commits:
-- Tests:
+- Tests: pnpm tsc --noEmit (passed), pnpm test:ui (226 tests passed), cargo test (72 tests passed)
 - PRs:
