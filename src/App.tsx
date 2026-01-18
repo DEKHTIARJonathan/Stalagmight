@@ -1,8 +1,9 @@
-import { useEffect, useCallback, useState } from 'react';
+import { useEffect, useCallback, useState, useMemo } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
+import { useBeforeUnload } from './hooks/useBeforeUnload';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, DuplicateImportDialog } from './components/Dialogs';
@@ -63,6 +64,38 @@ function App() {
 
   // Track whether we're hovering with a valid DMP file
   const [isDraggingDmp, setIsDraggingDmp] = useState(false);
+
+  // Determine if import dialog is open and has placed sections
+  // This is used to show a confirmation when closing the app
+  const isImportInProgress = useMemo(() => {
+    // Check if we're in the DMP section config dialog
+    if (activeDialog === 'dmp-section-config') {
+      // Check if there are placed sections in the saved state
+      const savedPlacedSections = dialogData.savedPlacedSections as number[] | undefined;
+      if (savedPlacedSections && savedPlacedSections.length > 0) {
+        return true;
+      }
+      // Also check the selectionConfig which indicates sections are being configured
+      if (dialogData.selectionConfig) {
+        return true;
+      }
+    }
+    // Also block during DMP selection if we have a parsed file
+    if (activeDialog === 'dmp-selection' && dialogData.dmpFile) {
+      return true;
+    }
+    // Block during new project for import dialog
+    if (activeDialog === 'new-project-for-import' && dialogData.dmpFile) {
+      return true;
+    }
+    return false;
+  }, [activeDialog, dialogData]);
+
+  // Show confirmation dialog when closing the app during import
+  useBeforeUnload(
+    isImportInProgress,
+    'Import is in progress. Discard all import data and close?'
+  );
 
   /**
    * Handle importing sections from the DMP Section Config Dialog.
