@@ -227,11 +227,57 @@ test.describe('Section and Shot Editing', () => {
       const colorInput = editDialog.locator('input[type="color"]');
       await expect(colorInput).toBeVisible();
 
+      // Check for direction selector
+      const directionSelect = editDialog.locator('[data-testid="section-direction-select"]');
+      await expect(directionSelect).toBeVisible();
+      // Should have In and Out options
+      await expect(directionSelect.locator('option')).toHaveCount(2);
+
       // Close the dialog without saving
       const cancelButton = editDialog.locator('button:has-text("Cancel")');
       await cancelButton.click();
 
       await expect(editDialog).not.toBeVisible({ timeout: 2000 });
+    }
+
+    // App should still be functional
+    await expect(page.locator('canvas').first()).toBeVisible();
+  });
+
+  test('should change section direction in edit dialog', async ({ page }) => {
+    await createProjectWithSection(page);
+
+    // Select a section
+    await selectSection(page, 'Main Passage');
+
+    // Open the edit section dialog
+    const editSectionButton = page.locator('button:has-text("Edit Section"), button:has-text("Edit")').first();
+
+    if (await editSectionButton.isVisible()) {
+      await editSectionButton.click();
+
+      const editDialog = page.locator('[role="dialog"], [data-testid="edit-section-dialog"]');
+      await expect(editDialog).toBeVisible({ timeout: 3000 });
+
+      // Get the direction selector
+      const directionSelect = editDialog.locator('[data-testid="section-direction-select"]');
+      await expect(directionSelect).toBeVisible();
+
+      // Get current value
+      const currentValue = await directionSelect.inputValue();
+
+      // Change direction
+      const newValue = currentValue === 'in' ? 'out' : 'in';
+      await directionSelect.selectOption(newValue);
+
+      // Verify the value changed
+      await expect(directionSelect).toHaveValue(newValue);
+
+      // Save the changes
+      const saveButton = editDialog.locator('button:has-text("Save")');
+      await saveButton.click();
+
+      await expect(editDialog).not.toBeVisible({ timeout: 3000 });
     }
 
     // App should still be functional

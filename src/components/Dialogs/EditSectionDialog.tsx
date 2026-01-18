@@ -22,6 +22,7 @@ export default function EditSectionDialog() {
   const [surveyor, setSurveyor] = useState('');
   const [date, setDate] = useState('');
   const [color, setColor] = useState('#4ecdc4');
+  const [direction, setDirection] = useState<'in' | 'out'>('in');
 
   // Shots state
   const [shots, setShots] = useState<EditableShot[]>([]);
@@ -35,6 +36,7 @@ export default function EditSectionDialog() {
       setSurveyor(section.surveyor ?? '');
       setDate(section.date ?? '');
       setColor(section.color);
+      setDirection(section.direction ?? 'in');
       setShots(section.shots.map(s => ({ ...s })));
     }
   }, [section]);
@@ -162,6 +164,7 @@ export default function EditSectionDialog() {
         surveyor: surveyor.trim() || null,
         date: date.trim() || null,
         color,
+        direction,
       });
 
       if (!sectionResult.success) {
@@ -247,6 +250,7 @@ export default function EditSectionDialog() {
     surveyor !== (section.surveyor ?? '') ||
     date !== (section.date ?? '') ||
     color !== section.color ||
+    direction !== (section.direction ?? 'in') ||
     shots.some(s => s.isNew || s.isDeleted) ||
     shots.some(s => {
       const original = section.shots.find(o => o.id === s.id);
@@ -283,10 +287,13 @@ export default function EditSectionDialog() {
           surveyor={surveyor}
           date={date}
           color={color}
+          direction={direction}
           onNameChange={setName}
           onSurveyorChange={setSurveyor}
           onDateChange={setDate}
           onColorChange={setColor}
+          onDirectionChange={setDirection}
+          showDirection={true}
           disabled={isLoading}
         />
 

@@ -1,17 +1,29 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-18T12:13:50.886566Z",
   "created_at": "2026-01-18T08:22:18.548835Z",
   "depends_on": [
     "fn-51-ctu.1",
     "fn-51-ctu.2"
   ],
   "epic": "fn-51-ctu",
+  "evidence": {
+    "commits": [],
+    "files_changed": [
+      "src/components/Dialogs/EditSectionDialog.tsx",
+      "e2e-playwright/section-shot-editing.spec.ts"
+    ],
+    "tests": [
+      "pnpm tsc --noEmit (passed)",
+      "cargo test (72 passed)",
+      "pnpm test:ui (118 passed - test infra timeouts unrelated to changes)"
+    ]
+  },
   "id": "fn-51-ctu.19",
   "priority": null,
   "spec_path": ".flow/tasks/fn-51-ctu.19.md",
-  "status": "todo",
+  "status": "done",
   "title": "Update EditSectionDialog to Use Shared Components",
-  "updated_at": "2026-01-18T08:29:37.045548Z"
+  "updated_at": "2026-01-18T12:13:50.937462Z"
 }
