@@ -30,9 +30,8 @@ Update all existing Playwright and WebdriverIO tests for new two-step import flo
 - [ ] All tests pass with new dialog flow
 - [ ] Test coverage maintained or improved
 ## Done summary
-TBD
-
+Updated WebdriverIO E2E tests to use the new two-step import flow. The tests now reference dmp-selection-dialog (Step 1) and dmp-section-config-dialog (Step 2) instead of the deprecated import-dmp-dialog. Added a new test for Step 1 to Step 2 navigation. Playwright tests were already updated in prior tasks - verified they pass (13/13 DMP Import tests passing).
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 5144f446d040e6a03fcdacd03f65926da9616739
+- Tests: pnpm test:ui --grep 'DMP Import', pnpm test:ui, pnpm tsc --noEmit
 - PRs:
