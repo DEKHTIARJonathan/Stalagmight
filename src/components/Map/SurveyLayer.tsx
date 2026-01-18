@@ -330,8 +330,14 @@ export default class SurveyLayer {
       }
     });
 
-    // Shot click handler
+    // Shot click handler - stations take priority
     this.map.on('click', this.shotsLayerId, (e) => {
+      // Check if there's a station at this point - stations always take priority
+      const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsLayerId] });
+      if (stationFeatures.length > 0) {
+        return; // Station will handle this click
+      }
+
       e.preventDefault();
       const feature = e.features?.[0];
       if (feature?.properties) {
@@ -352,7 +358,7 @@ export default class SurveyLayer {
       }
     });
 
-    // Station hover handlers
+    // Station hover handlers - stations take priority over shots
     this.map.on('mouseenter', this.stationsLayerId, (e) => {
       this.map.getCanvas().style.cursor = 'pointer';
       this.callbacks.onFeatureHover?.(true);
@@ -364,6 +370,11 @@ export default class SurveyLayer {
           station_index: stationIndex as number,
         };
         this.hoveredStationId = `${sectionId}:${stationIndex}`;
+        // Clear any shot hover since stations take priority
+        if (this.hoveredShotId) {
+          this.hoveredShotId = null;
+          this.callbacks.onShotHover?.(null);
+        }
         this.callbacks.onStationHover?.(ref);
         this.updateVisualState();
       }
@@ -376,8 +387,13 @@ export default class SurveyLayer {
       this.updateVisualState();
     });
 
-    // Shot hover handlers
+    // Shot hover handlers - stations take priority
     this.map.on('mouseenter', this.shotsLayerId, (e) => {
+      // Don't highlight shots if a station is already hovered
+      if (this.hoveredStationId) {
+        return;
+      }
+
       this.map.getCanvas().style.cursor = 'pointer';
       this.callbacks.onFeatureHover?.(true);
       const feature = e.features?.[0];
