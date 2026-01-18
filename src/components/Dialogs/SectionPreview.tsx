@@ -1,8 +1,21 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import maplibregl from 'maplibre-gl';
 import type { DmpSection, DmpShot } from '../../types/commands';
-import type { Station } from '../../types/project';
+import type { Section, Station, Shot } from '../../types/project';
 import { metersToMapCoords, getBounds } from '../../utils/coordinates';
+
+/**
+ * Merge preview configuration for "From Existing" placement mode.
+ * Shows both sections positioned correctly with a connection line.
+ */
+export interface MergePreviewConfig {
+  /** The existing/target section to merge with */
+  targetSection: Section;
+  /** Station index in the current (import) section to merge */
+  importStationIndex: number;
+  /** Station index in the target section to merge */
+  targetStationIndex: number;
+}
 
 /**
  * Compute circular mean of two angles in degrees.
@@ -26,7 +39,7 @@ function circularMeanDegrees(a: number, b: number): number {
  * Compute station coordinates from DMP shots.
  * Each station is positioned relative to the previous one based on shot heading, length, and pitch.
  */
-function computeStations(shots: DmpShot[]): Array<{ x: number; y: number; z: number }> {
+function computeStationsFromDmpShots(shots: DmpShot[]): Array<{ x: number; y: number; z: number }> {
   // Start at origin
   const stations: Array<{ x: number; y: number; z: number }> = [{ x: 0, y: 0, z: 0 }];
 
@@ -62,15 +75,58 @@ function computeStations(shots: DmpShot[]): Array<{ x: number; y: number; z: num
   return stations;
 }
 
+/**
+ * Compute station coordinates from project Section shots.
+ * Used for existing sections in merge preview.
+ */
+function computeStationsFromShots(shots: Shot[]): Array<{ x: number; y: number; z: number }> {
+  // Start at origin
+  const stations: Array<{ x: number; y: number; z: number }> = [{ x: 0, y: 0, z: 0 }];
+
+  for (const shot of shots) {
+    // Skip virtual shots for position calculation
+    if (shot.is_virtual) continue;
+
+    const prev = stations[stations.length - 1];
+    if (!prev) continue;
+
+    // Use circular mean for heading to handle wrap-around correctly
+    const azimuth = circularMeanDegrees(shot.azimuth_in, shot.azimuth_out);
+    const azimuthRad = (azimuth * Math.PI) / 180;
+
+    // Average pitch (0 means horizontal, positive means upward)
+    const pitchIn = shot.pitch_in ?? 0;
+    const pitchOut = shot.pitch_out ?? 0;
+    const avgPitch = (pitchIn + pitchOut) / 2;
+    const pitchRad = (avgPitch * Math.PI) / 180;
+
+    // Project length onto horizontal plane using pitch
+    const horizontalLength = shot.length * Math.cos(pitchRad);
+    const verticalChange = shot.length * Math.sin(pitchRad);
+
+    // Compute next station position
+    const x = prev.x + horizontalLength * Math.sin(azimuthRad);
+    const y = prev.y + horizontalLength * Math.cos(azimuthRad);
+    // Use depth from shot if available, otherwise compute from pitch
+    const z = shot.depth_out !== 0 ? shot.depth_out : prev.z - verticalChange;
+
+    stations.push({ x, y, z });
+  }
+
+  return stations;
+}
+
 interface SectionPreviewProps {
   /** The section to preview. When null, shows empty state. */
   section: DmpSection | null;
   /** Color for the section lines and stations */
   color?: string;
-  /** Existing station to connect to (for "From Existing Station" placement mode) */
+  /** Existing station to connect to (for "From Existing Station" placement mode) - legacy prop */
   existingStation?: Station | null;
-  /** Which station of the import to connect: 'first' or 'last' */
+  /** Which station of the import to connect: 'first' or 'last' - legacy prop */
   importStationIndex?: 'first' | 'last' | null;
+  /** Merge preview configuration - shows both sections with proper alignment */
+  mergePreview?: MergePreviewConfig | null;
   /** Callback when a station dot is clicked */
   onStationClick?: (stationIndex: number) => void;
   /** Index of the currently selected station (shows highlight ring) */
@@ -88,13 +144,15 @@ interface SectionPreviewProps {
  * - Selected station shows highlight ring
  * - Auto-fits bounds when section changes
  * - No labels (minimal view)
- * - Shows connection line when existingStation is provided
+ * - Shows merge preview with both sections when mergePreview is provided
+ * - Shows connection line when existingStation is provided (legacy mode)
  */
 export default function SectionPreview({
   section,
   color = '#4ecdc4',
   existingStation,
   importStationIndex,
+  mergePreview,
   onStationClick,
   selectedStationIndex,
   size = 250,
@@ -109,12 +167,19 @@ export default function SectionPreview({
     onStationClickRef.current = onStationClick;
   }, [onStationClick]);
 
-  // Compute stations from shots
+  // Compute stations from shots for the current (import) section
   const stations = useMemo(() => {
     if (!section) return [];
     const standardShots = section.shots.filter((s) => s.shot_type === 'Standard');
-    return computeStations(standardShots);
+    return computeStationsFromDmpShots(standardShots);
   }, [section]);
+
+  // Compute stations for the target section (for merge preview)
+  const targetStations = useMemo(() => {
+    if (!mergePreview) return [];
+    const nonVirtualShots = mergePreview.targetSection.shots.filter((s) => !s.is_virtual);
+    return computeStationsFromShots(nonVirtualShots);
+  }, [mergePreview]);
 
   // Initialize MapLibre instance - container is always mounted
   useEffect(() => {
@@ -187,6 +252,48 @@ export default function SectionPreview({
         data: { type: 'FeatureCollection', features: [] },
       });
 
+      // Sources for merge preview
+      map.addSource('preview-target-shots', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+
+      map.addSource('preview-target-stations', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+
+      map.addSource('preview-merge-highlight', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+
+      // Add target section shot lines layer (dimmed, rendered first so it's behind)
+      map.addLayer({
+        id: 'preview-target-shots-layer',
+        type: 'line',
+        source: 'preview-target-shots',
+        paint: {
+          'line-color': '#888888',
+          'line-width': 1.5,
+          'line-opacity': 0.6,
+        },
+      });
+
+      // Add target section stations layer (dimmed)
+      map.addLayer({
+        id: 'preview-target-stations-layer',
+        type: 'circle',
+        source: 'preview-target-stations',
+        paint: {
+          'circle-radius': 3,
+          'circle-color': '#888888',
+          'circle-stroke-width': 1,
+          'circle-stroke-color': '#000000',
+          'circle-opacity': 0.6,
+        },
+      });
+
       // Add shot lines layer
       map.addLayer({
         id: 'preview-shots-layer',
@@ -249,6 +356,19 @@ export default function SectionPreview({
         },
       });
 
+      // Add merge highlight layer (highlighted merge stations)
+      map.addLayer({
+        id: 'preview-merge-highlight-layer',
+        type: 'circle',
+        source: 'preview-merge-highlight',
+        paint: {
+          'circle-radius': 7,
+          'circle-color': '#4ecdc4',
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#ffffff',
+        },
+      });
+
       // Cursor changes to pointer on station hover
       map.on('mouseenter', 'preview-stations-layer', () => {
         map.getCanvas().style.cursor = 'pointer';
@@ -285,7 +405,21 @@ export default function SectionPreview({
 
     const map = mapRef.current;
 
-    // Build shot features
+    // Calculate offset for merge preview - positions the import section so merge stations align
+    let importOffset = { x: 0, y: 0 };
+    if (mergePreview && stations.length > 0 && targetStations.length > 0) {
+      const importMergeStation = stations[mergePreview.importStationIndex];
+      const targetMergeStation = targetStations[mergePreview.targetStationIndex];
+      if (importMergeStation && targetMergeStation) {
+        // Calculate offset to align import station with target station
+        importOffset = {
+          x: targetMergeStation.x - importMergeStation.x,
+          y: targetMergeStation.y - importMergeStation.y,
+        };
+      }
+    }
+
+    // Build shot features for the current (import) section with offset
     const shotFeatures: GeoJSON.Feature[] = [];
     const standardShots = section?.shots.filter((s) => s.shot_type === 'Standard') ?? [];
 
@@ -299,29 +433,120 @@ export default function SectionPreview({
         geometry: {
           type: 'LineString',
           coordinates: [
-            metersToMapCoords(from.x, from.y),
-            metersToMapCoords(to.x, to.y),
+            metersToMapCoords(from.x + importOffset.x, from.y + importOffset.y),
+            metersToMapCoords(to.x + importOffset.x, to.y + importOffset.y),
           ],
         },
         properties: { color },
       });
     }
 
-    // Build station features with index for click handling
+    // Build station features with offset for click handling
     const stationFeatures: GeoJSON.Feature[] = stations.map((station, index) => ({
       type: 'Feature',
       geometry: {
         type: 'Point',
-        coordinates: metersToMapCoords(station.x, station.y),
+        coordinates: metersToMapCoords(station.x + importOffset.x, station.y + importOffset.y),
       },
       properties: { color, stationIndex: index },
     }));
 
-    // Build connection line and existing station features
+    // Build target section features (for merge preview)
+    const targetShotFeatures: GeoJSON.Feature[] = [];
+    const targetStationFeatures: GeoJSON.Feature[] = [];
+    const mergeHighlightFeatures: GeoJSON.Feature[] = [];
     const connectionFeatures: GeoJSON.Feature[] = [];
+
+    if (mergePreview && targetStations.length > 0) {
+      const targetSection = mergePreview.targetSection;
+      const nonVirtualShots = targetSection.shots.filter((s) => !s.is_virtual);
+
+      // Build target section shots
+      for (let i = 0; i < nonVirtualShots.length; i++) {
+        const from = targetStations[i];
+        const to = targetStations[i + 1];
+        if (!from || !to) continue;
+
+        targetShotFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates: [
+              metersToMapCoords(from.x, from.y),
+              metersToMapCoords(to.x, to.y),
+            ],
+          },
+          properties: {},
+        });
+      }
+
+      // Build target section stations
+      for (let i = 0; i < targetStations.length; i++) {
+        const station = targetStations[i];
+        if (!station) continue;
+        targetStationFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: metersToMapCoords(station.x, station.y),
+          },
+          properties: { stationIndex: i },
+        });
+      }
+
+      // Highlight the merge stations
+      const importMergeStation = stations[mergePreview.importStationIndex];
+      const targetMergeStation = targetStations[mergePreview.targetStationIndex];
+
+      if (importMergeStation) {
+        mergeHighlightFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: metersToMapCoords(
+              importMergeStation.x + importOffset.x,
+              importMergeStation.y + importOffset.y
+            ),
+          },
+          properties: { type: 'import' },
+        });
+      }
+
+      if (targetMergeStation) {
+        mergeHighlightFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: metersToMapCoords(targetMergeStation.x, targetMergeStation.y),
+          },
+          properties: { type: 'target' },
+        });
+      }
+
+      // Draw dotted connection line between merge stations
+      // Since they should be at the same position after offset, we show a small indicator
+      if (importMergeStation && targetMergeStation) {
+        connectionFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates: [
+              metersToMapCoords(
+                importMergeStation.x + importOffset.x,
+                importMergeStation.y + importOffset.y
+              ),
+              metersToMapCoords(targetMergeStation.x, targetMergeStation.y),
+            ],
+          },
+          properties: {},
+        });
+      }
+    }
+
+    // Legacy mode: Build connection line and existing station features
     const existingStationFeatures: GeoJSON.Feature[] = [];
 
-    if (existingStation && stations.length > 0 && importStationIndex) {
+    if (!mergePreview && existingStation && stations.length > 0 && importStationIndex) {
       // Determine which import station to connect
       const importStationCoords =
         importStationIndex === 'first' ? stations[0] : stations[stations.length - 1];
@@ -329,7 +554,6 @@ export default function SectionPreview({
       if (importStationCoords) {
         // For visualization, we'll show a simple connection indicator
         // by placing the existing station at an offset from the import station
-        // (In the actual import, the merge will position them correctly)
         const offsetX = 10; // Show existing station 10m to the side for visibility
         const offsetY = 10;
 
@@ -394,7 +618,32 @@ export default function SectionPreview({
       });
     }
 
-    // Build and update selected station highlight feature
+    // Update merge preview sources
+    const targetShotsSource = map.getSource('preview-target-shots');
+    if (targetShotsSource && 'setData' in targetShotsSource) {
+      (targetShotsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: targetShotFeatures,
+      });
+    }
+
+    const targetStationsSource = map.getSource('preview-target-stations');
+    if (targetStationsSource && 'setData' in targetStationsSource) {
+      (targetStationsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: targetStationFeatures,
+      });
+    }
+
+    const mergeHighlightSource = map.getSource('preview-merge-highlight');
+    if (mergeHighlightSource && 'setData' in mergeHighlightSource) {
+      (mergeHighlightSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: mergeHighlightFeatures,
+      });
+    }
+
+    // Build and update selected station highlight feature (with offset for merge preview)
     const selectedStationFeatures: GeoJSON.Feature[] = [];
     if (
       selectedStationIndex !== null &&
@@ -408,7 +657,10 @@ export default function SectionPreview({
           type: 'Feature',
           geometry: {
             type: 'Point',
-            coordinates: metersToMapCoords(selectedStation.x, selectedStation.y),
+            coordinates: metersToMapCoords(
+              selectedStation.x + importOffset.x,
+              selectedStation.y + importOffset.y
+            ),
           },
           properties: {},
         });
@@ -425,10 +677,25 @@ export default function SectionPreview({
 
     // Fit bounds if we have stations
     if (stations.length > 0) {
-      const bounds = getBounds(stations);
+      // Get bounds for import section (with offset applied)
+      const offsetStations = stations.map((s) => ({
+        x: s.x + importOffset.x,
+        y: s.y + importOffset.y,
+        z: s.z,
+      }));
+      const bounds = getBounds(offsetStations);
 
-      // Include existing station in bounds if present
-      if (existingStationFeatures.length > 0) {
+      // Include target section in bounds if merge preview is active
+      if (mergePreview && targetStations.length > 0) {
+        const targetBounds = getBounds(targetStations);
+        bounds.minX = Math.min(bounds.minX, targetBounds.minX);
+        bounds.maxX = Math.max(bounds.maxX, targetBounds.maxX);
+        bounds.minY = Math.min(bounds.minY, targetBounds.minY);
+        bounds.maxY = Math.max(bounds.maxY, targetBounds.maxY);
+      }
+
+      // Include existing station in bounds if present (legacy mode)
+      if (!mergePreview && existingStationFeatures.length > 0) {
         const importStation =
           importStationIndex === 'first' ? stations[0] : stations[stations.length - 1];
         if (importStation) {
@@ -466,7 +733,7 @@ export default function SectionPreview({
         });
       }
     }
-  }, [section, stations, color, mapLoaded, existingStation, importStationIndex, selectedStationIndex]);
+  }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, selectedStationIndex]);
 
   // Always render the container, overlay placeholder when no section
   return (
