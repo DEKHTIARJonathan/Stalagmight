@@ -1,16 +1,27 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-18T12:36:10.619179Z",
   "created_at": "2026-01-18T08:22:18.667998Z",
   "depends_on": [
     "fn-51-ctu.20"
   ],
   "epic": "fn-51-ctu",
+  "evidence": {
+    "commits": [
+      "5144f446d040e6a03fcdacd03f65926da9616739"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm test:ui --grep 'DMP Import'",
+      "pnpm test:ui",
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-51-ctu.22",
   "priority": null,
   "spec_path": ".flow/tasks/fn-51-ctu.22.md",
-  "status": "todo",
+  "status": "done",
   "title": "Update Existing Tests",
-  "updated_at": "2026-01-18T08:31:02.099241Z"
+  "updated_at": "2026-01-18T12:41:11.633362Z"
 }

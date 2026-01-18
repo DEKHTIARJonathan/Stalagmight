@@ -35,9 +35,8 @@ function hasPitchDiscrepancy(pitchIn: number | null, pitchOut: number | null, th
 - [ ] Thresholds read from config
 - [ ] TypeScript and Rust compile without errors
 ## Done summary
-TBD
-
+Added configurable azimuth and pitch difference thresholds to ValidationConfig, with defaults of 10 and 5 degrees respectively. Created hasAzimuthDiscrepancy() and hasPitchDiscrepancy() utility functions in validation.ts with proper 0/360 wrap handling, and integrated them into ShotTableEditor for warning display.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 44698426e7ef079fadc873e5d6d919eba9595c7e
+- Tests: pnpm tsc --noEmit, cd src-tauri && cargo test
 - PRs:

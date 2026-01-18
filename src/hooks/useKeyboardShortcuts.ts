@@ -1,4 +1,5 @@
 import { useEffect, useCallback } from 'react';
+import { open } from '@tauri-apps/plugin-dialog';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import type { ToolType, Selection } from '../store/uiStore';
@@ -34,7 +35,8 @@ export function useKeyboardShortcuts() {
     clearMeasure,
     setDrawFromStation,
   } = useUIStore();
-  const { undo, redo, saveProject, project, stations } = useProjectStore();
+  const { undo, redo, saveProject, project, stations, importDmp } = useProjectStore();
+  const { setImportContext, hasImportedDmpPath, addImportedDmpPath } = useUIStore();
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
@@ -118,7 +120,58 @@ export function useKeyboardShortcuts() {
             return;
           case 'i':
             event.preventDefault();
-            openDialog('import-dmp');
+            // Context-aware DMP import
+            (async () => {
+              try {
+                const selected = await open({
+                  multiple: false,
+                  filters: [{ name: 'mNemo DMP', extensions: ['dmp'] }],
+                });
+
+                if (!selected || typeof selected !== 'string') {
+                  return;
+                }
+
+                // Check for duplicate import (existing project only)
+                if (project && hasImportedDmpPath(selected)) {
+                  // Show confirmation dialog for duplicate import
+                  openDialog('confirm-duplicate-import', {
+                    filePath: selected,
+                  });
+                  return;
+                }
+
+                const dmpFile = await importDmp(selected);
+                if (!dmpFile) return;
+
+                // Track this file as imported
+                addImportedDmpPath(selected);
+
+                // Determine context: are we creating a new project or adding to existing?
+                if (project) {
+                  // Existing project: open Step 1 (selection) directly
+                  setImportContext('existing-project');
+                  openDialog('dmp-selection', {
+                    dmpFile,
+                    filePath: selected,
+                  });
+                } else {
+                  // No project: show NewProjectDialog for import
+                  setImportContext('new-project');
+                  const fileName = selected.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
+                  openDialog('new-project-for-import', {
+                    dmpFile,
+                    filePath: selected,
+                    defaultName: fileName,
+                  });
+                }
+              } catch (e) {
+                openDialog('error', {
+                  title: 'Import Failed',
+                  message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+                });
+              }
+            })();
             return;
           case 'e':
             event.preventDefault();
@@ -169,7 +222,7 @@ export function useKeyboardShortcuts() {
         setActiveTool(toolShortcut as ToolType);
       }
     },
-    [setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection, selectAll, triggerFitToBounds, clearMergeStations, clearMeasure, setDrawFromStation, selection, openDialog, undo, redo, saveProject, project, stations]
+    [setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection, selectAll, triggerFitToBounds, clearMergeStations, clearMeasure, setDrawFromStation, selection, openDialog, undo, redo, saveProject, project, stations, importDmp, setImportContext, hasImportedDmpPath, addImportedDmpPath]
   );
 
   useEffect(() => {

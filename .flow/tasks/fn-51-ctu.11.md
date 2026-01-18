@@ -39,9 +39,8 @@ interface ImportState {
 - [ ] Reset Section deletes placed section from backend
 - [ ] TypeScript compiles without errors
 ## Done summary
-TBD
-
+Created useImportState hook with per-section state tracking, undo/redo stacks, and reset functionality. Integrated hook into DmpSectionConfigDialog replacing manual state management.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 36f2b9a60c3c1c74c38f3587f2ccbded3c35e020
+- Tests: pnpm tsc --noEmit, pnpm test:ui, cd src-tauri && cargo test
 - PRs:

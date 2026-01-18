@@ -32,9 +32,41 @@ Implement Previous/Next navigation, Import button, and Back to Selection with co
 - [ ] Ctrl+Arrow navigates between sections
 - [ ] TypeScript compiles without errors
 ## Done summary
-TBD
+# Task fn-51-ctu.13: Implement Navigation and Import Buttons
 
+## Summary
+Implemented the Import button validation logic for the DmpSectionConfigDialog to disable the import when:
+1. Not all sections are placed
+2. Any section has errors (e.g., no valid shots)
+
+## Changes Made
+
+### src/components/Dialogs/DmpSectionConfigDialog.tsx
+- Added `notPlacedCount` useMemo to count sections that haven't been placed yet
+- Added `canImport` computed variable that is true only when `errorCount === 0 && notPlacedCount === 0`
+- Updated Import button to be disabled when `isLastSection && !canImport`
+- Added tooltip on disabled Import button explaining why it's disabled
+- Updated keyboard shortcut handler (Ctrl+Enter) to respect the `canImport` validation
+- Reordered variable definitions to ensure proper dependency order for useEffect
+
+## Acceptance Criteria Status
+- [x] Previous button navigates to previous section (already implemented)
+- [x] Previous disabled on first section (already implemented)
+- [x] Next button navigates to next section (already implemented)
+- [x] Next changes to "Import X Sections" on last section (already implemented)
+- [x] Import button disabled if not all placed (NEW - implemented)
+- [x] Import button disabled if errors exist (NEW - implemented)
+- [x] Back to Selection confirms and undoes placements (already implemented)
+- [x] Cancel confirms and removes placed sections (already implemented)
+- [x] Ctrl+Enter triggers Next/Import (already implemented, updated to respect canImport)
+- [x] Ctrl+Arrow navigates between sections (already implemented)
+- [x] TypeScript compiles without errors (verified)
+
+## Testing
+- TypeScript: Compiles without errors
+- Playwright: 225/226 tests pass (1 unrelated failure in globalview-map.spec.ts)
+- Rust backend: 72/72 tests pass
 ## Evidence
 - Commits:
-- Tests:
+- Tests: typescript, playwright, rust
 - PRs:

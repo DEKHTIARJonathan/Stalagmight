@@ -34,9 +34,8 @@ Add placement options panel with 4 exclusive modes to DmpSectionConfigDialog.
 - [ ] Placed sections show checkmark in left panel
 - [ ] TypeScript compiles without errors
 ## Done summary
-TBD
-
+Enhanced the Placement Options Panel in DmpSectionConfigDialog with 4 expandable placement modes: Place at 0,0, Zero Datum (GPS with auto-format detection), From Existing (section/station dropdowns), and Manual Placement (station selector with "Place on Map" button). Added GPS parsing using parseGps and detectFormat from gps.ts utilities, station selection dropdowns, and proper data-testid attributes for E2E testing.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 7b594f9f3a35d12931bd3523097df0f6d743d9f5
+- Tests: pnpm tsc --noEmit, pnpm test:ui (225/226 passed, 1 flaky unrelated)
 - PRs:

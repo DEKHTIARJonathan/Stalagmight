@@ -265,6 +265,12 @@ impl Database {
                 UNIQUE(section_id, shot_id, warning_code)
             );
 
+            -- Imported file hashes (for duplicate detection)
+            CREATE TABLE IF NOT EXISTS imported_file_hashes (
+                id INTEGER PRIMARY KEY,
+                hash TEXT NOT NULL UNIQUE
+            );
+
             -- Indexes
             CREATE INDEX IF NOT EXISTS idx_shots_section ON shots(section_id);
             CREATE INDEX IF NOT EXISTS idx_undo_sequence ON undo_stack(sequence);
@@ -300,6 +306,7 @@ impl Database {
             DELETE FROM zero_datums;
             DELETE FROM section_offsets;
             DELETE FROM loop_closures;
+            DELETE FROM imported_file_hashes;
             DELETE FROM project;
             "#,
         )?;
@@ -417,6 +424,14 @@ impl Database {
                     lc.horizontal_misclosure,
                     lc.vertical_misclosure
                 ],
+            )?;
+        }
+
+        // Save imported file hashes
+        for hash in &project.imported_file_hashes {
+            tx.execute(
+                "INSERT INTO imported_file_hashes (hash) VALUES (?1)",
+                params![hash],
             )?;
         }
 
@@ -620,6 +635,9 @@ impl Database {
         // Load loop closures
         let loop_closures = self.load_loop_closures()?;
 
+        // Load imported file hashes
+        let imported_file_hashes = self.load_imported_file_hashes()?;
+
         Ok(Project {
             name,
             location,
@@ -632,6 +650,7 @@ impl Database {
             section_offsets,
             file_path: None,
             next_section_id,
+            imported_file_hashes,
         })
     }
 
@@ -729,6 +748,31 @@ impl Database {
         }
 
         Ok(closures)
+    }
+
+    /// Load imported file hashes from database
+    fn load_imported_file_hashes(&self) -> Result<Vec<String>> {
+        let mut hashes = Vec::new();
+
+        // Check if table exists (for backwards compatibility with older files)
+        let table_exists: bool = self.conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='imported_file_hashes'",
+            [],
+            |row| row.get::<_, i64>(0),
+        ).map(|c| c > 0).unwrap_or(false);
+
+        if !table_exists {
+            return Ok(hashes);
+        }
+
+        let mut stmt = self.conn.prepare("SELECT hash FROM imported_file_hashes")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+
+        for row in rows {
+            hashes.push(row?);
+        }
+
+        Ok(hashes)
     }
 
     /// Load resolved warnings from database
