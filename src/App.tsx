@@ -4,12 +4,12 @@ import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
-import { ImportDialog, ExportDialog, NewProjectDialog, DmpImportDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, DmpImportDialog, DmpSelectionDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 
 function App() {
   const { project, loadConfig, config, isDirty } = useProjectStore();
-  const { view, activeDialog, initPanelSizes } = useUIStore();
+  const { view, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes } = useUIStore();
 
   useEffect(() => {
     // Load config on startup
@@ -62,6 +62,22 @@ function App() {
       {activeDialog === 'export' && <ExportDialog />}
       {activeDialog === 'new-project' && <NewProjectDialog />}
       {activeDialog === 'import-dmp' && <DmpImportDialog />}
+      {activeDialog === 'dmp-selection' && dialogData.dmpFile ? (
+        <DmpSelectionDialog
+          dmpFile={dialogData.dmpFile as import('./types/commands').DmpFile}
+          filePath={dialogData.filePath as string}
+          onCancel={closeDialog}
+          onContinue={(config) => {
+            // For now, close and proceed to Step 2 (to be implemented in fn-51-ctu.5)
+            // The config will be passed to DmpSectionConfigDialog
+            openDialog('dmp-section-config', {
+              dmpFile: dialogData.dmpFile,
+              filePath: dialogData.filePath,
+              selectionConfig: config,
+            });
+          }}
+        />
+      ) : null}
       {activeDialog === 'confirm-delete' && <ConfirmDialog />}
       {activeDialog === 'merge' && <MergeDialog />}
       {activeDialog === 'merge-projects' && <MergeProjectsDialog />}
