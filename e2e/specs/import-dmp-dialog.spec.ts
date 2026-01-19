@@ -40,7 +40,7 @@ describe('DMP Import Dialog', () => {
     expect(dialogContent.toLowerCase()).toContain('section');
 
     // Close the dialog using Cancel button
-    const cancelBtn = await importDialog.$('[data-testid="cancel-button"], button*=Cancel');
+    const cancelBtn = await importDialog.$('[data-testid="cancel-button"]');
     await cancelBtn.click();
 
     // Verify dialog closed
@@ -60,16 +60,17 @@ describe('DMP Import Dialog', () => {
     await expect(sectionRow).toBeExisting();
 
     // Close the dialog using Cancel button
-    const cancelBtn = await importDialog.$('[data-testid="cancel-button"], button*=Cancel');
+    const cancelBtn = await importDialog.$('[data-testid="cancel-button"]');
     await cancelBtn.click();
     await importDialog.waitForDisplayed({ reverse: true, timeout: 5000 });
   });
 
-  it('should allow keyboard shortcut to open DMP import dialog', async () => {
+  it('should open DMP import dialog via helper (replaces Ctrl+I which opens native picker)', async () => {
     await createNewProject('Keyboard Test');
 
-    // Use Ctrl+I to open DMP import dialog
-    await browser.keys(['Control', 'i']);
+    // Note: Ctrl+I opens native file picker which can't be automated in E2E tests.
+    // We use the helper instead which parses a test fixture and opens the dialog.
+    await openDmpImportDialog();
 
     // Wait for Step 1 dialog (DmpSelectionDialog) using data-testid
     const dialog = await $('[data-testid="dmp-selection-dialog"]');
@@ -78,7 +79,7 @@ describe('DMP Import Dialog', () => {
     await expect(dialog).toBeDisplayed();
 
     // Close using Cancel button
-    const cancelBtn = await dialog.$('[data-testid="cancel-button"], button*=Cancel');
+    const cancelBtn = await dialog.$('[data-testid="cancel-button"]');
     await cancelBtn.click();
 
     // Dialog should close
@@ -106,9 +107,16 @@ describe('DMP Import Dialog', () => {
     const placementHeading = await step2Dialog.$('h3*=Placement');
     await expect(placementHeading).toBeExisting();
 
-    // Close the dialog
-    const cancelBtn = await step2Dialog.$('[data-testid="cancel-button"], button*=Cancel');
+    // Close the dialog - clicking Cancel shows a confirmation dialog
+    const cancelBtn = await step2Dialog.$('[data-testid="cancel-button"]');
     await cancelBtn.click();
+
+    // Wait for and click the confirm cancel button in the confirmation dialog
+    const confirmCancelDialog = await $('[data-testid="cancel-confirm-dialog"]');
+    await confirmCancelDialog.waitForDisplayed({ timeout: 3000 });
+    const confirmCancelBtn = await confirmCancelDialog.$('[data-testid="confirm-cancel-button"]');
+    await confirmCancelBtn.click();
+
     await step2Dialog.waitForDisplayed({ reverse: true, timeout: 5000 });
   });
 });

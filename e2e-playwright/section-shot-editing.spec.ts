@@ -53,22 +53,19 @@ async function createProjectWithSection(page: Page): Promise<void> {
   // Wait for Step 2 dialog (DmpSectionConfigDialog) to appear
   await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
 
-  // Navigate through sections until we reach the Import button (shown on last section)
-  // The button cycles: "Next Section" -> ... -> "Import N Sections"
+  // Place all sections - "Place section" places current and auto-advances
+  // When on the last unplaced section, it shows "Place and finish"
   let attempts = 0;
   const maxAttempts = 10;
   while (attempts < maxAttempts) {
-    const importButton = page.locator('[data-testid="import-button"]');
-    const nextButton = page.locator('[data-testid="next-section-button"]');
+    const placeAndFinishButton = page.locator('[data-testid="place-and-finish-button"]');
+    const placeSectionButton = page.locator('[data-testid="place-section-button"]');
 
-    if (await importButton.isVisible()) {
-      // We're on the last section, click Import
-      await importButton.click();
+    if (await placeAndFinishButton.isVisible()) {
+      await placeAndFinishButton.click();
       break;
-    } else if (await nextButton.isVisible()) {
-      // Not on last section yet, click Next
-      await nextButton.click();
-      // Small wait for navigation
+    } else if (await placeSectionButton.isVisible()) {
+      await placeSectionButton.click();
       await page.waitForTimeout(200);
     }
     attempts++;

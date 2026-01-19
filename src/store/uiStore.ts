@@ -205,6 +205,12 @@ interface UIStore {
   updatePlacementSnap: (stationRef: StationRef | null) => void;
   cancelPlacementMode: () => void;
   confirmPlacement: () => PlacementModeState | null;
+
+  // Map viewport center in project coordinates (x, y in meters)
+  // Used for "Place at center of screen" in import dialog
+  mapViewportCenterProject: { x: number; y: number } | null;
+  setMapViewportCenterProject: (center: { x: number; y: number } | null) => void;
+  getMapViewportCenter: () => { x: number; y: number };
 }
 
 export type DisplayToggleKey =
@@ -501,5 +507,14 @@ export const useUIStore = create<UIStore>((set) => ({
     // Clear placement mode and return the state for the caller to use
     set({ placementMode: null });
     return currentPlacement;
+  },
+
+  // Map viewport center in project coordinates
+  mapViewportCenterProject: null,
+  setMapViewportCenterProject: (center) => set({ mapViewportCenterProject: center }),
+  getMapViewportCenter: (): { x: number; y: number } => {
+    // Return stored viewport center, or default to origin (0, 0)
+    const center = useUIStore.getState().mapViewportCenterProject;
+    return center ?? { x: 0, y: 0 };
   },
 }));

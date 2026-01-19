@@ -3,6 +3,7 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
+import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import ExportPreview, { type ExportTheme } from './ExportPreview';
 import type { ExportImageOptions, ImageFormat } from '../../types/commands';
@@ -91,15 +92,15 @@ export default function ExportDialog() {
           {exportType === 'data' && (
             <div>
               <label className="block text-sm text-text-secondary mb-2">Format</label>
-              <select
+              <Select
                 value={dataFormat}
-                onChange={(e) => setDataFormat(e.target.value as 'csv' | 'json')}
-                className="w-full"
+                onChange={(v) => setDataFormat(v as 'csv' | 'json')}
+                options={[
+                  { value: 'csv', label: 'CSV' },
+                  { value: 'json', label: 'JSON' },
+                ]}
                 data-testid="data-format-select"
-              >
-                <option value="csv">CSV</option>
-                <option value="json">JSON</option>
-              </select>
+              />
             </div>
           )}
 
@@ -108,16 +109,16 @@ export default function ExportDialog() {
             <>
               <div>
                 <label className="block text-sm text-text-secondary mb-2">Format</label>
-                <select
+                <Select
                   value={imageFormat}
-                  onChange={(e) => setImageFormat(e.target.value as ImageFormat)}
-                  className="w-full"
+                  onChange={(v) => setImageFormat(v as ImageFormat)}
+                  options={[
+                    { value: 'png', label: 'PNG' },
+                    { value: 'svg', label: 'SVG' },
+                    { value: 'pdf', label: 'PDF' },
+                  ]}
                   data-testid="image-format-select"
-                >
-                  <option value="png">PNG</option>
-                  <option value="svg">SVG</option>
-                  <option value="pdf">PDF</option>
-                </select>
+                />
               </div>
 
               <div>
@@ -165,16 +166,16 @@ export default function ExportDialog() {
               {imageFormat === 'png' && (
                 <div>
                   <label className="block text-sm text-text-secondary mb-2">Resolution</label>
-                  <select
-                    value={imageOptions.dpi}
-                    onChange={(e) => setImageOptions({ ...imageOptions, dpi: parseInt(e.target.value) })}
-                    className="w-full"
+                  <Select
+                    value={String(imageOptions.dpi)}
+                    onChange={(v) => setImageOptions({ ...imageOptions, dpi: parseInt(v) })}
+                    options={[
+                      { value: '72', label: 'Low (72 DPI)' },
+                      { value: '150', label: 'Medium (150 DPI)' },
+                      { value: '300', label: 'High (300 DPI)' },
+                    ]}
                     data-testid="resolution-select"
-                  >
-                    <option value="72">Low (72 DPI)</option>
-                    <option value="150">Medium (150 DPI)</option>
-                    <option value="300">High (300 DPI)</option>
-                  </select>
+                  />
                 </div>
               )}
             </>

@@ -102,7 +102,7 @@ test.describe('DMP Import Dialog', () => {
     await expect(page.locator('text=Main Passage')).toBeVisible();
     await expect(page.locator('text=Side Tunnel')).toBeVisible();
 
-    // Step 1 shows a table with checkboxes, section names, dates, direction, and shot counts
+    // Step 1 shows a table with checkboxes, section names, dates, and shot counts
     // Verify the section table has expected structure
     const sectionRow0 = page.locator('[data-testid="section-row-0"]');
     await expect(sectionRow0).toBeVisible();
@@ -116,11 +116,6 @@ test.describe('DMP Import Dialog', () => {
     const checkbox0 = page.locator('[data-testid="section-checkbox-0"]');
     await expect(checkbox0).toBeVisible();
     await expect(checkbox0).toBeChecked(); // Non-empty sections are selected by default
-
-    // Verify direction selector is present
-    const directionSelect0 = page.locator('[data-testid="section-direction-0"]');
-    await expect(directionSelect0).toBeVisible();
-    await expect(directionSelect0).toHaveValue('in'); // Main Passage has direction 'in'
 
     // Verify file metadata header
     const metadata = dialog.locator('[data-testid="dmp-metadata"]');
@@ -155,49 +150,50 @@ test.describe('DMP Import Dialog', () => {
     // Step 2 should show section configuration UI - look for the Placement heading
     await expect(step2Dialog.locator('h3', { hasText: 'Placement' })).toBeVisible();
 
-    // Should have Next or Import button for navigating sections
-    const navButton = page.locator('[data-testid="next-section-button"], [data-testid="import-button"]');
+    // Should have "Place section" or "Place and finish" button
+    const navButton = page.locator('[data-testid="place-section-button"], [data-testid="place-and-finish-button"]');
     await expect(navButton.first()).toBeVisible();
   });
 
   /**
-   * Test 6.3: should allow editing section direction in Step 1
+   * Test 6.3: should allow toggling section selection in Step 1
    *
-   * Verifies users can modify section direction in Step 1 (DmpSelectionDialog)
-   * before proceeding to import configuration.
+   * Verifies users can select/deselect sections in Step 1 (DmpSelectionDialog)
+   * using checkboxes and bulk selection buttons.
    */
-  test('should allow editing shot values before import', async ({ page }) => {
+  test('should allow toggling section selection in Step 1', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Step 1 allows editing section direction via dropdown
-    // Find the direction dropdown for the first section
-    const directionSelect = page.locator('[data-testid="section-direction-0"]');
-    await expect(directionSelect).toBeVisible();
+    // Find section checkboxes
+    const checkbox0 = page.locator('[data-testid="section-checkbox-0"]');
+    const checkbox1 = page.locator('[data-testid="section-checkbox-1"]');
+    await expect(checkbox0).toBeVisible();
+    await expect(checkbox1).toBeVisible();
 
-    // Verify initial value from mock (Main Passage has direction 'in')
-    await expect(directionSelect).toHaveValue('in');
+    // Both non-empty sections should be selected by default
+    await expect(checkbox0).toBeChecked();
+    await expect(checkbox1).toBeChecked();
 
-    // Change direction to 'out'
-    await directionSelect.selectOption('out');
-    await expect(directionSelect).toHaveValue('out');
+    // Test deselecting a section
+    await checkbox0.click();
+    await expect(checkbox0).not.toBeChecked();
+    await expect(checkbox1).toBeChecked(); // Other section still selected
 
-    // Verify change persists - check by selecting and deselecting section
-    const checkbox = page.locator('[data-testid="section-checkbox-0"]');
-    await checkbox.click(); // Deselect
-    await checkbox.click(); // Reselect
+    // Test reselecting the section
+    await checkbox0.click();
+    await expect(checkbox0).toBeChecked();
 
-    // Direction should still be 'out' after reselecting
-    await expect(directionSelect).toHaveValue('out');
+    // Test Select None button
+    const selectNoneBtn = page.locator('[data-testid="select-none-button"]');
+    await selectNoneBtn.click();
+    await expect(checkbox0).not.toBeChecked();
+    await expect(checkbox1).not.toBeChecked();
 
-    // Change back to 'in' for a clean test
-    await directionSelect.selectOption('in');
-    await expect(directionSelect).toHaveValue('in');
-
-    // Test editing a different section
-    const directionSelect1 = page.locator('[data-testid="section-direction-1"]');
-    await expect(directionSelect1).toHaveValue('out'); // Side Tunnel is 'out'
-    await directionSelect1.selectOption('in');
-    await expect(directionSelect1).toHaveValue('in');
+    // Test Select All button
+    const selectAllBtn = page.locator('[data-testid="select-all-button"]');
+    await selectAllBtn.click();
+    await expect(checkbox0).toBeChecked();
+    await expect(checkbox1).toBeChecked();
   });
 
   /**
@@ -448,12 +444,8 @@ test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
     const sectionStatus = page.locator('[data-testid="section-status-0"]');
     await expect(sectionStatus).toBeVisible();
     await expect(sectionStatus).toContainText('!');
-
-    // Error count badge should show error count
-    const errorBadge = page.locator('[data-testid="section-error-count-0"]');
     // The section has azimuth error (400 degrees out of range)
-    // Badge may or may not be visible depending on whether we count placement error too
-    // At minimum, the status icon should show error
+    // Status icon should show error
     await expect(sectionStatus).toHaveClass(/text-error/);
   });
 
@@ -474,19 +466,15 @@ test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
     await page.locator('[data-testid="continue-button"]').click();
     await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
 
-    // Import button should be disabled (we're on the only section, so it shows "Import 1 Section")
-    const importButton = page.locator('[data-testid="import-button"]');
-    await expect(importButton).toBeDisabled();
-
-    // Tooltip should show error message
-    const title = await importButton.getAttribute('title');
-    expect(title).toContain('Cannot import');
+    // Place button should be disabled due to validation errors
+    const placeButton = page.locator('[data-testid="place-section-button"], [data-testid="place-and-finish-button"]');
+    await expect(placeButton.first()).toBeDisabled();
   });
 
   /**
-   * Test: Navigation buttons work even with errors
+   * Test: Navigation via left panel works with sections that have errors
    */
-  test('should allow navigation between sections with errors', async ({ page }) => {
+  test('should allow navigation between sections via left panel', async ({ page }) => {
     await createProject(page, 'Navigation With Errors Test');
     await page.keyboard.press('Control+i');
     await page.waitForSelector('[data-testid="dmp-selection-dialog"]');
@@ -504,18 +492,14 @@ test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
     // Should start on first section (Main Passage)
     await expect(page.getByRole('heading', { name: /Section: Main Passage/ })).toBeVisible();
 
-    // Next button should work (it's not Import yet, we have 2 sections)
-    const nextButton = page.locator('[data-testid="next-section-button"]');
-    await expect(nextButton).toBeEnabled();
-    await nextButton.click();
+    // Navigate to second section using left panel
+    await page.locator('[data-testid="section-list-item-1"]').click();
 
     // Now we should be on the second section
     await expect(page.getByRole('heading', { name: /Section: Validation Test Section/ })).toBeVisible();
 
-    // Previous button should still work
-    const prevButton = page.locator('[data-testid="previous-section-button"]');
-    await expect(prevButton).toBeEnabled();
-    await prevButton.click();
+    // Navigate back to first section using left panel
+    await page.locator('[data-testid="section-list-item-0"]').click();
 
     // Back to first section
     await expect(page.getByRole('heading', { name: /Section: Main Passage/ })).toBeVisible();
@@ -550,17 +534,16 @@ test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
   });
 
   /**
-   * Test: Fixing error by editing shot enables Import
+   * Test: Place button is enabled for section without errors
    *
-   * This test verifies that correcting invalid data allows import.
-   * Note: This is a complex test as it requires editing shot data.
+   * This test verifies that sections without validation errors can be placed.
    */
-  test('should enable Import after fixing errors', async ({ page }) => {
+  test('should enable Place button for section without errors', async ({ page }) => {
     await createProject(page, 'Fix Error Test');
     await page.keyboard.press('Control+i');
     await page.waitForSelector('[data-testid="dmp-selection-dialog"]');
 
-    // Select only Main Passage (no errors, already placed by default)
+    // Select only Main Passage (no errors)
     const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
     await dialog.locator('[data-testid="select-none-button"]').click();
     await page.locator('[data-testid="section-checkbox-0"]').click();
@@ -569,14 +552,14 @@ test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
     await page.locator('[data-testid="continue-button"]').click();
     await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
 
-    // With only Main Passage selected (and it's placed by default),
-    // the Import button should be enabled since there are no errors
-    const importButton = page.locator('[data-testid="import-button"]');
-    await expect(importButton).toBeEnabled();
+    // With only Main Passage selected (no errors), the Place button should be enabled
+    // Since it's the only section and it's not placed yet, it shows "Place and finish"
+    const placeButton = page.locator('[data-testid="place-and-finish-button"]');
+    await expect(placeButton).toBeEnabled();
   });
 
   /**
-   * Test: Section status icon shows error state
+   * Test: Section status icon shows error state vs not placed state
    */
   test('should show error icon in section list for invalid data', async ({ page }) => {
     await createProject(page, 'Error Icon Test');
@@ -593,10 +576,10 @@ test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
     await page.locator('[data-testid="continue-button"]').click();
     await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
 
-    // First section (Main Passage) should show checkmark (placed)
+    // First section (Main Passage) is NOT placed yet - should show empty circle (not placed)
     const status0 = page.locator('[data-testid="section-status-0"]');
-    await expect(status0).toContainText('✓');
-    await expect(status0).toHaveClass(/text-success/);
+    await expect(status0).toContainText('○');
+    await expect(status0).toHaveClass(/text-text-secondary/);
 
     // Second section (Validation Test) should show error icon
     const status1 = page.locator('[data-testid="section-status-1"]');

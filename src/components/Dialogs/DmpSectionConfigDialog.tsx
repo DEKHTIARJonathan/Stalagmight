@@ -6,6 +6,7 @@ import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { Project, Station } from '../../types/project';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
+import { Select, type SelectOptionGroup } from '../common/Select';
 import SectionPreview, { type MergePreviewConfig } from './SectionPreview';
 import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
@@ -64,11 +65,12 @@ export default function DmpSectionConfigDialog({
   stations: _stations,
 }: DmpSectionConfigDialogProps) {
   // Get placement mode controls from UI store
-  const { startPlacementMode, closeDialog, openDialog, dialogData } = useUIStore();
+  const { startPlacementMode, closeDialog, openDialog, dialogData, getMapViewportCenter } = useUIStore();
 
   // Check for saved state from dialogData (for restoring after placement mode)
   const savedSectionConfigs = dialogData.savedSectionConfigs as Array<[number, SectionConfig]> | undefined;
   const savedPlacedSections = dialogData.savedPlacedSections as number[] | undefined;
+  const savedExcludedSections = dialogData.savedExcludedSections as number[] | undefined;
   const savedCurrentIndex = dialogData.savedCurrentIndex as number | undefined;
 
   // Use the import state hook for all state management
@@ -79,6 +81,7 @@ export default function DmpSectionConfigDialog({
       ? {
           sectionConfigs: savedSectionConfigs,
           placedSections: savedPlacedSections,
+          excludedSections: savedExcludedSections ?? [],
           currentSectionIndex: savedCurrentIndex,
         }
       : undefined
@@ -93,6 +96,7 @@ export default function DmpSectionConfigDialog({
     canUndo: _canUndo,
     canRedo: _canRedo,
     navigateToArrayIndex,
+    navigateToSection: navigateToSectionIndex,  // Takes section index
     updateSectionField,
     updateShot,
     addShot,
@@ -101,16 +105,21 @@ export default function DmpSectionConfigDialog({
     insertShotAfter,
     setPlacement,
     markPlaced,
+    excludeSection,
+    includeSection,
     undo,
     redo,
     resetSection,
     serializeSectionConfigs,
     serializePlacedSections,
+    serializeExcludedSections,
     getSectionStatus,
     getAllConfigs,
-    getSectionErrorCount,
-    getTotalErrorCount,
-    canImport: checkCanImport,
+    getPlacedSectionConfigs,
+    getSectionDataErrorCount,
+    getTotalDataErrorCount,
+    getNextUnplacedSection,
+    allSectionsExcluded,
   } = importState;
 
   // Access sectionConfigs and placedSections via importState.state for manual placement callbacks
@@ -147,7 +156,8 @@ export default function DmpSectionConfigDialog({
 
   // From Existing fields
   const [importStationIndex, setImportStationIndex] = useState(0); // 0=first, -1=last
-  const [targetSectionId, setTargetSectionId] = useState<number | null>(null);
+  // Target can be existing section ID (number as string) or importing section ("import-X")
+  const [targetSectionRef, setTargetSectionRef] = useState<string>('');
   const [targetStationIndex, setTargetStationIndex] = useState(0);
 
   // Manual Placement fields
@@ -206,31 +216,118 @@ export default function DmpSectionConfigDialog({
     }));
   }, [existingSections]);
 
+  // Placed sections from current import (for "From existing" dropdown)
+  // Exclude the current section being configured
+  const importingSectionOptions = useMemo(() => {
+    const placedConfigs = getPlacedSectionConfigs();
+    return placedConfigs
+      .filter((config) => config.sectionIndex !== currentSectionIndex)
+      .map((config) => ({
+        value: `import-${config.sectionIndex}`,
+        label: `${config.name} (importing)`,
+        stationCount: config.stationCount,
+      }));
+  }, [getPlacedSectionConfigs, currentSectionIndex]);
+
+  // Get stations for an importing section
+  const getStationsForImportingSection = useCallback(
+    (sectionIndex: number): Array<{ value: number; label: string }> => {
+      const config = getPlacedSectionConfigs().find((c) => c.sectionIndex === sectionIndex);
+      if (!config) return [];
+      // stationCount is already shots + 1, don't add +1 again
+      const count = config.stationCount;
+      const options: Array<{ value: number; label: string }> = [];
+      for (let i = 0; i < count; i++) {
+        options.push({ value: i, label: `Station ${i}` });
+      }
+      return options;
+    },
+    [getPlacedSectionConfigs]
+  );
+
   // Target section stations (when a target section is selected)
   const targetSectionStations = useMemo(() => {
-    if (targetSectionId === null) return [];
-    return getStationsForSection(targetSectionId);
-  }, [targetSectionId, getStationsForSection]);
+    if (!targetSectionRef) return [];
+
+    // Check if it's an importing section
+    if (targetSectionRef.startsWith('import-')) {
+      const sectionIndex = parseInt(targetSectionRef.replace('import-', ''), 10);
+      return getStationsForImportingSection(sectionIndex);
+    }
+
+    // Otherwise it's an existing section ID
+    const sectionId = parseInt(targetSectionRef, 10);
+    return getStationsForSection(sectionId);
+  }, [targetSectionRef, getStationsForSection, getStationsForImportingSection]);
 
   // Compute merge preview config for SectionPreview when "From Existing" is selected
+  // Uses local dropdown state for real-time preview updates
   const mergePreviewConfig = useMemo((): MergePreviewConfig | null => {
-    if (!currentConfig || currentConfig.placement.type !== 'fromExisting') {
+    if (!currentConfig) return null;
+
+    const placementType = currentConfig.placement.type;
+    if (placementType !== 'fromExisting' && placementType !== 'fromImporting') {
       return null;
     }
 
-    const placement = currentConfig.placement;
-    const targetSection = existingSections.find((s) => s.id === placement.existingStation.section_id);
+    // Use local dropdown state for preview (updates in real-time)
+    if (!targetSectionRef) return null;
 
-    if (!targetSection) {
-      return null;
+    // Calculate actual import station index
+    const actualImportStation = importStationIndex === -1 ? currentShotCount : importStationIndex;
+
+    // Handle existing sections
+    if (!targetSectionRef.startsWith('import-')) {
+      const sectionId = parseInt(targetSectionRef, 10);
+      const targetSection = existingSections.find((s) => s.id === sectionId);
+      if (!targetSection) return null;
+
+      return {
+        targetSection,
+        importStationIndex: actualImportStation,
+        targetStationIndex,
+      };
     }
+
+    // Handle importing sections (from current import)
+    const targetIdx = parseInt(targetSectionRef.replace('import-', ''), 10);
+    const targetConfig = getPlacedSectionConfigs().find((c) => c.sectionIndex === targetIdx);
+    if (!targetConfig) return null;
+
+    // Get DMP shots and convert to Shot-like format for preview
+    const dmpShots = dmpFile.sections[targetIdx]?.shots.filter(s => s.shot_type === 'Standard') || [];
+    const convertedShots = dmpShots.map((shot, idx) => ({
+      id: idx,
+      azimuth_in: shot.heading_in,
+      azimuth_out: shot.heading_out,
+      length: shot.length,
+      depth_in: shot.depth_in,
+      depth_out: shot.depth_out,
+      pitch_in: shot.pitch_in ?? null,
+      pitch_out: shot.pitch_out ?? null,
+      left: shot.left ?? null,
+      right: shot.right ?? null,
+      up: shot.up ?? null,
+      down: shot.down ?? null,
+      comment: shot.comment ?? null,
+      is_virtual: false,
+      marker_index: null,
+      temperature: null,
+    }));
+
+    // Create a pseudo-section for the importing section preview
+    const importingSection = {
+      id: -targetIdx - 1, // Negative ID to distinguish from real sections
+      name: targetConfig.name,
+      shots: convertedShots,
+    };
 
     return {
-      targetSection,
-      importStationIndex: placement.importStation,
-      targetStationIndex: placement.existingStation.station_index,
+      targetSection: importingSection as any,
+      importStationIndex: actualImportStation,
+      targetStationIndex,
     };
-  }, [currentConfig, existingSections]);
+  }, [currentConfig, existingSections, targetSectionRef, targetStationIndex, importStationIndex, currentShotCount, getPlacedSectionConfigs, dmpFile.sections]);
 
   /**
    * Handle GPS input change with auto-detection.
@@ -369,11 +466,17 @@ export default function DmpSectionConfigDialog({
   );
 
   /**
-   * Handle "Place" button for Place at 0,0 mode.
+   * Handle placement at viewport center (used for "Place at center of screen" option).
+   * Gets the current map viewport center and sets that as the section position.
    */
-  const handlePlaceAtOrigin = useCallback(() => {
-    handlePlacementChange({ type: 'origin' });
-  }, [handlePlacementChange]);
+  const handlePlaceAtViewportCenter = useCallback(() => {
+    const center = getMapViewportCenter();
+    handlePlacementChange({
+      type: 'manual',
+      alignStation: 'first',
+      position: { x: center.x, y: center.y, z: 0 },
+    });
+  }, [handlePlacementChange, getMapViewportCenter]);
 
   /**
    * Handle "Place" button for Zero Datum mode.
@@ -389,22 +492,38 @@ export default function DmpSectionConfigDialog({
 
   /**
    * Handle "Place" button for From Existing mode.
+   * Supports both existing sections (in project) and importing sections (from current import).
    */
   const handlePlaceFromExisting = useCallback(() => {
-    if (targetSectionId === null) return;
+    if (!targetSectionRef) return;
+
     // Convert importStationIndex: 0=first, -1=last (actual index)
     const actualImportStation =
       importStationIndex === -1 ? currentShotCount : importStationIndex;
-    handlePlacementChange({
-      type: 'fromExisting',
-      importStation: actualImportStation,
-      existingStation: { section_id: targetSectionId, station_index: targetStationIndex },
-    });
+
+    // Check if it's an importing section
+    if (targetSectionRef.startsWith('import-')) {
+      const targetSectionIndex = parseInt(targetSectionRef.replace('import-', ''), 10);
+      handlePlacementChange({
+        type: 'fromImporting',
+        importStation: actualImportStation,
+        targetSectionIndex,
+        targetStationIndex,
+      });
+    } else {
+      // It's an existing section
+      const sectionId = parseInt(targetSectionRef, 10);
+      handlePlacementChange({
+        type: 'fromExisting',
+        importStation: actualImportStation,
+        existingStation: { section_id: sectionId, station_index: targetStationIndex },
+      });
+    }
   }, [
     handlePlacementChange,
     importStationIndex,
     currentShotCount,
-    targetSectionId,
+    targetSectionRef,
     targetStationIndex,
   ]);
 
@@ -445,6 +564,7 @@ export default function DmpSectionConfigDialog({
     const savedState = {
       sectionConfigs: serializeSectionConfigs(),
       placedSections: serializePlacedSections(),
+      excludedSections: serializeExcludedSections(),
       currentIndex,
       currentSectionIndex,
       manualAlignStation,
@@ -471,9 +591,9 @@ export default function DmpSectionConfigDialog({
           });
         }
 
-        // Add to placed sections
+        // Do NOT auto-mark as placed - user must click "Place section" button
+        // Keep the same placed sections as before
         const updatedPlaced = new Set<number>(savedState.placedSections);
-        updatedPlaced.add(savedState.currentSectionIndex);
 
         // Reopen dialog with updated state
         openDialog('dmp-section-config', {
@@ -483,6 +603,7 @@ export default function DmpSectionConfigDialog({
           // Pass saved state to restore
           savedSectionConfigs: Array.from(updatedConfigs.entries()),
           savedPlacedSections: Array.from(updatedPlaced),
+          savedExcludedSections: savedState.excludedSections,
           savedCurrentIndex: savedState.currentIndex,
         });
       },
@@ -496,6 +617,7 @@ export default function DmpSectionConfigDialog({
           // Pass saved state to restore
           savedSectionConfigs: savedState.sectionConfigs,
           savedPlacedSections: savedState.placedSections,
+          savedExcludedSections: savedState.excludedSections,
           savedCurrentIndex: savedState.currentIndex,
         });
       }
@@ -510,6 +632,7 @@ export default function DmpSectionConfigDialog({
     manualAlignStation,
     serializeSectionConfigs,
     serializePlacedSections,
+    serializeExcludedSections,
     startPlacementMode,
     openDialog,
     closeDialog,
@@ -563,21 +686,72 @@ export default function DmpSectionConfigDialog({
   }, [currentIndex, navigateToArrayIndex]);
 
   /**
-   * Navigate to next section or trigger import.
+   * Handle "Place section" button click.
+   * Applies the placement config based on current field values,
+   * marks the current section as placed, and advances to the next unplaced section.
+   * If all sections are now handled, triggers the import.
    */
-  const handleNext = useCallback(() => {
-    if (currentIndex < selectedIndices.length - 1) {
-      // Mark current section as placed if not already
-      if (currentSectionIndex !== undefined) {
-        markPlaced(currentSectionIndex);
+  const handlePlaceSection = useCallback(() => {
+    if (currentSectionIndex === undefined || !currentConfig) return;
+
+    // Apply placement config based on current type and field values
+    if (currentConfig.placement.type === 'origin') {
+      // Convert 'origin' to viewport center position
+      handlePlaceAtViewportCenter();
+    } else if (currentConfig.placement.type === 'zeroDatum') {
+      // Update with current GPS values
+      handlePlaceZeroDatum();
+    } else if (currentConfig.placement.type === 'fromExisting' || currentConfig.placement.type === 'fromImporting') {
+      // Validate that a target section is selected
+      if (!targetSectionRef) {
+        // Don't place - user needs to select a target section first
+        return;
       }
-      navigateToArrayIndex(currentIndex + 1);
+      // Update with current target section/station values
+      handlePlaceFromExisting();
+    }
+    // Note: 'manual' type is already set via handleStartManualPlacement
+
+    // Mark current section as placed
+    markPlaced(currentSectionIndex);
+
+    // Check if there's a next unplaced section
+    // Pass currentSectionIndex as excludeSection since state hasn't updated yet
+    // Note: getNextUnplacedSection returns a section index, not array index
+    const nextUnplaced = getNextUnplacedSection(currentSectionIndex, currentSectionIndex);
+    if (nextUnplaced !== undefined) {
+      // Navigate to the next unplaced section (by section index)
+      navigateToSectionIndex(nextUnplaced);
     } else {
-      // Last section - trigger import using hook's getAllConfigs
+      // All sections are now handled - trigger import
       const sections = getAllConfigs();
       onImport(sections);
     }
-  }, [currentIndex, selectedIndices.length, currentSectionIndex, markPlaced, navigateToArrayIndex, getAllConfigs, onImport]);
+  }, [currentSectionIndex, currentConfig, markPlaced, handlePlaceAtViewportCenter, handlePlaceZeroDatum, handlePlaceFromExisting, getNextUnplacedSection, navigateToSectionIndex, getAllConfigs, onImport, targetSectionRef]);
+
+  /**
+   * Handle Exclude/Include toggle for current section.
+   */
+  const handleExcludeToggle = useCallback(() => {
+    if (currentSectionIndex === undefined) return;
+
+    const status = getSectionStatus(currentSectionIndex);
+    if (status === 'excluded') {
+      // Include the section
+      includeSection(currentSectionIndex);
+    } else {
+      // Exclude the section and advance to next unplaced
+      excludeSection(currentSectionIndex);
+
+      // Navigate to next unplaced section
+      // Pass currentSectionIndex as excludeSection since state hasn't updated yet
+      // Note: getNextUnplacedSection returns a section index, not array index
+      const nextUnplaced = getNextUnplacedSection(currentSectionIndex, currentSectionIndex);
+      if (nextUnplaced !== undefined) {
+        navigateToSectionIndex(nextUnplaced);
+      }
+    }
+  }, [currentSectionIndex, getSectionStatus, includeSection, excludeSection, getNextUnplacedSection, navigateToSectionIndex]);
 
   /**
    * Handle cancel with confirmation.
@@ -593,28 +767,94 @@ export default function DmpSectionConfigDialog({
     setShowBackConfirm(true);
   }, []);
 
-  // Total error count across all sections (blocking errors only)
+  // Total error count across all sections (DATA errors only, not placement errors)
   const totalErrorCount = useMemo(() => {
-    return getTotalErrorCount(existingSections);
-  }, [getTotalErrorCount, existingSections]);
+    return getTotalDataErrorCount(existingSections);
+  }, [getTotalDataErrorCount, existingSections]);
 
-  // Count sections with errors (for display)
+  // Count sections with DATA errors (for display)
   const sectionsWithErrorsCount = useMemo(() => {
-    return selectedIndices.filter((idx) => getSectionErrorCount(idx, existingSections) > 0).length;
-  }, [selectedIndices, getSectionErrorCount, existingSections]);
+    return selectedIndices.filter((idx) => getSectionDataErrorCount(idx, existingSections) > 0).length;
+  }, [selectedIndices, getSectionDataErrorCount, existingSections]);
 
-  // Count sections not yet placed
-  const notPlacedCount = useMemo(() => {
-    return selectedIndices.filter((idx) => getSectionStatus(idx) === 'not_placed').length;
-  }, [selectedIndices, getSectionStatus]);
 
-  // Is this the last section?
-  const isLastSection = currentIndex === selectedIndices.length - 1;
+  // Current section status
+  const currentSectionStatus = useMemo(() => {
+    if (currentSectionIndex === undefined) return 'not_placed';
+    return getSectionStatus(currentSectionIndex);
+  }, [currentSectionIndex, getSectionStatus]);
 
-  // Can import: all sections must be placed and no errors
-  const canImport = useMemo(() => {
-    return checkCanImport(existingSections);
-  }, [checkCanImport, existingSections]);
+  // Is current section placed?
+  const isCurrentPlaced = currentSectionStatus === 'placed';
+
+  // Is current section excluded?
+  const isCurrentExcluded = currentSectionStatus === 'excluded';
+
+  // Does current section have data errors? (excluding placement errors)
+  // This is used to determine if the Place button should be enabled
+  const currentSectionHasErrors = useMemo(() => {
+    if (currentSectionIndex === undefined) return false;
+    // Use getSectionDataErrorCount to exclude placement errors - those are expected before placing
+    return getSectionDataErrorCount(currentSectionIndex, existingSections) > 0;
+  }, [currentSectionIndex, getSectionDataErrorCount, existingSections]);
+
+  // Is this the last unplaced section (all others are placed or excluded)?
+  const isLastUnplacedSection = useMemo(() => {
+    // Count sections that are not placed and not excluded (excluding current)
+    const unplacedCount = selectedIndices.filter((idx) => {
+      if (idx === currentSectionIndex) return false; // Don't count current
+      const status = getSectionStatus(idx);
+      return status !== 'placed' && status !== 'excluded';
+    }).length;
+    return unplacedCount === 0;
+  }, [selectedIndices, currentSectionIndex, getSectionStatus]);
+
+  // Should show "Place and finish" instead of "Place section"?
+  const showPlaceAndFinish = isLastUnplacedSection && !isCurrentPlaced && !isCurrentExcluded;
+
+  // Find the next unplaced section index (for "Next section" button)
+  const nextUnplacedSectionIndex = useMemo(() => {
+    // Look for the next unplaced section after current
+    for (let i = currentIndex + 1; i < selectedIndices.length; i++) {
+      const idx = selectedIndices[i];
+      if (idx === undefined) continue;
+      const status = getSectionStatus(idx);
+      if (status !== 'placed' && status !== 'excluded') {
+        return i;
+      }
+    }
+    // Wrap around and look before current
+    for (let i = 0; i < currentIndex; i++) {
+      const idx = selectedIndices[i];
+      if (idx === undefined) continue;
+      const status = getSectionStatus(idx);
+      if (status !== 'placed' && status !== 'excluded') {
+        return i;
+      }
+    }
+    return null;
+  }, [selectedIndices, currentIndex, getSectionStatus]);
+
+  // Should show "Next section" button (when current is placed/excluded and there are more unplaced sections)?
+  const showNextSection = (isCurrentPlaced || isCurrentExcluded) && nextUnplacedSectionIndex !== null;
+
+  // Handler for "Next section" button
+  const handleNextSection = useCallback(() => {
+    if (nextUnplacedSectionIndex !== null) {
+      navigateToArrayIndex(nextUnplacedSectionIndex);
+    }
+  }, [nextUnplacedSectionIndex, navigateToArrayIndex]);
+
+  // Can finish with current section excluded (all other sections are placed/excluded)?
+  const canFinishWithExclusion = useMemo(() => {
+    if (!isCurrentExcluded) return false;
+    // Check if all OTHER sections are placed or excluded
+    return selectedIndices.every((idx) => {
+      if (idx === currentSectionIndex) return true; // Current is excluded, that's OK
+      const status = getSectionStatus(idx);
+      return status === 'placed' || status === 'excluded';
+    });
+  }, [isCurrentExcluded, selectedIndices, currentSectionIndex, getSectionStatus]);
 
   /**
    * Keyboard shortcuts handler.
@@ -633,15 +873,17 @@ export default function DmpSectionConfigDialog({
         return;
       }
 
-      // Ctrl+Enter - proceed (Next or Import)
-      // Don't allow if on last section and import is disabled
+      // Ctrl+Enter - place current section
       if (e.key === 'Enter' && e.ctrlKey && !e.repeat) {
         e.preventDefault();
-        const onLastSection = currentIndex === selectedIndices.length - 1;
-        if (onLastSection && !canImport) {
-          return; // Import is disabled
+        // Don't allow if current section is already placed or has errors
+        if (currentSectionIndex !== undefined) {
+          const status = getSectionStatus(currentSectionIndex);
+          if (status === 'placed' || status === 'excluded' || status === 'errors') {
+            return;
+          }
         }
-        handleNext();
+        handlePlaceSection();
         return;
       }
 
@@ -682,15 +924,16 @@ export default function DmpSectionConfigDialog({
   }, [
     currentIndex,
     selectedIndices.length,
+    currentSectionIndex,
     handleCancel,
-    handleNext,
+    handlePlaceSection,
     handlePrevious,
     navigateToSection,
     showCancelConfirm,
     showBackConfirm,
     handleUndo,
     handleRedo,
-    canImport,
+    getSectionStatus,
   ]);
 
   return (
@@ -730,7 +973,7 @@ export default function DmpSectionConfigDialog({
           {/* Left Panel - Section List */}
           <div
             className={`border-r border-border flex flex-col transition-all ${
-              leftPanelCollapsed ? 'w-10' : 'w-48'
+              leftPanelCollapsed ? 'w-10' : 'w-56'
             }`}
             data-testid="section-list-panel"
           >
@@ -747,17 +990,21 @@ export default function DmpSectionConfigDialog({
 
             {/* Section list */}
             {!leftPanelCollapsed && (
-              <div className="flex-1 overflow-auto">
+              <div className="flex-1 overflow-auto min-h-0">
                 {selectedIndices.map((sectionIdx, arrayIdx) => {
                   const section = dmpFile.sections[sectionIdx];
                   const status = getSectionStatus(sectionIdx);
                   const isActive = arrayIdx === currentIndex;
-                  const sectionErrorCount = getSectionErrorCount(sectionIdx, existingSections);
+                  // Use data error count (excluding placement errors) for status display
+                  const sectionDataErrors = getSectionDataErrorCount(sectionIdx, existingSections);
 
-                  // Status icon
+                  // Status icon - based on data errors only, not placement errors
                   let statusIcon: string;
                   let statusColor: string;
-                  if (status === 'errors' || sectionErrorCount > 0) {
+                  if (status === 'excluded') {
+                    statusIcon = '✕';
+                    statusColor = 'text-error';
+                  } else if (status === 'errors' || sectionDataErrors > 0) {
                     statusIcon = '!';
                     statusColor = 'text-error';
                   } else if (status === 'placed') {
@@ -772,7 +1019,7 @@ export default function DmpSectionConfigDialog({
                     <button
                       key={sectionIdx}
                       type="button"
-                      onClick={() => navigateToSection(arrayIdx)}
+                      onClick={() => navigateToArrayIndex(arrayIdx)}
                       className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 hover:bg-background/50 ${
                         isActive ? 'bg-accent/10 border-l-2 border-accent' : ''
                       }`}
@@ -782,19 +1029,42 @@ export default function DmpSectionConfigDialog({
                         {statusIcon}
                       </span>
                       <span className="truncate flex-1">{section?.name ?? `Section ${arrayIdx + 1}`}</span>
-                      {/* Error count badge */}
-                      {sectionErrorCount > 0 && (
+                      {/* Error count badge - data errors only */}
+                      {sectionDataErrors > 0 && (
                         <span
                           className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 bg-error text-white rounded-full text-[10px] font-medium"
                           data-testid={`section-error-count-${arrayIdx}`}
-                          title={`${sectionErrorCount} error${sectionErrorCount > 1 ? 's' : ''}`}
+                          title={`${sectionDataErrors} error${sectionDataErrors > 1 ? 's' : ''}`}
                         >
-                          {sectionErrorCount}
+                          {sectionDataErrors}
                         </span>
                       )}
                     </button>
                   );
                 })}
+              </div>
+            )}
+
+            {/* Preview - anchored at bottom, only when expanded */}
+            {!leftPanelCollapsed && currentConfig && currentDmpSection && (
+              <div className="flex-shrink-0 p-2 border-t border-border" data-testid="section-preview-panel">
+                <SectionPreview
+                  section={currentDmpSection}
+                  color={currentConfig.color}
+                  size={200}
+                  selectedStationIndex={
+                    selectedShotIndex !== null ? selectedShotIndex + 1 : null
+                  }
+                  mergePreview={mergePreviewConfig}
+                  onStationClick={(stationIndex) => {
+                    // Station N corresponds to shot N-1 (station 0 has no corresponding shot)
+                    if (stationIndex > 0) {
+                      setSelectedShotIndex(stationIndex - 1);
+                    } else {
+                      setSelectedShotIndex(null);
+                    }
+                  }}
+                />
               </div>
             )}
 
@@ -807,9 +1077,9 @@ export default function DmpSectionConfigDialog({
           </div>
 
           {/* Main Panel */}
-          <div className="flex-1 flex flex-col overflow-hidden p-4" data-testid="main-config-panel">
+          <div className="flex-1 flex flex-col min-h-0 min-w-0 p-4" data-testid="main-config-panel">
             {currentConfig && currentDmpSection ? (
-              <>
+              <div className="flex-1 overflow-auto min-h-0 flex flex-col">
                 {/* Section header */}
                 <div className="flex items-center gap-4 mb-4">
                   <h3 className="font-medium text-lg">
@@ -818,95 +1088,92 @@ export default function DmpSectionConfigDialog({
                   <span className="text-sm text-text-secondary">
                     ({currentIndex + 1} of {selectedIndices.length})
                   </span>
+                  {/* Status badges */}
+                  {isCurrentPlaced && (
+                    <span className="px-2 py-1 bg-success/10 text-success text-xs rounded" data-testid="placed-badge">
+                      ✓ Placed
+                    </span>
+                  )}
+                  {isCurrentExcluded && (
+                    <span className="px-2 py-1 bg-error/10 text-error text-xs rounded" data-testid="excluded-badge">
+                      ✕ Excluded
+                    </span>
+                  )}
+                  {/* Reset Section button - pushed to the right */}
+                  <div className="flex-1" />
+                  <Button
+                    size="sm"
+                    onClick={handleResetSection}
+                    disabled={isCurrentPlaced || isCurrentExcluded}
+                    data-testid="reset-section-button"
+                    title="Reset all fields and placement to original DMP values"
+                  >
+                    Reset Section
+                  </Button>
                 </div>
 
-                {/* Top row: Preview + Parameters */}
-                <div className="flex gap-4 mb-4">
-                  {/* Preview */}
-                  <div className="flex-shrink-0">
-                    <SectionPreview
-                      section={currentDmpSection}
-                      color={currentConfig.color}
-                      size={200}
-                      selectedStationIndex={
-                        selectedShotIndex !== null ? selectedShotIndex + 1 : null
-                      }
-                      mergePreview={mergePreviewConfig}
-                      onStationClick={(stationIndex) => {
-                        // Station N corresponds to shot N-1 (station 0 has no corresponding shot)
-                        if (stationIndex > 0) {
-                          setSelectedShotIndex(stationIndex - 1);
-                        } else {
-                          setSelectedShotIndex(null);
-                        }
-                      }}
-                    />
+                {/* Read-only banner for placed sections */}
+                {isCurrentPlaced && (
+                  <div className="mb-4 p-3 bg-success/10 border border-success/30 rounded text-sm text-success" data-testid="placed-section-banner">
+                    This section has been placed and cannot be edited. Navigate to an unplaced section to continue.
                   </div>
+                )}
 
-                  {/* Parameters */}
-                  <Panel title="Parameters" className="flex-1">
-                    <div className="space-y-3">
-                      <SectionMetadataForm
-                        name={currentConfig.name}
-                        surveyor={currentConfig.surveyor ?? ''}
-                        date={currentConfig.date ?? ''}
-                        color={currentConfig.color}
-                        direction={currentConfig.direction}
-                        onNameChange={(value) => updateSectionField('name', value)}
-                        onSurveyorChange={(value) => updateSectionField('surveyor', value || null)}
-                        onDateChange={(value) => updateSectionField('date', value || null)}
-                        onColorChange={(value) => updateSectionField('color', value)}
-                        onDirectionChange={(value) => updateSectionField('direction', value)}
-                        showDirection
-                      />
-                      <div className="flex justify-end">
-                        <Button
-                          size="sm"
-                          onClick={handleResetSection}
-                          data-testid="reset-section-button"
-                          title="Reset all fields and placement to original DMP values"
-                        >
-                          Reset Section
-                        </Button>
-                      </div>
-                    </div>
+                {/* Excluded banner */}
+                {isCurrentExcluded && (
+                  <div className="mb-4 p-3 bg-error/10 border border-error/30 rounded text-sm text-error" data-testid="excluded-section-banner">
+                    This section is excluded from import. Click "Include" to add it back.
+                  </div>
+                )}
+
+                {/* Parameters */}
+                <div className="mb-4">
+                  <Panel title="Parameters">
+                    <SectionMetadataForm
+                      name={currentConfig.name}
+                      surveyor={currentConfig.surveyor ?? ''}
+                      date={currentConfig.date ?? ''}
+                      color={currentConfig.color}
+                      direction={currentConfig.direction}
+                      onNameChange={(value) => updateSectionField('name', value)}
+                      onSurveyorChange={(value) => updateSectionField('surveyor', value || null)}
+                      onDateChange={(value) => updateSectionField('date', value || null)}
+                      onColorChange={(value) => updateSectionField('color', value)}
+                      onDirectionChange={(value) => updateSectionField('direction', value)}
+                      showDirection
+                      disabled={isCurrentPlaced || isCurrentExcluded}
+                    />
                   </Panel>
                 </div>
 
                 {/* Placement options */}
                 <Panel title="Placement" className="mb-4" data-testid="placement-panel">
                   <div className="space-y-3">
-                    {/* Place at 0,0 */}
+                    {/* Place at center of screen */}
                     <div
                       className={`p-3 rounded border ${
                         currentConfig.placement.type === 'origin'
                           ? 'border-accent bg-accent/5'
                           : 'border-border'
-                      }`}
+                      } ${isCurrentPlaced || isCurrentExcluded ? 'opacity-50' : ''}`}
                       data-testid="placement-mode-origin"
                     >
-                      <label className="flex items-center gap-2 cursor-pointer">
+                      <label className={`flex items-center gap-2 ${isCurrentPlaced || isCurrentExcluded ? '' : 'cursor-pointer'}`}>
                         <input
                           type="radio"
                           name="placement"
                           checked={currentConfig.placement.type === 'origin'}
                           onChange={() => handlePlacementChange({ type: 'origin' })}
+                          disabled={isCurrentPlaced || isCurrentExcluded}
                           data-testid="placement-origin"
                         />
-                        <span className="font-medium">Place at 0,0</span>
+                        <span className="font-medium">Place at center of screen</span>
                       </label>
                       {currentConfig.placement.type === 'origin' && (
-                        <div className="mt-2 ml-6 flex items-center justify-between">
+                        <div className="mt-2 ml-6">
                           <span className="text-sm text-text-secondary">
-                            First station at origin
+                            First station at current map viewport center
                           </span>
-                          <Button
-                            size="sm"
-                            onClick={handlePlaceAtOrigin}
-                            data-testid="place-origin-button"
-                          >
-                            Place
-                          </Button>
                         </div>
                       )}
                     </div>
@@ -917,10 +1184,10 @@ export default function DmpSectionConfigDialog({
                         currentConfig.placement.type === 'zeroDatum'
                           ? 'border-accent bg-accent/5'
                           : 'border-border'
-                      }`}
+                      } ${isCurrentPlaced || isCurrentExcluded ? 'opacity-50' : ''}`}
                       data-testid="placement-mode-zero-datum"
                     >
-                      <label className="flex items-center gap-2 cursor-pointer">
+                      <label className={`flex items-center gap-2 ${isCurrentPlaced || isCurrentExcluded ? '' : 'cursor-pointer'}`}>
                         <input
                           type="radio"
                           name="placement"
@@ -932,6 +1199,7 @@ export default function DmpSectionConfigDialog({
                               stationIndex: gpsStationIndex,
                             })
                           }
+                          disabled={isCurrentPlaced || isCurrentExcluded}
                           data-testid="placement-zero-datum"
                         />
                         <span className="font-medium">Zero Datum (GPS)</span>
@@ -946,7 +1214,8 @@ export default function DmpSectionConfigDialog({
                               value={gpsInput}
                               onChange={(e) => handleGpsInputChange(e.target.value)}
                               placeholder="48.8584, 2.2945"
-                              className="flex-1 px-2 py-1 bg-background border border-border rounded text-sm"
+                              className="flex-1 px-2 py-1 bg-background border border-border rounded text-sm disabled:opacity-50"
+                              disabled={isCurrentPlaced || isCurrentExcluded}
                               data-testid="gps-input"
                             />
                             {gpsFormat && (
@@ -972,124 +1241,130 @@ export default function DmpSectionConfigDialog({
                           {/* Station Selection */}
                           <div className="flex items-center gap-2">
                             <label className="text-sm text-text-secondary w-12">Station:</label>
-                            <select
-                              value={gpsStationIndex}
-                              onChange={(e) => setGpsStationIndex(parseInt(e.target.value, 10))}
-                              className="px-2 py-1 bg-background border border-border rounded text-sm"
+                            <Select
+                              value={String(gpsStationIndex)}
+                              onChange={(v) => setGpsStationIndex(parseInt(v, 10))}
+                              options={stationOptions.map((opt) => ({ value: String(opt.value), label: opt.label }))}
+                              disabled={isCurrentPlaced || isCurrentExcluded}
+                              className="flex-1"
                               data-testid="gps-station-select"
-                            >
-                              {stationOptions.map((opt) => (
-                                <option key={opt.value} value={opt.value}>
-                                  {opt.label}
-                                </option>
-                              ))}
-                            </select>
-                            <Button
-                              size="sm"
-                              onClick={handlePlaceZeroDatum}
-                              disabled={!gpsCoords}
-                              data-testid="place-zero-datum-button"
-                            >
-                              Place
-                            </Button>
+                            />
                           </div>
                         </div>
                       )}
                     </div>
 
-                    {/* From Existing */}
+                    {/* From Existing or Importing Section */}
                     <div
                       className={`p-3 rounded border ${
-                        currentConfig.placement.type === 'fromExisting'
+                        currentConfig.placement.type === 'fromExisting' || currentConfig.placement.type === 'fromImporting'
                           ? 'border-accent bg-accent/5'
                           : 'border-border'
-                      } ${!project || existingSections.length === 0 ? 'opacity-50' : ''}`}
+                      } ${(existingSections.length === 0 && importingSectionOptions.length === 0) || isCurrentPlaced || isCurrentExcluded ? 'opacity-50' : ''}`}
                       data-testid="placement-mode-existing"
                     >
-                      <label className="flex items-center gap-2 cursor-pointer">
+                      <label className={`flex items-center gap-2 ${(existingSections.length === 0 && importingSectionOptions.length === 0) || isCurrentPlaced || isCurrentExcluded ? '' : 'cursor-pointer'}`}>
                         <input
                           type="radio"
                           name="placement"
-                          checked={currentConfig.placement.type === 'fromExisting'}
-                          onChange={() =>
-                            handlePlacementChange({
-                              type: 'fromExisting',
-                              importStation: importStationIndex === -1 ? currentShotCount : importStationIndex,
-                              existingStation: {
-                                section_id: targetSectionId || 0,
-                                station_index: targetStationIndex,
-                              },
-                            })
-                          }
-                          disabled={!project || existingSections.length === 0}
+                          checked={currentConfig.placement.type === 'fromExisting' || currentConfig.placement.type === 'fromImporting'}
+                          onChange={() => {
+                            // Switch to this mode - use existing handler which checks the target ref
+                            if (targetSectionRef) {
+                              handlePlaceFromExisting();
+                            } else {
+                              // Default: set a placeholder placement that will be updated when target is selected
+                              handlePlacementChange({
+                                type: 'fromExisting',
+                                importStation: importStationIndex === -1 ? currentShotCount : importStationIndex,
+                                existingStation: { section_id: 0, station_index: 0 },
+                              });
+                            }
+                          }}
+                          disabled={(existingSections.length === 0 && importingSectionOptions.length === 0) || isCurrentPlaced || isCurrentExcluded}
                           data-testid="placement-from-existing"
                         />
                         <span className="font-medium">From Existing Station</span>
-                        {(!project || existingSections.length === 0) && (
-                          <span className="text-xs text-text-secondary">(no existing sections)</span>
+                        {existingSections.length === 0 && importingSectionOptions.length === 0 && (
+                          <span className="text-xs text-text-secondary">(no available sections)</span>
                         )}
                       </label>
-                      {currentConfig.placement.type === 'fromExisting' && (
+                      {(currentConfig.placement.type === 'fromExisting' || currentConfig.placement.type === 'fromImporting') && (
                         <div className="mt-3 ml-6 space-y-3">
                           {/* This section station */}
                           <div className="flex items-center gap-2 flex-wrap">
                             <label className="text-sm text-text-secondary">Connect:</label>
-                            <select
-                              value={importStationIndex}
-                              onChange={(e) => setImportStationIndex(parseInt(e.target.value, 10))}
-                              className="px-2 py-1 bg-background border border-border rounded text-sm"
+                            <Select
+                              value={String(importStationIndex)}
+                              onChange={(v) => setImportStationIndex(parseInt(v, 10))}
+                              options={stationOptions.map((opt) => ({
+                                value: String(opt.value),
+                                label: opt.label,
+                              }))}
+                              disabled={isCurrentPlaced || isCurrentExcluded}
                               data-testid="import-station-select"
-                            >
-                              <option value={0}>First station (0)</option>
-                              <option value={-1}>Last station ({currentShotCount})</option>
-                            </select>
+                            />
                             <span className="text-sm text-text-secondary">to</span>
                           </div>
 
                           {/* Target section and station */}
                           <div className="flex items-center gap-2 flex-wrap">
-                            <select
-                              value={targetSectionId ?? ''}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setTargetSectionId(val ? parseInt(val, 10) : null);
+                            <Select
+                              value={targetSectionRef}
+                              onChange={(v) => {
+                                setTargetSectionRef(v);
                                 setTargetStationIndex(0);
                               }}
-                              className="px-2 py-1 bg-background border border-border rounded text-sm"
+                              options={(() => {
+                                const groups: SelectOptionGroup[] = [];
+
+                                // Importing sections (placed) - grouped on top
+                                if (importingSectionOptions.length > 0) {
+                                  groups.push({
+                                    label: 'Importing',
+                                    options: importingSectionOptions.map((opt) => {
+                                      const idx = parseInt(opt.value.replace('import-', ''), 10);
+                                      const name = opt.label.replace(' (importing)', '');
+                                      return {
+                                        value: opt.value,
+                                        label: `${idx}: ${name}`,
+                                      };
+                                    }),
+                                  });
+                                }
+
+                                // Existing sections - use section ID
+                                if (existingSectionOptions.length > 0) {
+                                  groups.push({
+                                    label: 'Existing',
+                                    options: existingSectionOptions.map((opt) => ({
+                                      value: String(opt.value),
+                                      label: `${opt.value}: ${opt.label}`,
+                                    })),
+                                  });
+                                }
+
+                                return groups.length > 0 ? groups : [{ value: '', label: 'No sections available' }];
+                              })()}
+                              placeholder="Select section..."
+                              disabled={isCurrentPlaced || isCurrentExcluded}
                               data-testid="target-section-select"
-                            >
-                              <option value="">Select section...</option>
-                              {existingSectionOptions.map((opt) => (
-                                <option key={opt.value} value={opt.value}>
-                                  {opt.label}
-                                </option>
-                              ))}
-                            </select>
-                            <select
-                              value={targetStationIndex}
-                              onChange={(e) => setTargetStationIndex(parseInt(e.target.value, 10))}
-                              className="px-2 py-1 bg-background border border-border rounded text-sm"
-                              disabled={targetSectionId === null}
+                            />
+                            <Select
+                              value={String(targetStationIndex)}
+                              onChange={(v) => setTargetStationIndex(parseInt(v, 10))}
+                              options={
+                                targetSectionStations.length === 0
+                                  ? [{ value: '0', label: 'Select station...' }]
+                                  : targetSectionStations.map((opt) => ({
+                                      value: String(opt.value),
+                                      label: opt.label,
+                                    }))
+                              }
+                              disabled={!targetSectionRef || isCurrentPlaced || isCurrentExcluded}
+                              className="min-w-[140px]"
                               data-testid="target-station-select"
-                            >
-                              {targetSectionStations.length === 0 ? (
-                                <option value={0}>Select station...</option>
-                              ) : (
-                                targetSectionStations.map((opt) => (
-                                  <option key={opt.value} value={opt.value}>
-                                    {opt.label}
-                                  </option>
-                                ))
-                              )}
-                            </select>
-                            <Button
-                              size="sm"
-                              onClick={handlePlaceFromExisting}
-                              disabled={targetSectionId === null}
-                              data-testid="place-from-existing-button"
-                            >
-                              Place
-                            </Button>
+                            />
                           </div>
                         </div>
                       )}
@@ -1101,15 +1376,16 @@ export default function DmpSectionConfigDialog({
                         currentConfig.placement.type === 'manual'
                           ? 'border-accent bg-accent/5'
                           : 'border-border'
-                      }`}
+                      } ${isCurrentPlaced || isCurrentExcluded ? 'opacity-50' : ''}`}
                       data-testid="placement-mode-manual"
                     >
-                      <label className="flex items-center gap-2 cursor-pointer">
+                      <label className={`flex items-center gap-2 ${isCurrentPlaced || isCurrentExcluded ? '' : 'cursor-pointer'}`}>
                         <input
                           type="radio"
                           name="placement"
                           checked={currentConfig.placement.type === 'manual'}
                           onChange={() => handlePlacementChange({ type: 'manual', alignStation: manualAlignStation })}
+                          disabled={isCurrentPlaced || isCurrentExcluded}
                           data-testid="placement-manual"
                         />
                         <span className="font-medium">Manual Placement</span>
@@ -1118,19 +1394,21 @@ export default function DmpSectionConfigDialog({
                         <div className="mt-3 ml-6 space-y-3">
                           <div className="flex items-center gap-2 flex-wrap">
                             <label className="text-sm text-text-secondary">Align:</label>
-                            <select
+                            <Select
                               value={manualAlignStation}
-                              onChange={(e) => setManualAlignStation(e.target.value as 'first' | 'last')}
-                              className="px-2 py-1 bg-background border border-border rounded text-sm"
+                              onChange={(v) => setManualAlignStation(v as 'first' | 'last')}
+                              options={[
+                                { value: 'first', label: 'First station' },
+                                { value: 'last', label: 'Last station' },
+                              ]}
+                              disabled={isCurrentPlaced || isCurrentExcluded}
                               data-testid="manual-align-select"
-                            >
-                              <option value="first">First station</option>
-                              <option value="last">Last station</option>
-                            </select>
+                            />
                             <span className="text-sm text-text-secondary">with cursor</span>
                             <Button
                               size="sm"
                               onClick={handleStartManualPlacement}
+                              disabled={isCurrentPlaced || isCurrentExcluded}
                               data-testid="start-placement-button"
                             >
                               Place on Map
@@ -1158,10 +1436,11 @@ export default function DmpSectionConfigDialog({
                       selectedRowIndex={selectedShotIndex}
                       onRowSelect={setSelectedShotIndex}
                       maxHeight="calc(100% - 2rem)"
+                      readOnly={isCurrentPlaced || isCurrentExcluded}
                     />
                   </div>
                 </Panel>
-              </>
+              </div>
             ) : (
               <div className="flex-1 flex items-center justify-center text-text-secondary">
                 No section selected
@@ -1179,29 +1458,63 @@ export default function DmpSectionConfigDialog({
             <Button onClick={handleBack} data-testid="back-to-selection-button">
               ← Back to Selection
             </Button>
+            {/* Exclude/Include toggle - always show so user can include sections back */}
+            <Button
+              onClick={handleExcludeToggle}
+              disabled={isCurrentPlaced}
+              data-testid={isCurrentExcluded ? 'include-button' : 'exclude-button'}
+              title={isCurrentPlaced ? 'Cannot exclude a placed section' : undefined}
+            >
+              {isCurrentExcluded ? 'Include' : 'Exclude'}
+            </Button>
           </div>
           <div className="flex gap-2">
-            <Button
-              onClick={handlePrevious}
-              disabled={currentIndex === 0}
-              data-testid="previous-section-button"
-            >
-              Previous
-            </Button>
-            <Button
-              variant="primary"
-              onClick={handleNext}
-              disabled={isLastSection && !canImport}
-              data-testid={isLastSection ? 'import-button' : 'next-section-button'}
-              title={isLastSection && !canImport
-                ? totalErrorCount > 0
-                  ? `Cannot import: ${totalErrorCount} error${totalErrorCount > 1 ? 's' : ''} in ${sectionsWithErrorsCount} section${sectionsWithErrorsCount > 1 ? 's' : ''}`
-                  : `Cannot import: ${notPlacedCount} section${notPlacedCount > 1 ? 's are' : ' is'} not placed`
-                : undefined
-              }
-            >
-              {isLastSection ? `Import ${selectedIndices.length} Section${selectedIndices.length > 1 ? 's' : ''}` : 'Next'}
-            </Button>
+            {/* Show Cancel when all sections are excluded */}
+            {allSectionsExcluded ? (
+              <Button onClick={handleCancel} data-testid="cancel-all-excluded-button">
+                Cancel (all sections excluded)
+              </Button>
+            ) : canFinishWithExclusion ? (
+              /* Show Finish Import when current is excluded but all others are placed/excluded */
+              <Button
+                variant="primary"
+                onClick={() => onImport(getAllConfigs())}
+                data-testid="finish-import-button"
+              >
+                Finish Import
+              </Button>
+            ) : showNextSection ? (
+              /* Show Next section when current is placed/excluded but there are more unplaced sections */
+              <Button
+                variant="primary"
+                onClick={handleNextSection}
+                data-testid="next-section-button"
+              >
+                Next section →
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                onClick={handlePlaceSection}
+                disabled={
+                  currentSectionHasErrors ||
+                  ((currentConfig?.placement.type === 'fromExisting' || currentConfig?.placement.type === 'fromImporting') && !targetSectionRef) ||
+                  (currentConfig?.placement.type === 'manual' && !currentConfig.placement.position)
+                }
+                data-testid={showPlaceAndFinish ? 'place-and-finish-button' : 'place-section-button'}
+                title={
+                  currentSectionHasErrors
+                    ? 'Fix errors before placing'
+                    : (currentConfig?.placement.type === 'fromExisting' || currentConfig?.placement.type === 'fromImporting') && !targetSectionRef
+                      ? 'Select a target section first'
+                      : currentConfig?.placement.type === 'manual' && !currentConfig.placement.position
+                        ? 'Click "Place on map" first'
+                        : undefined
+                }
+              >
+                {showPlaceAndFinish ? 'Place and finish' : 'Place section'}
+              </Button>
+            )}
           </div>
         </div>
       </div>

@@ -80,7 +80,7 @@ function calculateAverage(a: number | null | undefined, b: number | null | undef
 
 /**
  * Check for azimuth warning using the shared validation function.
- * Returns true if the difference from 180 exceeds the threshold.
+ * Returns true if the difference between azimuth_in and azimuth_out exceeds the threshold.
  */
 function hasAzimuthWarning(shot: EditableShot, threshold: number): boolean {
   return hasAzimuthDiscrepancy(shot.azimuth_in, shot.azimuth_out, threshold);
@@ -103,7 +103,7 @@ function getShotWarnings(shot: EditableShot, config: ValidationConfig): ShotWarn
   if (hasAzimuthWarning(shot, config.azimuth_diff_threshold)) {
     warnings.push({
       type: 'azimuth',
-      message: `Azimuth in/out differ by more than ${config.azimuth_diff_threshold}° from 180°`,
+      message: `Azimuth in/out differ by more than ${config.azimuth_diff_threshold}°`,
     });
   }
 

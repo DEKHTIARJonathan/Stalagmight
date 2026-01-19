@@ -14,7 +14,6 @@ import {
  */
 export interface DmpSelectionConfig {
   selectedIndices: Set<number>;
-  sectionDirections: Map<number, 'in' | 'out'>;
   defaultSurveyor: string | null;
   defaultDate: string | null;
 }
@@ -26,6 +25,7 @@ export type PlacementConfig =
   | { type: 'origin' }
   | { type: 'zeroDatum'; coordinates: GpsCoordinates; stationIndex: number }
   | { type: 'fromExisting'; importStation: number; existingStation: StationRef }
+  | { type: 'fromImporting'; importStation: number; targetSectionIndex: number; targetStationIndex: number }
   | { type: 'manual'; alignStation: 'first' | 'last'; position?: Coordinates; snappedToStation?: StationRef | null };
 
 /**
@@ -71,6 +71,8 @@ export interface ImportState {
   currentSectionIndex: number;
   /** Placed sections (user has explicitly set placement) */
   placedSections: Set<number>;
+  /** Excluded sections (will not be imported) */
+  excludedSections: Set<number>;
   /** Undo stacks per section */
   undoStacks: Map<number, UndoEntry[]>;
   /** Redo stacks per section */
@@ -93,10 +95,12 @@ type ImportAction =
   | { type: 'SET_PLACEMENT'; placement: PlacementConfig }
   | { type: 'MARK_PLACED'; sectionIndex: number }
   | { type: 'UNMARK_PLACED'; sectionIndex: number }
+  | { type: 'EXCLUDE_SECTION'; sectionIndex: number }
+  | { type: 'INCLUDE_SECTION'; sectionIndex: number }
   | { type: 'UNDO' }
   | { type: 'REDO' }
   | { type: 'RESET_SECTION' }
-  | { type: 'RESTORE_STATE'; sectionConfigs: Map<number, SectionConfig>; placedSections: Set<number>; currentSectionIndex: number };
+  | { type: 'RESTORE_STATE'; sectionConfigs: Map<number, SectionConfig>; placedSections: Set<number>; excludedSections: Set<number>; currentSectionIndex: number };
 
 /**
  * Default section colors for import.
@@ -390,21 +394,16 @@ function importReducer(state: ImportState, action: ImportAction): ImportState {
       };
       let stateWithUndo = pushToUndoStack(state, 'placementChange', 'Change placement', previousPartial);
 
-      // Update placement
+      // Update placement (does NOT mark section as placed - that only happens via MARK_PLACED)
       const newConfigs = new Map(stateWithUndo.sectionConfigs);
       newConfigs.set(state.currentSectionIndex, {
         ...currentConfig,
         placement: action.placement,
       });
 
-      // Also mark as placed
-      const newPlaced = new Set(stateWithUndo.placedSections);
-      newPlaced.add(state.currentSectionIndex);
-
       return {
         ...stateWithUndo,
         sectionConfigs: newConfigs,
-        placedSections: newPlaced,
       };
     }
 
@@ -423,6 +422,28 @@ function importReducer(state: ImportState, action: ImportAction): ImportState {
       return {
         ...state,
         placedSections: newPlaced,
+      };
+    }
+
+    case 'EXCLUDE_SECTION': {
+      const newExcluded = new Set(state.excludedSections);
+      newExcluded.add(action.sectionIndex);
+      // Also remove from placed if it was placed
+      const newPlaced = new Set(state.placedSections);
+      newPlaced.delete(action.sectionIndex);
+      return {
+        ...state,
+        excludedSections: newExcluded,
+        placedSections: newPlaced,
+      };
+    }
+
+    case 'INCLUDE_SECTION': {
+      const newExcluded = new Set(state.excludedSections);
+      newExcluded.delete(action.sectionIndex);
+      return {
+        ...state,
+        excludedSections: newExcluded,
       };
     }
 
@@ -578,6 +599,7 @@ function importReducer(state: ImportState, action: ImportAction): ImportState {
         ...state,
         sectionConfigs: action.sectionConfigs,
         placedSections: action.placedSections,
+        excludedSections: action.excludedSections,
         currentSectionIndex: action.currentSectionIndex,
       };
     }
@@ -596,6 +618,7 @@ function initializeState(
   savedState?: {
     sectionConfigs: Array<[number, SectionConfig]>;
     placedSections: number[];
+    excludedSections?: number[];
     currentSectionIndex: number;
   }
 ): ImportState {
@@ -613,7 +636,7 @@ function initializeState(
     originalValues.set(sectionIdx, {
       sectionIndex: sectionIdx,
       name: section.name,
-      surveyor: section.name || null, // Original surveyor from DMP
+      surveyor: null, // DMP sections don't have surveyor - use defaultSurveyor from Step 1
       date: dateStr,
       color: SECTION_COLORS[arrayIdx % SECTION_COLORS.length] ?? '#4ecdc4',
       direction: section.direction,
@@ -628,6 +651,7 @@ function initializeState(
       sectionConfigs: new Map(savedState.sectionConfigs),
       currentSectionIndex: savedState.currentSectionIndex,
       placedSections: new Set(savedState.placedSections),
+      excludedSections: new Set(savedState.excludedSections ?? []),
       undoStacks: new Map(),
       redoStacks: new Map(),
       originalValues,
@@ -640,8 +664,9 @@ function initializeState(
     const section = dmpFile.sections[sectionIdx];
     if (!section) return;
 
-    const direction = selectionConfig.sectionDirections.get(sectionIdx) ?? section.direction;
-    const surveyor = selectionConfig.defaultSurveyor || section.name || null;
+    const direction = section.direction;
+    // Use default surveyor from step 1, or null if not provided (don't fall back to section name)
+    const surveyor = selectionConfig.defaultSurveyor || null;
     const dateStr = selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
 
     sectionConfigs.set(sectionIdx, {
@@ -656,16 +681,15 @@ function initializeState(
     });
   });
 
-  // First section defaults to placed at origin
+  // No auto-placement - all sections start as unplaced
   const placedSections = new Set<number>();
-  if (firstSectionIndex !== undefined) {
-    placedSections.add(firstSectionIndex);
-  }
+  const excludedSections = new Set<number>();
 
   return {
     sectionConfigs,
     currentSectionIndex: firstSectionIndex ?? 0,
     placedSections,
+    excludedSections,
     undoStacks: new Map(),
     redoStacks: new Map(),
     originalValues,
@@ -682,6 +706,7 @@ export function useImportState(
   savedState?: {
     sectionConfigs: Array<[number, SectionConfig]>;
     placedSections: number[];
+    excludedSections?: number[];
     currentSectionIndex: number;
   }
 ) {
@@ -770,6 +795,14 @@ export function useImportState(
     dispatch({ type: 'UNMARK_PLACED', sectionIndex });
   }, []);
 
+  const excludeSection = useCallback((sectionIndex: number) => {
+    dispatch({ type: 'EXCLUDE_SECTION', sectionIndex });
+  }, []);
+
+  const includeSection = useCallback((sectionIndex: number) => {
+    dispatch({ type: 'INCLUDE_SECTION', sectionIndex });
+  }, []);
+
   const undo = useCallback(() => {
     dispatch({ type: 'UNDO' });
   }, []);
@@ -785,9 +818,10 @@ export function useImportState(
   const restoreState = useCallback((
     sectionConfigs: Map<number, SectionConfig>,
     placedSections: Set<number>,
+    excludedSections: Set<number>,
     currentSectionIndex: number
   ) => {
-    dispatch({ type: 'RESTORE_STATE', sectionConfigs, placedSections, currentSectionIndex });
+    dispatch({ type: 'RESTORE_STATE', sectionConfigs, placedSections, excludedSections, currentSectionIndex });
   }, []);
 
   // Serialization helpers for state persistence
@@ -799,8 +833,77 @@ export function useImportState(
     return Array.from(state.placedSections);
   }, [state.placedSections]);
 
-  // Get section status - now considers validation errors
-  const getSectionStatus = useCallback((sectionIndex: number): 'placed' | 'not_placed' | 'errors' => {
+  const serializeExcludedSections = useCallback(() => {
+    return Array.from(state.excludedSections);
+  }, [state.excludedSections]);
+
+  /**
+   * Get the next unplaced section index (not placed and not excluded).
+   * Returns undefined if all sections are placed or excluded.
+   *
+   * @param afterIndex - Section index to start searching after
+   * @param excludeSection - Optional section index to exclude from search (used when
+   *                         the section is being marked as placed but state hasn't updated yet)
+   */
+  const getNextUnplacedSection = useCallback((afterIndex?: number, excludeSection?: number): number | undefined => {
+    const startIdx = afterIndex !== undefined
+      ? selectedIndices.indexOf(afterIndex) + 1
+      : 0;
+
+    // First check from startIdx to end
+    for (let i = startIdx; i < selectedIndices.length; i++) {
+      const sectionIndex = selectedIndices[i];
+      if (sectionIndex === undefined) continue;
+      // Skip the section being placed (state not yet updated)
+      if (sectionIndex === excludeSection) continue;
+      if (!state.placedSections.has(sectionIndex) && !state.excludedSections.has(sectionIndex)) {
+        return sectionIndex;
+      }
+    }
+
+    // Then check from beginning to startIdx (wrap around)
+    for (let i = 0; i < startIdx; i++) {
+      const sectionIndex = selectedIndices[i];
+      if (sectionIndex === undefined) continue;
+      // Skip the section being placed (state not yet updated)
+      if (sectionIndex === excludeSection) continue;
+      if (!state.placedSections.has(sectionIndex) && !state.excludedSections.has(sectionIndex)) {
+        return sectionIndex;
+      }
+    }
+
+    return undefined;
+  }, [selectedIndices, state.placedSections, state.excludedSections]);
+
+  /**
+   * Check if all sections are either placed or excluded.
+   */
+  const allSectionsHandled = useMemo(() => {
+    for (const sectionIndex of selectedIndices) {
+      if (!state.placedSections.has(sectionIndex) && !state.excludedSections.has(sectionIndex)) {
+        return false;
+      }
+    }
+    return true;
+  }, [selectedIndices, state.placedSections, state.excludedSections]);
+
+  /**
+   * Check if all sections are excluded.
+   */
+  const allSectionsExcluded = useMemo(() => {
+    for (const sectionIndex of selectedIndices) {
+      if (!state.excludedSections.has(sectionIndex)) {
+        return false;
+      }
+    }
+    return true;
+  }, [selectedIndices, state.excludedSections]);
+
+  // Get section status - now considers validation errors and excluded status
+  const getSectionStatus = useCallback((sectionIndex: number): 'placed' | 'not_placed' | 'errors' | 'excluded' => {
+    // Check excluded first
+    if (state.excludedSections.has(sectionIndex)) return 'excluded';
+
     const config = state.sectionConfigs.get(sectionIndex);
     if (!config) return 'not_placed';
 
@@ -818,15 +921,37 @@ export function useImportState(
     if (state.placedSections.has(sectionIndex)) return 'placed';
 
     return 'not_placed';
-  }, [state.sectionConfigs, state.placedSections]);
+  }, [state.sectionConfigs, state.placedSections, state.excludedSections]);
 
-  // Get all configs for import
+  // Get all configs for import (excludes excluded sections)
   const getAllConfigs = useCallback(() => {
-    return Array.from(state.sectionConfigs.values()).map((config) => ({
-      ...config,
-      shots: config.shots.filter((s) => !s.isDeleted),
-    }));
-  }, [state.sectionConfigs]);
+    return Array.from(state.sectionConfigs.values())
+      .filter((config) => !state.excludedSections.has(config.sectionIndex))
+      .map((config) => ({
+        ...config,
+        shots: config.shots.filter((s) => !s.isDeleted),
+      }));
+  }, [state.sectionConfigs, state.excludedSections]);
+
+  /**
+   * Get configs for sections that have been placed (for use as targets in "From existing station").
+   * Returns placed sections with their names and station counts.
+   */
+  const getPlacedSectionConfigs = useCallback(() => {
+    const placedConfigs: Array<{ sectionIndex: number; name: string; stationCount: number }> = [];
+    for (const sectionIndex of state.placedSections) {
+      const config = state.sectionConfigs.get(sectionIndex);
+      if (config) {
+        const validShots = config.shots.filter((s) => !s.isDeleted);
+        placedConfigs.push({
+          sectionIndex,
+          name: config.name,
+          stationCount: validShots.length + 1, // shots + 1 = stations
+        });
+      }
+    }
+    return placedConfigs;
+  }, [state.placedSections, state.sectionConfigs]);
 
   /**
    * Get all errors for a specific section.
@@ -921,6 +1046,19 @@ export function useImportState(
   }, [getSectionErrors]);
 
   /**
+   * Get the data error count for a specific section (excluding placement errors).
+   * This is used to determine if the Place button should be enabled.
+   */
+  const getSectionDataErrorCount = useCallback((
+    sectionIndex: number,
+    existingSections: Section[]
+  ): number => {
+    const errors = getSectionErrors(sectionIndex, existingSections);
+    // Filter out missingPlacement errors - those are expected before placing
+    return errors.filter((e) => e.type !== 'missingPlacement').length;
+  }, [getSectionErrors]);
+
+  /**
    * Get total error count across all sections.
    */
   const getTotalErrorCount = useCallback((
@@ -934,12 +1072,34 @@ export function useImportState(
   }, [selectedIndices, getSectionErrors]);
 
   /**
-   * Check if all sections can be imported (no errors and all placed).
+   * Get total data error count across all sections (excluding placement errors).
+   * Used for the error summary display.
+   */
+  const getTotalDataErrorCount = useCallback((
+    existingSections: Section[]
+  ): number => {
+    let total = 0;
+    for (const sectionIndex of selectedIndices) {
+      total += getSectionDataErrorCount(sectionIndex, existingSections);
+    }
+    return total;
+  }, [selectedIndices, getSectionDataErrorCount]);
+
+  /**
+   * Check if all sections can be imported (no errors and all placed or excluded).
    */
   const canImport = useCallback((
     existingSections: Section[]
   ): boolean => {
+    // If all sections are excluded, we can't import (nothing to import)
+    if (state.excludedSections.size === selectedIndices.length) {
+      return false;
+    }
+
     for (const sectionIndex of selectedIndices) {
+      // Skip excluded sections - they don't need to be validated
+      if (state.excludedSections.has(sectionIndex)) continue;
+
       const config = state.sectionConfigs.get(sectionIndex);
       if (!config) return false;
 
@@ -973,7 +1133,7 @@ export function useImportState(
       }
     }
     return true;
-  }, [selectedIndices, state.sectionConfigs, state.placedSections]);
+  }, [selectedIndices, state.sectionConfigs, state.placedSections, state.excludedSections]);
 
   return {
     // State
@@ -984,12 +1144,16 @@ export function useImportState(
     selectedIndices,
     sectionConfigs: state.sectionConfigs,
     placedSections: state.placedSections,
+    excludedSections: state.excludedSections,
     canUndo,
     canRedo,
+    allSectionsHandled,
+    allSectionsExcluded,
 
     // Navigation
     navigateToSection,
     navigateToArrayIndex,
+    getNextUnplacedSection,
 
     // Section field updates
     updateSectionField,
@@ -1006,6 +1170,10 @@ export function useImportState(
     markPlaced,
     unmarkPlaced,
 
+    // Exclude/Include
+    excludeSection,
+    includeSection,
+
     // Undo/Redo
     undo,
     redo,
@@ -1019,18 +1187,22 @@ export function useImportState(
     // Serialization
     serializeSectionConfigs,
     serializePlacedSections,
+    serializeExcludedSections,
 
     // Status
     getSectionStatus,
 
     // Export
     getAllConfigs,
+    getPlacedSectionConfigs,
 
     // Error validation
     getSectionErrors,
     getAllSectionErrors,
     getSectionErrorCount,
+    getSectionDataErrorCount,
     getTotalErrorCount,
+    getTotalDataErrorCount,
     canImport,
   };
 }
