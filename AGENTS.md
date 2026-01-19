@@ -4,7 +4,7 @@
 - `src/`: React + TypeScript frontend. Core UI lives in `src/components/`, state in `src/store/`, hooks in `src/hooks/`, and shared helpers in `src/utils/`.
 - `src-tauri/`: Rust backend and Tauri setup. Core business logic is in `src-tauri/src/core/`, data models in `src-tauri/src/models/`, and persistence in `src-tauri/src/persistence/`.
 - `src-tauri/tests/`: Rust integration tests.
-- `prd/`, `SPEC.md`, `TODO.md`: product specs and roadmap notes.
+- `prd/`, `docs/SPEC.md`, `TODO.md`: product specs and roadmap notes.
 - `dist/`: Vite build output (generated).
 
 ## Build, Test, and Development Commands
@@ -15,7 +15,7 @@
 - `pnpm build`: typecheck + Vite build for frontend.
 - `pnpm typecheck`: TypeScript type checks only.
 - `pnpm test`: run Vitest (frontend tests).
-- `cd src-tauri && cargo test`: run Rust integration tests.
+- `cargo test --manifest-path src-tauri/Cargo.toml`: run Rust integration tests.
 
 ## Coding Style & Naming Conventions
 - TypeScript uses 2-space indentation and single quotes; follow existing component and store patterns.

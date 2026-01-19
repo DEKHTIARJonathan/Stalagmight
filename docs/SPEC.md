@@ -1916,15 +1916,26 @@ cavechef/
 │       ├── commands.ts
 │       └── api.ts
 │
-├── tests/                        # Test files
-│   ├── rust/                     # Rust unit/integration tests
-│   └── ts/                       # TypeScript tests
+├── e2e/                          # WebdriverIO E2E tests (full Tauri app)
+│   ├── specs/                    # Test specifications
+│   ├── fixtures/                 # Test data (DMP files)
+│   └── helpers/                  # Test utilities
+│
+├── e2e-playwright/               # Playwright E2E tests (mocked IPC)
+│   ├── mocks/                    # Tauri IPC mocks
+│   └── fixtures/                 # Test data
+│
+├── docs/                         # Documentation
+│   ├── SPEC.md                   # This document
+│   ├── TESTING.md                # Testing guide
+│   ├── architecture.md           # System design
+│   └── ...                       # Other docs
 │
 ├── package.json
 ├── pnpm-lock.yaml
 ├── vite.config.ts
 ├── tsconfig.json
-├── SPEC.md                       # This document
+├── CLAUDE.md                     # Agent instructions
 └── README.md
 ```
 

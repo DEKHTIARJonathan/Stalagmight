@@ -1,6 +1,6 @@
 # CaveChef TODO - v1.0 Completion Tasks
 
-This document tracks functionality specified in SPEC.md and the task files in `tasks/`.
+This document tracks functionality specified in `docs/SPEC.md` and the task files in `tasks/`.
 
 **Last Updated**: 2026-01-18
 
@@ -42,7 +42,7 @@ This document tracks functionality specified in SPEC.md and the task files in `t
 - [x] Playwright E2E tests with mocked IPC
 - [x] WebdriverIO E2E tests for full app
 - [x] data-testid attributes on dialogs and key UI elements
-- [x] TESTING.md documentation
+- [x] Testing documentation (`docs/TESTING.md`)
 
 ---
 
