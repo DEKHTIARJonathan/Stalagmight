@@ -600,11 +600,11 @@ export default function DmpSectionConfigDialog({
           dmpFile,
           filePath: dialogData.filePath,
           selectionConfig,
-          // Pass saved state to restore
+          // Pass saved state to restore (use currentSectionIndex, not array index)
           savedSectionConfigs: Array.from(updatedConfigs.entries()),
           savedPlacedSections: Array.from(updatedPlaced),
           savedExcludedSections: savedState.excludedSections,
-          savedCurrentIndex: savedState.currentIndex,
+          savedCurrentIndex: savedState.currentSectionIndex,
         });
       },
       // onCancel callback
@@ -614,11 +614,11 @@ export default function DmpSectionConfigDialog({
           dmpFile,
           filePath: dialogData.filePath,
           selectionConfig,
-          // Pass saved state to restore
+          // Pass saved state to restore (use currentSectionIndex, not array index)
           savedSectionConfigs: savedState.sectionConfigs,
           savedPlacedSections: savedState.placedSections,
           savedExcludedSections: savedState.excludedSections,
-          savedCurrentIndex: savedState.currentIndex,
+          savedCurrentIndex: savedState.currentSectionIndex,
         });
       }
     );
@@ -1296,7 +1296,30 @@ export default function DmpSectionConfigDialog({
                             <label className="text-sm text-text-secondary">Connect:</label>
                             <Select
                               value={String(importStationIndex)}
-                              onChange={(v) => setImportStationIndex(parseInt(v, 10))}
+                              onChange={(v) => {
+                                const newImportStation = parseInt(v, 10);
+                                setImportStationIndex(newImportStation);
+                                // Update placement config with new import station
+                                if (targetSectionRef) {
+                                  const actualImportStation = newImportStation === -1 ? currentShotCount : newImportStation;
+                                  if (targetSectionRef.startsWith('import-')) {
+                                    const targetSectionIdx = parseInt(targetSectionRef.replace('import-', ''), 10);
+                                    handlePlacementChange({
+                                      type: 'fromImporting',
+                                      importStation: actualImportStation,
+                                      targetSectionIndex: targetSectionIdx,
+                                      targetStationIndex,
+                                    });
+                                  } else {
+                                    const sectionId = parseInt(targetSectionRef, 10);
+                                    handlePlacementChange({
+                                      type: 'fromExisting',
+                                      importStation: actualImportStation,
+                                      existingStation: { section_id: sectionId, station_index: targetStationIndex },
+                                    });
+                                  }
+                                }
+                              }}
                               options={stationOptions.map((opt) => ({
                                 value: String(opt.value),
                                 label: opt.label,
@@ -1314,6 +1337,26 @@ export default function DmpSectionConfigDialog({
                               onChange={(v) => {
                                 setTargetSectionRef(v);
                                 setTargetStationIndex(0);
+                                // Update placement config immediately when target is selected
+                                if (v) {
+                                  const actualImportStation = importStationIndex === -1 ? currentShotCount : importStationIndex;
+                                  if (v.startsWith('import-')) {
+                                    const targetSectionIndex = parseInt(v.replace('import-', ''), 10);
+                                    handlePlacementChange({
+                                      type: 'fromImporting',
+                                      importStation: actualImportStation,
+                                      targetSectionIndex,
+                                      targetStationIndex: 0,
+                                    });
+                                  } else {
+                                    const sectionId = parseInt(v, 10);
+                                    handlePlacementChange({
+                                      type: 'fromExisting',
+                                      importStation: actualImportStation,
+                                      existingStation: { section_id: sectionId, station_index: 0 },
+                                    });
+                                  }
+                                }
                               }}
                               options={(() => {
                                 const groups: SelectOptionGroup[] = [];
@@ -1352,7 +1395,30 @@ export default function DmpSectionConfigDialog({
                             />
                             <Select
                               value={String(targetStationIndex)}
-                              onChange={(v) => setTargetStationIndex(parseInt(v, 10))}
+                              onChange={(v) => {
+                                const newStationIndex = parseInt(v, 10);
+                                setTargetStationIndex(newStationIndex);
+                                // Update placement config with new station
+                                if (targetSectionRef) {
+                                  const actualImportStation = importStationIndex === -1 ? currentShotCount : importStationIndex;
+                                  if (targetSectionRef.startsWith('import-')) {
+                                    const targetSectionIdx = parseInt(targetSectionRef.replace('import-', ''), 10);
+                                    handlePlacementChange({
+                                      type: 'fromImporting',
+                                      importStation: actualImportStation,
+                                      targetSectionIndex: targetSectionIdx,
+                                      targetStationIndex: newStationIndex,
+                                    });
+                                  } else {
+                                    const sectionId = parseInt(targetSectionRef, 10);
+                                    handlePlacementChange({
+                                      type: 'fromExisting',
+                                      importStation: actualImportStation,
+                                      existingStation: { section_id: sectionId, station_index: newStationIndex },
+                                    });
+                                  }
+                                }
+                              }}
                               options={
                                 targetSectionStations.length === 0
                                   ? [{ value: '0', label: 'Select station...' }]
