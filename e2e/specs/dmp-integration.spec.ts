@@ -56,24 +56,72 @@ describe('DMP Integration', () => {
     // V2 files should have multiple sections
     expect(result.sectionCount).toBeGreaterThan(0);
 
-    // Now open the import dialog to verify UI
+    // Now open the import dialog to verify UI (Step 1: DmpSelectionDialog)
     await openDmpImportWithFile(dmpPath);
 
-    // Verify dialog is open
-    const dialog = await $('[data-testid="import-dmp-dialog"]');
-    await expect(dialog).toBeDisplayed();
+    // Verify Step 1 dialog is open
+    const selectionDialog = await $('[data-testid="dmp-selection-dialog"]');
+    await expect(selectionDialog).toBeDisplayed();
 
     // Verify version is displayed
-    const dialogText = await dialog.getText();
-    expect(dialogText.toLowerCase()).toContain('version 2');
+    const dialogText = await selectionDialog.getText();
+    expect(dialogText.toLowerCase()).toMatch(/version:?\s*2/);
 
-    // Click Import button to import sections
-    const importBtn = await dialog.$('button*=Import');
-    await importBtn.waitForClickable({ timeout: 5000 });
-    await importBtn.click();
+    // Click Continue to proceed to Step 2
+    const continueBtn = await selectionDialog.$('[data-testid="continue-button"]');
+    await continueBtn.waitForClickable({ timeout: 5000 });
+    await continueBtn.click();
+
+    // Wait for Step 2 dialog (DmpSectionConfigDialog)
+    const configDialog = await $('[data-testid="dmp-section-config-dialog"]');
+    await configDialog.waitForDisplayed({ timeout: 5000 });
+    // Wait for dialog to fully render
+    await browser.pause(1000);
+
+    // Complete the import by placing all sections
+    // "Place section" places current and auto-advances to next unplaced
+    // "Place and finish" appears on the last unplaced section
+    let importComplete = false;
+    let iterationCount = 0;
+    const maxIterations = 30; // Safety limit
+    while (!importComplete && iterationCount < maxIterations) {
+      iterationCount++;
+
+      // Try to find "Place and finish" button (shown when all others placed and on last section)
+      const placeFinishBtn = await configDialog.$('[data-testid="place-and-finish-button"]');
+      if (await placeFinishBtn.isExisting()) {
+        try {
+          await placeFinishBtn.waitForClickable({ timeout: 3000 });
+          await placeFinishBtn.click();
+          importComplete = true;
+        } catch {
+          // Button exists but not clickable, try place section
+          const placeBtn = await configDialog.$('[data-testid="place-section-button"]');
+          if (await placeBtn.isExisting()) {
+            await placeBtn.waitForClickable({ timeout: 3000 });
+            await placeBtn.click();
+            await browser.pause(500);
+          }
+        }
+      } else {
+        // Not the last unplaced section, click "Place section"
+        const placeBtn = await configDialog.$('[data-testid="place-section-button"]');
+        if (await placeBtn.isExisting()) {
+          await placeBtn.waitForClickable({ timeout: 3000 });
+          await placeBtn.click();
+          await browser.pause(500);
+        } else {
+          // Neither button found, wait a bit and retry
+          await browser.pause(500);
+        }
+      }
+    }
+    if (!importComplete) {
+      throw new Error('Import did not complete within max iterations');
+    }
 
     // Wait for dialog to close
-    await dialog.waitForDisplayed({ reverse: true, timeout: 10000 });
+    await configDialog.waitForDisplayed({ reverse: true, timeout: 10000 });
 
     // Verify sections were imported
     await browser.pause(1000);
@@ -98,42 +146,68 @@ describe('DMP Integration', () => {
     const result = await importDmpFile(dmpPath);
     expect(result.success).toBe(true);
 
-    // Open import dialog with file
+    // Open import dialog with file (Step 1: DmpSelectionDialog)
     await openDmpImportWithFile(dmpPath);
 
-    const dialog = await $('[data-testid="import-dmp-dialog"]');
-    await expect(dialog).toBeDisplayed();
+    const selectionDialog = await $('[data-testid="dmp-selection-dialog"]');
+    await expect(selectionDialog).toBeDisplayed();
 
     // Verify version 5 is shown
-    const dialogText = await dialog.getText();
-    expect(dialogText.toLowerCase()).toContain('version 5');
+    const dialogText = await selectionDialog.getText();
+    expect(dialogText.toLowerCase()).toMatch(/version:?\s*5/);
 
-    // Expand first section to see LRUD columns
-    const expandBtn = await dialog.$('[data-testid="section-expand-0"]');
-    if (await expandBtn.isExisting()) {
-      await expandBtn.click();
-      await browser.pause(500);
+    // Click Continue to proceed to Step 2
+    const continueBtn = await selectionDialog.$('[data-testid="continue-button"]');
+    await continueBtn.waitForClickable({ timeout: 5000 });
+    await continueBtn.click();
 
-      // Verify LRUD column headers are visible
-      const headers = await dialog.$$('th');
-      if (headers && headers.length > 0) {
-        const headerTexts: string[] = [];
-        for (const h of headers) {
-          headerTexts.push(await h.getText());
+    // Wait for Step 2 dialog (DmpSectionConfigDialog)
+    const configDialog = await $('[data-testid="dmp-section-config-dialog"]');
+    await configDialog.waitForDisplayed({ timeout: 5000 });
+
+    // Step 2 shows detailed section config including LRUD in the shot table
+    // Verify the section config panel is visible
+    const configPanel = await configDialog.$('[data-testid="main-config-panel"]');
+    await expect(configPanel).toBeExisting();
+
+    // Complete the import by clicking through all sections
+    // For each section: ensure it's placed at origin, then navigate or import
+    await browser.pause(1000);
+    let importComplete = false;
+    let iterationCount = 0;
+    const maxIterations = 30;
+    while (!importComplete && iterationCount < maxIterations) {
+      iterationCount++;
+
+      const placeFinishBtn = await configDialog.$('[data-testid="place-and-finish-button"]');
+      if (await placeFinishBtn.isExisting()) {
+        try {
+          await placeFinishBtn.waitForClickable({ timeout: 3000 });
+          await placeFinishBtn.click();
+          importComplete = true;
+        } catch {
+          const placeBtn = await configDialog.$('[data-testid="place-section-button"]');
+          if (await placeBtn.isExisting()) {
+            await placeBtn.waitForClickable({ timeout: 3000 });
+            await placeBtn.click();
+            await browser.pause(500);
+          }
         }
-        // V5 files should have LRUD columns
-        expect(headerTexts).toContain('L');
-        expect(headerTexts).toContain('R');
-        expect(headerTexts).toContain('U');
-        expect(headerTexts).toContain('D');
+      } else {
+        const placeBtn = await configDialog.$('[data-testid="place-section-button"]');
+        if (await placeBtn.isExisting()) {
+          await placeBtn.waitForClickable({ timeout: 3000 });
+          await placeBtn.click();
+          await browser.pause(500);
+        } else {
+          await browser.pause(500);
+        }
       }
     }
-
-    // Import the sections
-    const importBtn = await dialog.$('button*=Import');
-    await importBtn.waitForClickable({ timeout: 5000 });
-    await importBtn.click();
-    await dialog.waitForDisplayed({ reverse: true, timeout: 10000 });
+    if (!importComplete) {
+      throw new Error('Import did not complete within max iterations');
+    }
+    await configDialog.waitForDisplayed({ reverse: true, timeout: 10000 });
 
     // Verify sections were imported with shot data
     await browser.pause(1000);
@@ -170,14 +244,15 @@ describe('DMP Integration', () => {
     const mainView = await $('canvas, [class*="MapCanvas"]');
     await expect(mainView).toBeExisting();
 
-    // Can still open import dialog
-    await browser.keys(['Control', 'i']);
-    const dialog = await $('[data-testid="import-dmp-dialog"]');
+    // Can still open import dialog with a valid file
+    // Use the helper instead of Ctrl+I (which opens native file picker that can't be automated)
+    await openDmpImportWithFile(path.join(FIXTURES_DIR, 'test_v5.dmp'));
+    const dialog = await $('[data-testid="dmp-selection-dialog"]');
     await dialog.waitForDisplayed({ timeout: 5000 });
     await expect(dialog).toBeDisplayed();
 
     // Close dialog
-    const cancelBtn = await dialog.$('button*=Cancel');
+    const cancelBtn = await dialog.$('[data-testid="cancel-button"]');
     await cancelBtn.click();
     await dialog.waitForDisplayed({ reverse: true, timeout: 5000 });
   });
@@ -195,22 +270,20 @@ describe('DMP Integration', () => {
 
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
 
-    // Open import dialog (don't call importDmpFile as it creates sections directly)
+    // Open import dialog (Step 1: DmpSelectionDialog)
     await openDmpImportWithFile(dmpPath);
 
-    const dialog = await $('[data-testid="import-dmp-dialog"]');
-    await expect(dialog).toBeDisplayed();
+    const selectionDialog = await $('[data-testid="dmp-selection-dialog"]');
+    await expect(selectionDialog).toBeDisplayed();
 
     // Verify section selection UI
-    // Look for checkboxes (one per section) - should have multiple for multi-section DMP
-    const checkboxes = await dialog.$$('input[type="checkbox"]');
-    // Exclude the acknowledge-warnings checkbox if it exists
-    const sectionCheckboxCount = checkboxes.length;
-    expect(sectionCheckboxCount).toBeGreaterThan(1); // Multi-section file should have multiple
+    // Look for section checkboxes - should have multiple for multi-section DMP
+    const sectionRows = await selectionDialog.$$('[data-testid^="section-row-"]');
+    expect(sectionRows.length).toBeGreaterThan(1); // Multi-section file should have multiple
 
     // Verify All/None selection buttons
-    const allBtn = await dialog.$('button*=All');
-    const noneBtn = await dialog.$('button*=None');
+    const allBtn = await selectionDialog.$('[data-testid="select-all-button"]');
+    const noneBtn = await selectionDialog.$('[data-testid="select-none-button"]');
     await expect(allBtn).toBeExisting();
     await expect(noneBtn).toBeExisting();
 
@@ -220,21 +293,52 @@ describe('DMP Integration', () => {
     await allBtn.click();
     await browser.pause(500);
 
-    // Check if there's an "acknowledge warnings" checkbox and click it if present
-    const acknowledgeCheckbox = await dialog.$('[data-testid="acknowledge-warnings-checkbox"]');
-    if (await acknowledgeCheckbox.isExisting()) {
-      const isChecked = await acknowledgeCheckbox.isSelected();
-      if (!isChecked) {
-        await acknowledgeCheckbox.click();
-        await browser.pause(200);
+    // Click Continue to proceed to Step 2
+    const continueBtn = await selectionDialog.$('[data-testid="continue-button"]');
+    await continueBtn.waitForClickable({ timeout: 5000 });
+    await continueBtn.click();
+
+    // Wait for Step 2 dialog
+    const configDialog = await $('[data-testid="dmp-section-config-dialog"]');
+    await configDialog.waitForDisplayed({ timeout: 5000 });
+
+    // Place all sections via "Place section" (auto-advances) and "Place and finish"
+    await browser.pause(1000);
+    let importComplete = false;
+    let iterationCount = 0;
+    const maxIterations = 30;
+    while (!importComplete && iterationCount < maxIterations) {
+      iterationCount++;
+
+      const placeFinishBtn = await configDialog.$('[data-testid="place-and-finish-button"]');
+      if (await placeFinishBtn.isExisting()) {
+        try {
+          await placeFinishBtn.waitForClickable({ timeout: 3000 });
+          await placeFinishBtn.click();
+          importComplete = true;
+        } catch {
+          const placeBtn = await configDialog.$('[data-testid="place-section-button"]');
+          if (await placeBtn.isExisting()) {
+            await placeBtn.waitForClickable({ timeout: 3000 });
+            await placeBtn.click();
+            await browser.pause(500);
+          }
+        }
+      } else {
+        const placeBtn = await configDialog.$('[data-testid="place-section-button"]');
+        if (await placeBtn.isExisting()) {
+          await placeBtn.waitForClickable({ timeout: 3000 });
+          await placeBtn.click();
+          await browser.pause(500);
+        } else {
+          await browser.pause(500);
+        }
       }
     }
-
-    // Import all sections
-    const importBtn = await dialog.$('button*=Import');
-    await importBtn.waitForClickable({ timeout: 5000 });
-    await importBtn.click();
-    await dialog.waitForDisplayed({ reverse: true, timeout: 10000 });
+    if (!importComplete) {
+      throw new Error('Import did not complete within max iterations');
+    }
+    await configDialog.waitForDisplayed({ reverse: true, timeout: 10000 });
 
     // Verify multiple sections were imported (all that were selected)
     await browser.pause(1000);
@@ -255,40 +359,71 @@ describe('DMP Integration', () => {
 
     const dmpPath = path.join(FIXTURES_DIR, 'test_v5.dmp');
 
-    // Open import dialog with file
+    // Open import dialog with file (Step 1: DmpSelectionDialog)
     await openDmpImportWithFile(dmpPath);
 
-    const dialog = await $('[data-testid="import-dmp-dialog"]');
-    await expect(dialog).toBeDisplayed();
+    const selectionDialog = await $('[data-testid="dmp-selection-dialog"]');
+    await expect(selectionDialog).toBeDisplayed();
 
     // Verify section metadata is displayed
-    // Look for section names (3-character DMP names)
-    const tableRows = await dialog.$$('tbody tr');
-    expect(tableRows.length).toBeGreaterThan(0);
+    // Look for section rows in Step 1
+    const sectionRows = await selectionDialog.$$('[data-testid^="section-row-"]');
+    expect(sectionRows.length).toBeGreaterThan(0);
 
-    // Verify direction selector is present
-    const directionSelect = await $('[data-testid="direction-select-0"]');
+    // Verify direction selector is present in Step 1
+    const directionSelect = await selectionDialog.$('[data-testid="section-direction-0"]');
     if (await directionSelect.isExisting()) {
-      // Verify it has valid options
-      const value = await directionSelect.getValue();
-      expect(['in', 'out']).toContain(value);
+      // Direction select should be visible
+      await expect(directionSelect).toBeDisplayed();
     }
 
-    // Verify date column is present in header
-    const headers = await dialog.$$('th');
-    if (headers && headers.length > 0) {
-      const headerTexts: string[] = [];
-      for (const h of headers) {
-        headerTexts.push(await h.getText());
+    // Click Continue to proceed to Step 2
+    const continueBtn = await selectionDialog.$('[data-testid="continue-button"]');
+    await continueBtn.waitForClickable({ timeout: 5000 });
+    await continueBtn.click();
+
+    // Wait for Step 2 dialog
+    const configDialog = await $('[data-testid="dmp-section-config-dialog"]');
+    await configDialog.waitForDisplayed({ timeout: 5000 });
+
+    // Complete the import by clicking through all sections
+    // Place all sections via "Place section" (auto-advances) and "Place and finish"
+    await browser.pause(1000);
+    let importComplete = false;
+    let iterationCount = 0;
+    const maxIterations = 30;
+    while (!importComplete && iterationCount < maxIterations) {
+      iterationCount++;
+
+      const placeFinishBtn = await configDialog.$('[data-testid="place-and-finish-button"]');
+      if (await placeFinishBtn.isExisting()) {
+        try {
+          await placeFinishBtn.waitForClickable({ timeout: 3000 });
+          await placeFinishBtn.click();
+          importComplete = true;
+        } catch {
+          const placeBtn = await configDialog.$('[data-testid="place-section-button"]');
+          if (await placeBtn.isExisting()) {
+            await placeBtn.waitForClickable({ timeout: 3000 });
+            await placeBtn.click();
+            await browser.pause(500);
+          }
+        }
+      } else {
+        const placeBtn = await configDialog.$('[data-testid="place-section-button"]');
+        if (await placeBtn.isExisting()) {
+          await placeBtn.waitForClickable({ timeout: 3000 });
+          await placeBtn.click();
+          await browser.pause(500);
+        } else {
+          await browser.pause(500);
+        }
       }
-      expect(headerTexts).toContain('Date');
     }
-
-    // Import and verify metadata preserved
-    const importBtn = await dialog.$('button*=Import');
-    await importBtn.waitForClickable({ timeout: 5000 });
-    await importBtn.click();
-    await dialog.waitForDisplayed({ reverse: true, timeout: 10000 });
+    if (!importComplete) {
+      throw new Error('Import did not complete within max iterations');
+    }
+    await configDialog.waitForDisplayed({ reverse: true, timeout: 10000 });
 
     // Verify sections have names
     await browser.pause(1000);
@@ -325,31 +460,66 @@ describe('DMP Integration', () => {
     // Should have sections despite buggy EOS
     expect(result.sectionCount).toBeGreaterThan(0);
 
-    // Open import dialog and verify
+    // Open import dialog and verify (Step 1: DmpSelectionDialog)
     await openDmpImportWithFile(dmpPath);
 
-    const dialog = await $('[data-testid="import-dmp-dialog"]');
-    await expect(dialog).toBeDisplayed();
+    const selectionDialog = await $('[data-testid="dmp-selection-dialog"]');
+    await expect(selectionDialog).toBeDisplayed();
 
     // Verify version 5 (buggy EOS is a v5 issue)
-    const dialogText = await dialog.getText();
-    expect(dialogText.toLowerCase()).toContain('version 5');
+    const dialogText = await selectionDialog.getText();
+    expect(dialogText.toLowerCase()).toMatch(/version:?\s*5/);
 
-    // Verify statistics are computed (proves data was parsed)
-    const statsFooter = await dialog.$('[data-testid="stats-footer"]');
-    await expect(statsFooter).toBeExisting();
+    // Verify section rows exist (proves data was parsed)
+    const sectionRows = await selectionDialog.$$('[data-testid^="section-row-"]');
+    expect(sectionRows.length).toBeGreaterThan(0);
 
-    const totalLength = await dialog.$('[data-testid="stats-total-length"]');
-    const lengthText = await totalLength.getText();
-    // Should have a non-zero total length
-    expect(lengthText).toMatch(/\d+\.\d+m/);
-    expect(lengthText).not.toBe('0.0m');
+    // Click Continue to proceed to Step 2
+    const continueBtn = await selectionDialog.$('[data-testid="continue-button"]');
+    await continueBtn.waitForClickable({ timeout: 5000 });
+    await continueBtn.click();
 
-    // Import and verify data integrity
-    const importBtn = await dialog.$('button*=Import');
-    await importBtn.waitForClickable({ timeout: 5000 });
-    await importBtn.click();
-    await dialog.waitForDisplayed({ reverse: true, timeout: 10000 });
+    // Wait for Step 2 dialog
+    const configDialog = await $('[data-testid="dmp-section-config-dialog"]');
+    await configDialog.waitForDisplayed({ timeout: 5000 });
+
+    // Place all sections via "Place section" (auto-advances) and "Place and finish"
+    await browser.pause(1000);
+    let importComplete = false;
+    let iterationCount = 0;
+    const maxIterations = 30;
+    while (!importComplete && iterationCount < maxIterations) {
+      iterationCount++;
+
+      const placeFinishBtn = await configDialog.$('[data-testid="place-and-finish-button"]');
+      if (await placeFinishBtn.isExisting()) {
+        try {
+          await placeFinishBtn.waitForClickable({ timeout: 3000 });
+          await placeFinishBtn.click();
+          importComplete = true;
+        } catch {
+          const placeBtn = await configDialog.$('[data-testid="place-section-button"]');
+          if (await placeBtn.isExisting()) {
+            await placeBtn.waitForClickable({ timeout: 3000 });
+            await placeBtn.click();
+            await browser.pause(500);
+          }
+        }
+      } else {
+        const placeBtn = await configDialog.$('[data-testid="place-section-button"]');
+        if (await placeBtn.isExisting()) {
+          await placeBtn.waitForClickable({ timeout: 3000 });
+          await placeBtn.click();
+          await browser.pause(500);
+        } else {
+          await browser.pause(500);
+        }
+      }
+    }
+    if (!importComplete) {
+      throw new Error('Import did not complete within max iterations');
+    }
+    await configDialog.waitForDisplayed({ reverse: true, timeout: 10000 });
 
     // Verify sections were imported
     await browser.pause(1000);

@@ -105,6 +105,10 @@ function App() {
     const errors: string[] = [];
     const warnings: string[] = [];
 
+    // Map of import section index to created section ID
+    // Used for fromImporting placement type
+    const createdSectionIds = new Map<number, number>();
+
     for (const sectionConfig of sections) {
       const sectionData: SectionData = {
         name: sectionConfig.name,
@@ -128,6 +132,9 @@ function App() {
         errors.push(`Section "${sectionConfig.name}" created but no ID returned`);
         continue;
       }
+
+      // Store the created section ID for fromImporting references
+      createdSectionIds.set(sectionConfig.sectionIndex, sectionId);
 
       // Handle placement-specific operations
       const placement = sectionConfig.placement;
@@ -153,7 +160,7 @@ function App() {
       }
 
       if (placement.type === 'fromExisting') {
-        // Merge stations
+        // Merge stations with an existing section in the project
         const importRef = {
           section_id: sectionId,
           station_index: placement.importStation,
@@ -168,6 +175,40 @@ function App() {
         if (!mergeResult.success) {
           warnings.push(
             `Section "${sectionConfig.name}" created but failed to merge stations: ${mergeResult.error}`
+          );
+        }
+        continue;
+      }
+
+      if (placement.type === 'fromImporting') {
+        // Merge stations with another section from this import batch
+        const targetSectionId = createdSectionIds.get(placement.targetSectionIndex);
+        if (targetSectionId === undefined) {
+          warnings.push(
+            `Section "${sectionConfig.name}" could not be attached: target section not yet created`
+          );
+          continue;
+        }
+
+        const importRef = {
+          section_id: sectionId,
+          station_index: placement.importStation,
+        };
+
+        const existingStation = {
+          section_id: targetSectionId,
+          station_index: placement.targetStationIndex,
+        };
+
+        const mergeResult = await mergeStations(
+          importRef,
+          existingStation,
+          'KeepRaw'
+        );
+
+        if (!mergeResult.success) {
+          warnings.push(
+            `Section "${sectionConfig.name}" created but failed to merge with imported section: ${mergeResult.error}`
           );
         }
         continue;

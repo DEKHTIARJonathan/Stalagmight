@@ -736,8 +736,26 @@ export default function MapCanvas() {
       map.current.getCanvas().style.cursor = 'crosshair';
       // Disable drag pan during placement
       map.current.dragPan.disable();
+    } else {
+      // Re-enable drag pan when placement mode ends (unless current tool should disable it)
+      const noPanTools = ['select', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station'];
+      if (!noPanTools.includes(activeTool)) {
+        map.current.dragPan.enable();
+      }
+      // Reset cursor based on current tool
+      const cursors: Record<string, string> = {
+        select: 'default',
+        pan: 'grab',
+        draw: 'crosshair',
+        delete: 'crosshair',
+        merge: 'crosshair',
+        measure: 'crosshair',
+        move_section: 'move',
+        move_station: 'move',
+      };
+      map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
     }
-  }, [placementMode]);
+  }, [placementMode, activeTool]);
 
   // Calculate box select overlay style
   const boxSelectStyle = boxSelect.start && boxSelect.end

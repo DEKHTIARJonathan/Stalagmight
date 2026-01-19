@@ -59,16 +59,20 @@ test.describe('Export Dialog', () => {
     const dataRadio = page.locator('[data-testid="export-type-data"]');
     await expect(dataRadio).toBeChecked();
 
-    // Format dropdown should be visible
+    // Format dropdown (custom Select component) should be visible
     const formatSelect = page.locator('[data-testid="data-format-select"]');
     await expect(formatSelect).toBeVisible();
 
-    // CSV should be the default selection
-    await expect(formatSelect).toHaveValue('csv');
+    // CSV should be the default selection (check button text)
+    await expect(formatSelect.locator('button').first()).toHaveText('CSV');
 
-    // Verify CSV option is available
-    const csvOption = formatSelect.locator('option[value="csv"]');
-    await expect(csvOption).toHaveText('CSV');
+    // Click to open dropdown and verify CSV option is available
+    await formatSelect.locator('button').first().click();
+    // The dropdown options are in a div with class 'absolute'
+    const dropdown = formatSelect.locator('.absolute');
+    await expect(dropdown.locator('button:has-text("CSV")')).toBeVisible();
+    // Click CSV to close dropdown (selecting default value)
+    await dropdown.locator('button:has-text("CSV")').click();
 
     // Preview should not be visible for data export (only for image export)
     const preview = page.locator('[data-testid="export-preview"]');
@@ -87,16 +91,15 @@ test.describe('Export Dialog', () => {
     const dataRadio = page.locator('[data-testid="export-type-data"]');
     await expect(dataRadio).toBeChecked();
 
-    // Change format to JSON
+    // Change format to JSON using custom Select component
     const formatSelect = page.locator('[data-testid="data-format-select"]');
-    await formatSelect.selectOption('json');
+    // Click to open dropdown
+    await formatSelect.locator('button').first().click();
+    // Click JSON option
+    await formatSelect.locator('button:has-text("JSON")').click();
 
-    // Verify JSON is now selected
-    await expect(formatSelect).toHaveValue('json');
-
-    // Verify JSON option text
-    const jsonOption = formatSelect.locator('option[value="json"]');
-    await expect(jsonOption).toHaveText('JSON');
+    // Verify JSON is now selected (check button text)
+    await expect(formatSelect.locator('button').first()).toHaveText('JSON');
 
     // Preview should not be visible for data export
     const preview = page.locator('[data-testid="export-preview"]');
@@ -118,14 +121,19 @@ test.describe('Export Dialog', () => {
     const imageRadio = page.locator('[data-testid="export-type-image"]');
     await expect(imageRadio).toBeChecked();
 
-    // Image format select should be visible
+    // Image format select (custom Select component) should be visible
     const imageFormatSelect = page.locator('[data-testid="image-format-select"]');
     await expect(imageFormatSelect).toBeVisible();
 
-    // Verify available image formats
-    await expect(imageFormatSelect.locator('option[value="png"]')).toHaveText('PNG');
-    await expect(imageFormatSelect.locator('option[value="svg"]')).toHaveText('SVG');
-    await expect(imageFormatSelect.locator('option[value="pdf"]')).toHaveText('PDF');
+    // Verify available image formats by opening dropdown
+    await imageFormatSelect.locator('button').first().click();
+    // The dropdown options are in a div with class 'absolute'
+    const imageDropdown = imageFormatSelect.locator('.absolute');
+    await expect(imageDropdown.locator('button:has-text("PNG")')).toBeVisible();
+    await expect(imageDropdown.locator('button:has-text("SVG")')).toBeVisible();
+    await expect(imageDropdown.locator('button:has-text("PDF")')).toBeVisible();
+    // Click PNG to close dropdown (selecting default value)
+    await imageDropdown.locator('button:has-text("PNG")').click();
 
     // Image options checkboxes should be visible
     await expect(page.locator('[data-testid="option-include-labels"]')).toBeVisible();
@@ -139,7 +147,7 @@ test.describe('Export Dialog', () => {
     await expect(page.locator('[data-testid="option-include-grid"]')).not.toBeChecked();
     await expect(page.locator('[data-testid="option-include-shot-data"]')).not.toBeChecked();
 
-    // Resolution select should be visible for PNG format
+    // Resolution select (custom Select component) should be visible for PNG format
     const resolutionSelect = page.locator('[data-testid="resolution-select"]');
     await expect(resolutionSelect).toBeVisible();
 

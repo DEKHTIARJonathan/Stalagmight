@@ -796,4 +796,119 @@ describe('Project Persistence', () => {
     });
     expect(isDirty).toBe(true);
   });
+
+  /**
+   * Test 14.7: should zoom to fit when opening a project
+   *
+   * Validates auto-fit behavior:
+   * - Save a project with data
+   * - Close and reopen it
+   * - Verify triggerFitToBounds was called
+   *
+   * Regression test: Project view not zooming to fit after open
+   */
+  it('should trigger fit-to-view when opening a project', async () => {
+    await createNewProject('Fit To View Test');
+
+    // Import survey data to have something to zoom to
+    const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
+    const importResult = await importDmpFile(dmpPath);
+    expect(importResult.success).toBe(true);
+
+    // Save project
+    const projectPath = path.join(tempDir, 'fit-to-view-test.cvproj');
+    await browser.executeAsync(
+      async (savePath: string, done: (result: { success: boolean }) => void) => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            projectStore: {
+              getState: () => {
+                saveProject: (path?: string) => Promise<{ success: boolean }>;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+
+        if (!e2e) {
+          done({ success: false });
+          return;
+        }
+
+        const result = await e2e.projectStore.getState().saveProject(savePath);
+        done(result);
+      },
+      projectPath
+    );
+    await browser.pause(1000);
+
+    // Close project
+    await resetAppState();
+
+    // Clear any previous fit-to-bounds request
+    await browser.execute(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: {
+            getState: () => {
+              clearFitToBoundsRequest: () => void;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (e2e) {
+        e2e.uiStore.getState().clearFitToBoundsRequest();
+      }
+    });
+
+    // Open the project
+    const openResult = await browser.executeAsync(
+      async (openPath: string, done: (result: { success: boolean; error?: string }) => void) => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            projectStore: {
+              getState: () => {
+                openProject: (path: string) => Promise<{ success: boolean; error?: string }>;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+
+        if (!e2e) {
+          done({ success: false, error: 'E2E helpers not found' });
+          return;
+        }
+
+        try {
+          const result = await e2e.projectStore.getState().openProject(openPath);
+          done(result);
+        } catch (err) {
+          done({ success: false, error: String(err) });
+        }
+      },
+      projectPath
+    );
+    expect(openResult.success).toBe(true);
+
+    // Wait a moment for the state to update
+    await browser.pause(200);
+
+    // Verify triggerFitToBounds was called (requestFitToBounds should be true)
+    const fitToBoundsTriggered = await browser.execute(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: {
+            getState: () => {
+              requestFitToBounds: boolean;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!e2e) return false;
+      return e2e.uiStore.getState().requestFitToBounds;
+    });
+
+    expect(fitToBoundsTriggered).toBe(true);
+  });
 });

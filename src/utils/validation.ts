@@ -42,14 +42,13 @@ export interface ValidationIssue {
 const LRUD_MAX = 50.0;
 
 /**
- * Check if azimuth in/out values differ by more than expected from 180 degrees.
- * For most shots, azimuth_out should be azimuth_in +/- 180 degrees (surveyor faces back).
+ * Check if azimuth in/out values differ from each other by more than the threshold.
  * Handles 0/360 degree wrap-around correctly.
  *
  * @param azimuthIn The incoming azimuth in degrees [0, 360)
  * @param azimuthOut The outgoing azimuth in degrees [0, 360)
- * @param threshold Maximum allowable deviation from 180 degrees difference
- * @returns true if the deviation exceeds the threshold
+ * @param threshold Maximum allowable difference between azimuth values
+ * @returns true if the difference exceeds the threshold
  */
 export function hasAzimuthDiscrepancy(
   azimuthIn: number,
@@ -58,11 +57,10 @@ export function hasAzimuthDiscrepancy(
 ): boolean {
   // Calculate the absolute difference
   let diff = Math.abs(azimuthIn - azimuthOut);
-  // Normalize to [0, 180] range for comparison
+  // Normalize to [0, 180] range for wrap-around handling
   if (diff > 180) diff = 360 - diff;
-  // Expected difference is 180 degrees (surveyor faces back)
-  const expectedDiff = 180;
-  return Math.abs(diff - expectedDiff) > threshold;
+  // Check if they differ by more than the threshold
+  return diff > threshold;
 }
 
 /**

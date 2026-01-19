@@ -16,8 +16,6 @@ export interface DmpSelectionConfig {
   defaultSurveyor: string;
   /** Optional date override to apply to all sections */
   defaultDate: string | null;
-  /** Direction overrides per section (key: section index) */
-  sectionDirections: Map<number, 'in' | 'out'>;
 }
 
 interface DmpSelectionDialogProps {
@@ -131,11 +129,6 @@ export default function DmpSelectionDialog({
     return indices;
   });
 
-  // Direction overrides per section
-  const [sectionDirections, setSectionDirections] = useState<Map<number, 'in' | 'out'>>(
-    new Map()
-  );
-
   // Check if form has changes
   const isDirty = useMemo(() => {
     // Check surveyor/date changes
@@ -148,36 +141,8 @@ export default function DmpSelectionDialog({
       if (!initialSelection.has(idx)) return true;
     }
 
-    // Check direction changes
-    if (sectionDirections.size > 0) return true;
-
     return false;
-  }, [defaultSurveyor, initialSurveyor, defaultDate, initialDate, selectedIndices, initialSelection, sectionDirections]);
-
-  // Get effective direction for a section (user override or original)
-  const getEffectiveDirection = useCallback(
-    (sectionIndex: number): 'in' | 'out' => {
-      const override = sectionDirections.get(sectionIndex);
-      if (override !== undefined) return override;
-      return dmpFile.sections[sectionIndex]?.direction ?? 'in';
-    },
-    [dmpFile.sections, sectionDirections]
-  );
-
-  // Handle direction change
-  const handleDirectionChange = useCallback((sectionIndex: number, direction: 'in' | 'out') => {
-    setSectionDirections(prev => {
-      const next = new Map(prev);
-      // Only set override if different from original
-      const original = dmpFile.sections[sectionIndex]?.direction ?? 'in';
-      if (direction === original) {
-        next.delete(sectionIndex);
-      } else {
-        next.set(sectionIndex, direction);
-      }
-      return next;
-    });
-  }, [dmpFile.sections]);
+  }, [defaultSurveyor, initialSurveyor, defaultDate, initialDate, selectedIndices, initialSelection]);
 
   // Bulk selection handlers
   const handleSelectAll = useCallback(() => {
@@ -230,10 +195,9 @@ export default function DmpSelectionDialog({
       selectedIndices,
       defaultSurveyor,
       defaultDate: defaultDate.trim() || null,
-      sectionDirections: new Map(sectionDirections),
     };
     onContinue(config);
-  }, [selectedIndices, defaultSurveyor, defaultDate, sectionDirections, onContinue, setLastUsedSurveyor]);
+  }, [selectedIndices, defaultSurveyor, defaultDate, onContinue, setLastUsedSurveyor]);
 
   // Calculate section counts for display
   const nonEmptySectionCount = useMemo(() => {
@@ -352,7 +316,6 @@ export default function DmpSelectionDialog({
                   const isEmpty = shotCount === 0;
                   const isSelected = selectedIndices.has(index);
                   const dateStr = section.date?.split(/[T ]/)[0] ?? '-';
-                  const direction = getEffectiveDirection(index);
 
                   return (
                     <tr
@@ -376,19 +339,7 @@ export default function DmpSelectionDialog({
                       </td>
                       <td className="px-3 py-2">{section.name}</td>
                       <td className="px-3 py-2">{dateStr}</td>
-                      <td className="px-3 py-2">
-                        <select
-                          value={direction}
-                          onChange={(e) => handleDirectionChange(index, e.target.value as 'in' | 'out')}
-                          disabled={isEmpty}
-                          className="bg-surface border border-border rounded px-2 py-0.5 text-xs"
-                          data-testid={`section-direction-${index}`}
-                          aria-label={`Direction for section ${section.name}`}
-                        >
-                          <option value="in">In</option>
-                          <option value="out">Out</option>
-                        </select>
-                      </td>
+                      <td className="px-3 py-2 capitalize">{section.direction}</td>
                       <td className="px-3 py-2 text-right">
                         {isEmpty ? (
                           <span className="text-text-secondary">(empty)</span>

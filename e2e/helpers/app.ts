@@ -215,30 +215,76 @@ export async function createNewProject(projectName: string): Promise<void> {
 }
 
 /**
- * Open the DMP Import Dialog using keyboard shortcut (Ctrl+I).
+ * Open the DMP Import Dialog (Step 1: DmpSelectionDialog) with a parsed DMP file.
  *
  * With the new two-step import flow:
- * - Ctrl+I triggers the file picker
- * - After file selection, opens Step 1 (DmpSelectionDialog)
+ * - Step 1: DmpSelectionDialog - Select sections from DMP file
+ * - Step 2: DmpSectionConfigDialog - Configure each section
  *
- * Note: This opens DmpSelectionDialog (Step 1), NOT the deprecated DmpImportDialog.
+ * This helper parses the DMP file via IPC and opens Step 1 directly.
+ * Note: Ctrl+I triggers the native file picker which can't be automated in E2E tests.
+ *
+ * @param filePath - Path to the DMP file to parse (defaults to test_v5.dmp fixture)
  */
-export async function openDmpImportDialog(): Promise<void> {
-  // Open dialog via store directly (more reliable than keyboard shortcut in WebDriver)
-  await browser.execute(() => {
-    const e2e = (window as unknown as {
-      __E2E_TEST__?: {
-        uiStore: {
-          getState: () => {
-            openDialog: (name: string) => void;
+export async function openDmpImportDialog(filePath?: string): Promise<void> {
+  // Use default fixture if no path provided
+  const resolvedPath = filePath ?? `${process.cwd()}/e2e/fixtures/test_v5.dmp`;
+
+  // Parse DMP file via store (uses IPC internally)
+  const parseResult = await browser.executeAsync(
+    async (path: string, done: (result: { dmpFile?: unknown; error?: string }) => void) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              importDmp: (path: string) => Promise<unknown>;
+            };
           };
         };
-      };
-    }).__E2E_TEST__;
-    if (e2e) {
-      e2e.uiStore.getState().openDialog('import-dmp');
-    }
-  });
+      }).__E2E_TEST__;
+
+      if (!e2e) {
+        done({ error: 'E2E helpers not available' });
+        return;
+      }
+
+      try {
+        const dmpFile = await e2e.projectStore.getState().importDmp(path);
+        done({ dmpFile });
+      } catch (err) {
+        done({ error: String(err) });
+      }
+    },
+    resolvedPath
+  );
+
+  if (parseResult.error) {
+    throw new Error(`Failed to parse DMP file: ${parseResult.error}`);
+  }
+
+  // Open Step 1 dialog (DmpSelectionDialog) with parsed data
+  await browser.execute(
+    (dmpFile: unknown, path: string) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: {
+            getState: () => {
+              openDialog: (name: string, data?: unknown) => void;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (e2e) {
+        e2e.uiStore.getState().openDialog('dmp-selection', {
+          dmpFile,
+          filePath: path,
+        });
+      }
+    },
+    parseResult.dmpFile,
+    resolvedPath
+  );
 
   // Wait for Step 1 dialog (DmpSelectionDialog) to appear
   const importDialog = await $('[data-testid="dmp-selection-dialog"]');
@@ -619,8 +665,16 @@ export async function importDmpFile(path: string): Promise<{ success: boolean; e
 }
 
 /**
- * Open DMP import dialog and load a file using the dialog.
- * This simulates the user entering a file path directly (since we can't use the file dialog in tests).
+ * Open DMP import dialog (Step 1: DmpSelectionDialog) with a specific DMP file.
+ *
+ * This helper:
+ * 1. Parses the DMP file via IPC (import_dmp command)
+ * 2. Opens Step 1 dialog (DmpSelectionDialog) with the parsed data
+ *
+ * Note: The native file picker (Ctrl+I) can't be automated, so we bypass it by
+ * parsing the file directly and opening the dialog with the data.
+ *
+ * @param filePath - Absolute path to the DMP file to import
  */
 export async function openDmpImportWithFile(filePath: string): Promise<void> {
   // Close any existing dialog first to ensure clean state
@@ -640,9 +694,41 @@ export async function openDmpImportWithFile(filePath: string): Promise<void> {
   });
   await browser.pause(100);
 
-  // Open the dialog directly with the file path (dialog reads filePath from dialogData on mount)
+  // Parse DMP file via store (uses IPC internally)
+  const parseResult = await browser.executeAsync(
+    async (path: string, done: (result: { dmpFile?: unknown; error?: string }) => void) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              importDmp: (path: string) => Promise<unknown>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!e2e) {
+        done({ error: 'E2E helpers not available' });
+        return;
+      }
+
+      try {
+        const dmpFile = await e2e.projectStore.getState().importDmp(path);
+        done({ dmpFile });
+      } catch (err) {
+        done({ error: String(err) });
+      }
+    },
+    filePath
+  );
+
+  if (parseResult.error) {
+    throw new Error(`Failed to parse DMP file: ${parseResult.error}`);
+  }
+
+  // Open Step 1 dialog (DmpSelectionDialog) with parsed data
   await browser.execute(
-    (path: string) => {
+    (dmpFile: unknown, path: string) => {
       const e2e = (window as unknown as {
         __E2E_TEST__?: {
           uiStore: {
@@ -654,17 +740,21 @@ export async function openDmpImportWithFile(filePath: string): Promise<void> {
       }).__E2E_TEST__;
 
       if (e2e) {
-        e2e.uiStore.getState().openDialog('import-dmp', { filePath: path });
+        e2e.uiStore.getState().openDialog('dmp-selection', {
+          dmpFile,
+          filePath: path,
+        });
       }
     },
+    parseResult.dmpFile,
     filePath
   );
 
-  // Wait for dialog to open
-  const importDialog = await $('[data-testid="import-dmp-dialog"]');
+  // Wait for Step 1 dialog (DmpSelectionDialog) to open
+  const importDialog = await $('[data-testid="dmp-selection-dialog"]');
   await importDialog.waitForDisplayed({ timeout: 5000 });
 
-  // Wait for file to actually load by checking for section count in stats
+  // Wait for dialog to be fully rendered by checking for section content
   await browser.waitUntil(
     async () => {
       const dialogText = await importDialog.getText();
@@ -672,29 +762,16 @@ export async function openDmpImportWithFile(filePath: string): Promise<void> {
       if (dialogText.toLowerCase().includes('version')) {
         return true;
       }
-      // Check for error state (also counts as "loaded")
-      if (dialogText.toLowerCase().includes('error') || dialogText.toLowerCase().includes('failed')) {
-        return true;
-      }
-      return false;
+      // Check for section rows which indicate the dialog is populated
+      const sectionRow = await importDialog.$('[data-testid="section-row-0"]');
+      return await sectionRow.isExisting();
     },
     {
-      timeout: 15000,
-      timeoutMsg: 'DMP file did not load within 15 seconds',
+      timeout: 10000,
+      timeoutMsg: 'DMP Selection dialog did not fully load',
       interval: 500,
     }
   );
-
-  // Check if there's an "acknowledge warnings" checkbox and click it if present
-  // This is required when the DMP file has validation warnings
-  const acknowledgeCheckbox = await importDialog.$('[data-testid="acknowledge-warnings-checkbox"]');
-  if (await acknowledgeCheckbox.isExisting()) {
-    const isChecked = await acknowledgeCheckbox.isSelected();
-    if (!isChecked) {
-      await acknowledgeCheckbox.click();
-      await browser.pause(200);
-    }
-  }
 
   // Extra pause for React to finish rendering
   await browser.pause(300);

@@ -1,4 +1,4 @@
-import { waitForAppReady, resetAppState, createNewProject, selectTool, togglePanel } from '../helpers/app';
+import { waitForAppReady, resetAppState, createNewProject, selectTool, togglePanel, openDmpImportDialog } from '../helpers/app';
 
 describe('Keyboard Shortcuts', () => {
   beforeEach(async () => {
@@ -65,17 +65,19 @@ describe('Keyboard Shortcuts', () => {
   });
 
   describe('Action Shortcuts', () => {
-    it('should open import dialog with Ctrl+I', async () => {
-      await browser.keys(['Control', 'i']);
+    it('should open import dialog (via helper, Ctrl+I opens native picker)', async () => {
+      // Note: Ctrl+I opens native file picker which can't be automated in E2E tests.
+      // We use the helper instead which parses a test fixture and opens the dialog.
+      await openDmpImportDialog();
 
-      // Ctrl+I opens DmpSelectionDialog (Step 1 of two-step import flow)
+      // Opens DmpSelectionDialog (Step 1 of two-step import flow)
       const dialog = await $('[data-testid="dmp-selection-dialog"]');
       await dialog.waitForDisplayed({ timeout: 5000 });
 
       await expect(dialog).toBeDisplayed();
 
       // Close dialog via Cancel button
-      const cancelBtn = await dialog.$('[data-testid="cancel-button"], button*=Cancel');
+      const cancelBtn = await dialog.$('[data-testid="cancel-button"]');
       await cancelBtn.click();
     });
 
