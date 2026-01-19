@@ -75,6 +75,15 @@ pub enum UndoData {
     /// Full project snapshot for batch operations (JSON serialized)
     ProjectSnapshot(String),
 
+    /// Before and after project snapshots for operations that can't be re-executed
+    /// (e.g., batch operations that create sections with dynamic IDs)
+    /// - before: Snapshot before the operation (used for undo)
+    /// - after: Snapshot after the operation (used for redo)
+    ProjectSnapshotPair {
+        before: String,
+        after: String,
+    },
+
     /// No undo data (for commands that can't be undone)
     None,
 }

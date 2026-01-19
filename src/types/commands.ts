@@ -1,5 +1,7 @@
 // Command types for Tauri IPC
 
+import type { ShotData, StationRef, ClosureStrategy, Coordinates } from './project';
+
 export interface CommandResult {
   success: boolean;
   warnings: ValidationWarning[];
@@ -59,6 +61,15 @@ export interface DmpShot {
   marker_index: number;
   comment?: string;
 }
+
+// Batch command types for execute_batch IPC
+// These match the Rust Command enum variants
+
+export type BatchCommand =
+  | { type: 'create_section'; name?: string; surveyor?: string; date?: string; color: string; direction?: 'in' | 'out'; shots: ShotData[] }
+  | { type: 'merge_stations'; station_a: StationRef; station_b: StationRef; closure_strategy: ClosureStrategy }
+  | { type: 'move_section'; section_id: number; offset: Coordinates }
+  | { type: 'set_zero_datum'; station_ref: StationRef; coordinates: { latitude: number; longitude: number; depth_reference: number } };
 
 // Export types
 export type ImageFormat = 'png' | 'svg' | 'pdf';

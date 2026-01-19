@@ -4,12 +4,14 @@ import type { SectionData, Coordinates, ShotData } from '../../types/project';
 interface PlacementOverlayProps {
   /** Section data to preview */
   sectionData: SectionData;
-  /** Which station aligns to cursor ('first' or 'last') */
-  alignStation: 'first' | 'last';
+  /** Which station index aligns to cursor (0 = first, N = last) */
+  alignStationIndex: number;
   /** Current cursor position in screen pixels */
   cursorPosition: { x: number; y: number } | null;
   /** Whether snapped to an existing station */
   isSnapped: boolean;
+  /** Pixels per meter at current map zoom (for to-scale rendering) */
+  pixelsPerMeter: number;
 }
 
 /**
@@ -42,13 +44,14 @@ function calculateStationPositions(shots: ShotData[]): Coordinates[] {
 
 /**
  * Overlay component that renders a section preview following the cursor
- * during manual placement mode.
+ * during manual placement mode. The preview is rendered to-scale with the map.
  */
 export default function PlacementOverlay({
   sectionData,
-  alignStation,
+  alignStationIndex,
   cursorPosition,
   isSnapped,
+  pixelsPerMeter,
 }: PlacementOverlayProps) {
   // Calculate station positions relative to first station
   const stationPositions = useMemo(
@@ -56,36 +59,16 @@ export default function PlacementOverlay({
     [sectionData.shots]
   );
 
-  // Get the anchor station (the one that follows the cursor)
-  const anchorIndex = alignStation === 'first' ? 0 : stationPositions.length - 1;
+  // Clamp align station index to valid range
+  const anchorIndex = Math.max(0, Math.min(alignStationIndex, stationPositions.length - 1));
   const anchorStation = stationPositions[anchorIndex];
-
-  // Calculate bounds for scaling
-  const bounds = useMemo(() => {
-    let minX = Infinity,
-      maxX = -Infinity,
-      minY = Infinity,
-      maxY = -Infinity;
-    for (const station of stationPositions) {
-      minX = Math.min(minX, station.x);
-      maxX = Math.max(maxX, station.x);
-      minY = Math.min(minY, station.y);
-      maxY = Math.max(maxY, station.y);
-    }
-    return { minX, maxX, minY, maxY };
-  }, [stationPositions]);
-
-  // Calculate scale to fit preview in reasonable size (max 300px)
-  const previewSize = 300;
-  const margin = 20;
-  const width = bounds.maxX - bounds.minX;
-  const height = bounds.maxY - bounds.minY;
-  const maxDimension = Math.max(width, height, 1);
-  const scale = (previewSize - margin * 2) / maxDimension;
 
   if (!cursorPosition || !anchorStation) {
     return null;
   }
+
+  // Use the map's actual scale (pixels per meter) for to-scale rendering
+  const scale = pixelsPerMeter;
 
   // Transform station to screen coordinates, centered on cursor
   const toScreen = (station: Coordinates): { x: number; y: number } => {

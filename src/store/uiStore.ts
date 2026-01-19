@@ -35,8 +35,8 @@ export interface PlacementResult {
 export interface PlacementModeState {
   /** The section data to be created (not yet in the project) */
   sectionData: SectionData;
-  /** Which station of the new section aligns to cursor ('first' or 'last') */
-  alignStation: 'first' | 'last';
+  /** Which station index of the new section aligns to cursor (0 = first, N = last) */
+  alignStationIndex: number;
   /** Current cursor position in map coordinates (meters) */
   cursorPosition: Coordinates | null;
   /** Snapped station reference (if cursor is near an existing station) */
@@ -197,7 +197,7 @@ interface UIStore {
   placementMode: PlacementModeState | null;
   startPlacementMode: (
     sectionData: SectionData,
-    alignStation: 'first' | 'last',
+    alignStationIndex: number,
     onComplete?: (result: PlacementResult) => void,
     onCancel?: () => void
   ) => void;
@@ -468,11 +468,11 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Placement mode state
   placementMode: null,
-  startPlacementMode: (sectionData, alignStation, onComplete, onCancel) =>
+  startPlacementMode: (sectionData, alignStationIndex, onComplete, onCancel) =>
     set({
       placementMode: {
         sectionData,
-        alignStation,
+        alignStationIndex,
         cursorPosition: null,
         snappedToStation: null,
         ...(onComplete !== undefined && { onComplete }),

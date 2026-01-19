@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
-use crate::models::{Coordinates, Section, SectionId, SectionUpdates, ShotData, SurveyDirection};
+use crate::models::{ClosureStrategy, Coordinates, Section, SectionId, SectionUpdates, ShotData, StationRef, SurveyDirection};
 
 /// Create a new section
 #[tauri::command]
@@ -59,4 +59,40 @@ pub fn move_section(
     offset: Coordinates,
 ) -> CommandResult {
     state.execute(Command::MoveSection { section_id, offset })
+}
+
+/// Create a new section and immediately merge one of its stations with an existing station.
+/// This is executed as a single undo/redo operation using the internal batch mechanism.
+///
+/// The merge station's section_id is specified as 0 (placeholder) and replaced with the
+/// actual created section ID during execution.
+#[tauri::command]
+pub fn create_section_and_merge(
+    state: State<AppState>,
+    name: Option<String>,
+    surveyor: Option<String>,
+    date: Option<NaiveDate>,
+    color: String,
+    direction: Option<SurveyDirection>,
+    shots: Vec<ShotData>,
+    import_station_index: u32,
+    target_station: StationRef,
+    closure_strategy: ClosureStrategy,
+) -> CommandResult {
+    // Use a special internal execution that:
+    // 1. Takes a project snapshot for undo
+    // 2. Creates the section
+    // 3. Merges with the actual section ID
+    // 4. Returns as a single undo unit
+    state.execute_create_and_merge(
+        name,
+        surveyor,
+        date,
+        color,
+        direction,
+        shots,
+        import_station_index,
+        target_station,
+        closure_strategy,
+    )
 }

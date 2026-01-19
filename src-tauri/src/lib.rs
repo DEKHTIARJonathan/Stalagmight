@@ -58,6 +58,7 @@ pub fn run() {
             commands::section::delete_section,
             commands::section::get_section,
             commands::section::move_section,
+            commands::section::create_section_and_merge,
             // Shot commands
             commands::shot::create_shot,
             commands::shot::update_shot,

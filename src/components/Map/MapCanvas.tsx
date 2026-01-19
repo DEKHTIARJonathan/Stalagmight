@@ -38,6 +38,8 @@ export default function MapCanvas() {
   const [isHoveringFeature, setIsHoveringFeature] = useState(false);
   // Placement mode cursor position (screen pixels)
   const [placementCursor, setPlacementCursor] = useState<{ x: number; y: number } | null>(null);
+  // Current map scale in pixels per meter (for to-scale placement preview)
+  const [pixelsPerMeter, setPixelsPerMeter] = useState(1);
 
   const { project, stations, config, moveSection, moveStation } = useProjectStore();
   const {
@@ -423,6 +425,14 @@ export default function MapCanvas() {
     map.current.on('zoom', () => {
       if (!map.current) return;
       setMapZoom(map.current.getZoom());
+      // Calculate pixels per meter at current zoom
+      // Use map center to project 1 meter difference
+      const center = map.current.getCenter();
+      const centerScreen = map.current.project(center);
+      // Point 1 meter north in map coordinates (1 meter = 1/111320 degrees)
+      const northPoint = map.current.project([center.lng, center.lat + 1 / 111320]);
+      const ppm = Math.abs(centerScreen.y - northPoint.y);
+      setPixelsPerMeter(ppm > 0 ? ppm : 1);
     });
 
     // Initialize survey layer
@@ -430,6 +440,12 @@ export default function MapCanvas() {
       if (!map.current) return;
       surveyLayerRef.current = new SurveyLayer(map.current, toolCallbacks);
       setMapLoaded(true);
+      // Initialize pixels per meter
+      const center = map.current.getCenter();
+      const centerScreen = map.current.project(center);
+      const northPoint = map.current.project([center.lng, center.lat + 1 / 111320]);
+      const ppm = Math.abs(centerScreen.y - northPoint.y);
+      setPixelsPerMeter(ppm > 0 ? ppm : 1);
     });
 
     return () => {
@@ -904,9 +920,10 @@ export default function MapCanvas() {
       {placementMode && placementCursor && (
         <PlacementOverlay
           sectionData={placementMode.sectionData}
-          alignStation={placementMode.alignStation}
+          alignStationIndex={placementMode.alignStationIndex}
           cursorPosition={placementCursor}
           isSnapped={placementMode.snappedToStation !== null}
+          pixelsPerMeter={pixelsPerMeter}
         />
       )}
 
