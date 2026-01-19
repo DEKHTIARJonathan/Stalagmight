@@ -110,6 +110,29 @@ Use `./scripts/dev.sh` to restart the dev server. This script:
 - When using sleep for safety waits, never exceed 5 seconds
 - Check if process exists with `pgrep` before using `pkill`
 
+### Working Directory Hazard (CRITICAL)
+
+**NEVER use `cd` in bash commands.** The shell session persists the working directory, causing subsequent commands to run from the wrong location. This has caused files to be created in `src-tauri/src-tauri/` and committed to git.
+
+```bash
+# BAD - changes working directory for entire session
+cd /home/user/src/cave/CaveChef/src-tauri && cargo check
+
+# GOOD - use absolute paths
+cargo check --manifest-path /home/user/src/cave/CaveChef/src-tauri/Cargo.toml
+
+# GOOD - subshell doesn't persist directory change
+(cd /home/user/src/cave/CaveChef/src-tauri && cargo check)
+
+# GOOD - run from project root with path
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+**Always verify working directory** before git operations:
+```bash
+pwd  # Should be /home/user/src/cave/CaveChef
+```
+
 ## Test Commands
 
 ```bash
