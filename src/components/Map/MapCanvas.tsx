@@ -8,6 +8,9 @@ import SurveyLayer from './SurveyLayer';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
 
+// Tools that support Ctrl+drag for panning (excludes tools with their own drag behaviors)
+const CTRL_PAN_TOOLS = ['select', 'draw', 'delete', 'merge', 'measure'];
+
 interface BoxSelectState {
   start: { x: number; y: number } | null;
   end: { x: number; y: number } | null;
@@ -526,8 +529,8 @@ export default function MapCanvas() {
     // If hovering over a feature, SurveyLayer sets cursor to 'pointer'
     // Otherwise, set cursor based on active tool
     if (!isHoveringFeature) {
-      // In select mode with Ctrl held, show grab cursor for panning
-      if (activeTool === 'select' && ctrlHeld) {
+      // In supported tools with Ctrl held, show grab cursor for panning
+      if (CTRL_PAN_TOOLS.includes(activeTool) && ctrlHeld) {
         map.current.getCanvas().style.cursor = 'grab';
       } else {
         map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
@@ -536,15 +539,15 @@ export default function MapCanvas() {
   }, [activeTool, ctrlHeld, isHoveringFeature]);
 
   // Disable map drag pan for tools that need custom interaction
-  // Exception: In select mode, Ctrl+drag enables panning
+  // Exception: Ctrl+drag enables panning in supported tools
   useEffect(() => {
     if (!map.current) return;
 
-    // Tools that should have map panning disabled
+    // Tools that should have map panning disabled (includes CTRL_PAN_TOOLS + move tools)
     const noPanTools = ['select', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station'];
 
-    // Enable panning in select mode when Ctrl is held
-    if (activeTool === 'select' && ctrlHeld) {
+    // Enable panning when Ctrl is held in supported tools
+    if (CTRL_PAN_TOOLS.includes(activeTool) && ctrlHeld) {
       map.current.dragPan.enable();
     } else if (noPanTools.includes(activeTool)) {
       map.current.dragPan.disable();
@@ -553,7 +556,7 @@ export default function MapCanvas() {
     }
   }, [activeTool, ctrlHeld]);
 
-  // Track Ctrl key for pan-in-select-mode feature
+  // Track Ctrl key for pan-in-supported-tools feature
   // IMPORTANT: Enable dragPan directly in the handler, not via useEffect, to avoid timing issues
   useEffect(() => {
     const noPanTools = ['select', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station'];
@@ -561,8 +564,12 @@ export default function MapCanvas() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Control' && !e.repeat) {
         setCtrlHeld(true);
-        // Enable dragPan immediately when Ctrl is pressed (for select mode)
-        if (map.current && activeTool === 'select') {
+
+        // Cancel any active box select when Ctrl is pressed (mid-drag Ctrl converts to pan)
+        setBoxSelect({ start: null, end: null });
+
+        // Enable dragPan immediately when Ctrl is pressed (for supported tools)
+        if (map.current && CTRL_PAN_TOOLS.includes(activeTool)) {
           map.current.dragPan.enable();
         }
       }
@@ -570,7 +577,7 @@ export default function MapCanvas() {
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Control') {
         setCtrlHeld(false);
-        // Disable dragPan when Ctrl is released (for select mode)
+        // Disable dragPan when Ctrl is released (for tools that don't normally pan)
         if (map.current && noPanTools.includes(activeTool)) {
           map.current.dragPan.disable();
         }
@@ -579,6 +586,8 @@ export default function MapCanvas() {
     // Also handle window blur (Ctrl held, switch windows, release outside)
     const handleBlur = () => {
       setCtrlHeld(false);
+      // Cancel any active box select
+      setBoxSelect({ start: null, end: null });
       if (map.current && noPanTools.includes(activeTool)) {
         map.current.dragPan.disable();
       }
@@ -592,6 +601,27 @@ export default function MapCanvas() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
+    };
+  }, [activeTool]);
+
+  // Capture-phase handler to enable dragPan BEFORE MapLibre processes mousedown
+  // This handles the timing issue where Ctrl might be pressed just as mouse is clicked
+  useEffect(() => {
+    const mapElement = mapContainer.current;
+    if (!mapElement) return;
+
+    const handleMouseDownCapture = (e: MouseEvent) => {
+      if (e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool) && map.current) {
+        // Enable dragPan BEFORE MapLibre processes this mousedown
+        map.current.dragPan.enable();
+      }
+    };
+
+    // Use capture: true to intercept BEFORE MapLibre's handlers
+    mapElement.addEventListener('mousedown', handleMouseDownCapture, { capture: true });
+
+    return () => {
+      mapElement.removeEventListener('mousedown', handleMouseDownCapture, { capture: true });
     };
   }, [activeTool]);
 
