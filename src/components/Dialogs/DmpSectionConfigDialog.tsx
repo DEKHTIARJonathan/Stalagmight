@@ -160,8 +160,8 @@ export default function DmpSectionConfigDialog({
   const [targetSectionRef, setTargetSectionRef] = useState<string>('');
   const [targetStationIndex, setTargetStationIndex] = useState(0);
 
-  // Manual Placement fields
-  const [manualAlignStation, setManualAlignStation] = useState<'first' | 'last'>('first');
+  // Manual Placement fields - station index (0 = first, N = last)
+  const [manualAlignStationIndex, setManualAlignStationIndex] = useState<number>(0);
 
   // Get current DMP section data
   const currentDmpSection = currentSectionIndex !== undefined
@@ -473,7 +473,7 @@ export default function DmpSectionConfigDialog({
     const center = getMapViewportCenter();
     handlePlacementChange({
       type: 'manual',
-      alignStation: 'first',
+      alignStationIndex: 0,
       position: { x: center.x, y: center.y, z: 0 },
     });
   }, [handlePlacementChange, getMapViewportCenter]);
@@ -567,13 +567,13 @@ export default function DmpSectionConfigDialog({
       excludedSections: serializeExcludedSections(),
       currentIndex,
       currentSectionIndex,
-      manualAlignStation,
+      manualAlignStationIndex,
     };
 
     // Start placement mode on the map with callbacks
     startPlacementMode(
       sectionData,
-      manualAlignStation,
+      manualAlignStationIndex,
       // onComplete callback
       (result: PlacementResult) => {
         // Update the saved state with the placement result
@@ -584,7 +584,7 @@ export default function DmpSectionConfigDialog({
             ...current,
             placement: {
               type: 'manual',
-              alignStation: savedState.manualAlignStation,
+              alignStationIndex: savedState.manualAlignStationIndex,
               position: result.position,
               snappedToStation: result.snappedToStation,
             },
@@ -629,7 +629,7 @@ export default function DmpSectionConfigDialog({
     currentConfig,
     currentSectionIndex,
     currentIndex,
-    manualAlignStation,
+    manualAlignStationIndex,
     serializeSectionConfigs,
     serializePlacedSections,
     serializeExcludedSections,
@@ -1450,7 +1450,7 @@ export default function DmpSectionConfigDialog({
                           type="radio"
                           name="placement"
                           checked={currentConfig.placement.type === 'manual'}
-                          onChange={() => handlePlacementChange({ type: 'manual', alignStation: manualAlignStation })}
+                          onChange={() => handlePlacementChange({ type: 'manual', alignStationIndex: manualAlignStationIndex })}
                           disabled={isCurrentPlaced || isCurrentExcluded}
                           data-testid="placement-manual"
                         />
@@ -1461,12 +1461,12 @@ export default function DmpSectionConfigDialog({
                           <div className="flex items-center gap-2 flex-wrap">
                             <label className="text-sm text-text-secondary">Align:</label>
                             <Select
-                              value={manualAlignStation}
-                              onChange={(v) => setManualAlignStation(v as 'first' | 'last')}
-                              options={[
-                                { value: 'first', label: 'First station' },
-                                { value: 'last', label: 'Last station' },
-                              ]}
+                              value={String(manualAlignStationIndex)}
+                              onChange={(v) => setManualAlignStationIndex(parseInt(v, 10))}
+                              options={stationOptions.map((opt) => ({
+                                value: String(opt.value),
+                                label: opt.label,
+                              }))}
                               disabled={isCurrentPlaced || isCurrentExcluded}
                               data-testid="manual-align-select"
                             />

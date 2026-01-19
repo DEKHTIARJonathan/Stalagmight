@@ -26,7 +26,7 @@ export type PlacementConfig =
   | { type: 'zeroDatum'; coordinates: GpsCoordinates; stationIndex: number }
   | { type: 'fromExisting'; importStation: number; existingStation: StationRef }
   | { type: 'fromImporting'; importStation: number; targetSectionIndex: number; targetStationIndex: number }
-  | { type: 'manual'; alignStation: 'first' | 'last'; position?: Coordinates; snappedToStation?: StationRef | null };
+  | { type: 'manual'; alignStationIndex: number; position?: Coordinates; snappedToStation?: StationRef | null };
 
 /**
  * Configuration for a single imported section.

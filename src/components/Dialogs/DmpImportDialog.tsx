@@ -249,8 +249,8 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
   const [importStation, setImportStation] = useState<'first' | 'last'>('first');
   // Selected existing station from the current project to connect to
   const [existingStation, setExistingStation] = useState<StationRef | null>(null);
-  // Import station for manual placement: which station aligns to cursor
-  const [manualImportStation, setManualImportStation] = useState<'first' | 'last'>('first');
+  // Import station for manual placement: which station index aligns to cursor (0 = first)
+  const [manualImportStationIndex, setManualImportStationIndex] = useState<number>(0);
 
   // Track edited directions per section (key: section index, value: direction)
   const [sectionDirections, setSectionDirections] = useState<Map<number, 'in' | 'out'>>(new Map());
@@ -355,7 +355,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
     setPlacementMode('origin');
     setImportStation('first');
     setExistingStation(null);
-    setManualImportStation('first');
+    setManualImportStationIndex(0);
     // Reset section directions to initial values from parsed file
     setSectionDirections(new Map());
   }, [dmpFile]);
@@ -648,7 +648,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
 
           // Switch to single view and start placement mode
           setView('single');
-          startPlacementMode(sectionData, manualImportStation);
+          startPlacementMode(sectionData, manualImportStationIndex);
           closeDialog();
           return;
         }
@@ -1238,13 +1238,27 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                         Station to align with cursor
                       </label>
                       <select
-                        value={manualImportStation}
-                        onChange={(e) => setManualImportStation(e.target.value as 'first' | 'last')}
+                        value={String(manualImportStationIndex)}
+                        onChange={(e) => setManualImportStationIndex(parseInt(e.target.value, 10))}
                         className="bg-surface border border-border rounded px-3 py-1.5 text-sm w-full"
                         data-testid="manual-import-station-selector"
                       >
-                        <option value="first">First station of imported section</option>
-                        <option value="last">Last station of imported section</option>
+                        {/* Show all stations for the first selected section */}
+                        {(() => {
+                          const selectedArr = Array.from(selectedSections);
+                          if (selectedArr.length === 0 || !dmpFile) {
+                            return <option value="0">Station 0</option>;
+                          }
+                          const firstIdx = selectedArr[0]!;
+                          const section = dmpFile.sections[firstIdx];
+                          if (!section) {
+                            return <option value="0">Station 0</option>;
+                          }
+                          const stationCount = section.shots.length + 1;
+                          return Array.from({ length: stationCount }, (_, i) => (
+                            <option key={i} value={String(i)}>Station {i}</option>
+                          ));
+                        })()}
                       </select>
                     </div>
                     <p className="text-xs text-text-secondary">

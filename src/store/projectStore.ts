@@ -19,7 +19,7 @@ import type {
   Coordinates,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, DmpFile, ExportImageOptions, ProjectWarning } from '../types/commands';
+import type { CommandResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand } from '../types/commands';
 
 interface ProjectStore {
   // State
@@ -52,6 +52,12 @@ interface ProjectStore {
   mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandResult>;
 
   createSection: (data: SectionData) => Promise<CommandResult>;
+  createSectionAndMerge: (
+    data: SectionData,
+    importStationIndex: number,
+    targetStation: StationRef,
+    closureStrategy: ClosureStrategy
+  ) => Promise<CommandResult>;
   updateSection: (sectionId: SectionId, updates: SectionUpdates) => Promise<CommandResult>;
   deleteSection: (sectionId: SectionId) => Promise<CommandResult>;
 
@@ -70,6 +76,9 @@ interface ProjectStore {
   undo: () => Promise<CommandResult>;
   redo: () => Promise<CommandResult>;
   refreshUndoState: () => Promise<void>;
+
+  // Batch execution - groups multiple commands into a single undo/redo unit
+  executeBatch: (commands: BatchCommand[]) => Promise<CommandResult>;
 
   importDmp: (path: string) => Promise<DmpFile>;
   calculateFileHash: (path: string) => Promise<string>;
@@ -281,6 +290,34 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     return result;
   },
 
+  createSectionAndMerge: async (
+    data: SectionData,
+    importStationIndex: number,
+    targetStation: StationRef,
+    closureStrategy: ClosureStrategy
+  ) => {
+    console.log('[projectStore] createSectionAndMerge called:', data.name, 'shots:', data.shots?.length);
+    const result = await invoke<CommandResult>('create_section_and_merge', {
+      name: data.name,
+      surveyor: data.surveyor,
+      date: data.date,
+      color: data.color,
+      direction: data.direction,
+      shots: data.shots,
+      importStationIndex,
+      targetStation,
+      closureStrategy,
+    });
+    console.log('[projectStore] create_section_and_merge result:', result);
+    if (result.success) {
+      console.log('[projectStore] Refreshing after section create and merge...');
+      await get().refreshProjectState();
+      console.log('[projectStore] Refresh done after section create and merge');
+      set({ isDirty: true });
+    }
+    return result;
+  },
+
   updateSection: async (sectionId: SectionId, updates: SectionUpdates) => {
     const result = await invoke<CommandResult>('update_section', { sectionId, updates });
     if (result.success) {
@@ -424,6 +461,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     } catch (e) {
       console.error('Failed to refresh undo state:', e);
     }
+  },
+
+  // Batch execution - groups multiple commands into a single undo/redo unit
+  executeBatch: async (commands: BatchCommand[]) => {
+    console.log('[projectStore] executeBatch called with', commands.length, 'commands');
+    const result = await invoke<CommandResult>('execute_batch', { commands });
+    console.log('[projectStore] execute_batch result:', result);
+    if (result.success) {
+      console.log('[projectStore] Refreshing after batch execute...');
+      await get().refreshProjectState();
+      console.log('[projectStore] Refresh done after batch execute');
+      set({ isDirty: true });
+    }
+    return result;
   },
 
   // Import/Export
