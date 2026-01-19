@@ -1657,4 +1657,165 @@ mod tests {
         let loaded_after_delete = db.load_resolved_warnings().unwrap();
         assert!(loaded_after_delete.is_empty());
     }
+
+    // === Test: Verify merged_with is populated correctly from fractal fixture ===
+    #[test]
+    fn test_merged_with_from_fractal_iter2() {
+        use std::path::Path;
+        use crate::models::StationRef;
+
+        // Use the fractal_plant_iter2 fixture
+        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..") // Go up from src-tauri
+            .join("e2e")
+            .join("fixtures")
+            .join("fractal_plant_iter2.cvproj");
+
+        // Make sure the fixture exists
+        assert!(fixture_path.exists(), "Fixture file not found: {:?}", fixture_path);
+
+        // Load the project
+        let db = Database::open_existing(&fixture_path).unwrap();
+        let project = db.load_project().unwrap();
+
+        // Verify there are merges
+        println!("Project has {} merges:", project.station_merges.len());
+        for merge in &project.station_merges {
+            println!("  Merge: {} <-> {}", merge.station_a, merge.station_b);
+        }
+
+        // Compute station coordinates (this populates merged_with)
+        let stations = project.compute_station_coordinates();
+
+        // Find station S1.st0
+        let s1_st0_ref = StationRef::new(1, 0);
+        let s1_st0 = stations.iter().find(|s| s.station_ref == s1_st0_ref)
+            .expect("Station 1:0 should exist");
+
+        println!("Station 1:0 merged_with: {:?}", s1_st0.merged_with);
+
+        // S1.st0 should be merged with:
+        // - S0.st2 (parent branch merge - when S1 was created from S0)
+        // - S2.st0 (sibling merge - when S2 was created from S1)
+        let s0_st2 = StationRef::new(0, 2);
+        let s2_st0 = StationRef::new(2, 0);
+
+        assert!(
+            s1_st0.merged_with.contains(&s0_st2),
+            "Station 1:0 should be merged with 0:2 (parent). Got: {:?}",
+            s1_st0.merged_with
+        );
+        assert!(
+            s1_st0.merged_with.contains(&s2_st0),
+            "Station 1:0 should be merged with 2:0 (sibling). Got: {:?}",
+            s1_st0.merged_with
+        );
+        assert_eq!(
+            s1_st0.merged_with.len(),
+            2,
+            "Station 1:0 should have exactly 2 merges. Got: {:?}",
+            s1_st0.merged_with
+        );
+
+        // Verify transitive merge groups - 0:2 should also show merged with 2:0
+        // since they're all in the same merge group (0:2 ↔ 1:0 ↔ 2:0)
+        let s0_st2_station = stations.iter().find(|s| s.station_ref == s0_st2)
+            .expect("Station 0:2 should exist");
+        println!("Station 0:2 merged_with: {:?}", s0_st2_station.merged_with);
+
+        assert!(
+            s0_st2_station.merged_with.contains(&s1_st0_ref),
+            "Station 0:2 should be merged with 1:0. Got: {:?}",
+            s0_st2_station.merged_with
+        );
+        assert!(
+            s0_st2_station.merged_with.contains(&s2_st0),
+            "Station 0:2 should be merged with 2:0 (transitive). Got: {:?}",
+            s0_st2_station.merged_with
+        );
+        assert_eq!(
+            s0_st2_station.merged_with.len(),
+            2,
+            "Station 0:2 should have exactly 2 merges (transitive group). Got: {:?}",
+            s0_st2_station.merged_with
+        );
+
+        // Verify 2:0 also shows the full group
+        let s2_st0_station = stations.iter().find(|s| s.station_ref == s2_st0)
+            .expect("Station 2:0 should exist");
+        println!("Station 2:0 merged_with: {:?}", s2_st0_station.merged_with);
+
+        assert!(
+            s2_st0_station.merged_with.contains(&s1_st0_ref),
+            "Station 2:0 should be merged with 1:0. Got: {:?}",
+            s2_st0_station.merged_with
+        );
+        assert!(
+            s2_st0_station.merged_with.contains(&s0_st2),
+            "Station 2:0 should be merged with 0:2 (transitive). Got: {:?}",
+            s2_st0_station.merged_with
+        );
+        assert_eq!(
+            s2_st0_station.merged_with.len(),
+            2,
+            "Station 2:0 should have exactly 2 merges (transitive group). Got: {:?}",
+            s2_st0_station.merged_with
+        );
+    }
+
+    // === Test: Verify merged_with from iter4 fixture ===
+    #[test]
+    fn test_merged_with_from_fractal_iter4() {
+        use std::path::Path;
+        use crate::models::StationRef;
+
+        // Use the fractal_plant_iter4 fixture
+        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..") // Go up from src-tauri
+            .join("e2e")
+            .join("fixtures")
+            .join("fractal_plant_iter4.cvproj");
+
+        // Make sure the fixture exists
+        assert!(fixture_path.exists(), "Fixture file not found: {:?}", fixture_path);
+
+        // Load the project
+        let db = Database::open_existing(&fixture_path).unwrap();
+        let project = db.load_project().unwrap();
+
+        println!("Iter4 project has {} merges", project.station_merges.len());
+
+        // Compute station coordinates (this populates merged_with)
+        let stations = project.compute_station_coordinates();
+
+        // Find station S1.st0
+        let s1_st0_ref = StationRef::new(1, 0);
+        let s1_st0 = stations.iter().find(|s| s.station_ref == s1_st0_ref)
+            .expect("Station 1:0 should exist");
+
+        println!("Station 1:0 merged_with: {:?}", s1_st0.merged_with);
+
+        // S1.st0 should be merged with:
+        // - S0.st8 (parent branch merge - when S1 was created from S0)
+        // - S2.st0 (child merge - when S2 was created from S1)
+        let s0_st8 = StationRef::new(0, 8);
+        let s2_st0 = StationRef::new(2, 0);
+
+        assert!(
+            s1_st0.merged_with.contains(&s0_st8),
+            "Station 1:0 should be merged with 0:8 (parent). Got: {:?}",
+            s1_st0.merged_with
+        );
+        assert!(
+            s1_st0.merged_with.contains(&s2_st0),
+            "Station 1:0 should be merged with 2:0 (child). Got: {:?}",
+            s1_st0.merged_with
+        );
+        assert_eq!(
+            s1_st0.merged_with.len(),
+            2,
+            "Station 1:0 should have exactly 2 merges. Got: {:?}",
+            s1_st0.merged_with
+        );
+    }
 }

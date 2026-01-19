@@ -695,9 +695,14 @@ export default function MapCanvas() {
     const sw = metersToMapCoords(bounds.minX, bounds.minY);
     const ne = metersToMapCoords(bounds.maxX, bounds.maxY);
 
-    // Use MapLibre's fitBounds with padding
+    // Calculate 10% padding based on container size
+    const container = map.current.getContainer();
+    const paddingX = Math.round(container.clientWidth * 0.1);
+    const paddingY = Math.round(container.clientHeight * 0.1);
+
+    // Use MapLibre's fitBounds with percentage-based padding
     map.current.fitBounds([sw, ne], {
-      padding: 50,
+      padding: { top: paddingY, bottom: paddingY, left: paddingX, right: paddingX },
       maxZoom: 20,
     });
   }, [stations]);
