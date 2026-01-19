@@ -629,13 +629,55 @@ impl Project {
             }
         }
 
-        // Mark merged stations
+        // Mark merged stations - build merge groups (transitive closure)
+        // First, build a map of station_ref -> group_id using Union-Find logic
+        let mut station_to_group: std::collections::HashMap<StationRef, usize> = std::collections::HashMap::new();
+        let mut groups: Vec<Vec<StationRef>> = Vec::new();
+
         for merge in &self.station_merges {
-            for station in &mut stations {
-                if station.station_ref == merge.station_a {
-                    station.merged_with.push(merge.station_b);
-                } else if station.station_ref == merge.station_b {
-                    station.merged_with.push(merge.station_a);
+            let group_a = station_to_group.get(&merge.station_a).copied();
+            let group_b = station_to_group.get(&merge.station_b).copied();
+
+            match (group_a, group_b) {
+                (None, None) => {
+                    // Neither station is in a group, create a new group
+                    let group_id = groups.len();
+                    groups.push(vec![merge.station_a, merge.station_b]);
+                    station_to_group.insert(merge.station_a, group_id);
+                    station_to_group.insert(merge.station_b, group_id);
+                }
+                (Some(gid), None) => {
+                    // station_a is in a group, add station_b to it
+                    groups[gid].push(merge.station_b);
+                    station_to_group.insert(merge.station_b, gid);
+                }
+                (None, Some(gid)) => {
+                    // station_b is in a group, add station_a to it
+                    groups[gid].push(merge.station_a);
+                    station_to_group.insert(merge.station_a, gid);
+                }
+                (Some(gid_a), Some(gid_b)) => {
+                    if gid_a != gid_b {
+                        // Both are in different groups, merge the groups
+                        // Move all from group_b to group_a
+                        let group_b_members: Vec<StationRef> = groups[gid_b].drain(..).collect();
+                        for member in &group_b_members {
+                            station_to_group.insert(*member, gid_a);
+                        }
+                        groups[gid_a].extend(group_b_members);
+                    }
+                    // If same group, nothing to do
+                }
+            }
+        }
+
+        // Now assign merged_with for each station based on their group
+        for station in &mut stations {
+            if let Some(&group_id) = station_to_group.get(&station.station_ref) {
+                for member in &groups[group_id] {
+                    if *member != station.station_ref {
+                        station.merged_with.push(*member);
+                    }
                 }
             }
         }

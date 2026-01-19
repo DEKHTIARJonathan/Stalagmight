@@ -837,3 +837,230 @@ export async function getProjectStats(): Promise<{ totalLength: number; stationC
     }
   );
 }
+
+// ============================================================================
+// Fractal Test Helpers
+// ============================================================================
+
+/**
+ * Create a section with shots via the store.
+ * Returns the actual backend section ID for tracking.
+ *
+ * @param data - Section data including name, color, and shots
+ * @returns Result with success status and backend section ID
+ */
+export async function createSectionViaStore(data: {
+  name: string;
+  color: string;
+  shots: Array<{
+    azimuth_in: number;
+    azimuth_out: number;
+    length: number;
+    depth_in: number;
+    depth_out: number;
+  }>;
+}): Promise<{ success: boolean; sectionId?: number; error?: string }> {
+  return await browser.executeAsync(
+    async (
+      sectionData: {
+        name: string;
+        color: string;
+        shots: Array<{
+          azimuth_in: number;
+          azimuth_out: number;
+          length: number;
+          depth_in: number;
+          depth_out: number;
+        }>;
+      },
+      done: (result: { success: boolean; sectionId?: number; error?: string }) => void
+    ) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              createSection: (data: {
+                name: string;
+                color: string;
+                surveyor: string;
+                date: string;
+                shots: Array<{
+                  azimuth_in: number;
+                  azimuth_out: number;
+                  length: number;
+                  depth_in: number;
+                  depth_out: number;
+                }>;
+              }) => Promise<{ success: boolean; section_id?: number; error?: string }>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!e2e) {
+        done({ success: false, error: 'E2E helpers not found' });
+        return;
+      }
+
+      try {
+        const result = await e2e.projectStore.getState().createSection({
+          ...sectionData,
+          surveyor: 'Fractal Generator',
+          date: new Date().toISOString().split('T')[0],
+        });
+        done({
+          success: result.success,
+          sectionId: result.section_id,
+          error: result.error ?? undefined,
+        });
+      } catch (err) {
+        done({ success: false, error: String(err) });
+      }
+    },
+    data
+  );
+}
+
+/**
+ * Merge two stations via the store.
+ *
+ * @param stationA - First station reference
+ * @param stationB - Second station reference
+ * @param strategy - Closure strategy (default: 'KeepRaw')
+ * @returns Result with success status
+ */
+export async function mergeStationsViaStore(
+  stationA: { section_id: number; station_index: number },
+  stationB: { section_id: number; station_index: number },
+  strategy: string = 'KeepRaw'
+): Promise<{ success: boolean; error?: string }> {
+  return await browser.executeAsync(
+    async (
+      a: { section_id: number; station_index: number },
+      b: { section_id: number; station_index: number },
+      strat: string,
+      done: (result: { success: boolean; error?: string }) => void
+    ) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              mergeStations: (
+                stationA: { section_id: number; station_index: number },
+                stationB: { section_id: number; station_index: number },
+                strategy: string
+              ) => Promise<{ success: boolean; error?: string }>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!e2e) {
+        done({ success: false, error: 'E2E helpers not found' });
+        return;
+      }
+
+      try {
+        const result = await e2e.projectStore.getState().mergeStations(a, b, strat);
+        done({
+          success: result.success,
+          error: result.error ?? undefined,
+        });
+      } catch (err) {
+        done({ success: false, error: String(err) });
+      }
+    },
+    stationA,
+    stationB,
+    strategy
+  );
+}
+
+/**
+ * Save the current project to a specific file path via the store.
+ *
+ * @param filePath - Absolute path to save the project file
+ * @returns Result with success status
+ */
+export async function saveProjectToPath(
+  filePath: string
+): Promise<{ success: boolean; error?: string }> {
+  return await browser.executeAsync(
+    async (
+      path: string,
+      done: (result: { success: boolean; error?: string }) => void
+    ) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              saveProject: (path: string) => Promise<{ success: boolean; error?: string }>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!e2e) {
+        done({ success: false, error: 'E2E helpers not found' });
+        return;
+      }
+
+      try {
+        const result = await e2e.projectStore.getState().saveProject(path);
+        done({
+          success: result.success,
+          error: result.error ?? undefined,
+        });
+      } catch (err) {
+        done({ success: false, error: String(err) });
+      }
+    },
+    filePath
+  );
+}
+
+/**
+ * Get the station merges from the current project.
+ * Used for verifying merge relationships after fractal generation.
+ *
+ * @returns Array of station merge objects
+ */
+export async function getProjectMerges(): Promise<
+  Array<{
+    station_a: { section_id: number; station_index: number };
+    station_b: { section_id: number; station_index: number };
+  }>
+> {
+  return await browser.executeAsync(
+    (
+      done: (
+        merges: Array<{
+          station_a: { section_id: number; station_index: number };
+          station_b: { section_id: number; station_index: number };
+        }>
+      ) => void
+    ) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              project: {
+                station_merges: Array<{
+                  station_a: { section_id: number; station_index: number };
+                  station_b: { section_id: number; station_index: number };
+                }>;
+              } | null;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!e2e || !e2e.projectStore.getState().project) {
+        done([]);
+        return;
+      }
+
+      done(e2e.projectStore.getState().project?.station_merges ?? []);
+    }
+  );
+}
