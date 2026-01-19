@@ -31,11 +31,21 @@ pnpm test:ui
 pnpm test:ui:headed
 
 # Run backend tests
-cd src-tauri && cargo test
+cargo test --manifest-path src-tauri/Cargo.toml
 
 # Run all tests
 pnpm test:all
 ```
+
+## Required Tests by Feature Type
+
+| Feature Type | Required Tests |
+|--------------|----------------|
+| New UI component/dialog | Playwright E2E tests |
+| New Tauri IPC command | Rust unit tests + Playwright E2E tests |
+| Backend logic (parsers, models) | Rust unit tests |
+| User workflow (multi-step) | Playwright E2E tests |
+| Bug fix | Regression test covering the fix |
 
 ## Playwright E2E Tests
 
@@ -347,10 +357,9 @@ Located alongside source code in `src-tauri/src/`.
 ### Running Rust Tests
 
 ```bash
-cd src-tauri
-cargo test                    # All tests
-cargo test parser             # Tests matching "parser"
-cargo test -- --nocapture     # Show println! output
+cargo test --manifest-path src-tauri/Cargo.toml              # All tests
+cargo test --manifest-path src-tauri/Cargo.toml parser       # Tests matching "parser"
+cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture  # Show println! output
 ```
 
 ### Writing Rust Tests
@@ -476,7 +485,7 @@ await expect(page.locator('.error-message'))
   .toHaveText('Project name is required', { timeout: 3000 });
 ```
 
-## UI Component Requirements for Testability
+## UI Component Testability Requirements
 
 All UI components must include proper attributes for tests to locate elements reliably.
 
@@ -492,13 +501,27 @@ All UI components must include proper attributes for tests to locate elements re
 </div>
 ```
 
+**Why**: E2E tests use `[role="dialog"]` to locate dialogs. Without this attribute, tests cannot find the dialog even when visually present.
+
 ### Test Identifiers (`data-testid`)
 
-```tsx
-<button data-testid="new-project-button">New Project</button>
-<div data-testid="global-view">...</div>
-<input data-testid="project-name-input" />
-```
+| Element Type | Convention | Example |
+|--------------|------------|---------|
+| Main views | `<view>-view` | `data-testid="global-view"` |
+| Buttons | `<action>-button` | `data-testid="new-project-button"` |
+| Dialogs | `<name>-dialog` | `data-testid="import-dialog"` |
+| Form inputs | `<field>-input` | `data-testid="project-name-input"` |
+| Statistics | `stats-<metric>` | `data-testid="stats-total-length"` |
+
+### ARIA Attributes Quick Reference
+
+| Attribute | Use Case |
+|-----------|----------|
+| `role="dialog"` | Modal dialogs (required) |
+| `aria-modal="true"` | Dialogs that block interaction |
+| `aria-labelledby` | Connect dialog to its title |
+| `aria-label` | Icon-only buttons |
+| `aria-expanded` | Collapsible panels |
 
 ### Selector Priority
 
@@ -506,6 +529,14 @@ All UI components must include proper attributes for tests to locate elements re
 2. `role` + `aria-*` - Accessibility: `[role="dialog"]`
 3. Semantic elements: `button:has-text("New Project")`
 4. CSS classes - Least reliable
+
+### Checklist for New UI Components
+
+- [ ] Dialogs have `role="dialog"` and `aria-modal="true"`
+- [ ] Dialog titles have `id` referenced by `aria-labelledby`
+- [ ] Primary buttons have `data-testid`
+- [ ] Form inputs have `data-testid`
+- [ ] Icon-only buttons have `aria-label`
 
 ## Troubleshooting
 
@@ -542,6 +573,6 @@ Tests are run in CI on every push. The CI pipeline:
 
 1. Runs `pnpm tsc --noEmit` (type check)
 2. Runs `pnpm test:ui` (Playwright tests)
-3. Runs `cargo test` (Rust tests)
+3. Runs `cargo test --manifest-path src-tauri/Cargo.toml` (Rust tests)
 
 All must pass for the build to succeed.
