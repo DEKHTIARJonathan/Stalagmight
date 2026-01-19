@@ -279,6 +279,34 @@ See `wdio.conf.ts`. Key settings:
 
 ### Running WebdriverIO Tests
 
+**Recommended: Use the comprehensive test runner script:**
+
+```bash
+# Run all tests (auto-detects display, ensures fresh build)
+./scripts/wdio.sh
+
+# Force rebuild before tests
+./scripts/wdio.sh --rebuild
+
+# Run specific spec file
+./scripts/wdio.sh --spec e2e/specs/dmp-integration.spec.ts
+
+# Force headless mode (uses xvfb)
+./scripts/wdio.sh --headless
+
+# Skip build checks (use with caution - can cause stale binary issues)
+./scripts/wdio.sh --skip-build
+```
+
+The `wdio.sh` script automatically handles:
+- Platform verification (Linux/Windows only)
+- tauri-driver installation check
+- Display detection (uses xvfb automatically if headless)
+- Port cleanup (kills stale tauri-driver/cavechef processes)
+- Build freshness checks (rebuilds if source is newer than binary)
+
+**Manual run (not recommended):**
+
 ```bash
 # Standard run (builds app first)
 pnpm test:e2e
@@ -491,12 +519,16 @@ All UI components must include proper attributes for tests to locate elements re
 ### WebdriverIO Tests Failing
 
 1. **"No such file or directory" for cavechef binary**: Set `CARGO_TARGET_DIR` to point to where your binary was built (e.g., `CARGO_TARGET_DIR=./src-tauri/target`)
-2. **"No display available" or display errors**: Use `xvfb-run -a` to provide a virtual display
-3. **Port 4444 already in use**: A previous tauri-driver is still running. Kill it with `pkill tauri-driver`
+2. **"No display available" or display errors**: Use `xvfb-run -a` to provide a virtual display, or use `./scripts/wdio.sh` which auto-detects
+3. **Port 4444 already in use**: A previous tauri-driver is still running. Kill it with `pkill tauri-driver`, or use `./scripts/wdio.sh` which handles this automatically
 4. **Check tauri-driver**: Must be installed (`cargo install tauri-driver`)
 5. **Check build**: App must be built with `--debug --no-bundle`
 6. **Check platform**: Only Linux/Windows supported (not macOS)
 7. **Check ARIA attributes**: Dialogs must have `role="dialog"`
+8. **"Application did not load" with "Could not connect to localhost" in page source**: The binary has stale/incorrectly embedded frontend assets. This happens when using `SKIP_BUILD=1` with an outdated binary. Solution:
+   - Use `./scripts/wdio.sh` (recommended) - it checks build freshness automatically
+   - Or rebuild manually: `pnpm tauri build --debug --no-bundle`
+   - Verify binary timestamp is after latest source file changes
 
 ### Rust Tests Failing
 

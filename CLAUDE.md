@@ -147,7 +147,10 @@ pnpm test:ui:headed       # With visible browser
 cd src-tauri && cargo test
 
 # WebdriverIO E2E tests (full Tauri app, Linux/Windows only)
-pnpm test:e2e
+./scripts/wdio.sh              # Recommended: auto-handles display, build, cleanup
+./scripts/wdio.sh --rebuild    # Force rebuild before tests
+./scripts/wdio.sh --headless   # Force xvfb mode
+pnpm test:e2e                  # Manual (prefer script above)
 ```
 
 ## Testing Requirements (MANDATORY)
