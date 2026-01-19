@@ -797,6 +797,7 @@ export default function MapCanvas() {
       const cursors: Record<string, string> = {
         select: 'default',
         pan: 'grab',
+        zoom: 'zoom-in',
         draw: 'crosshair',
         delete: 'crosshair',
         merge: 'crosshair',
