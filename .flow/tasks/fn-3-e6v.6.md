@@ -366,9 +366,8 @@ When stations are hidden:
 - [ ] Playwright mocks updated in `e2e-playwright/mocks/tauri-ipc.ts`
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Implemented toast state with per-key throttling in uiStore, toast Portal rendering with z-index 99999 and accessibility attributes, guards in handleStationClick/handleShotClick/handleEmptyClick merge snap path, Ctrl+A guard, and hidden feature click detection via querySourceFeatures with 15-pixel proximity threshold.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: f71fab06e9c614f57b0d2d46d0bb69ae72ef8457, ac9616bf82d89fd0af63d462eed2c93f95e6a632, 400c7fcc5a31a3e75a61da1d58627ced97025173
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
