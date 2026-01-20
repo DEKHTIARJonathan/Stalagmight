@@ -159,6 +159,22 @@ fn handle_tile_request(
     x: u32,
     tile_cache: &Arc<Mutex<Option<TileCache>>>,
 ) -> http::Response<Vec<u8>> {
+    handle_tile_request_with_fetcher(provider, z, y, x, tile_cache, fetch_tile_from_network)
+}
+
+/// Internal implementation that accepts a fetch function for testability.
+/// The fetch function signature: (provider, z, y, x) -> Result<(data, content_type), error_message>
+fn handle_tile_request_with_fetcher<F>(
+    provider: &str,
+    z: u32,
+    y: u32,
+    x: u32,
+    tile_cache: &Arc<Mutex<Option<TileCache>>>,
+    fetch_fn: F,
+) -> http::Response<Vec<u8>>
+where
+    F: FnOnce(&str, u32, u32, u32) -> Result<(Vec<u8>, String), String>,
+{
     // Validate provider
     if !SUPPORTED_PROVIDERS.contains(&provider) {
         tracing::warn!(provider = %provider, "Unknown tile provider requested");
@@ -188,7 +204,7 @@ fn handle_tile_request(
 
     // Cache miss - fetch from network
     tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache miss, fetching from network");
-    match fetch_tile_from_network(provider, z, y, x) {
+    match fetch_fn(provider, z, y, x) {
         Ok((data, content_type)) => {
             // Store in cache
             if let Ok(mut cache_guard) = tile_cache.lock() {
@@ -525,30 +541,84 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_tile_request_cache_miss_no_network_returns_404() {
-        // With no cached tile and network failing (offline), should return 404
-        // Note: This test will actually attempt network and fail (expected)
+    fn test_handle_tile_request_cache_miss_network_fails_returns_404() {
+        // With no cached tile and network failing, should return 404
         let cache = make_test_cache();
-        let response = handle_tile_request("esri", 99, 99999, 99999, &cache);
-        // The actual network call will fail (invalid coords or timeout in test env)
-        // Either way, without a cached tile, we should get 404
-        assert!(
-            response.status() == http::StatusCode::NOT_FOUND
-                || response.status() == http::StatusCode::OK
-        );
+
+        // Mock fetch that always fails
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
+            Err("Network unavailable".to_string())
+        };
+
+        let response =
+            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, mock_fetch);
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
     }
 
     #[test]
-    fn test_handle_tile_request_with_no_cache_initialized() {
-        // Cache is None (disabled or failed to init)
+    fn test_handle_tile_request_cache_miss_network_succeeds_returns_200() {
+        // Cache miss but network fetch succeeds
+        let cache = make_test_cache();
+
+        // Mock fetch that returns tile data
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
+            Ok((b"fetched_tile_data".to_vec(), "image/jpeg".to_string()))
+        };
+
+        let response =
+            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, mock_fetch);
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(response.body(), b"fetched_tile_data");
+    }
+
+    #[test]
+    fn test_handle_tile_request_fetched_tile_is_cached() {
+        // Verify that a successfully fetched tile is stored in cache
+        let cache = make_test_cache();
+
+        // Mock fetch
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
+            Ok((b"new_tile".to_vec(), "image/png".to_string()))
+        };
+
+        let _ = handle_tile_request_with_fetcher("esri", 15, 100, 200, &cache, mock_fetch);
+
+        // Check that tile is now in cache
+        let cached = {
+            let mut guard = cache.lock().unwrap();
+            guard.as_mut().unwrap().get("esri", 15, 100, 200)
+        };
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap().data, b"new_tile");
+    }
+
+    #[test]
+    fn test_handle_tile_request_with_no_cache_network_succeeds() {
+        // Cache is None (disabled) but network works
         let cache = Arc::new(Mutex::new(None));
-        let response = handle_tile_request("esri", 10, 500, 250, &cache);
-        // Should still work (just won't cache), will hit network
-        // Either succeeds with tile or fails with 404
-        assert!(
-            response.status() == http::StatusCode::OK
-                || response.status() == http::StatusCode::NOT_FOUND
-        );
+
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
+            Ok((b"tile_data".to_vec(), "image/jpeg".to_string()))
+        };
+
+        let response =
+            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, mock_fetch);
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(response.body(), b"tile_data");
+    }
+
+    #[test]
+    fn test_handle_tile_request_with_no_cache_network_fails() {
+        // Cache is None (disabled) and network fails -> 404
+        let cache = Arc::new(Mutex::new(None));
+
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
+            Err("Connection refused".to_string())
+        };
+
+        let response =
+            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, mock_fetch);
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
     }
 
     // === Response builder tests ===
