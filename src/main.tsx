@@ -17,8 +17,7 @@ declare global {
 
 // Expose stores for E2E testing (only in dev/test mode)
 // Guarded to prevent shipping internal store access to production builds
-// Using process.env.NODE_ENV which Vite replaces at build time
-if (process.env.NODE_ENV !== 'production') {
+if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
   window.__E2E_TEST__ = {
     uiStore: useUIStore,
     projectStore: useProjectStore,
