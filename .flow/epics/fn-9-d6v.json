@@ -4,10 +4,10 @@
   "depends_on_epics": [],
   "id": "fn-9-d6v",
   "next_task": 1,
-  "plan_review_status": "unknown",
-  "plan_reviewed_at": null,
+  "plan_review_status": "ship",
+  "plan_reviewed_at": "2026-01-20T16:07:17.575955Z",
   "spec_path": ".flow/specs/fn-9-d6v.md",
   "status": "open",
   "title": "Section Hover/Selection Highlighting on Map",
-  "updated_at": "2026-01-20T15:42:59.228719Z"
+  "updated_at": "2026-01-20T16:07:17.575969Z"
 }
