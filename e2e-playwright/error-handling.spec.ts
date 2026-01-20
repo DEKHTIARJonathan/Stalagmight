@@ -274,6 +274,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
             display: {
               default_background: '#1a1a2e',
               grid_color: '#333366',
+              grid_spacing: 10,
               station_size: 6,
               line_thickness: 2,
               font_size: 12,
@@ -292,10 +293,15 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
             map: {
               satellite_provider: 'openstreetmap',
               satellite_enabled: false,
+              satellite_gps_origin: {
+                latitude: 24.55,
+                longitude: -81.78,
+              },
               snap_threshold_pixels: 10,
               zoom_default: 15,
               zoom_min: 1,
               zoom_max: 22,
+              zoom_step: 1.0,
               controls: {
                 pan_speed: 1.0,
                 zoom_speed: 1.0,
@@ -307,6 +313,8 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               warn_shot_length_max: 50.0,
               warn_depth_change_per_shot_max: 10.0,
               warn_azimuth_deviation_max: 30.0,
+              azimuth_diff_threshold: 10.0,
+              pitch_diff_threshold: 5.0,
             },
             export: {
               default_image_format: 'png',
@@ -343,6 +351,11 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               sections_panel_width: 250,
               detail_panel_width: 300,
               data_table_height: 200,
+            },
+            cache: {
+              tile_cache_enabled: true,
+              tile_cache_max_mb: 500,
+              tile_ttl_days: 30,
             },
           };
 

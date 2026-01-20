@@ -4,6 +4,41 @@
 Wire up the visibility toggles in MapCanvas using useEffect hooks.
 
 ## File to Modify
+
+### `src/components/Map/MapCanvas.tsx`
+
+**Existing pattern (L517-528):**
+```typescript
+// Sync shot data labels visibility with SurveyLayer
+useEffect(() => {
+  if (!surveyLayerRef.current) return;
+  surveyLayerRef.current.setShowShotLabels(showShotData);
+}, [showShotData, mapLoaded]);
+```
+
+**State destructuring (~L66):**
+Add `showStations` and `showShots` to the destructured state from uiStore.
+
+## Implementation
+
+Add after existing toggle sync hooks (~L534):
+
+```typescript
+// Sync stations visibility with SurveyLayer
+useEffect(() => {
+  if (!surveyLayerRef.current) return;
+  surveyLayerRef.current.setShowStations(showStations);
+}, [showStations, mapLoaded]);
+
+// Sync shots visibility with SurveyLayer
+useEffect(() => {
+  if (!surveyLayerRef.current) return;
+  surveyLayerRef.current.setShowShots(showShots);
+}, [showShots, mapLoaded]);
+```
+
+**Important**: Include `mapLoaded` in dependency array to handle case where toggle changes before map is ready.
+## File to Modify
 - `src/components/Map/MapCanvas.tsx`
 
 ## Implementation Details
@@ -32,12 +67,14 @@ Also add `showStations` and `showShots` to the destructured state from uiStore.
 - Task 1: showShots state must exist in uiStore
 - Task 2: SurveyLayer methods must exist
 ## Acceptance
-- [ ] useEffect hook syncs `showStations` toggle to SurveyLayer
-- [ ] useEffect hook syncs `showShots` toggle to SurveyLayer
+- [ ] `showStations` and `showShots` destructured from uiStore
+- [ ] useEffect hook syncs `showStations` to `surveyLayerRef.current.setShowStations()`
+- [ ] useEffect hook syncs `showShots` to `surveyLayerRef.current.setShowShots()`
+- [ ] Both hooks include `mapLoaded` in dependency array
+- [ ] Both hooks have null-check for `surveyLayerRef.current`
 - [ ] Toggling "Stations" in Display menu hides/shows station markers on map
 - [ ] Toggling "Shots" in Display menu hides/shows shot lines on map
-- [ ] Visibility changes apply immediately without requiring map interaction
-- [ ] TypeScript compiles without errors
+- [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD
 
