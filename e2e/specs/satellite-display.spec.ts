@@ -85,14 +85,10 @@ async function clearTileCache(provider?: string): Promise<void> {
 
 /**
  * Check network connectivity via IPC
+ * Backend returns boolean: true = online, false = offline
  */
-interface NetworkStatus {
-  is_offline: boolean;
-  is_low_disk: boolean;
-}
-
-async function getNetworkStatus(): Promise<NetworkStatus> {
-  return await invokeIPC<NetworkStatus>('get_network_status');
+async function isNetworkOnline(): Promise<boolean> {
+  return await invokeIPC<boolean>('get_network_status');
 }
 
 /**
@@ -100,8 +96,8 @@ async function getNetworkStatus(): Promise<NetworkStatus> {
  */
 async function skipIfOffline(ctx: Mocha.Context): Promise<void> {
   try {
-    const status = await getNetworkStatus();
-    if (status.is_offline) {
+    const online = await isNetworkOnline();
+    if (!online) {
       ctx.skip();
     }
   } catch {
@@ -422,20 +418,12 @@ describe('Satellite Display and Cache Verification', () => {
         { timeout: 5000, interval: 200 }
       );
 
-      // Wait for cache to potentially grow (new tiles loaded)
-      // Allow some time for tile fetches, but use waitUntil pattern
-      await browser.waitUntil(
-        async () => {
-          const newStats = await getCacheStats();
-          // Consider success if tiles increased OR stayed same (all tiles were pre-cached)
-          return newStats.total_tiles >= initialTiles;
-        },
-        { timeout: 15000, interval: 1000 }
-      );
+      // Wait for cache to grow with new tiles from panned region
+      // After a significant pan, we expect at least 1 new tile to load
+      const finalStats = await waitForCacheTiles(initialTiles + 1, 20000);
 
-      // Final verification
-      const finalStats = await getCacheStats();
-      expect(finalStats.total_tiles).toBeGreaterThanOrEqual(initialTiles);
+      // Verify cache actually grew (not just stayed same)
+      expect(finalStats.total_tiles).toBeGreaterThan(initialTiles);
     });
 
     /**
@@ -462,6 +450,7 @@ describe('Satellite Display and Cache Verification', () => {
 
       // Wait for initial tiles at current zoom
       const initialStats = await waitForCacheTiles(1, 30000);
+      const initialTiles = initialStats.total_tiles;
       const initialZoom = (await getMapInfo()).zoom ?? 10;
 
       // Zoom in using programmatic map access (more reliable than wheel events)
@@ -479,10 +468,14 @@ describe('Satellite Display and Cache Verification', () => {
       // Wait for zoom to actually change
       await waitForZoomChange(initialZoom, 5000);
 
-      // Wait for new tiles at zoomed level
-      await waitForCacheTiles(initialStats.total_tiles, 15000);
+      // Wait for new tiles at zoomed level - expect growth from higher resolution tiles
+      const statsAfterZoomIn = await waitForCacheTiles(initialTiles + 1, 20000);
+      expect(statsAfterZoomIn.total_tiles).toBeGreaterThan(initialTiles);
 
-      // Zoom out
+      const tilesAfterZoomIn = statsAfterZoomIn.total_tiles;
+      const zoomedInZoom = (await getMapInfo()).zoom ?? initialZoom;
+
+      // Zoom out past original level
       await browser.execute(() => {
         const map = (window as unknown as { __cavechef_map__?: {
           zoomOut: () => void;
@@ -494,32 +487,24 @@ describe('Satellite Display and Cache Verification', () => {
         }
       });
 
-      const zoomedInZoom = (await getMapInfo()).zoom ?? initialZoom;
       await waitForZoomChange(zoomedInZoom, 5000);
 
-      // Wait for cache to settle
-      await browser.waitUntil(
-        async () => {
-          const stats = await getCacheStats();
-          return stats.total_tiles >= initialStats.total_tiles;
-        },
-        { timeout: 15000, interval: 1000 }
-      );
+      // Wait for cache to grow with zoomed-out tiles
+      const finalStats = await waitForCacheTiles(tilesAfterZoomIn + 1, 20000);
 
-      // Verify cache has tiles from multiple zoom levels
-      const finalStats = await getCacheStats();
-      expect(finalStats.total_tiles).toBeGreaterThanOrEqual(initialStats.total_tiles);
+      // Verify cache grew with tiles from multiple zoom levels
+      expect(finalStats.total_tiles).toBeGreaterThan(tilesAfterZoomIn);
     });
   });
 
   describe('Cache Hit Verification', () => {
     /**
-     * Test: Toggle satellite off then on, verify tiles served from cache
+     * Test: Toggle satellite off then on, verify faster load from cache
      *
-     * Second enable should serve tiles from cache without new fetches.
-     * We verify by checking that cache stats remain stable.
+     * Second enable should serve tiles from cache, resulting in faster display.
+     * We measure time to reach stable tile count on first vs second enable.
      */
-    it('should serve tiles from cache on re-enable', async function () {
+    it('should serve tiles from cache on re-enable (faster second load)', async function () {
       await skipIfOffline(this);
 
       await createNewProject('Cache Hit Test');
@@ -533,10 +518,12 @@ describe('Satellite Display and Cache Verification', () => {
 
       // Ensure baseline and enable satellite
       await ensureBaselineState();
-      await setSatellite(true);
 
-      // Wait for tiles to load
+      // Measure time for first load (network fetch)
+      const firstLoadStart = Date.now();
+      await setSatellite(true);
       const statsAfterFirstLoad = await waitForCacheTiles(1, 30000);
+      const firstLoadTime = Date.now() - firstLoadStart;
       expect(statsAfterFirstLoad.total_tiles).toBeGreaterThan(0);
 
       // Disable satellite
@@ -546,15 +533,16 @@ describe('Satellite Display and Cache Verification', () => {
         { timeout: 3000 }
       );
 
-      // Re-enable satellite (should be served from cache)
+      // Measure time for second load (should be from cache)
+      const secondLoadStart = Date.now();
       await setSatellite(true);
       await browser.waitUntil(
         async () => await isSatelliteEnabled(),
         { timeout: 3000 }
       );
-
-      // Give a brief moment for any potential fetches
-      await browser.pause(1000);
+      // Wait briefly for tiles to appear (cache hit should be near-instant)
+      await browser.pause(500);
+      const secondLoadTime = Date.now() - secondLoadStart;
 
       // Stats should be stable (tiles served from cache)
       const statsAfterSecondLoad = await getCacheStats();
@@ -563,6 +551,13 @@ describe('Satellite Display and Cache Verification', () => {
       expect(statsAfterSecondLoad.total_tiles).toBeGreaterThanOrEqual(
         statsAfterFirstLoad.total_tiles
       );
+
+      // Second load should be faster than first (with generous 3x threshold)
+      // This accounts for network variability while still verifying cache benefit
+      // Note: If first load was very fast (< 1s), skip timing check as it's unreliable
+      if (firstLoadTime > 1000) {
+        expect(secondLoadTime).toBeLessThan(firstLoadTime);
+      }
     });
 
     /**
