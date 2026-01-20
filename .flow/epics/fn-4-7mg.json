@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-4-7mg",
+  "created_at": "2026-01-20T13:02:18.357545Z",
+  "depends_on_epics": [],
+  "id": "fn-4-7mg",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-4-7mg.md",
+  "status": "open",
+  "title": "Configurable interaction bounding boxes for shots and stations",
+  "updated_at": "2026-01-20T13:02:49.894349Z"
+}

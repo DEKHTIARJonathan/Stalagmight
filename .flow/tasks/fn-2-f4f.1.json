@@ -1,0 +1,14 @@
+{
+  "assignee": "cavechef@example.com",
+  "claim_note": "",
+  "claimed_at": "2026-01-20T13:01:38.851683Z",
+  "created_at": "2026-01-20T12:03:46.333394Z",
+  "depends_on": [],
+  "epic": "fn-2-f4f",
+  "id": "fn-2-f4f.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-2-f4f.1.md",
+  "status": "in_progress",
+  "title": "Add zoom_step to map config",
+  "updated_at": "2026-01-20T13:01:38.851697Z"
+}

@@ -71,6 +71,8 @@ export interface MapConfig {
   zoom_default: number;
   zoom_min: number;
   zoom_max: number;
+  /** Zoom step for click-to-zoom (default: 1.0, range: 0.1-5.0) */
+  zoom_step: number;
   controls: MapControlsConfig;
 }
 
@@ -192,6 +194,7 @@ export const defaultConfig: Config = {
     zoom_default: 15,
     zoom_min: 1,
     zoom_max: 22,
+    zoom_step: 1.0,
     controls: {
       pan_speed: 1.0,
       zoom_speed: 1.0,

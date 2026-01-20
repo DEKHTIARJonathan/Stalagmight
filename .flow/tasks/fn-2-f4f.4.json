@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-20T12:04:35.494854Z",
+  "depends_on": [
+    "fn-2-f4f.2"
+  ],
+  "epic": "fn-2-f4f",
+  "id": "fn-2-f4f.4",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-2-f4f.4.md",
+  "status": "todo",
+  "title": "Implement spring-loaded Z key for temporary zoom",
+  "updated_at": "2026-01-20T12:40:59.189314Z"
+}

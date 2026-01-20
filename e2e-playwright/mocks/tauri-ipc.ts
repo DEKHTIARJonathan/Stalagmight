@@ -685,6 +685,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 zoom_default: 15,
                 zoom_min: 1,
                 zoom_max: 22,
+                zoom_step: 1.0,
                 controls: {
                   pan_speed: 1.0,
                   zoom_speed: 1.0,
@@ -734,6 +735,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 sections_panel_width: 250,
                 detail_panel_width: 300,
                 data_table_height: 200,
+              },
+              cache: {
+                tile_cache_enabled: true,
+                tile_cache_max_mb: 500,
+                tile_ttl_days: 30,
               },
             };
 

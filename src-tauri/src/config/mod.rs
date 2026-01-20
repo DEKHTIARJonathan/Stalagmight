@@ -176,7 +176,21 @@ pub struct MapConfig {
     pub zoom_default: u32,
     pub zoom_min: u32,
     pub zoom_max: u32,
+    /// Zoom step for click-to-zoom (default: 1.0, range: 0.1-5.0)
+    #[serde(default = "default_zoom_step")]
+    pub zoom_step: f64,
     pub controls: MapControlsConfig,
+}
+
+impl MapConfig {
+    /// Normalize zoom_step to valid range (0.1-5.0)
+    pub fn normalize(&mut self) {
+        self.zoom_step = self.zoom_step.clamp(0.1, 5.0);
+    }
+}
+
+fn default_zoom_step() -> f64 {
+    1.0
 }
 
 fn default_satellite_gps_origin() -> GpsOrigin {
@@ -247,7 +261,8 @@ impl Config {
         if config_path.exists() {
             let contents =
                 std::fs::read_to_string(&config_path).context("Failed to read config file")?;
-            let config: Config = toml::from_str(&contents).context("Failed to parse config file")?;
+            let mut config: Config = toml::from_str(&contents).context("Failed to parse config file")?;
+            config.map.normalize();
             tracing::info!(?config_path, "Loaded config from file");
             Ok(config)
         } else {
@@ -257,7 +272,8 @@ impl Config {
     }
 
     /// Save config to file
-    pub fn save(&self) -> Result<()> {
+    pub fn save(&mut self) -> Result<()> {
+        self.map.normalize();
         let config_path = Self::config_path()?;
 
         if let Some(parent) = config_path.parent() {
