@@ -2,7 +2,7 @@
 //!
 //! Tests are organized by category. Run `cargo test` to execute all tests.
 
-use cavechef_lib::config::ValidationConfig;
+use cavechef_lib::config::{CacheConfig, Config, ValidationConfig};
 use cavechef_lib::core::{Command, UndoData, UndoEntry, UndoStack, Validator};
 use cavechef_lib::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure, Project, Section, SectionData,
@@ -916,6 +916,47 @@ fn test_undo_limit_config() {
 
     stack.set_history_limit(75);
     assert_eq!(stack.history_limit(), 75);
+}
+
+/// Test: CacheConfig defaults match SPEC.md values
+#[test]
+fn test_cache_config_defaults() {
+    let cache = CacheConfig::default();
+    assert!(cache.tile_cache_enabled, "tile_cache_enabled should default to true");
+    assert_eq!(cache.tile_cache_max_mb, 500, "tile_cache_max_mb should default to 500 per SPEC.md");
+    assert_eq!(cache.tile_ttl_days, 30, "tile_ttl_days should default to 30");
+}
+
+/// Test: Config includes CacheConfig with correct defaults
+#[test]
+fn test_config_includes_cache_config() {
+    let config = Config::default();
+    assert!(config.cache.tile_cache_enabled);
+    assert_eq!(config.cache.tile_cache_max_mb, 500);
+    assert_eq!(config.cache.tile_ttl_days, 30);
+}
+
+/// Test: CacheConfig TOML deserialization with missing fields uses defaults
+#[test]
+fn test_cache_config_partial_toml_deserialization() {
+    // Test partial cache config - only tile_cache_enabled specified
+    let toml_str = r#"
+        tile_cache_enabled = false
+    "#;
+    let cache: CacheConfig = toml::from_str(toml_str).expect("Should deserialize partial CacheConfig");
+    assert!(!cache.tile_cache_enabled, "Explicit value should be respected");
+    assert_eq!(cache.tile_cache_max_mb, 500, "Missing field should use default");
+    assert_eq!(cache.tile_ttl_days, 30, "Missing field should use default");
+}
+
+/// Test: CacheConfig TOML deserialization with empty table uses all defaults
+#[test]
+fn test_cache_config_empty_toml_deserialization() {
+    let toml_str = "";
+    let cache: CacheConfig = toml::from_str(toml_str).expect("Should deserialize empty CacheConfig");
+    assert!(cache.tile_cache_enabled);
+    assert_eq!(cache.tile_cache_max_mb, 500);
+    assert_eq!(cache.tile_ttl_days, 30);
 }
 
 // ============================================================================
