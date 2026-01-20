@@ -668,12 +668,12 @@ export default function MapCanvas() {
       clearMeasure();
       setDrawFromStation(null);
       setSnappedStation(null);
-      // Cancel placement mode (relies on station snapping)
+      // Cancel placement mode properly (calls onCancel callback and clears cursor)
       if (placementMode) {
-        cancelPlacementMode();
+        handlePlacementCancel();
       }
     }
-  }, [showStations, clearSelectionByType, setHoveredStation, clearMergeStations, clearMeasure, setDrawFromStation, setSnappedStation, placementMode, cancelPlacementMode]);
+  }, [showStations, clearSelectionByType, setHoveredStation, clearMergeStations, clearMeasure, setDrawFromStation, setSnappedStation, placementMode, handlePlacementCancel]);
 
   // Clear shot selection and hover when shots visibility changes to OFF
   useEffect(() => {
