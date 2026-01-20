@@ -1,0 +1,17 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-20T05:27:09.519983Z",
+  "depends_on": [
+    "fn-1-0u5.3",
+    "fn-1-0u5.4"
+  ],
+  "epic": "fn-1-0u5",
+  "id": "fn-1-0u5.5",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-1-0u5.5.md",
+  "status": "todo",
+  "title": "Frontend integration - types, tile URL, hooks, UI",
+  "updated_at": "2026-01-20T05:28:57.394234Z"
+}

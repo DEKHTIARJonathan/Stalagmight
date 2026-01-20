@@ -1,5 +1,0 @@
-{
-  "tests": ["226 Playwright tests passed", "72 Rust tests passed"],
-  "typecheck": "TypeScript compiles without errors",
-  "files_modified": ["src/components/Dialogs/SectionPreview.tsx"]
-}

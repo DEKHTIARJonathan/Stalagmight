@@ -1,0 +1,17 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-20T05:27:12.122820Z",
+  "depends_on": [
+    "fn-1-0u5.5",
+    "fn-1-0u5.6"
+  ],
+  "epic": "fn-1-0u5",
+  "id": "fn-1-0u5.7",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-1-0u5.7.md",
+  "status": "todo",
+  "title": "Playwright tests - satellite display and edge cases",
+  "updated_at": "2026-01-20T05:28:57.529280Z"
+}
