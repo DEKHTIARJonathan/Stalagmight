@@ -5,12 +5,12 @@
 
 /**
  * Get the current map zoom level.
- * @returns The current zoom level, or null if map is not available.
+ * @returns The current zoom level, or 0 if map is not available.
  */
-export async function getMapZoom(): Promise<number | null> {
+export async function getMapZoom(): Promise<number> {
   return browser.execute(() => {
     const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number } }).__cavechef_map__;
-    return map?.getZoom() ?? null;
+    return map?.getZoom() ?? 0;
   });
 }
 
@@ -103,7 +103,7 @@ export async function loadProjectFixture(fixtureName: string): Promise<void> {
     throw new Error(`Unknown fixture: ${fixtureName}. Available: ${Object.keys(fixtures).join(', ')}`);
   }
 
-  // Create new project
+  // Create new project and switch to single view
   const createResult = await browser.executeAsync(
     async (
       projectName: string,
@@ -116,6 +116,11 @@ export async function loadProjectFixture(fixtureName: string): Promise<void> {
               createProject: (name: string) => Promise<{ success: boolean; error?: string }>;
             };
           };
+          uiStore: {
+            getState: () => {
+              setView: (view: string) => void;
+            };
+          };
         };
       }).__E2E_TEST__;
 
@@ -126,6 +131,10 @@ export async function loadProjectFixture(fixtureName: string): Promise<void> {
 
       try {
         const result = await e2e.projectStore.getState().createProject(projectName);
+        if (result.success) {
+          // Switch to single view so MapCanvas mounts
+          e2e.uiStore.getState().setView('single');
+        }
         done(result);
       } catch (err) {
         done({ success: false, error: String(err) });
