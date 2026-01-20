@@ -16,8 +16,9 @@ export function hexToRgb(hex: string): [number, number, number] {
 /**
  * Convert hex color to HSL
  * Returns null if the hex color is invalid
+ * (Internal helper for HSL interpolation)
  */
-export function hexToHSL(hex: string): { h: number; s: number; l: number } | null {
+function hexToHSL(hex: string): { h: number; s: number; l: number } | null {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
   if (!result) {
     return null;
@@ -54,8 +55,9 @@ export function hexToHSL(hex: string): { h: number; s: number; l: number } | nul
 /**
  * Convert HSL to hex color
  * h: 0-360, s: 0-1, l: 0-1
+ * (Internal helper for HSL interpolation)
  */
-export function hslToHex(h: number, s: number, l: number): string {
+function hslToHex(h: number, s: number, l: number): string {
   // Normalize h to 0-360 range
   h = ((h % 360) + 360) % 360;
 
@@ -88,8 +90,9 @@ export function hslToHex(h: number, s: number, l: number): string {
  * Interpolate between two hues taking the shortest path around the color wheel
  * h1, h2: 0-360, t: 0-1
  * Returns: 0-360
+ * (Internal helper for HSL interpolation)
  */
-export function interpolateHue(h1: number, h2: number, t: number): number {
+function interpolateHue(h1: number, h2: number, t: number): number {
   // Calculate the difference
   let diff = h2 - h1;
 
@@ -157,13 +160,15 @@ export function getDepthColor(
   maxDepth: number
 ): string | null {
   // Return null for invalid inputs - caller should fallback to section color
-  if (!isFinite(depth) || !isFinite(minDepth) || !isFinite(maxDepth)) {
+  // Use Number.isFinite for strict validation (doesn't coerce non-numbers)
+  if (!Number.isFinite(depth) || !Number.isFinite(minDepth) || !Number.isFinite(maxDepth)) {
     return null;
   }
 
-  // Handle equal depths (flat cave)
+  // Handle equal depths (flat cave) - validate shallowColor first
   if (maxDepth === minDepth) {
-    return shallowColor;
+    // Validate shallowColor is a valid hex before returning
+    return hexToHSL(shallowColor) ? shallowColor : null;
   }
 
   // Clamp depth to range
