@@ -15,6 +15,13 @@ pub fn update_config(state: State<AppState>, config: Config) -> Result<(), Strin
     state.update_config(config).map_err(|e| e.to_string())
 }
 
+/// Reload configuration from disk without persisting any changes
+/// This re-reads the config file and updates the in-memory state
+#[tauri::command]
+pub fn reload_config(state: State<AppState>) -> Result<Config, String> {
+    state.reload_config().map_err(|e| e.to_string())
+}
+
 /// Update panel sizes in configuration (efficient partial update)
 #[tauri::command]
 pub fn update_panel_sizes(

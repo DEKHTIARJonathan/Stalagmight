@@ -1897,6 +1897,16 @@ impl AppState {
         Ok(())
     }
 
+    /// Reload config from disk without saving
+    /// Returns the newly loaded config
+    pub fn reload_config(&self) -> Result<Config> {
+        let new_config = Config::load()?;
+        if let Ok(mut cfg) = self.config.lock() {
+            *cfg = new_config.clone();
+        }
+        Ok(new_config)
+    }
+
     /// Check if undo is available
     pub fn can_undo(&self) -> bool {
         self.undo_stack

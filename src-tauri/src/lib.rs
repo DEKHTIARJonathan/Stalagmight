@@ -445,6 +445,7 @@ pub fn run() {
             // Config
             commands::config::get_config,
             commands::config::update_config,
+            commands::config::reload_config,
             commands::config::update_panel_sizes,
             // Display settings (per-project)
             commands::config::load_display_settings,
