@@ -655,6 +655,7 @@ export default function MapCanvas() {
   }, [showVirtualShots, showShots, mapLoaded]);
 
   // Clear station selection, hover, and cancel station operations when stations hidden
+  // Note: Toast notifications for canceled operations will be added in task fn-3-e6v.6
   useEffect(() => {
     if (!showStations) {
       // Clear station selection and hover
@@ -685,7 +686,7 @@ export default function MapCanvas() {
   }, [showShots, clearSelectionByType, setHoveredShot]);
 
   // Clear virtual shot selection when virtual shots visibility changes to OFF
-  // Uses composite identity (file_path or created_at) for stable dependency
+  // Uses composite identity (file_path or created_at) since Project type has no id field
   const projectIdentity = project?.file_path ?? project?.created_at;
   useEffect(() => {
     if (!showVirtualShots && project?.sections) {
