@@ -15,12 +15,15 @@ declare global {
   }
 }
 
-// Always expose stores for E2E testing
-// This is safe because the stores are already accessible through React DevTools
-window.__E2E_TEST__ = {
-  uiStore: useUIStore,
-  projectStore: useProjectStore,
-};
+// Expose stores for E2E testing (only in dev/test mode)
+// Guarded to prevent shipping internal store access to production builds
+// Using process.env.NODE_ENV which Vite replaces at build time
+if (process.env.NODE_ENV !== 'production') {
+  window.__E2E_TEST__ = {
+    uiStore: useUIStore,
+    projectStore: useProjectStore,
+  };
+}
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
