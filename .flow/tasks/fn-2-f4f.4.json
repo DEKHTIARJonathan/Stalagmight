@@ -7,10 +7,23 @@
     "fn-2-f4f.2"
   ],
   "epic": "fn-2-f4f",
+  "evidence": {
+    "commits": [
+      "df74de0",
+      "63461a7",
+      "cc6c945"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui",
+      "cargo test --manifest-path src-tauri/Cargo.toml"
+    ]
+  },
   "id": "fn-2-f4f.4",
   "priority": null,
   "spec_path": ".flow/tasks/fn-2-f4f.4.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Implement spring-loaded Z key for temporary zoom",
-  "updated_at": "2026-01-20T14:23:37.472515Z"
+  "updated_at": "2026-01-20T14:44:24.396175Z"
 }

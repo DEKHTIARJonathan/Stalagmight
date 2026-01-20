@@ -579,9 +579,8 @@ The existing `DEFAULT_SHORTCUTS` has `z: 'zoom'`. The spring-loaded behavior ove
 - [ ] blur effect calls deactivateSpringLoaded
 - [ ] pnpm tsc --noEmit passes
 ## Done summary
-TBD
-
+Implemented spring-loaded Z key for temporary zoom tool activation with tap (keep zoom) vs hold (restore previous tool) behavior, including cancelSpringLoaded for blur/unmount safety.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: df74de0, 63461a7, cc6c945
+- Tests: pnpm tsc --noEmit, pnpm test:ui, cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:

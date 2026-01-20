@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-20T14:44:47.214067Z",
+  "depends_on": [
+    "fn-7-gba.1"
+  ],
+  "epic": "fn-7-gba",
+  "id": "fn-7-gba.2",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-7-gba.2.md",
+  "status": "todo",
+  "title": "Audit and fix all map overlay components for cleanup issues",
+  "updated_at": "2026-01-20T14:45:10.166661Z"
+}
