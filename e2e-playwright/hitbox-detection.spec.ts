@@ -42,50 +42,6 @@ async function createProject(page: Page, name: string): Promise<void> {
 }
 
 /**
- * Helper to get a station's screen position using map.queryRenderedFeatures + map.project().
- * This avoids re-implementing coordinate conversion logic and uses the actual rendered feature coords.
- */
-async function getStationScreenPosition(
-  page: Page,
-  sectionId: number,
-  stationIndex: number
-): Promise<{ x: number; y: number }> {
-  return page.evaluate(
-    ({ sectionId, stationIndex }) => {
-      const map = (window as unknown as {
-        __cavechef_map__?: {
-          project: (coords: [number, number]) => { x: number; y: number };
-          queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
-            geometry: { type: string; coordinates: [number, number] };
-            properties: { sectionId: number; stationIndex: number };
-          }>;
-        };
-      }).__cavechef_map__;
-
-      if (!map) throw new Error('Map not available');
-
-      // Query actual rendered features to get their coordinates
-      const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-      const feature = features.find(
-        (f) =>
-          f.properties.sectionId === sectionId &&
-          f.properties.stationIndex === stationIndex
-      );
-
-      if (!feature) {
-        throw new Error(`Station feature not found: ${sectionId}:${stationIndex}`);
-      }
-
-      // Project the actual feature coordinates to screen space
-      const coords = feature.geometry.coordinates as [number, number];
-      const screenPos = map.project(coords);
-      return { x: screenPos.x, y: screenPos.y };
-    },
-    { sectionId, stationIndex }
-  );
-}
-
-/**
  * Helper to get the current selection state using expect.poll for stability.
  */
 async function getSelectionState(page: Page): Promise<{
@@ -211,32 +167,6 @@ async function getLayerOrder(page: Page): Promise<Record<string, number>> {
 }
 
 /**
- * Helper to navigate back to GlobalView from a project view.
- * Handles the "Discard Changes" dialog if it appears.
- */
-async function navigateToGlobalView(page: Page): Promise<void> {
-  // Go back to GlobalView (close project) using the "Back" button
-  await page.click('button:has-text("Back")');
-
-  // Handle unsaved changes dialog if it appears
-  const discardButton = page.locator('button:has-text("Discard Changes")');
-  if (await discardButton.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await discardButton.click();
-  }
-
-  // Wait for GlobalView to load
-  await page.waitForSelector('[data-testid="settings-button"], h1:has-text("CaveChef")', { timeout: 5000 });
-}
-
-/**
- * Helper to open the Settings dialog from GlobalView.
- */
-async function openSettingsDialog(page: Page): Promise<void> {
-  await page.click('[data-testid="settings-button"]');
-  await page.waitForSelector('[data-testid="settings-dialog"]', { timeout: 5000 });
-}
-
-/**
  * Helper to find an isolated station (no other stations within 2*hitArea + margin).
  */
 async function findIsolatedStation(page: Page, margin = 5): Promise<{
@@ -357,13 +287,14 @@ test.describe('Hitbox Detection', () => {
     // Poll for selection to be cleared
     await pollSelectionState(page, (sel) => sel === null);
 
-    // Click at hitArea + 2 pixels from station center (should miss)
-    const missX = canvasBox.x + screenPos.x + hitArea + 2;
+    // Click at hitArea + 1 pixels from station center (should miss)
+    const missX = canvasBox.x + screenPos.x + hitArea + 1;
     const missY = canvasBox.y + screenPos.y;
     await page.mouse.click(missX, missY);
 
-    // Wait a moment then verify selection is still null (miss)
+    // Verify miss - selection should remain null AND detail panel should not be visible
     await expect.poll(async () => getSelectionState(page), { timeout: 1000 }).toBeNull();
+    await expect(page.locator('[data-testid="detail-panel"]')).not.toBeVisible();
   });
 
   test('overlapping hitboxes select nearest to click', async ({ page }) => {
@@ -426,9 +357,18 @@ test.describe('Hitbox Detection', () => {
     // Ensure select tool is active
     await page.keyboard.press('s');
 
-    // Click closer to stationA (25% of the way from A to B)
-    const clickX = stationA.screenPos.x + (stationB.screenPos.x - stationA.screenPos.x) * 0.25;
-    const clickY = stationA.screenPos.y + (stationB.screenPos.y - stationA.screenPos.y) * 0.25;
+    // Click at midpoint between stations (guaranteed overlap region since dist < 2*hitArea),
+    // then offset slightly toward stationA to ensure it's the nearest
+    const midX = (stationA.screenPos.x + stationB.screenPos.x) / 2;
+    const midY = (stationA.screenPos.y + stationB.screenPos.y) / 2;
+    // Move 2 pixels toward stationA from the midpoint
+    const dx = stationA.screenPos.x - midX;
+    const dy = stationA.screenPos.y - midY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const offsetX = dist > 0 ? (dx / dist) * 2 : 0;
+    const offsetY = dist > 0 ? (dy / dist) * 2 : 0;
+    const clickX = midX + offsetX;
+    const clickY = midY + offsetY;
 
     await page.mouse.click(canvasBox.x + clickX, canvasBox.y + clickY);
 
@@ -571,15 +511,16 @@ test.describe('Hitbox Detection', () => {
     await page.keyboard.press('Escape');
     await pollSelectionState(page, (sel) => sel === null);
 
-    // Click at shotHitArea/2 + 2 perpendicular from shot line (should miss)
-    const missOffset = shotHitArea / 2 + 2;
+    // Click at shotHitArea/2 + 1 perpendicular from shot line (should miss)
+    const missOffset = shotHitArea / 2 + 1;
     const missX = canvasBox.x + midPoint.x + perpendicular.x * missOffset;
     const missY = canvasBox.y + midPoint.y + perpendicular.y * missOffset;
 
     await page.mouse.click(missX, missY);
 
-    // Verify miss - selection should remain null
+    // Verify miss - selection should remain null AND detail panel should not be visible
     await expect.poll(async () => getSelectionState(page), { timeout: 1000 }).toBeNull();
+    await expect(page.locator('[data-testid="detail-panel"]')).not.toBeVisible();
   });
 });
 
@@ -842,6 +783,99 @@ test.describe('Config Reload Effects', () => {
       return map?.getPaintProperty('survey-shots-hitbox', 'line-width') ?? 0;
     });
     expect(updatedShotWidth).toBe(12);
+  });
+
+  test('config hit_area change affects actual hit detection behavior', async ({ page }) => {
+    await createProject(page, 'Config Hit Detection Behavior Test');
+
+    // Find an isolated station to test with
+    const isolatedStation = await findIsolatedStation(page, 10);
+    if (!isolatedStation) {
+      test.skip(true, 'No isolated station found for behavior testing');
+      return;
+    }
+
+    const { screenPos } = isolatedStation;
+    const canvasBox = await getCanvasBoundingBox(page);
+    const initialHitArea = await getStationHitArea(page);
+
+    // Ensure select tool is active
+    await page.keyboard.press('s');
+
+    // Click at initialHitArea - 1 (should hit with default hitArea=10)
+    const clickOffset = initialHitArea - 1;
+    await page.mouse.click(
+      canvasBox.x + screenPos.x + clickOffset,
+      canvasBox.y + screenPos.y
+    );
+
+    // Verify hit
+    const selectionAfterHit = await pollSelectionState(page, (sel) => sel !== null);
+    expect(selectionAfterHit).not.toBeNull();
+    expect(selectionAfterHit?.type).toBe('station');
+
+    // Clear selection
+    await page.keyboard.press('Escape');
+    await pollSelectionState(page, (sel) => sel === null);
+
+    // Now reduce hit_area to 5 (so clicking at offset 9 should miss)
+    await page.evaluate(() => {
+      const stores = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              config: { map: { station: { hit_area: number; radius: number } } } | null;
+            };
+            setState: (update: Partial<{
+              config: { map: { station: { hit_area: number } } } | null;
+            }>) => void;
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (stores) {
+        const state = stores.projectStore.getState();
+        if (state.config) {
+          stores.projectStore.setState({
+            config: {
+              ...state.config,
+              map: {
+                ...state.config.map,
+                station: {
+                  ...state.config.map.station,
+                  hit_area: 5,
+                },
+              },
+            } as typeof state.config,
+          });
+        }
+      }
+    });
+
+    // Wait for hitbox layer to update
+    await expect.poll(
+      async () => {
+        return page.evaluate(() => {
+          const map = (window as unknown as {
+            __cavechef_map__?: {
+              getPaintProperty: (layer: string, prop: string) => number;
+            };
+          }).__cavechef_map__;
+          return map?.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
+        });
+      },
+      { timeout: 5000 }
+    ).toBe(5);
+
+    // Click at same offset (initialHitArea - 1 = 9) - should now MISS since hitArea is 5
+    await page.mouse.click(
+      canvasBox.x + screenPos.x + clickOffset,
+      canvasBox.y + screenPos.y
+    );
+
+    // Verify miss - the same click that hit before should now miss
+    await expect.poll(async () => getSelectionState(page), { timeout: 1000 }).toBeNull();
+    await expect(page.locator('[data-testid="detail-panel"]')).not.toBeVisible();
   });
 });
 

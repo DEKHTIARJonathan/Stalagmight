@@ -324,9 +324,8 @@ async function getShotScreenCoords(page, sectionId, shotId) {
 - [ ] `pnpm test:ui` runs the new tests (not skipped)
 - [ ] All new tests pass
 ## Done summary
-TBD
-
+Added comprehensive Playwright E2E tests for hitbox detection in a new test file, covering station/shot click boundaries, layer ordering, debug visualization toggle, and config reload effects.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 7c80bc0eb8385bde0af7f80af1fae3a63d0cc070, 1c8c05c, 6c69fec, 52d683a
+- Tests: pnpm test:ui e2e-playwright/hitbox-detection.spec.ts
 - PRs:
