@@ -41,8 +41,18 @@ impl AppState {
 
         // Initialize tile cache if enabled
         let tile_cache = if config.cache.tile_cache_enabled {
-            Self::init_tile_cache(&config).ok()
+            match Self::init_tile_cache(&config) {
+                Ok(cache) => Some(cache),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "Failed to initialize tile cache - offline tile access will be unavailable"
+                    );
+                    None
+                }
+            }
         } else {
+            tracing::info!("Tile cache disabled in configuration");
             None
         };
 

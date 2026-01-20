@@ -8,8 +8,11 @@ pub mod models;
 pub mod parsers;
 pub mod persistence;
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{Emitter, Manager};
+
+use cache::TileCache;
 
 /// ESRI World Imagery tile server base URL
 const ESRI_TILE_URL: &str = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile";
@@ -17,10 +20,24 @@ const ESRI_TILE_URL: &str = "https://server.arcgisonline.com/ArcGIS/rest/service
 /// HTTP request timeout for tile fetches
 const TILE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Fetches a tile from the ESRI server
-fn fetch_tile_from_network(z: u32, y: u32, x: u32) -> Result<(Vec<u8>, String), String> {
-    let url = format!("{}/{}/{}/{}", ESRI_TILE_URL, z, y, x);
-    tracing::debug!(url = %url, "Fetching tile from network");
+/// Allowed content types for tile responses (whitelist for security)
+const ALLOWED_CONTENT_TYPES: &[&str] = &["image/jpeg", "image/jpg", "image/png"];
+
+/// Default content type when upstream doesn't provide one or it's invalid
+const DEFAULT_CONTENT_TYPE: &str = "image/jpeg";
+
+/// Supported tile providers
+const SUPPORTED_PROVIDERS: &[&str] = &["esri"];
+
+/// Fetches a tile from the network based on provider
+fn fetch_tile_from_network(provider: &str, z: u32, y: u32, x: u32) -> Result<(Vec<u8>, String), String> {
+    // Route to appropriate provider URL
+    let url = match provider {
+        "esri" => format!("{}/{}/{}/{}", ESRI_TILE_URL, z, y, x),
+        _ => return Err(format!("Unknown provider: {}", provider)),
+    };
+
+    tracing::debug!(url = %url, provider = %provider, "Fetching tile from network");
 
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(TILE_FETCH_TIMEOUT))
@@ -32,12 +49,14 @@ fn fetch_tile_from_network(z: u32, y: u32, x: u32) -> Result<(Vec<u8>, String), 
         .call()
         .map_err(|e| format!("Network error: {}", e))?;
 
-    let content_type = response
+    // Sanitize content type - only allow whitelisted image types
+    let raw_content_type = response
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("image/jpeg")
-        .to_string();
+        .unwrap_or(DEFAULT_CONTENT_TYPE);
+
+    let content_type = sanitize_content_type(raw_content_type);
 
     let body = response
         .into_body()
@@ -47,23 +66,160 @@ fn fetch_tile_from_network(z: u32, y: u32, x: u32) -> Result<(Vec<u8>, String), 
     Ok((body, content_type))
 }
 
-/// Parses tile coordinates from a URI path like /esri/z/y/x
-fn parse_tile_path(path: &str) -> Option<(&str, u32, u32, u32)> {
-    // Path format: /esri/{z}/{y}/{x} or /esri/{z}/{y}/{x}.jpg etc.
-    let path = path.trim_start_matches('/');
-    let parts: Vec<&str> = path.split('/').collect();
-    if parts.len() < 4 {
-        return None;
+/// Sanitize content type to only allow whitelisted image types
+fn sanitize_content_type(raw: &str) -> String {
+    // Extract the base content type (before any ; parameters like charset)
+    let base = raw.split(';').next().unwrap_or(raw).trim().to_lowercase();
+
+    if ALLOWED_CONTENT_TYPES.contains(&base.as_str()) {
+        base
+    } else {
+        DEFAULT_CONTENT_TYPE.to_string()
+    }
+}
+
+/// Parses tile coordinates from a URI.
+/// Supports both path-based (/esri/z/y/x) and host-based (esri/{z}/{y}/{x}) formats.
+fn parse_tile_uri(uri: &http::Uri) -> Option<(String, u32, u32, u32)> {
+    let path = uri.path().trim_start_matches('/');
+    let mut segments = path.split('/');
+
+    // Try path-based format first: /esri/{z}/{y}/{x}
+    let first = segments.next()?;
+
+    // Check if first segment is a provider or a number (z coordinate)
+    if let Ok(z) = first.parse::<u32>() {
+        // Host-based format: provider is in host, path is /{z}/{y}/{x}
+        // Extract provider from host
+        let host = uri.host().unwrap_or("esri");
+        let provider = host.to_string();
+
+        let y: u32 = segments.next()?.parse().ok()?;
+        let x_str = segments.next()?.split('.').next()?;
+        let x: u32 = x_str.parse().ok()?;
+
+        Some((provider, z, y, x))
+    } else {
+        // Path-based format: /esri/{z}/{y}/{x}
+        let provider = first.to_string();
+        let z: u32 = segments.next()?.parse().ok()?;
+        let y: u32 = segments.next()?.parse().ok()?;
+        let x_str = segments.next()?.split('.').next()?;
+        let x: u32 = x_str.parse().ok()?;
+
+        Some((provider, z, y, x))
+    }
+}
+
+/// Build a successful HTTP response with proper error handling
+fn build_ok_response(data: Vec<u8>, content_type: &str) -> http::Response<Vec<u8>> {
+    http::Response::builder()
+        .status(http::StatusCode::OK)
+        .header(http::header::CONTENT_TYPE, content_type)
+        .body(data)
+        .unwrap_or_else(|_| {
+            // Fallback response if builder fails
+            http::Response::builder()
+                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                .header(http::header::CONTENT_TYPE, "text/plain")
+                .body(b"Internal error building response".to_vec())
+                .unwrap()
+        })
+}
+
+/// Build an error HTTP response with proper error handling
+fn build_error_response(status: http::StatusCode, message: &str) -> http::Response<Vec<u8>> {
+    http::Response::builder()
+        .status(status)
+        .header(http::header::CONTENT_TYPE, "text/plain")
+        .body(message.as_bytes().to_vec())
+        .unwrap_or_else(|_| {
+            http::Response::builder()
+                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                .header(http::header::CONTENT_TYPE, "text/plain")
+                .body(b"Internal error".to_vec())
+                .unwrap()
+        })
+}
+
+/// Handle a tile request - check cache, fetch from network, return response
+fn handle_tile_request(
+    provider: &str,
+    z: u32,
+    y: u32,
+    x: u32,
+    tile_cache: &Arc<Mutex<Option<TileCache>>>,
+) -> http::Response<Vec<u8>> {
+    // Validate provider
+    if !SUPPORTED_PROVIDERS.contains(&provider) {
+        tracing::warn!(provider = %provider, "Unknown tile provider requested");
+        return build_error_response(
+            http::StatusCode::BAD_REQUEST,
+            &format!("Unknown provider: {}. Supported: {:?}", provider, SUPPORTED_PROVIDERS),
+        );
     }
 
-    let provider = parts[0];
-    let z: u32 = parts[1].parse().ok()?;
-    let y: u32 = parts[2].parse().ok()?;
-    // Remove any extension from x (e.g., "123.jpg" -> "123")
-    let x_str = parts[3].split('.').next()?;
-    let x: u32 = x_str.parse().ok()?;
+    // Check cache first (fresh tiles)
+    let cached_tile = {
+        if let Ok(mut cache_guard) = tile_cache.lock() {
+            if let Some(cache) = cache_guard.as_mut() {
+                cache.get(provider, z, y, x)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
 
-    Some((provider, z, y, x))
+    if let Some(entry) = cached_tile {
+        tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache hit (fresh)");
+        return build_ok_response(entry.data, &entry.content_type);
+    }
+
+    // Cache miss - fetch from network
+    tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache miss, fetching from network");
+    match fetch_tile_from_network(provider, z, y, x) {
+        Ok((data, content_type)) => {
+            // Store in cache
+            if let Ok(mut cache_guard) = tile_cache.lock() {
+                if let Some(cache) = cache_guard.as_mut() {
+                    if let Err(e) = cache.put(provider, z, y, x, &data, &content_type) {
+                        tracing::warn!(error = %e, "Failed to cache tile");
+                    }
+                }
+            }
+
+            build_ok_response(data, &content_type)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, provider = %provider, z = z, y = y, x = x, "Network fetch failed");
+
+            // Try to serve stale cached tile as offline fallback
+            let stale_tile = {
+                if let Ok(cache_guard) = tile_cache.lock() {
+                    if let Some(cache) = cache_guard.as_ref() {
+                        cache.get_stale(provider, z, y, x)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
+            if let Some(entry) = stale_tile {
+                tracing::info!(provider = %provider, z = z, y = y, x = x, "Serving stale cached tile as offline fallback");
+                return build_ok_response(entry.data, &entry.content_type);
+            }
+
+            // No cached tile at all - return 404
+            build_error_response(
+                http::StatusCode::NOT_FOUND,
+                &format!("Tile not available: {}", e),
+            )
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -75,84 +231,39 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol("cavechef-tiles", |ctx, request, responder| {
-            let path = request.uri().path().to_string();
+            let uri = request.uri().clone();
             let state = ctx.app_handle().state::<core::state::AppState>();
-            let tile_cache = state.tile_cache().clone();
+            let tile_cache = state.tile_cache();
 
-            std::thread::spawn(move || {
-                // Parse the tile coordinates from the path
-                let Some((provider, z, y, x)) = parse_tile_path(&path) else {
-                    tracing::warn!(path = %path, "Invalid tile path format");
-                    responder.respond(
-                        http::Response::builder()
-                            .status(http::StatusCode::BAD_REQUEST)
-                            .header(http::header::CONTENT_TYPE, "text/plain")
-                            .body("Invalid tile path format".as_bytes().to_vec())
-                            .unwrap(),
-                    );
+            // Use Tauri's async runtime with spawn_blocking for bounded concurrency
+            // This uses a threadpool instead of spawning unbounded threads
+            tauri::async_runtime::spawn(async move {
+                // Parse the tile coordinates from the URI
+                let Some((provider, z, y, x)) = parse_tile_uri(&uri) else {
+                    tracing::warn!(uri = %uri, "Invalid tile URI format");
+                    responder.respond(build_error_response(
+                        http::StatusCode::BAD_REQUEST,
+                        "Invalid tile URI format. Expected: /esri/{z}/{y}/{x} or esri/{z}/{y}/{x}",
+                    ));
                     return;
                 };
 
                 tracing::debug!(provider = %provider, z = z, y = y, x = x, "Processing tile request");
 
-                // Check cache first
-                let cached_tile = {
-                    if let Ok(mut cache_guard) = tile_cache.lock() {
-                        if let Some(cache) = cache_guard.as_mut() {
-                            cache.get(provider, z, y, x)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                };
+                // Run the blocking tile fetch in the blocking threadpool
+                let response = tauri::async_runtime::spawn_blocking(move || {
+                    handle_tile_request(&provider, z, y, x, &tile_cache)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::error!(error = %e, "Tile request task panicked");
+                    build_error_response(
+                        http::StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal error processing tile request",
+                    )
+                });
 
-                if let Some(entry) = cached_tile {
-                    tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache hit");
-                    responder.respond(
-                        http::Response::builder()
-                            .status(http::StatusCode::OK)
-                            .header(http::header::CONTENT_TYPE, &entry.content_type)
-                            .body(entry.data)
-                            .unwrap(),
-                    );
-                    return;
-                }
-
-                // Cache miss - fetch from network
-                tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache miss, fetching from network");
-                match fetch_tile_from_network(z, y, x) {
-                    Ok((data, content_type)) => {
-                        // Store in cache
-                        if let Ok(mut cache_guard) = tile_cache.lock() {
-                            if let Some(cache) = cache_guard.as_mut() {
-                                if let Err(e) = cache.put(provider, z, y, x, &data, &content_type) {
-                                    tracing::warn!(error = %e, "Failed to cache tile");
-                                }
-                            }
-                        }
-
-                        responder.respond(
-                            http::Response::builder()
-                                .status(http::StatusCode::OK)
-                                .header(http::header::CONTENT_TYPE, &content_type)
-                                .body(data)
-                                .unwrap(),
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, provider = %provider, z = z, y = y, x = x, "Failed to fetch tile");
-                        // Return 404 for cache miss when offline
-                        responder.respond(
-                            http::Response::builder()
-                                .status(http::StatusCode::NOT_FOUND)
-                                .header(http::header::CONTENT_TYPE, "text/plain")
-                                .body(format!("Tile not available: {}", e).into_bytes())
-                                .unwrap(),
-                        );
-                    }
-                }
+                responder.respond(response);
             });
         })
         .on_window_event(|window, event| {

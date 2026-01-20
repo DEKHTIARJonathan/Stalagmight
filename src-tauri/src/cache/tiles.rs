@@ -174,6 +174,51 @@ impl TileCache {
         }
     }
 
+    /// Get a stale tile from the cache (TTL expired but still present).
+    ///
+    /// This is useful for serving offline fallbacks when network requests fail.
+    /// Unlike `get()`, this returns tiles that have expired TTL but are still in cache.
+    /// Does NOT update `accessed_at` since we're serving stale data.
+    ///
+    /// Returns `None` if the tile is not cached at all (fresh or stale).
+    pub fn get_stale(&self, provider: &str, z: u32, y: u32, x: u32) -> Option<TileEntry> {
+        let now = Self::now();
+        let min_fetched_at = now - self.ttl_seconds;
+
+        // Get tiles that ARE stale (fetched_at <= min_fetched_at)
+        let result: Result<TileEntry, rusqlite::Error> = self.conn.query_row(
+            "SELECT data, content_type, size_bytes, fetched_at, accessed_at FROM tiles
+             WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
+               AND fetched_at <= ?5",
+            params![provider, z, y, x, min_fetched_at],
+            |row| {
+                Ok(TileEntry {
+                    data: row.get(0)?,
+                    content_type: row.get(1)?,
+                    size_bytes: row.get::<_, i64>(2)? as u64,
+                    fetched_at: row.get(3)?,
+                    accessed_at: row.get(4)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(entry) => Some(entry),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => {
+                tracing::warn!(
+                    provider,
+                    z,
+                    y,
+                    x,
+                    error = %e,
+                    "Database error during stale tile lookup"
+                );
+                None
+            }
+        }
+    }
+
     /// Store a tile in the cache.
     ///
     /// If storing this tile would exceed the cache size limit, expired tiles are removed
