@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-10-i64",
+  "created_at": "2026-01-20T15:46:19.154941Z",
+  "depends_on_epics": [],
+  "id": "fn-10-i64",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-10-i64.md",
+  "status": "open",
+  "title": "Loading Progress Indicator",
+  "updated_at": "2026-01-20T15:46:54.231048Z"
+}

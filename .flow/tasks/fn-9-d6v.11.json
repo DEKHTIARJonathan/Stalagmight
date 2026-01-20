@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-20T15:43:26.061589Z",
+  "depends_on": [],
+  "epic": "fn-9-d6v",
+  "id": "fn-9-d6v.11",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-9-d6v.11.md",
+  "status": "todo",
+  "title": "WebdriverIO accessibility and visual tests",
+  "updated_at": "2026-01-20T15:46:52.699768Z"
+}
