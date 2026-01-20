@@ -243,9 +243,8 @@ Apply depth color to shot azimuth/length/depth labels when enabled.
 - [ ] `getDepthColor` imported from `@/utils/colors`
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added depth-based coloring to station and shot labels in SurveyLayer. Updated label layer paints to use dynamic ['get', 'color'] instead of hardcoded white, increased text halo width to 2 for readability, and added color properties to label features with proper white (#ffffff) fallback when depth gradient is disabled or depth is invalid.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 8d60d7c, 1f43655
+- Tests: pnpm tsc --noEmit
 - PRs:
