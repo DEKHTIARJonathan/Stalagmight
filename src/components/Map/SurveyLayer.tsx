@@ -84,8 +84,9 @@ export default class SurveyLayer {
   // GPS origin for coordinate transforms (enables satellite tile alignment)
   private gpsOrigin: GpsOrigin | null = null;
 
-  // Depth gradient mode state (stored during update() for use in feature building)
-  // These are assigned in update() and used by subsequent tasks (fn-5-jef.3) for depth coloring
+  // Depth gradient mode state (stored during update() for feature building)
+  // NOTE: These fields are wired but not yet used for coloring - task fn-5-jef.3
+  // will implement the actual depth-based color calculation in update()
   private showDepthGradient: boolean = false;
   private depthRange: { min: number; max: number } = { min: 0, max: 50 };
 
@@ -1089,14 +1090,15 @@ export default class SurveyLayer {
     this.updateVisualState();
   }
 
-  // Depth gradient accessors (used by depth coloring logic in update())
-  // These return the current depth mode state set during the last update() call
+  // Depth gradient accessors for use by depth coloring logic (task fn-5-jef.3)
+  // Returns the depth mode state set during the last update() call
   getShowDepthGradient(): boolean {
     return this.showDepthGradient;
   }
 
   getDepthRange(): { min: number; max: number } {
-    return this.depthRange;
+    // Return a copy to prevent external mutation
+    return { min: this.depthRange.min, max: this.depthRange.max };
   }
 
   // Control shot data labels visibility
@@ -1319,9 +1321,18 @@ export default class SurveyLayer {
   ) {
     // Store gpsOrigin for coordinate transforms
     this.gpsOrigin = gpsOrigin ?? null;
-    // Store depth mode parameters for use in feature building (used by fn-5-jef.3)
+    // Store depth mode parameters for use in feature building (task fn-5-jef.3)
     this.showDepthGradient = showDepthGradient;
-    this.depthRange = depthRange;
+    // Clone and normalize depth range (handle min > max, min === max, NaN)
+    const minD = Number.isFinite(depthRange.min) ? depthRange.min : 0;
+    const maxD = Number.isFinite(depthRange.max) ? depthRange.max : 50;
+    const normalizedMin = Math.min(minD, maxD);
+    const normalizedMax = Math.max(minD, maxD);
+    // If min === max, widen by small epsilon to avoid divide-by-zero in gradient calculation
+    const epsilon = 0.001;
+    this.depthRange = normalizedMin === normalizedMax
+      ? { min: normalizedMin - epsilon, max: normalizedMax + epsilon }
+      : { min: normalizedMin, max: normalizedMax };
     // Build shot features and shot label features
     const shotFeatures: GeoJSON.Feature[] = [];
     const shotLabelFeatures: GeoJSON.Feature[] = [];
