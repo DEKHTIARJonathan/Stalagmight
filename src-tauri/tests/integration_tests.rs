@@ -959,6 +959,188 @@ fn test_cache_config_empty_toml_deserialization() {
     assert_eq!(cache.tile_ttl_days, 30);
 }
 
+/// Test: Config backwards compatibility - old config with removed fields parses correctly
+#[test]
+fn test_config_backwards_compat_ignores_removed_fields() {
+    // Old config format with deprecated fields that were removed:
+    // - display.station_size, display.line_thickness
+    // - map.snap_threshold_pixels
+    // - top-level [snap] section
+    // Serde should ignore unknown fields (default behavior)
+    let old_config_toml = r##"
+[general]
+auto_save = true
+auto_save_interval_seconds = 60
+recent_projects_max = 10
+
+[units]
+length = "meters"
+depth = "feet"
+angle = "degrees"
+decimal_precision = 2
+
+[display]
+default_background = "#2a2a3e"
+grid_color = "#444466"
+station_size = 8
+line_thickness = 3
+font_size = 14
+font_color = "#ffffff"
+
+[display.depth_gradient]
+enabled = true
+shallow_color = "#00ff00"
+deep_color = "#ff0000"
+shallow_depth = 0.0
+deep_depth = 100.0
+
+[section_colors]
+palette = ["#ff0000", "#00ff00", "#0000ff"]
+
+[map]
+satellite_provider = "esri"
+satellite_enabled = true
+snap_threshold_pixels = 15
+zoom_default = 12
+zoom_min = 5
+zoom_max = 20
+
+[map.controls]
+pan_speed = 1.5
+zoom_speed = 2.0
+invert_scroll = true
+
+[validation]
+warn_shot_length_min = 0.5
+warn_shot_length_max = 100.0
+warn_depth_change_per_shot_max = 20.0
+warn_azimuth_deviation_max = 45.0
+
+[export]
+default_image_format = "svg"
+default_dpi = 150
+default_include_satellite = false
+default_include_grid = true
+default_include_labels = false
+
+[logging]
+level = "debug"
+max_directory_size_mb = 256
+
+[shortcuts]
+select = "A"
+pan = "H"
+zoom = "J"
+draw = "K"
+delete = "L"
+merge = "G"
+measure = "F"
+move_section = "W"
+move_station = "E"
+undo = "Ctrl+U"
+redo = "Ctrl+R"
+save = "Ctrl+W"
+
+[snap]
+enabled_draw = false
+enabled_merge = true
+enabled_measure = false
+threshold_pixels = 20
+"##;
+
+    let config: Config = toml::from_str(old_config_toml)
+        .expect("Config with deprecated fields should parse - serde ignores unknown fields by default");
+
+    // Verify custom values were preserved
+    assert_eq!(config.general.auto_save_interval_seconds, 60);
+    assert_eq!(config.units.depth, cavechef_lib::config::LengthUnit::Feet);
+    assert_eq!(config.display.font_size, 14);
+    assert!(config.display.depth_gradient.enabled);
+    assert_eq!(config.map.satellite_provider, "esri");
+    assert!(config.map.satellite_enabled);
+    assert!(config.map.controls.invert_scroll);
+
+    // New nested configs should have defaults since they weren't in old format
+    assert_eq!(config.map.station.radius, 4.0);
+    assert_eq!(config.map.station.hit_area, 10.0);
+    assert_eq!(config.map.shot.width, 2.0);
+    assert_eq!(config.map.shot.hit_area, 8.0);
+    assert_eq!(config.map.snap.threshold, 10.0);
+    assert!(config.map.snap.enabled_draw);
+    assert!(config.map.snap.enabled_merge);
+    assert!(config.map.snap.enabled_measure);
+    assert!(!config.debug.map.show_hitboxes);
+}
+
+/// Test: Config normalization clamps and validates values
+#[test]
+fn test_config_normalize_clamps_values() {
+    use cavechef_lib::config::{MapConfig, StationConfig, ShotConfig, MapSnapConfig};
+
+    let mut map_config = MapConfig {
+        station: StationConfig { radius: 0.1, hit_area: 0.5 },  // Below min
+        shot: ShotConfig { width: 100.0, hit_area: 50.0 },       // Above max
+        snap: MapSnapConfig { threshold: -5.0, enabled_draw: true, enabled_merge: true, enabled_measure: true },
+        ..Default::default()
+    };
+
+    map_config.normalize();
+
+    // Station: radius clamped to 1.0, hit_area clamped to 1.0 then max'd to radius
+    assert_eq!(map_config.station.radius, 1.0);
+    assert_eq!(map_config.station.hit_area, 1.0);  // max(1.0, 1.0)
+
+    // Shot: width clamped to 20.0, hit_area clamped to 20.0 then max'd to width
+    assert_eq!(map_config.shot.width, 20.0);
+    assert_eq!(map_config.shot.hit_area, 20.0);
+
+    // Snap: threshold clamped to 1.0
+    assert_eq!(map_config.snap.threshold, 1.0);
+}
+
+/// Test: Config normalization handles NaN/inf values
+#[test]
+fn test_config_normalize_handles_nan_inf() {
+    use cavechef_lib::config::{MapConfig, StationConfig, ShotConfig, MapSnapConfig};
+
+    let mut map_config = MapConfig {
+        station: StationConfig { radius: f64::NAN, hit_area: f64::INFINITY },
+        shot: ShotConfig { width: f64::NEG_INFINITY, hit_area: f64::NAN },
+        snap: MapSnapConfig { threshold: f64::NAN, enabled_draw: true, enabled_merge: true, enabled_measure: true },
+        ..Default::default()
+    };
+
+    map_config.normalize();
+
+    // All should fall back to defaults
+    assert_eq!(map_config.station.radius, 4.0);
+    assert_eq!(map_config.station.hit_area, 10.0);
+    assert_eq!(map_config.shot.width, 2.0);
+    assert_eq!(map_config.shot.hit_area, 8.0);
+    assert_eq!(map_config.snap.threshold, 10.0);
+}
+
+/// Test: hit_area must be >= radius/width after normalization
+#[test]
+fn test_config_normalize_hit_area_ge_visual_size() {
+    use cavechef_lib::config::{MapConfig, StationConfig, ShotConfig};
+
+    let mut map_config = MapConfig {
+        station: StationConfig { radius: 20.0, hit_area: 5.0 },  // hit_area < radius
+        shot: ShotConfig { width: 15.0, hit_area: 3.0 },          // hit_area < width
+        ..Default::default()
+    };
+
+    map_config.normalize();
+
+    // hit_area should be raised to match radius/width
+    assert_eq!(map_config.station.radius, 20.0);
+    assert_eq!(map_config.station.hit_area, 20.0);  // raised to radius
+
+    assert_eq!(map_config.shot.width, 15.0);
+    assert_eq!(map_config.shot.hit_area, 15.0);  // raised to width
+}
+
 // ============================================================================
 // Persistence Tests (8 tests)
 // ============================================================================
