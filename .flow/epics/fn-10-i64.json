@@ -4,10 +4,10 @@
   "depends_on_epics": [],
   "id": "fn-10-i64",
   "next_task": 1,
-  "plan_review_status": "unknown",
-  "plan_reviewed_at": null,
+  "plan_review_status": "ship",
+  "plan_reviewed_at": "2026-01-20T16:46:45.426395Z",
   "spec_path": ".flow/specs/fn-10-i64.md",
   "status": "open",
   "title": "Loading Progress Indicator",
-  "updated_at": "2026-01-20T16:38:13.632257Z"
+  "updated_at": "2026-01-20T16:46:45.426408Z"
 }
