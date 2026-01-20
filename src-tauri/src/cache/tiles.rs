@@ -177,8 +177,9 @@ impl TileCache {
 
     /// Store a tile in the cache.
     ///
-    /// If storing this tile would exceed the cache size limit, LRU eviction is performed
-    /// in a loop until there's space. Tiles larger than max_bytes are rejected.
+    /// If storing this tile would exceed the cache size limit, expired tiles are removed
+    /// first, then LRU eviction is performed until there's space. Tiles larger than
+    /// max_bytes are rejected.
     pub fn put(
         &mut self,
         provider: &str,
@@ -201,19 +202,39 @@ impl TileCache {
         }
 
         // Check if we're replacing an existing tile (to account for size delta)
-        let existing_size: i64 = self
-            .conn
-            .query_row(
-                "SELECT size_bytes FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4",
-                params![provider, z, y, x],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        let existing_size: i64 = match self.conn.query_row(
+            "SELECT size_bytes FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4",
+            params![provider, z, y, x],
+            |row| row.get(0),
+        ) {
+            Ok(size) => size,
+            Err(rusqlite::Error::QueryReturnedNoRows) => 0,
+            Err(e) => {
+                // Log but don't fail - assume no existing tile
+                tracing::warn!(
+                    provider,
+                    z,
+                    y,
+                    x,
+                    error = %e,
+                    "Database error checking existing tile size"
+                );
+                0
+            }
+        };
 
         // Calculate space needed (new size minus existing size we're replacing)
         let space_needed = new_size.saturating_sub(existing_size as u64);
 
-        // Evict until we have space
+        // First, clear expired tiles to free space before LRU eviction
+        // This ensures we don't evict fresh tiles while stale ones consume space
+        let min_fetched_at = now - self.ttl_seconds;
+        self.conn.execute(
+            "DELETE FROM tiles WHERE fetched_at <= ?1",
+            params![min_fetched_at],
+        )?;
+
+        // Evict LRU tiles until we have space
         let mut stats = self.get_stats();
         while stats.total_bytes + space_needed > self.max_bytes {
             let freed = self.evict_one_lru()?;
@@ -259,6 +280,9 @@ impl TileCache {
     /// Evict least-recently-used tiles until cache is under the size limit.
     /// Also removes any expired tiles (TTL exceeded).
     ///
+    /// When eviction is needed, this method evicts down to 80% of max capacity
+    /// (hysteresis) to avoid repeated eviction on subsequent puts.
+    ///
     /// Returns the number of bytes freed.
     pub fn evict_lru(&mut self) -> Result<u64> {
         let mut freed_bytes: u64 = 0;
@@ -282,9 +306,10 @@ impl TileCache {
         freed_bytes += expired_bytes as u64;
 
         // Then, if still over capacity, delete LRU tiles using batch approach
+        // Evict to 80% capacity (hysteresis) to reduce eviction frequency
         let stats = self.get_stats();
         if stats.total_bytes > self.max_bytes {
-            let target_bytes = self.max_bytes * 80 / 100; // Evict to 80% capacity
+            let target_bytes = self.max_bytes * 80 / 100;
 
             // Batch select tiles to evict (more efficient than repeated queries)
             let mut to_delete: Vec<(i64, i64)> = Vec::new();
