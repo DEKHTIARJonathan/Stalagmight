@@ -49,18 +49,27 @@ impl TileCache {
     /// * `cache_dir` - Directory to store the cache database
     /// * `max_mb` - Maximum cache size in megabytes
     /// * `ttl_days` - Time-to-live for cached tiles in days
+    ///
+    /// Note: `PRAGMA auto_vacuum = INCREMENTAL` only takes effect on newly created databases.
+    /// For existing databases, the vacuum mode is already set.
     pub fn open(cache_dir: &Path, max_mb: u32, ttl_days: u32) -> Result<Self> {
         // Ensure cache directory exists
         std::fs::create_dir_all(cache_dir).context("Failed to create cache directory")?;
 
         let db_path = cache_dir.join("tile_cache.db");
+        let is_new = !db_path.exists();
         let conn = Connection::open(&db_path).context("Failed to open tile cache database")?;
 
-        // Enable incremental vacuum for better space reclamation
+        // Set pragmas (auto_vacuum only effective on new DBs)
         conn.execute_batch(
             "PRAGMA auto_vacuum = INCREMENTAL;
              PRAGMA journal_mode = WAL;",
         )?;
+
+        // Run initial vacuum on new databases to apply auto_vacuum setting
+        if is_new {
+            let _ = conn.execute("VACUUM", []);
+        }
 
         let cache = Self {
             conn,
@@ -103,7 +112,6 @@ impl TileCache {
                 UNIQUE(provider, z, y, x)
             );
             CREATE INDEX IF NOT EXISTS idx_tiles_accessed ON tiles(accessed_at);
-            CREATE INDEX IF NOT EXISTS idx_tiles_provider ON tiles(provider);
             "#,
         )?;
         Ok(())
@@ -121,19 +129,23 @@ impl TileCache {
     ///
     /// Returns `None` if the tile is not cached or has expired (TTL exceeded).
     /// Updates the `accessed_at` timestamp on cache hit.
+    ///
+    /// Note: Returns `None` on DB errors (logged at warn level). Use `has_fresh_tile`
+    /// for explicit existence checks that don't mask errors.
     pub fn get(&mut self, provider: &str, z: u32, y: u32, x: u32) -> Option<TileEntry> {
         let now = Self::now();
         // A tile is fresh if it was fetched within the last ttl_seconds
-        // Use strict < for staleness: tile is stale when fetched_at < now - ttl_seconds
+        // Use strict < for staleness: tile is stale when fetched_at <= now - ttl_seconds
         let min_fetched_at = now - self.ttl_seconds;
 
-        // Query tile, filtering out expired entries (strictly greater than min)
-        let result: Result<TileEntry, _> = self.conn.query_row(
-            "SELECT data, content_type, size_bytes, fetched_at, accessed_at
-             FROM tiles
-             WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
-               AND fetched_at > ?5",
-            params![provider, z, y, x, min_fetched_at],
+        // Update accessed_at first and return tile data in one query
+        // This ensures the returned accessed_at is current
+        let result: Result<TileEntry, rusqlite::Error> = self.conn.query_row(
+            "UPDATE tiles SET accessed_at = ?1
+             WHERE provider = ?2 AND z = ?3 AND y = ?4 AND x = ?5
+               AND fetched_at > ?6
+             RETURNING data, content_type, size_bytes, fetched_at, accessed_at",
+            params![now, provider, z, y, x, min_fetched_at],
             |row| {
                 Ok(TileEntry {
                     data: row.get(0)?,
@@ -146,22 +158,27 @@ impl TileCache {
         );
 
         match result {
-            Ok(entry) => {
-                // Update accessed_at timestamp
-                let _ = self.conn.execute(
-                    "UPDATE tiles SET accessed_at = ?1
-                     WHERE provider = ?2 AND z = ?3 AND y = ?4 AND x = ?5",
-                    params![now, provider, z, y, x],
+            Ok(entry) => Some(entry),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None, // Cache miss
+            Err(e) => {
+                // Log actual DB errors but don't propagate - treat as miss
+                tracing::warn!(
+                    provider,
+                    z,
+                    y,
+                    x,
+                    error = %e,
+                    "Database error during tile cache lookup"
                 );
-                Some(entry)
+                None
             }
-            Err(_) => None,
         }
     }
 
     /// Store a tile in the cache.
     ///
-    /// If storing this tile would exceed the cache size limit, LRU eviction is performed first.
+    /// If storing this tile would exceed the cache size limit, LRU eviction is performed
+    /// in a loop until there's space. Tiles larger than max_bytes are rejected.
     pub fn put(
         &mut self,
         provider: &str,
@@ -172,22 +189,71 @@ impl TileCache {
         content_type: &str,
     ) -> Result<()> {
         let now = Self::now();
-        let size_bytes = data.len() as i64;
+        let new_size = data.len() as u64;
 
-        // Ensure we have space (evict if needed)
-        let stats = self.get_stats();
-        if stats.total_bytes + (size_bytes as u64) > self.max_bytes {
-            self.evict_lru()?;
+        // Reject tiles larger than the entire cache
+        if new_size > self.max_bytes {
+            anyhow::bail!(
+                "Tile size ({} bytes) exceeds max cache size ({} bytes)",
+                new_size,
+                self.max_bytes
+            );
+        }
+
+        // Check if we're replacing an existing tile (to account for size delta)
+        let existing_size: i64 = self
+            .conn
+            .query_row(
+                "SELECT size_bytes FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4",
+                params![provider, z, y, x],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        // Calculate space needed (new size minus existing size we're replacing)
+        let space_needed = new_size.saturating_sub(existing_size as u64);
+
+        // Evict until we have space
+        let mut stats = self.get_stats();
+        while stats.total_bytes + space_needed > self.max_bytes {
+            let freed = self.evict_one_lru()?;
+            if freed == 0 {
+                // No more tiles to evict (shouldn't happen if new_size <= max_bytes)
+                break;
+            }
+            stats = self.get_stats();
         }
 
         // Insert or replace the tile
         self.conn.execute(
             "INSERT OR REPLACE INTO tiles (provider, z, y, x, data, content_type, size_bytes, fetched_at, accessed_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![provider, z, y, x, data, content_type, size_bytes, now, now],
+            params![provider, z, y, x, data, content_type, new_size as i64, now, now],
         )?;
 
         Ok(())
+    }
+
+    /// Evict a single least-recently-used tile.
+    /// Returns the number of bytes freed (0 if cache is empty).
+    fn evict_one_lru(&mut self) -> Result<u64> {
+        // Find and delete the least recently accessed tile
+        // Use id as tie-breaker for deterministic behavior when timestamps match
+        let oldest: Result<(i64, i64), _> = self.conn.query_row(
+            "SELECT id, size_bytes FROM tiles ORDER BY accessed_at ASC, id ASC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        );
+
+        match oldest {
+            Ok((id, size)) => {
+                self.conn
+                    .execute("DELETE FROM tiles WHERE id = ?1", params![id])?;
+                Ok(size as u64)
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Evict least-recently-used tiles until cache is under the size limit.
@@ -197,7 +263,7 @@ impl TileCache {
     pub fn evict_lru(&mut self) -> Result<u64> {
         let mut freed_bytes: u64 = 0;
 
-        // First, always delete expired tiles
+        // First, always delete expired tiles (batch delete for efficiency)
         // A tile is stale when fetched_at <= now - ttl_seconds
         let min_fetched_at = Self::now() - self.ttl_seconds;
         let expired_bytes: i64 = self
@@ -215,33 +281,38 @@ impl TileCache {
         )?;
         freed_bytes += expired_bytes as u64;
 
-        // Then, if still over capacity, delete LRU tiles
+        // Then, if still over capacity, delete LRU tiles using batch approach
         let stats = self.get_stats();
         if stats.total_bytes > self.max_bytes {
             let target_bytes = self.max_bytes * 80 / 100; // Evict to 80% capacity
 
-            // Delete tiles one at a time, oldest accessed first
-            loop {
-                let current_stats = self.get_stats();
-                if current_stats.total_bytes <= target_bytes {
-                    break;
-                }
+            // Batch select tiles to evict (more efficient than repeated queries)
+            let mut to_delete: Vec<(i64, i64)> = Vec::new();
+            let mut accumulated_bytes: u64 = 0;
+            let bytes_to_free = stats.total_bytes.saturating_sub(target_bytes);
 
-                // Find and delete the least recently accessed tile
-                let oldest: Result<(i64, i64), _> = self.conn.query_row(
-                    "SELECT id, size_bytes FROM tiles ORDER BY accessed_at ASC LIMIT 1",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                );
+            {
+                let mut stmt = self.conn.prepare(
+                    "SELECT id, size_bytes FROM tiles ORDER BY accessed_at ASC, id ASC",
+                )?;
+                let mut rows = stmt.query([])?;
 
-                match oldest {
-                    Ok((id, size)) => {
-                        self.conn
-                            .execute("DELETE FROM tiles WHERE id = ?1", params![id])?;
-                        freed_bytes += size as u64;
+                while let Some(row) = rows.next()? {
+                    if accumulated_bytes >= bytes_to_free {
+                        break;
                     }
-                    Err(_) => break, // No more tiles to delete
+                    let id: i64 = row.get(0)?;
+                    let size: i64 = row.get(1)?;
+                    to_delete.push((id, size));
+                    accumulated_bytes += size as u64;
                 }
+            }
+
+            // Delete in batch
+            for (id, size) in to_delete {
+                self.conn
+                    .execute("DELETE FROM tiles WHERE id = ?1", params![id])?;
+                freed_bytes += size as u64;
             }
         }
 
@@ -348,6 +419,29 @@ mod tests {
         vec![0xFFu8; size]
     }
 
+    // Helper to set accessed_at directly in DB for deterministic LRU testing
+    fn set_accessed_at(cache: &TileCache, provider: &str, z: u32, y: u32, x: u32, accessed_at: i64) {
+        cache
+            .conn
+            .execute(
+                "UPDATE tiles SET accessed_at = ?1 WHERE provider = ?2 AND z = ?3 AND y = ?4 AND x = ?5",
+                params![accessed_at, provider, z, y, x],
+            )
+            .unwrap();
+    }
+
+    // Helper to get accessed_at directly from DB
+    fn get_accessed_at_from_db(cache: &TileCache, provider: &str, z: u32, y: u32, x: u32) -> i64 {
+        cache
+            .conn
+            .query_row(
+                "SELECT accessed_at FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4",
+                params![provider, z, y, x],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
     // === Test 1: put and get roundtrip ===
     #[test]
     fn test_put_get_roundtrip() {
@@ -395,33 +489,35 @@ mod tests {
         let tile3 = make_tile_data(400);
 
         cache.put("esri", 1, 0, 0, &tile1, "image/jpeg").unwrap();
-        thread::sleep(Duration::from_millis(10)); // Ensure different timestamps
-
         cache.put("esri", 1, 0, 1, &tile2, "image/jpeg").unwrap();
-        thread::sleep(Duration::from_millis(10));
-
-        // This should trigger eviction
         cache.put("esri", 1, 0, 2, &tile3, "image/jpeg").unwrap();
 
-        // Access tile2 to make it more recently used
-        let _ = cache.get("esri", 1, 0, 1);
+        // Set explicit timestamps to make LRU deterministic
+        // tile1 is oldest, tile2 is middle, tile3 is newest
+        let base_time = TileCache::now();
+        set_accessed_at(&cache, "esri", 1, 0, 0, base_time - 100); // oldest
+        set_accessed_at(&cache, "esri", 1, 0, 1, base_time - 50);  // middle
+        set_accessed_at(&cache, "esri", 1, 0, 2, base_time);       // newest
 
-        // Trigger eviction
+        // Trigger eviction explicitly
         let _freed = cache.evict_lru().unwrap();
 
         // The oldest tile (tile1) should have been evicted
-        // tile2 was accessed more recently, tile3 is newest
         let stats = cache.get_stats();
         assert!(
             stats.total_bytes <= cache.max_bytes,
-            "Cache should be under limit"
+            "Cache should be under limit after eviction"
         );
 
-        // tile1 (oldest, never accessed after put) should be gone
+        // tile1 (oldest) should be gone
         assert!(
             cache.get("esri", 1, 0, 0).is_none(),
             "Oldest tile should be evicted"
         );
+
+        // tile2 and tile3 should still exist
+        assert!(cache.get("esri", 1, 0, 1).is_some(), "Middle tile should remain");
+        assert!(cache.get("esri", 1, 0, 2).is_some(), "Newest tile should remain");
     }
 
     // === Test 4: TTL expiration (stale tiles not returned) ===
@@ -523,6 +619,9 @@ mod tests {
     }
 
     // === Test 8: concurrent access (multi-threaded) ===
+    // Note: This test uses a Mutex to serialize access, primarily testing
+    // that TileCache is Send. For true concurrent SQLite access, separate
+    // connections would be needed.
     #[test]
     fn test_concurrent_access() {
         use std::sync::{Arc, Mutex};
@@ -638,19 +737,28 @@ mod tests {
             .put("esri", 10, 500, 250, b"tile data", "image/jpeg")
             .unwrap();
 
-        let first_access = cache.get("esri", 10, 500, 250).unwrap();
-        let first_accessed_at = first_access.accessed_at;
+        // Get initial accessed_at from DB
+        let first_accessed_at = get_accessed_at_from_db(&cache, "esri", 10, 500, 250);
 
-        // Wait a bit
-        thread::sleep(Duration::from_millis(100));
+        // Wait for time to advance (at least 1 second since timestamps are in seconds)
+        thread::sleep(Duration::from_millis(1100));
 
-        // Access again - accessed_at should update
-        let second_access = cache.get("esri", 10, 500, 250).unwrap();
-        let second_accessed_at = second_access.accessed_at;
+        // Access the tile - this should update accessed_at
+        let entry = cache.get("esri", 10, 500, 250).unwrap();
 
+        // Verify the returned entry has the updated accessed_at
         assert!(
-            second_accessed_at >= first_accessed_at,
-            "accessed_at should be updated on get"
+            entry.accessed_at > first_accessed_at,
+            "Returned accessed_at should be updated (got {}, expected > {})",
+            entry.accessed_at,
+            first_accessed_at
+        );
+
+        // Also verify DB was updated
+        let db_accessed_at = get_accessed_at_from_db(&cache, "esri", 10, 500, 250);
+        assert!(
+            db_accessed_at > first_accessed_at,
+            "DB accessed_at should be updated"
         );
     }
 
@@ -712,5 +820,81 @@ mod tests {
 
         let stats = cache.get_stats();
         assert_eq!(stats.tile_count, 0, "All expired tiles should be removed");
+    }
+
+    // === Test 16: put enforces max_bytes limit ===
+    #[test]
+    fn test_put_enforces_max_bytes() {
+        let mut cache = TileCache::in_memory(1, 30).unwrap();
+        cache.max_bytes = 500; // 500 bytes max
+
+        // Add tiles that together exceed limit
+        let tile1 = make_tile_data(200);
+        let tile2 = make_tile_data(200);
+        let tile3 = make_tile_data(200);
+
+        cache.put("esri", 1, 0, 0, &tile1, "image/jpeg").unwrap();
+        cache.put("esri", 1, 0, 1, &tile2, "image/jpeg").unwrap();
+
+        // Set explicit timestamps
+        set_accessed_at(&cache, "esri", 1, 0, 0, TileCache::now() - 100);
+        set_accessed_at(&cache, "esri", 1, 0, 1, TileCache::now());
+
+        // This put should trigger eviction to make space
+        cache.put("esri", 1, 0, 2, &tile3, "image/jpeg").unwrap();
+
+        let stats = cache.get_stats();
+        assert!(
+            stats.total_bytes <= cache.max_bytes,
+            "Cache should never exceed max_bytes after put"
+        );
+
+        // The oldest tile should have been evicted
+        assert!(cache.get("esri", 1, 0, 0).is_none(), "Oldest tile should be evicted");
+    }
+
+    // === Test 17: tile larger than cache is rejected ===
+    #[test]
+    fn test_oversized_tile_rejected() {
+        let mut cache = TileCache::in_memory(1, 30).unwrap();
+        cache.max_bytes = 100; // 100 bytes max
+
+        let oversized = make_tile_data(200); // Larger than cache
+        let result = cache.put("esri", 1, 0, 0, &oversized, "image/jpeg");
+
+        assert!(result.is_err(), "Oversized tile should be rejected");
+    }
+
+    // === Test 18: LRU eviction has deterministic tie-breaking ===
+    #[test]
+    fn test_lru_deterministic_tiebreaker() {
+        let mut cache = TileCache::in_memory(1, 30).unwrap();
+        cache.max_bytes = 500; // 500 bytes capacity
+
+        // Add tiles with same timestamp - 3 * 200 = 600 bytes exceeds 500
+        let tile = make_tile_data(200);
+        cache.put("esri", 1, 0, 0, &tile, "image/jpeg").unwrap();
+        cache.put("esri", 1, 0, 1, &tile, "image/jpeg").unwrap();
+        cache.put("esri", 1, 0, 2, &tile, "image/jpeg").unwrap();
+
+        // Set all to same timestamp
+        let same_time = TileCache::now();
+        set_accessed_at(&cache, "esri", 1, 0, 0, same_time);
+        set_accessed_at(&cache, "esri", 1, 0, 1, same_time);
+        set_accessed_at(&cache, "esri", 1, 0, 2, same_time);
+
+        // Force eviction - should evict to 80% = 400 bytes
+        cache.evict_lru().unwrap();
+
+        let stats = cache.get_stats();
+        // Should have evicted at least one tile (to 80% = 400 bytes)
+        assert!(stats.total_bytes <= 400, "Cache should be at 80% after eviction, got {} bytes", stats.total_bytes);
+
+        // With deterministic tie-breaking (by id), lower id tiles should be evicted first
+        // Tile at (1,0,0) has lowest id, should be evicted first
+        assert!(
+            cache.get("esri", 1, 0, 0).is_none(),
+            "Tile with lowest id should be evicted first when timestamps tie"
+        );
     }
 }
