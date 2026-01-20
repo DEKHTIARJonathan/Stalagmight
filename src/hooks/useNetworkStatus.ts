@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
-// Number of consecutive failures before disabling IPC polling
+// Number of consecutive failures before backing off
 const MAX_IPC_FAILURES = 3;
+
+// After disabling, retry every N poll intervals to check if IPC recovered
+const RECOVERY_CHECK_INTERVAL = 6; // Every 6th poll (e.g., every 60s if poll is 10s)
 
 /**
  * Hook to track network connectivity status.
@@ -21,9 +24,12 @@ export function useNetworkStatus(pollInterval = 10000) {
   );
 
   // Track consecutive IPC failures
-  // Only disable polling after multiple failures to handle transient issues
+  // Only back off after multiple failures to handle transient issues
   const ipcFailureCountRef = useRef(0);
-  const ipcDisabledRef = useRef(false);
+  const ipcBackedOffRef = useRef(false);
+
+  // Counter for recovery attempts (retry periodically even when backed off)
+  const pollCountRef = useRef(0);
 
   // Check network status via backend
   const checkNetworkStatus = useCallback(async () => {
@@ -33,27 +39,37 @@ export function useNetworkStatus(pollInterval = 10000) {
       return;
     }
 
-    // If IPC has been permanently disabled after repeated failures, use browser state
-    if (ipcDisabledRef.current) {
-      setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true);
-      return;
+    // If IPC is backed off, only try recovery periodically
+    if (ipcBackedOffRef.current) {
+      pollCountRef.current++;
+      if (pollCountRef.current < RECOVERY_CHECK_INTERVAL) {
+        // Not time for recovery check yet - use browser state
+        setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true);
+        return;
+      }
+      // Time for a recovery attempt
+      pollCountRef.current = 0;
     }
 
     try {
       const online = await invoke<boolean>('get_network_status');
-      // Success - reset failure counter
+      // Success - reset failure counter and clear backoff
       ipcFailureCountRef.current = 0;
+      if (ipcBackedOffRef.current) {
+        ipcBackedOffRef.current = false;
+        console.info('[useNetworkStatus] IPC recovered, resuming backend checks');
+      }
       setIsOnline(online);
     } catch (error) {
       // IPC failure - increment counter
       ipcFailureCountRef.current++;
 
-      if (ipcFailureCountRef.current >= MAX_IPC_FAILURES) {
-        // Too many consecutive failures - disable polling
-        // This handles non-Tauri environments (tests, browser preview)
-        ipcDisabledRef.current = true;
+      if (ipcFailureCountRef.current >= MAX_IPC_FAILURES && !ipcBackedOffRef.current) {
+        // Too many consecutive failures - back off but allow recovery
+        ipcBackedOffRef.current = true;
+        pollCountRef.current = 0;
         console.warn(
-          `[useNetworkStatus] Tauri IPC unavailable after ${MAX_IPC_FAILURES} failures, falling back to browser online state`
+          `[useNetworkStatus] Tauri IPC unavailable after ${MAX_IPC_FAILURES} failures, backing off (will retry periodically)`
         );
       }
 
@@ -65,12 +81,12 @@ export function useNetworkStatus(pollInterval = 10000) {
   // Listen to browser online/offline events for immediate updates
   useEffect(() => {
     const handleOnline = () => {
-      // Browser came online - verify with backend if available
-      if (!ipcDisabledRef.current) {
-        checkNetworkStatus();
-      } else {
-        setIsOnline(true);
+      // Browser came online - verify with backend
+      // Reset backoff to allow immediate recovery check
+      if (ipcBackedOffRef.current) {
+        pollCountRef.current = RECOVERY_CHECK_INTERVAL; // Force immediate retry
       }
+      checkNetworkStatus();
     };
 
     const handleOffline = () => {
@@ -87,17 +103,13 @@ export function useNetworkStatus(pollInterval = 10000) {
     };
   }, [checkNetworkStatus]);
 
-  // Periodic polling for network status (only if IPC is available)
+  // Periodic polling for network status
   useEffect(() => {
     // Initial check
     checkNetworkStatus();
 
-    // Set up interval (will self-disable after MAX_IPC_FAILURES)
-    const intervalId = setInterval(() => {
-      if (!ipcDisabledRef.current) {
-        checkNetworkStatus();
-      }
-    }, pollInterval);
+    // Set up interval (will back off but periodically retry)
+    const intervalId = setInterval(checkNetworkStatus, pollInterval);
 
     return () => clearInterval(intervalId);
   }, [checkNetworkStatus, pollInterval]);
