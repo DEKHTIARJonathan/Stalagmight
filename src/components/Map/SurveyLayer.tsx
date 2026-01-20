@@ -384,13 +384,14 @@ export default class SurveyLayer {
 
     // Station highlight layer for snapped/active stations
     // Inserted immediately after stations - labels added later render on top naturally
+    // Radius is config-based (baseRadius + 3), updated via updateVisualState()
     this.map.addLayer({
       id: this.stationsHighlightLayerId,
       type: 'circle',
       source: this.sourceId + '-stations',
       filter: ['==', ['get', 'sectionId'], -9999], // Filter to nothing initially
       paint: {
-        'circle-radius': 7,
+        'circle-radius': this.getStationRadius() + 3, // Snapped state: radius + 3
         'circle-color': '#00ffcc',
         'circle-stroke-width': 4,
         'circle-stroke-color': '#00ffcc',
@@ -530,8 +531,8 @@ export default class SurveyLayer {
   }
 
   private initializeEventHandlers() {
-    // Station click handler
-    this.map.on('click', this.stationsLayerId, (e) => {
+    // Station click handler - use HITBOX layer for larger clickable area
+    this.map.on('click', this.stationsHitboxLayerId, (e) => {
       e.preventDefault();
       const feature = e.features?.[0];
       if (feature?.properties) {
@@ -544,10 +545,10 @@ export default class SurveyLayer {
       }
     });
 
-    // Shot click handler - stations take priority
-    this.map.on('click', this.shotsLayerId, (e) => {
-      // Check if there's a station at this point - stations always take priority
-      const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsLayerId] });
+    // Shot click handler - use HITBOX layer, stations take priority
+    this.map.on('click', this.shotsHitboxLayerId, (e) => {
+      // Check if there's a station hitbox at this point - stations always take priority
+      const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsHitboxLayerId] });
       if (stationFeatures.length > 0) {
         return; // Station will handle this click
       }
@@ -561,14 +562,14 @@ export default class SurveyLayer {
     });
 
     // Empty click handler (on map, not on features)
+    // Uses HITBOX layers for detection (NOT ghost hitbox layers - those are debug only)
     this.map.on('click', (e) => {
-      // Check if we clicked on a feature (including label layers)
-      const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsLayerId] });
-      const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsLayerId] });
-      const labelFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.labelsLayerId, this.shotLabelsLayerId, this.stationLabelsLayerId] });
+      // Check if we clicked on a feature using HITBOX layers (larger clickable area)
+      const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsHitboxLayerId] });
+      const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsHitboxLayerId] });
 
-      // If we hit a visible feature, let the layer-specific handlers deal with it
-      if (stationFeatures.length > 0 || shotFeatures.length > 0 || labelFeatures.length > 0) {
+      // If we hit a hitbox, let the layer-specific handlers deal with it
+      if (stationFeatures.length > 0 || shotFeatures.length > 0) {
         return;
       }
 
@@ -621,8 +622,9 @@ export default class SurveyLayer {
       this.callbacks.onEmptyClick?.(e);
     });
 
-    // Station hover handlers - stations take priority over shots
-    this.map.on('mouseenter', this.stationsLayerId, (e) => {
+    // Station hover handlers - use HITBOX layer for larger hover area
+    // Stations take priority over shots
+    this.map.on('mouseenter', this.stationsHitboxLayerId, (e) => {
       this.map.getCanvas().style.cursor = 'pointer';
       this.callbacks.onFeatureHover?.(true);
       const feature = e.features?.[0];
@@ -643,15 +645,15 @@ export default class SurveyLayer {
       }
     });
 
-    this.map.on('mouseleave', this.stationsLayerId, () => {
+    this.map.on('mouseleave', this.stationsHitboxLayerId, () => {
       this.callbacks.onFeatureHover?.(false);
       this.hoveredStationId = null;
       this.callbacks.onStationHover?.(null);
       this.updateVisualState();
     });
 
-    // Shot hover handlers - stations take priority
-    this.map.on('mouseenter', this.shotsLayerId, (e) => {
+    // Shot hover handlers - use HITBOX layer, stations take priority
+    this.map.on('mouseenter', this.shotsHitboxLayerId, (e) => {
       // Don't highlight shots if a station is already hovered
       if (this.hoveredStationId) {
         return;
@@ -668,7 +670,7 @@ export default class SurveyLayer {
       }
     });
 
-    this.map.on('mouseleave', this.shotsLayerId, () => {
+    this.map.on('mouseleave', this.shotsHitboxLayerId, () => {
       // Only clear feature hover if no station is being hovered
       if (!this.hoveredStationId) {
         this.callbacks.onFeatureHover?.(false);
@@ -678,10 +680,10 @@ export default class SurveyLayer {
       this.updateVisualState();
     });
 
-    // Context menu handler
+    // Context menu handler - uses HITBOX layers (NOT ghost hitbox layers)
     this.map.on('contextmenu', (e) => {
-      const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsLayerId] });
-      const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsLayerId] });
+      const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsHitboxLayerId] });
+      const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsHitboxLayerId] });
 
       if (stationFeatures.length > 0) {
         const feature = stationFeatures[0];
@@ -767,6 +769,9 @@ export default class SurveyLayer {
       baseWidth + 1, // Selected: width + 1
       baseWidth, // Base
     ]);
+
+    // Update highlight layer radius to match snapped state (baseRadius + 3)
+    this.map.setPaintProperty(this.stationsHighlightLayerId, 'circle-radius', baseRadius + 3);
   }
 
   // Update hitbox layer sizes from config
@@ -853,33 +858,37 @@ export default class SurveyLayer {
     );
   }
 
-  // Control stations visibility (also hides merges and loop closures)
+  // Control stations visibility (also hides merges, loop closures, and station hitbox)
   // Note: Highlight layer stays visible - it uses filter to control what renders,
   // allowing snapped/origin stations to appear even when stations layer is hidden
   setShowStations(visible: boolean): void {
     if (!this.map) return;
     this.stationsVisible = visible;
     const visibility = visible ? 'visible' : 'none';
+    // Clear hover state FIRST when hiding to prevent any race conditions
+    // then set visibility to prevent hover events from triggering while clearing
+    if (!visible) {
+      this.clearStationHover();
+    }
     this.map.setLayoutProperty(this.stationsLayerId, 'visibility', visibility);
+    this.map.setLayoutProperty(this.stationsHitboxLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.mergesLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.loopClosuresLayerId, 'visibility', visibility);
     // Note: stationsHighlightLayerId intentionally NOT hidden - it uses filter
     // to show only snapped/origin stations even when main stations layer is hidden
-    // Clear hover state when hiding to prevent stuck hover state
-    if (!visible) {
-      this.clearStationHover();
-    }
   }
 
-  // Control shots visibility
+  // Control shots visibility (also hides shot hitbox)
   setShowShots(visible: boolean): void {
     if (!this.map) return;
     this.shotsVisible = visible;
-    this.map.setLayoutProperty(this.shotsLayerId, 'visibility', visible ? 'visible' : 'none');
-    // Clear hover state when hiding to prevent stuck hover state
+    const visibility = visible ? 'visible' : 'none';
+    // Clear hover state FIRST when hiding to prevent any race conditions
     if (!visible) {
       this.clearShotHover();
     }
+    this.map.setLayoutProperty(this.shotsLayerId, 'visibility', visibility);
+    this.map.setLayoutProperty(this.shotsHitboxLayerId, 'visibility', visibility);
   }
 
   // Control virtual shots visibility via filter (while keeping regular shots visible)
