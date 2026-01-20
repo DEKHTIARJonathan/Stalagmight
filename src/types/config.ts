@@ -192,7 +192,7 @@ export const defaultConfig: Config = {
     satellite_gps_origin: { latitude: 24.55, longitude: -81.78 },
     snap_threshold_pixels: 10,
     zoom_default: 15,
-    zoom_min: 1,
+    zoom_min: 0,
     zoom_max: 22,
     zoom_step: 1.0,
     controls: {

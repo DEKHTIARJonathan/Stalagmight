@@ -98,7 +98,7 @@ impl Default for MapConfig {
             },
             snap_threshold_pixels: 10,
             zoom_default: 15,
-            zoom_min: 1,
+            zoom_min: 0,
             zoom_max: 22,
             zoom_step: 1.0,
             controls: MapControlsConfig::default(),

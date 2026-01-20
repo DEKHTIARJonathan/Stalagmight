@@ -7,10 +7,20 @@
     "fn-2-f4f.1"
   ],
   "epic": "fn-2-f4f",
+  "evidence": {
+    "files_verified": [
+      "src/components/Map/MapCanvas.tsx"
+    ],
+    "implementation_location": "src/components/Map/MapCanvas.tsx:814-877 (zoom capture handlers), 666-674 (doubleClickZoom toggle), 641-648 (cursor forcing)",
+    "tests_passed": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui --grep zoom (8 passed)"
+    ]
+  },
   "id": "fn-2-f4f.2",
   "priority": null,
   "spec_path": ".flow/tasks/fn-2-f4f.2.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Implement click-to-zoom behavior",
-  "updated_at": "2026-01-20T13:14:48.856803Z"
+  "updated_at": "2026-01-20T13:44:56.069120Z"
 }

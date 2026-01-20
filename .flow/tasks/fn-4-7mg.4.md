@@ -1,8 +1,163 @@
 # fn-4-7mg.4 Add debug.map.showHitboxes visualization
 
 ## Description
-Add debug visualization for hitbox layers when `debug.map.showHitboxes` config is enabled.
+Add debug visualization for hitbox layers when `debug.map.showHitboxes` is enabled.
 
+## CRITICAL: Must Set BOTH Color AND Opacity
+
+Setting only color alpha won't show debug overlay if layer opacity is near-zero. Must set BOTH:
+- Color with alpha (e.g., `rgba(255, 0, 0, 0.3)`)
+- Layer opacity to 1 (or debug value)
+
+## Implementation in SurveyLayer.tsx
+
+### updateDebugVisualization() method
+
+```typescript
+private updateDebugVisualization(): void {
+  if (!this.map || !this.config) return;
+
+  const showHitboxes = this.config.debug?.map?.showHitboxes ?? false;
+
+  if (showHitboxes) {
+    // Debug mode: visible red overlay
+    // MUST set both color AND opacity
+    this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-color', 'rgba(255, 0, 0, 0.3)');
+    this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-opacity', 1);
+
+    this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-color', 'rgba(255, 0, 0, 0.3)');
+    this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-opacity', 1);
+
+    // Ghost hitboxes
+    this.map.setPaintProperty(this.ghostStationsHitboxLayerId, 'circle-color', 'rgba(255, 0, 0, 0.3)');
+    this.map.setPaintProperty(this.ghostStationsHitboxLayerId, 'circle-opacity', 1);
+
+    this.map.setPaintProperty(this.ghostShotsHitboxLayerId, 'line-color', 'rgba(255, 0, 0, 0.3)');
+    this.map.setPaintProperty(this.ghostShotsHitboxLayerId, 'line-opacity', 1);
+  } else {
+    // Normal mode: near-invisible (0.001 opacity for queryRenderedFeatures)
+    this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-color', 'rgba(0, 0, 0, 0)');
+    this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-opacity', 0.001);
+
+    this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-color', 'rgba(0, 0, 0, 0)');
+    this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-opacity', 0.001);
+
+    // Ghost hitboxes
+    this.map.setPaintProperty(this.ghostStationsHitboxLayerId, 'circle-color', 'rgba(0, 0, 0, 0)');
+    this.map.setPaintProperty(this.ghostStationsHitboxLayerId, 'circle-opacity', 0.001);
+
+    this.map.setPaintProperty(this.ghostShotsHitboxLayerId, 'line-color', 'rgba(0, 0, 0, 0)');
+    this.map.setPaintProperty(this.ghostShotsHitboxLayerId, 'line-opacity', 0.001);
+  }
+}
+```
+
+### Call from setConfig()
+
+The `setConfig()` method should call `updateDebugVisualization()` after `updateHitboxLayers()`.
+
+### Debug logging
+
+Add logging in event handlers when `debug.map.logHitDetection` is true:
+
+```typescript
+private handleStationClick = (e: MapLayerMouseEvent) => {
+  if (this.config?.debug?.map?.logHitDetection) {
+    console.log('[HitDetection] Station click', {
+      layer: this.stationsHitboxLayerId,
+      featureId: e.features?.[0]?.properties?.id,
+      coordinates: e.lngLat,
+      featuresCount: e.features?.length ?? 0,
+    });
+  }
+  // ... existing logic
+};
+```
+
+Add similar logging to:
+- `handleShotClick`
+- `handleStationEnter`
+- `handleShotEnter`
+
+## Visual result
+
+When `debug.map.showHitboxes = true`:
+- Station hitboxes: red semi-transparent circles (radius = hitArea)
+- Shot hitboxes: red semi-transparent thick lines (width = hitArea)
+- Visual layers render ON TOP of debug overlay (correct z-order)
+## Implementation in SurveyLayer.tsx
+
+### Add updateDebugVisualization() method
+
+```typescript
+private updateDebugVisualization(): void {
+  if (!this.map || !this.config) return;
+
+  const showHitboxes = this.config.debug?.map?.showHitboxes ?? false;
+  const debugColor = 'rgba(255, 0, 0, 0.3)';  // Semi-transparent red
+  const transparentColor = 'rgba(0, 0, 0, 0)';
+
+  // Station hitbox
+  this.map.setPaintProperty(
+    this.stationsHitboxLayerId,
+    'circle-color',
+    showHitboxes ? debugColor : transparentColor
+  );
+
+  // Shot hitbox
+  this.map.setPaintProperty(
+    this.shotsHitboxLayerId,
+    'line-color',
+    showHitboxes ? debugColor : transparentColor
+  );
+
+  // Ghost hitboxes (same treatment)
+  this.map.setPaintProperty(
+    this.ghostStationsHitboxLayerId,
+    'circle-color',
+    showHitboxes ? debugColor : transparentColor
+  );
+  this.map.setPaintProperty(
+    this.ghostShotsHitboxLayerId,
+    'line-color',
+    showHitboxes ? debugColor : transparentColor
+  );
+}
+```
+
+### Call from setConfig()
+
+The `setConfig()` method (added in task 2) should call `updateDebugVisualization()` after `updateHitboxLayers()`.
+
+### Debug logging
+
+Add logging in event handlers when `debug.map.logHitDetection` is true:
+
+```typescript
+private handleStationClick = (e: MapLayerMouseEvent) => {
+  if (this.config?.debug?.map?.logHitDetection) {
+    console.log('[HitDetection] Station click', {
+      layer: this.stationsHitboxLayerId,
+      featureId: e.features?.[0]?.properties?.id,
+      coordinates: e.lngLat,
+    });
+  }
+  // ... existing logic
+};
+```
+
+Add similar logging to:
+- `handleShotClick`
+- `handleStationEnter`
+- `handleShotEnter`
+
+## Visual result
+
+When `debug.map.showHitboxes = true`:
+- Station hitboxes appear as red semi-transparent circles (radius = hitArea)
+- Shot hitboxes appear as red semi-transparent thick lines (width = hitArea)
+- Visual layers render ON TOP of debug overlay
+- User can see both the actual element and its surrounding hitbox area
 ## Implementation
 
 ### Paint Property Toggle
@@ -43,14 +198,17 @@ Hitbox layers remain below visual layers so:
 - Red debug overlay shows around/under the actual station/shot
 - User can see both the actual element and its hitbox area
 ## Acceptance
-- [ ] Hitbox layers show red overlay when `debug.map.showHitboxes` is true
-- [ ] Hitbox layers are transparent when `debug.map.showHitboxes` is false
-- [ ] Visual layers render on top of hitbox debug overlay
+- [ ] `updateDebugVisualization()` sets BOTH color AND opacity for station hitbox
+- [ ] `updateDebugVisualization()` sets BOTH color AND opacity for shot hitbox
+- [ ] `updateDebugVisualization()` sets BOTH color AND opacity for ghost hitboxes
+- [ ] Debug mode uses `opacity: 1` with `rgba(255,0,0,0.3)` color
+- [ ] Normal mode uses `opacity: 0.001` with transparent color
+- [ ] Visual layers render on top of debug overlay
 - [ ] Hit detection events logged when `debug.map.logHitDetection` is true
-- [ ] Logs include layer name, feature ID, and coordinates
-- [ ] Method to toggle debug visualization on config reload
+- [ ] Logs include layer name, feature ID, coordinates, features count
+- [ ] `setConfig()` calls `updateDebugVisualization()`
 - [ ] `pnpm tsc --noEmit` passes
-- [ ] Manual testing: enable showHitboxes, verify red overlay visible
+- [ ] Manual test: enable showHitboxes in config, reload, verify red overlay visible
 ## Done summary
 TBD
 

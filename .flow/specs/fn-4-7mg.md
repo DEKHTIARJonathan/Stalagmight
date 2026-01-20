@@ -2,104 +2,139 @@
 
 ## Problem
 
-The current interaction areas for stations (4px radius circles) and shots (2px wide lines) are too small to click accurately. Users must position their mouse precisely to select, delete, or interact with survey elements, which is frustrating and slows down workflow. This affects all tools equally: select, delete, merge, measure, and draw.
+The current interaction areas for stations (4px radius circles) and shots (2px wide lines) are too small to click accurately. Users must position their mouse precisely to select, delete, or interact with survey elements, which is frustrating and slows down workflow.
 
 ## Approach
 
-Implement invisible "hitbox" layers rendered beneath the visual layers. These hitbox layers use larger sizes (configurable) while the visual appearance remains unchanged. MapLibre's `queryRenderedFeatures` will detect clicks/hovers on the hitbox layers, providing a larger interactive area without changing the visual design.
+Implement "hitbox" layers rendered beneath visual layers with larger configurable sizes.
 
 ### Technical Implementation
 
-1. **Transparent Hitbox Layers**: Add two new MapLibre layers:
-   - `survey-stations-hitbox`: Circle layer with `circle-radius` set to `map.station.hitArea` (default 10px)
-   - `survey-shots-hitbox`: Line layer with `line-width` set to `map.shot.hitArea` (default 8px)
-   - Both layers use `opacity: 0` (fully transparent) by default
-   - Same GeoJSON source as visual layers, just different paint properties
+1. **Hitbox Layers**: Add MapLibre layers using same GeoJSON source as visual layers:
+   - `survey-stations-hitbox`: Circle layer, radius from `map.station.hitArea`
+   - `survey-shots-hitbox`: Line layer, width from `map.shot.hitArea`
+   - Ghost hitbox layers for merge preview
+   - **Use `opacity: 0.001`** (not 0) to ensure `queryRenderedFeatures` works
+   - Transparent color (`rgba(0,0,0,0)`) with non-zero opacity
 
-2. **Layer Order**: Hitbox layers rendered first (below), visual layers on top. This ensures visual appearance is preserved while hitbox layers handle interaction queries.
+2. **Layer Order**: Hitbox layers FIRST, then visual layers, then labels. Satellite insertion anchors on `survey-stations-hitbox`.
 
-3. **Event Handling**: Click and hover events registered on hitbox layers, not visual layers. Station hitbox has priority over shot hitbox (current behavior preserved).
+3. **Event Handling**: Move ALL handlers to hitbox layers including global empty-click handler.
 
-4. **Ghost Layers**: Ghost/preview layers (used during merge) also get hitbox counterparts with same settings.
+4. **Nearest-to-Click Resolution**:
+   - For stations: Project point to screen, compute distance to click
+   - **For shots**: Compute distance-to-line-segment in screen space (project segment endpoints, find perpendicular distance or endpoint distance, whichever is smaller)
+   - Use same resolver for click, hover, context menu
 
-5. **Debug Mode**: When `debug.map.showHitboxes` is true, render hitbox layers with `rgba(255, 0, 0, 0.3)` instead of transparent.
+5. **Visual Sizing with State Scaling**:
+   - Base radius from `config.map.station.radius` (default 4.0)
+   - **Zero datum**: `radius * 2` (8px at default)
+   - **Snapped**: `radius + 3` (7px at default)
+   - **Hovered**: `radius + 2` for selection feedback
+   - Apply same delta pattern to shots with `config.map.shot.width`
+
+6. **Debug Mode**: When `showHitboxes` true, set BOTH color alpha AND layer opacity to 1.
 
 ### Configuration Schema
 
-**New settings in `[map]` section:**
+**Use `f64` for all size values to support fractional values (0.5-20 for shots):**
 
 ```toml
 [map.station]
-radius = 4              # Visual size (pixels) - was display.station_size
-hitArea = 10            # Clickable area radius (pixels)
+radius = 4.0            # Visual size (f64, 1.0-50.0)
+hit_area = 10.0         # Clickable area (f64, 1.0-50.0, >= radius)
 
 [map.shot]
-width = 2               # Visual width (pixels) - was display.line_thickness
-hitArea = 8             # Clickable area width (pixels)
+width = 2.0             # Visual width (f64, 0.5-20.0)
+hit_area = 8.0          # Clickable area (f64, 0.5-20.0, >= width)
 
 [map.snap]
-threshold = 10          # Snap radius (pixels) - was snap.threshold_pixels
-enabledDraw = true      # was snap.enabled_draw
-enabledMerge = true     # was snap.enabled_merge
-enabledMeasure = true   # was snap.enabled_measure
+threshold = 10.0        # Snap radius (f64, 1.0-50.0)
+enabled_draw = true
+enabled_merge = true
+enabled_measure = true
 
 [debug.map]
-showHitboxes = false    # Show red overlay for hitbox areas
-logHitDetection = false # Log hit detection events to console
+show_hitboxes = false
+log_hit_detection = false  # Logs only on CLICK/CONTEXTMENU, not hover
 ```
 
-**Validation bounds:**
-- Station settings (radius, hitArea): 1-50px
-- Shot settings (width, hitArea): 0.5-20px
-- Snap threshold: 1-50px
+**Config file**: Use `Config::config_path()` (platform-specific via `directories::ProjectDirs`).
 
-**Removed settings (clean break migration):**
-- `display.station_size` → `map.station.radius`
-- `display.line_thickness` → `map.shot.width`
-- `snap.enabled_draw` → `map.snap.enabledDraw`
-- `snap.enabled_merge` → `map.snap.enabledMerge`
-- `snap.enabled_measure` → `map.snap.enabledMeasure`
-- `snap.threshold_pixels` → `map.snap.threshold`
+**Migration**:
+1. Remove `SnapConfig` struct and `config.snap` field
+2. Remove `map.snap_threshold_pixels` (vestigial)
+3. Remove `display.station_size`, `display.line_thickness`
+4. Add `#[serde(default)]` on: `MapConfig.station`, `MapConfig.shot`, `MapConfig.snap`, `Config.debug`, `DebugConfig.map`
 
 ### Config Reload
 
-- Add "Reload Config" button to Settings dialog footer
-- When clicked, re-read config file and apply changes immediately
-- Show toast notification listing which settings changed
+**API Contract** - `reload_config` returns only the new config:
+```rust
+#[tauri::command]
+pub fn reload_config(state: State<AppState>) -> Result<Config, String> {
+    let new_config = Config::load()?;
+    *state.config.lock().unwrap() = new_config.clone();
+    Ok(new_config)
+}
+```
+
+**Diffing done client-side** (simpler, more flexible):
+```typescript
+const handleReloadConfig = async () => {
+  const newConfig = await invoke<Config>('reload_config');
+  const changes = computeConfigDiff(localConfig, newConfig);  // Frontend diff
+  setLocalConfig(newConfig);
+  updateConfig(newConfig);
+  showChangesDialog(changes);
+};
+```
+
+**Live-applied settings** (this feature):
+- `map.station.*`, `map.shot.*`, `map.snap.*`, `debug.map.*`
+
+**Require restart** (out of scope):
+- `display.default_background`, `display.grid_color`, etc.
+
+**UX**: Disable reload button when `isDirty`.
+
+### Debug Logging Scope
+
+`debug.map.logHitDetection` logs **only on click and contextmenu**, NOT on hover/mousemove (prevents spam):
+```typescript
+private handleStationClick = (e: MapLayerMouseEvent) => {
+  if (this.config?.debug?.map?.logHitDetection) {
+    console.log('[HitDetection] Station click', { ... });
+  }
+};
+// NO logging in mouseenter/mousemove handlers
+```
 
 ## Edge Cases
 
-- **Dense surveys**: Stations have priority when multiple elements overlap. Fixed hit areas (not zoom-dependent) for simplicity.
-- **Performance**: Trust MapLibre's spatial indexing initially. Benchmark with large surveys and optimize only if needed.
-- **Config file missing keys**: Use defaults for any missing settings (config always generated with all keys).
+- **Overlapping hitboxes**: Nearest-to-click wins (stations first, then shots)
+- **Shot distance**: Use perpendicular distance to line segment, not just endpoints
+- **Config reload**: Only hitbox/visual settings applied live; other settings require restart
+- **Performance**: O(N) snap acceptable for now; can optimize later
 
 ## Quick Commands
 
 ```bash
-# Type check
 pnpm tsc --noEmit
-
-# Run Playwright E2E tests
 pnpm test:ui
-
-# Run Rust tests
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 ## Acceptance Criteria
 
-- [ ] Stations can be clicked/hovered within configurable hitArea radius (default 10px)
-- [ ] Shots can be clicked/hovered within configurable hitArea width (default 8px)
-- [ ] Visual rendering sizes unchanged (station 4px radius, shot 2px width by default)
-- [ ] All settings configurable via `~/.config/cavechef/config.toml`
-- [ ] Settings apply immediately when "Reload Config" clicked in Settings dialog
-- [ ] Toast shows changed settings on config reload
-- [ ] Debug mode (`debug.map.showHitboxes`) shows red overlay for hitbox areas
-- [ ] Debug logging (`debug.map.logHitDetection`) logs hit events when enabled
-- [ ] Old settings (`display.station_size`, `display.line_thickness`, `snap.*`) removed
-- [ ] TypeScript and Rust config types updated and synchronized
-- [ ] Unit tests for config loading, validation, and defaults
-- [ ] E2E tests verify exact pixel distance hit detection (hitArea-1 hits, hitArea+1 misses)
-- [ ] docs/configuration.md updated with new settings
-- [ ] Ghost layers use same hitArea settings
-- [ ] All validation bounds enforced (station 1-50px, shot 0.5-20px)
+- [ ] All size fields use `f64` (Rust) / `number` (TS) with float defaults
+- [ ] Hitbox layers use `opacity: 0.001`
+- [ ] Visual state scaling: zeroDatum = radius*2, snapped = radius+3
+- [ ] Shot selection uses distance-to-line-segment in screen space
+- [ ] `reload_config` returns Config only; diffing done client-side
+- [ ] `logHitDetection` logs only click/contextmenu (not hover)
+- [ ] `#[serde(default)]` on all nested config structs for migration
+- [ ] Satellite layer anchors on `survey-stations-hitbox`
+- [ ] Global empty-click handler queries hitbox layers
+- [ ] E2E tests use mock station coords or expose test helper
+- [ ] TypeScript and Rust config types synchronized

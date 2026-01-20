@@ -116,7 +116,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   updateConfig: async (config: Config) => {
     const result = await invoke<CommandResult>('update_config', { config });
     if (result.success) {
-      set({ config });
+      // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
+      await get().loadConfig();
     }
     return result;
   },
