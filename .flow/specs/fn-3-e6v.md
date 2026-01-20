@@ -13,36 +13,55 @@ Display toggles don't actually hide elements or prevent selection.
    - Add to `resetDisplaySettings()`
    - **Update `loadDisplaySettings`:**
      ```typescript
-     const displayState: Partial<UIState> = {};
-     let sawShowShots = false;
-     for (const [key, value] of Object.entries(map)) {
-       if (key === 'showShots') {
-         displayState.showShots = value === 'true';
-         sawShowShots = true;
+     // Keep existing type and loop structure (L377-388)
+     const displayState: Partial<Record<DisplayToggleKey, boolean>> = {};
+     let gridSpacing: number | undefined;
+     for (const [key, value] of Object.entries(settings)) {
+       if (key.startsWith('show')) {
+         displayState[key as DisplayToggleKey] = value === 'true';
        }
-       // ... existing key handling
+       // ... existing gridSpacing handling
      }
-     // Fallback for missing showShots
-     if (!sawShowShots) {
+
+     // ADD FALLBACK HERE - BEFORE the set() guard check (before L389)
+     // If showShots wasn't in saved settings, default to true
+     if (displayState.showShots === undefined) {
        displayState.showShots = true;
      }
-     set(displayState);
+
+     // Existing guard (L389) now works correctly - displayState.showShots
+     // ensures Object.keys(displayState).length > 0
+     if (Object.keys(displayState).length > 0 || gridSpacing !== undefined) {
+       set({ ...displayState, ...(gridSpacing !== undefined ? { gridSpacing } : {}) });
+     }
      ```
 
 2. **DisplayMenu, MapCanvas, mocks** - as before
 
 ## Station Highlight Layer Ordering
 
-**Insert ABOVE stations layer, BELOW labels:**
+**Insert immediately AFTER stations layer (NO beforeId needed):**
+
+Layer order in initializeLayers(): loop-closures → shots → stations → highlight → shot-labels → section-labels → station-labels
+
+Since station-labels is added AFTER the highlight layer, it naturally renders on top.
+
 ```typescript
-// In initializeLayers(), after survey-stations, before station-labels
+// In initializeLayers(), RIGHT AFTER the stations layer (L271)
+// DO NOT use beforeId - station-labels doesn't exist yet at this point
 this.map.addLayer({
   id: 'survey-stations-highlight',
   type: 'circle',
-  source: 'survey-data-stations',
-  filter: ['==', ['get', 'sectionId'], -9999],
-  paint: { ... }
-}, 'station-labels');  // beforeId ensures it's below labels
+  source: this.sourceId + '-stations',  // same source as stations
+  filter: ['==', ['get', 'sectionId'], -9999],  // filter to nothing initially
+  paint: {
+    'circle-radius': 7,
+    'circle-color': '#00ffcc',
+    'circle-stroke-width': 4,
+    'circle-stroke-color': '#00ffcc',
+  }
+});
+// Station-labels added later (L355) renders on top naturally
 ```
 
 ## Selection Entry Points - Guard Placement
@@ -50,6 +69,10 @@ this.map.addLayer({
 **Context menu guard BEFORE selection:**
 ```typescript
 // In handleContextMenu, at TOP before any setSelection
+// First handle null target case
+if (!target) return;
+
+// Then guard hidden elements
 if (target.type === 'station' && !showStations) {
   showToast("Enable 'Stations' in Display menu...", 'stations-hidden');
   return;  // Return before setSelection
@@ -83,7 +106,7 @@ Per-key throttle, Portal, z-index 99999.
 
 ## Acceptance Criteria
 
-- [ ] `loadDisplaySettings` uses `sawShowShots` flag for fallback
-- [ ] Context menu guard placed BEFORE setSelection calls
-- [ ] Highlight layer inserted with `beforeId` for ordering above stations, below labels
+- [ ] `loadDisplaySettings` fallback for showShots placed BEFORE set() guard check
+- [ ] Context menu guard with null check placed BEFORE setSelection calls
+- [ ] Highlight layer inserted immediately AFTER stations (no beforeId - labels added later render on top)
 - [ ] E2E and unit tests pass
