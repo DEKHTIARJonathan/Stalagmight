@@ -999,19 +999,22 @@ export default class SurveyLayer {
 
   // Update debug visualization based on config
   // Sets BOTH color AND opacity on all hitbox layers for debug mode
+  // CRITICAL: In normal mode, use OPAQUE color (#000) with tiny opacity (0.001)
+  // Using transparent color (rgba(0,0,0,0)) would multiply with opacity to give
+  // effective alpha of 0, breaking queryRenderedFeatures/hover detection
   private updateDebugVisualization(): void {
     if (!this.map) return;
 
     const showHitboxes = this.config?.debug?.map?.show_hitboxes ?? false;
-    const debugColor = 'rgba(255, 0, 0, 0.3)'; // Semi-transparent red
-    const transparentColor = 'rgba(0, 0, 0, 0)';
+    const debugColor = 'rgba(255, 0, 0, 0.3)'; // Semi-transparent red for debug
+    const opaqueColor = '#000000'; // OPAQUE color for normal mode (opacity controls visibility)
 
-    // Station hitbox - MUST set both color AND opacity
+    // Station hitbox - MUST use opaque color in normal mode for queryRenderedFeatures
     if (this.map.getLayer(this.stationsHitboxLayerId)) {
       this.map.setPaintProperty(
         this.stationsHitboxLayerId,
         'circle-color',
-        showHitboxes ? debugColor : transparentColor
+        showHitboxes ? debugColor : opaqueColor
       );
       this.map.setPaintProperty(
         this.stationsHitboxLayerId,
@@ -1020,12 +1023,12 @@ export default class SurveyLayer {
       );
     }
 
-    // Shot hitbox - MUST set both color AND opacity
+    // Shot hitbox - MUST use opaque color in normal mode for queryRenderedFeatures
     if (this.map.getLayer(this.shotsHitboxLayerId)) {
       this.map.setPaintProperty(
         this.shotsHitboxLayerId,
         'line-color',
-        showHitboxes ? debugColor : transparentColor
+        showHitboxes ? debugColor : opaqueColor
       );
       this.map.setPaintProperty(
         this.shotsHitboxLayerId,
@@ -1034,31 +1037,31 @@ export default class SurveyLayer {
       );
     }
 
-    // Ghost station hitbox - MUST set both color AND opacity
+    // Ghost hitbox layers - debug visualization only (NOT used for hit detection)
+    // Keep at opacity 0 when debug off to avoid unnecessary rendering work
     if (this.map.getLayer(this.ghostStationsHitboxLayerId)) {
       this.map.setPaintProperty(
         this.ghostStationsHitboxLayerId,
         'circle-color',
-        showHitboxes ? debugColor : transparentColor
+        showHitboxes ? debugColor : opaqueColor
       );
       this.map.setPaintProperty(
         this.ghostStationsHitboxLayerId,
         'circle-opacity',
-        showHitboxes ? 1 : 0.001
+        showHitboxes ? 1 : 0 // 0 when off - not used for hit detection
       );
     }
 
-    // Ghost shot hitbox - MUST set both color AND opacity
     if (this.map.getLayer(this.ghostShotsHitboxLayerId)) {
       this.map.setPaintProperty(
         this.ghostShotsHitboxLayerId,
         'line-color',
-        showHitboxes ? debugColor : transparentColor
+        showHitboxes ? debugColor : opaqueColor
       );
       this.map.setPaintProperty(
         this.ghostShotsHitboxLayerId,
         'line-opacity',
-        showHitboxes ? 1 : 0.001
+        showHitboxes ? 1 : 0 // 0 when off - not used for hit detection
       );
     }
   }
