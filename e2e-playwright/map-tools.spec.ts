@@ -454,6 +454,13 @@ test.describe('Zoom Tool Click Behavior', () => {
     const canvas = page.locator('canvas').first();
     await expect(canvas).toBeVisible();
 
+    // Verify no selection initially
+    const initialSelection = await page.evaluate(() => {
+      const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { selection: unknown } } } }).__E2E_TEST__;
+      return stores?.uiStore?.getState()?.selection ?? null;
+    });
+    expect(initialSelection).toBeNull();
+
     // Switch to zoom tool
     await page.keyboard.press('z');
     await page.waitForTimeout(100);
@@ -465,19 +472,16 @@ test.describe('Zoom Tool Click Behavior', () => {
       const centerX = canvasBox.x + canvasBox.width / 2;
       const centerY = canvasBox.y + canvasBox.height / 2;
 
-      // Click on map - should not trigger selection
+      // Click on map with zoom tool - should NOT trigger selection
       await page.mouse.click(centerX, centerY);
-      await page.waitForTimeout(200);
+      await page.waitForTimeout(400); // Wait for zoom animation
 
-      // Verify no selection state is active by checking UI store
-      const hasSelection = await page.evaluate(() => {
-        // Selection would typically show in detail panel or as visual highlighting
-        // For now, just verify no error occurred and zoom happened
-        const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number } }).__cavechef_map__;
-        return map !== undefined;
+      // Verify selection is still null (click-to-zoom doesn't select)
+      const selectionAfterClick = await page.evaluate(() => {
+        const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { selection: unknown } } } }).__E2E_TEST__;
+        return stores?.uiStore?.getState()?.selection ?? null;
       });
-
-      expect(hasSelection).toBe(true);
+      expect(selectionAfterClick).toBeNull();
 
       // Canvas should still be functional
       await expect(canvas).toBeVisible();

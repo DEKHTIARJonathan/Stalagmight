@@ -829,7 +829,9 @@ export default function MapCanvas() {
     // Left-click capture: stop propagation to prevent SurveyLayer selection
     // Actual zoom is handled by zoom box end handler (handleZoomBoxEnd)
     // Don't intercept Ctrl+click (used for Ctrl+drag panning)
+    // Don't intercept during placement mode (let placement click through)
     const handleClickCapture = (e: MouseEvent) => {
+      if (placementMode) return;
       if (e.button === 0 && !e.ctrlKey) {
         e.stopPropagation();
         e.stopImmediatePropagation();
@@ -1121,11 +1123,13 @@ export default function MapCanvas() {
   );
 
   // Determine mousedown handler based on mode and tool
-  // Only process events that originate from the map container (not overlay UI)
+  // Only process events that originate from the map canvas (not UI controls or overlays)
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      // Ignore clicks on overlay UI (buttons, indicators, etc.)
-      if (!mapContainer.current?.contains(e.target as Node)) {
+      // Ignore clicks on overlay UI (buttons, indicators, MapLibre controls)
+      // Gate on canvas element to exclude .maplibregl-control-container clicks
+      const canvas = map.current?.getCanvas();
+      if (!canvas || !canvas.contains(e.target as Node)) {
         return;
       }
       if (placementMode) {

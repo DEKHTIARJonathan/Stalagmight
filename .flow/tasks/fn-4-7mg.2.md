@@ -1,8 +1,63 @@
 # fn-4-7mg.2 Add transparent hitbox layers to SurveyLayer
 
 ## Description
-Add hitbox layers with ghost layers non-interactive.
+Add hitbox layers with complete visual scaling rules.
 
+## Visual State Scaling (Complete)
+
+**Stations** (all relative to `config.map.station.radius`, default 4.0):
+- Normal: radius (4)
+- Zero datum: radius * 2 (8)
+- Snapped: radius + 3 (7)
+- Hovered: radius + 2 (6)
+- Selected: radius + 1 (5)
+
+**Shots** (all relative to `config.map.shot.width`, default 2.0):
+- Normal: width (2)
+- Hovered: width + 2 (4)
+- Selected: width + 1 (3)
+
+```typescript
+private updateVisualState(): void {
+  const baseRadius = this.config?.map.station.radius ?? 4;
+  const baseWidth = this.config?.map.shot.width ?? 2;
+
+  // Stations
+  this.map.setPaintProperty(this.stationsLayerId, 'circle-radius', [
+    'case',
+    ['==', stationIdExpr, this.snappedStationId ?? ''], baseRadius + 3,
+    ['==', ['get', 'isZeroDatum'], true], baseRadius * 2,
+    ['==', stationIdExpr, this.hoveredStationId ?? ''], baseRadius + 2,
+    ['==', stationIdExpr, this.selectedStationId ?? ''], baseRadius + 1,
+    baseRadius
+  ]);
+
+  // Shots
+  this.map.setPaintProperty(this.shotsLayerId, 'line-width', [
+    'case',
+    ['==', shotIdExpr, this.hoveredShotId ?? ''], baseWidth + 2,
+    ['==', shotIdExpr, this.selectedShotId ?? ''], baseWidth + 1,
+    baseWidth
+  ]);
+}
+```
+
+## Hitbox Layers
+
+- opacity: 0.001
+- Ghost hitbox layers: NOT interactive (debug only)
+
+## SurveyLayer Config Cache
+
+```typescript
+private config: Config | null = null;
+public setConfig(config: Config): void {
+  this.config = config;
+  this.updateHitboxLayers();
+  this.updateVisualState();
+  this.updateDebugVisualization();
+}
+```
 ## Ghost Hitbox Layers: Non-Interactive
 
 Ghost hitbox layers are for **debug visualization only**:
@@ -397,12 +452,12 @@ From bottom to top:
 - Also update visual layers to use `map.station.radius` and `map.shot.width`
 - Add methods to update hitbox layer paint properties when config changes
 ## Acceptance
-- [ ] Ghost hitbox layers added but NOT included in queries
+- [ ] Station scaling: zeroDatum=radius*2, snapped=radius+3, hovered=radius+2, selected=radius+1
+- [ ] Shot scaling: hovered=width+2, selected=width+1
 - [ ] Hitbox layers use opacity 0.001
-- [ ] Visual state scaling: zeroDatum = radius * 2, snapped = radius + 3
-- [ ] SurveyLayer stores config for event handlers
-- [ ] setConfig() updates hitbox and visual layers
-- [ ] Satellite insertion anchors on `survey-stations-hitbox`
+- [ ] Ghost hitbox layers non-interactive
+- [ ] SurveyLayer stores config and has setConfig method
+- [ ] Satellite insertion anchors on survey-stations-hitbox
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD
