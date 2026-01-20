@@ -111,6 +111,8 @@ interface UIStore {
   removeFromSelection: (selection: Selection) => void;
   toggleSelection: (selection: Selection) => void;
   clearSelection: () => void;
+  clearSelectionByType: (type: 'station' | 'shot' | 'section') => void;
+  filterSelection: (predicate: (s: Selection) => boolean) => void;
   selectAll: (selections: Selection[]) => void;
   isSelected: (selection: Selection) => boolean;
 
@@ -307,6 +309,16 @@ export const useUIStore = create<UIStore>((set) => ({
       }
     }),
   clearSelection: () => set({ selection: null, multiSelection: [] }),
+  clearSelectionByType: (type) =>
+    set((state) => ({
+      selection: state.selection?.type === type ? null : state.selection,
+      multiSelection: state.multiSelection.filter((s) => s.type !== type),
+    })),
+  filterSelection: (predicate) =>
+    set((state) => ({
+      selection: state.selection && predicate(state.selection) ? state.selection : null,
+      multiSelection: state.multiSelection.filter(predicate),
+    })),
   selectAll: (selections: Selection[]) =>
     set({
       multiSelection: selections,

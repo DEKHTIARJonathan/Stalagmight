@@ -74,10 +74,14 @@ export default function MapCanvas() {
     measureEnd,
     addToSelection,
     clearSelection,
+    clearSelectionByType,
+    filterSelection,
     requestFitToBounds,
     clearFitToBoundsRequest,
     snappedStation,
     setSnappedStation,
+    setHoveredStation,
+    setHoveredShot,
     placementMode,
     updatePlacementCursor,
     updatePlacementSnap,
@@ -640,6 +644,40 @@ export default function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setShowVirtualShots(showShots && showVirtualShots);
   }, [showVirtualShots, showShots, mapLoaded]);
+
+  // Clear station selection and hover when stations visibility changes to OFF
+  useEffect(() => {
+    if (!showStations) {
+      clearSelectionByType('station');
+      setHoveredStation(null);
+      surveyLayerRef.current?.clearAllInteractionState();
+    }
+  }, [showStations, clearSelectionByType, setHoveredStation]);
+
+  // Clear shot selection and hover when shots visibility changes to OFF
+  useEffect(() => {
+    if (!showShots) {
+      clearSelectionByType('shot');
+      setHoveredShot(null);
+      surveyLayerRef.current?.clearShotHover();
+    }
+  }, [showShots, clearSelectionByType, setHoveredShot]);
+
+  // Clear virtual shot selection when virtual shots visibility changes to OFF
+  // Uses project?.name as stable dependency instead of project?.sections
+  const projectName = project?.name;
+  useEffect(() => {
+    if (!showVirtualShots && project?.sections) {
+      filterSelection((s) => {
+        if (s.type !== 'shot') return true;
+        const section = project.sections.find((sec) => sec.id === s.sectionId);
+        const shot = section?.shots.find((sh) => sh.id === s.shotId);
+        return !shot?.is_virtual;
+      });
+      surveyLayerRef.current?.clearShotHover();
+      setHoveredShot(null);
+    }
+  }, [showVirtualShots, projectName, filterSelection, setHoveredShot]);
 
   // Handle scale bar toggle
   useEffect(() => {
