@@ -447,9 +447,8 @@ If config file has parse errors:
 - [ ] Button disabled when isDirty
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added Reload Config button to Settings dialog with setConfig store action, reload_config Tauri command, client-side config diff display, and proper state synchronization.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 4321b3e, 891325a132f9c6dfda1f2e414efdb600cb98cd47
+- Tests: pnpm tsc --noEmit, cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:

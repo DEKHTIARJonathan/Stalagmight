@@ -55,8 +55,14 @@ Document the "Reload Config" button in Settings dialog for applying config chang
 - [ ] "Reload Config" button documented
 - [ ] Example config shows complete new structure
 ## Done summary
-TBD
+Updated docs/configuration.md with new hitbox and debug settings:
 
+- Added `[map.station]` section with radius (1-50) and hitArea (1-50) settings
+- Added `[map.shot]` section with width (0.5-20) and hitArea (0.5-20) settings  
+- Added `[map.snap]` section with threshold and tool-specific enable flags
+- Added `[debug.map]` section with showHitboxes and logHitDetection settings
+- Added Deprecated Settings table mapping old settings to new locations
+- Documented "Reload Config" button in Settings dialog section
 ## Evidence
 - Commits:
 - Tests:
