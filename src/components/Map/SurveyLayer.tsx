@@ -15,6 +15,10 @@ export interface SurveyLayerCallbacks {
     target: { type: 'station'; ref: StationRef } | { type: 'shot'; sectionId: SectionId; shotId: ShotId } | null,
     event: MapMouseEvent
   ) => void;
+  /** Called when user clicks near a hidden station (for toast feedback) */
+  onHiddenStationClick?: () => void;
+  /** Called when user clicks near a hidden shot (for toast feedback) */
+  onHiddenShotClick?: () => void;
 }
 
 /**
@@ -60,6 +64,10 @@ export default class SurveyLayer {
   private hoveredStationId: string | null = null;
   private hoveredShotId: string | null = null;
   private snappedStationId: string | null = null;
+
+  // Visibility state (for hidden feature detection)
+  private stationsVisible: boolean = true;
+  private shotsVisible: boolean = true;
 
   // GPS origin for coordinate transforms (enables satellite tile alignment)
   private gpsOrigin: GpsOrigin | null = null;
@@ -456,9 +464,58 @@ export default class SurveyLayer {
       const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsLayerId] });
       const labelFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.labelsLayerId, this.shotLabelsLayerId, this.stationLabelsLayerId] });
 
-      if (stationFeatures.length === 0 && shotFeatures.length === 0 && labelFeatures.length === 0) {
-        this.callbacks.onEmptyClick?.(e);
+      // If we hit a visible feature, let the layer-specific handlers deal with it
+      if (stationFeatures.length > 0 || shotFeatures.length > 0 || labelFeatures.length > 0) {
+        return;
       }
+
+      // Check for clicks on hidden features (stations take priority)
+      // Use a 15-pixel threshold for "near" detection
+      const HIDDEN_CLICK_THRESHOLD_PX = 15;
+
+      if (!this.stationsVisible && this.callbacks.onHiddenStationClick) {
+        // Query source features (works even when layer is hidden)
+        const sourceFeatures = this.map.querySourceFeatures(this.sourceId + '-stations');
+        for (const feature of sourceFeatures) {
+          if (feature.geometry.type === 'Point') {
+            const coords = feature.geometry.coordinates as [number, number];
+            const projected = this.map.project(coords);
+            const dx = projected.x - e.point.x;
+            const dy = projected.y - e.point.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            if (distance < HIDDEN_CLICK_THRESHOLD_PX) {
+              this.callbacks.onHiddenStationClick();
+              return;
+            }
+          }
+        }
+      }
+
+      if (!this.shotsVisible && this.callbacks.onHiddenShotClick) {
+        // Query shot source features
+        const sourceFeatures = this.map.querySourceFeatures(this.sourceId + '-shots');
+        for (const feature of sourceFeatures) {
+          if (feature.geometry.type === 'LineString') {
+            const lineCoords = feature.geometry.coordinates as [number, number][];
+            // Check distance to line segment
+            for (let i = 0; i < lineCoords.length - 1; i++) {
+              const coord1 = lineCoords[i];
+              const coord2 = lineCoords[i + 1];
+              if (!coord1 || !coord2) continue;
+              const p1 = this.map.project(coord1);
+              const p2 = this.map.project(coord2);
+              const dist = this.pointToSegmentDistance(e.point.x, e.point.y, p1.x, p1.y, p2.x, p2.y);
+              if (dist < HIDDEN_CLICK_THRESHOLD_PX) {
+                this.callbacks.onHiddenShotClick();
+                return;
+              }
+            }
+          }
+        }
+      }
+
+      // No hidden features nearby, fire empty click
+      this.callbacks.onEmptyClick?.(e);
     });
 
     // Station hover handlers - stations take priority over shots
@@ -643,6 +700,7 @@ export default class SurveyLayer {
   // Control stations visibility (also hides merges and loop closures)
   setShowStations(visible: boolean): void {
     if (!this.map) return;
+    this.stationsVisible = visible;
     const visibility = visible ? 'visible' : 'none';
     this.map.setLayoutProperty(this.stationsLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.mergesLayerId, 'visibility', visibility);
@@ -657,6 +715,7 @@ export default class SurveyLayer {
   // Control shots visibility
   setShowShots(visible: boolean): void {
     if (!this.map) return;
+    this.shotsVisible = visible;
     this.map.setLayoutProperty(this.shotsLayerId, 'visibility', visible ? 'visible' : 'none');
     // Clear hover state when hiding to prevent stuck hover state
     if (!visible) {
@@ -674,6 +733,40 @@ export default class SurveyLayer {
       // Hide virtual shots only
       this.map.setFilter(this.shotsLayerId, ['!=', ['get', 'isVirtual'], true]);
     }
+  }
+
+  /**
+   * Calculate distance from point (px, py) to line segment (x1,y1)-(x2,y2).
+   * Used for detecting clicks near hidden shot lines.
+   */
+  private pointToSegmentDistance(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+    const A = px - x1;
+    const B = py - y1;
+    const C = x2 - x1;
+    const D = y2 - y1;
+
+    const dot = A * C + B * D;
+    const lenSq = C * C + D * D;
+    let param = -1;
+    if (lenSq !== 0) {
+      param = dot / lenSq;
+    }
+
+    let xx: number, yy: number;
+    if (param < 0) {
+      xx = x1;
+      yy = y1;
+    } else if (param > 1) {
+      xx = x2;
+      yy = y2;
+    } else {
+      xx = x1 + param * C;
+      yy = y1 + param * D;
+    }
+
+    const dx = px - xx;
+    const dy = py - yy;
+    return Math.sqrt(dx * dx + dy * dy);
   }
 
   // Set highlighted stations by their string IDs (format: "sectionId:stationIndex")

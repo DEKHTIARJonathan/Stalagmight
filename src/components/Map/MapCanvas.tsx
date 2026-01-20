@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import maplibregl from 'maplibre-gl';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
@@ -90,6 +90,7 @@ export default function MapCanvas() {
     updatePlacementSnap,
     cancelPlacementMode,
     confirmPlacement,
+    showToast,
   } = useUIStore();
 
   // Snap-to-station detection
@@ -249,7 +250,7 @@ export default function MapCanvas() {
   );
 
   // Get map tool callbacks
-  const toolCallbacks = useMapTools({
+  const baseToolCallbacks = useMapTools({
     onMeasureComplete: (distance, depthDiff) => {
       setMeasureResult({ distance, depthDiff });
       // Clear after a few seconds
@@ -258,6 +259,17 @@ export default function MapCanvas() {
     onMoveDragStart: handleMoveDragStart,
     onFeatureHover: setIsHoveringFeature,
   });
+
+  // Combine with hidden feature callbacks for toast feedback
+  const toolCallbacks = useMemo(() => ({
+    ...baseToolCallbacks,
+    onHiddenStationClick: () => {
+      showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden');
+    },
+    onHiddenShotClick: () => {
+      showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden');
+    },
+  }), [baseToolCallbacks, showToast]);
 
   // Box select handlers
   const handleBoxSelectStart = useCallback(
