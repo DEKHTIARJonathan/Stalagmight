@@ -188,6 +188,12 @@ interface UIStore {
   setHoveredStation: (ref: StationRef | null) => void;
   setHoveredShot: (shot: { sectionId: SectionId; shotId: ShotId } | null) => void;
 
+  // Toast state (per-key throttling)
+  toast: { message: string; key: string; timestamp: number } | null;
+  lastToastByKey: Record<string, number>;
+  showToast: (message: string, key: string) => void;
+  clearToast: () => void;
+
   // Snap state
   snappedStation: StationRef | null;
   setSnappedStation: (ref: StationRef | null) => void;
@@ -489,6 +495,30 @@ export const useUIStore = create<UIStore>((set) => ({
   hoveredShot: null,
   setHoveredStation: (hoveredStation) => set({ hoveredStation }),
   setHoveredShot: (hoveredShot) => set({ hoveredShot }),
+
+  // Toast state (per-key throttling)
+  toast: null,
+  lastToastByKey: {},
+  showToast: (message, key) => {
+    const now = Date.now();
+    const lastTime = useUIStore.getState().lastToastByKey[key] || 0;
+
+    // Throttle: only show if no recent toast for this key (5 second cooldown)
+    if (now - lastTime > 5000) {
+      set({
+        toast: { message, key, timestamp: now },
+        lastToastByKey: { ...useUIStore.getState().lastToastByKey, [key]: now },
+      });
+      // Auto-clear after 3 seconds
+      setTimeout(() => {
+        const t = useUIStore.getState().toast;
+        if (t && t.timestamp === now) {
+          set({ toast: null });
+        }
+      }, 3000);
+    }
+  },
+  clearToast: () => set({ toast: null }),
 
   // Snap state
   snappedStation: null,

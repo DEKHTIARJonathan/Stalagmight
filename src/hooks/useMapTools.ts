@@ -36,6 +36,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     setHoveredShot,
     openDialog,
     snappedStation,
+    showStations,
+    showShots,
+    showToast,
   } = useUIStore();
 
   const { stations, project } = useProjectStore();
@@ -74,6 +77,12 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   // Handle station click based on active tool
   const handleStationClick = useCallback(
     (ref: StationRef, event: { originalEvent: MouseEvent }) => {
+      // GUARD: Block all station interactions when hidden
+      if (!showStations) {
+        showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden');
+        return;
+      }
+
       const mouseEvent = event.originalEvent;
 
       switch (activeTool) {
@@ -178,6 +187,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       setMergeStationA,
       setMergeStationB,
       setSelection,
+      showStations,
+      showToast,
       toggleSelection,
     ]
   );
@@ -185,6 +196,12 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   // Handle shot click based on active tool
   const handleShotClick = useCallback(
     (sectionId: SectionId, shotId: ShotId, event: { originalEvent: MouseEvent }) => {
+      // GUARD: Block all shot interactions when hidden
+      if (!showShots) {
+        showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden');
+        return;
+      }
+
       const mouseEvent = event.originalEvent;
 
       switch (activeTool) {
@@ -213,7 +230,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         // Other tools don't respond to shot clicks
       }
     },
-    [activeTool, addToSelection, openDialog, setSelection, toggleSelection]
+    [activeTool, addToSelection, openDialog, setSelection, showShots, showToast, toggleSelection]
   );
 
   // Handle empty click (no feature) - but use snapped station if available
@@ -229,6 +246,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             return;
 
           case 'merge':
+            // GUARD: Block merge snap when stations are hidden
+            if (!showStations) {
+              showToast("Enable 'Stations' in Display menu to merge", 'stations-hidden');
+              return;
+            }
             if (!mergeStationA) {
               setMergeStationA(snappedStation);
             } else {
@@ -293,6 +315,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       setMeasureStart,
       setMergeStationA,
       setMergeStationB,
+      showStations,
+      showToast,
     ]
   );
 

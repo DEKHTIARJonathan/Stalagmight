@@ -1,4 +1,5 @@
 import { useEffect, useCallback, useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
@@ -60,7 +61,7 @@ function calculateStationPositions(shots: ImportedSectionConfig['shots']): Array
 
 function App() {
   const { project, stations, loadConfig, config, isDirty, createSection, createSectionAndMerge, setZeroDatum, mergeStations, moveSection, importDmp } = useProjectStore();
-  const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, hasImportedDmpPath, addImportedDmpPath, triggerFitToBounds } = useUIStore();
+  const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, hasImportedDmpPath, addImportedDmpPath, triggerFitToBounds, toast } = useUIStore();
 
   // Track whether we're hovering with a valid DMP file
   const [isDraggingDmp, setIsDraggingDmp] = useState(false);
@@ -557,6 +558,18 @@ function App() {
       {activeDialog === 'section-adjust' && <SectionAdjustDialog />}
       {activeDialog === 'confirm-duplicate-import' && <DuplicateImportDialog />}
       {activeDialog === 'settings' && <SettingsDialog />}
+
+      {/* Toast notification (via Portal for z-index reliability) */}
+      {toast && createPortal(
+        <div className="fixed inset-0 pointer-events-none z-[99999]">
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 pointer-events-auto">
+            <div className="bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg">
+              {toast.message}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

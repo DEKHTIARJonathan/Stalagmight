@@ -41,6 +41,8 @@ export function useKeyboardShortcuts() {
     setDrawFromStation,
     activateSpringLoaded,
     deactivateSpringLoaded,
+    showStations,
+    showToast,
   } = useUIStore();
   const { undo, redo, saveProject, project, stations, importDmp } = useProjectStore();
   const { setImportContext, hasImportedDmpPath, addImportedDmpPath } = useUIStore();
@@ -113,6 +115,11 @@ export function useKeyboardShortcuts() {
             return;
           case 'a':
             event.preventDefault();
+            // GUARD: Block select all when stations are hidden
+            if (!showStations) {
+              showToast("Enable 'Stations' in Display menu to select all", 'stations-hidden');
+              return;
+            }
             if (stations.length > 0) {
               const allStations: Selection[] = stations.map((station) => ({
                 type: 'station' as const,
@@ -264,7 +271,7 @@ export function useKeyboardShortcuts() {
         setActiveTool(toolShortcut as ToolType);
       }
     },
-    [setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection, selectAll, triggerFitToBounds, clearMergeStations, clearMeasure, setDrawFromStation, selection, openDialog, undo, redo, saveProject, project, stations, importDmp, setImportContext, hasImportedDmpPath, addImportedDmpPath, activateSpringLoaded]
+    [setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection, selectAll, triggerFitToBounds, clearMergeStations, clearMeasure, setDrawFromStation, selection, openDialog, undo, redo, saveProject, project, stations, importDmp, setImportContext, hasImportedDmpPath, addImportedDmpPath, activateSpringLoaded, showStations, showToast]
   );
 
   useEffect(() => {
