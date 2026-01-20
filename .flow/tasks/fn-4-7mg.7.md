@@ -9,15 +9,15 @@ Add unit tests for the new config schema, loading, and validation.
 
 1. **Default values**: Verify all defaults match expected values
    - `map.station.radius` = 4
-   - `map.station.hitArea` = 10
+   - `map.station.hit_area` = 10
    - `map.shot.width` = 2
-   - `map.shot.hitArea` = 8
+   - `map.shot.hit_area` = 8
    - `map.snap.threshold` = 10
    - etc.
 
 2. **Validation bounds**:
-   - Station radius/hitArea: accept 1, 25, 50; reject 0, -1, 51, 100
-   - Shot width/hitArea: accept 0.5, 10, 20; reject 0, -1, 21, 100
+   - Station radius/hit_area: accept 1, 25, 50; reject 0, -1, 51, 100
+   - Shot width/hit_area: accept 0.5, 10, 20; reject 0, -1, 21, 100
    - Snap threshold: accept 1, 25, 50; reject 0, -1, 51
 
 3. **Config parsing**: Test TOML parsing with:
@@ -37,19 +37,18 @@ Add unit tests for the new config schema, loading, and validation.
 - Rust: `src-tauri/src/config/tests.rs` or `mod.rs` with `#[cfg(test)]`
 - TypeScript: `src/types/__tests__/config.test.ts`
 ## Acceptance
-- [ ] Rust test for default values
-- [ ] Rust test for validation bounds (station)
-- [ ] Rust test for validation bounds (shot)
-- [ ] Rust test for validation bounds (snap)
-- [ ] Rust test for config parsing
-- [ ] Rust test for config serialization
-- [ ] TypeScript test for defaultConfig structure
-- [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
-- [ ] All new tests pass
+- [x] Rust test for default values
+- [x] Rust test for validation bounds (station)
+- [x] Rust test for validation bounds (shot)
+- [x] Rust test for validation bounds (snap)
+- [x] Rust test for config parsing
+- [x] Rust test for config serialization
+- [x] TypeScript test for defaultConfig structure
+- [x] `cargo test --manifest-path src-tauri/Cargo.toml` passes
+- [x] All new tests pass
 ## Done summary
-TBD
-
+Added comprehensive unit tests for config loading and validation covering Rust tests for default values, validation bounds (station/shot/snap), NaN/infinity handling, config parsing (complete/partial), and serialization; plus TypeScript tests verifying defaultConfig structure and type safety.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: d30a0d71b9df4e2df1ddd3bc31c91f2540cfa5e2
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, pnpm test -- --run src/types/__tests__/config.test.ts
 - PRs:
