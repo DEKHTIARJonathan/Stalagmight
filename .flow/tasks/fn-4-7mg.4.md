@@ -255,7 +255,8 @@ Hitbox layers remain below visual layers so:
 - [ ] NO logging in mouseenter/mouseleave handlers
 - [ ] Debug visualization sets BOTH color AND opacity
 - [ ] Debug mode: opacity = 1, color = rgba(255,0,0,0.3)
-- [ ] Normal mode: opacity = 0.001, color = transparent
+- [ ] Normal mode: opacity = 0.001, color = opaque (e.g., #000000) - NOT transparent rgba(0,0,0,0) which breaks queryRenderedFeatures (see pitfalls.md)
+- [ ] Ghost hitbox layers: opacity = 0 when debug off (not used for hit detection)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD
