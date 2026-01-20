@@ -1,49 +1,50 @@
 # fn-6-yz5.1 Investigate root cause of non-working Save button
 
 ## Description
-# Investigate Root Cause of Non-Working Save Button
 
-## Objective
-Determine why the Save button in Edit Section and Edit Shot dialogs doesn't respond to clicks (mouse or keyboard).
+Investigation Complete - Root Cause Found.
 
-## Investigation Steps
+### Root Cause
 
-### 1. Verify button rendering
-- Check if `<button>` element has correct attributes
-- Verify onClick prop is being passed through Button component
-- Check for any CSS that might disable pointer events
+JavaScript truthy/falsy check bug. The code uses `if (!sectionId) return;` which fails when `sectionId === 0` because `0` is falsy in JavaScript.
 
-### 2. Check for event interception
-- Search for global event listeners with `capture: true`
-- Look for `stopPropagation()` or `stopImmediatePropagation()` calls
-- Check DialogWrapper for any event blocking
+### Findings
 
-### 3. Check for invisible overlays
-- Inspect z-index stacking of dialog elements
-- Look for absolutely positioned elements that might cover the button
-- Check react-datepicker for leftover portals or overlays
+The Rust backend initializes IDs starting from 0:
+- `src-tauri/src/models/project.rs:87` - `next_section_id: 0`
+- `src-tauri/src/models/section.rs:124` - `next_shot_id: 0`
 
-### 4. Test in isolation
-- Create minimal test case with just the button
-- Temporarily remove DatePicker and other complex inputs
-- Check if issue is specific to these dialogs or affects all dialogs
+So the first section always has `sectionId === 0`, and the first shot always has `shotId === 0`.
 
-### 5. Check React DevTools
-- Verify component props in React DevTools
-- Check if handleSave function is defined and accessible
-- Look for any React warnings or errors
+### Buggy Code Locations
 
-## Expected Deliverable
-- Root cause identified and documented
-- Clear explanation of why clicks don't work
-- Proposed fix strategy
+1. `EditSectionDialog.tsx:155` - `if (!sectionId) return;`
+2. `EditShotDialog.tsx:82` - `if (!sectionId || !shotId) return;`
+3. `SectionAdjustDialog.tsx:30,82,118` - `if (!sectionId) return;` (3 locations)
+4. `DataTable.tsx:78` - `if (!selectedSectionId) return null;`
+
+### Correct Pattern
+
+See `ConfirmDialog.tsx:18`:
+```typescript
+if (type === 'shot' && sectionId !== undefined && shotId !== undefined)
+```
+
+### Next Step
+
+This task is investigation only. Proceed to fn-6-yz5.2 for the fix.
+
 ## Acceptance
-- [ ] TBD
+
+- [x] Root cause identified
+- [x] All affected files documented
+- [x] Correct fix pattern identified
 
 ## Done summary
-TBD
+
+Investigation complete. Root cause is JavaScript truthy/falsy bug where `!sectionId` returns `true` when `sectionId === 0`. Found 4 affected files with 6 total code locations to fix.
 
 ## Evidence
-- Commits:
-- Tests:
-- PRs:
+
+- Research: context-scout, practice-scout, docs-scout, memory-scout agents
+- Files analyzed: EditSectionDialog.tsx, EditShotDialog.tsx, SectionAdjustDialog.tsx, DataTable.tsx, ConfirmDialog.tsx

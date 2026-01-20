@@ -84,10 +84,10 @@ test.describe('Ctrl+Drag Panning', () => {
     }
   });
 
-  // Unsupported tools (have their own drag behaviors)
+  // Unsupported tools (have their own drag behaviors that conflict with Ctrl+pan)
+  // Note: zoom mode supports Ctrl+drag panning (added in box zoom feature), so it's not in this list
   const unsupportedTools = [
     { key: 'p', name: 'pan' },
-    { key: 'z', name: 'zoom' },
     { key: 'v', name: 'move_section' },
     { key: 't', name: 'move_station' },
   ];
@@ -123,6 +123,30 @@ test.describe('Ctrl+Drag Panning', () => {
         await page.keyboard.up('Control');
       });
     }
+  });
+
+  // Zoom mode supports Ctrl+drag panning (shows grab cursor when Ctrl is held)
+  test('should show grab cursor with Ctrl in zoom mode for panning', async ({ page }) => {
+    // Switch to zoom tool
+    await page.keyboard.press('z');
+    await page.waitForTimeout(50);
+
+    const canvas = page.locator('canvas').first();
+    await expect(canvas).toBeVisible();
+
+    // Hold Ctrl
+    await page.keyboard.down('Control');
+    await page.waitForTimeout(100);
+
+    // Get the cursor - should be 'grab' for Ctrl+pan support
+    const cursor = await page.evaluate(() => {
+      const canvas = document.querySelector('canvas');
+      return canvas?.style.cursor || '';
+    });
+
+    expect(cursor).toBe('grab');
+
+    await page.keyboard.up('Control');
   });
 
   test.describe('Box Select Interactions', () => {

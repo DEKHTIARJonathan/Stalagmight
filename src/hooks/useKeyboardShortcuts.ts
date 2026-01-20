@@ -1,8 +1,13 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import type { ToolType, Selection } from '../store/uiStore';
+
+/** Shortcuts that use spring-loaded behavior (tool shortcuts only) */
+const SPRING_LOADED_SHORTCUTS: Partial<Record<string, ToolType>> = {
+  z: 'zoom',
+};
 
 interface ShortcutConfig {
   [key: string]: ToolType | 'undo' | 'redo' | 'save' | 'toggle_sections' | 'toggle_detail' | 'toggle_data';
@@ -34,9 +39,14 @@ export function useKeyboardShortcuts() {
     clearMergeStations,
     clearMeasure,
     setDrawFromStation,
+    activateSpringLoaded,
+    deactivateSpringLoaded,
   } = useUIStore();
   const { undo, redo, saveProject, project, stations, importDmp } = useProjectStore();
   const { setImportContext, hasImportedDmpPath, addImportedDmpPath } = useUIStore();
+
+  // Track which spring-loaded keys are currently held
+  const springLoadedKeysHeld = useRef<Set<string>>(new Set());
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
@@ -216,13 +226,29 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // Handle tool shortcuts
+      // Handle spring-loaded shortcuts (e.g., Z for zoom)
+      const springLoadedTool = SPRING_LOADED_SHORTCUTS[key];
+      if (springLoadedTool && !event.repeat) {
+        const { activeDialog, placementMode, activeTool, springLoadedState } = useUIStore.getState();
+        // Don't activate during dialogs or placement mode
+        if (activeDialog || placementMode) return;
+        // Don't activate if already in target tool or already spring-loaded
+        if (activeTool === springLoadedTool || springLoadedState) return;
+
+        springLoadedKeysHeld.current.add(key);
+        activateSpringLoaded(springLoadedTool);
+        return;
+      }
+
+      // Handle tool shortcuts (non-spring-loaded)
       const toolShortcut = DEFAULT_SHORTCUTS[key];
       if (toolShortcut && typeof toolShortcut === 'string' && toolShortcut !== 'undo' && toolShortcut !== 'redo' && toolShortcut !== 'save') {
+        // Skip if this is a spring-loaded shortcut (already handled above)
+        if (SPRING_LOADED_SHORTCUTS[key]) return;
         setActiveTool(toolShortcut as ToolType);
       }
     },
-    [setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection, selectAll, triggerFitToBounds, clearMergeStations, clearMeasure, setDrawFromStation, selection, openDialog, undo, redo, saveProject, project, stations, importDmp, setImportContext, hasImportedDmpPath, addImportedDmpPath]
+    [setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection, selectAll, triggerFitToBounds, clearMergeStations, clearMeasure, setDrawFromStation, selection, openDialog, undo, redo, saveProject, project, stations, importDmp, setImportContext, hasImportedDmpPath, addImportedDmpPath, activateSpringLoaded]
   );
 
   useEffect(() => {
@@ -231,4 +257,36 @@ export function useKeyboardShortcuts() {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [handleKeyDown]);
+
+  // Keyup handler for spring-loaded shortcuts
+  useEffect(() => {
+    const handleKeyUp = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+
+      // Check if this is a spring-loaded key that was held
+      if (SPRING_LOADED_SHORTCUTS[key] && springLoadedKeysHeld.current.has(key)) {
+        springLoadedKeysHeld.current.delete(key);
+        deactivateSpringLoaded();
+      }
+    };
+
+    window.addEventListener('keyup', handleKeyUp);
+    return () => window.removeEventListener('keyup', handleKeyUp);
+  }, [deactivateSpringLoaded]);
+
+  // Blur handler for stuck spring-loaded keys (e.g., Alt+Tab while Z held)
+  useEffect(() => {
+    const handleBlur = () => {
+      // Clear all held spring-loaded keys
+      springLoadedKeysHeld.current.clear();
+      // Deactivate spring-loaded state if active
+      const state = useUIStore.getState();
+      if (state.springLoadedState) {
+        state.deactivateSpringLoaded();
+      }
+    };
+
+    window.addEventListener('blur', handleBlur);
+    return () => window.removeEventListener('blur', handleBlur);
+  }, []); // No dependencies - uses getState() for latest state
 }

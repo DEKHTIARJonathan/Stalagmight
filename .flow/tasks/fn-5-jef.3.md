@@ -3,6 +3,55 @@
 ## Description
 Implement depth-based coloring logic in `SurveyLayer.update()`.
 
+## File: `src/components/Map/SurveyLayer.tsx`
+
+### Station Feature Building (L770-790)
+Current code at ~L772-773:
+```typescript
+color: section?.color ?? '#ffffff',
+```
+Change to:
+```typescript
+const stationDepth = station.coordinates.z;
+const color = this.showDepthGradient && isFinite(stationDepth)
+  ? getDepthColor(stationDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)
+  : section?.color ?? '#ffffff';
+```
+
+### Shot Feature Building (L723-740)
+Current code at ~L735:
+```typescript
+color: section.color,
+```
+Change to:
+```typescript
+const fromDepth = fromStation.coordinates.z;
+const toDepth = toStation.coordinates.z;
+const avgDepth = (fromDepth + toDepth) / 2;
+const color = this.showDepthGradient && isFinite(avgDepth)
+  ? getDepthColor(avgDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)
+  : section.color;
+```
+
+### Station Labels (~L800-820)
+Apply same depth color to station index labels when enabled.
+
+### Shot Data Labels
+Apply same depth color to shot azimuth/length/depth labels when enabled.
+
+### Unchanged Elements
+- Loop closures (L223-235): Keep error-severity coloring
+- Merges (L193-221): Keep distinct styling
+- Ghost previews: Keep ghost styling
+
+## Imports
+Add at top of file:
+```typescript
+import { getDepthColor } from '@/utils/colors';
+```
+
+## Performance Note
+Use existing loop structure - avoid creating large arrays for Math.min/max (memory overflow risk on large projects).
 ## Files to Modify
 
 ### `src/components/Map/SurveyLayer.tsx`
@@ -54,13 +103,13 @@ Apply depth color to shot azimuth/length/depth labels when enabled.
 ## Acceptance
 - [ ] Stations colored by depth when `showDepthGradient` enabled
 - [ ] Shots colored by average depth of endpoints when enabled
-- [ ] Station labels colored by depth when enabled
+- [ ] Station labels colored by depth when enabled  
 - [ ] Shot data labels colored by depth when enabled
-- [ ] Virtual shots use depth coloring
-- [ ] Loop closures keep error-severity colors
-- [ ] Merges keep distinct styling
-- [ ] Ghost previews keep ghost styling
-- [ ] z=0 gets shallowest color
+- [ ] Virtual shots use depth coloring (same code path)
+- [ ] Loop closures keep error-severity colors unchanged
+- [ ] Merges keep distinct styling unchanged
+- [ ] NaN depth values fall back to section color
+- [ ] `getDepthColor` imported from `@/utils/colors`
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD

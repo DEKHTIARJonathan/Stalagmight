@@ -2,49 +2,56 @@
 
 ## Problem
 
-The Save button in both Edit Section and Edit Shot dialogs is non-functional. When users make changes (date, depth, name, or any field) and click Save, nothing happens:
+The Save button in Edit Section, Edit Shot, and Section Adjust dialogs silently fails when the section or shot ID is `0`.
 
-1. **No visual feedback** - button doesn't show any click response
-2. **No loading state** - "Saving..." text never appears
-3. **No error messages** - no errors displayed in dialog or console
-4. **Dialog remains open** - doesn't close after clicking Save
-5. **Changes not persisted** - values not saved to backend
-
-This affects both dialogs accessed via:
-- Right-click context menu → Edit Section / Edit Shot
-- Any other access points (detail panel edit button, etc.)
-
-The dialogs themselves render correctly - section/shot data loads, X button works, clicking backdrop works.
-
-## Investigation Findings
-
-Thorough debugging revealed:
-- Button element renders correctly as `<button>`
-- DevTools shows no response when button is clicked
-- Mouse clicks don't work
-- Keyboard (Enter/Space on focused button) doesn't work
-- TypeScript compilation succeeds with no errors
-- Clean rebuild doesn't fix the issue
-- Select tool is active (zoom tool handlers not interfering)
-- No console errors when clicking
-
-This suggests the button's event handlers are not being attached or something is preventing event propagation.
-
-## Root Cause Hypothesis
-
-Most likely causes (to investigate):
-1. **React event handler not attached** - onClick prop not reaching the button
-2. **Invisible overlay blocking clicks** - some element positioned over the button
-3. **CSS pointer-events issue** - button or ancestor has pointer-events: none
-4. **Capture phase event blocker** - global handler stopping events before they reach button
-5. **Component render issue** - button rendered in unexpected state
+**Root Cause**: JavaScript truthy/falsy check bug. The code uses `if (!sectionId) return;` which fails when `sectionId === 0` because `0` is falsy in JavaScript. The Rust backend uses IDs starting from 0, so the first section/shot is always affected.
 
 ## Affected Files
 
-- `src/components/Dialogs/EditSectionDialog.tsx` - lines 320-321 (Save button)
-- `src/components/Dialogs/EditShotDialog.tsx` - lines 297-298 (Save button)
-- `src/components/common/Button.tsx` - button component
-- `src/components/Dialogs/DialogWrapper.tsx` - dialog container
+| File | Line(s) | Buggy Code | Type | Impact |
+|------|---------|------------|------|--------|
+| `EditSectionDialog.tsx` | 155 | `if (!sectionId) return;` | `number \| undefined` | Save fails for first section |
+| `EditShotDialog.tsx` | 82 | `if (!sectionId \|\| !shotId) return;` | `number \| undefined` | Save fails for first shot/section |
+| `SectionAdjustDialog.tsx` | 30, 82, 118 | `if (!sectionId) return;` | `number \| undefined` | Adjust and cancel fail |
+| `DataTable.tsx` | 78 | `if (!selectedSectionId) return null;` | `number \| null` | Warnings don't render |
+
+## Fix
+
+Replace falsy checks with explicit nullish checks appropriate to the type:
+
+### For `number | undefined` (dialog data)
+
+```typescript
+// WRONG: fails when id === 0
+if (!sectionId) return;
+
+// CORRECT: only fails when id is undefined
+if (sectionId === undefined) return;
+```
+
+### For `number | null` (UI state like selectedSectionId)
+
+```typescript
+// WRONG: fails when id === 0
+if (!selectedSectionId) return null;
+
+// CORRECT: only fails when id is null
+if (selectedSectionId === null) return null;
+```
+
+**Key insight**: Check the TypeScript type annotation to determine correct fix:
+- `number | undefined` → check `=== undefined`
+- `number | null` → check `=== null`
+- `number | null | undefined` → use nullish check `== null` (catches both)
+
+**Reference pattern**: `ConfirmDialog.tsx:18` uses correct pattern: `sectionId !== undefined && shotId !== undefined`
+
+## Edge Cases
+
+- First section (id=0): Most common case for new projects
+- First shot (id=0): First survey shot in any section
+- Both ids = 0: First shot of first section
+- SectionAdjustDialog cancel: Must revert preview even when id=0
 
 ## Quick Commands
 
@@ -55,16 +62,23 @@ pnpm tsc --noEmit
 # Run dev server
 ./scripts/dev.sh
 
-# Run Playwright tests for dialogs
-pnpm test:ui -- --grep "edit.*dialog"
+# Run Playwright tests
+pnpm test:ui
 ```
 
 ## Acceptance Criteria
 
-- [ ] Edit Section dialog Save button works (closes dialog, persists changes)
-- [ ] Edit Shot dialog Save button works (closes dialog, persists changes)
-- [ ] Save button shows loading state while saving
-- [ ] Errors display in dialog if save fails
-- [ ] Changes persist and are visible when dialog is reopened
+- [ ] Edit Section dialog saves when sectionId === 0
+- [ ] Edit Shot dialog saves when sectionId === 0 and/or shotId === 0
+- [ ] Section Adjust dialog applies changes when sectionId === 0
+- [ ] Section Adjust dialog reverts preview on cancel when sectionId === 0
+- [ ] DataTable renders warnings for section with id=0
+- [ ] E2E tests added for id=0 scenarios (fn-6-yz5.3)
 - [ ] All existing Playwright tests pass
 - [ ] No TypeScript errors
+
+## References
+
+- Correct pattern: `src/components/Dialogs/ConfirmDialog.tsx:18`
+- Backend ID init: `src-tauri/src/models/project.rs:87` (next_section_id: 0)
+- Shot ID init: `src-tauri/src/models/section.rs:124` (next_shot_id: 0)

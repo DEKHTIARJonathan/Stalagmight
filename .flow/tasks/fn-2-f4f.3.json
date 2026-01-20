@@ -7,10 +7,20 @@
     "fn-2-f4f.2"
   ],
   "epic": "fn-2-f4f",
+  "evidence": {
+    "commits": [
+      "0400fb9",
+      "5cc4546"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-2-f4f.3",
   "priority": null,
   "spec_path": ".flow/tasks/fn-2-f4f.3.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Implement box zoom (drag-to-zoom)",
-  "updated_at": "2026-01-20T14:08:36.134908Z"
+  "updated_at": "2026-01-20T14:22:26.628599Z"
 }

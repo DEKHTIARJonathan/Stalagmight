@@ -698,9 +698,8 @@ Depends on fn-2-f4f.2 for `handleZoomClick` function.
 - [ ] Zoom box overlay with data-testid="zoom-box-overlay"
 - [ ] pnpm tsc --noEmit passes
 ## Done summary
-TBD
-
+Implemented box zoom (drag-to-zoom) behavior: large drags (>= 10px) call fitBounds on the selected area, small drags act as click-to-zoom. Added zoom box overlay, Escape key cancel, Ctrl key cancel on blur, e.buttons guard to prevent stuck state on focus loss, and proper Ctrl+drag cursor handling.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 0400fb9, 5cc4546
+- Tests: pnpm tsc --noEmit
 - PRs:
