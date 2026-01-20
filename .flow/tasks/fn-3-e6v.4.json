@@ -7,10 +7,21 @@
     "fn-3-e6v.1"
   ],
   "epic": "fn-3-e6v",
+  "evidence": {
+    "commits": [
+      "058ea97"
+    ],
+    "review": "codex impl-review SHIP",
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui (Display Menu tests)",
+      "cargo test"
+    ]
+  },
   "id": "fn-3-e6v.4",
   "priority": null,
   "spec_path": ".flow/tasks/fn-3-e6v.4.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Implement toggle disable relationships in DisplayMenu",
-  "updated_at": "2026-01-20T17:48:23.785052Z"
+  "updated_at": "2026-01-20T17:58:42.883936Z"
 }
