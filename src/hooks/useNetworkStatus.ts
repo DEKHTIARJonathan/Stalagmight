@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
+// Number of consecutive failures before disabling IPC polling
+const MAX_IPC_FAILURES = 3;
+
 /**
  * Hook to track network connectivity status.
  *
@@ -17,9 +20,10 @@ export function useNetworkStatus(pollInterval = 10000) {
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
 
-  // Track if we've detected that Tauri IPC is unavailable
-  // This prevents log spam in non-Tauri environments (tests, browser preview, etc.)
-  const ipcUnavailableRef = useRef(false);
+  // Track consecutive IPC failures
+  // Only disable polling after multiple failures to handle transient issues
+  const ipcFailureCountRef = useRef(0);
+  const ipcDisabledRef = useRef(false);
 
   // Check network status via backend
   const checkNetworkStatus = useCallback(async () => {
@@ -29,25 +33,31 @@ export function useNetworkStatus(pollInterval = 10000) {
       return;
     }
 
-    // If we've already determined IPC isn't available, skip the check
-    if (ipcUnavailableRef.current) {
-      // Fall back to browser's online state
+    // If IPC has been permanently disabled after repeated failures, use browser state
+    if (ipcDisabledRef.current) {
       setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true);
       return;
     }
 
     try {
       const online = await invoke<boolean>('get_network_status');
+      // Success - reset failure counter
+      ipcFailureCountRef.current = 0;
       setIsOnline(online);
     } catch (error) {
-      // IPC failure - this could mean:
-      // 1. App is running outside Tauri (tests, browser preview)
-      // 2. App is closing
-      // 3. Backend issue
-      // Mark IPC as unavailable to prevent repeated failures
-      ipcUnavailableRef.current = true;
-      // Fall back to browser's online state (only log once)
-      console.warn('[useNetworkStatus] Tauri IPC unavailable, falling back to browser online state');
+      // IPC failure - increment counter
+      ipcFailureCountRef.current++;
+
+      if (ipcFailureCountRef.current >= MAX_IPC_FAILURES) {
+        // Too many consecutive failures - disable polling
+        // This handles non-Tauri environments (tests, browser preview)
+        ipcDisabledRef.current = true;
+        console.warn(
+          `[useNetworkStatus] Tauri IPC unavailable after ${MAX_IPC_FAILURES} failures, falling back to browser online state`
+        );
+      }
+
+      // Fall back to browser's online state
       setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true);
     }
   }, []);
@@ -56,7 +66,7 @@ export function useNetworkStatus(pollInterval = 10000) {
   useEffect(() => {
     const handleOnline = () => {
       // Browser came online - verify with backend if available
-      if (!ipcUnavailableRef.current) {
+      if (!ipcDisabledRef.current) {
         checkNetworkStatus();
       } else {
         setIsOnline(true);
@@ -82,9 +92,9 @@ export function useNetworkStatus(pollInterval = 10000) {
     // Initial check
     checkNetworkStatus();
 
-    // Set up interval (will self-disable if IPC is unavailable)
+    // Set up interval (will self-disable after MAX_IPC_FAILURES)
     const intervalId = setInterval(() => {
-      if (!ipcUnavailableRef.current) {
+      if (!ipcDisabledRef.current) {
         checkNetworkStatus();
       }
     }, pollInterval);

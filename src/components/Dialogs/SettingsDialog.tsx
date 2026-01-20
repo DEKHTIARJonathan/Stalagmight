@@ -41,15 +41,13 @@ export default function SettingsDialog() {
   const [localConfig, setLocalConfig] = useState<Config | null>(config);
   const [isDirty, setIsDirty] = useState(false);
 
+  // Track raw input value for max cache size (allows typing intermediate values)
+  const [maxSizeInput, setMaxSizeInput] = useState<string>(
+    String(config?.cache?.tile_cache_max_mb ?? 500)
+  );
+
   // Track if component is mounted to avoid state updates after unmount
   const mountedRef = useRef(true);
-
-  // Track if we need to handle dirty state on cancel
-  const handleRequestClose = useCallback(() => {
-    // DialogWrapper handles the dirty confirmation, so we just call closeDialog
-    // The isDirty prop passed to DialogWrapper will trigger the confirm flow
-    closeDialog();
-  }, [closeDialog]);
 
   // Load cache stats when Cache tab is active or on mount
   const loadCacheStats = useCallback(async () => {
@@ -96,6 +94,7 @@ export default function SettingsDialog() {
   useEffect(() => {
     if (config && !isDirty) {
       setLocalConfig(config);
+      setMaxSizeInput(String(config.cache.tile_cache_max_mb));
     }
   }, [config, isDirty]);
 
@@ -128,32 +127,57 @@ export default function SettingsDialog() {
     setIsDirty(true);
   };
 
-  // Handle max cache size change with validation and clamping
-  const handleMaxSizeChange = (value: string) => {
+  // Handle max cache size input change (allows intermediate values while typing)
+  const handleMaxSizeInputChange = (value: string) => {
+    setMaxSizeInput(value);
+    setIsDirty(true);
+  };
+
+  // Validate and apply max cache size on blur
+  const handleMaxSizeBlur = () => {
     if (!localConfig) return;
 
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) {
-      // Invalid input - don't update
-      return;
+    const parsed = Number(maxSizeInput);
+    let finalValue: number;
+
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      // Invalid input - revert to current config value
+      finalValue = localConfig.cache.tile_cache_max_mb;
+    } else {
+      // Clamp to valid range
+      finalValue = clamp(Math.round(parsed), MIN_CACHE_SIZE_MB, MAX_CACHE_SIZE_MB);
     }
 
-    const clamped = clamp(Math.round(parsed), MIN_CACHE_SIZE_MB, MAX_CACHE_SIZE_MB);
-
+    // Update both input display and config
+    setMaxSizeInput(String(finalValue));
     setLocalConfig({
       ...localConfig,
       cache: {
         ...localConfig.cache,
-        tile_cache_max_mb: clamped,
+        tile_cache_max_mb: finalValue,
       },
     });
-    setIsDirty(true);
   };
 
   // Save settings
   const handleSave = async () => {
     if (!localConfig || !isDirty) return;
-    const result = await updateConfig(localConfig);
+
+    // Ensure we have a valid max size before saving
+    const parsed = Number(maxSizeInput);
+    const finalMaxSize = Number.isFinite(parsed) && parsed > 0
+      ? clamp(Math.round(parsed), MIN_CACHE_SIZE_MB, MAX_CACHE_SIZE_MB)
+      : localConfig.cache.tile_cache_max_mb;
+
+    const configToSave = {
+      ...localConfig,
+      cache: {
+        ...localConfig.cache,
+        tile_cache_max_mb: finalMaxSize,
+      },
+    };
+
+    const result = await updateConfig(configToSave);
     if (result.success) {
       setIsDirty(false);
       closeDialog();
@@ -166,169 +190,164 @@ export default function SettingsDialog() {
   return (
     <DialogWrapper
       title="Settings"
-      onClose={handleRequestClose}
+      onClose={closeDialog}
       isDirty={isDirty}
       size="lg"
       data-testid="settings-dialog"
     >
-      {/* Tab navigation */}
-      <div className="flex border-b border-border mb-4">
-        <button
-          onClick={() => setActiveTab('general')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'general'
-              ? 'border-accent text-accent'
-              : 'border-transparent text-text-secondary hover:text-text'
-          }`}
-          data-testid="settings-tab-general"
-        >
-          General
-        </button>
-        <button
-          onClick={() => setActiveTab('cache')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'cache'
-              ? 'border-accent text-accent'
-              : 'border-transparent text-text-secondary hover:text-text'
-          }`}
-          data-testid="settings-tab-cache"
-        >
-          Cache
-        </button>
-      </div>
-
-      {/* Tab content */}
-      <div className="min-h-[300px]">
-        {activeTab === 'general' && (
-          <div className="space-y-4">
-            <p className="text-text-secondary">General settings will be available here.</p>
+      {({ requestClose }) => (
+        <>
+          {/* Tab navigation */}
+          <div className="flex border-b border-border mb-4">
+            <button
+              onClick={() => setActiveTab('general')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'general'
+                  ? 'border-accent text-accent'
+                  : 'border-transparent text-text-secondary hover:text-text'
+              }`}
+              data-testid="settings-tab-general"
+            >
+              General
+            </button>
+            <button
+              onClick={() => setActiveTab('cache')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'cache'
+                  ? 'border-accent text-accent'
+                  : 'border-transparent text-text-secondary hover:text-text'
+              }`}
+              data-testid="settings-tab-cache"
+            >
+              Cache
+            </button>
           </div>
-        )}
 
-        {activeTab === 'cache' && (
-          <div className="space-y-6">
-            {/* Cache Statistics Section */}
-            <div>
-              <h3 className="text-sm font-medium mb-3">Tile Cache</h3>
-              <div
-                className="bg-background/50 rounded-lg p-4 space-y-3"
-                data-testid="cache-stats"
-              >
-                {isLoadingStats ? (
-                  <p className="text-text-secondary">Loading cache statistics...</p>
-                ) : cacheStats ? (
-                  <>
-                    <div className="flex justify-between">
-                      <span className="text-text-secondary">Cached tiles:</span>
-                      <span data-testid="cache-tile-count">{cacheStats.total_tiles.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-text-secondary">Cache size:</span>
-                      <span data-testid="cache-size">{formatBytes(cacheStats.total_bytes)}</span>
-                    </div>
-                    {Object.entries(cacheStats.providers).length > 0 && (
-                      <div className="pt-2 border-t border-border">
-                        <span className="text-xs text-text-secondary">By provider:</span>
-                        {Object.entries(cacheStats.providers).map(([provider, stats]) => (
-                          <div key={provider} className="flex justify-between text-sm mt-1">
-                            <span className="text-text-secondary capitalize">{provider}:</span>
-                            <span>{stats.tiles.toLocaleString()} tiles ({formatBytes(stats.bytes)})</span>
+          {/* Tab content */}
+          <div className="min-h-[300px]">
+            {activeTab === 'general' && (
+              <div className="space-y-4">
+                <p className="text-text-secondary">General settings will be available here.</p>
+              </div>
+            )}
+
+            {activeTab === 'cache' && (
+              <div className="space-y-6">
+                {/* Cache Statistics Section */}
+                <div>
+                  <h3 className="text-sm font-medium mb-3">Tile Cache</h3>
+                  <div
+                    className="bg-background/50 rounded-lg p-4 space-y-3"
+                    data-testid="cache-stats"
+                  >
+                    {isLoadingStats ? (
+                      <p className="text-text-secondary">Loading cache statistics...</p>
+                    ) : cacheStats ? (
+                      <>
+                        <div className="flex justify-between">
+                          <span className="text-text-secondary">Cached tiles:</span>
+                          <span data-testid="cache-tile-count">{cacheStats.total_tiles.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-text-secondary">Cache size:</span>
+                          <span data-testid="cache-size">{formatBytes(cacheStats.total_bytes)}</span>
+                        </div>
+                        {Object.entries(cacheStats.providers).length > 0 && (
+                          <div className="pt-2 border-t border-border">
+                            <span className="text-xs text-text-secondary">By provider:</span>
+                            {Object.entries(cacheStats.providers).map(([provider, stats]) => (
+                              <div key={provider} className="flex justify-between text-sm mt-1">
+                                <span className="text-text-secondary capitalize">{provider}:</span>
+                                <span>{stats.tiles.toLocaleString()} tiles ({formatBytes(stats.bytes)})</span>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-text-secondary">Unable to load cache statistics</p>
                     )}
-                  </>
-                ) : (
-                  <p className="text-text-secondary">Unable to load cache statistics</p>
-                )}
-              </div>
+                  </div>
 
-              {/* Clear cache button */}
-              <div className="mt-3">
-                <Button
-                  variant="danger"
-                  onClick={handleClearCache}
-                  disabled={isClearing || (cacheStats?.total_tiles ?? 0) === 0}
-                  data-testid="clear-cache-button"
-                >
-                  {isClearing ? 'Clearing...' : 'Clear Cache'}
-                </Button>
-              </div>
-            </div>
-
-            {/* Cache Configuration Section */}
-            <div>
-              <h3 className="text-sm font-medium mb-3">Cache Configuration</h3>
-              {!configLoaded ? (
-                <p className="text-text-secondary">Loading configuration...</p>
-              ) : (
-                <div className="space-y-4">
-                  {/* Cache enabled toggle */}
-                  <label className="flex items-center gap-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={localConfig.cache.tile_cache_enabled}
-                      onChange={(e) => handleCacheEnabledChange(e.target.checked)}
-                      className="w-4 h-4 rounded border-border"
-                      data-testid="cache-enabled-toggle"
-                    />
-                    <div>
-                      <span className="block">Enable tile caching</span>
-                      <span className="block text-xs text-text-secondary">
-                        Cache satellite tiles for offline access
-                      </span>
-                    </div>
-                  </label>
-
-                  {/* Max cache size */}
-                  <div>
-                    <label className="block text-sm mb-1">Maximum cache size</label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min={MIN_CACHE_SIZE_MB}
-                        max={MAX_CACHE_SIZE_MB}
-                        step={100}
-                        value={localConfig.cache.tile_cache_max_mb}
-                        onChange={(e) => handleMaxSizeChange(e.target.value)}
-                        onBlur={(e) => {
-                          // Ensure value is clamped on blur
-                          const val = Number(e.target.value);
-                          if (Number.isFinite(val)) {
-                            const clamped = clamp(Math.round(val), MIN_CACHE_SIZE_MB, MAX_CACHE_SIZE_MB);
-                            if (clamped !== val) {
-                              handleMaxSizeChange(String(clamped));
-                            }
-                          }
-                        }}
-                        className="w-24 px-2 py-1 bg-background border border-border rounded text-sm"
-                        data-testid="cache-max-size-input"
-                      />
-                      <span className="text-text-secondary">MB</span>
-                    </div>
-                    <p className="text-xs text-text-secondary mt-1">
-                      Older tiles will be removed when this limit is reached ({MIN_CACHE_SIZE_MB}-{MAX_CACHE_SIZE_MB} MB)
-                    </p>
+                  {/* Clear cache button */}
+                  <div className="mt-3">
+                    <Button
+                      variant="danger"
+                      onClick={handleClearCache}
+                      disabled={isClearing || (cacheStats?.total_tiles ?? 0) === 0}
+                      data-testid="clear-cache-button"
+                    >
+                      {isClearing ? 'Clearing...' : 'Clear Cache'}
+                    </Button>
                   </div>
                 </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
 
-      {/* Actions */}
-      <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-border">
-        <Button onClick={handleRequestClose}>Cancel</Button>
-        <Button
-          variant="primary"
-          onClick={handleSave}
-          disabled={!isDirty || !configLoaded}
-          data-testid="settings-save-button"
-        >
-          Save
-        </Button>
-      </div>
+                {/* Cache Configuration Section */}
+                <div>
+                  <h3 className="text-sm font-medium mb-3">Cache Configuration</h3>
+                  {!configLoaded ? (
+                    <p className="text-text-secondary">Loading configuration...</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Cache enabled toggle */}
+                      <label className="flex items-center gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={localConfig.cache.tile_cache_enabled}
+                          onChange={(e) => handleCacheEnabledChange(e.target.checked)}
+                          className="w-4 h-4 rounded border-border"
+                          data-testid="cache-enabled-toggle"
+                        />
+                        <div>
+                          <span className="block">Enable tile caching</span>
+                          <span className="block text-xs text-text-secondary">
+                            Cache satellite tiles for offline access
+                          </span>
+                        </div>
+                      </label>
+
+                      {/* Max cache size */}
+                      <div>
+                        <label className="block text-sm mb-1">Maximum cache size</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={MIN_CACHE_SIZE_MB}
+                            max={MAX_CACHE_SIZE_MB}
+                            step={100}
+                            value={maxSizeInput}
+                            onChange={(e) => handleMaxSizeInputChange(e.target.value)}
+                            onBlur={handleMaxSizeBlur}
+                            className="w-24 px-2 py-1 bg-background border border-border rounded text-sm"
+                            data-testid="cache-max-size-input"
+                          />
+                          <span className="text-text-secondary">MB</span>
+                        </div>
+                        <p className="text-xs text-text-secondary mt-1">
+                          Older tiles will be removed when this limit is reached ({MIN_CACHE_SIZE_MB}-{MAX_CACHE_SIZE_MB} MB)
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Actions */}
+          <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-border">
+            <Button onClick={requestClose}>Cancel</Button>
+            <Button
+              variant="primary"
+              onClick={handleSave}
+              disabled={!isDirty || !configLoaded}
+              data-testid="settings-save-button"
+            >
+              Save
+            </Button>
+          </div>
+        </>
+      )}
     </DialogWrapper>
   );
 }
