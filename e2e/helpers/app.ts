@@ -558,9 +558,8 @@ export async function openImportSectionDialog(): Promise<void> {
 }
 
 /**
- * Press Escape key. Note: This clears tool/selection state in useKeyboardShortcuts,
- * but does NOT close dialogs (Escape support for dialogs is not yet implemented).
- * To close dialogs, use the Cancel button or backdrop click.
+ * Press Escape key. This clears tool/selection state in useKeyboardShortcuts
+ * and also closes any open dialog.
  */
 export async function pressEscape(): Promise<void> {
   await browser.keys(['Escape']);
