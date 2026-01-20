@@ -84,6 +84,11 @@ export default class SurveyLayer {
   // GPS origin for coordinate transforms (enables satellite tile alignment)
   private gpsOrigin: GpsOrigin | null = null;
 
+  // Depth gradient mode state (stored during update() for use in feature building)
+  // These are assigned in update() and used by subsequent tasks (fn-5-jef.3) for depth coloring
+  private showDepthGradient: boolean = false;
+  private depthRange: { min: number; max: number } = { min: 0, max: 50 };
+
   // Bound event handlers stored for proper cleanup in destroy()
   private boundStationEnter: ((e: maplibregl.MapLayerMouseEvent) => void) | null = null;
   private boundStationLeave: (() => void) | null = null;
@@ -1084,6 +1089,16 @@ export default class SurveyLayer {
     this.updateVisualState();
   }
 
+  // Depth gradient accessors (used by depth coloring logic in update())
+  // These return the current depth mode state set during the last update() call
+  getShowDepthGradient(): boolean {
+    return this.showDepthGradient;
+  }
+
+  getDepthRange(): { min: number; max: number } {
+    return this.depthRange;
+  }
+
   // Control shot data labels visibility
   setShowShotLabels(show: boolean) {
     this.map.setLayoutProperty(
@@ -1293,9 +1308,20 @@ export default class SurveyLayer {
     }
   }
 
-  update(sections: Section[], stations: Station[], stationMerges?: StationMerge[], loopClosures?: LoopClosure[], gpsOrigin?: GpsOrigin | null) {
+  update(
+    sections: Section[],
+    stations: Station[],
+    stationMerges?: StationMerge[],
+    loopClosures?: LoopClosure[],
+    gpsOrigin?: GpsOrigin | null,
+    showDepthGradient: boolean = false,
+    depthRange: { min: number; max: number } = { min: 0, max: 50 }
+  ) {
     // Store gpsOrigin for coordinate transforms
     this.gpsOrigin = gpsOrigin ?? null;
+    // Store depth mode parameters for use in feature building (used by fn-5-jef.3)
+    this.showDepthGradient = showDepthGradient;
+    this.depthRange = depthRange;
     // Build shot features and shot label features
     const shotFeatures: GeoJSON.Feature[] = [];
     const shotLabelFeatures: GeoJSON.Feature[] = [];
