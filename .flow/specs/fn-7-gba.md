@@ -36,19 +36,33 @@ The issue is a **race condition** in cleanup effect ordering - `GridOverlay` cle
 
 ```typescript
 // src/components/Map/mapUtils.ts
+import type maplibregl from 'maplibre-gl';
+
+/**
+ * Check if map instance has a live style (not destroyed).
+ * Uses internal property access since maplibre-gl doesn't expose this publicly.
+ */
 export function hasLiveStyle(map: maplibregl.Map | null): boolean {
   return !!(map && (map as any).style);
 }
 ```
 
-### 2. Guard ALL map cleanup operations with try/catch
+### 2. Guard ALL map teardown operations with try/catch
 
 Both `map.getLayer()` and `map.getSource()` can throw after `map.remove()` because the internal `style` is destroyed. The guard check alone still has a small race window between check and call.
+
+Apply `hasLiveStyle()` + try/catch to:
+- **React cleanup effects** (e.g., GridOverlay useEffect return)
+- **Manual teardown methods** (e.g., `SurveyLayer.destroy()`) - this is critical, not just React cleanups
+- **Any other map operations** that could run during unmount or after map destruction
 
 ```typescript
 // GridOverlay.tsx cleanup pattern
 return () => {
-  if (!hasLiveStyle(map)) return;
+  if (!hasLiveStyle(map)) {
+    layerAdded.current = false;
+    return;
+  }
   
   try {
     if (map.getLayer(layerId)) {
@@ -64,11 +78,25 @@ return () => {
 };
 ```
 
+```typescript
+// SurveyLayer.tsx destroy() method - MUST be guarded (manual teardown, not React cleanup)
+public destroy(): void {
+  if (!hasLiveStyle(this.map)) return;
+  
+  try {
+    // Remove event listeners
+    // Remove layers and sources
+  } catch {
+    // Map already destroyed
+  }
+}
+```
+
 **Important**: The cleanup runs even when `showGrid` is false because it unconditionally calls `map.getLayer()`. The guard must be added regardless of grid visibility state.
 
 ### 3. Audit scope - search entire repo
 
-Search for all instances of these patterns in cleanup/unmount code:
+Search for all instances of these patterns in cleanup/unmount/teardown code:
 - `map.getLayer()`
 - `map.getSource()`
 - `map.removeLayer()`
@@ -76,29 +104,44 @@ Search for all instances of these patterns in cleanup/unmount code:
 
 Files to explicitly audit and fix:
 - `src/components/Map/GridOverlay.tsx` - cleanup effect
-- `src/components/Map/SurveyLayer.tsx` - `destroy()` method
+- `src/components/Map/SurveyLayer.tsx` - `destroy()` method (manual teardown entry point)
 - Any other components found via repo search
 
 ### 4. Add closing guard for rapid Back clicks
 
-Add an in-flight guard to prevent multiple concurrent close operations:
+**Use a ref-based or store-level guard** (NOT useState) to avoid "state update on unmounted component" warnings. The `handleCloseProject` triggers `setView('global')` which unmounts `SingleSystemView`, so a component-level useState would be problematic.
 
+Option A - Ref-based guard in useProject.ts:
 ```typescript
-// In useProject.ts or projectStore.ts
-const [isClosing, setIsClosing] = useState(false);
+const isClosingRef = useRef(false);
 
-const handleCloseProject = async () => {
-  if (isClosing) return; // Ignore additional clicks
-  setIsClosing(true);
-  try {
-    // ... existing logic
-  } finally {
-    setIsClosing(false);
+const handleCloseProject = useCallback(async () => {
+  if (isClosingRef.current) return;
+  
+  if (isDirty) {
+    openUnsavedChangesDialog();
+    return;
   }
-};
+  
+  isClosingRef.current = true;
+  try {
+    await closeProject();
+    setView('global');
+  } finally {
+    isClosingRef.current = false;
+  }
+}, [isDirty, openUnsavedChangesDialog, closeProject, setView]);
 ```
 
-Or disable the Back button while closing is in progress.
+Option B - Store-level guard in projectStore.ts:
+```typescript
+// Add to store state
+isClosing: false,
+
+// Guard in closeProject action
+```
+
+Also ensure the UnsavedChangesDialog respects this guard.
 
 ## Edge Cases
 
@@ -106,7 +149,7 @@ Or disable the Back button while closing is in progress.
 - Clicking Back without unsaved changes → clean exit directly
 - Clicking Back immediately after opening project
 - Clicking Back during map loading (before `mapLoaded` is true)
-- Multiple rapid Back clicks → **guard prevents concurrent closes**
+- Multiple rapid Back clicks → **ref/store guard prevents concurrent closes**
 - Grid visible vs hidden when clicking Back → **guard handles both**
 
 ## Expected Behavior After Fix
@@ -136,7 +179,7 @@ pnpm test:e2e
 
 ### Playwright Test Requirements
 
-Create `src/tests/back-button-navigation.spec.ts`:
+Create `e2e-playwright/back-button-navigation.spec.ts` (NOT src/tests - Playwright runs from e2e-playwright/):
 
 1. **Setup**: Use `page.on('pageerror', ...)` to fail test on any JS error
 2. **Capture console errors**: `page.on('console', ...)` with message type 'error'
@@ -144,30 +187,36 @@ Create `src/tests/back-button-navigation.spec.ts`:
    - Open a project → Click "← Back" → Assert GlobalView visible
    - Assert no `pageerror` events fired
    - Assert no console errors captured
-4. **Test with dirty state**: Make a change, click Back, handle Unsaved Changes dialog
+4. **Test with dirty state**: 
+   - **Concrete dirtying action**: Use Zustand's setState directly via `__E2E_TEST__`:
+     ```typescript
+     await page.evaluate(() => {
+       const e2e = (window as any).__E2E_TEST__;
+       if (e2e && e2e.projectStore) {
+         e2e.projectStore.setState({ isDirty: true });
+       }
+     });
+     ```
+   - There is no `setDirty` action - use `setState({ isDirty: true })` directly
+   - Click Back, handle Unsaved Changes dialog
 
 ### WebdriverIO Test Requirements
 
-Create `e2e/test/specs/back-button.e2e.ts`:
+Create `e2e/specs/back-button.spec.ts` (NOT e2e/test/specs - WDIO uses e2e/specs/):
 
 1. **Click actual Back button** (not just store-level reset)
 2. **Handle Unsaved Changes dialog** if it appears
 3. **Assert GlobalView displayed** after navigation
 4. **Assert React still mounted**: Check `document.getElementById('root').innerHTML.length > 50`
-5. **Capture JS errors**: Use `window.onerror` collector exposed via `__E2E_TEST__`
-
-Example error collector pattern:
-```typescript
-// In test setup
-await browser.execute(() => {
-  (window as any).__testErrors = [];
-  window.onerror = (msg) => (window as any).__testErrors.push(msg);
-});
-
-// After test action
-const errors = await browser.execute(() => (window as any).__testErrors);
-expect(errors).toHaveLength(0);
-```
+5. **Capture JS errors**: Set up both `window.onerror` AND `window.onunhandledrejection` collectors:
+   ```typescript
+   await browser.execute(() => {
+     (window as any).__testErrors = [];
+     window.onerror = (msg) => (window as any).__testErrors.push(String(msg));
+     window.onunhandledrejection = (e) => (window as any).__testErrors.push(e.reason?.message || String(e.reason));
+   });
+   ```
+6. **Concrete dirtying action**: Use `__E2E_TEST__.projectStore.setState({ isDirty: true })`
 
 ## Acceptance Criteria
 
@@ -177,11 +226,14 @@ expect(errors).toHaveLength(0);
 - [ ] Unsaved changes dialog appears when appropriate
 - [ ] `hasLiveStyle()` helper created in `src/components/Map/mapUtils.ts`
 - [ ] GridOverlay cleanup uses guard + try/catch
-- [ ] SurveyLayer.tsx `destroy()` uses guard + try/catch  
-- [ ] Repo-wide search done for getLayer/getSource in cleanup code
-- [ ] Rapid Back click guard implemented
-- [ ] Playwright test with pageerror/console.error assertions
-- [ ] WebdriverIO test clicking actual Back button with error capture
+- [ ] SurveyLayer.tsx `destroy()` uses guard + try/catch (manual teardown path)
+- [ ] Repo-wide search done for getLayer/getSource in cleanup/teardown code
+- [ ] Rapid Back click guard implemented (ref-based or store-level, NOT useState)
+- [ ] Playwright test in `e2e-playwright/back-button-navigation.spec.ts`
+- [ ] Playwright test has pageerror/console.error assertions
+- [ ] WebdriverIO test in `e2e/specs/back-button.spec.ts`
+- [ ] WebdriverIO test captures both onerror AND onunhandledrejection
+- [ ] Tests use `__E2E_TEST__.projectStore.setState({ isDirty: true })` for dirtying
 - [ ] All existing tests pass
 - [ ] No TypeScript errors (note: `(map as any).style` for internal access)
 
@@ -194,3 +246,5 @@ expect(errors).toHaveLength(0);
 - handleCloseProject: `src/hooks/useProject.ts:91-106`
 - UnsavedChangesDialog: `src/components/Dialogs/UnsavedChangesDialog.tsx`
 - E2E test helpers: `src/main.tsx` (exposes `__E2E_TEST__`)
+- Playwright config: `playwright.config.ts` (testDir: './e2e-playwright')
+- WDIO specs: `e2e/specs/`
