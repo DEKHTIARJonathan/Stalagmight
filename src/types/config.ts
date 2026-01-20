@@ -78,7 +78,7 @@ export interface ValidationConfig {
   warn_shot_length_max: number;
   warn_depth_change_per_shot_max: number;
   warn_azimuth_deviation_max: number;
-  /** Threshold for azimuth in/out difference warning (degrees). Default: 15 */
+  /** Threshold for azimuth in/out difference warning (degrees). Default: 10 */
   azimuth_diff_threshold: number;
   /** Threshold for pitch in/out difference warning (degrees). Default: 5 */
   pitch_diff_threshold: number;
@@ -194,7 +194,7 @@ export const defaultConfig: Config = {
     warn_shot_length_max: 50.0,
     warn_depth_change_per_shot_max: 10.0,
     warn_azimuth_deviation_max: 30.0,
-    azimuth_diff_threshold: 15.0,
+    azimuth_diff_threshold: 10.0,
     pitch_diff_threshold: 5.0,
   },
   export: {
