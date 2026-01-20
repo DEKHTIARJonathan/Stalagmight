@@ -100,6 +100,7 @@ export default class SurveyLayer {
   public setConfig(config: Config): void {
     this.config = config;
     this.updateHitboxLayers();
+    this.updateGhostVisualLayers();
     this.updateVisualState();
     this.updateDebugVisualization();
   }
@@ -279,25 +280,27 @@ export default class SurveyLayer {
     // === VISUAL LAYERS ===
 
     // Ghost section shots layer (dashed, semi-transparent) - rendered first so it's behind everything
+    // Uses config-based line width, updated via updateGhostVisualLayers()
     this.map.addLayer({
       id: this.ghostShotsLayerId,
       type: 'line',
       source: this.sourceId + '-ghost-shots',
       paint: {
         'line-color': ['get', 'color'],
-        'line-width': 2,
+        'line-width': this.getShotWidth(),
         'line-opacity': 0.5,
         'line-dasharray': [4, 2],
       },
     });
 
     // Ghost section stations layer (semi-transparent)
+    // Uses config-based radius, updated via updateGhostVisualLayers()
     this.map.addLayer({
       id: this.ghostStationsLayerId,
       type: 'circle',
       source: this.sourceId + '-ghost-stations',
       paint: {
-        'circle-radius': 4,
+        'circle-radius': this.getStationRadius(),
         'circle-color': ['get', 'color'],
         'circle-stroke-width': 1,
         'circle-stroke-color': '#000000',
@@ -781,36 +784,55 @@ export default class SurveyLayer {
     const stationHitArea = this.getStationHitArea();
     const shotHitArea = this.getShotHitArea();
 
-    // Update hitbox layer sizes
-    this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-radius', stationHitArea);
-    this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-width', shotHitArea);
-    this.map.setPaintProperty(this.ghostStationsHitboxLayerId, 'circle-radius', stationHitArea);
-    this.map.setPaintProperty(this.ghostShotsHitboxLayerId, 'line-width', shotHitArea);
+    // Update hitbox layer sizes (guard layer existence for safety)
+    if (this.map.getLayer(this.stationsHitboxLayerId)) {
+      this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-radius', stationHitArea);
+    }
+    if (this.map.getLayer(this.shotsHitboxLayerId)) {
+      this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-width', shotHitArea);
+    }
+    if (this.map.getLayer(this.ghostStationsHitboxLayerId)) {
+      this.map.setPaintProperty(this.ghostStationsHitboxLayerId, 'circle-radius', stationHitArea);
+    }
+    if (this.map.getLayer(this.ghostShotsHitboxLayerId)) {
+      this.map.setPaintProperty(this.ghostShotsHitboxLayerId, 'line-width', shotHitArea);
+    }
+  }
+
+  // Update ghost visual layer sizes from config (merge preview layers)
+  private updateGhostVisualLayers(): void {
+    if (!this.map) return;
+
+    const baseRadius = this.getStationRadius();
+    const baseWidth = this.getShotWidth();
+
+    // Update ghost visual layers to match config (guard layer existence)
+    if (this.map.getLayer(this.ghostStationsLayerId)) {
+      this.map.setPaintProperty(this.ghostStationsLayerId, 'circle-radius', baseRadius);
+    }
+    if (this.map.getLayer(this.ghostShotsLayerId)) {
+      this.map.setPaintProperty(this.ghostShotsLayerId, 'line-width', baseWidth);
+    }
   }
 
   // Update debug visualization based on config
+  // ONLY ghost hitbox layers are used for debug visualization
+  // Real hitbox layers must stay functional (opacity 0.001) at all times
   private updateDebugVisualization(): void {
     if (!this.map) return;
 
     const showHitboxes = this.config?.debug?.map?.show_hitboxes ?? false;
 
-    // Show/hide debug hitbox visualization (ghost layers only - real hitboxes stay invisible)
-    this.map.setPaintProperty(this.ghostStationsHitboxLayerId, 'circle-opacity', showHitboxes ? 0.3 : 0);
-    this.map.setPaintProperty(this.ghostShotsHitboxLayerId, 'line-opacity', showHitboxes ? 0.3 : 0);
-
-    // For the actual hitbox layers, show a subtle highlight when debug is enabled
-    // but keep them functional (opacity > 0) at all times
-    if (showHitboxes) {
-      this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-color', 'rgba(0, 255, 255, 0.2)');
-      this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-opacity', 0.3);
-      this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-color', 'rgba(255, 0, 255, 0.2)');
-      this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-opacity', 0.3);
-    } else {
-      this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-color', 'rgba(0, 0, 0, 0)');
-      this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-opacity', 0.001);
-      this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-color', 'rgba(0, 0, 0, 0)');
-      this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-opacity', 0.001);
+    // Show/hide debug hitbox visualization using ONLY ghost hitbox layers
+    // Real hitbox layers stay invisible (opacity 0.001) - they are functional, not visual
+    if (this.map.getLayer(this.ghostStationsHitboxLayerId)) {
+      this.map.setPaintProperty(this.ghostStationsHitboxLayerId, 'circle-opacity', showHitboxes ? 0.3 : 0);
     }
+    if (this.map.getLayer(this.ghostShotsHitboxLayerId)) {
+      this.map.setPaintProperty(this.ghostShotsHitboxLayerId, 'line-opacity', showHitboxes ? 0.3 : 0);
+    }
+    // Note: Real hitbox layers (stationsHitboxLayerId, shotsHitboxLayerId) are NOT modified
+    // They must always maintain opacity 0.001 for queryRenderedFeatures to work
   }
 
   // Set selected station (called from outside to sync with uiStore)
