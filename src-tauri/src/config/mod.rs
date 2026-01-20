@@ -20,6 +20,8 @@ pub struct Config {
     pub snap: SnapConfig,
     #[serde(default)]
     pub panels: PanelsConfig,
+    #[serde(default)]
+    pub cache: CacheConfig,
 }
 
 /// Snap-to-station configuration for precision tools
@@ -44,6 +46,17 @@ pub struct PanelsConfig {
     pub detail_panel_width: u32,
     /// Data table height in pixels
     pub data_table_height: u32,
+}
+
+/// Tile cache configuration for offline satellite imagery
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheConfig {
+    /// Enable tile caching for offline access
+    pub tile_cache_enabled: bool,
+    /// Maximum cache size in megabytes
+    pub tile_cache_max_mb: u32,
+    /// Time-to-live for cached tiles in days
+    pub tile_ttl_days: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
