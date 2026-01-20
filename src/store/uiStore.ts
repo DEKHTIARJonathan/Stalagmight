@@ -602,6 +602,12 @@ export const useUIStore = create<UIStore>((set) => ({
     set((state) => {
       if (!state.springLoadedState) return state;
 
+      // Only restore if still on the target tool (user didn't manually switch away)
+      // This mirrors the guard in deactivateSpringLoaded
+      if (state.activeTool !== state.springLoadedState.targetTool) {
+        return { springLoadedState: null };
+      }
+
       // Force restore previous tool and state (used on blur/unmount to prevent stuck state)
       // Skip threshold check - always restore when canceling
       return {
