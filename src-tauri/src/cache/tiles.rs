@@ -379,9 +379,14 @@ impl TileCache {
     }
 
     /// Clear all tiles from the cache.
+    ///
+    /// Uses incremental vacuum instead of full VACUUM to avoid blocking
+    /// the database connection for extended periods on large caches.
     pub fn clear_all(&mut self) -> Result<()> {
         self.conn.execute("DELETE FROM tiles", [])?;
-        let _ = self.conn.execute("VACUUM", []);
+        // Use incremental vacuum (non-blocking) instead of full VACUUM
+        // to prevent UI freezes when clearing large caches
+        let _ = self.conn.execute("PRAGMA incremental_vacuum(100)", []);
         Ok(())
     }
 
