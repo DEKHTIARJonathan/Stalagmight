@@ -21,3 +21,6 @@ In SQLite queries, distinguish QueryReturnedNoRows (expected miss) from other er
 
 ## 2026-01-20 manual [pitfall]
 f64::clamp does not handle NaN/inf - always check is_finite() first when normalizing user-supplied floats
+
+## 2026-01-20 manual [pitfall]
+When intercepting map clicks, attach capture handlers to canvas element not container - container includes UI controls that need to remain clickable

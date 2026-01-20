@@ -10,7 +10,7 @@ import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
 
 // Tools that support Ctrl+drag for panning (excludes tools with their own drag behaviors)
-const CTRL_PAN_TOOLS = ['select', 'draw', 'delete', 'merge', 'measure'];
+const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure'];
 
 interface BoxSelectState {
   start: { x: number; y: number } | null;
@@ -359,8 +359,7 @@ export default function MapCanvas() {
     const maxY = Math.max(zoomBox.start.y, zoomBox.end.y);
 
     // For small drags (<10px), treat as click-to-zoom
-    // Task 3 will enhance with full box zoom for larger drags
-    if (maxX - minX < 10 && maxY - minY < 10) {
+    if (maxX - minX < 10 || maxY - minY < 10) {
       // Click zoom-in at center of box (effectively the click point)
       const centerX = (minX + maxX) / 2;
       const centerY = (minY + maxY) / 2;
@@ -378,8 +377,20 @@ export default function MapCanvas() {
           duration: 300,
         });
       }
+    } else {
+      // Large drag: box zoom to bounds
+      // Note: Y is inverted in screen coords (top=0)
+      const sw = map.current.unproject([minX, maxY]); // bottom-left screen = SW
+      const ne = map.current.unproject([maxX, minY]); // top-right screen = NE
+
+      const maxZoom = config?.map.zoom_max ?? 22;
+      map.current.fitBounds([sw, ne], {
+        padding: 20,
+        linear: true,
+        duration: 300,
+        maxZoom,
+      });
     }
-    // Task 3 will add: else { box zoom to bounds }
 
     setZoomBox({ start: null, end: null });
   }, [zoomBox, config]);
@@ -721,6 +732,20 @@ export default function MapCanvas() {
       window.removeEventListener('blur', handleBlur);
     };
   }, []);
+
+  // Escape key cancels zoom box drag
+  useEffect(() => {
+    if (!zoomBox.start) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setZoomBox({ start: null, end: null });
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [zoomBox.start]);
 
   // Custom Ctrl+drag panning implementation
   // MapLibre's dragPan doesn't work reliably with Ctrl modifier in Tauri/WebKit,
@@ -1160,6 +1185,20 @@ export default function MapCanvas() {
         <div
           className="absolute border-2 border-accent border-dashed bg-accent/10 pointer-events-none"
           style={boxSelectStyle}
+        />
+      )}
+
+      {/* Zoom box overlay */}
+      {zoomBox.start && zoomBox.end && (
+        <div
+          className="absolute border-2 border-accent bg-accent/20 pointer-events-none"
+          style={{
+            left: Math.min(zoomBox.start.x, zoomBox.end.x),
+            top: Math.min(zoomBox.start.y, zoomBox.end.y),
+            width: Math.abs(zoomBox.end.x - zoomBox.start.x),
+            height: Math.abs(zoomBox.end.y - zoomBox.start.y),
+          }}
+          data-testid="zoom-box-overlay"
         />
       )}
 

@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-20T14:10:02.986278Z",
+  "depends_on": [],
+  "epic": "fn-5-jef",
+  "id": "fn-5-jef.4",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-5-jef.4.md",
+  "status": "todo",
+  "title": "Handle zero datum stations with gold border + depth fill",
+  "updated_at": "2026-01-20T14:10:02.986290Z"
+}

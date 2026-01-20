@@ -13,6 +13,19 @@ Create `e2e-playwright/hitbox-detection.spec.ts` (NOT in map-tools.spec.ts)
 
 Use `window.__cavechef_map__` for deterministic pixel positions via `map.project()`.
 
+**IMPORTANT**: The `window.__E2E_TEST__` helper must only be exposed in dev/test mode:
+
+```typescript
+// In SurveyLayer.ts or MapCanvas.tsx - GUARDED exposure
+if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
+  window.__E2E_TEST__ = window.__E2E_TEST__ || {};
+  window.__E2E_TEST__.stations = stationCoordinates;
+  window.__E2E_TEST__.mapInstance = this.map;
+}
+```
+
+This ensures test helpers are NEVER shipped to production.
+
 ### Setup helpers
 
 ```typescript
@@ -300,6 +313,7 @@ async function getShotScreenCoords(page, sectionId, shotId) {
 - [ ] Test is NOT skipped (`test.describe`, not `test.describe.skip`)
 - [ ] Helper `getStationScreenPosition()` uses `__cavechef_map__.project()` for deterministic coords
 - [ ] Helper `waitForMapReady()` waits for map loaded state
+- [ ] `window.__E2E_TEST__` exposure guarded by `import.meta.env.DEV || import.meta.env.MODE === 'test'`
 - [ ] Test: station click at hitArea-1 hits (shows detail panel)
 - [ ] Test: station click at hitArea+1 misses (no detail panel)
 - [ ] Test: shot click detection uses hitArea
