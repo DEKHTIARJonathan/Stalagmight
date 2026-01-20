@@ -3,6 +3,7 @@ import type maplibregl from 'maplibre-gl';
 import type { Section, SectionId, ShotId, Station, StationRef, StationMerge, LoopClosure } from '../../types/project';
 import type { Config, GpsOrigin } from '../../types/config';
 import { metersToMapCoords } from '../../utils/coordinates';
+import { getDepthColor } from '../../utils/colors';
 
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
@@ -84,9 +85,7 @@ export default class SurveyLayer {
   // GPS origin for coordinate transforms (enables satellite tile alignment)
   private gpsOrigin: GpsOrigin | null = null;
 
-  // Depth gradient mode state (stored during update() for feature building)
-  // NOTE: These fields are wired but not yet used for coloring - task fn-5-jef.3
-  // will implement the actual depth-based color calculation in update()
+  // Depth gradient mode state (used during update() for feature color calculation)
   private showDepthGradient: boolean = false;
   private depthRange: { min: number; max: number } = { min: 0, max: 50 };
 
@@ -1090,8 +1089,7 @@ export default class SurveyLayer {
     this.updateVisualState();
   }
 
-  // Depth gradient accessors for use by depth coloring logic (task fn-5-jef.3)
-  // Returns the depth mode state set during the last update() call
+  // Depth gradient accessors - return current depth mode state
   getShowDepthGradient(): boolean {
     return this.showDepthGradient;
   }
@@ -1321,7 +1319,7 @@ export default class SurveyLayer {
   ) {
     // Store gpsOrigin for coordinate transforms
     this.gpsOrigin = gpsOrigin ?? null;
-    // Store depth mode parameters for use in feature building (task fn-5-jef.3)
+    // Store depth mode parameters for use in feature color calculation
     this.showDepthGradient = showDepthGradient;
     // Clone and normalize depth range (handle min > max, min === max, NaN)
     const minD = Number.isFinite(depthRange.min) ? depthRange.min : 0;
@@ -1349,6 +1347,12 @@ export default class SurveyLayer {
         const toStation = sectionStations[i + 1];
 
         if (fromStation && toStation && shot) {
+          // Calculate shot color - use depth gradient if enabled, otherwise section color
+          const avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
+          const shotColor = this.showDepthGradient && Number.isFinite(avgDepth)
+            ? getDepthColor(avgDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)
+            : section.color;
+
           shotFeatures.push({
             type: 'Feature',
             geometry: {
@@ -1361,7 +1365,7 @@ export default class SurveyLayer {
             properties: {
               sectionId: section.id,
               shotId: shot.id,
-              color: section.color,
+              color: shotColor,
               isVirtual: shot.is_virtual,
               length: shot.length,
               azimuth: shot.azimuth_in,
@@ -1371,10 +1375,10 @@ export default class SurveyLayer {
           // Generate shot label at midpoint
           const midX = (fromStation.coordinates.x + toStation.coordinates.x) / 2;
           const midY = (fromStation.coordinates.y + toStation.coordinates.y) / 2;
-          const avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
+          const labelDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
 
           // Format: "45° 3.2m -12.5m" (azimuth, length, depth)
-          const label = `${shot.azimuth_in.toFixed(0)}° ${shot.length.toFixed(1)}m ${avgDepth.toFixed(1)}m`;
+          const label = `${shot.azimuth_in.toFixed(0)}° ${shot.length.toFixed(1)}m ${labelDepth.toFixed(1)}m`;
 
           shotLabelFeatures.push({
             type: 'Feature',
@@ -1399,7 +1403,13 @@ export default class SurveyLayer {
     const stationFeatures: GeoJSON.Feature[] = stations.map((station) => {
       // Find section color for this station
       const section = sections.find((s) => s.id === station.station_ref.section_id);
-      const color = section?.color ?? '#ffffff';
+      const sectionColor = section?.color ?? '#ffffff';
+
+      // Calculate station color - use depth gradient if enabled, otherwise section color
+      const stationDepth = station.coordinates.z;
+      const color = this.showDepthGradient && Number.isFinite(stationDepth)
+        ? getDepthColor(stationDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)
+        : sectionColor;
 
       return {
         type: 'Feature',
