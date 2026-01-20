@@ -150,6 +150,107 @@ test.describe('Ctrl+Drag Panning', () => {
     await page.keyboard.up('Control');
   });
 
+  // Spring-loaded Z key tests
+  test.describe('Spring-Loaded Z Key', () => {
+    test('tap (quick press) should keep zoom tool active', async ({ page }) => {
+      // Start in select mode
+      await page.keyboard.press('s');
+      await page.waitForTimeout(50);
+
+      // Verify we're in select mode (check toolbar button has ring-accent class)
+      const selectButton = page.locator('button[title="Select (S)"]');
+      await expect(selectButton).toHaveClass(/ring-accent/);
+
+      // Quick tap Z (well under 200ms threshold)
+      await page.keyboard.press('z');
+      await page.waitForTimeout(50);
+
+      // Verify we're now in zoom mode (tap keeps the new tool)
+      const zoomButton = page.locator('button[title="Zoom (Z)"]');
+      await expect(zoomButton).toHaveClass(/ring-accent/);
+    });
+
+    test('hold (>200ms) should restore previous tool on release', async ({ page }) => {
+      // Start in select mode
+      await page.keyboard.press('s');
+      await page.waitForTimeout(50);
+
+      // Verify we're in select mode
+      const selectButton = page.locator('button[title="Select (S)"]');
+      await expect(selectButton).toHaveClass(/ring-accent/);
+
+      // Hold Z for >200ms
+      await page.keyboard.down('z');
+      await page.waitForTimeout(250); // Well over 200ms threshold
+
+      // Verify we're in zoom mode while holding
+      const zoomButton = page.locator('button[title="Zoom (Z)"]');
+      await expect(zoomButton).toHaveClass(/ring-accent/);
+
+      // Release Z
+      await page.keyboard.up('z');
+      await page.waitForTimeout(50);
+
+      // Verify we're back in select mode (hold restores previous tool)
+      await expect(selectButton).toHaveClass(/ring-accent/);
+    });
+
+    test('blur while holding Z should restore previous tool', async ({ page }) => {
+      // Start in draw mode (to test state restoration)
+      await page.keyboard.press('d');
+      await page.waitForTimeout(50);
+
+      // Verify we're in draw mode
+      const drawButton = page.locator('button[title="Draw (D)"]');
+      await expect(drawButton).toHaveClass(/ring-accent/);
+
+      // Hold Z
+      await page.keyboard.down('z');
+      await page.waitForTimeout(50);
+
+      // Verify we're in zoom mode while holding
+      const zoomButton = page.locator('button[title="Zoom (Z)"]');
+      await expect(zoomButton).toHaveClass(/ring-accent/);
+
+      // Simulate blur (window loses focus)
+      await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+      await page.waitForTimeout(50);
+
+      // Verify we're back in draw mode (blur always restores)
+      await expect(drawButton).toHaveClass(/ring-accent/);
+    });
+
+    test('manual tool switch while Z held should not restore on release', async ({ page }) => {
+      // Start in select mode
+      await page.keyboard.press('s');
+      await page.waitForTimeout(50);
+
+      // Hold Z
+      await page.keyboard.down('z');
+      await page.waitForTimeout(100);
+
+      // Verify we're in zoom mode
+      const zoomButton = page.locator('button[title="Zoom (Z)"]');
+      await expect(zoomButton).toHaveClass(/ring-accent/);
+
+      // Manually switch to draw mode while Z is held
+      await page.keyboard.press('d');
+      await page.waitForTimeout(50);
+
+      // Verify we're in draw mode
+      const drawButton = page.locator('button[title="Draw (D)"]');
+      await expect(drawButton).toHaveClass(/ring-accent/);
+
+      // Release Z after >200ms total
+      await page.waitForTimeout(150);
+      await page.keyboard.up('z');
+      await page.waitForTimeout(50);
+
+      // Should stay in draw mode (not restore to select, user manually switched)
+      await expect(drawButton).toHaveClass(/ring-accent/);
+    });
+  });
+
   test.describe('Box Select Interactions', () => {
     test('should not start box select when Ctrl+drag in select mode', async ({ page }) => {
       // Switch to select mode
