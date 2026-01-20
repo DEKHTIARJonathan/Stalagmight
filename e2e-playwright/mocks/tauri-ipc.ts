@@ -675,8 +675,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 palette: ['#4ecdc4', '#ff6b6b', '#95e1d3', '#f38181', '#aa96da', '#fcbad3', '#a8d8ea', '#ffcb77'],
               },
               map: {
-                satellite_provider: 'openstreetmap',
+                satellite_provider: 'esri',
                 satellite_enabled: false,
+                satellite_gps_origin: {
+                  latitude: 24.55,
+                  longitude: -81.78,
+                },
                 snap_threshold_pixels: 10,
                 zoom_default: 15,
                 zoom_min: 1,
