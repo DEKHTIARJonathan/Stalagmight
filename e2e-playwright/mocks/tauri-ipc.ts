@@ -810,12 +810,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           // Display settings (per-project)
           case 'load_display_settings':
-            // Return sparse settings to exercise fallback paths for new keys like showShots
-            // Real persisted settings may not include newer keys added in updates
+            // Return display settings for mocked tests
             return {
               showStations: 'true',
+              showShots: 'true',
               showSectionNames: 'true',
-              // showShots intentionally omitted to test fallback default
             };
 
           case 'save_display_setting':
