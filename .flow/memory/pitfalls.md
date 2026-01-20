@@ -33,3 +33,6 @@ When adding keyboard shortcuts for map zoom, disable the map library's built-in 
 
 ## 2026-01-20 manual [pitfall]
 Playwright tests must waitForFunction(__cavechef_map__) after canvas appears to avoid false positives from uninitialized map state
+
+## 2026-01-20 manual [pitfall]
+When clearing hover state for one feature type (stations/shots), only fire onFeatureHover(false) if no other feature type is currently hovered
