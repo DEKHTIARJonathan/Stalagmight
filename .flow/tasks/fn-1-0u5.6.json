@@ -7,10 +7,20 @@
     "fn-1-0u5.4"
   ],
   "epic": "fn-1-0u5",
+  "evidence": {
+    "commits": [
+      "1a534fef48fae708b0536185c4f0d077bc0ecc09"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui"
+    ]
+  },
   "id": "fn-1-0u5.6",
   "priority": null,
   "spec_path": ".flow/tasks/fn-1-0u5.6.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Update Playwright IPC mocks for cache commands",
-  "updated_at": "2026-01-20T08:24:18.346315Z"
+  "updated_at": "2026-01-20T08:34:04.780348Z"
 }
