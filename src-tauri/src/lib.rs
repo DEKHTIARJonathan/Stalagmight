@@ -80,6 +80,11 @@ fn sanitize_content_type(raw: &str) -> String {
 
 /// Parses tile coordinates from a URI.
 /// Supports both path-based (/esri/z/y/x) and host-based (esri/{z}/{y}/{x}) formats.
+///
+/// Path-based: `cavechef-tiles://localhost/esri/10/500/250`
+/// Host-based: `cavechef-tiles://esri/10/500/250`
+///
+/// Returns None for malformed URIs.
 fn parse_tile_uri(uri: &http::Uri) -> Option<(String, u32, u32, u32)> {
     let path = uri.path().trim_start_matches('/');
     let mut segments = path.split('/');
@@ -90,8 +95,12 @@ fn parse_tile_uri(uri: &http::Uri) -> Option<(String, u32, u32, u32)> {
     // Check if first segment is a provider or a number (z coordinate)
     if let Ok(z) = first.parse::<u32>() {
         // Host-based format: provider is in host, path is /{z}/{y}/{x}
-        // Extract provider from host
-        let host = uri.host().unwrap_or("esri");
+        // Host is REQUIRED for this format - reject malformed URIs without host
+        let host = uri.host()?;
+        if host.is_empty() || host == "localhost" {
+            // No valid provider in host, reject
+            return None;
+        }
         let provider = host.to_string();
 
         let y: u32 = segments.next()?.parse().ok()?;
@@ -347,4 +356,121 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // === parse_tile_uri tests ===
+
+    #[test]
+    fn test_parse_tile_uri_path_based() {
+        let uri: http::Uri = "cavechef-tiles://localhost/esri/10/500/250"
+            .parse()
+            .unwrap();
+        let result = parse_tile_uri(&uri);
+        assert_eq!(result, Some(("esri".to_string(), 10, 500, 250)));
+    }
+
+    #[test]
+    fn test_parse_tile_uri_path_based_with_extension() {
+        let uri: http::Uri = "cavechef-tiles://localhost/esri/10/500/250.jpg"
+            .parse()
+            .unwrap();
+        let result = parse_tile_uri(&uri);
+        assert_eq!(result, Some(("esri".to_string(), 10, 500, 250)));
+    }
+
+    #[test]
+    fn test_parse_tile_uri_host_based() {
+        let uri: http::Uri = "cavechef-tiles://esri/10/500/250".parse().unwrap();
+        let result = parse_tile_uri(&uri);
+        assert_eq!(result, Some(("esri".to_string(), 10, 500, 250)));
+    }
+
+    #[test]
+    fn test_parse_tile_uri_malformed_no_host() {
+        // Malformed URI with numeric first segment but no valid host
+        let uri: http::Uri = "cavechef-tiles://localhost/10/500/250".parse().unwrap();
+        let result = parse_tile_uri(&uri);
+        // First segment is "10" which parses as z, host is "localhost" which is rejected
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_tile_uri_invalid_coordinates() {
+        let uri: http::Uri = "cavechef-tiles://localhost/esri/abc/500/250"
+            .parse()
+            .unwrap();
+        let result = parse_tile_uri(&uri);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_tile_uri_too_few_segments() {
+        let uri: http::Uri = "cavechef-tiles://localhost/esri/10/500".parse().unwrap();
+        let result = parse_tile_uri(&uri);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_tile_uri_empty_path() {
+        let uri: http::Uri = "cavechef-tiles://localhost/".parse().unwrap();
+        let result = parse_tile_uri(&uri);
+        assert_eq!(result, None);
+    }
+
+    // === sanitize_content_type tests ===
+
+    #[test]
+    fn test_sanitize_content_type_valid_jpeg() {
+        assert_eq!(sanitize_content_type("image/jpeg"), "image/jpeg");
+    }
+
+    #[test]
+    fn test_sanitize_content_type_valid_png() {
+        assert_eq!(sanitize_content_type("image/png"), "image/png");
+    }
+
+    #[test]
+    fn test_sanitize_content_type_with_charset() {
+        assert_eq!(
+            sanitize_content_type("image/jpeg; charset=utf-8"),
+            "image/jpeg"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_content_type_invalid_returns_default() {
+        assert_eq!(sanitize_content_type("text/html"), DEFAULT_CONTENT_TYPE);
+    }
+
+    #[test]
+    fn test_sanitize_content_type_uppercase_normalized() {
+        assert_eq!(sanitize_content_type("IMAGE/JPEG"), "image/jpeg");
+    }
+
+    #[test]
+    fn test_sanitize_content_type_application_octet_stream() {
+        // Should fall back to default for non-image types
+        assert_eq!(
+            sanitize_content_type("application/octet-stream"),
+            DEFAULT_CONTENT_TYPE
+        );
+    }
+
+    // === Provider validation tests ===
+
+    #[test]
+    fn test_supported_providers_includes_esri() {
+        assert!(SUPPORTED_PROVIDERS.contains(&"esri"));
+    }
+
+    #[test]
+    fn test_allowed_content_types() {
+        assert!(ALLOWED_CONTENT_TYPES.contains(&"image/jpeg"));
+        assert!(ALLOWED_CONTENT_TYPES.contains(&"image/png"));
+        assert!(!ALLOWED_CONTENT_TYPES.contains(&"text/html"));
+    }
 }
