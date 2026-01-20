@@ -1,7 +1,7 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-20T21:40:18.572942Z",
   "created_at": "2026-01-20T13:02:56.781005Z",
   "depends_on": [
     "fn-4-7mg.1"
@@ -10,7 +10,7 @@
   "id": "fn-4-7mg.7",
   "priority": null,
   "spec_path": ".flow/tasks/fn-4-7mg.7.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Add unit tests for config loading and validation",
-  "updated_at": "2026-01-20T13:43:11.205045Z"
+  "updated_at": "2026-01-20T21:40:18.572956Z"
 }
