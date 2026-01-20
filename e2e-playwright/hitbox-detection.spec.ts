@@ -25,14 +25,25 @@ async function waitForMapReady(page: Page): Promise<void> {
  * Helper to wait for the app to be ready (canvas visible and map loaded).
  */
 async function waitForAppReady(page: Page): Promise<void> {
-  await page.waitForSelector('canvas', { timeout: 10000 });
+  await page.waitForSelector('canvas.maplibregl-canvas', { timeout: 10000 });
   await waitForMapReady(page);
 }
 
 /**
- * Helper to get a station's screen position using map.project() for deterministic coordinates.
- * Uses the projectStore to find station data and map.project() to convert to screen coords.
- * Coordinates are converted from meters to map lng/lat using the same formula as SurveyLayer.
+ * Helper to create a new project with the given name.
+ */
+async function createProject(page: Page, name: string): Promise<void> {
+  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
+  await newProjectBtn.click();
+  await page.waitForSelector('.fixed.inset-0');
+  await page.locator('.fixed.inset-0 input').first().fill(name);
+  await page.click('.fixed.inset-0 button:has-text("Create")');
+  await waitForAppReady(page);
+}
+
+/**
+ * Helper to get a station's screen position using map.queryRenderedFeatures + map.project().
+ * This avoids re-implementing coordinate conversion logic and uses the actual rendered feature coords.
  */
 async function getStationScreenPosition(
   page: Page,
@@ -41,51 +52,33 @@ async function getStationScreenPosition(
 ): Promise<{ x: number; y: number }> {
   return page.evaluate(
     ({ sectionId, stationIndex }) => {
-      // Get store reference from __E2E_TEST__
-      const stores = (window as unknown as {
-        __E2E_TEST__?: {
-          projectStore: { getState: () => {
-            stations: Array<{
-              station_ref: { section_id: number; station_index: number };
-              coordinates: { x: number; y: number };
-            }>;
-            config: { map: { satellite_gps_origin?: { latitude: number; longitude: number } } } | null;
-          } };
-        };
-      }).__E2E_TEST__;
-
-      if (!stores) throw new Error('__E2E_TEST__ not available');
-
-      const state = stores.projectStore.getState();
-      const station = state.stations.find(
-        (s) =>
-          s.station_ref.section_id === sectionId &&
-          s.station_ref.station_index === stationIndex
-      );
-
-      if (!station) {
-        throw new Error(`Station not found: ${sectionId}:${stationIndex}`);
-      }
-
-      // Get map instance
       const map = (window as unknown as {
         __cavechef_map__?: {
           project: (coords: [number, number]) => { x: number; y: number };
+          queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
+            geometry: { type: string; coordinates: [number, number] };
+            properties: { sectionId: number; stationIndex: number };
+          }>;
         };
       }).__cavechef_map__;
 
       if (!map) throw new Error('Map not available');
 
-      // Convert station meters to map coords using the same formula as SurveyLayer
-      // metersToMapCoords() from coordinates.ts
-      const METERS_PER_DEGREE = 111320;
-      const gpsOrigin = state.config?.map?.satellite_gps_origin ?? null;
-      const originLat = gpsOrigin?.latitude ?? 0;
-      const metersPerDegreeLng = METERS_PER_DEGREE * Math.cos((originLat * Math.PI) / 180);
-      const lng = (gpsOrigin?.longitude ?? 0) + station.coordinates.x / metersPerDegreeLng;
-      const lat = (gpsOrigin?.latitude ?? 0) + station.coordinates.y / METERS_PER_DEGREE;
+      // Query actual rendered features to get their coordinates
+      const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
+      const feature = features.find(
+        (f) =>
+          f.properties.sectionId === sectionId &&
+          f.properties.stationIndex === stationIndex
+      );
 
-      const screenPos = map.project([lng, lat]);
+      if (!feature) {
+        throw new Error(`Station feature not found: ${sectionId}:${stationIndex}`);
+      }
+
+      // Project the actual feature coordinates to screen space
+      const coords = feature.geometry.coordinates as [number, number];
+      const screenPos = map.project(coords);
       return { x: screenPos.x, y: screenPos.y };
     },
     { sectionId, stationIndex }
@@ -93,7 +86,7 @@ async function getStationScreenPosition(
 }
 
 /**
- * Helper to get the current selection state.
+ * Helper to get the current selection state using expect.poll for stability.
  */
 async function getSelectionState(page: Page): Promise<{
   type: string;
@@ -116,6 +109,29 @@ async function getSelectionState(page: Page): Promise<{
       shotId?: number;
     } | null;
   });
+}
+
+/**
+ * Helper to poll for selection state changes (more stable than waitForTimeout).
+ */
+async function pollSelectionState(
+  page: Page,
+  predicate: (sel: Awaited<ReturnType<typeof getSelectionState>>) => boolean,
+  timeout = 5000
+): Promise<Awaited<ReturnType<typeof getSelectionState>>> {
+  let result: Awaited<ReturnType<typeof getSelectionState>> = null;
+  await expect.poll(
+    async () => {
+      const sel = await getSelectionState(page);
+      if (predicate(sel)) {
+        result = sel;
+        return true;
+      }
+      return false;
+    },
+    { timeout }
+  ).toBe(true);
+  return result;
 }
 
 /**
@@ -194,6 +210,76 @@ async function getLayerOrder(page: Page): Promise<Record<string, number>> {
   });
 }
 
+/**
+ * Helper to find an isolated station (no other stations within 2*hitArea + margin).
+ */
+async function findIsolatedStation(page: Page, margin = 5): Promise<{
+  sectionId: number;
+  stationIndex: number;
+  screenPos: { x: number; y: number };
+} | null> {
+  return page.evaluate(
+    ({ margin }) => {
+      const map = (window as unknown as {
+        __cavechef_map__?: {
+          project: (coords: [number, number]) => { x: number; y: number };
+          queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
+            geometry: { type: string; coordinates: [number, number] };
+            properties: { sectionId: number; stationIndex: number };
+          }>;
+        };
+      }).__cavechef_map__;
+
+      const stores = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: { getState: () => { config: { map: { station: { hit_area: number } } } | null } };
+        };
+      }).__E2E_TEST__;
+
+      if (!map || !stores) return null;
+
+      const hitArea = stores.projectStore.getState().config?.map?.station?.hit_area ?? 10;
+      const minDistance = 2 * hitArea + margin;
+
+      const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
+      if (features.length === 0) return null;
+
+      // Get screen positions for all stations
+      const stationsWithPos = features.map((f) => ({
+        sectionId: f.properties.sectionId,
+        stationIndex: f.properties.stationIndex,
+        screenPos: map.project(f.geometry.coordinates as [number, number]),
+      }));
+
+      // Find a station that's isolated (far from all others)
+      for (const station of stationsWithPos) {
+        let isIsolated = true;
+        for (const other of stationsWithPos) {
+          if (
+            station.sectionId === other.sectionId &&
+            station.stationIndex === other.stationIndex
+          ) {
+            continue;
+          }
+          const dx = station.screenPos.x - other.screenPos.x;
+          const dy = station.screenPos.y - other.screenPos.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < minDistance) {
+            isIsolated = false;
+            break;
+          }
+        }
+        if (isIsolated) {
+          return station;
+        }
+      }
+
+      return null;
+    },
+    { margin }
+  );
+}
+
 test.describe('Hitbox Detection', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
@@ -202,170 +288,132 @@ test.describe('Hitbox Detection', () => {
   });
 
   test('station click at hitArea-1 hits, hitArea+1 misses', async ({ page }) => {
-    // Create a project to get stations
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Hitbox Test Project');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
+    await createProject(page, 'Hitbox Test Project');
 
-    await waitForAppReady(page);
+    // Find an isolated station to ensure clear hit/miss boundaries
+    const isolatedStation = await findIsolatedStation(page);
+    if (!isolatedStation) {
+      // All stations overlap - skip with reason
+      test.skip(true, 'No isolated station found for boundary testing');
+      return;
+    }
 
-    // The mock creates a project with pre-populated sections containing stations
-    // Find the first available station to test with
-    const firstStation = await page.evaluate(() => {
-      const stores = (window as unknown as {
-        __E2E_TEST__?: {
-          projectStore: { getState: () => {
-            stations: Array<{
-              station_ref: { section_id: number; station_index: number };
-              coordinates: { x: number; y: number };
-            }>;
-          } };
-        };
-      }).__E2E_TEST__;
-
-      if (!stores) return null;
-      const state = stores.projectStore.getState();
-      if (!state.stations || state.stations.length === 0) return null;
-      return state.stations[0]!.station_ref;
-    });
-
-    expect(firstStation).not.toBeNull();
-    const targetSection = firstStation!.section_id;
-    const targetIndex = firstStation!.station_index;
-
+    const { sectionId, stationIndex, screenPos } = isolatedStation;
     const hitArea = await getStationHitArea(page);
-    const stationPos = await getStationScreenPosition(page, targetSection, targetIndex);
     const canvasBox = await getCanvasBoundingBox(page);
 
     // Ensure select tool is active
     await page.keyboard.press('s');
-    await page.waitForTimeout(100);
 
     // Click at hitArea - 1 pixels from station center (should hit)
-    const hitX = canvasBox.x + stationPos.x + hitArea - 1;
-    const hitY = canvasBox.y + stationPos.y;
+    const hitX = canvasBox.x + screenPos.x + hitArea - 1;
+    const hitY = canvasBox.y + screenPos.y;
     await page.mouse.click(hitX, hitY);
-    await page.waitForTimeout(200);
 
-    // Verify station is selected
-    const selectionAfterHit = await getSelectionState(page);
+    // Poll for selection to appear (more stable than waitForTimeout)
+    const selectionAfterHit = await pollSelectionState(page, (sel) => sel !== null);
     expect(selectionAfterHit).not.toBeNull();
     expect(selectionAfterHit?.type).toBe('station');
-    // The selected station should be the one we clicked near (or another within hitArea)
-    expect(selectionAfterHit?.stationRef).toBeDefined();
+    expect(selectionAfterHit?.stationRef?.section_id).toBe(sectionId);
+    expect(selectionAfterHit?.stationRef?.station_index).toBe(stationIndex);
 
     // Clear selection with Escape
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(200);
 
-    // Verify selection is cleared
-    const selectionAfterEscape = await getSelectionState(page);
-    expect(selectionAfterEscape).toBeNull();
+    // Poll for selection to be cleared
+    await pollSelectionState(page, (sel) => sel === null);
 
-    // Click at hitArea + 2 pixels from station center (should miss, with margin for rounding)
-    const missX = canvasBox.x + stationPos.x + hitArea + 2;
-    const missY = canvasBox.y + stationPos.y;
+    // Click at hitArea + 2 pixels from station center (should miss)
+    const missX = canvasBox.x + screenPos.x + hitArea + 2;
+    const missY = canvasBox.y + screenPos.y;
     await page.mouse.click(missX, missY);
-    await page.waitForTimeout(200);
 
-    // Verify no station is selected (miss) - unless another station is nearby
-    // The test verifies the hitArea boundary behavior
-    const selectionAfterMiss = await getSelectionState(page);
-    // If selected, it should NOT be the same station (we clicked outside its hitArea)
-    if (selectionAfterMiss?.type === 'station') {
-      // Another station might be nearby - that's ok
-      // The key test is that distance-based selection works
-    }
+    // Wait a moment then verify selection is still null (miss)
+    await expect.poll(async () => getSelectionState(page), { timeout: 1000 }).toBeNull();
   });
 
   test('overlapping hitboxes select nearest to click', async ({ page }) => {
-    // Create a project
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Overlap Test Project');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
+    await createProject(page, 'Overlap Test Project');
 
-    await waitForAppReady(page);
+    // Find two stations whose hitboxes overlap in screen space
+    const overlappingPair = await page.evaluate(() => {
+      const map = (window as unknown as {
+        __cavechef_map__?: {
+          project: (coords: [number, number]) => { x: number; y: number };
+          queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
+            geometry: { type: string; coordinates: [number, number] };
+            properties: { sectionId: number; stationIndex: number };
+          }>;
+        };
+      }).__cavechef_map__;
 
-    // Find two adjacent stations from the same section
-    const adjacentStations = await page.evaluate(() => {
       const stores = (window as unknown as {
         __E2E_TEST__?: {
-          projectStore: { getState: () => {
-            stations: Array<{
-              station_ref: { section_id: number; station_index: number };
-              coordinates: { x: number; y: number };
-            }>;
-          } };
+          projectStore: { getState: () => { config: { map: { station: { hit_area: number } } } | null } };
         };
       }).__E2E_TEST__;
 
-      if (!stores) return null;
-      const state = stores.projectStore.getState();
-      if (!state.stations || state.stations.length < 2) return null;
+      if (!map || !stores) return null;
 
-      // Find two stations from the same section
-      const sections = new Map<number, typeof state.stations>();
-      for (const s of state.stations) {
-        const sectionStations = sections.get(s.station_ref.section_id) ?? [];
-        sectionStations.push(s);
-        sections.set(s.station_ref.section_id, sectionStations);
-      }
+      const hitArea = stores.projectStore.getState().config?.map?.station?.hit_area ?? 10;
+      const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
 
-      // Find a section with at least 2 stations
-      for (const [sectionId, sectionStations] of sections) {
-        if (sectionStations.length >= 2) {
-          return {
-            sectionId,
-            station0: sectionStations[0]!.station_ref,
-            station1: sectionStations[1]!.station_ref,
-          };
+      // Get screen positions for all stations
+      const stationsWithPos = features.map((f) => ({
+        sectionId: f.properties.sectionId,
+        stationIndex: f.properties.stationIndex,
+        screenPos: map.project(f.geometry.coordinates as [number, number]),
+      }));
+
+      // Find two stations whose circles overlap (distance < 2 * hitArea)
+      for (let i = 0; i < stationsWithPos.length; i++) {
+        for (let j = i + 1; j < stationsWithPos.length; j++) {
+          const a = stationsWithPos[i]!;
+          const b = stationsWithPos[j]!;
+          const dx = a.screenPos.x - b.screenPos.x;
+          const dy = a.screenPos.y - b.screenPos.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 2 * hitArea && dist > 0) {
+            return { stationA: a, stationB: b, distance: dist };
+          }
         }
       }
       return null;
     });
 
-    expect(adjacentStations).not.toBeNull();
-    const { sectionId, station0, station1 } = adjacentStations!;
+    if (!overlappingPair) {
+      test.skip(true, 'No overlapping station hitboxes found');
+      return;
+    }
 
-    // Get positions of two adjacent stations
-    const station0Pos = await getStationScreenPosition(page, sectionId, station0.station_index);
-    const station1Pos = await getStationScreenPosition(page, sectionId, station1.station_index);
+    const { stationA, stationB } = overlappingPair;
     const canvasBox = await getCanvasBoundingBox(page);
 
     // Ensure select tool is active
     await page.keyboard.press('s');
-    await page.waitForTimeout(100);
 
-    // Calculate midpoint between the two stations
-    const midX = (station0Pos.x + station1Pos.x) / 2;
-    const midY = (station0Pos.y + station1Pos.y) / 2;
+    // Click closer to stationA (25% of the way from A to B)
+    const clickX = stationA.screenPos.x + (stationB.screenPos.x - stationA.screenPos.x) * 0.25;
+    const clickY = stationA.screenPos.y + (stationB.screenPos.y - stationA.screenPos.y) * 0.25;
 
-    // Click at the midpoint - should select the nearest station
-    await page.mouse.click(canvasBox.x + midX, canvasBox.y + midY);
-    await page.waitForTimeout(200);
+    await page.mouse.click(canvasBox.x + clickX, canvasBox.y + clickY);
 
-    // Verify a station is selected (should be one of the two or nearby)
-    const selection = await getSelectionState(page);
+    // Poll for selection and verify nearest station (stationA) was selected
+    const selection = await pollSelectionState(page, (sel) => sel !== null);
     expect(selection).not.toBeNull();
     expect(selection?.type).toBe('station');
-
-    // The selected station should be one of the nearby stations
-    expect(selection?.stationRef).toBeDefined();
+    expect(selection?.stationRef?.section_id).toBe(stationA.sectionId);
+    expect(selection?.stationRef?.station_index).toBe(stationA.stationIndex);
   });
 
   test('layer order has station-hitbox above shot-hitbox', async ({ page }) => {
-    // Create a project to initialize the map layers
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Layer Order Test');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
+    await createProject(page, 'Layer Order Test');
 
-    await waitForAppReady(page);
+    // Poll for layers to be ready
+    await expect.poll(async () => {
+      const order = await getLayerOrder(page);
+      return order['survey-stations-hitbox'];
+    }).toBeDefined();
 
     // Get layer order from the map style
     const layerOrder = await getLayerOrder(page);
@@ -381,14 +429,13 @@ test.describe('Hitbox Detection', () => {
   });
 
   test('hitbox layers have correct opacity for click detection', async ({ page }) => {
-    // Create a project
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Opacity Test');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
+    await createProject(page, 'Opacity Test');
 
-    await waitForAppReady(page);
+    // Poll for layers to be ready
+    await expect.poll(async () => {
+      const order = await getLayerOrder(page);
+      return order['survey-stations-hitbox'];
+    }).toBeDefined();
 
     // Verify hitbox layers have tiny non-zero opacity (required for queryRenderedFeatures)
     const stationOpacity = await getHitboxLayerOpacity(page, 'survey-stations-hitbox');
@@ -401,86 +448,104 @@ test.describe('Hitbox Detection', () => {
     expect(shotOpacity).toBeLessThan(0.01);
   });
 
-  test('shot click detection uses hitbox layer', async ({ page }) => {
-    // Create a project
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Shot Hitbox Test');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
+  test('shot click detection at hitArea boundaries', async ({ page }) => {
+    await createProject(page, 'Shot Hitbox Test');
 
-    await waitForAppReady(page);
+    // Find a shot (line between two adjacent stations) and test perpendicular hitbox
+    const shotInfo = await page.evaluate(() => {
+      const map = (window as unknown as {
+        __cavechef_map__?: {
+          project: (coords: [number, number]) => { x: number; y: number };
+          queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
+            geometry: { type: string; coordinates: [number, number] | [number, number][] };
+            properties: Record<string, unknown>;
+          }>;
+        };
+      }).__cavechef_map__;
 
-    // Find two adjacent stations from the same section to identify a shot
-    const adjacentStations = await page.evaluate(() => {
       const stores = (window as unknown as {
         __E2E_TEST__?: {
-          projectStore: { getState: () => {
-            stations: Array<{
-              station_ref: { section_id: number; station_index: number };
-              coordinates: { x: number; y: number };
-            }>;
-          } };
+          projectStore: { getState: () => { config: { map: { shot: { hit_area: number } } } | null } };
         };
       }).__E2E_TEST__;
 
-      if (!stores) return null;
-      const state = stores.projectStore.getState();
-      if (!state.stations || state.stations.length < 2) return null;
+      if (!map || !stores) return null;
 
-      // Find two adjacent stations (index i and i+1) from the same section
-      const sections = new Map<number, typeof state.stations>();
-      for (const s of state.stations) {
-        const sectionStations = sections.get(s.station_ref.section_id) ?? [];
-        sectionStations.push(s);
-        sections.set(s.station_ref.section_id, sectionStations);
-      }
+      const shotHitArea = stores.projectStore.getState().config?.map?.shot?.hit_area ?? 8;
+      const features = map.queryRenderedFeatures({ layers: ['survey-shots'] });
 
-      // Find a section with at least 2 stations
-      for (const [sectionId, sectionStations] of sections) {
-        if (sectionStations.length >= 2) {
-          // Sort by station index to get adjacent stations
-          sectionStations.sort((a, b) => a.station_ref.station_index - b.station_ref.station_index);
-          return {
-            sectionId,
-            station0: sectionStations[0]!.station_ref,
-            station1: sectionStations[1]!.station_ref,
-          };
-        }
+      // Find a shot that's long enough to click on its middle
+      for (const f of features) {
+        if (f.geometry.type !== 'LineString') continue;
+        const coords = f.geometry.coordinates as [number, number][];
+        if (coords.length < 2) continue;
+
+        const start = map.project(coords[0]!);
+        const end = map.project(coords[1]!);
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+
+        // Need a shot long enough to click perpendicular to it
+        if (len < 30) continue;
+
+        // Calculate midpoint and perpendicular direction
+        const midX = (start.x + end.x) / 2;
+        const midY = (start.y + end.y) / 2;
+
+        // Perpendicular vector (normalized)
+        const perpX = -dy / len;
+        const perpY = dx / len;
+
+        return {
+          sectionId: f.properties.sectionId as number,
+          shotId: f.properties.shotId as number,
+          midPoint: { x: midX, y: midY },
+          perpendicular: { x: perpX, y: perpY },
+          shotHitArea,
+        };
       }
       return null;
     });
 
-    if (!adjacentStations) {
-      // Skip if we can't find adjacent stations for a shot
+    if (!shotInfo) {
+      test.skip(true, 'No suitable shot found for boundary testing');
       return;
     }
 
-    const { sectionId, station0, station1 } = adjacentStations;
-
-    // Get positions of adjacent stations to find a shot midpoint
-    const station0Pos = await getStationScreenPosition(page, sectionId, station0.station_index);
-    const station1Pos = await getStationScreenPosition(page, sectionId, station1.station_index);
+    const { sectionId, shotId, midPoint, perpendicular, shotHitArea } = shotInfo;
     const canvasBox = await getCanvasBoundingBox(page);
 
     // Ensure select tool is active
     await page.keyboard.press('s');
-    await page.waitForTimeout(100);
 
-    // Calculate shot midpoint
-    const shotMidX = (station0Pos.x + station1Pos.x) / 2;
-    const shotMidY = (station0Pos.y + station1Pos.y) / 2;
+    // Click at shotHitArea/2 - 1 perpendicular from shot line (should hit)
+    const hitOffset = shotHitArea / 2 - 1;
+    const hitX = canvasBox.x + midPoint.x + perpendicular.x * hitOffset;
+    const hitY = canvasBox.y + midPoint.y + perpendicular.y * hitOffset;
 
-    // Click at the shot midpoint (should hit either shot or nearby station)
-    await page.mouse.click(canvasBox.x + shotMidX, canvasBox.y + shotMidY);
-    await page.waitForTimeout(200);
+    await page.mouse.click(hitX, hitY);
 
-    // Verify something is selected (shot or station)
-    // The hitbox layers allow clicking on the shot line
-    const selection = await getSelectionState(page);
-    // Either a shot or station selection is acceptable at midpoint
-    // The important thing is something was hit within the hitbox area
-    expect(selection).not.toBeNull();
+    // Poll for shot selection
+    const selectionAfterHit = await pollSelectionState(page, (sel) => sel !== null);
+    expect(selectionAfterHit).not.toBeNull();
+    expect(selectionAfterHit?.type).toBe('shot');
+    expect(selectionAfterHit?.sectionId).toBe(sectionId);
+    expect(selectionAfterHit?.shotId).toBe(shotId);
+
+    // Clear selection
+    await page.keyboard.press('Escape');
+    await pollSelectionState(page, (sel) => sel === null);
+
+    // Click at shotHitArea/2 + 2 perpendicular from shot line (should miss)
+    const missOffset = shotHitArea / 2 + 2;
+    const missX = canvasBox.x + midPoint.x + perpendicular.x * missOffset;
+    const missY = canvasBox.y + midPoint.y + perpendicular.y * missOffset;
+
+    await page.mouse.click(missX, missY);
+
+    // Verify miss - selection should remain null
+    await expect.poll(async () => getSelectionState(page), { timeout: 1000 }).toBeNull();
   });
 });
 
@@ -491,30 +556,23 @@ test.describe('Debug Hitbox Visualization', () => {
     await page.waitForLoadState('networkidle');
   });
 
-  test('debug.map.showHitboxes changes layer opacity when enabled', async ({ page }) => {
-    // Create a project
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Debug Hitbox Test');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
+  test('hitbox layers exist with correct initial opacity', async ({ page }) => {
+    // This test verifies the initial state where hitboxes are nearly invisible
+    // Full toggle testing would require Settings dialog interaction with config reload
+    await createProject(page, 'Debug Hitbox Test');
 
-    await waitForAppReady(page);
+    // Poll for layers to be ready
+    await expect.poll(async () => {
+      const order = await getLayerOrder(page);
+      return order['survey-stations-hitbox'];
+    }).toBeDefined();
 
-    // Verify initial state: hitbox layers have tiny opacity
-    const initialStationOpacity = await getHitboxLayerOpacity(page, 'survey-stations-hitbox');
-    expect(initialStationOpacity).toBeLessThan(0.01);
+    // Verify initial state: hitbox layers have tiny opacity (not fully visible)
+    const stationOpacity = await getHitboxLayerOpacity(page, 'survey-stations-hitbox');
+    expect(stationOpacity).toBeGreaterThan(0);
+    expect(stationOpacity).toBeLessThan(0.01);
 
-    // Note: To fully test debug visualization toggle, we would need to:
-    // 1. Open Settings dialog
-    // 2. Navigate to Debug tab
-    // 3. Toggle showHitboxes
-    // 4. Click Reload Config
-    //
-    // For now, we verify the initial state is correct (hidden hitboxes)
-    // The full toggle test would require more complex UI interaction
-
-    // Verify the layers exist and are queryable
+    // Verify the layers exist and are queryable (essential for click detection)
     const layerOrder = await getLayerOrder(page);
     expect(layerOrder['survey-stations-hitbox']).toBeDefined();
     expect(layerOrder['survey-shots-hitbox']).toBeDefined();
@@ -528,15 +586,8 @@ test.describe('E2E Test Infrastructure', () => {
     await page.waitForLoadState('networkidle');
   });
 
-  test('__E2E_TEST__ stores are exposed', async ({ page }) => {
-    // Create a project to ensure stores are populated
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('E2E Test Infrastructure');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-
-    await waitForAppReady(page);
+  test('__E2E_TEST__ stores are exposed in dev mode', async ({ page }) => {
+    await createProject(page, 'E2E Test Infrastructure');
 
     // Verify __E2E_TEST__ is available with required stores
     const hasTestAPI = await page.evaluate(() => {
@@ -560,14 +611,7 @@ test.describe('E2E Test Infrastructure', () => {
   });
 
   test('__cavechef_map__ is exposed after map loads', async ({ page }) => {
-    // Create a project
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Map Exposure Test');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-
-    await waitForAppReady(page);
+    await createProject(page, 'Map Exposure Test');
 
     // Verify __cavechef_map__ is available with required methods
     const hasMapAPI = await page.evaluate(() => {
@@ -577,6 +621,7 @@ test.describe('E2E Test Infrastructure', () => {
           project: (coords: [number, number]) => { x: number; y: number };
           getStyle: () => { layers: unknown[] };
           getPaintProperty: (layer: string, prop: string) => unknown;
+          queryRenderedFeatures: (options?: unknown) => unknown[];
         };
       }).__cavechef_map__;
 
@@ -586,6 +631,7 @@ test.describe('E2E Test Infrastructure', () => {
         hasProject: typeof map?.project === 'function',
         hasGetStyle: typeof map?.getStyle === 'function',
         hasGetPaintProperty: typeof map?.getPaintProperty === 'function',
+        hasQueryRenderedFeatures: typeof map?.queryRenderedFeatures === 'function',
       };
     });
 
@@ -594,5 +640,6 @@ test.describe('E2E Test Infrastructure', () => {
     expect(hasMapAPI.hasProject).toBe(true);
     expect(hasMapAPI.hasGetStyle).toBe(true);
     expect(hasMapAPI.hasGetPaintProperty).toBe(true);
+    expect(hasMapAPI.hasQueryRenderedFeatures).toBe(true);
   });
 });
