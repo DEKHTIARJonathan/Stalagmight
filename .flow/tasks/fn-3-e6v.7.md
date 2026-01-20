@@ -1,8 +1,81 @@
 # fn-3-e6v.7 Show snapped/origin stations during Draw/Merge/Measure
 
 ## Description
-Show snapped/origin stations during Draw/Merge/Measure using highlight layer.
+Wire highlight layer to snap/draw/merge state.
 
+## File: `src/components/Map/MapCanvas.tsx`
+
+Add useEffect that derives highlight IDs from state:
+
+```typescript
+useEffect(() => {
+  if (!surveyLayerRef.current) return;
+  
+  const highlightIds: string[] = [];
+  if (snappedStation) highlightIds.push(snappedStation);
+  if (drawFromStation && !highlightIds.includes(drawFromStation)) {
+    highlightIds.push(drawFromStation);
+  }
+  if (mergeStationA && !highlightIds.includes(mergeStationA)) {
+    highlightIds.push(mergeStationA);
+  }
+  if (mergeStationB && !highlightIds.includes(mergeStationB)) {
+    highlightIds.push(mergeStationB);
+  }
+  
+  surveyLayerRef.current.setHighlightedStations(highlightIds);
+}, [snappedStation, drawFromStation, mergeStationA, mergeStationB, mapLoaded]);
+```
+
+This ensures snapped/origin stations are visible even when stations layer is hidden.
+## File: `src/components/Map/MapCanvas.tsx`
+
+### Station Identifier
+
+Station features have `station_ref` property (existing). The `snappedStation`, `drawFromStation` state uses the same format.
+
+### Implementation
+
+```typescript
+useEffect(() => {
+  if (!surveyLayerRef.current) return;
+  
+  const highlightRefs: string[] = [];
+  
+  // snappedStation, drawFromStation, mergeStationA/B are station_ref strings
+  if (snappedStation) highlightRefs.push(snappedStation);
+  if (drawFromStation && !highlightRefs.includes(drawFromStation)) {
+    highlightRefs.push(drawFromStation);
+  }
+  if (mergeStationA && !highlightRefs.includes(mergeStationA)) {
+    highlightRefs.push(mergeStationA);
+  }
+  if (mergeStationB && !highlightRefs.includes(mergeStationB)) {
+    highlightRefs.push(mergeStationB);
+  }
+  
+  surveyLayerRef.current.setHighlightedStations(highlightRefs);
+}, [snappedStation, drawFromStation, mergeStationA, mergeStationB, mapLoaded]);
+```
+
+### How It Works
+
+1. User hides stations via Display menu
+2. `survey-stations` layer becomes invisible
+3. User activates Draw tool, cursor approaches station
+4. Snap detection finds station (iterates array)
+5. `snappedStation` set to station_ref value
+6. useEffect triggers, `setHighlightedStations([station_ref])`
+7. Highlight layer filter matches, station appears in cyan
+8. User completes operation
+9. State clears, highlight filter returns to match nothing
+
+### Note on Merge Tool
+
+Merge requires BOTH stations to be selected. When stations are hidden:
+- Guard in `handleStationClick` blocks station selection
+- Merge tool cannot be used (no way to select targets)
+- This is correct behavior per spec
 ## File to Modify: `src/components/Map/MapCanvas.tsx`
 
 ### Understanding Station IDs
@@ -211,16 +284,12 @@ Alternative approach:
 ## Depends On
 - Task 3: Base visibility must work first
 ## Acceptance
-- [ ] useEffect watches snappedStation, drawFromStation, mergeStationA/B
-- [ ] Station IDs converted to compound format `${sectionId}:${stationIndex}`
-- [ ] Compound ID format matches `id` property in station features
-- [ ] `setHighlightedStations()` called with correct IDs
-- [ ] Snapped station visible during Draw even when stations layer hidden
-- [ ] Draw origin station visible during draw operation
-- [ ] Both merge stations highlighted during merge operation
-- [ ] Multiple stations can be highlighted simultaneously
-- [ ] Highlight clears when operation completes (IDs array becomes empty)
-- [ ] Highlight clears when operation canceled
+- [ ] useEffect derives highlight IDs from snappedStation/drawFromStation/mergeStationA/B
+- [ ] Calls setHighlightedStations with array of IDs
+- [ ] Snapped station visible during Draw when stations hidden
+- [ ] Draw origin visible during draw operation
+- [ ] Merge stations highlighted
+- [ ] Highlight clears when operation completes
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD

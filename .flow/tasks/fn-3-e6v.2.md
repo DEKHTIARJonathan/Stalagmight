@@ -1,8 +1,192 @@
 # fn-3-e6v.2 Implement setShowStations and setShowShots in SurveyLayer
 
 ## Description
-Implement visibility methods, highlight layer, and cleanup in SurveyLayer.
+Implement visibility methods and highlight layer in SurveyLayer.
 
+## File: `src/components/Map/SurveyLayer.tsx`
+
+### 1. Add highlight layer in `initializeLayers()`
+
+Add AFTER stations layer using correct source:
+
+```typescript
+this.map.addLayer({
+  id: 'survey-stations-highlight',
+  type: 'circle',
+  source: 'survey-data-stations',  // NOT 'survey-data' - that doesn't exist
+  filter: ['==', ['get', 'sectionId'], -9999],
+  paint: {
+    'circle-radius': 7,
+    'circle-color': '#00ffcc',
+    'circle-stroke-width': 4,
+    'circle-stroke-color': '#00ffcc',
+  }
+});
+```
+
+### 2. Add setHighlightedStations method
+
+```typescript
+setHighlightedStations(ids: string[]): void {
+  if (!this.map) return;
+  const idExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]];
+  this.map.setFilter('survey-stations-highlight',
+    ids.length > 0
+      ? ['in', idExpr, ['literal', ids]]
+      : ['==', ['get', 'sectionId'], -9999]
+  );
+}
+```
+
+### 3. Visibility and cleanup methods
+
+As specified in epic.
+## File: `src/components/Map/SurveyLayer.tsx`
+
+### 1. Add highlight layer in `initializeLayers()`
+
+Add AFTER the survey-stations layer, using the SAME source:
+
+```typescript
+// In initializeLayers(), after survey-stations layer:
+this.map.addLayer({
+  id: 'survey-stations-highlight',
+  type: 'circle',
+  source: 'survey-data',  // Same source as stations
+  filter: ['==', ['get', 'sectionId'], -9999], // Match nothing initially
+  paint: {
+    'circle-radius': 7,
+    'circle-color': '#00ffcc',
+    'circle-stroke-width': 4,
+    'circle-stroke-color': '#00ffcc',
+  }
+});
+```
+
+### 2. Add highlight filter method
+
+```typescript
+private stationsHighlightLayerId = 'survey-stations-highlight';
+
+setHighlightedStations(ids: string[]): void {
+  if (!this.map) return;
+  const idExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]];
+  this.map.setFilter(this.stationsHighlightLayerId,
+    ids.length > 0
+      ? ['in', idExpr, ['literal', ids]]
+      : ['==', ['get', 'sectionId'], -9999]
+  );
+}
+```
+
+### 3. Visibility methods
+
+```typescript
+setShowStations(visible: boolean): void { ... }
+setShowShots(visible: boolean): void { ... }
+setShowVirtualShots(visible: boolean): void {
+  if (!this.map) return;
+  if (visible) {
+    this.map.setFilter(this.shotsLayerId, null);
+  } else {
+    this.map.setFilter(this.shotsLayerId, ['!=', ['get', 'isVirtual'], true]);
+  }
+}
+```
+
+### 4. Cleanup methods
+
+```typescript
+clearAllInteractionState(): void {
+  this.hoveredStationId = null;
+  this.hoveredShotId = null;
+  this.snappedStationId = null;
+  this.selectedStationId = null;
+  this.selectedShotId = null;
+  this.setHighlightedStations([]);
+  this.updateVisualState();
+}
+
+clearStationHover(): void { ... }
+clearShotHover(): void { ... }
+clearSnappedStation(): void { ... }
+```
+
+No separate `clearVirtualShotState()` - use clearShotHover() + selection filtering.
+## File: `src/components/Map/SurveyLayer.tsx`
+
+### 1. Add highlight layer
+
+Station features have `sectionId` and `stationIndex` properties. Internal ID format is `${sectionId}:${stationIndex}` (see L459, L535).
+
+```typescript
+private stationsHighlightLayerId = 'survey-stations-highlight';
+
+// In initialization:
+this.map.addLayer({
+  id: this.stationsHighlightLayerId,
+  type: 'circle',
+  source: 'survey-data',
+  filter: ['==', ['get', 'sectionId'], -9999], // Match nothing
+  paint: {
+    'circle-radius': 7,
+    'circle-color': '#00ffcc',
+    'circle-stroke-width': 4,
+    'circle-stroke-color': '#00ffcc',
+  }
+});
+```
+
+### 2. Highlight filter using compound expression
+
+Match existing format from L535:
+```typescript
+setHighlightedStations(ids: string[]): void {
+  if (!this.map) return;
+  const idExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]];
+  this.map.setFilter(this.stationsHighlightLayerId,
+    ids.length > 0
+      ? ['in', idExpr, ['literal', ids]]
+      : ['==', ['get', 'sectionId'], -9999]
+  );
+}
+```
+
+### 3. Visibility methods
+
+```typescript
+setShowStations(visible: boolean): void { ... }
+setShowShots(visible: boolean): void { ... }
+setShowVirtualShots(visible: boolean): void {
+  // Use filter to exclude virtual shots
+  if (visible) {
+    this.map.setFilter(this.shotsLayerId, null);
+  } else {
+    this.map.setFilter(this.shotsLayerId, ['!=', ['get', 'isVirtual'], true]);
+  }
+}
+```
+
+### 4. Cleanup methods
+
+```typescript
+clearAllInteractionState(): void {
+  this.hoveredStationId = null;
+  this.hoveredShotId = null;
+  this.snappedStationId = null;
+  this.selectedStationId = null;  // INCLUDE THIS
+  this.selectedShotId = null;     // INCLUDE THIS
+  this.setHighlightedStations([]);
+  this.updateVisualState();
+}
+
+clearVirtualShotState(): void {
+  // Clear hover if currently hovering a virtual shot
+  // (may need to track isVirtual in hover state)
+  this.hoveredShotId = null;
+  this.updateVisualState();
+}
+```
 ## File: `src/components/Map/SurveyLayer.tsx`
 
 ### 1. Add highlight layer (~L280)
@@ -341,16 +525,11 @@ Note: `this.stationsLayerId` is `'survey-stations'` (private property at line 45
 ## Depends On
 Nothing - can be done in parallel with Task 1.
 ## Acceptance
-- [ ] `survey-stations-highlight` layer created with cyan styling
-- [ ] Highlight layer filter uses `station_ref` property (existing in features)
-- [ ] `setShowStations(visible)` controls stations, merges, loop-closures
-- [ ] `setShowShots(visible)` controls shots layer
-- [ ] `setShowVirtualShots(visible)` uses FILTER to exclude virtual shots
-- [ ] `setHighlightedStations(stationRefs)` uses station_ref filter
-- [ ] `clearStationHover()`, `clearShotHover()` methods exist
-- [ ] `clearSnappedStation()` clears snap AND highlight layer
-- [ ] `clearAllInteractionState()` clears ALL internal IDs (hover, selected, snapped)
-- [ ] All methods have null-check for `this.map`
+- [ ] Highlight layer uses source `survey-data-stations` (correct source)
+- [ ] Layer added in initializeLayers() AFTER stations layer
+- [ ] Filter uses compound expression
+- [ ] All visibility methods implemented
+- [ ] clearAllInteractionState clears ALL internal IDs
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD

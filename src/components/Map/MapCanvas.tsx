@@ -688,13 +688,17 @@ export default function MapCanvas() {
     const handleMouseUpCapture = () => {
       if (ctrlPanStart && map.current) {
         ctrlPanStart = null;
-        // Restore cursor
+        // Restore cursor using the same mapping as the main cursor effect
         const cursors: Record<string, string> = {
           select: 'default',
+          pan: 'grab',
+          zoom: 'zoom-in',
           draw: 'crosshair',
-          delete: 'crosshair',
-          merge: 'crosshair',
+          delete: 'not-allowed',
+          merge: 'cell',
           measure: 'crosshair',
+          move_section: 'move',
+          move_station: 'move',
         };
         map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
       }
@@ -737,26 +741,30 @@ export default function MapCanvas() {
     };
   }, [activeTool]);
 
+  // Extract zoom config values for stable dependencies
+  const zoomStep = config?.map.zoom_step ?? 1.0;
+  const zoomMin = config?.map.zoom_min ?? 0;
+  const zoomMax = config?.map.zoom_max ?? 22;
+
   // Zoom tool capture handlers - intercept clicks before SurveyLayer to prevent selection
   // and handle right-click zoom out behavior
   useEffect(() => {
     const mapElement = mapContainer.current;
     if (!mapElement || !map.current || activeTool !== 'zoom') return;
 
-    const zoomStep = config?.map.zoom_step ?? 1.0;
-    const minZoom = config?.map.zoom_min ?? 0;
-    const maxZoom = config?.map.zoom_max ?? 22;
-
     // Left-click capture: stop propagation to prevent SurveyLayer selection
+    // Always intercept left clicks for zoom tool (regardless of Ctrl state)
     const handleClickCapture = (e: MouseEvent) => {
-      if (e.button === 0 && !e.ctrlKey) {
+      if (e.button === 0) {
         e.stopPropagation();
+        e.stopImmediatePropagation();
+
         // Actual zoom-in on click (if not dragging for box zoom)
         // For simple clicks, zoom in at click point
         if (!map.current || !mapContainer.current) return;
 
         const currentZoom = map.current.getZoom();
-        const targetZoom = Math.min(maxZoom, currentZoom + zoomStep);
+        const targetZoom = Math.min(zoomMax, currentZoom + zoomStep);
 
         // Early return if at max zoom (no recenter)
         if (targetZoom === currentZoom) return;
@@ -775,18 +783,22 @@ export default function MapCanvas() {
       }
     };
 
-    // Right-click capture: zoom out at click point
+    // Right-click capture: zoom out at click point (or cancel zoom box in task 3)
     const handleContextMenuCapture = (e: MouseEvent) => {
       // Don't intercept during placement mode
       if (placementMode) return;
 
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation();
+
+      // TODO: Task 3 will add zoomBox state - if zoomBox.start is set, cancel box instead of zooming
+      // For now, always zoom out
 
       if (!map.current || !mapContainer.current) return;
 
       const currentZoom = map.current.getZoom();
-      const targetZoom = Math.max(minZoom, currentZoom - zoomStep);
+      const targetZoom = Math.max(zoomMin, currentZoom - zoomStep);
 
       // Early return if at min zoom (no recenter)
       if (targetZoom === currentZoom) return;
@@ -811,7 +823,7 @@ export default function MapCanvas() {
       mapElement.removeEventListener('click', handleClickCapture, { capture: true });
       mapElement.removeEventListener('contextmenu', handleContextMenuCapture, { capture: true });
     };
-  }, [activeTool, config, placementMode]);
+  }, [activeTool, zoomStep, zoomMin, zoomMax, placementMode]);
 
   // Get satellite tile URL based on provider config
   // Uses custom cavechef-tiles:// protocol for offline caching

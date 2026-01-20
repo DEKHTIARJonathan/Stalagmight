@@ -1,8 +1,61 @@
 # fn-3-e6v.6 Block selection and show throttled toast for hidden elements
 
 ## Description
-Block selection via guards in useMapTools and add toast system.
+Block selection via guards and add toast system.
 
+## Files to Modify
+
+### `src/store/uiStore.ts` - Toast state
+
+Per-key throttling as before.
+
+### `src/App.tsx` - Toast Portal
+
+React Portal to document.body with z-index 99999.
+
+### `src/hooks/useMapTools.ts` - Guards
+
+**Station click guard:**
+```typescript
+const handleStationClick = (...) => {
+  if (!showStations) {
+    showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden');
+    return;
+  }
+  // ...
+};
+```
+
+**Shot click guard:**
+```typescript
+const handleShotClick = (...) => {
+  if (!showShots) {
+    showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden');
+    return;
+  }
+  // ...
+};
+```
+
+**Merge snap guard in handleEmptyClick:**
+```typescript
+// In handleEmptyClick, merge logic path
+if (activeTool === 'merge' && snappedStation) {
+  if (!showStations) {
+    showToast("Enable 'Stations' in Display menu to merge", 'stations-hidden');
+    return;
+  }
+  // ... existing merge logic
+}
+```
+
+### `src/hooks/useKeyboardShortcuts.ts` - Ctrl+A guard
+
+Block when stations hidden.
+
+### `e2e-playwright/mocks/tauri-ipc.ts` - Add showShots
+
+Update display settings mock to include `showShots: true`.
 ## Files to Modify
 
 ### `src/store/uiStore.ts` - Toast state
@@ -303,18 +356,14 @@ When stations are hidden:
 ## Depends On
 - Task 3: Visibility state must be accessible in tool handlers
 ## Acceptance
-- [ ] Toast state has `key` property for per-key throttle tracking
-- [ ] `lastToastByKey: Record<string, number>` in state
-- [ ] `showToast(message, key)` throttles per-key (5 second cooldown)
-- [ ] Toast auto-clears after 3 seconds
-- [ ] Toast uses React Portal to document.body
-- [ ] Toast has z-index 99999 (above all other UI)
-- [ ] Toast positioned bottom-center
-- [ ] **Guard in handleStationClick** blocks when `!showStations`
-- [ ] **Guard in handleShotClick** blocks when `!showShots`
-- [ ] Guards show throttled toast before returning
-- [ ] Ctrl+A blocked when stations hidden, shows toast
-- [ ] Toast messages match spec text exactly
+- [ ] Toast state with per-key throttle in uiStore
+- [ ] Toast Portal renders to document.body with z-index 99999
+- [ ] Guard in handleStationClick blocks when !showStations
+- [ ] Guard in handleShotClick blocks when !showShots
+- [ ] **Guard in merge snap path** blocks when !showStations
+- [ ] Guards call showToast before returning
+- [ ] Ctrl+A blocked when stations hidden
+- [ ] Playwright mocks updated in `e2e-playwright/mocks/tauri-ipc.ts`
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD

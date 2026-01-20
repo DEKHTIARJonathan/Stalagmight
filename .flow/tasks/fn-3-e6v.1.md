@@ -3,6 +3,22 @@
 ## Description
 Add `showShots` state and "Shots" toggle - complete implementation.
 
+## Files to Modify
+
+### `src/store/uiStore.ts`
+- Add `showShots: boolean` to UIState interface
+- Add `'showShots'` to `DisplayToggleKey` union
+- Add `showShots: true` to initial state defaults
+- **Add `showShots: true` to `resetDisplaySettings()`**
+
+### `src/components/SingleSystemView/DisplayMenu.tsx`
+- Add to displayOptions before "Virtual Shots"
+
+### `src/components/Map/MapCanvas.tsx`
+- Destructure `showShots`
+
+### `e2e-playwright/mocks/tauri-ipc.ts`
+- Add `showShots: true` to mock
 ## Files to Modify (Complete Checklist)
 
 ### 1. `src/store/uiStore.ts`
@@ -79,13 +95,13 @@ export type DisplayToggleKey =
 ## Depends On
 Nothing - this is a foundational task.
 ## Acceptance
-- [ ] `showShots: boolean` in UIState interface
-- [ ] `'showShots'` in DisplayToggleKey union type
-- [ ] `showShots: true` in initial state defaults
-- [ ] "Shots" toggle in DisplayMenu above "Virtual Shots"
-- [ ] Toggle checkbox correctly updates store state
-- [ ] Persistence works (verify via dev tools or test)
-- [ ] No TypeScript errors: `pnpm tsc --noEmit`
+- [ ] `showShots` in UIState interface
+- [ ] `'showShots'` in DisplayToggleKey union
+- [ ] `showShots: true` in initial state
+- [ ] `showShots: true` in resetDisplaySettings()
+- [ ] "Shots" toggle in DisplayMenu
+- [ ] Playwright mocks updated
+- [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD
 

@@ -1,8 +1,58 @@
 # fn-3-e6v.4 Implement toggle disable relationships in DisplayMenu
 
 ## Description
-Implement toggle disable relationships in DisplayMenu using existing button-row pattern.
+Implement toggle disable relationships in DisplayMenu.
 
+## File: `src/components/SingleSystemView/DisplayMenu.tsx`
+
+### Current Pattern (L142-164)
+
+Button with custom checkbox div using template strings (no cn() helper, no Checkbox component):
+```tsx
+<button onClick={() => toggleDisplay(item.key)} className="w-full px-3 py-2 ...">
+  ...
+  <div className={`w-5 h-5 rounded ... ${toggleValues[item.key] ? 'bg-accent' : 'bg-background'}`}>✓</div>
+</button>
+```
+
+### Implementation
+
+**1. Extend DisplayOption interface (L5-9):**
+```typescript
+interface DisplayOption {
+  key: DisplayToggleKey;
+  label: string;
+  description?: string;
+  disabledWhen?: DisplayToggleKey;  // NEW
+}
+```
+
+**2. Add disabledWhen to items (L11-32):**
+```typescript
+{ key: 'showVirtualShots', ..., disabledWhen: 'showShots' },
+{ key: 'showShotData', ..., disabledWhen: 'showShots' },
+```
+
+**3. Add helper function:**
+```typescript
+const isDisabled = (item: DisplayOption) => 
+  item.disabledWhen ? !toggleValues[item.disabledWhen] : false;
+```
+
+**4. Update button (L142-164):**
+```tsx
+<button
+  onClick={() => !isDisabled(item) && toggleDisplay(item.key)}
+  aria-disabled={isDisabled(item) || undefined}
+  className={`
+    w-full px-3 py-2 flex items-center justify-between transition-colors
+    ${isDisabled(item) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-background/50'}
+  `}
+  data-testid={`display-toggle-${item.key}`}
+>
+  ...
+</button>
+```
 ## File: `src/components/SingleSystemView/DisplayMenu.tsx`
 
 ### Current Pattern
@@ -123,16 +173,14 @@ The disabled toggles should remember their state - when Shots is re-enabled, the
 ## Depends On
 - Task 1: showShots state must exist
 ## Acceptance
-- [ ] `disabledWhen` property added to DisplayOption interface
-- [ ] `isDisabled(option)` helper function checks parent toggle state
-- [ ] "Virtual Shots" has `disabledWhen: 'showShots'`
-- [ ] "Shot Data" has `disabledWhen: 'showShots'`
-- [ ] Disabled rows have `opacity-50` class
-- [ ] Disabled rows have `cursor-not-allowed` class
-- [ ] onClick guard prevents toggle when disabled
-- [ ] `aria-disabled` attribute set for accessibility
-- [ ] Disabled rows retain their checked state visually
-- [ ] Re-enabling parent immediately shows correct child states
+- [ ] `disabledWhen` added to DisplayOption interface
+- [ ] `isDisabled(item)` helper checks parent toggle state
+- [ ] Virtual Shots has `disabledWhen: 'showShots'`
+- [ ] Shot Data has `disabledWhen: 'showShots'`
+- [ ] Button onClick guards against disabled state
+- [ ] `aria-disabled` attribute set when disabled
+- [ ] Disabled class includes `opacity-50 cursor-not-allowed`
+- [ ] No new external components added (uses existing pattern)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD
