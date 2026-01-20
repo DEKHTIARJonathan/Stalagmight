@@ -532,8 +532,19 @@ Nothing - can be done in parallel with Task 1.
 - [ ] clearAllInteractionState clears ALL internal IDs
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
+## Summary
 
+Implemented visibility methods and highlight layer in SurveyLayer:
+
+1. **Added `stationsHighlightLayerId`** property for the new highlight layer
+2. **Added highlight layer** in `initializeLayers()` after the stations layer with cyan color (#00ffcc) styling
+3. **Added `setShowStations()`** - controls stations, merges, loop closures, and highlight layer visibility
+4. **Added `setShowShots()`** - controls shots layer visibility  
+5. **Added `setHighlightedStations()`** - sets filter on highlight layer using compound ID expression
+6. **Added cleanup methods**: `clearStationHover()`, `clearShotHover()`, `clearSnappedStation()`, `clearAllInteractionState()`
+7. **Updated `destroy()`** to remove the highlight layer on cleanup
+
+All methods follow existing patterns and use MapLibre's `setLayoutProperty` and `setFilter` APIs.
 ## Evidence
 - Commits:
 - Tests:

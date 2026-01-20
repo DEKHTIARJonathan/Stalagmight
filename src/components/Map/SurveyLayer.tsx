@@ -51,6 +51,7 @@ export default class SurveyLayer {
   private ghostShotsLayerId = 'survey-ghost-shots';
   private ghostStationsLayerId = 'survey-ghost-stations';
   private ghostMergeLayerId = 'survey-ghost-merge';
+  private stationsHighlightLayerId = 'survey-stations-highlight';
   private callbacks: SurveyLayerCallbacks;
 
   // Visual state
@@ -267,6 +268,21 @@ export default class SurveyLayer {
         // Stroke width varies based on selection/hover state (updated dynamically)
         'circle-stroke-width': 1,
         'circle-stroke-color': '#000000',
+      },
+    });
+
+    // Station highlight layer for snapped/active stations
+    // Inserted immediately after stations - labels added later render on top naturally
+    this.map.addLayer({
+      id: this.stationsHighlightLayerId,
+      type: 'circle',
+      source: this.sourceId + '-stations',
+      filter: ['==', ['get', 'sectionId'], -9999], // Filter to nothing initially
+      paint: {
+        'circle-radius': 7,
+        'circle-color': '#00ffcc',
+        'circle-stroke-width': 4,
+        'circle-stroke-color': '#00ffcc',
       },
     });
 
@@ -622,6 +638,102 @@ export default class SurveyLayer {
       'visibility',
       show ? 'visible' : 'none'
     );
+  }
+
+  // Control stations visibility (also hides merges and loop closures)
+  setShowStations(visible: boolean): void {
+    if (!this.map) return;
+    const visibility = visible ? 'visible' : 'none';
+    this.map.setLayoutProperty(this.stationsLayerId, 'visibility', visibility);
+    this.map.setLayoutProperty(this.mergesLayerId, 'visibility', visibility);
+    this.map.setLayoutProperty(this.loopClosuresLayerId, 'visibility', visibility);
+    this.map.setLayoutProperty(this.stationsHighlightLayerId, 'visibility', visibility);
+    // Clear hover state when hiding to prevent stuck hover state
+    if (!visible) {
+      this.clearStationHover();
+    }
+  }
+
+  // Control shots visibility
+  setShowShots(visible: boolean): void {
+    if (!this.map) return;
+    this.map.setLayoutProperty(this.shotsLayerId, 'visibility', visible ? 'visible' : 'none');
+    // Clear hover state when hiding to prevent stuck hover state
+    if (!visible) {
+      this.clearShotHover();
+    }
+  }
+
+  // Control virtual shots visibility via filter (while keeping regular shots visible)
+  setShowVirtualShots(visible: boolean): void {
+    if (!this.map) return;
+    if (visible) {
+      // Show all shots (clear filter)
+      this.map.setFilter(this.shotsLayerId, null);
+    } else {
+      // Hide virtual shots only
+      this.map.setFilter(this.shotsLayerId, ['!=', ['get', 'isVirtual'], true]);
+    }
+  }
+
+  // Set highlighted stations by their string IDs (format: "sectionId:stationIndex")
+  setHighlightedStations(stationIds: string[]): void {
+    if (!this.map) return;
+    // Build filter expression to match stations in the highlight set
+    // Uses compound expression matching the internal ID format used elsewhere (sectionId:stationIndex)
+    const idExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]];
+    if (stationIds.length > 0) {
+      this.map.setFilter(
+        this.stationsHighlightLayerId,
+        ['in', idExpr, ['literal', stationIds]] as unknown as maplibregl.FilterSpecification
+      );
+    } else {
+      // Filter to nothing when no stations highlighted
+      this.map.setFilter(this.stationsHighlightLayerId, ['==', ['get', 'sectionId'], -9999]);
+    }
+  }
+
+  // Clear station hover state
+  clearStationHover(): void {
+    this.hoveredStationId = null;
+    this.callbacks.onStationHover?.(null);
+    // Only clear feature hover if no shot is being hovered
+    if (!this.hoveredShotId) {
+      this.callbacks.onFeatureHover?.(false);
+    }
+    this.updateVisualState();
+  }
+
+  // Clear shot hover state
+  clearShotHover(): void {
+    this.hoveredShotId = null;
+    this.callbacks.onShotHover?.(null);
+    // Only clear feature hover if no station is being hovered
+    if (!this.hoveredStationId) {
+      this.callbacks.onFeatureHover?.(false);
+    }
+    this.updateVisualState();
+  }
+
+  // Clear snapped station state
+  clearSnappedStation(): void {
+    this.snappedStationId = null;
+    this.setHighlightedStations([]);
+    this.updateVisualState();
+  }
+
+  // Clear all interaction state (hover, selection, snap, highlights)
+  clearAllInteractionState(): void {
+    this.hoveredStationId = null;
+    this.hoveredShotId = null;
+    this.snappedStationId = null;
+    this.selectedStationId = null;
+    this.selectedShotId = null;
+    this.setHighlightedStations([]);
+    this.callbacks.onStationHover?.(null);
+    this.callbacks.onShotHover?.(null);
+    this.callbacks.onFeatureHover?.(false);
+    this.updateVisualState();
   }
 
   /**
@@ -992,6 +1104,9 @@ export default class SurveyLayer {
     }
     if (this.map.getLayer(this.stationsLayerId)) {
       this.map.removeLayer(this.stationsLayerId);
+    }
+    if (this.map.getLayer(this.stationsHighlightLayerId)) {
+      this.map.removeLayer(this.stationsHighlightLayerId);
     }
     if (this.map.getLayer(this.shotsLayerId)) {
       this.map.removeLayer(this.shotsLayerId);
