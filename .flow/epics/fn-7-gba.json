@@ -4,10 +4,10 @@
   "depends_on_epics": [],
   "id": "fn-7-gba",
   "next_task": 1,
-  "plan_review_status": "unknown",
-  "plan_reviewed_at": null,
+  "plan_review_status": "ship",
+  "plan_reviewed_at": "2026-01-20T15:01:46.924495Z",
   "spec_path": ".flow/specs/fn-7-gba.md",
   "status": "open",
   "title": "Bugfix: Back button causes app freeze with blank window",
-  "updated_at": "2026-01-20T14:55:49.963534Z"
+  "updated_at": "2026-01-20T15:01:46.924508Z"
 }

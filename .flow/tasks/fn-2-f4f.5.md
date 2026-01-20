@@ -108,9 +108,8 @@ No dependencies - can be done in parallel with other tasks.
 - [ ] Falls back to 1.0 if config not loaded
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Implemented keyboard shortcuts for zoom in (+/=) and zoom out (-) using configurable zoom_step from config.map, with proper handling for zoom limits, Ctrl/Cmd modifier preservation, and disabled MapLibre's built-in keyboard zoom to prevent conflicts.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 38687a8, 0ec94ecafe7d8da7c03999928c4729189c2d21d5
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:

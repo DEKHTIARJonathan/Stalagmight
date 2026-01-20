@@ -12,6 +12,105 @@ Import the helper:
 import { hasLiveStyle } from './mapUtils';
 ```
 
+Update destroy method - apply `hasLiveStyle()` to this manual teardown method (not just React cleanups):
+```typescript
+public destroy(): void {
+  // Guard against map being destroyed
+  if (!hasLiveStyle(this.map)) return;
+  
+  try {
+    // Remove event listeners first
+    this.map.off('mouseenter', this.stationsLayerId, this.onStationMouseEnter);
+    // ... other event listener removals
+    
+    // Remove layers and sources
+    if (this.map.getLayer(this.stationsLayerId)) {
+      this.map.removeLayer(this.stationsLayerId);
+    }
+    if (this.map.getLayer(this.shotsLayerId)) {
+      this.map.removeLayer(this.shotsLayerId);
+    }
+    if (this.map.getSource(this.sourceId)) {
+      this.map.removeSource(this.sourceId);
+    }
+  } catch {
+    // Map already destroyed, cleanup not needed
+  }
+}
+```
+
+### 2. Repo-wide search for cleanup patterns
+
+Run these searches to find any other cleanup code that needs guards:
+
+```bash
+# Find all map.getLayer calls
+rg "map\.getLayer\(" src/components/Map/ --type ts --type tsx
+
+# Find all map.getSource calls  
+rg "map\.getSource\(" src/components/Map/ --type ts --type tsx
+
+# Find all removeLayer/removeSource calls
+rg "(removeLayer|removeSource)" src/components/Map/ --type ts --type tsx
+
+# Look for cleanup effects with map operations
+rg "return \(\) =>" src/components/Map/ -A 10
+```
+
+### 3. Add rapid Back click guard (ref-based or store-level)
+
+**IMPORTANT**: Do NOT use `useState` - the component unmounts during close which causes "state update on unmounted component" warnings.
+
+Option A - Ref-based guard in `src/hooks/useProject.ts`:
+
+```typescript
+const isClosingRef = useRef(false);
+
+const handleCloseProject = useCallback(async () => {
+  // Prevent concurrent close operations using ref (survives unmount)
+  if (isClosingRef.current) return;
+  
+  if (isDirty) {
+    openUnsavedChangesDialog();
+    return;
+  }
+  
+  isClosingRef.current = true;
+  try {
+    await closeProject();
+    setView('global');
+  } finally {
+    isClosingRef.current = false;
+  }
+}, [isDirty, openUnsavedChangesDialog, closeProject, setView]);
+```
+
+Option B - Store-level guard in `src/store/projectStore.ts`:
+```typescript
+// Add to store state
+isClosing: false,
+
+// Guard in closeProject action
+```
+
+Also ensure the UnsavedChangesDialog respects this guard.
+
+### 4. Files to check
+
+- `src/components/Map/SurveyLayer.tsx` - `destroy()` method (manual teardown, not just React cleanup)
+- `src/components/Map/GridOverlay.tsx` - already fixed in task 1
+- `src/components/Map/MapCanvas.tsx` - verify cleanup order
+- `src/hooks/useProject.ts` - add isClosing ref guard
+- `src/components/Dialogs/UnsavedChangesDialog.tsx` - verify it respects closing state
+## Implementation
+
+### 1. Fix SurveyLayer.tsx `destroy()` method
+
+Import the helper:
+```typescript
+import { hasLiveStyle } from './mapUtils';
+```
+
 Update destroy method:
 ```typescript
 public destroy(): void {
@@ -145,8 +244,8 @@ if (map && map.style && map.getLayer(layerId)) {
 - [ ] SurveyLayer `destroy()` wraps map operations in try/catch
 - [ ] Repo-wide search completed for getLayer/getSource in cleanup code
 - [ ] All found instances either have guards or don't need them (documented why)
-- [ ] Rapid Back click guard implemented in useProject.ts
-- [ ] isClosing state prevents concurrent close operations
+- [ ] Rapid Back click guard implemented using useRef (NOT useState)
+- [ ] Guard prevents concurrent close operations without unmount warnings
 - [ ] UnsavedChangesDialog respects closing guard
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary

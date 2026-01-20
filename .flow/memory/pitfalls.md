@@ -27,3 +27,9 @@ When intercepting map clicks, attach capture handlers to canvas element not cont
 
 ## 2026-01-20 manual [pitfall]
 React mouse drag handlers should check e.buttons to prevent stuck state on focus loss - window blur may not fire mouseup
+
+## 2026-01-20 manual [pitfall]
+When adding keyboard shortcuts for map zoom, disable the map library's built-in keyboard handler to prevent double-zoom with conflicting step values
+
+## 2026-01-20 manual [pitfall]
+Playwright tests must waitForFunction(__cavechef_map__) after canvas appears to avoid false positives from uninitialized map state

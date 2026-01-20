@@ -4,6 +4,38 @@
  */
 
 /**
+ * Get the current map zoom level.
+ * @returns The current zoom level, or null if map is not available.
+ */
+export async function getMapZoom(): Promise<number | null> {
+  return browser.execute(() => {
+    const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number } }).__cavechef_map__;
+    return map?.getZoom() ?? null;
+  });
+}
+
+/**
+ * Wait for the MapLibre map to be fully ready (loaded and zoom available).
+ * Call this after creating a project to ensure map interactions work reliably.
+ */
+export async function waitForMapReady(): Promise<void> {
+  await browser.waitUntil(
+    async () => {
+      const mapReady = await browser.execute(() => {
+        const map = (window as unknown as { __cavechef_map__?: { loaded: () => boolean; getZoom: () => number } }).__cavechef_map__;
+        return map && map.loaded() && typeof map.getZoom() === 'number';
+      });
+      return mapReady;
+    },
+    {
+      timeout: 10000,
+      timeoutMsg: 'Map did not become ready within 10 seconds',
+      interval: 100,
+    }
+  );
+}
+
+/**
  * Reset the application state - close any open dialogs and return to global view.
  * Call this in beforeEach to ensure clean test state.
  */

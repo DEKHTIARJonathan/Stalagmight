@@ -356,9 +356,39 @@ export async function dragMap(page: Page, options: {start: {x: number, y: number
 - [ ] Test: spring-loaded Z tap keeps zoom tool
 - [ ] pnpm test:ui passes
 ## Done summary
-TBD
+## Summary
 
+Added comprehensive Playwright tests for the zoom tool at `e2e-playwright/zoom-tool.spec.ts`. The test file covers:
+
+### Click Zoom Tests
+- Left-click zooms in
+- Right-click zooms out
+- Right-click does not show context menu
+- Click at max zoom (22) is ignored (no recenter)
+- Right-click at min zoom (1) is ignored (no recenter)
+
+### Box Zoom Tests
+- Drag draws rectangle overlay with `[data-testid="zoom-box-overlay"]`
+- Escape cancels box zoom
+- Small drag (<10px) treated as click
+- Ctrl+drag pans instead of box zoom
+
+### Spring-Loaded Z Key Tests
+- Hold Z >200ms activates zoom, release restores previous tool
+- Tap Z (<200ms) keeps zoom tool active
+- Previous tool state (e.g., merge mode) preserved after spring-loaded Z
+
+### Cursor Tests
+- Shows zoom-in cursor when zoom tool is active
+- Cursor stays zoom-in when hovering (doesn't switch to pointer)
+
+### Keyboard Shortcuts Tests
+- `=` key zooms in by config step
+- `-` key zooms out by config step
+- Keyboard zoom works regardless of active tool
+
+All 17 new tests pass, plus 4 existing zoom tests in other files. Full test suite: 248 passed.
 ## Evidence
 - Commits:
-- Tests:
+- Tests: {'file': 'e2e-playwright/zoom-tool.spec.ts', 'result': '17 tests passed'}
 - PRs:
