@@ -1,8 +1,12 @@
 # fn-5-jef.6 Add color mode dropdown to export dialog
 
 ## Description
-Add color mode dropdown to the export dialog.
+**DEFERRED TO SEPARATE EPIC**
 
+This task requires architectural decisions about export system (backend SVG/PDF vs frontend capture).
+See epic spec "Future Work" section.
+
+Original requirement: Add color mode dropdown to export dialog
 ## Export Dialog Location
 Find the existing export dialog/modal component and add a color mode selector.
 
@@ -36,12 +40,7 @@ When exporting:
 - PDF/SVG export should also respect this if applicable
 - Don't persist the export color mode preference - always reset to 'section'
 ## Acceptance
-- [ ] Color mode dropdown added to export dialog
-- [ ] Options: "Section Colors" and "Depth Gradient"
-- [ ] Default selection: Section Colors
-- [ ] Export respects selected color mode
-- [ ] Original display setting restored after export
-- [ ] `pnpm tsc --noEmit` passes
+- [ ] DEFERRED - see epic "Future Work" section
 ## Done summary
 TBD
 

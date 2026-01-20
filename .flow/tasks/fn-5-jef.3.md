@@ -1,8 +1,138 @@
 # fn-5-jef.3 Implement depth-based coloring in SurveyLayer.update()
 
 ## Description
-Implement depth-based coloring logic in `SurveyLayer.update()`.
+Implement depth-based coloring in `SurveyLayer.update()` for stations, shots, and ALL labels.
 
+## File: `src/components/Map/SurveyLayer.tsx`
+
+### Station Feature Building (L770-790)
+Use null-coalescing for fallback:
+```typescript
+const stationDepth = station.coordinates.z;
+const depthColor = showDepthGradient 
+  ? getDepthColor(stationDepth, '#00bfff', '#ff4444', depthRange.min, depthRange.max)
+  : null;
+const color = depthColor ?? (section?.color ?? '#ffffff');
+```
+
+### Shot Feature Building (L723-740)
+Same pattern:
+```typescript
+const fromDepth = fromStation.coordinates.z;
+const toDepth = toStation.coordinates.z;
+const avgDepth = (fromDepth + toDepth) / 2;
+const depthColor = showDepthGradient
+  ? getDepthColor(avgDepth, '#00bfff', '#ff4444', depthRange.min, depthRange.max)
+  : null;
+const color = depthColor ?? section.color;
+```
+
+### Station Labels (initializeLayers + update)
+**In initializeLayers() L372 - Change paint:**
+```typescript
+paint: {
+  'text-color': ['get', 'color'],  // Was hardcoded '#ffffff'
+  'text-halo-color': '#000000',
+  'text-halo-width': 2,  // Increase from 1.5 for depth color readability
+  ...
+}
+```
+
+**In update() - Add color to station label features:**
+```typescript
+const labelDepthColor = showDepthGradient
+  ? getDepthColor(station.coordinates.z, '#00bfff', '#ff4444', depthRange.min, depthRange.max)
+  : null;
+const labelColor = labelDepthColor ?? '#ffffff';
+
+// Station label feature properties:
+color: labelColor,
+```
+
+### Shot Data Labels - ALSO NEEDS UPDATE
+**In initializeLayers() - Shot labels paint (survey-shot-labels):**
+```typescript
+paint: {
+  'text-color': ['get', 'color'],  // Was hardcoded '#ffffff'
+  'text-halo-color': '#000000',
+  'text-halo-width': 2,
+  ...
+}
+```
+
+**In update() - Add color to shot label features:**
+```typescript
+const shotLabelDepthColor = showDepthGradient
+  ? getDepthColor(avgDepth, '#00bfff', '#ff4444', depthRange.min, depthRange.max)
+  : null;
+const shotLabelColor = shotLabelDepthColor ?? '#ffffff';
+
+// Shot label feature properties:
+color: shotLabelColor,
+```
+
+### Imports
+Add at top of file:
+```typescript
+import { getDepthColor } from '@/utils/colors';
+```
+
+### Unchanged Elements
+- Loop closures (L223-235): Keep error-severity coloring - separate source
+- Merges (L193-221): Keep distinct styling
+- Ghost previews: Keep ghost styling
+## File: `src/components/Map/SurveyLayer.tsx`
+
+### Station Feature Building (L770-790)
+```typescript
+const stationDepth = station.coordinates.z;
+const depthColor = showDepthGradient 
+  ? getDepthColor(stationDepth, '#00bfff', '#ff4444', depthRange.min, depthRange.max)
+  : null;
+const color = depthColor ?? (section?.color ?? '#ffffff');
+```
+
+### Shot Feature Building (L723-740)
+```typescript
+const fromDepth = fromStation.coordinates.z;
+const toDepth = toStation.coordinates.z;
+const avgDepth = (fromDepth + toDepth) / 2;
+const depthColor = showDepthGradient
+  ? getDepthColor(avgDepth, '#00bfff', '#ff4444', depthRange.min, depthRange.max)
+  : null;
+const color = depthColor ?? section.color;
+```
+
+### Station Labels (initializeLayers + update)
+**In initializeLayers() L372 - Change paint:**
+```typescript
+paint: {
+  'text-color': ['get', 'color'],  // Was hardcoded '#ffffff'
+  'text-halo-color': '#000000',
+  'text-halo-width': 2,  // Increase from 1.5 for depth color readability
+  ...
+}
+```
+
+**In update() - Add color to station label features:**
+```typescript
+// Station label feature properties
+color: showDepthGradient ? (depthColor ?? '#ffffff') : '#ffffff',
+```
+
+### Shot Data Labels
+Same pattern as station labels - add `color` property and use `['get', 'color']` in paint.
+
+### Imports
+Add at top of file:
+```typescript
+import { getDepthColor } from '@/utils/colors';
+```
+
+### Unchanged Elements
+- Loop closures (L223-235): Keep error-severity coloring - separate source
+- Merges (L193-221): Keep distinct styling
+- Ghost previews: Keep ghost styling
 ## File: `src/components/Map/SurveyLayer.tsx`
 
 ### Station Feature Building (L770-790)
@@ -101,14 +231,15 @@ Apply depth color to shot azimuth/length/depth labels when enabled.
 - Virtual shots use same depth coloring as regular shots
 - z=0 is treated as surface level (shallowest color)
 ## Acceptance
-- [ ] Stations colored by depth when `showDepthGradient` enabled
-- [ ] Shots colored by average depth of endpoints when enabled
-- [ ] Station labels colored by depth when enabled  
-- [ ] Shot data labels colored by depth when enabled
+- [ ] Stations use `depthColor ?? sectionColor` pattern (not direct assignment)
+- [ ] Shots use `depthColor ?? sectionColor` pattern
+- [ ] Station labels layer paint uses `['get', 'color']`
+- [ ] Station label features have `color` property with null fallback
+- [ ] Shot labels layer paint uses `['get', 'color']`
+- [ ] Shot label features have `color` property with null fallback
+- [ ] Text halo width increased to 2 for readability
 - [ ] Virtual shots use depth coloring (same code path)
-- [ ] Loop closures keep error-severity colors unchanged
-- [ ] Merges keep distinct styling unchanged
-- [ ] NaN depth values fall back to section color
+- [ ] Loop closures and merges unchanged
 - [ ] `getDepthColor` imported from `@/utils/colors`
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary

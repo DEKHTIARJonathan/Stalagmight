@@ -238,6 +238,7 @@ interface UIStore {
   springLoadedState: SpringLoadedState | null;
   activateSpringLoaded: (targetTool: ToolType) => void;
   deactivateSpringLoaded: () => void;
+  cancelSpringLoaded: () => void;
 }
 
 export type DisplayToggleKey =
@@ -595,5 +596,21 @@ export const useUIStore = create<UIStore>((set) => ({
         // Tap - keep new tool, just clear spring state
         return { springLoadedState: null };
       }
+    }),
+
+  cancelSpringLoaded: () =>
+    set((state) => {
+      if (!state.springLoadedState) return state;
+
+      // Force restore previous tool and state (used on blur/unmount to prevent stuck state)
+      // Skip threshold check - always restore when canceling
+      return {
+        activeTool: state.springLoadedState.previousTool,
+        mergeStationA: state.springLoadedState.mergeStationA,
+        measureStart: state.springLoadedState.measureStart,
+        measureEnd: state.springLoadedState.measureEnd,
+        drawFromStation: state.springLoadedState.drawFromStation,
+        springLoadedState: null,
+      };
     }),
 }));

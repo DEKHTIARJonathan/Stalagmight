@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
@@ -13,10 +13,10 @@ interface ShortcutConfig {
   [key: string]: ToolType | 'undo' | 'redo' | 'save' | 'toggle_sections' | 'toggle_detail' | 'toggle_data';
 }
 
+// Note: Spring-loaded shortcuts (z) are NOT in DEFAULT_SHORTCUTS to avoid duplication
 const DEFAULT_SHORTCUTS: ShortcutConfig = {
   s: 'select',
   p: 'pan',
-  z: 'zoom',
   d: 'draw',
   x: 'delete',
   m: 'merge',
@@ -44,9 +44,6 @@ export function useKeyboardShortcuts() {
   } = useUIStore();
   const { undo, redo, saveProject, project, stations, importDmp } = useProjectStore();
   const { setImportContext, hasImportedDmpPath, addImportedDmpPath } = useUIStore();
-
-  // Track which spring-loaded keys are currently held
-  const springLoadedKeysHeld = useRef<Set<string>>(new Set());
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
@@ -235,7 +232,6 @@ export function useKeyboardShortcuts() {
         // Don't activate if already in target tool or already spring-loaded
         if (activeTool === springLoadedTool || springLoadedState) return;
 
-        springLoadedKeysHeld.current.add(key);
         activateSpringLoaded(springLoadedTool);
         return;
       }
@@ -243,8 +239,6 @@ export function useKeyboardShortcuts() {
       // Handle tool shortcuts (non-spring-loaded)
       const toolShortcut = DEFAULT_SHORTCUTS[key];
       if (toolShortcut && typeof toolShortcut === 'string' && toolShortcut !== 'undo' && toolShortcut !== 'redo' && toolShortcut !== 'save') {
-        // Skip if this is a spring-loaded shortcut (already handled above)
-        if (SPRING_LOADED_SHORTCUTS[key]) return;
         setActiveTool(toolShortcut as ToolType);
       }
     },
@@ -259,13 +253,14 @@ export function useKeyboardShortcuts() {
   }, [handleKeyDown]);
 
   // Keyup handler for spring-loaded shortcuts
+  // Unconditionally deactivate when a spring-loaded key is released
   useEffect(() => {
     const handleKeyUp = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
 
-      // Check if this is a spring-loaded key that was held
-      if (SPRING_LOADED_SHORTCUTS[key] && springLoadedKeysHeld.current.has(key)) {
-        springLoadedKeysHeld.current.delete(key);
+      // If this is a spring-loaded key, unconditionally deactivate
+      // This handles both normal key release and stuck state recovery
+      if (SPRING_LOADED_SHORTCUTS[key]) {
         deactivateSpringLoaded();
       }
     };
@@ -275,18 +270,28 @@ export function useKeyboardShortcuts() {
   }, [deactivateSpringLoaded]);
 
   // Blur handler for stuck spring-loaded keys (e.g., Alt+Tab while Z held)
+  // Uses cancelSpringLoaded to force restore (ignores tap threshold)
   useEffect(() => {
     const handleBlur = () => {
-      // Clear all held spring-loaded keys
-      springLoadedKeysHeld.current.clear();
-      // Deactivate spring-loaded state if active
+      // Force cancel spring-loaded state if active (always restore on blur)
       const state = useUIStore.getState();
       if (state.springLoadedState) {
-        state.deactivateSpringLoaded();
+        state.cancelSpringLoaded();
       }
     };
 
     window.addEventListener('blur', handleBlur);
     return () => window.removeEventListener('blur', handleBlur);
   }, []); // No dependencies - uses getState() for latest state
+
+  // Unmount cleanup to prevent stuck spring-loaded state
+  useEffect(() => {
+    return () => {
+      // On unmount, cancel any active spring-loaded state
+      const state = useUIStore.getState();
+      if (state.springLoadedState) {
+        state.cancelSpringLoaded();
+      }
+    };
+  }, []);
 }

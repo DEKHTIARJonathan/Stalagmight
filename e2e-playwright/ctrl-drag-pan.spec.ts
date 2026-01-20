@@ -127,7 +127,8 @@ test.describe('Ctrl+Drag Panning', () => {
 
   // Zoom mode supports Ctrl+drag panning (shows grab cursor when Ctrl is held)
   test('should show grab cursor with Ctrl in zoom mode for panning', async ({ page }) => {
-    // Switch to zoom tool
+    // Switch to zoom tool using tap (press is instant, well under 200ms threshold)
+    // This uses spring-loaded tap behavior: quick press keeps zoom tool active
     await page.keyboard.press('z');
     await page.waitForTimeout(50);
 
