@@ -319,6 +319,7 @@ async function getShotScreenCoords(page, sectionId, shotId) {
 - [ ] Test: shot click detection uses hitArea
 - [ ] Test: overlapping hitboxes select nearest to click
 - [ ] Test: debug.map.showHitboxes changes layer opacity
+- [ ] Test: layer order verification - station-hitbox above shot-hitbox via `map.getStyle().layers`
 - [ ] All tests use mock config with known hitArea values (from task 9)
 - [ ] `pnpm test:ui` runs the new tests (not skipped)
 - [ ] All new tests pass

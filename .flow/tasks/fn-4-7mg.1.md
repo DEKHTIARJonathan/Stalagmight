@@ -542,7 +542,7 @@ Add validation for bounds:
 - [ ] Every nested struct has `#[derive(Default)]`
 - [ ] f64 for all size fields with float defaults
 - [ ] `Config::normalize()` implemented with is_finite() checks, clamp, hit_area >= radius/width
-- [ ] `Config::normalize()` called from: `Config::load()`, `Config::save()`, `commands::config::update_config()`
+- [ ] `Config::normalize()` called ONLY from: `Config::load()` and `Config::save()` (not elsewhere to avoid double-normalization)
 - [ ] TypeScript uses snake_case matching Rust
 - [ ] All migration checklist items completed
 - [ ] `cargo test` passes
