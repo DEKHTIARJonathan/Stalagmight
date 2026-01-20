@@ -246,8 +246,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }> = [];
 
             if (currentProject?.sections) {
+              let sectionOffset = 0;
               for (const section of currentProject.sections as Array<{ id: number; shots: unknown[] }>) {
                 // Each section gets (shots.length + 1) stations
+                // Spread stations 50 units apart (5x hitArea) to ensure clear boundaries
+                // Different sections offset vertically for isolation
                 const shotCount = section.shots?.length ?? 0;
                 for (let i = 0; i <= shotCount; i++) {
                   mockStations.push({
@@ -255,13 +258,31 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                       section_id: section.id,
                       station_index: i,
                     },
-                    coordinates: { x: i * 10, y: 0, z: 0 },
+                    coordinates: { x: i * 50, y: sectionOffset * 100, z: 0 },
                     is_zero_datum: i === 0,
                     gps_coordinates: null,
                     merged_with: [],
                   });
                 }
+                sectionOffset++;
               }
+
+              // Add a pair of overlapping stations for hitbox overlap testing
+              // These are 15 units apart (< 2*hitArea=20), placed at y=-200 to isolate them
+              mockStations.push({
+                station_ref: { section_id: 999, station_index: 0 },
+                coordinates: { x: 0, y: -200, z: 0 },
+                is_zero_datum: false,
+                gps_coordinates: null,
+                merged_with: [],
+              });
+              mockStations.push({
+                station_ref: { section_id: 999, station_index: 1 },
+                coordinates: { x: 15, y: -200, z: 0 },
+                is_zero_datum: false,
+                gps_coordinates: null,
+                merged_with: [],
+              });
             }
 
             return {

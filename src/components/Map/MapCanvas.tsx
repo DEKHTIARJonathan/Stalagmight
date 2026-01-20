@@ -56,7 +56,7 @@ export default function MapCanvas() {
   // Current map scale in pixels per meter (for to-scale placement preview)
   const [pixelsPerMeter, setPixelsPerMeter] = useState(1);
 
-  const { project, stations, config, moveSection, moveStation } = useProjectStore();
+  const { project, stations, stats, config, moveSection, moveStation } = useProjectStore();
 
   // Get GPS origin for coordinate transforms (enables satellite tile alignment)
   const gpsOrigin = config?.map.satellite_gps_origin ?? null;
@@ -79,6 +79,7 @@ export default function MapCanvas() {
     showStations,
     showShots,
     showVirtualShots,
+    showDepthGradient,
     selection,
     mergeStationA,
     mergeStationB,
@@ -605,9 +606,17 @@ export default function MapCanvas() {
   // Update survey layer when data changes or map loads
   useEffect(() => {
     if (surveyLayerRef.current && project) {
-      surveyLayerRef.current.update(project.sections, stations, project.station_merges, project.loop_closures, gpsOrigin);
+      surveyLayerRef.current.update(
+        project.sections,
+        stations,
+        project.station_merges,
+        project.loop_closures,
+        gpsOrigin,
+        showDepthGradient,
+        { min: stats?.min_depth ?? 0, max: stats?.max_depth ?? 50 }
+      );
     }
-  }, [project, stations, mapLoaded, gpsOrigin]);
+  }, [project, stations, mapLoaded, gpsOrigin, showDepthGradient, stats?.min_depth, stats?.max_depth]);
 
   // Update callbacks when they change
   useEffect(() => {
