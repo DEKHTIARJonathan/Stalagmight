@@ -1899,11 +1899,25 @@ impl AppState {
 
     /// Reload config from disk without saving
     /// Returns the newly loaded config
+    /// Also syncs config-derived state (recent_projects, undo_stack limit)
     pub fn reload_config(&self) -> Result<Config> {
         let new_config = Config::load()?;
+
+        // Update the config
         if let Ok(mut cfg) = self.config.lock() {
             *cfg = new_config.clone();
         }
+
+        // Sync recent_projects from config
+        if let Ok(mut recent) = self.recent_projects.lock() {
+            *recent = new_config.general.recent_projects.clone();
+        }
+
+        // Sync undo_stack history limit from config
+        if let Ok(mut undo) = self.undo_stack.lock() {
+            undo.set_history_limit(new_config.general.undo_history_limit);
+        }
+
         Ok(new_config)
     }
 

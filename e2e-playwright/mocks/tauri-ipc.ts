@@ -755,6 +755,122 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               },
             };
 
+          case 'reload_config':
+            // Return the same mock config as get_config
+            // In real app, this would reload from disk
+            return {
+              general: {
+                auto_save: true,
+                auto_save_interval_seconds: 30,
+                recent_projects_max: 20,
+                undo_history_limit: 100,
+                undo_persist_limit: 20,
+              },
+              units: {
+                length: 'meters',
+                depth: 'meters',
+                angle: 'degrees',
+                decimal_precision: 1,
+              },
+              display: {
+                default_background: '#1a1a2e',
+                grid_color: '#333366',
+                grid_spacing: 10,
+                font_size: 12,
+                font_color: '#f5f5f5',
+                depth_gradient: {
+                  enabled: false,
+                  shallow_color: '#00bfff',
+                  deep_color: '#ff4444',
+                  shallow_depth: 0.0,
+                  deep_depth: 50.0,
+                },
+              },
+              section_colors: {
+                palette: ['#4ecdc4', '#ff6b6b', '#95e1d3', '#f38181', '#aa96da', '#fcbad3', '#a8d8ea', '#ffcb77'],
+              },
+              map: {
+                satellite_provider: 'esri',
+                satellite_enabled: false,
+                satellite_gps_origin: {
+                  latitude: 24.55,
+                  longitude: -81.78,
+                },
+                zoom_default: 15,
+                zoom_min: 1,
+                zoom_max: 22,
+                zoom_step: 1.0,
+                controls: {
+                  pan_speed: 1.0,
+                  zoom_speed: 1.0,
+                  invert_scroll: false,
+                },
+                station: {
+                  radius: 4.0,
+                  hit_area: 10.0,
+                },
+                shot: {
+                  width: 2.0,
+                  hit_area: 8.0,
+                },
+                snap: {
+                  threshold: 10.0,
+                  enabled_draw: true,
+                  enabled_merge: true,
+                  enabled_measure: true,
+                },
+              },
+              validation: {
+                warn_shot_length_min: 0.1,
+                warn_shot_length_max: 50.0,
+                warn_depth_change_per_shot_max: 10.0,
+                warn_azimuth_deviation_max: 30.0,
+                azimuth_diff_threshold: 10.0,
+                pitch_diff_threshold: 5.0,
+              },
+              export: {
+                default_image_format: 'png',
+                default_dpi: 300,
+                default_include_satellite: true,
+                default_include_grid: false,
+                default_include_labels: true,
+              },
+              logging: {
+                level: 'info',
+                max_directory_size_mb: 128,
+              },
+              shortcuts: {
+                select: 'S',
+                pan: 'P',
+                zoom: 'Z',
+                draw: 'D',
+                delete: 'X',
+                merge: 'M',
+                measure: 'R',
+                move_section: 'V',
+                move_station: 'T',
+                undo: 'Ctrl+Z',
+                redo: 'Ctrl+Y',
+                save: 'Ctrl+S',
+              },
+              panels: {
+                sections_panel_width: 250,
+                detail_panel_width: 300,
+                data_table_height: 200,
+              },
+              cache: {
+                tile_cache_enabled: true,
+                tile_cache_max_mb: 500,
+                tile_ttl_days: 30,
+              },
+              debug: {
+                map: {
+                  show_hitboxes: false,
+                  log_hit_detection: false,
+                },
+              },
+            };
+
           case 'get_recent_projects':
           case 'list_recent_projects':
             return [
