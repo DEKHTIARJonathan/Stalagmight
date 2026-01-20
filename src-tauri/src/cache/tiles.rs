@@ -130,8 +130,7 @@ impl TileCache {
     /// Returns `None` if the tile is not cached or has expired (TTL exceeded).
     /// Updates the `accessed_at` timestamp on cache hit.
     ///
-    /// Note: Returns `None` on DB errors (logged at warn level). Use `has_fresh_tile`
-    /// for explicit existence checks that don't mask errors.
+    /// Note: Returns `None` on DB errors (logged at warn level).
     pub fn get(&mut self, provider: &str, z: u32, y: u32, x: u32) -> Option<TileEntry> {
         let now = Self::now();
         // A tile is fresh if it was fetched within the last ttl_seconds
@@ -201,7 +200,15 @@ impl TileCache {
             );
         }
 
-        // Check if we're replacing an existing tile (to account for size delta)
+        // First, clear expired tiles to free space before checking existing size
+        // This ensures we don't count an expired tile that's about to be deleted
+        let min_fetched_at = now - self.ttl_seconds;
+        self.conn.execute(
+            "DELETE FROM tiles WHERE fetched_at <= ?1",
+            params![min_fetched_at],
+        )?;
+
+        // Check if we're replacing an existing (non-expired) tile
         let existing_size: i64 = match self.conn.query_row(
             "SELECT size_bytes FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4",
             params![provider, z, y, x],
@@ -209,30 +216,11 @@ impl TileCache {
         ) {
             Ok(size) => size,
             Err(rusqlite::Error::QueryReturnedNoRows) => 0,
-            Err(e) => {
-                // Log but don't fail - assume no existing tile
-                tracing::warn!(
-                    provider,
-                    z,
-                    y,
-                    x,
-                    error = %e,
-                    "Database error checking existing tile size"
-                );
-                0
-            }
+            Err(e) => return Err(e.into()), // Propagate actual DB errors
         };
 
         // Calculate space needed (new size minus existing size we're replacing)
         let space_needed = new_size.saturating_sub(existing_size as u64);
-
-        // First, clear expired tiles to free space before LRU eviction
-        // This ensures we don't evict fresh tiles while stale ones consume space
-        let min_fetched_at = now - self.ttl_seconds;
-        self.conn.execute(
-            "DELETE FROM tiles WHERE fetched_at <= ?1",
-            params![min_fetched_at],
-        )?;
 
         // Evict LRU tiles until we have space
         let mut stats = self.get_stats();
@@ -280,9 +268,6 @@ impl TileCache {
     /// Evict least-recently-used tiles until cache is under the size limit.
     /// Also removes any expired tiles (TTL exceeded).
     ///
-    /// When eviction is needed, this method evicts down to 80% of max capacity
-    /// (hysteresis) to avoid repeated eviction on subsequent puts.
-    ///
     /// Returns the number of bytes freed.
     pub fn evict_lru(&mut self) -> Result<u64> {
         let mut freed_bytes: u64 = 0;
@@ -306,10 +291,9 @@ impl TileCache {
         freed_bytes += expired_bytes as u64;
 
         // Then, if still over capacity, delete LRU tiles using batch approach
-        // Evict to 80% capacity (hysteresis) to reduce eviction frequency
         let stats = self.get_stats();
         if stats.total_bytes > self.max_bytes {
-            let target_bytes = self.max_bytes * 80 / 100;
+            let target_bytes = self.max_bytes; // Evict until under limit
 
             // Batch select tiles to evict (more efficient than repeated queries)
             let mut to_delete: Vec<(i64, i64)> = Vec::new();
@@ -395,41 +379,61 @@ impl TileCache {
     }
 
     /// Check if a tile exists and is fresh (not expired).
+    ///
+    /// Returns `false` on DB errors (logs at warn level).
     pub fn has_fresh_tile(&self, provider: &str, z: u32, y: u32, x: u32) -> bool {
         let now = Self::now();
         let min_fetched_at = now - self.ttl_seconds;
 
-        let count: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM tiles
-                 WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
-                   AND fetched_at > ?5",
-                params![provider, z, y, x, min_fetched_at],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-
-        count > 0
+        match self.conn.query_row(
+            "SELECT COUNT(*) FROM tiles
+             WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
+               AND fetched_at > ?5",
+            params![provider, z, y, x, min_fetched_at],
+            |row| row.get::<_, i64>(0),
+        ) {
+            Ok(count) => count > 0,
+            Err(e) => {
+                tracing::warn!(
+                    provider,
+                    z,
+                    y,
+                    x,
+                    error = %e,
+                    "Database error checking fresh tile"
+                );
+                false
+            }
+        }
     }
 
     /// Check if a tile exists but is stale (expired TTL).
+    ///
+    /// Returns `false` on DB errors (logs at warn level).
     pub fn has_stale_tile(&self, provider: &str, z: u32, y: u32, x: u32) -> bool {
         let now = Self::now();
         let min_fetched_at = now - self.ttl_seconds;
 
-        let count: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM tiles
-                 WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
-                   AND fetched_at <= ?5",
-                params![provider, z, y, x, min_fetched_at],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-
-        count > 0
+        match self.conn.query_row(
+            "SELECT COUNT(*) FROM tiles
+             WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
+               AND fetched_at <= ?5",
+            params![provider, z, y, x, min_fetched_at],
+            |row| row.get::<_, i64>(0),
+        ) {
+            Ok(count) => count > 0,
+            Err(e) => {
+                tracing::warn!(
+                    provider,
+                    z,
+                    y,
+                    x,
+                    error = %e,
+                    "Database error checking stale tile"
+                );
+                false
+            }
+        }
     }
 }
 
@@ -908,12 +912,16 @@ mod tests {
         set_accessed_at(&cache, "esri", 1, 0, 1, same_time);
         set_accessed_at(&cache, "esri", 1, 0, 2, same_time);
 
-        // Force eviction - should evict to 80% = 400 bytes
+        // Force eviction - should evict to under max_bytes (500)
         cache.evict_lru().unwrap();
 
         let stats = cache.get_stats();
-        // Should have evicted at least one tile (to 80% = 400 bytes)
-        assert!(stats.total_bytes <= 400, "Cache should be at 80% after eviction, got {} bytes", stats.total_bytes);
+        // Should have evicted at least one tile to get under 500 bytes
+        assert!(
+            stats.total_bytes <= cache.max_bytes,
+            "Cache should be under limit after eviction, got {} bytes",
+            stats.total_bytes
+        );
 
         // With deterministic tie-breaking (by id), lower id tiles should be evicted first
         // Tile at (1,0,0) has lowest id, should be evicted first
