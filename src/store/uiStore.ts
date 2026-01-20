@@ -323,10 +323,18 @@ export const useUIStore = create<UIStore>((set) => ({
       };
     }),
   filterSelection: (predicate) =>
-    set((state) => ({
-      selection: state.selection && predicate(state.selection) ? state.selection : null,
-      multiSelection: state.multiSelection.filter(predicate),
-    })),
+    set((state) => {
+      const filteredMulti = state.multiSelection.filter(predicate);
+      // If current selection fails predicate, update to last remaining item
+      const newSelection =
+        state.selection && predicate(state.selection)
+          ? state.selection
+          : (filteredMulti[filteredMulti.length - 1] ?? null);
+      return {
+        selection: newSelection,
+        multiSelection: filteredMulti,
+      };
+    }),
   selectAll: (selections: Selection[]) =>
     set({
       multiSelection: selections,
