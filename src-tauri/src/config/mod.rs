@@ -17,24 +17,156 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub shortcuts: ShortcutsConfig,
     #[serde(default)]
-    pub snap: SnapConfig,
-    #[serde(default)]
     pub panels: PanelsConfig,
     #[serde(default)]
     pub cache: CacheConfig,
+    #[serde(default)]
+    pub debug: DebugConfig,
+}
+
+/// Station visual and interaction configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StationConfig {
+    /// Visual radius in pixels (1.0-50.0)
+    #[serde(default = "default_station_radius")]
+    pub radius: f64,
+    /// Clickable area radius in pixels (1.0-50.0, >= radius)
+    #[serde(default = "default_station_hit_area")]
+    pub hit_area: f64,
+}
+
+impl StationConfig {
+    pub fn normalize(&mut self) {
+        if !self.radius.is_finite() {
+            self.radius = default_station_radius();
+        }
+        if !self.hit_area.is_finite() {
+            self.hit_area = default_station_hit_area();
+        }
+        self.radius = self.radius.clamp(1.0, 50.0);
+        self.hit_area = self.hit_area.clamp(1.0, 50.0).max(self.radius);
+    }
+}
+
+impl Default for StationConfig {
+    fn default() -> Self {
+        Self {
+            radius: default_station_radius(),
+            hit_area: default_station_hit_area(),
+        }
+    }
+}
+
+fn default_station_radius() -> f64 {
+    4.0
+}
+
+fn default_station_hit_area() -> f64 {
+    10.0
+}
+
+/// Shot visual and interaction configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShotConfig {
+    /// Visual line width in pixels (0.5-20.0)
+    #[serde(default = "default_shot_width")]
+    pub width: f64,
+    /// Clickable area width in pixels (0.5-20.0, >= width)
+    #[serde(default = "default_shot_hit_area")]
+    pub hit_area: f64,
+}
+
+impl ShotConfig {
+    pub fn normalize(&mut self) {
+        if !self.width.is_finite() {
+            self.width = default_shot_width();
+        }
+        if !self.hit_area.is_finite() {
+            self.hit_area = default_shot_hit_area();
+        }
+        self.width = self.width.clamp(0.5, 20.0);
+        self.hit_area = self.hit_area.clamp(0.5, 20.0).max(self.width);
+    }
+}
+
+impl Default for ShotConfig {
+    fn default() -> Self {
+        Self {
+            width: default_shot_width(),
+            hit_area: default_shot_hit_area(),
+        }
+    }
+}
+
+fn default_shot_width() -> f64 {
+    2.0
+}
+
+fn default_shot_hit_area() -> f64 {
+    8.0
 }
 
 /// Snap-to-station configuration for precision tools
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnapConfig {
+pub struct MapSnapConfig {
+    /// Snap threshold in pixels (1.0-50.0)
+    #[serde(default = "default_snap_threshold")]
+    pub threshold: f64,
     /// Enable snap for draw tool
+    #[serde(default = "default_true")]
     pub enabled_draw: bool,
     /// Enable snap for merge tool
+    #[serde(default = "default_true")]
     pub enabled_merge: bool,
     /// Enable snap for measure tool
+    #[serde(default = "default_true")]
     pub enabled_measure: bool,
-    /// Snap threshold in pixels
-    pub threshold_pixels: u32,
+}
+
+impl MapSnapConfig {
+    pub fn normalize(&mut self) {
+        if !self.threshold.is_finite() {
+            self.threshold = default_snap_threshold();
+        }
+        self.threshold = self.threshold.clamp(1.0, 50.0);
+    }
+}
+
+impl Default for MapSnapConfig {
+    fn default() -> Self {
+        Self {
+            threshold: default_snap_threshold(),
+            enabled_draw: true,
+            enabled_merge: true,
+            enabled_measure: true,
+        }
+    }
+}
+
+fn default_snap_threshold() -> f64 {
+    10.0
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Debug configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DebugConfig {
+    #[serde(default)]
+    pub map: MapDebugConfig,
+}
+
+/// Map-specific debug options
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MapDebugConfig {
+    /// Show hitbox visualization for debugging
+    #[serde(default)]
+    pub show_hitboxes: bool,
+    /// Log hit detection events to console
+    #[serde(default)]
+    pub log_hit_detection: bool,
 }
 
 /// Panel sizes configuration (persisted across sessions)
@@ -126,8 +258,6 @@ pub struct DisplayConfig {
     /// Grid spacing in meters (e.g., 1, 5, 10, 25, 50)
     #[serde(default = "default_grid_spacing")]
     pub grid_spacing: f64,
-    pub station_size: u32,
-    pub line_thickness: u32,
     pub font_size: u32,
     pub font_color: String,
     pub depth_gradient: DepthGradientConfig,
@@ -172,7 +302,6 @@ pub struct MapConfig {
     /// GPS origin for satellite tile alignment
     #[serde(default = "default_satellite_gps_origin")]
     pub satellite_gps_origin: GpsOrigin,
-    pub snap_threshold_pixels: u32,
     pub zoom_default: u32,
     pub zoom_min: u32,
     pub zoom_max: u32,
@@ -180,17 +309,29 @@ pub struct MapConfig {
     #[serde(default = "default_zoom_step")]
     pub zoom_step: f64,
     pub controls: MapControlsConfig,
+    /// Station visual and interaction settings
+    #[serde(default)]
+    pub station: StationConfig,
+    /// Shot visual and interaction settings
+    #[serde(default)]
+    pub shot: ShotConfig,
+    /// Snap-to-station settings
+    #[serde(default)]
+    pub snap: MapSnapConfig,
 }
 
 impl MapConfig {
-    /// Normalize zoom_step to valid range (0.1-5.0)
-    /// Also handles NaN/inf by falling back to default
+    /// Normalize all float values to valid ranges
+    /// Also handles NaN/inf by falling back to defaults
     pub fn normalize(&mut self) {
         if !self.zoom_step.is_finite() {
             self.zoom_step = default_zoom_step();
         } else {
             self.zoom_step = self.zoom_step.clamp(0.1, 5.0);
         }
+        self.station.normalize();
+        self.shot.normalize();
+        self.snap.normalize();
     }
 }
 

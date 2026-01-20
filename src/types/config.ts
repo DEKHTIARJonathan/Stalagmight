@@ -13,9 +13,9 @@ export interface Config {
   export: ExportConfig;
   logging: LoggingConfig;
   shortcuts: ShortcutsConfig;
-  snap: SnapConfig;
   panels: PanelsConfig;
   cache: CacheConfig;
+  debug: DebugConfig;
 }
 
 export interface GeneralConfig {
@@ -38,8 +38,6 @@ export interface DisplayConfig {
   grid_color: string;
   /** Grid spacing in meters (e.g., 1, 5, 10, 25, 50) */
   grid_spacing: number;
-  station_size: number;
-  line_thickness: number;
   font_size: number;
   font_color: string;
   depth_gradient: DepthGradientConfig;
@@ -62,18 +60,64 @@ export interface GpsOrigin {
   longitude: number;
 }
 
+/** Station visual and interaction configuration */
+export interface StationConfig {
+  /** Visual radius in pixels (1.0-50.0) */
+  radius: number;
+  /** Clickable area radius in pixels (1.0-50.0, >= radius) */
+  hit_area: number;
+}
+
+/** Shot visual and interaction configuration */
+export interface ShotConfig {
+  /** Visual line width in pixels (0.5-20.0) */
+  width: number;
+  /** Clickable area width in pixels (0.5-20.0, >= width) */
+  hit_area: number;
+}
+
+/** Snap-to-station configuration for precision tools */
+export interface MapSnapConfig {
+  /** Snap threshold in pixels (1.0-50.0) */
+  threshold: number;
+  /** Enable snap for draw tool */
+  enabled_draw: boolean;
+  /** Enable snap for merge tool */
+  enabled_merge: boolean;
+  /** Enable snap for measure tool */
+  enabled_measure: boolean;
+}
+
+/** Debug configuration */
+export interface DebugConfig {
+  map: MapDebugConfig;
+}
+
+/** Map-specific debug options */
+export interface MapDebugConfig {
+  /** Show hitbox visualization for debugging */
+  show_hitboxes: boolean;
+  /** Log hit detection events to console */
+  log_hit_detection: boolean;
+}
+
 export interface MapConfig {
   satellite_provider: string;
   satellite_enabled: boolean;
   /** GPS origin for satellite tile alignment. Defaults to Florida Keys area. */
   satellite_gps_origin: GpsOrigin;
-  snap_threshold_pixels: number;
   zoom_default: number;
   zoom_min: number;
   zoom_max: number;
   /** Zoom step for click-to-zoom (default: 1.0, range: 0.1-5.0) */
   zoom_step: number;
   controls: MapControlsConfig;
+  /** Station visual and interaction settings */
+  station: StationConfig;
+  /** Shot visual and interaction settings */
+  shot: ShotConfig;
+  /** Snap-to-station settings */
+  snap: MapSnapConfig;
 }
 
 export interface MapControlsConfig {
@@ -121,13 +165,6 @@ export interface ShortcutsConfig {
   save: string;
 }
 
-export interface SnapConfig {
-  enabled_draw: boolean;
-  enabled_merge: boolean;
-  enabled_measure: boolean;
-  threshold_pixels: number;
-}
-
 export interface PanelsConfig {
   sections_panel_width: number;
   detail_panel_width: number;
@@ -161,8 +198,6 @@ export const defaultConfig: Config = {
     default_background: '#1a1a2e',
     grid_color: '#333366',
     grid_spacing: 10,
-    station_size: 6,
-    line_thickness: 2,
     font_size: 12,
     font_color: '#f5f5f5',
     depth_gradient: {
@@ -190,7 +225,6 @@ export const defaultConfig: Config = {
     satellite_enabled: false,
     // Default to Florida Keys area - popular cave diving location
     satellite_gps_origin: { latitude: 24.55, longitude: -81.78 },
-    snap_threshold_pixels: 10,
     zoom_default: 15,
     zoom_min: 0,
     zoom_max: 22,
@@ -199,6 +233,20 @@ export const defaultConfig: Config = {
       pan_speed: 1.0,
       zoom_speed: 1.0,
       invert_scroll: false,
+    },
+    station: {
+      radius: 4.0,
+      hit_area: 10.0,
+    },
+    shot: {
+      width: 2.0,
+      hit_area: 8.0,
+    },
+    snap: {
+      threshold: 10.0,
+      enabled_draw: true,
+      enabled_merge: true,
+      enabled_measure: true,
     },
   },
   validation: {
@@ -234,12 +282,6 @@ export const defaultConfig: Config = {
     redo: 'Ctrl+Y',
     save: 'Ctrl+S',
   },
-  snap: {
-    enabled_draw: true,
-    enabled_merge: true,
-    enabled_measure: true,
-    threshold_pixels: 10,
-  },
   panels: {
     sections_panel_width: 250,
     detail_panel_width: 300,
@@ -249,5 +291,11 @@ export const defaultConfig: Config = {
     tile_cache_enabled: true,
     tile_cache_max_mb: 500,
     tile_ttl_days: 30,
+  },
+  debug: {
+    map: {
+      show_hitboxes: false,
+      log_hit_detection: false,
+    },
   },
 };
