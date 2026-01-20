@@ -1048,6 +1048,7 @@ closure_error_threshold = 5.0  # Percentage threshold for warnings
 [cache]
 tile_cache_enabled = true
 tile_cache_max_mb = 500  # Maximum tile cache size
+tile_ttl_days = 30  # Days before cached tiles are considered stale
 
 [accessibility]
 announce_tool_changes = true

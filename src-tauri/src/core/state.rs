@@ -1,8 +1,9 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use crate::cache::TileCache;
 use crate::config::Config;
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, Project, ProjectMetadata, Section, SectionData,
@@ -26,6 +27,16 @@ pub struct AppState {
     recent_projects: Mutex<Vec<PathBuf>>,
     /// In-memory display settings cache (used when no DB is open, e.g., new unsaved project)
     display_settings_cache: Mutex<HashMap<String, String>>,
+    /// Tile cache for offline satellite imagery.
+    ///
+    /// Note: Uses Arc<Mutex<...>> rather than plain Mutex<...> because the protocol handler
+    /// runs in a separate async task/thread that outlives the closure scope, requiring
+    /// owned/cloneable access to the cache. This is a deliberate deviation from the spec
+    /// for thread-safety requirements.
+    ///
+    /// Note: Changes to CacheConfig at runtime (via update_config) do NOT re-initialize
+    /// this cache. Users must restart the app for cache config changes to take effect.
+    tile_cache: Arc<Mutex<Option<TileCache>>>,
 }
 
 impl AppState {
@@ -36,6 +47,23 @@ impl AppState {
         let recent = config.general.recent_projects.clone();
         let undo_limit = config.general.undo_history_limit;
 
+        // Initialize tile cache if enabled
+        let tile_cache = if config.cache.tile_cache_enabled {
+            match Self::init_tile_cache(&config) {
+                Ok(cache) => Some(cache),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "Failed to initialize tile cache - offline tile access will be unavailable"
+                    );
+                    None
+                }
+            }
+        } else {
+            tracing::info!("Tile cache disabled in configuration");
+            None
+        };
+
         Ok(Self {
             project: Mutex::new(None),
             database: Mutex::new(None),
@@ -43,7 +71,21 @@ impl AppState {
             config: Mutex::new(config),
             recent_projects: Mutex::new(recent),
             display_settings_cache: Mutex::new(HashMap::new()),
+            tile_cache: Arc::new(Mutex::new(tile_cache)),
         })
+    }
+
+    /// Initialize the tile cache based on config
+    fn init_tile_cache(config: &Config) -> Result<TileCache> {
+        let dirs = directories::ProjectDirs::from("com", "cavechef", "CaveChef")
+            .ok_or_else(|| anyhow::anyhow!("Could not determine app data directory"))?;
+        let cache_dir = dirs.cache_dir();
+        TileCache::open(cache_dir, config.cache.tile_cache_max_mb, config.cache.tile_ttl_days)
+    }
+
+    /// Get a clone of the tile cache Arc for sharing across threads
+    pub fn tile_cache(&self) -> Arc<Mutex<Option<TileCache>>> {
+        Arc::clone(&self.tile_cache)
     }
 
     /// Execute a command and return the result

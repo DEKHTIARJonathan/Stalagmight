@@ -16,7 +16,7 @@ const sizeClasses: Record<DialogSize, string> = {
 interface DialogWrapperProps {
   title: string;
   onClose: () => void;
-  children: ReactNode;
+  children: ReactNode | ((props: { requestClose: () => void }) => ReactNode);
   isDirty?: boolean;
   size?: DialogSize;
   'data-testid'?: string;
@@ -89,7 +89,9 @@ export function DialogWrapper({
             ×
           </button>
         </div>
-        <div className="p-4">{children}</div>
+        <div className="p-4">
+          {typeof children === 'function' ? children({ requestClose }) : children}
+        </div>
       </div>
 
       {/* Inline confirm overlay for dirty state */}

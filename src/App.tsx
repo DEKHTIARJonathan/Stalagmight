@@ -6,7 +6,7 @@ import { useUIStore } from './store/uiStore';
 import { useBeforeUnload } from './hooks/useBeforeUnload';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, DuplicateImportDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, DuplicateImportDialog, SettingsDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
 import type { SectionData, ShotData } from './types/project';
@@ -556,6 +556,7 @@ function App() {
       {activeDialog === 'context-menu' && <ContextMenu />}
       {activeDialog === 'section-adjust' && <SectionAdjustDialog />}
       {activeDialog === 'confirm-duplicate-import' && <DuplicateImportDialog />}
+      {activeDialog === 'settings' && <SettingsDialog />}
     </div>
   );
 }

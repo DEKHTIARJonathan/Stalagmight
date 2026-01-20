@@ -164,7 +164,16 @@ export default function GlobalView() {
           <Button data-testid="new-project-button" onClick={() => handleNewProject()}>New Project</Button>
           <Button onClick={() => handleOpenProject()}>Open Project</Button>
         </div>
-        <h1 className="text-xl font-bold">CaveChef</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-bold">CaveChef</h1>
+          <Button
+            onClick={() => openDialog('settings')}
+            data-testid="settings-button"
+            aria-label="Settings"
+          >
+            Settings
+          </Button>
+        </div>
       </header>
 
       {/* Tabs - only show if there are projects */}
