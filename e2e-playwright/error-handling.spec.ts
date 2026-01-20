@@ -275,8 +275,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               default_background: '#1a1a2e',
               grid_color: '#333366',
               grid_spacing: 10,
-              station_size: 6,
-              line_thickness: 2,
               font_size: 12,
               font_color: '#f5f5f5',
               depth_gradient: {
@@ -297,7 +295,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
                 latitude: 24.55,
                 longitude: -81.78,
               },
-              snap_threshold_pixels: 10,
               zoom_default: 15,
               zoom_min: 1,
               zoom_max: 22,
@@ -306,6 +303,20 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
                 pan_speed: 1.0,
                 zoom_speed: 1.0,
                 invert_scroll: false,
+              },
+              station: {
+                radius: 4.0,
+                hit_area: 10.0,
+              },
+              shot: {
+                width: 2.0,
+                hit_area: 8.0,
+              },
+              snap: {
+                threshold: 10.0,
+                enabled_draw: true,
+                enabled_merge: true,
+                enabled_measure: true,
               },
             },
             validation: {
@@ -341,12 +352,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               redo: 'Ctrl+Y',
               save: 'Ctrl+S',
             },
-            snap: {
-              enabled_draw: true,
-              enabled_merge: true,
-              enabled_measure: true,
-              threshold_pixels: 10,
-            },
             panels: {
               sections_panel_width: 250,
               detail_panel_width: 300,
@@ -356,6 +361,12 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               tile_cache_enabled: true,
               tile_cache_max_mb: 500,
               tile_ttl_days: 30,
+            },
+            debug: {
+              map: {
+                show_hitboxes: false,
+                log_hit_detection: false,
+              },
             },
           };
 

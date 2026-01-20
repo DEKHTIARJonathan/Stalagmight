@@ -12,9 +12,9 @@ impl Default for Config {
             export: ExportConfig::default(),
             logging: LoggingConfig::default(),
             shortcuts: ShortcutsConfig::default(),
-            snap: SnapConfig::default(),
             panels: PanelsConfig::default(),
             cache: CacheConfig::default(),
+            debug: DebugConfig::default(),
         }
     }
 }
@@ -49,8 +49,6 @@ impl Default for DisplayConfig {
             default_background: "#1a1a2e".to_string(),
             grid_color: "#333366".to_string(),
             grid_spacing: 10.0,
-            station_size: 6,
-            line_thickness: 2,
             font_size: 12,
             font_color: "#f5f5f5".to_string(),
             depth_gradient: DepthGradientConfig::default(),
@@ -96,12 +94,14 @@ impl Default for MapConfig {
                 latitude: 24.55,
                 longitude: -81.78,
             },
-            snap_threshold_pixels: 10,
             zoom_default: 15,
             zoom_min: 0,
             zoom_max: 22,
             zoom_step: 1.0,
             controls: MapControlsConfig::default(),
+            station: StationConfig::default(),
+            shot: ShotConfig::default(),
+            snap: MapSnapConfig::default(),
         }
     }
 }
@@ -165,17 +165,6 @@ impl Default for ShortcutsConfig {
             undo: "Ctrl+Z".to_string(),
             redo: "Ctrl+Y".to_string(),
             save: "Ctrl+S".to_string(),
-        }
-    }
-}
-
-impl Default for SnapConfig {
-    fn default() -> Self {
-        Self {
-            enabled_draw: true,
-            enabled_merge: true,
-            enabled_measure: true,
-            threshold_pixels: 10,
         }
     }
 }

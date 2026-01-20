@@ -116,7 +116,7 @@ export default function MapCanvas() {
 
       // Check if snap is enabled for the current tool
       // Note: Merge requires stations to be visible (can't select merge targets when hidden)
-      const snapConfig = config.snap;
+      const snapConfig = config.map.snap;
       const shouldSnap =
         (activeTool === 'draw' && snapConfig.enabled_draw) ||
         (activeTool === 'merge' && snapConfig.enabled_merge && showStations) ||
@@ -127,7 +127,7 @@ export default function MapCanvas() {
         return;
       }
 
-      const threshold = snapConfig.threshold_pixels;
+      const threshold = snapConfig.threshold;
       let nearestStation = null;
       let nearestDistance = Infinity;
 
@@ -170,7 +170,7 @@ export default function MapCanvas() {
         return null;
       }
 
-      const threshold = config.snap.threshold_pixels;
+      const threshold = config.map.snap.threshold;
       let nearestStation = null;
       let nearestDistance = Infinity;
 
