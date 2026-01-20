@@ -1,14 +1,14 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-20T17:08:47.738362Z",
   "created_at": "2026-01-20T12:52:10.802691Z",
   "depends_on": [],
   "epic": "fn-3-e6v",
   "id": "fn-3-e6v.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-3-e6v.1.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Add showShots state and Shots toggle to DisplayMenu",
-  "updated_at": "2026-01-20T13:28:21.153913Z"
+  "updated_at": "2026-01-20T17:08:47.738373Z"
 }

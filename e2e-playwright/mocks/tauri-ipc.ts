@@ -810,8 +810,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           // Display settings (per-project)
           case 'load_display_settings':
-            // Return empty settings for mocked tests (uses defaults)
-            return {};
+            // Return default display settings for mocked tests
+            return {
+              showStations: 'true',
+              showShots: 'true',
+              showSectionNames: 'true',
+              showStationLabels: 'false',
+              showShotData: 'false',
+              showVirtualShots: 'true',
+              showZeroDatum: 'true',
+              showGrid: 'false',
+              showScaleBar: 'true',
+              showSatellite: 'false',
+              showDepthGradient: 'false',
+            };
 
           case 'save_display_setting':
             // No-op for mocked tests

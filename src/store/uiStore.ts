@@ -163,6 +163,7 @@ interface UIStore {
 
   // Display toggles
   showStations: boolean;
+  showShots: boolean;
   showSectionNames: boolean;
   showStationLabels: boolean;
   showShotData: boolean;
@@ -243,6 +244,7 @@ interface UIStore {
 
 export type DisplayToggleKey =
   | 'showStations'
+  | 'showShots'
   | 'showSectionNames'
   | 'showStationLabels'
   | 'showShotData'
@@ -375,6 +377,7 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Display toggles
   showStations: true,
+  showShots: true,
   showSectionNames: true,
   showStationLabels: false,
   showShotData: false,
@@ -414,6 +417,10 @@ export const useUIStore = create<UIStore>((set) => ({
           }
         }
       }
+      // Fallback: if showShots wasn't in saved settings, default to true
+      if (displayState.showShots === undefined) {
+        displayState.showShots = true;
+      }
       if (Object.keys(displayState).length > 0 || gridSpacing !== undefined) {
         set({ ...displayState, ...(gridSpacing !== undefined ? { gridSpacing } : {}) });
       }
@@ -433,6 +440,7 @@ export const useUIStore = create<UIStore>((set) => ({
     // Reset all display toggles to their default values
     set({
       showStations: true,
+      showShots: true,
       showSectionNames: true,
       showStationLabels: false,
       showShotData: false,
