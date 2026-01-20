@@ -5,6 +5,58 @@ Add bidirectional map-to-panel hover sync (hovering map features highlights sect
 
 ## Files to Modify
 
+### `src/hooks/useMapTools.ts` (or wherever hover callbacks are handled)
+
+**Extend existing hover callbacks to also set hoveredSectionId:**
+
+The existing `handleStationHover` and `handleShotHover` callbacks already receive the relevant data. We need to derive sectionId and call `setHoveredSectionId`.
+
+**Pattern:**
+```typescript
+// When station is hovered
+const handleStationHover = (stationRef: StationRef | null) => {
+  // ... existing logic (setHoveredStation, etc.)
+  
+  // Derive section and set for panel highlight
+  setHoveredSectionId(stationRef?.section_id ?? null);
+};
+
+// When shot is hovered
+const handleShotHover = (shot: { sectionId: SectionId; shotId: ShotId } | null) => {
+  // ... existing logic (setHoveredShot, etc.)
+  
+  // Derive section and set for panel highlight
+  setHoveredSectionId(shot?.sectionId ?? null);
+};
+```
+
+**CRITICAL: Clear behavior**
+When callbacks are called with `null` (mouse leaves feature), `setHoveredSectionId(null)` is called to clear the panel highlight:
+- `handleStationHover(null)` → `setHoveredSectionId(null)`
+- `handleShotHover(null)` → `setHoveredSectionId(null)`
+
+This happens automatically via the `?? null` fallback in the pattern above.
+
+## Alternative: Effect-based sync
+
+If modifying useMapTools is complex, use an effect in MapCanvas:
+```typescript
+// Derive hoveredSectionId from individual hover states
+useEffect(() => {
+  if (hoveredStation) {
+    setHoveredSectionId(hoveredStation.section_id);
+  } else if (hoveredShot) {
+    setHoveredSectionId(hoveredShot.sectionId);
+  } else {
+    setHoveredSectionId(null);  // Clear when no hover
+  }
+}, [hoveredStation, hoveredShot, setHoveredSectionId]);
+```
+
+## Panel Response
+The SectionsPanel already reads `hoveredSectionId` from uiStore (from task 6), so when map sets it, panel row highlights automatically via the conditional class.
+## Files to Modify
+
 ### `src/components/Map/MapCanvas.tsx`
 
 **In existing hover callbacks, derive section and set hoveredSectionId:**
@@ -51,11 +103,13 @@ The SectionsPanel already reads `hoveredSectionId` from uiStore (from task 6), s
 ## Acceptance
 - [ ] Hovering station on map sets hoveredSectionId (derived from StationRef.section_id)
 - [ ] Hovering shot on map sets hoveredSectionId (from shot.sectionId)
-- [ ] Leaving all features clears hoveredSectionId to null
+- [ ] `handleStationHover(null)` clears hoveredSectionId to null
+- [ ] `handleShotHover(null)` clears hoveredSectionId to null
 - [ ] SectionsPanel row highlights when its section is hovered on map
 - [ ] No debounce needed (per interview decision)
 - [ ] Clear is immediate when mouse leaves features
-- [ ] Works with stations AND shots (both derive section)
+- [ ] Works with both stations AND shots
+- [ ] Uses either callback extension or effect-based approach
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD
