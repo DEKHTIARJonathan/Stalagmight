@@ -1,8 +1,60 @@
 # fn-7-gba.1 Fix GridOverlay cleanup to check map style existence
 
 ## Description
-# Fix GridOverlay Cleanup
+Fix GridOverlay cleanup to check map style existence before operations.
 
+## Implementation
+
+### 1. Create shared helper (src/components/Map/mapUtils.ts)
+
+```typescript
+import type maplibregl from 'maplibre-gl';
+
+/**
+ * Check if map instance has a live style (not destroyed).
+ * Uses internal property access since maplibre-gl doesn't expose this publicly.
+ */
+export function hasLiveStyle(map: maplibregl.Map | null): boolean {
+  return !!(map && (map as any).style);
+}
+```
+
+### 2. Update GridOverlay.tsx cleanup (lines 150-158)
+
+Import the helper:
+```typescript
+import { hasLiveStyle } from './mapUtils';
+```
+
+Update the cleanup effect to guard ALL map operations and wrap in try/catch:
+
+```typescript
+return () => {
+  // Guard against map being destroyed (race condition on unmount)
+  if (!hasLiveStyle(map)) {
+    layerAdded.current = false;
+    return;
+  }
+  
+  try {
+    if (map.getLayer(layerId)) {
+      map.removeLayer(layerId);
+    }
+    if (map.getSource(sourceId)) {
+      map.removeSource(sourceId);
+    }
+  } catch {
+    // Map already destroyed during unmount, cleanup not needed
+  }
+  layerAdded.current = false;
+};
+```
+
+**Important notes:**
+- The cleanup runs even when `showGrid` is false because it unconditionally calls `map.getLayer()`
+- Both `getLayer()` AND `getSource()` can throw - guard both
+- The try/catch is essential because there's a race window between the style check and the actual call
+- Use `(map as any).style` since it's not part of the public TypeScript surface
 ## Problem
 
 The `GridOverlay` component's cleanup effect tries to call `map.getLayer()` and `map.removeLayer()` after the map's style has been destroyed, causing a TypeError crash.
@@ -57,14 +109,14 @@ Also add similar guard checks in:
 3. App should return to Global View without error
 4. No TypeScript errors: `pnpm tsc --noEmit`
 ## Acceptance
-- [ ] Cleanup effect (lines 150-158) has guard for map.style
-- [ ] All map.getLayer() calls are guarded
-- [ ] All map.getSource() calls are guarded
-- [ ] All map.removeLayer() calls are guarded
-- [ ] All map.removeSource() calls are guarded
-- [ ] Back button works without crash
-- [ ] No console errors when clicking Back
-- [ ] pnpm tsc --noEmit passes
+- [ ] `hasLiveStyle()` helper created in `src/components/Map/mapUtils.ts`
+- [ ] Helper uses `(map as any).style` for internal access (with comment explaining why)
+- [ ] GridOverlay cleanup imports `hasLiveStyle` from mapUtils
+- [ ] GridOverlay cleanup guards with `if (!hasLiveStyle(map)) return`
+- [ ] GridOverlay cleanup wraps map operations in try/catch
+- [ ] Both `map.getLayer()` and `map.getSource()` calls are inside the try/catch
+- [ ] layerAdded.current is reset in all code paths
+- [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD
 
