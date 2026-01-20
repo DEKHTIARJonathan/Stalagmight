@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-20T15:43:21.670848Z",
+  "depends_on": [],
+  "epic": "fn-9-d6v",
+  "id": "fn-9-d6v.8",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-9-d6v.8.md",
+  "status": "todo",
+  "title": "Add bidirectional map-to-panel hover sync",
+  "updated_at": "2026-01-20T15:46:47.594215Z"
+}

@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-20T15:43:23.627648Z",
+  "depends_on": [],
+  "epic": "fn-9-d6v",
+  "id": "fn-9-d6v.9",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-9-d6v.9.md",
+  "status": "todo",
+  "title": "Unit tests for expression builder",
+  "updated_at": "2026-01-20T15:46:48.815331Z"
+}
