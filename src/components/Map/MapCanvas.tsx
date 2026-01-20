@@ -3,6 +3,7 @@ import maplibregl from 'maplibre-gl';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
+import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
 import { useMapTools } from '../../hooks/useMapTools';
 import SurveyLayer from './SurveyLayer';
 import PlacementOverlay from './PlacementOverlay';
@@ -455,15 +456,11 @@ export default function MapCanvas() {
   }, []);
 
   // Register custom tile protocol for offline caching
-  // This allows MapLibre to use cavechef-tiles:// URLs which are handled by the Tauri backend
+  // Uses ref-counted registration to safely handle multiple map instances
   useEffect(() => {
-    maplibregl.addProtocol('cavechef-tiles', async (params, abortController) => {
-      const response = await fetch(params.url, { signal: abortController.signal });
-      return { data: await response.arrayBuffer() };
-    });
-
+    registerTileProtocol();
     return () => {
-      maplibregl.removeProtocol('cavechef-tiles');
+      unregisterTileProtocol();
     };
   }, []);
 

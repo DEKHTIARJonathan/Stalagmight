@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -7,7 +7,10 @@ import { DialogWrapper } from './DialogWrapper';
 import type { CacheStats } from '../../types/cache';
 import type { Config } from '../../types/config';
 
-type SettingsTab = 'general' | 'storage';
+type SettingsTab = 'general' | 'cache';
+
+const MIN_CACHE_SIZE_MB = 100;
+const MAX_CACHE_SIZE_MB = 10000;
 
 /**
  * Format bytes to human-readable string (e.g., "12.5 MB")
@@ -21,48 +24,80 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${sizes[i]}`;
 }
 
+/**
+ * Clamp a number to a range
+ */
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
 export default function SettingsDialog() {
   const { closeDialog } = useUIStore();
   const { config, updateConfig } = useProjectStore();
-  const [activeTab, setActiveTab] = useState<SettingsTab>('storage');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('cache');
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
   const [isLoadingStats, setIsLoadingStats] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [localConfig, setLocalConfig] = useState<Config | null>(config);
   const [isDirty, setIsDirty] = useState(false);
 
-  // Load cache stats when Storage tab is active or on mount
+  // Track if component is mounted to avoid state updates after unmount
+  const mountedRef = useRef(true);
+
+  // Track if we need to handle dirty state on cancel
+  const handleRequestClose = useCallback(() => {
+    // DialogWrapper handles the dirty confirmation, so we just call closeDialog
+    // The isDirty prop passed to DialogWrapper will trigger the confirm flow
+    closeDialog();
+  }, [closeDialog]);
+
+  // Load cache stats when Cache tab is active or on mount
   const loadCacheStats = useCallback(async () => {
+    if (!mountedRef.current) return;
     setIsLoadingStats(true);
     try {
       const stats = await invoke<CacheStats>('get_cache_stats');
-      setCacheStats(stats);
+      if (mountedRef.current) {
+        setCacheStats(stats);
+      }
     } catch (error) {
       console.error('[SettingsDialog] Failed to load cache stats:', error);
       // Don't fail silently - show zero stats
-      setCacheStats({
-        total_tiles: 0,
-        total_bytes: 0,
-        providers: {},
-      });
+      if (mountedRef.current) {
+        setCacheStats({
+          total_tiles: 0,
+          total_bytes: 0,
+          providers: {},
+        });
+      }
     } finally {
-      setIsLoadingStats(false);
+      if (mountedRef.current) {
+        setIsLoadingStats(false);
+      }
     }
   }, []);
 
-  // Load stats on mount and when storage tab is selected
+  // Cleanup on unmount
   useEffect(() => {
-    if (activeTab === 'storage') {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Load stats on mount and when cache tab is selected
+  useEffect(() => {
+    if (activeTab === 'cache') {
       loadCacheStats();
     }
   }, [activeTab, loadCacheStats]);
 
-  // Update local config when prop changes
+  // Update local config when prop changes (but don't override dirty state)
   useEffect(() => {
-    if (config) {
+    if (config && !isDirty) {
       setLocalConfig(config);
     }
-  }, [config]);
+  }, [config, isDirty]);
 
   // Handle clearing the cache
   const handleClearCache = async () => {
@@ -74,7 +109,9 @@ export default function SettingsDialog() {
     } catch (error) {
       console.error('[SettingsDialog] Failed to clear cache:', error);
     } finally {
-      setIsClearing(false);
+      if (mountedRef.current) {
+        setIsClearing(false);
+      }
     }
   };
 
@@ -91,14 +128,23 @@ export default function SettingsDialog() {
     setIsDirty(true);
   };
 
-  // Handle max cache size change
-  const handleMaxSizeChange = (maxMb: number) => {
+  // Handle max cache size change with validation and clamping
+  const handleMaxSizeChange = (value: string) => {
     if (!localConfig) return;
+
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      // Invalid input - don't update
+      return;
+    }
+
+    const clamped = clamp(Math.round(parsed), MIN_CACHE_SIZE_MB, MAX_CACHE_SIZE_MB);
+
     setLocalConfig({
       ...localConfig,
       cache: {
         ...localConfig.cache,
-        tile_cache_max_mb: maxMb,
+        tile_cache_max_mb: clamped,
       },
     });
     setIsDirty(true);
@@ -114,10 +160,13 @@ export default function SettingsDialog() {
     }
   };
 
+  // Show loading state if config hasn't loaded yet
+  const configLoaded = localConfig !== null;
+
   return (
     <DialogWrapper
       title="Settings"
-      onClose={closeDialog}
+      onClose={handleRequestClose}
       isDirty={isDirty}
       size="lg"
       data-testid="settings-dialog"
@@ -136,15 +185,15 @@ export default function SettingsDialog() {
           General
         </button>
         <button
-          onClick={() => setActiveTab('storage')}
+          onClick={() => setActiveTab('cache')}
           className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'storage'
+            activeTab === 'cache'
               ? 'border-accent text-accent'
               : 'border-transparent text-text-secondary hover:text-text'
           }`}
-          data-testid="settings-tab-storage"
+          data-testid="settings-tab-cache"
         >
-          Storage
+          Cache
         </button>
       </div>
 
@@ -156,7 +205,7 @@ export default function SettingsDialog() {
           </div>
         )}
 
-        {activeTab === 'storage' && (
+        {activeTab === 'cache' && (
           <div className="space-y-6">
             {/* Cache Statistics Section */}
             <div>
@@ -210,45 +259,59 @@ export default function SettingsDialog() {
             {/* Cache Configuration Section */}
             <div>
               <h3 className="text-sm font-medium mb-3">Cache Configuration</h3>
-              <div className="space-y-4">
-                {/* Cache enabled toggle */}
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={localConfig?.cache?.tile_cache_enabled ?? true}
-                    onChange={(e) => handleCacheEnabledChange(e.target.checked)}
-                    className="w-4 h-4 rounded border-border"
-                    data-testid="cache-enabled-toggle"
-                  />
-                  <div>
-                    <span className="block">Enable tile caching</span>
-                    <span className="block text-xs text-text-secondary">
-                      Cache satellite tiles for offline access
-                    </span>
-                  </div>
-                </label>
-
-                {/* Max cache size */}
-                <div>
-                  <label className="block text-sm mb-1">Maximum cache size</label>
-                  <div className="flex items-center gap-2">
+              {!configLoaded ? (
+                <p className="text-text-secondary">Loading configuration...</p>
+              ) : (
+                <div className="space-y-4">
+                  {/* Cache enabled toggle */}
+                  <label className="flex items-center gap-3 cursor-pointer">
                     <input
-                      type="number"
-                      min={100}
-                      max={10000}
-                      step={100}
-                      value={localConfig?.cache?.tile_cache_max_mb ?? 500}
-                      onChange={(e) => handleMaxSizeChange(parseInt(e.target.value) || 500)}
-                      className="w-24 px-2 py-1 bg-background border border-border rounded text-sm"
-                      data-testid="cache-max-size-input"
+                      type="checkbox"
+                      checked={localConfig.cache.tile_cache_enabled}
+                      onChange={(e) => handleCacheEnabledChange(e.target.checked)}
+                      className="w-4 h-4 rounded border-border"
+                      data-testid="cache-enabled-toggle"
                     />
-                    <span className="text-text-secondary">MB</span>
+                    <div>
+                      <span className="block">Enable tile caching</span>
+                      <span className="block text-xs text-text-secondary">
+                        Cache satellite tiles for offline access
+                      </span>
+                    </div>
+                  </label>
+
+                  {/* Max cache size */}
+                  <div>
+                    <label className="block text-sm mb-1">Maximum cache size</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={MIN_CACHE_SIZE_MB}
+                        max={MAX_CACHE_SIZE_MB}
+                        step={100}
+                        value={localConfig.cache.tile_cache_max_mb}
+                        onChange={(e) => handleMaxSizeChange(e.target.value)}
+                        onBlur={(e) => {
+                          // Ensure value is clamped on blur
+                          const val = Number(e.target.value);
+                          if (Number.isFinite(val)) {
+                            const clamped = clamp(Math.round(val), MIN_CACHE_SIZE_MB, MAX_CACHE_SIZE_MB);
+                            if (clamped !== val) {
+                              handleMaxSizeChange(String(clamped));
+                            }
+                          }
+                        }}
+                        className="w-24 px-2 py-1 bg-background border border-border rounded text-sm"
+                        data-testid="cache-max-size-input"
+                      />
+                      <span className="text-text-secondary">MB</span>
+                    </div>
+                    <p className="text-xs text-text-secondary mt-1">
+                      Older tiles will be removed when this limit is reached ({MIN_CACHE_SIZE_MB}-{MAX_CACHE_SIZE_MB} MB)
+                    </p>
                   </div>
-                  <p className="text-xs text-text-secondary mt-1">
-                    Older tiles will be removed when this limit is reached
-                  </p>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         )}
@@ -256,11 +319,11 @@ export default function SettingsDialog() {
 
       {/* Actions */}
       <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-border">
-        <Button onClick={closeDialog}>Cancel</Button>
+        <Button onClick={handleRequestClose}>Cancel</Button>
         <Button
           variant="primary"
           onClick={handleSave}
-          disabled={!isDirty}
+          disabled={!isDirty || !configLoaded}
           data-testid="settings-save-button"
         >
           Save
