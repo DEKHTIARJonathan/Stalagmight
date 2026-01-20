@@ -57,7 +57,7 @@ describe('Zoom Tool E2E', () => {
       );
 
       const initialZoom = await getMapZoom();
-      expect(initialZoom).not.toBeNull();
+      expect(initialZoom).toBeGreaterThanOrEqual(0);
 
       const mapCanvas = await $('canvas');
       const location = await mapCanvas.getLocation();
@@ -84,14 +84,13 @@ describe('Zoom Tool E2E', () => {
       await browser.waitUntil(
         async () => {
           const newZoom = await getMapZoom();
-          return newZoom !== null && newZoom > initialZoom!;
+          return newZoom > initialZoom;
         },
         { timeout: 5000, timeoutMsg: 'Zoom did not increase after left click' }
       );
 
       const newZoom = await getMapZoom();
-      expect(newZoom).not.toBeNull();
-      expect(newZoom).toBeGreaterThan(initialZoom!);
+      expect(newZoom).toBeGreaterThan(initialZoom);
     });
 
     it('right click on map zooms out', async () => {
@@ -131,13 +130,13 @@ describe('Zoom Tool E2E', () => {
       await browser.waitUntil(
         async () => {
           const zoom = await getMapZoom();
-          return zoom !== null && zoom > 1;
+          return zoom > 1;
         },
         { timeout: 5000 }
       );
 
       const initialZoom = await getMapZoom();
-      expect(initialZoom).not.toBeNull();
+      expect(initialZoom).toBeGreaterThan(1);
 
       // Right click to zoom out
       await browser.performActions([
@@ -158,14 +157,13 @@ describe('Zoom Tool E2E', () => {
       await browser.waitUntil(
         async () => {
           const newZoom = await getMapZoom();
-          return newZoom !== null && newZoom < initialZoom!;
+          return newZoom < initialZoom;
         },
         { timeout: 5000, timeoutMsg: 'Zoom did not decrease after right click' }
       );
 
       const newZoom = await getMapZoom();
-      expect(newZoom).not.toBeNull();
-      expect(newZoom).toBeLessThan(initialZoom!);
+      expect(newZoom).toBeLessThan(initialZoom);
     });
   });
 
@@ -183,7 +181,7 @@ describe('Zoom Tool E2E', () => {
       );
 
       const initialZoom = await getMapZoom();
-      expect(initialZoom).not.toBeNull();
+      expect(initialZoom).toBeGreaterThanOrEqual(0);
 
       const mapCanvas = await $('canvas');
       const location = await mapCanvas.getLocation();
@@ -215,14 +213,13 @@ describe('Zoom Tool E2E', () => {
       await browser.waitUntil(
         async () => {
           const newZoom = await getMapZoom();
-          return newZoom !== null && newZoom > initialZoom!;
+          return newZoom > initialZoom;
         },
         { timeout: 5000, timeoutMsg: 'Zoom did not increase after box zoom drag' }
       );
 
       const newZoom = await getMapZoom();
-      expect(newZoom).not.toBeNull();
-      expect(newZoom).toBeGreaterThan(initialZoom!);
+      expect(newZoom).toBeGreaterThan(initialZoom);
     });
 
     it('box zoom overlay visible during drag', async () => {
@@ -352,8 +349,27 @@ describe('Zoom Tool E2E', () => {
 
   describe('Config Integration', () => {
     it('uses zoom_step from config', async () => {
-      // This test verifies the config is being used by checking zoom step behavior
-      // The default zoom_step is 1.0, so zoom should change by approximately 1 level
+      // Set a non-default zoom_step to verify config is actually being used
+      const testZoomStep = 2.0;
+      await browser.execute((step: number) => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            projectStore: {
+              getState: () => {
+                config: { map: { zoom_step: number } } | null;
+                setConfig: (config: { map: { zoom_step: number } }) => void;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+        if (e2e) {
+          const currentConfig = e2e.projectStore.getState().config;
+          if (currentConfig) {
+            currentConfig.map.zoom_step = step;
+          }
+        }
+      }, testZoomStep);
+
       // Activate zoom tool via toolbar click
       const zoomBtn = await $('[data-testid="tool-zoom"]');
       await zoomBtn.click();
@@ -366,7 +382,7 @@ describe('Zoom Tool E2E', () => {
       );
 
       const initialZoom = await getMapZoom();
-      expect(initialZoom).not.toBeNull();
+      expect(initialZoom).toBeGreaterThanOrEqual(0);
 
       const mapCanvas = await $('canvas');
       const location = await mapCanvas.getLocation();
@@ -393,18 +409,17 @@ describe('Zoom Tool E2E', () => {
       await browser.waitUntil(
         async () => {
           const newZoom = await getMapZoom();
-          return newZoom !== null && newZoom > initialZoom!;
+          return newZoom > initialZoom;
         },
         { timeout: 5000 }
       );
 
       const newZoom = await getMapZoom();
-      expect(newZoom).not.toBeNull();
-      const diff = newZoom! - initialZoom!;
-      // Zoom step from config should be around 1.0 (allow for animation/rounding variance)
-      // This verifies the zoom behavior is working as configured
-      expect(diff).toBeGreaterThan(0.5);
-      expect(diff).toBeLessThan(1.5);
+      const diff = newZoom - initialZoom;
+      // Zoom step should be approximately 2.0 (the non-default value we set)
+      // Allow for animation/rounding variance
+      expect(diff).toBeGreaterThan(1.5);
+      expect(diff).toBeLessThan(2.5);
     });
   });
 });
