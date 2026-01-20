@@ -5,10 +5,19 @@
   "created_at": "2026-01-20T14:10:02.855100Z",
   "depends_on": [],
   "epic": "fn-5-jef",
+  "evidence": {
+    "commits": [
+      "c44a59927d281af778d4ee1fadc7ed40b9a5db00"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-5-jef.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-5-jef.1.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Wire showDepthGradient toggle to SurveyLayer",
-  "updated_at": "2026-01-20T23:06:16.805414Z"
+  "updated_at": "2026-01-20T23:30:10.508998Z"
 }

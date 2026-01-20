@@ -14,6 +14,98 @@ export function hexToRgb(hex: string): [number, number, number] {
 }
 
 /**
+ * Convert hex color to HSL
+ * Returns null if the hex color is invalid
+ */
+export function hexToHSL(hex: string): { h: number; s: number; l: number } | null {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!result) {
+    return null;
+  }
+
+  const r = parseInt(result[1] ?? '0', 16) / 255;
+  const g = parseInt(result[2] ?? '0', 16) / 255;
+  const b = parseInt(result[3] ?? '0', 16) / 255;
+
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+
+  if (max === min) {
+    // Achromatic (gray)
+    return { h: 0, s: 0, l };
+  }
+
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+
+  let h: number;
+  if (max === r) {
+    h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+  } else if (max === g) {
+    h = ((b - r) / d + 2) / 6;
+  } else {
+    h = ((r - g) / d + 4) / 6;
+  }
+
+  return { h: h * 360, s, l };
+}
+
+/**
+ * Convert HSL to hex color
+ * h: 0-360, s: 0-1, l: 0-1
+ */
+export function hslToHex(h: number, s: number, l: number): string {
+  // Normalize h to 0-360 range
+  h = ((h % 360) + 360) % 360;
+
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+
+  let r = 0;
+  let g = 0;
+  let b = 0;
+
+  if (h < 60) {
+    [r, g, b] = [c, x, 0];
+  } else if (h < 120) {
+    [r, g, b] = [x, c, 0];
+  } else if (h < 180) {
+    [r, g, b] = [0, c, x];
+  } else if (h < 240) {
+    [r, g, b] = [0, x, c];
+  } else if (h < 300) {
+    [r, g, b] = [x, 0, c];
+  } else {
+    [r, g, b] = [c, 0, x];
+  }
+
+  return rgbToHex((r + m) * 255, (g + m) * 255, (b + m) * 255);
+}
+
+/**
+ * Interpolate between two hues taking the shortest path around the color wheel
+ * h1, h2: 0-360, t: 0-1
+ * Returns: 0-360
+ */
+export function interpolateHue(h1: number, h2: number, t: number): number {
+  // Calculate the difference
+  let diff = h2 - h1;
+
+  // Take the shortest path around the wheel
+  if (diff > 180) {
+    diff -= 360;
+  } else if (diff < -180) {
+    diff += 360;
+  }
+
+  // Interpolate and normalize to 0-360
+  let result = h1 + diff * t;
+  return ((result % 360) + 360) % 360;
+}
+
+/**
  * Convert RGB values to hex color
  */
 export function rgbToHex(r: number, g: number, b: number): string {
@@ -47,24 +139,51 @@ export function interpolateColor(
 }
 
 /**
- * Get a color for a depth value using gradient settings
+ * Get a color for a depth value using HSL gradient interpolation
+ * Returns null for invalid inputs - caller should fallback to section color
+ *
+ * @param depth - The depth value to get color for
+ * @param shallowColor - Color for shallowest depth (default: '#00bfff' light blue)
+ * @param deepColor - Color for deepest depth (default: '#ff4444' red)
+ * @param minDepth - Shallowest depth value (smallest z)
+ * @param maxDepth - Deepest depth value (largest z)
+ * @returns Hex color string or null if inputs are invalid
  */
 export function getDepthColor(
   depth: number,
   shallowColor: string,
   deepColor: string,
-  shallowDepth: number,
-  deepDepth: number
-): string {
-  if (depth <= shallowDepth) {
-    return shallowColor;
-  }
-  if (depth >= deepDepth) {
-    return deepColor;
+  minDepth: number,
+  maxDepth: number
+): string | null {
+  // Return null for invalid inputs - caller should fallback to section color
+  if (!isFinite(depth) || !isFinite(minDepth) || !isFinite(maxDepth)) {
+    return null;
   }
 
-  const t = (depth - shallowDepth) / (deepDepth - shallowDepth);
-  return interpolateColor(shallowColor, deepColor, t);
+  // Handle equal depths (flat cave)
+  if (maxDepth === minDepth) {
+    return shallowColor;
+  }
+
+  // Clamp depth to range
+  const clampedDepth = Math.max(minDepth, Math.min(maxDepth, depth));
+  const t = (clampedDepth - minDepth) / (maxDepth - minDepth);
+
+  // Convert hex to HSL
+  const shallowHSL = hexToHSL(shallowColor);
+  const deepHSL = hexToHSL(deepColor);
+
+  if (!shallowHSL || !deepHSL) {
+    return null; // Invalid color format
+  }
+
+  // Interpolate in HSL space (shortest hue path)
+  const h = interpolateHue(shallowHSL.h, deepHSL.h, t);
+  const s = shallowHSL.s + (deepHSL.s - shallowHSL.s) * t;
+  const l = shallowHSL.l + (deepHSL.l - shallowHSL.l) * t;
+
+  return hslToHex(h, s, l);
 }
 
 /**
