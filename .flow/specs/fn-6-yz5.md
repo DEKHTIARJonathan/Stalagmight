@@ -17,44 +17,28 @@ The Save button in Edit Section, Edit Shot, and Section Adjust dialogs silently 
 
 ## Fix
 
-Replace falsy checks with explicit runtime-safe type guards:
-
-### For `number | undefined` (dialog data)
-
 ```typescript
 // WRONG: fails when id === 0
 if (!sectionId) return;
 
-// CORRECT: runtime-safe type guard (preferred)
+// CORRECT: runtime-safe type guard
 if (typeof sectionId !== 'number') return;
-```
 
-### For `number | null` (UI state like selectedSectionId)
-
-```typescript
-// WRONG: fails when id === 0
-if (!selectedSectionId) return null;
-
-// CORRECT: nullish check (catches both null and undefined)
+// For number | null:
 if (selectedSectionId == null) return null;
 ```
 
-**Reference pattern**: `ConfirmDialog.tsx:18` uses correct pattern: `sectionId !== undefined && shotId !== undefined`
-
 ## SectionAdjustDialog Cancel/Revert Edge Case
 
-The preview is debounced (150ms). Both `handleCancel` and `handleApply` must clear the timeout FIRST (before any early returns):
+Both `handleCancel` and `handleApply` must clear the timeout FIRST:
 
 ```typescript
-// FIXED handleCancel:
 const handleCancel = async () => {
-  // Clear pending preview timeout FIRST (before any other logic)
   if (previewTimeoutRef.current) {
     clearTimeout(previewTimeoutRef.current);
     previewTimeoutRef.current = null;
   }
 
-  // Use typeof for id=0 safety (was: previewApplied && sectionId)
   if (previewApplied && typeof sectionId === 'number') {
     await moveSection(sectionId, {
       x: -lastPreviewOffset.current.dx,
@@ -64,123 +48,101 @@ const handleCancel = async () => {
   }
   closeDialog();
 };
-
-// FIXED handleApply:
-const handleApply = async () => {
-  // Clear pending preview timeout FIRST (even before early return)
-  if (previewTimeoutRef.current) {
-    clearTimeout(previewTimeoutRef.current);
-    previewTimeoutRef.current = null;
-  }
-
-  if (typeof sectionId !== 'number') return;  // was: if (!sectionId)
-
-  // ...rest of apply logic unchanged
-};
-
-// FIXED applyPreview:
-const applyPreview = useCallback(async (newDx: number, newDy: number) => {
-  if (typeof sectionId !== 'number') return;  // was: if (!sectionId)
-  // ...rest unchanged
-}, [sectionId, moveSection]);
 ```
 
 ## E2E Test Setup for id=0 Scenarios
 
-### Strategy: Keep tests self-contained with mock-aligned data
-
-The mock `get_project_state` generates stations/stats from `currentProject`. To avoid inconsistency on `refreshProjectState()`:
-
-1. Set fixture data that matches what mock would generate
-2. Use `setView('single')` to ensure dialogs are available
-3. Use `(window as any)` for type safety in evaluate calls
-
-### Full Test Setup Pattern
+### Update tauri-ipc.ts to expose mock setter
 
 ```typescript
-// e2e-playwright/tests/id-zero-bug.spec.ts
-import { test, expect } from '@playwright/test';
-import { createAndOpenProject } from './helpers/project-helpers';
+// In e2e-playwright/mocks/tauri-ipc.ts
+(window as any).__E2E_MOCKS__ = {
+  setCurrentProject: (project: any) => { currentProject = project; },
+  getCurrentProject: () => currentProject,
+};
+```
+
+### Full Test Pattern
+
+```typescript
+// e2e-playwright/id-zero-bug.spec.ts
+import { test, expect, Page } from '@playwright/test';
+import { setupTauriMocks } from './mocks/tauri-ipc';
+
+async function createProject(page: Page, name: string) {
+  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
+  await newProjectBtn.click();
+  await page.waitForSelector('.fixed.inset-0');
+  await page.locator('.fixed.inset-0 input').first().fill(name);
+  await page.click('.fixed.inset-0 button:has-text("Create")');
+  await page.waitForSelector('canvas', { timeout: 10000 });
+}
+
+async function injectId0Fixture(page: Page) {
+  await page.evaluate(() => {
+    const testSection = {
+      id: 0, name: 'First Section', surveyor: 'Test', date: '2026-01-20',
+      color: '#4ecdc4', direction: 'in',
+      shots: [{
+        id: 0, azimuth_in: 90, azimuth_out: 270, length: 10,
+        depth_in: 0, depth_out: -1, pitch_in: null, pitch_out: null,
+        left: 1, right: 1, up: 2, down: 0.5, comment: null,
+        is_virtual: false, marker_index: 0, temperature: null,
+      }]
+    };
+
+    const store = (window as any).__E2E_TEST__.projectStore.getState();
+    const project = { ...store.project, sections: [testSection] };
+    const mockStations = [
+      { station_ref: { section_id: 0, station_index: 0 }, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: true, gps_coordinates: null, merged_with: [] },
+      { station_ref: { section_id: 0, station_index: 1 }, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false, gps_coordinates: null, merged_with: [] },
+    ];
+    const mockStats = { section_count: 1, shot_count: 1, total_length: 0, min_depth: 0, max_depth: 0, station_count: 2, loop_count: 0, penetration_distance: 0 };
+
+    (window as any).__E2E_TEST__.projectStore.setState({ project, stations: mockStations, stats: mockStats });
+    if ((window as any).__E2E_MOCKS__?.setCurrentProject) {
+      (window as any).__E2E_MOCKS__.setCurrentProject(project);
+    }
+  });
+}
 
 test.describe('ID=0 Bug Fixes', () => {
   test.beforeEach(async ({ page }) => {
-    // Use existing helper to create project (puts app in SingleSystemView)
-    await createAndOpenProject(page, 'ID Zero Test');
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await createProject(page, 'ID Zero Test');
+    await injectId0Fixture(page);
   });
 
   test('Edit Section dialog saves when sectionId === 0', async ({ page }) => {
-    // Inject fixture with id=0 (matching mock's expected shape)
-    await page.evaluate(() => {
-      const testSection = {
-        id: 0,
-        name: 'First Section',
-        surveyor: 'Test Surveyor',
-        date: '2026-01-20',
-        color: '#4ecdc4',
-        direction: 'in',
-        shots: [{
-          id: 0,
-          azimuth_in: 90,
-          azimuth_out: 270,
-          length: 10,
-          depth_in: 0,
-          depth_out: -1,
-          pitch_in: null,
-          pitch_out: null,
-          left: 1, right: 1, up: 2, down: 0.5,
-          comment: null,
-          is_virtual: false,
-          marker_index: 0,
-          temperature: null,
-        }]
-      };
-
-      // Get current project and replace first section with id=0 fixture
-      const store = (window as any).__E2E_TEST__.projectStore.getState();
-      const project = { ...store.project, sections: [testSection] };
-
-      // Mock generates stations as: section.shots.length + 1 per section
-      // with x = station_index * 10, y = 0, z = 0
-      const mockStations = [
-        { station_ref: { section_id: 0, station_index: 0 }, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: true, gps_coordinates: null, merged_with: [] },
-        { station_ref: { section_id: 0, station_index: 1 }, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false, gps_coordinates: null, merged_with: [] },
-      ];
-
-      const mockStats = {
-        section_count: 1,
-        shot_count: 1,
-        total_length: 0,
-        min_depth: 0,
-        max_depth: 0,
-        station_count: 2,
-        loop_count: 0,
-        penetration_distance: 0,
-      };
-
-      (window as any).__E2E_TEST__.projectStore.setState({
-        project,
-        stations: mockStations,
-        stats: mockStats,
-      });
-    });
-
-    // Open Edit Section dialog for section id=0
     await page.evaluate(() => {
       (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-section', { sectionId: 0 });
     });
-
-    // Wait for dialog
-    await expect(page.getByTestId('edit-section-dialog')).toBeVisible();
-
-    // Modify something and save
+    await expect(page.getByRole('dialog')).toBeVisible();
     await page.fill('[data-testid="section-name-input"]', 'Modified Section');
-    await page.click('[data-testid="save-button"]');
-
-    // Verify dialog closed (save succeeded)
-    await expect(page.getByTestId('edit-section-dialog')).not.toBeVisible();
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('dialog')).not.toBeVisible();
   });
 
-  // Similar tests for edit-shot and section-adjust...
+  test('Edit Shot dialog saves when shotId === 0', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('edit-shot', { sectionId: 0, shotId: 0 });
+    });
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('dialog')).not.toBeVisible();
+  });
+
+  test('Section Adjust dialog applies when sectionId === 0', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as any).__E2E_TEST__.uiStore.getState().openDialog('section-adjust', { sectionId: 0 });
+    });
+    await expect(page.getByTestId('section-adjust-dialog')).toBeVisible();
+    await page.fill('[data-testid="dx-input"]', '5');
+    await page.getByRole('button', { name: 'Apply' }).click();
+    await expect(page.getByTestId('section-adjust-dialog')).not.toBeVisible();
+  });
 });
 ```
 
@@ -188,37 +150,35 @@ test.describe('ID=0 Bug Fixes', () => {
 
 ```typescript
 test('DataTable renders warnings for section with id=0', async ({ page }) => {
-  // First set up project with id=0 as above, then:
   await page.evaluate(() => {
     (window as any).__E2E_TEST__.projectStore.setState({
       warnings: [{
-        section_id: 0,
-        shot_id: 0,
-        shot_index: 0,
-        code: 'TEST_WARNING',
-        message: 'Test warning for shot 0',
-        severity: 'warning',
-        is_resolved: false,
+        section_id: 0, shot_id: 0, shot_index: 0,
+        code: 'TEST_WARNING', message: 'Test warning',
+        severity: 'warning', is_resolved: false,
       }]
     });
   });
 
-  // Select section 0 to show in DataTable
+  await page.click('canvas');
+
+  // Open DataTable via setState (direct state set, not toggle)
   await page.evaluate(() => {
-    (window as any).__E2E_TEST__.uiStore.getState().setSelectedSection(0);
+    (window as any).__E2E_TEST__.uiStore.setState({ dataTableOpen: true });
   });
 
-  // Verify warning indicator visible (with data-testid)
+  await page.waitForSelector('text=Data Table', { timeout: 3000 });
+  const dataTableHeader = page.locator('text=Data Table').locator('..').locator('..');
+  await dataTableHeader.locator('select').selectOption({ label: 'First Section' });
   await expect(page.getByTestId('warning-0-0')).toBeVisible();
 });
 ```
 
 ### Warning UI testability
 
-Add `data-testid` with section and shot IDs:
+Add `data-testid` in DataTable:
 
 ```typescript
-// In DataTable warning column rendering
 <span
   data-testid={`warning-${selectedSectionId}-${shot.id}`}
   className="text-warning cursor-help"
@@ -230,34 +190,17 @@ Add `data-testid` with section and shot IDs:
 
 ## Pre-fix Scan
 
-Scan entire `src` directory for all ID-related falsy checks:
-
 ```bash
-# Falsy ID checks with !
 rg -n "if \(!\\w+Id\\b\)" src --type ts
-
-# Boolean AND with ID (misses id=0)
 rg -n "&&\\s*\\w+Id\\b" src --type ts
-
-# Explicit !id patterns
 rg -n "!\\w+Id\\b" src --type ts
-
-# OR with falsy ID checks
-rg -n "\\|\\|\\s*!\\w+Id\\b" src --type ts
 ```
-
-Record results and confirm the list in "Affected Files" is complete.
 
 ## Quick Commands
 
 ```bash
-# Type check
 pnpm tsc --noEmit
-
-# Run dev server
 ./scripts/dev.sh
-
-# Run Playwright tests
 pnpm test:ui
 ```
 
@@ -269,12 +212,11 @@ pnpm test:ui
 - [ ] Section Adjust dialog clears pending timeout FIRST in cancel/apply
 - [ ] Section Adjust dialog reverts preview on cancel when sectionId === 0
 - [ ] DataTable renders warnings for section with id=0
-- [ ] E2E tests use createAndOpenProject helper (ensures SingleSystemView)
-- [ ] E2E fixture data matches mock's generated stations/stats shape
-- [ ] E2E tests use `(window as any)` for type-safe evaluate calls
-- [ ] E2E tests use correct dialog keys: 'edit-section', 'edit-shot', 'section-adjust'
+- [ ] E2E mock exposes `__E2E_MOCKS__.setCurrentProject` hook
+- [ ] E2E tests sync mock currentProject after fixture injection
+- [ ] E2E tests open DataTable via `uiStore.setState({ dataTableOpen: true })`
 - [ ] Warning indicators have data-testid with section+shot IDs
-- [ ] Codebase scanned for all `!<id>` patterns in src (grep verified)
+- [ ] Codebase scanned for all `!<id>` patterns (grep verified)
 - [ ] E2E tests added for id=0 scenarios (fn-6-yz5.3)
 - [ ] All existing Playwright tests pass
 - [ ] No TypeScript errors
@@ -282,9 +224,8 @@ pnpm test:ui
 ## References
 
 - Correct pattern: `src/components/Dialogs/ConfirmDialog.tsx:18`
-- Backend ID init: `src-tauri/src/models/project.rs:87` (next_section_id: 0)
-- Shot ID init: `src-tauri/src/models/section.rs:124` (next_shot_id: 0)
-- TypeScript types: `src/types/project.ts` (Project:158, Shot:9, Section:64)
-- Dialog keys: `src/App.tsx:550-557` ('edit-section', 'edit-shot', 'section-adjust')
-- E2E hooks: `src/main.tsx:20-23` (window.__E2E_TEST__)
-- Mock station generation: `e2e-playwright/mocks/tauri-ipc.ts:233-249`
+- Backend ID init: `src-tauri/src/models/project.rs:87`
+- Dialog keys: `src/App.tsx:550-557`
+- E2E hooks: `src/main.tsx:20-23`
+- Mock file: `e2e-playwright/mocks/tauri-ipc.ts`
+- Helper pattern: `e2e-playwright/section-adjust-dialog.spec.ts:7-14`
