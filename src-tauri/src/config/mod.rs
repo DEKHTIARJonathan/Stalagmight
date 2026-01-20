@@ -52,11 +52,26 @@ pub struct PanelsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheConfig {
     /// Enable tile caching for offline access
+    #[serde(default = "default_tile_cache_enabled")]
     pub tile_cache_enabled: bool,
     /// Maximum cache size in megabytes
+    #[serde(default = "default_tile_cache_max_mb")]
     pub tile_cache_max_mb: u32,
     /// Time-to-live for cached tiles in days
+    #[serde(default = "default_tile_ttl_days")]
     pub tile_ttl_days: u32,
+}
+
+fn default_tile_cache_enabled() -> bool {
+    true
+}
+
+fn default_tile_cache_max_mb() -> u32 {
+    500
+}
+
+fn default_tile_ttl_days() -> u32 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
