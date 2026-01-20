@@ -1,8 +1,170 @@
 # fn-4-7mg.3 Update click/hover event handlers to use hitbox layers
 
 ## Description
-Update ALL interaction event handlers and feature-presence checks to use hitbox layers.
+Update event handlers with nearest resolution for CLICK ONLY.
 
+## Nearest Resolution: Click/Contextmenu ONLY
+
+**Hover uses standard behavior** (mouseenter/mouseleave on hitbox layers). MapLibre gives topmost feature - that's fine for hover.
+
+**Click and contextmenu use nearest resolution**:
+
+```typescript
+private handleStationClick = (e: MapLayerMouseEvent) => {
+  const nearest = this.resolveNearestStation(e, e.features ?? []);
+  if (!nearest) return;
+  // ... use nearest
+};
+
+private handleContextMenu = (e: MapLayerMouseEvent) => {
+  // Query and resolve nearest for stations
+  const stationHits = this.map.queryRenderedFeatures(e.point, {
+    layers: [this.stationsHitboxLayerId]  // NOT ghost layers
+  });
+  const nearestStation = this.resolveNearestStation(e, stationHits);
+
+  // Query and resolve nearest for shots
+  const shotHits = this.map.queryRenderedFeatures(e.point, {
+    layers: [this.shotsHitboxLayerId]
+  });
+  const nearestShot = this.resolveNearestShot(e, shotHits);
+  // ...
+};
+```
+
+**Hover handlers: NO nearest resolution**:
+```typescript
+private handleStationEnter = (e: MapLayerMouseEvent) => {
+  // Use e.features[0] directly - standard MapLibre behavior
+  const feature = e.features?.[0];
+  // ...
+};
+```
+
+## Distance-to-Line-Segment for Shots
+
+```typescript
+private distanceToLineSegment(px, py, x1, y1, x2, y2): number {
+  const A = px - x1, B = py - y1;
+  const C = x2 - x1, D = y2 - y1;
+  const dot = A * C + B * D;
+  const lenSq = C * C + D * D;
+  let param = lenSq !== 0 ? dot / lenSq : -1;
+
+  let xx, yy;
+  if (param < 0) { xx = x1; yy = y1; }
+  else if (param > 1) { xx = x2; yy = y2; }
+  else { xx = x1 + param * C; yy = y1 + param * D; }
+
+  return Math.sqrt((px - xx) ** 2 + (py - yy) ** 2);
+}
+```
+
+## Global Empty-Click Handler
+
+Query hitbox layers (NOT ghost):
+```typescript
+const stationHits = this.map.queryRenderedFeatures(e.point, {
+  layers: [this.stationsHitboxLayerId]
+});
+const shotHits = this.map.queryRenderedFeatures(e.point, {
+  layers: [this.shotsHitboxLayerId]
+});
+if (stationHits.length === 0 && shotHits.length === 0) {
+  // Empty click
+}
+```
+## Distance-to-Line-Segment for Shots
+
+Don't use just endpoint or midpoint distance. Compute perpendicular distance to line segment:
+
+```typescript
+private distanceToLineSegment(
+  px: number, py: number,  // Click point in screen coords
+  x1: number, y1: number,  // Line start in screen coords
+  x2: number, y2: number   // Line end in screen coords
+): number {
+  const A = px - x1;
+  const B = py - y1;
+  const C = x2 - x1;
+  const D = y2 - y1;
+
+  const dot = A * C + B * D;
+  const lenSq = C * C + D * D;
+  let param = lenSq !== 0 ? dot / lenSq : -1;
+
+  let xx, yy;
+  if (param < 0) {
+    xx = x1; yy = y1;  // Closest to start
+  } else if (param > 1) {
+    xx = x2; yy = y2;  // Closest to end
+  } else {
+    xx = x1 + param * C;  // Perpendicular point
+    yy = y1 + param * D;
+  }
+
+  return Math.sqrt((px - xx) ** 2 + (py - yy) ** 2);
+}
+```
+
+## Nearest Shot Resolution
+
+```typescript
+private resolveNearestShot(
+  e: MapLayerMouseEvent,
+  features: MapGeoJSONFeature[]
+): MapGeoJSONFeature | null {
+  if (features.length === 0) return null;
+  if (features.length === 1) return features[0];
+
+  let nearest = features[0];
+  let nearestDist = Infinity;
+
+  for (const feature of features) {
+    const geom = feature.geometry;
+    if (geom.type === 'LineString' && geom.coordinates.length >= 2) {
+      // Project line endpoints to screen
+      const [lng1, lat1] = geom.coordinates[0];
+      const [lng2, lat2] = geom.coordinates[1];
+      const p1 = this.map.project([lng1, lat1]);
+      const p2 = this.map.project([lng2, lat2]);
+
+      const dist = this.distanceToLineSegment(
+        e.point.x, e.point.y,
+        p1.x, p1.y, p2.x, p2.y
+      );
+
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearest = feature;
+      }
+    }
+  }
+  return nearest;
+}
+```
+
+## Global Empty-Click Handler
+
+Update to query hitbox layers:
+```typescript
+const stationHits = this.map.queryRenderedFeatures(e.point, {
+  layers: [this.stationsHitboxLayerId]
+});
+const shotHits = this.map.queryRenderedFeatures(e.point, {
+  layers: [this.shotsHitboxLayerId]
+});
+if (stationHits.length === 0 && shotHits.length === 0) {
+  // Empty space - trigger empty-click behavior
+}
+```
+
+## Snap Detection Update
+
+```typescript
+const threshold = config.map.snap.threshold;
+if (config.map.snap.enabled_draw) { ... }
+```
 ## CRITICAL: Global Empty-Click Handler
 
 SurveyLayer has a global `map.on('click', ...)` handler that fires for ALL clicks, not just layer-specific. It queries visual layers to detect if click hit empty space. **Must update to query hitbox layers**, otherwise clicks inside hitbox but outside visual glyph will incorrectly trigger empty-space behavior.
@@ -282,20 +444,13 @@ Cursor should still change to 'pointer' when hovering hitbox layers (not just vi
 
 Station hitbox has priority over shot hitbox (existing behavior preserved). If both station-hitbox and shot-hitbox features are at the click point, station wins.
 ## Acceptance
-- [ ] `resolveNearestFeature()` helper added for nearest-to-click resolution
-- [ ] Station click uses hitbox layer AND nearest resolver
-- [ ] Shot click uses hitbox layer AND nearest resolver
-- [ ] Station hover uses hitbox layer
-- [ ] Shot hover uses hitbox layer
-- [ ] Global empty-click handler queries hitbox layers (not visual layers)
-- [ ] Context menu queries hitbox layers AND uses nearest resolver
-- [ ] Box select queries `survey-stations-hitbox`
-- [ ] Snap detection uses `config.map.snap.threshold`
-- [ ] Snap enabled checks use `config.map.snap.enabledDraw/Merge/Measure`
-- [ ] Cursor changes to 'pointer' when hovering hitbox area
-- [ ] Station priority over shot preserved
+- [ ] Nearest resolution for CLICK and CONTEXTMENU only
+- [ ] Hover uses standard mouseenter/mouseleave (no nearest)
+- [ ] distanceToLineSegment() for shot selection
+- [ ] Ghost layers NOT included in queries
+- [ ] Global empty-click queries hitbox layers
+- [ ] Snap uses config.map.snap.* (migration)
 - [ ] `pnpm tsc --noEmit` passes
-- [ ] Manual test: overlapping stations select nearest to click
 ## Done summary
 TBD
 

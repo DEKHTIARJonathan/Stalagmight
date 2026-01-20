@@ -1,8 +1,139 @@
 # fn-4-7mg.2 Add transparent hitbox layers to SurveyLayer
 
 ## Description
-Add hitbox layers to SurveyLayer with configurable sizes from config.
+Add hitbox layers with ghost layers non-interactive.
 
+## Ghost Hitbox Layers: Non-Interactive
+
+Ghost hitbox layers are for **debug visualization only**:
+- Add them to the layer stack
+- **DO NOT** include them in click/contextmenu queries
+- Only visible when `debug.map.show_hitboxes` is true
+
+```typescript
+// Event queries do NOT include ghost hitbox layers
+const stationHits = this.map.queryRenderedFeatures(e.point, {
+  layers: [this.stationsHitboxLayerId]  // NOT ghostStationsHitboxLayerId
+});
+```
+
+## Hitbox Layers with opacity 0.001
+
+```typescript
+this.map.addLayer({
+  id: this.stationsHitboxLayerId,
+  type: 'circle',
+  source: this.stationsSourceId,
+  paint: {
+    'circle-radius': this.config?.map.station.hit_area ?? 10,
+    'circle-color': 'rgba(0, 0, 0, 0)',
+    'circle-opacity': 0.001,
+  },
+});
+```
+
+## Visual State Scaling
+
+```typescript
+const baseRadius = this.config?.map.station.radius ?? 4;
+
+// Zero datum: radius * 2
+// Snapped: radius + 3
+// Hovered: radius + 2
+// Selected: radius + 1
+```
+
+## SurveyLayer Config Cache
+
+Store config in SurveyLayer for use in event handlers:
+
+```typescript
+private config: Config | null = null;
+
+public setConfig(config: Config): void {
+  this.config = config;
+  this.updateHitboxLayers();
+  this.updateVisualState();
+  this.updateDebugVisualization();
+}
+```
+
+Event handlers can then access `this.config` for logging/settings.
+## Visual State Scaling Rules
+
+Base values from config, with explicit deltas:
+- **Normal station**: `config.map.station.radius` (default 4.0)
+- **Zero datum station**: `radius * 2` (8.0 at default)
+- **Snapped station**: `radius + 3` (7.0 at default)
+- **Hovered station**: `radius + 2` (6.0 at default, for visual feedback)
+- **Selected station**: `radius + 1` (5.0 at default)
+
+Same pattern for shots with `config.map.shot.width`.
+
+## Implementation
+
+### Hitbox layers with opacity 0.001
+
+```typescript
+this.map.addLayer({
+  id: this.stationsHitboxLayerId,
+  type: 'circle',
+  source: this.stationsSourceId,
+  paint: {
+    'circle-radius': this.config?.map.station.hit_area ?? 10,
+    'circle-color': 'rgba(0, 0, 0, 0)',
+    'circle-opacity': 0.001,  // CRITICAL: non-zero
+  },
+});
+```
+
+### Satellite layer anchor
+
+Update satellite insertion to anchor on `survey-stations-hitbox`.
+
+### updateVisualState() with scaling
+
+```typescript
+private updateVisualState(): void {
+  const baseRadius = this.config?.map.station.radius ?? 4;
+  const baseWidth = this.config?.map.shot.width ?? 2;
+
+  // Station radius with state-based scaling
+  this.map.setPaintProperty(this.stationsLayerId, 'circle-radius', [
+    'case',
+    ['==', stationIdExpr, this.snappedStationId ?? ''],
+    baseRadius + 3,  // Snapped
+    ['==', ['get', 'isZeroDatum'], true],
+    baseRadius * 2,  // Zero datum
+    ['==', stationIdExpr, this.hoveredStationId ?? ''],
+    baseRadius + 2,  // Hovered
+    ['==', stationIdExpr, this.selectedStationId ?? ''],
+    baseRadius + 1,  // Selected
+    baseRadius  // Normal
+  ]);
+
+  // Shot width with state-based scaling
+  this.map.setPaintProperty(this.shotsLayerId, 'line-width', [
+    'case',
+    ['==', shotIdExpr, this.hoveredShotId ?? ''],
+    baseWidth + 2,  // Hovered
+    ['==', shotIdExpr, this.selectedShotId ?? ''],
+    baseWidth + 1,  // Selected
+    baseWidth  // Normal
+  ]);
+}
+```
+
+### setConfig method
+
+```typescript
+public setConfig(config: Config): void {
+  this.config = config;
+  this.updateHitboxLayers();
+  this.updateVisualState();  // Applies new base sizes
+  this.updateDebugVisualization();
+}
+```
 ## CRITICAL: Opacity Must Be Non-Zero
 
 Use `opacity: 0.001` (not 0) to ensure `queryRenderedFeatures` works. Fully transparent layers may not be "rendered" in some MapLibre paths.
@@ -266,19 +397,13 @@ From bottom to top:
 - Also update visual layers to use `map.station.radius` and `map.shot.width`
 - Add methods to update hitbox layer paint properties when config changes
 ## Acceptance
-- [ ] SurveyLayer has `config` property and `setConfig(config)` method
-- [ ] `survey-stations-hitbox` layer uses `opacity: 0.001` (not 0)
-- [ ] `survey-shots-hitbox` layer uses `opacity: 0.001` (not 0)
-- [ ] Ghost hitbox layers use `opacity: 0.001`
-- [ ] Hitbox layers are FIRST in survey layer order
-- [ ] Satellite layer insertion anchors on `survey-stations-hitbox` (updated from `survey-ghost-shots`)
-- [ ] `updateVisualState()` refactored to use `config.map.station.radius` as base
-- [ ] `updateVisualState()` refactored to use `config.map.shot.width` as base
-- [ ] State deltas (hover, selected, snapped) applied to config base values
-- [ ] MapCanvas calls `setConfig()` on SurveyLayer initialization
-- [ ] MapCanvas calls `setConfig()` when config changes (useEffect)
+- [ ] Ghost hitbox layers added but NOT included in queries
+- [ ] Hitbox layers use opacity 0.001
+- [ ] Visual state scaling: zeroDatum = radius * 2, snapped = radius + 3
+- [ ] SurveyLayer stores config for event handlers
+- [ ] setConfig() updates hitbox and visual layers
+- [ ] Satellite insertion anchors on `survey-stations-hitbox`
 - [ ] `pnpm tsc --noEmit` passes
-- [ ] Existing satellite layer order E2E tests still pass
 ## Done summary
 TBD
 

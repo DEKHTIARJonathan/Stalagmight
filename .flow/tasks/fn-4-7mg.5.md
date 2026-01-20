@@ -1,8 +1,136 @@
 # fn-4-7mg.5 Add Reload Config button to Settings dialog
 
 ## Description
-Add a "Reload Config" button to the Settings dialog that re-reads the config file from disk.
+Add Reload Config button that updates store WITHOUT persisting.
 
+## CRITICAL: Don't Call update_config
+
+`update_config` saves to disk. On reload, we only want to refresh from disk, NOT save back:
+
+```typescript
+const handleReloadConfig = async () => {
+  try {
+    const newConfig = await invoke<Config>('reload_config');
+    const changes = computeConfigDiff(localConfig, newConfig);
+
+    setLocalConfig(newConfig);
+
+    // Update store directly - DO NOT call updateConfig() which would persist
+    // Use internal store method or direct setState
+    const store = useProjectStore.getState();
+    useProjectStore.setState({ config: newConfig });
+
+    if (changes.length > 0) {
+      const changeList = changes.map(c => `• ${c.path}: ${c.oldValue} → ${c.newValue}`).join('\n');
+      alert(`Config reloaded:\n\n${changeList}`);
+    } else {
+      alert('Config reloaded (no changes)');
+    }
+  } catch (error) {
+    alert(`Failed to reload config: ${error}`);
+  }
+};
+```
+
+## Rust Command
+
+```rust
+#[tauri::command]
+pub fn reload_config(state: State<AppState>) -> Result<Config, String> {
+    let new_config = Config::load().map_err(|e| e.to_string())?;
+    *state.config.lock().unwrap() = new_config.clone();
+    Ok(new_config)
+}
+```
+
+## UX
+
+- Button disabled when `isDirty`
+- Tooltip: "Save or discard local changes first"
+
+## Client-Side Diffing
+
+```typescript
+function computeConfigDiff(old: Config, new_: Config) {
+  const changes = [];
+  // Compare map.station.radius, map.station.hit_area, etc.
+  return changes;
+}
+```
+## API Contract
+
+`reload_config` returns **only the new Config** (simpler than returning diff):
+
+```rust
+#[tauri::command]
+pub fn reload_config(state: State<AppState>) -> Result<Config, String> {
+    let new_config = Config::load().map_err(|e| e.to_string())?;
+    *state.config.lock().unwrap() = new_config.clone();
+    Ok(new_config)
+}
+```
+
+## Client-Side Diffing
+
+Frontend computes diff (more flexible, easier to maintain):
+
+```typescript
+function computeConfigDiff(
+  oldConfig: Config,
+  newConfig: Config
+): { path: string; oldValue: string; newValue: string }[] {
+  const changes: { path: string; oldValue: string; newValue: string }[] = [];
+
+  // Check map.station
+  if (oldConfig.map.station.radius !== newConfig.map.station.radius) {
+    changes.push({
+      path: 'map.station.radius',
+      oldValue: String(oldConfig.map.station.radius),
+      newValue: String(newConfig.map.station.radius),
+    });
+  }
+  if (oldConfig.map.station.hit_area !== newConfig.map.station.hit_area) {
+    changes.push({
+      path: 'map.station.hit_area',
+      oldValue: String(oldConfig.map.station.hit_area),
+      newValue: String(newConfig.map.station.hit_area),
+    });
+  }
+  // ... check other relevant fields
+
+  return changes;
+}
+```
+
+## Implementation
+
+```typescript
+const handleReloadConfig = async () => {
+  try {
+    const newConfig = await invoke<Config>('reload_config');
+    const changes = computeConfigDiff(localConfig, newConfig);
+
+    setLocalConfig(newConfig);
+    updateConfig(newConfig);  // Update store
+
+    if (changes.length > 0) {
+      const changeList = changes
+        .map(c => `• ${c.path}: ${c.oldValue} → ${c.newValue}`)
+        .join('\n');
+      alert(`Config reloaded:\n\n${changeList}`);
+    } else {
+      alert('Config reloaded (no changes)');
+    }
+  } catch (error) {
+    alert(`Failed to reload config: ${error}`);
+  }
+};
+```
+
+## UX
+
+- Button disabled when `isDirty` (pending local edits)
+- Tooltip: "Save or discard local changes first"
 ## UX: Disable When isDirty
 
 The Settings dialog has local state (`localConfig`, `isDirty`) for pending edits. Reload button should be disabled when there are unsaved local changes to avoid confusion.
@@ -266,20 +394,12 @@ If config file has parse errors:
 - Show error toast with details
 - Keep previous config (don't crash)
 ## Acceptance
-- [ ] "Reload Config" button added to Settings dialog footer
-- [ ] Button disabled when `isDirty` is true
-- [ ] Button has tooltip explaining disabled state
-- [ ] Rust `reload_config` command returns config + list of changes
-- [ ] `ConfigChange` struct with path, old_value, new_value
-- [ ] `compute_config_diff()` compares key config fields
-- [ ] Config changes propagate to store and components
-- [ ] Changes shown via alert/dialog (no new toast system)
-- [ ] "No changes" message when config unchanged
-- [ ] Error message shown if config file has parse errors
-- [ ] Previous config preserved on parse error
-- [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
+- [ ] Reload updates store WITHOUT persisting (no updateConfig call)
+- [ ] Uses setState or internal method to update config state
+- [ ] Client-side diffing with computeConfigDiff()
+- [ ] Button disabled when isDirty
+- [ ] `cargo test` passes
 - [ ] `pnpm tsc --noEmit` passes
-- [ ] Manual test: edit config file, click Reload, verify dialog and effect
 ## Done summary
 TBD
 
