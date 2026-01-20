@@ -489,6 +489,8 @@ export default function MapCanvas() {
       center: mapCenter,
       zoom: mapZoom,
       attributionControl: false,
+      // Disable built-in keyboard zoom (handled by useKeyboardShortcuts with config.map.zoom_step)
+      keyboard: false,
     });
 
     // Disable rotation (Ctrl+drag rotates by default, we want Ctrl+drag to pan)
@@ -554,7 +556,7 @@ export default function MapCanvas() {
     };
   }, []);
 
-  // Expose map instance for E2E testing (development only)
+  // Expose map instance for E2E testing and keyboard shortcuts
   useEffect(() => {
     if (map.current) {
       (window as unknown as { __cavechef_map__?: maplibregl.Map }).__cavechef_map__ = map.current;

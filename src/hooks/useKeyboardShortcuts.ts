@@ -50,7 +50,7 @@ export function useKeyboardShortcuts() {
       const key = event.key.toLowerCase();
 
       // Handle Escape FIRST - works even when focus is in an input
-      if (key === 'escape' || key === 'esc') {
+      if (key === 'escape') {
         // Close any open dialog
         const { activeDialog, closeDialog } = useUIStore.getState();
         if (activeDialog) {
@@ -213,28 +213,32 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // Handle +/- for zoom
-      if (key === '+' || key === '=') {
+      // Handle +/- for zoom (only without Ctrl/Cmd to preserve browser/app zoom behavior)
+      if (!isCtrlOrCmd && (key === '+' || key === '=')) {
         event.preventDefault();
-        const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number; zoomTo: (zoom: number, options?: { duration?: number }) => void } }).__cavechef_map__;
+        const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number; getMinZoom: () => number; getMaxZoom: () => number; zoomTo: (zoom: number, options?: { duration?: number }) => void } }).__cavechef_map__;
         if (map) {
           const config = useProjectStore.getState().config;
           const zoomStep = config?.map.zoom_step ?? 1.0;
-          const targetZoom = Math.min(22, map.getZoom() + zoomStep);
-          if (targetZoom !== map.getZoom()) {
+          const maxZoom = config?.map.zoom_max ?? map.getMaxZoom();
+          const currentZoom = map.getZoom();
+          const targetZoom = Math.min(maxZoom, currentZoom + zoomStep);
+          if (targetZoom !== currentZoom) {
             map.zoomTo(targetZoom, { duration: 300 });
           }
         }
         return;
       }
-      if (key === '-') {
+      if (!isCtrlOrCmd && key === '-') {
         event.preventDefault();
-        const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number; zoomTo: (zoom: number, options?: { duration?: number }) => void } }).__cavechef_map__;
+        const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number; getMinZoom: () => number; getMaxZoom: () => number; zoomTo: (zoom: number, options?: { duration?: number }) => void } }).__cavechef_map__;
         if (map) {
           const config = useProjectStore.getState().config;
           const zoomStep = config?.map.zoom_step ?? 1.0;
-          const targetZoom = Math.max(0, map.getZoom() - zoomStep);
-          if (targetZoom !== map.getZoom()) {
+          const minZoom = config?.map.zoom_min ?? map.getMinZoom();
+          const currentZoom = map.getZoom();
+          const targetZoom = Math.max(minZoom, currentZoom - zoomStep);
+          if (targetZoom !== currentZoom) {
             map.zoomTo(targetZoom, { duration: 300 });
           }
         }
