@@ -520,6 +520,643 @@ impl Config {
 mod tests {
     use super::*;
 
+    // ========================================================================
+    // Default Values Tests
+    // ========================================================================
+
+    #[test]
+    fn test_station_config_defaults() {
+        let config = StationConfig::default();
+        assert_eq!(config.radius, 4.0);
+        assert_eq!(config.hit_area, 10.0);
+    }
+
+    #[test]
+    fn test_shot_config_defaults() {
+        let config = ShotConfig::default();
+        assert_eq!(config.width, 2.0);
+        assert_eq!(config.hit_area, 8.0);
+    }
+
+    #[test]
+    fn test_map_snap_config_defaults() {
+        let config = MapSnapConfig::default();
+        assert_eq!(config.threshold, 10.0);
+        assert!(config.enabled_draw);
+        assert!(config.enabled_merge);
+        assert!(config.enabled_measure);
+    }
+
+    #[test]
+    fn test_map_config_defaults() {
+        let config = MapConfig::default();
+        assert_eq!(config.station.radius, 4.0);
+        assert_eq!(config.station.hit_area, 10.0);
+        assert_eq!(config.shot.width, 2.0);
+        assert_eq!(config.shot.hit_area, 8.0);
+        assert_eq!(config.snap.threshold, 10.0);
+        assert_eq!(config.zoom_step, 1.0);
+    }
+
+    #[test]
+    fn test_debug_config_defaults() {
+        let config = DebugConfig::default();
+        assert!(!config.map.show_hitboxes);
+        assert!(!config.map.log_hit_detection);
+    }
+
+    // ========================================================================
+    // Station Config Validation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_station_validation_accepts_minimum_bound() {
+        let mut config = StationConfig { radius: 1.0, hit_area: 1.0 };
+        config.normalize();
+        assert_eq!(config.radius, 1.0);
+        assert_eq!(config.hit_area, 1.0);
+    }
+
+    #[test]
+    fn test_station_validation_accepts_mid_range() {
+        let mut config = StationConfig { radius: 25.0, hit_area: 25.0 };
+        config.normalize();
+        assert_eq!(config.radius, 25.0);
+        assert_eq!(config.hit_area, 25.0);
+    }
+
+    #[test]
+    fn test_station_validation_accepts_maximum_bound() {
+        let mut config = StationConfig { radius: 50.0, hit_area: 50.0 };
+        config.normalize();
+        assert_eq!(config.radius, 50.0);
+        assert_eq!(config.hit_area, 50.0);
+    }
+
+    #[test]
+    fn test_station_validation_rejects_zero() {
+        let mut config = StationConfig { radius: 0.0, hit_area: 0.0 };
+        config.normalize();
+        assert_eq!(config.radius, 1.0); // clamped to min
+        assert_eq!(config.hit_area, 1.0); // clamped to min
+    }
+
+    #[test]
+    fn test_station_validation_rejects_negative() {
+        let mut config = StationConfig { radius: -1.0, hit_area: -1.0 };
+        config.normalize();
+        assert_eq!(config.radius, 1.0); // clamped to min
+        assert_eq!(config.hit_area, 1.0); // clamped to min
+    }
+
+    #[test]
+    fn test_station_validation_rejects_above_max() {
+        let mut config = StationConfig { radius: 51.0, hit_area: 51.0 };
+        config.normalize();
+        assert_eq!(config.radius, 50.0); // clamped to max
+        assert_eq!(config.hit_area, 50.0); // clamped to max
+    }
+
+    #[test]
+    fn test_station_validation_rejects_large_values() {
+        let mut config = StationConfig { radius: 100.0, hit_area: 100.0 };
+        config.normalize();
+        assert_eq!(config.radius, 50.0); // clamped to max
+        assert_eq!(config.hit_area, 50.0); // clamped to max
+    }
+
+    #[test]
+    fn test_station_validation_handles_nan() {
+        let mut config = StationConfig { radius: f64::NAN, hit_area: f64::NAN };
+        config.normalize();
+        assert_eq!(config.radius, 4.0); // default
+        assert_eq!(config.hit_area, 10.0); // default
+    }
+
+    #[test]
+    fn test_station_validation_handles_infinity() {
+        let mut config = StationConfig { radius: f64::INFINITY, hit_area: f64::INFINITY };
+        config.normalize();
+        assert_eq!(config.radius, 4.0); // default
+        assert_eq!(config.hit_area, 10.0); // default
+    }
+
+    #[test]
+    fn test_station_validation_handles_neg_infinity() {
+        let mut config = StationConfig { radius: f64::NEG_INFINITY, hit_area: f64::NEG_INFINITY };
+        config.normalize();
+        assert_eq!(config.radius, 4.0); // default
+        assert_eq!(config.hit_area, 10.0); // default
+    }
+
+    #[test]
+    fn test_station_hit_area_enforced_gte_radius() {
+        let mut config = StationConfig { radius: 20.0, hit_area: 10.0 };
+        config.normalize();
+        assert_eq!(config.radius, 20.0);
+        assert_eq!(config.hit_area, 20.0); // enforced >= radius
+    }
+
+    // ========================================================================
+    // Shot Config Validation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_shot_validation_accepts_minimum_bound() {
+        let mut config = ShotConfig { width: 0.5, hit_area: 0.5 };
+        config.normalize();
+        assert_eq!(config.width, 0.5);
+        assert_eq!(config.hit_area, 0.5);
+    }
+
+    #[test]
+    fn test_shot_validation_accepts_mid_range() {
+        let mut config = ShotConfig { width: 10.0, hit_area: 10.0 };
+        config.normalize();
+        assert_eq!(config.width, 10.0);
+        assert_eq!(config.hit_area, 10.0);
+    }
+
+    #[test]
+    fn test_shot_validation_accepts_maximum_bound() {
+        let mut config = ShotConfig { width: 20.0, hit_area: 20.0 };
+        config.normalize();
+        assert_eq!(config.width, 20.0);
+        assert_eq!(config.hit_area, 20.0);
+    }
+
+    #[test]
+    fn test_shot_validation_rejects_zero() {
+        let mut config = ShotConfig { width: 0.0, hit_area: 0.0 };
+        config.normalize();
+        assert_eq!(config.width, 0.5); // clamped to min
+        assert_eq!(config.hit_area, 0.5); // clamped to min
+    }
+
+    #[test]
+    fn test_shot_validation_rejects_negative() {
+        let mut config = ShotConfig { width: -1.0, hit_area: -1.0 };
+        config.normalize();
+        assert_eq!(config.width, 0.5); // clamped to min
+        assert_eq!(config.hit_area, 0.5); // clamped to min
+    }
+
+    #[test]
+    fn test_shot_validation_rejects_above_max() {
+        let mut config = ShotConfig { width: 21.0, hit_area: 21.0 };
+        config.normalize();
+        assert_eq!(config.width, 20.0); // clamped to max
+        assert_eq!(config.hit_area, 20.0); // clamped to max
+    }
+
+    #[test]
+    fn test_shot_validation_rejects_large_values() {
+        let mut config = ShotConfig { width: 100.0, hit_area: 100.0 };
+        config.normalize();
+        assert_eq!(config.width, 20.0); // clamped to max
+        assert_eq!(config.hit_area, 20.0); // clamped to max
+    }
+
+    #[test]
+    fn test_shot_validation_handles_nan() {
+        let mut config = ShotConfig { width: f64::NAN, hit_area: f64::NAN };
+        config.normalize();
+        assert_eq!(config.width, 2.0); // default
+        assert_eq!(config.hit_area, 8.0); // default
+    }
+
+    #[test]
+    fn test_shot_validation_handles_infinity() {
+        let mut config = ShotConfig { width: f64::INFINITY, hit_area: f64::INFINITY };
+        config.normalize();
+        assert_eq!(config.width, 2.0); // default
+        assert_eq!(config.hit_area, 8.0); // default
+    }
+
+    #[test]
+    fn test_shot_hit_area_enforced_gte_width() {
+        let mut config = ShotConfig { width: 15.0, hit_area: 5.0 };
+        config.normalize();
+        assert_eq!(config.width, 15.0);
+        assert_eq!(config.hit_area, 15.0); // enforced >= width
+    }
+
+    // ========================================================================
+    // Snap Config Validation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_snap_validation_accepts_minimum_bound() {
+        let mut config = MapSnapConfig { threshold: 1.0, ..Default::default() };
+        config.normalize();
+        assert_eq!(config.threshold, 1.0);
+    }
+
+    #[test]
+    fn test_snap_validation_accepts_mid_range() {
+        let mut config = MapSnapConfig { threshold: 25.0, ..Default::default() };
+        config.normalize();
+        assert_eq!(config.threshold, 25.0);
+    }
+
+    #[test]
+    fn test_snap_validation_accepts_maximum_bound() {
+        let mut config = MapSnapConfig { threshold: 50.0, ..Default::default() };
+        config.normalize();
+        assert_eq!(config.threshold, 50.0);
+    }
+
+    #[test]
+    fn test_snap_validation_rejects_zero() {
+        let mut config = MapSnapConfig { threshold: 0.0, ..Default::default() };
+        config.normalize();
+        assert_eq!(config.threshold, 1.0); // clamped to min
+    }
+
+    #[test]
+    fn test_snap_validation_rejects_negative() {
+        let mut config = MapSnapConfig { threshold: -1.0, ..Default::default() };
+        config.normalize();
+        assert_eq!(config.threshold, 1.0); // clamped to min
+    }
+
+    #[test]
+    fn test_snap_validation_rejects_above_max() {
+        let mut config = MapSnapConfig { threshold: 51.0, ..Default::default() };
+        config.normalize();
+        assert_eq!(config.threshold, 50.0); // clamped to max
+    }
+
+    #[test]
+    fn test_snap_validation_handles_nan() {
+        let mut config = MapSnapConfig { threshold: f64::NAN, ..Default::default() };
+        config.normalize();
+        assert_eq!(config.threshold, 10.0); // default
+    }
+
+    #[test]
+    fn test_snap_validation_handles_infinity() {
+        let mut config = MapSnapConfig { threshold: f64::INFINITY, ..Default::default() };
+        config.normalize();
+        assert_eq!(config.threshold, 10.0); // default
+    }
+
+    // ========================================================================
+    // Config Parsing Tests
+    // ========================================================================
+
+    #[test]
+    fn test_config_parsing_complete() {
+        let toml_str = r##"
+[general]
+auto_save = true
+auto_save_interval_seconds = 30
+recent_projects_max = 20
+
+[units]
+length = "meters"
+depth = "meters"
+angle = "degrees"
+decimal_precision = 1
+
+[display]
+default_background = "#1a1a2e"
+grid_color = "#333366"
+font_size = 12
+font_color = "#f5f5f5"
+
+[display.depth_gradient]
+enabled = false
+shallow_color = "#00bfff"
+deep_color = "#ff4444"
+shallow_depth = 0.0
+deep_depth = 50.0
+
+[section_colors]
+palette = ["#4ecdc4"]
+
+[map]
+satellite_provider = "openstreetmap"
+satellite_enabled = false
+zoom_default = 15
+zoom_min = 0
+zoom_max = 22
+zoom_step = 1.5
+
+[map.controls]
+pan_speed = 1.0
+zoom_speed = 1.0
+invert_scroll = false
+
+[map.station]
+radius = 6.0
+hit_area = 12.0
+
+[map.shot]
+width = 3.0
+hit_area = 10.0
+
+[map.snap]
+threshold = 15.0
+enabled_draw = true
+enabled_merge = false
+enabled_measure = true
+
+[validation]
+warn_shot_length_min = 0.1
+warn_shot_length_max = 50.0
+warn_depth_change_per_shot_max = 10.0
+warn_azimuth_deviation_max = 30.0
+
+[export]
+default_image_format = "png"
+default_dpi = 300
+default_include_satellite = true
+default_include_grid = false
+default_include_labels = true
+
+[logging]
+level = "info"
+max_directory_size_mb = 128
+
+[shortcuts]
+select = "S"
+pan = "P"
+zoom = "Z"
+draw = "D"
+delete = "X"
+merge = "M"
+measure = "R"
+move_section = "V"
+move_station = "T"
+undo = "Ctrl+Z"
+redo = "Ctrl+Y"
+save = "Ctrl+S"
+
+[debug.map]
+show_hitboxes = true
+log_hit_detection = true
+"##;
+
+        let config: Config = toml::from_str(toml_str).expect("Complete config should parse");
+
+        // Verify map section values
+        assert_eq!(config.map.station.radius, 6.0);
+        assert_eq!(config.map.station.hit_area, 12.0);
+        assert_eq!(config.map.shot.width, 3.0);
+        assert_eq!(config.map.shot.hit_area, 10.0);
+        assert_eq!(config.map.snap.threshold, 15.0);
+        assert!(config.map.snap.enabled_draw);
+        assert!(!config.map.snap.enabled_merge);
+        assert!(config.map.snap.enabled_measure);
+        assert_eq!(config.map.zoom_step, 1.5);
+
+        // Verify debug values
+        assert!(config.debug.map.show_hitboxes);
+        assert!(config.debug.map.log_hit_detection);
+    }
+
+    #[test]
+    fn test_config_parsing_partial_uses_defaults() {
+        // Config with only required sections, missing optional nested configs
+        let toml_str = r##"
+[general]
+auto_save = true
+auto_save_interval_seconds = 30
+recent_projects_max = 20
+
+[units]
+length = "meters"
+depth = "meters"
+angle = "degrees"
+decimal_precision = 1
+
+[display]
+default_background = "#1a1a2e"
+grid_color = "#333366"
+font_size = 12
+font_color = "#f5f5f5"
+
+[display.depth_gradient]
+enabled = false
+shallow_color = "#00bfff"
+deep_color = "#ff4444"
+shallow_depth = 0.0
+deep_depth = 50.0
+
+[section_colors]
+palette = ["#4ecdc4"]
+
+[map]
+satellite_provider = "openstreetmap"
+satellite_enabled = false
+zoom_default = 15
+zoom_min = 0
+zoom_max = 22
+
+[map.controls]
+pan_speed = 1.0
+zoom_speed = 1.0
+invert_scroll = false
+
+[validation]
+warn_shot_length_min = 0.1
+warn_shot_length_max = 50.0
+warn_depth_change_per_shot_max = 10.0
+warn_azimuth_deviation_max = 30.0
+
+[export]
+default_image_format = "png"
+default_dpi = 300
+default_include_satellite = true
+default_include_grid = false
+default_include_labels = true
+
+[logging]
+level = "info"
+max_directory_size_mb = 128
+
+[shortcuts]
+select = "S"
+pan = "P"
+zoom = "Z"
+draw = "D"
+delete = "X"
+merge = "M"
+measure = "R"
+move_section = "V"
+move_station = "T"
+undo = "Ctrl+Z"
+redo = "Ctrl+Y"
+save = "Ctrl+S"
+"##;
+
+        let config: Config = toml::from_str(toml_str).expect("Partial config should parse");
+
+        // Missing sections should use defaults
+        assert_eq!(config.map.station.radius, 4.0); // default
+        assert_eq!(config.map.station.hit_area, 10.0); // default
+        assert_eq!(config.map.shot.width, 2.0); // default
+        assert_eq!(config.map.shot.hit_area, 8.0); // default
+        assert_eq!(config.map.snap.threshold, 10.0); // default
+        assert!(config.map.snap.enabled_draw); // default
+        assert!(config.map.snap.enabled_merge); // default
+        assert!(config.map.snap.enabled_measure); // default
+        assert_eq!(config.map.zoom_step, 1.0); // default
+
+        // Debug section defaults
+        assert!(!config.debug.map.show_hitboxes);
+        assert!(!config.debug.map.log_hit_detection);
+    }
+
+    #[test]
+    fn test_config_parsing_partial_station_uses_field_defaults() {
+        // Config with partial station config (only radius, missing hit_area)
+        let toml_str = r##"
+[general]
+auto_save = true
+auto_save_interval_seconds = 30
+recent_projects_max = 20
+
+[units]
+length = "meters"
+depth = "meters"
+angle = "degrees"
+decimal_precision = 1
+
+[display]
+default_background = "#1a1a2e"
+grid_color = "#333366"
+font_size = 12
+font_color = "#f5f5f5"
+
+[display.depth_gradient]
+enabled = false
+shallow_color = "#00bfff"
+deep_color = "#ff4444"
+shallow_depth = 0.0
+deep_depth = 50.0
+
+[section_colors]
+palette = ["#4ecdc4"]
+
+[map]
+satellite_provider = "openstreetmap"
+satellite_enabled = false
+zoom_default = 15
+zoom_min = 0
+zoom_max = 22
+
+[map.controls]
+pan_speed = 1.0
+zoom_speed = 1.0
+invert_scroll = false
+
+[map.station]
+radius = 8.0
+
+[validation]
+warn_shot_length_min = 0.1
+warn_shot_length_max = 50.0
+warn_depth_change_per_shot_max = 10.0
+warn_azimuth_deviation_max = 30.0
+
+[export]
+default_image_format = "png"
+default_dpi = 300
+default_include_satellite = true
+default_include_grid = false
+default_include_labels = true
+
+[logging]
+level = "info"
+max_directory_size_mb = 128
+
+[shortcuts]
+select = "S"
+pan = "P"
+zoom = "Z"
+draw = "D"
+delete = "X"
+merge = "M"
+measure = "R"
+move_section = "V"
+move_station = "T"
+undo = "Ctrl+Z"
+redo = "Ctrl+Y"
+save = "Ctrl+S"
+"##;
+
+        let config: Config = toml::from_str(toml_str).expect("Config with partial station should parse");
+
+        // Explicit value
+        assert_eq!(config.map.station.radius, 8.0);
+        // Missing field uses default
+        assert_eq!(config.map.station.hit_area, 10.0);
+    }
+
+    // ========================================================================
+    // Config Serialization Tests
+    // ========================================================================
+
+    #[test]
+    fn test_config_serialization_roundtrip() {
+        let original = Config::default();
+        let serialized = toml::to_string_pretty(&original).expect("Config should serialize");
+        let deserialized: Config = toml::from_str(&serialized).expect("Serialized config should parse");
+
+        // Verify key values survived roundtrip
+        assert_eq!(deserialized.map.station.radius, original.map.station.radius);
+        assert_eq!(deserialized.map.station.hit_area, original.map.station.hit_area);
+        assert_eq!(deserialized.map.shot.width, original.map.shot.width);
+        assert_eq!(deserialized.map.shot.hit_area, original.map.shot.hit_area);
+        assert_eq!(deserialized.map.snap.threshold, original.map.snap.threshold);
+        assert_eq!(deserialized.debug.map.show_hitboxes, original.debug.map.show_hitboxes);
+    }
+
+    #[test]
+    fn test_config_serialization_preserves_custom_values() {
+        let mut config = Config::default();
+        config.map.station.radius = 8.0;
+        config.map.station.hit_area = 16.0;
+        config.map.shot.width = 4.0;
+        config.map.shot.hit_area = 12.0;
+        config.map.snap.threshold = 20.0;
+        config.map.snap.enabled_draw = false;
+        config.debug.map.show_hitboxes = true;
+
+        let serialized = toml::to_string_pretty(&config).expect("Config should serialize");
+        let deserialized: Config = toml::from_str(&serialized).expect("Serialized config should parse");
+
+        assert_eq!(deserialized.map.station.radius, 8.0);
+        assert_eq!(deserialized.map.station.hit_area, 16.0);
+        assert_eq!(deserialized.map.shot.width, 4.0);
+        assert_eq!(deserialized.map.shot.hit_area, 12.0);
+        assert_eq!(deserialized.map.snap.threshold, 20.0);
+        assert!(!deserialized.map.snap.enabled_draw);
+        assert!(deserialized.debug.map.show_hitboxes);
+    }
+
+    #[test]
+    fn test_config_serialization_includes_map_section() {
+        let config = Config::default();
+        let serialized = toml::to_string_pretty(&config).expect("Config should serialize");
+
+        assert!(serialized.contains("[map.station]"));
+        assert!(serialized.contains("radius"));
+        assert!(serialized.contains("hit_area"));
+        assert!(serialized.contains("[map.shot]"));
+        assert!(serialized.contains("width"));
+        assert!(serialized.contains("[map.snap]"));
+        assert!(serialized.contains("threshold"));
+        assert!(serialized.contains("[debug.map]"));
+        assert!(serialized.contains("show_hitboxes"));
+    }
+
+    // ========================================================================
+    // Legacy Migration Tests (existing)
+    // ========================================================================
+
     #[test]
     fn test_legacy_snap_migration() {
         let old_config_toml = r##"
