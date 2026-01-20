@@ -322,9 +322,8 @@ Alternative approach:
 - [ ] Highlight clears when operation completes
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Wired the highlight layer to snap/draw/merge state in MapCanvas.tsx, adding stationRefToId helper and useEffect to derive highlight IDs from snappedStation, drawFromStation, mergeStationA, and mergeStationB state.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 99657cc96f9cffc1d6216ffcac28931a52f01924
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:

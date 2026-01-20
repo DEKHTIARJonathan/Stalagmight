@@ -7,10 +7,20 @@
     "fn-3-e6v.3"
   ],
   "epic": "fn-3-e6v",
+  "evidence": {
+    "commits": [
+      "99657cc96f9cffc1d6216ffcac28931a52f01924"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui"
+    ]
+  },
   "id": "fn-3-e6v.7",
   "priority": null,
   "spec_path": ".flow/tasks/fn-3-e6v.7.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Show snapped/origin stations during Draw/Merge/Measure",
-  "updated_at": "2026-01-20T18:44:37.605682Z"
+  "updated_at": "2026-01-20T18:47:47.254708Z"
 }

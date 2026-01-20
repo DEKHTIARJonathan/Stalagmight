@@ -698,6 +698,8 @@ export default class SurveyLayer {
   }
 
   // Control stations visibility (also hides merges and loop closures)
+  // Note: Highlight layer stays visible - it uses filter to control what renders,
+  // allowing snapped/origin stations to appear even when stations layer is hidden
   setShowStations(visible: boolean): void {
     if (!this.map) return;
     this.stationsVisible = visible;
@@ -705,7 +707,8 @@ export default class SurveyLayer {
     this.map.setLayoutProperty(this.stationsLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.mergesLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.loopClosuresLayerId, 'visibility', visibility);
-    this.map.setLayoutProperty(this.stationsHighlightLayerId, 'visibility', visibility);
+    // Note: stationsHighlightLayerId intentionally NOT hidden - it uses filter
+    // to show only snapped/origin stations even when main stations layer is hidden
     // Clear hover state when hiding to prevent stuck hover state
     if (!visible) {
       this.clearStationHover();
