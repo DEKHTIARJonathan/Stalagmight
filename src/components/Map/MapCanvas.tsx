@@ -668,8 +668,12 @@ export default function MapCanvas() {
       clearMeasure();
       setDrawFromStation(null);
       setSnappedStation(null);
+      // Cancel placement mode (relies on station snapping)
+      if (placementMode) {
+        cancelPlacementMode();
+      }
     }
-  }, [showStations, clearSelectionByType, setHoveredStation, clearMergeStations, clearMeasure, setDrawFromStation, setSnappedStation]);
+  }, [showStations, clearSelectionByType, setHoveredStation, clearMergeStations, clearMeasure, setDrawFromStation, setSnappedStation, placementMode, cancelPlacementMode]);
 
   // Clear shot selection and hover when shots visibility changes to OFF
   useEffect(() => {
@@ -681,8 +685,8 @@ export default function MapCanvas() {
   }, [showShots, clearSelectionByType, setHoveredShot]);
 
   // Clear virtual shot selection when virtual shots visibility changes to OFF
-  // Uses project?.file_path as stable dependency instead of project?.sections
-  const projectFilePath = project?.file_path;
+  // Uses composite identity (file_path or created_at) for stable dependency
+  const projectIdentity = project?.file_path ?? project?.created_at;
   useEffect(() => {
     if (!showVirtualShots && project?.sections) {
       filterSelection((s) => {
@@ -694,7 +698,7 @@ export default function MapCanvas() {
       surveyLayerRef.current?.clearShotHover();
       setHoveredShot(null);
     }
-  }, [showVirtualShots, projectFilePath, filterSelection, setHoveredShot]);
+  }, [showVirtualShots, projectIdentity, filterSelection, setHoveredShot]);
 
   // Handle scale bar toggle
   useEffect(() => {
