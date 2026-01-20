@@ -23,6 +23,17 @@ angle = "degrees"                   # degrees, grads
 [display]
 default_background = "#1a1a2e"      # Map background color
 
+[map]
+satellite_provider = "esri"         # Tile provider
+satellite_enabled = false           # Show satellite imagery
+# GPS origin for coordinate alignment (required for satellite tiles)
+satellite_gps_origin = { latitude = 24.55, longitude = -81.78 }
+
+[cache]
+tile_cache_enabled = true           # Cache satellite tiles for offline use
+tile_cache_max_mb = 500             # Maximum cache size in MB
+tile_ttl_days = 30                  # Days before tiles are stale
+
 [validation]
 # Validation thresholds for warnings
 ```

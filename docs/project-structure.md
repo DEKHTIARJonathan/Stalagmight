@@ -28,6 +28,7 @@ cavechef/
 │   │   ├── models/               # Data structures
 │   │   ├── parsers/              # DMP file parser (versions 2-5)
 │   │   ├── persistence/          # SQLite operations
+│   │   ├── cache/                # Tile caching (SQLite-based)
 │   │   ├── export/               # CSV, JSON, image export
 │   │   ├── config/               # Configuration with defaults
 │   │   └── logging/              # Tracing setup

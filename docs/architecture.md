@@ -30,10 +30,14 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 | `src-tauri/src/persistence/sqlite.rs` | Database schema and operations |
 | `src-tauri/src/parsers/dmp.rs` | mNemo DMP file parser |
 | `src-tauri/src/models/project.rs` | Project model with merge/offset logic |
+| `src-tauri/src/cache/tiles.rs` | Satellite tile cache (SQLite-based) |
+| `src-tauri/src/commands/cache.rs` | Cache IPC commands (stats, clear, fetch) |
 | `src/store/projectStore.ts` | Frontend state, Tauri IPC calls |
 | `src/store/uiStore.ts` | UI state (selection, tools, panels) |
 | `src/components/Map/MapCanvas.tsx` | MapLibre map initialization |
 | `src/components/Map/SurveyLayer.tsx` | Survey rendering on map |
+| `src/utils/coordinates.ts` | Coordinate transforms (meters ↔ GPS) |
+| `src/utils/tileProtocol.ts` | MapLibre tile protocol for caching |
 | `src/hooks/useProject.ts` | Project file operations hook |
 | `src/hooks/useMapTools.ts` | Map tool handlers |
 | `src/hooks/useKeyboardShortcuts.ts` | Global keyboard shortcut handler |
