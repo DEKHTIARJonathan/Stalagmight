@@ -811,6 +811,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // Display settings (per-project)
           case 'load_display_settings':
             // Return display settings for mocked tests
+            // Note: showShots is included for forward compatibility with display toggle features
             return {
               showStations: 'true',
               showShots: 'true',

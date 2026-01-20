@@ -552,9 +552,8 @@ When visibility toggles change during an active tool operation:
 - [ ] Virtual shot effect uses `projectId` dependency (stable)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added clearSelectionByType and filterSelection actions to uiStore. Implemented useEffect hooks in MapCanvas to clear selection, hover state, and cancel station operations (merge, measure, draw, placement) when visibility toggles are disabled.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: c7bb091, a0d0122, eab965d, 404c098, 7492d27
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
