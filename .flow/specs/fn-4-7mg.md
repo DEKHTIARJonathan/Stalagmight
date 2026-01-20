@@ -14,6 +14,8 @@ Add hitbox layers with larger configurable sizes for improved click detection.
 
 - `survey-stations-hitbox`, `survey-shots-hitbox` with `opacity: 0.001`
 - Ghost hitbox layers: **non-interactive** (debug visualization only, NOT in queries)
+- **Layer order**: Insert hitbox layers before `survey-ghost-shots` (same anchor as visual layers)
+- **Satellite anchor update**: Change `satellite-tiles` insertion to anchor before `survey-stations-hitbox` (first hitbox layer)
 
 #### 2. Hover UX Change (Intentional)
 
@@ -21,7 +23,9 @@ Hover triggers within hitbox area, not just visual glyph. **Intentional and acce
 
 #### 3. Click/Contextmenu Handling
 
-**ALWAYS query hitbox layers and use nearest resolver** (don't rely on `e.features[0]`):
+**ALWAYS query hitbox layers and use nearest resolver** (don't rely on `e.features[0]`).
+
+**Label exclusion behavior change (intentional)**: Previously, clicking a label would prevent empty-click actions. After this change, clicking a label outside a hitbox will count as empty-click and trigger tool behavior. This is an intentional simplification - labels are not interactive targets.
 
 ```typescript
 private handleStationClick = (e: MapLayerMouseEvent) => {
@@ -51,12 +55,31 @@ Shots (from `config.map.shot.width`): hovered=width+2, selected=width+1
 #### 6. Config Wiring
 
 ```typescript
-// SurveyLayer.ts
+// SurveyLayer.ts - with fallback defaults for when config is null/undefined
+private static readonly DEFAULTS = {
+  station: { radius: 4, hit_area: 10 },
+  shot: { width: 2, hit_area: 8 },
+};
+
 public setConfig(config: Config): void {
   this.config = config;
   this.updateHitboxLayers();
   this.updateVisualState();
   this.updateDebugVisualization();
+}
+
+// All methods use fallback defaults:
+private getStationRadius(): number {
+  return this.config?.map?.station?.radius ?? SurveyLayer.DEFAULTS.station.radius;
+}
+private getStationHitArea(): number {
+  return this.config?.map?.station?.hit_area ?? SurveyLayer.DEFAULTS.station.hit_area;
+}
+private getShotWidth(): number {
+  return this.config?.map?.shot?.width ?? SurveyLayer.DEFAULTS.shot.width;
+}
+private getShotHitArea(): number {
+  return this.config?.map?.shot?.hit_area ?? SurveyLayer.DEFAULTS.shot.hit_area;
 }
 
 // MapCanvas.tsx - add useEffect
@@ -93,7 +116,12 @@ log_hit_detection = false
 
 ### Config Validation (Rust)
 
-**Add to `Config::normalize()` called from `load()` and `save()`:**
+**Add `Config::normalize()` and call it from these locations:**
+- `Config::load()` - after deserializing
+- `Config::save()` - before serializing
+- `commands::config::update_config()` - after applying updates, before saving
+
+**Implementation:**
 
 ```rust
 impl StationConfig {
@@ -169,7 +197,14 @@ const handleReloadConfig = async () => {
 
 **E2E:**
 - `e2e-playwright/mocks/tauri-ipc.ts`: Update mock config
-- Add test helper to expose station coordinates: `window.__E2E_TEST__.stations`
+- Add test helper to expose station coordinates (dev/test only):
+  ```typescript
+  // In SurveyLayer.ts or MapCanvas.tsx
+  if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
+    window.__E2E_TEST__ = window.__E2E_TEST__ || {};
+    window.__E2E_TEST__.stations = stationCoordinates;
+  }
+  ```
 
 **Docs:**
 - `docs/configuration.md`: Update
@@ -179,14 +214,18 @@ const handleReloadConfig = async () => {
 - [ ] Snake_case naming throughout
 - [ ] Every nested config struct has Default impl + #[serde(default)]
 - [ ] Config validation: is_finite(), clamp, hit_area >= radius/width
+- [ ] Config::normalize() called in load(), save(), and update_config()
 - [ ] Click/contextmenu use queryRenderedFeatures + nearest resolver (not e.features[0])
 - [ ] Hover uses standard layer events (intentional UX change documented)
+- [ ] Label exclusion behavior change documented (clicking labels outside hitbox triggers empty-click)
 - [ ] Ghost hitbox layers NOT in any queries
+- [ ] Satellite tiles anchor updated to insert before survey-stations-hitbox
 - [ ] Visual scaling: zeroDatum=radius*2, snapped=radius+3, hovered=radius+2, selected=radius+1
 - [ ] Shot scaling: hovered=width+2, selected=width+1
+- [ ] SurveyLayer has fallback defaults (radius=4, width=2, hit_area=10/8)
 - [ ] SurveyLayer.setConfig() wired via MapCanvas useEffect
 - [ ] reload_config command registered in lib.rs
 - [ ] Store setConfig action (no persist)
 - [ ] Reload button disabled when isDirty
-- [ ] E2E test helper exposes station coordinates
+- [ ] E2E test helper exposes station coordinates (guarded by dev/test mode)
 - [ ] All migration checklist items completed

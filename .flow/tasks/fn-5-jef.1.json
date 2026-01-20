@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-20T14:10:02.855100Z",
+  "depends_on": [],
+  "epic": "fn-5-jef",
+  "id": "fn-5-jef.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-5-jef.1.md",
+  "status": "todo",
+  "title": "Wire showDepthGradient toggle to SurveyLayer",
+  "updated_at": "2026-01-20T14:10:26.411944Z"
+}

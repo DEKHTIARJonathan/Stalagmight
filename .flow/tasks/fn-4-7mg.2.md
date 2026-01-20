@@ -47,15 +47,36 @@ private updateVisualState(): void {
 - opacity: 0.001
 - Ghost hitbox layers: NOT interactive (debug only)
 
-## SurveyLayer Config Cache
+## SurveyLayer Config Cache with Fallback Defaults
 
 ```typescript
 private config: Config | null = null;
+
+// Fallback defaults for when config is null (initial load)
+private static readonly DEFAULTS = {
+  station: { radius: 4, hit_area: 10 },
+  shot: { width: 2, hit_area: 8 },
+};
+
 public setConfig(config: Config): void {
   this.config = config;
   this.updateHitboxLayers();
   this.updateVisualState();
   this.updateDebugVisualization();
+}
+
+// Helper methods that use fallback defaults
+private getStationRadius(): number {
+  return this.config?.map?.station?.radius ?? SurveyLayer.DEFAULTS.station.radius;
+}
+private getStationHitArea(): number {
+  return this.config?.map?.station?.hit_area ?? SurveyLayer.DEFAULTS.station.hit_area;
+}
+private getShotWidth(): number {
+  return this.config?.map?.shot?.width ?? SurveyLayer.DEFAULTS.shot.width;
+}
+private getShotHitArea(): number {
+  return this.config?.map?.shot?.hit_area ?? SurveyLayer.DEFAULTS.shot.hit_area;
 }
 ```
 ## Ghost Hitbox Layers: Non-Interactive
@@ -457,6 +478,7 @@ From bottom to top:
 - [ ] Hitbox layers use opacity 0.001
 - [ ] Ghost hitbox layers non-interactive
 - [ ] SurveyLayer stores config and has setConfig method
+- [ ] SurveyLayer has fallback defaults (radius=4, width=2, hit_area=10/8) for when config is null
 - [ ] Satellite insertion anchors on survey-stations-hitbox
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary

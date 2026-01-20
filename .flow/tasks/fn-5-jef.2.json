@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-20T14:10:02.901105Z",
+  "depends_on": [],
+  "epic": "fn-5-jef",
+  "id": "fn-5-jef.2",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-5-jef.2.md",
+  "status": "todo",
+  "title": "Modify getDepthColor() to use HSL interpolation",
+  "updated_at": "2026-01-20T14:10:02.901117Z"
+}
