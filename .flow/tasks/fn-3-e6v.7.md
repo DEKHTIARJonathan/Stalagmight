@@ -5,6 +5,38 @@ Wire highlight layer to snap/draw/merge state.
 
 ## File: `src/components/Map/MapCanvas.tsx`
 
+**StationRef is an object**, not a string. Convert to compound ID format:
+
+```typescript
+const stationRefToId = (ref: StationRef | null): string | null => {
+  if (!ref) return null;
+  return \`\${ref.section_id}:\${ref.station_index}\`;
+};
+
+useEffect(() => {
+  if (!surveyLayerRef.current) return;
+  
+  const highlightIds: string[] = [];
+  
+  const snappedId = stationRefToId(snappedStation);
+  if (snappedId) highlightIds.push(snappedId);
+  
+  const drawId = stationRefToId(drawFromStation);
+  if (drawId && !highlightIds.includes(drawId)) highlightIds.push(drawId);
+  
+  const mergeAId = stationRefToId(mergeStationA);
+  if (mergeAId && !highlightIds.includes(mergeAId)) highlightIds.push(mergeAId);
+  
+  const mergeBId = stationRefToId(mergeStationB);
+  if (mergeBId && !highlightIds.includes(mergeBId)) highlightIds.push(mergeBId);
+  
+  surveyLayerRef.current.setHighlightedStations(highlightIds);
+}, [snappedStation, drawFromStation, mergeStationA, mergeStationB, mapLoaded]);
+```
+
+ID format: `${section_id}:${station_index}` matches filter expression.
+## File: `src/components/Map/MapCanvas.tsx`
+
 Add useEffect that derives highlight IDs from state:
 
 ```typescript
@@ -284,11 +316,9 @@ Alternative approach:
 ## Depends On
 - Task 3: Base visibility must work first
 ## Acceptance
-- [ ] useEffect derives highlight IDs from snappedStation/drawFromStation/mergeStationA/B
-- [ ] Calls setHighlightedStations with array of IDs
-- [ ] Snapped station visible during Draw when stations hidden
-- [ ] Draw origin visible during draw operation
-- [ ] Merge stations highlighted
+- [ ] Helper `stationRefToId` converts StationRef to string
+- [ ] ID format matches filter expression (section_id:station_index)
+- [ ] useEffect derives IDs from snap/draw/merge state
 - [ ] Highlight clears when operation completes
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary

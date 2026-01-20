@@ -33,6 +33,7 @@ export default function MapCanvas() {
   const scaleControlAddedRef = useRef<boolean>(false);
   const [measureResult, setMeasureResult] = useState<{ distance: number; depthDiff: number } | null>(null);
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
+  const [zoomBox, setZoomBox] = useState<BoxSelectState>({ start: null, end: null });
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
@@ -753,37 +754,16 @@ export default function MapCanvas() {
     if (!mapElement || !map.current || activeTool !== 'zoom') return;
 
     // Left-click capture: stop propagation to prevent SurveyLayer selection
-    // Always intercept left clicks for zoom tool (regardless of Ctrl state)
+    // Actual zoom is handled by box end handler (task 3) for <10px drags
     const handleClickCapture = (e: MouseEvent) => {
       if (e.button === 0) {
         e.stopPropagation();
         e.stopImmediatePropagation();
-
-        // Actual zoom-in on click (if not dragging for box zoom)
-        // For simple clicks, zoom in at click point
-        if (!map.current || !mapContainer.current) return;
-
-        const currentZoom = map.current.getZoom();
-        const targetZoom = Math.min(zoomMax, currentZoom + zoomStep);
-
-        // Early return if at max zoom (no recenter)
-        if (targetZoom === currentZoom) return;
-
-        // Convert click to map coords
-        const rect = mapContainer.current.getBoundingClientRect();
-        const screenX = e.clientX - rect.left;
-        const screenY = e.clientY - rect.top;
-        const clickLngLat = map.current.unproject([screenX, screenY]);
-
-        map.current.easeTo({
-          center: clickLngLat,
-          zoom: targetZoom,
-          duration: 300,
-        });
+        // Zoom-in will be handled by zoom box end handler (task 3)
       }
     };
 
-    // Right-click capture: zoom out at click point (or cancel zoom box in task 3)
+    // Right-click capture: cancel zoom box if active, otherwise zoom out at click point
     const handleContextMenuCapture = (e: MouseEvent) => {
       // Don't intercept during placement mode
       if (placementMode) return;
@@ -792,8 +772,11 @@ export default function MapCanvas() {
       e.stopPropagation();
       e.stopImmediatePropagation();
 
-      // TODO: Task 3 will add zoomBox state - if zoomBox.start is set, cancel box instead of zooming
-      // For now, always zoom out
+      // If a zoom box is in progress, cancel it instead of zooming
+      if (zoomBox.start) {
+        setZoomBox({ start: null, end: null });
+        return;
+      }
 
       if (!map.current || !mapContainer.current) return;
 
@@ -823,7 +806,7 @@ export default function MapCanvas() {
       mapElement.removeEventListener('click', handleClickCapture, { capture: true });
       mapElement.removeEventListener('contextmenu', handleContextMenuCapture, { capture: true });
     };
-  }, [activeTool, zoomStep, zoomMin, zoomMax, placementMode]);
+  }, [activeTool, zoomStep, zoomMin, zoomMax, placementMode, zoomBox.start]);
 
   // Get satellite tile URL based on provider config
   // Uses custom cavechef-tiles:// protocol for offline caching
