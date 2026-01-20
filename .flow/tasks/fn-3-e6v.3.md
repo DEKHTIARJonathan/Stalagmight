@@ -76,9 +76,8 @@ Also add `showStations` and `showShots` to the destructured state from uiStore.
 - [ ] Toggling "Shots" in Display menu hides/shows shot lines on map
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Wired showStations and showShots visibility toggles in MapCanvas using useEffect hooks that sync with SurveyLayer methods, following the existing pattern for other display toggles.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 1366e3146105b5c537052055b352a5326071de0d
+- Tests: pnpm tsc --noEmit
 - PRs:

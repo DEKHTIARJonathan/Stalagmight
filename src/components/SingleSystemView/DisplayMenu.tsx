@@ -6,6 +6,7 @@ interface DisplayOption {
   key: DisplayToggleKey;
   label: string;
   description?: string;
+  disabledWhen?: DisplayToggleKey;
 }
 
 const displayOptions: { group: string; items: DisplayOption[] }[] = [
@@ -15,9 +16,9 @@ const displayOptions: { group: string; items: DisplayOption[] }[] = [
       { key: 'showStations', label: 'Stations', description: 'Show station markers' },
       { key: 'showSectionNames', label: 'Section Names', description: 'Show labels for sections' },
       { key: 'showStationLabels', label: 'Station Labels', description: 'Show station index numbers' },
-      { key: 'showShotData', label: 'Shot Data', description: 'Show azimuth, length, depth labels' },
       { key: 'showShots', label: 'Shots', description: 'Show survey shot lines' },
-      { key: 'showVirtualShots', label: 'Virtual Shots', description: 'Show dashed virtual connections' },
+      { key: 'showVirtualShots', label: 'Virtual Shots', description: 'Show dashed virtual connections', disabledWhen: 'showShots' },
+      { key: 'showShotData', label: 'Shot Data', description: 'Show azimuth, length, depth labels', disabledWhen: 'showShots' },
       { key: 'showZeroDatum', label: 'Zero Datum', description: 'Highlight entrance markers' },
     ],
   },
@@ -67,6 +68,9 @@ export default function DisplayMenu() {
     showSatellite,
     showDepthGradient,
   };
+
+  const isDisabled = (item: DisplayOption) =>
+    item.disabledWhen ? !toggleValues[item.disabledWhen] : false;
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -140,11 +144,18 @@ export default function DisplayMenu() {
                 {group.group}
               </div>
               <div className="pb-1">
-                {group.items.map((item) => (
+                {group.items.map((item) => {
+                  const disabled = isDisabled(item);
+                  return (
                   <div key={item.key}>
                     <button
-                      onClick={() => toggleDisplay(item.key)}
-                      className="w-full px-3 py-2 flex items-center justify-between hover:bg-background/50 transition-colors"
+                      onClick={() => !disabled && toggleDisplay(item.key)}
+                      disabled={disabled}
+                      aria-disabled={disabled || undefined}
+                      className={`
+                        w-full px-3 py-2 flex items-center justify-between transition-colors
+                        ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-background/50'}
+                      `}
                       data-testid={`display-toggle-${item.key}`}
                     >
                       <div className="flex flex-col items-start">
@@ -187,7 +198,8 @@ export default function DisplayMenu() {
                       </div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))}
