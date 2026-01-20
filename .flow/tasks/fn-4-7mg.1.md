@@ -1,8 +1,246 @@
 # fn-4-7mg.1 Update config schema (Rust + TypeScript)
 
 ## Description
-Update the configuration schema in both Rust backend and TypeScript frontend.
+Update config schema with snake_case naming and Default impls.
 
+## Naming Convention
+
+Use **snake_case** throughout to match existing TOML config:
+- Rust field names: `hit_area` (not `hitArea`)
+- TOML keys: `hit_area`
+- TypeScript: `hit_area` (match serialization)
+
+## Rust Structs with Default Impls
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StationConfig {
+    #[serde(default = "default_station_radius")]
+    pub radius: f64,
+    #[serde(default = "default_station_hit_area")]
+    pub hit_area: f64,
+}
+
+impl Default for StationConfig {
+    fn default() -> Self {
+        Self { radius: 4.0, hit_area: 10.0 }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ShotConfig {
+    #[serde(default = "default_shot_width")]
+    pub width: f64,
+    #[serde(default = "default_shot_hit_area")]
+    pub hit_area: f64,
+}
+
+impl Default for ShotConfig {
+    fn default() -> Self {
+        Self { width: 2.0, hit_area: 8.0 }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MapSnapConfig {
+    #[serde(default = "default_snap_threshold")]
+    pub threshold: f64,
+    #[serde(default = "default_true")]
+    pub enabled_draw: bool,
+    #[serde(default = "default_true")]
+    pub enabled_merge: bool,
+    #[serde(default = "default_true")]
+    pub enabled_measure: bool,
+}
+
+impl Default for MapSnapConfig {
+    fn default() -> Self {
+        Self {
+            threshold: 10.0,
+            enabled_draw: true,
+            enabled_merge: true,
+            enabled_measure: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DebugConfig {
+    #[serde(default)]
+    pub map: MapDebugConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MapDebugConfig {
+    #[serde(default)]
+    pub show_hitboxes: bool,
+    #[serde(default)]
+    pub log_hit_detection: bool,
+}
+```
+
+## TypeScript with snake_case
+
+```typescript
+interface StationConfig {
+  radius: number;
+  hit_area: number;
+}
+
+interface ShotConfig {
+  width: number;
+  hit_area: number;
+}
+
+interface MapSnapConfig {
+  threshold: number;
+  enabled_draw: boolean;
+  enabled_merge: boolean;
+  enabled_measure: boolean;
+}
+
+interface MapDebugConfig {
+  show_hitboxes: boolean;
+  log_hit_detection: boolean;
+}
+```
+
+## Migration Checklist (from epic)
+
+Update all consumers in order:
+1. MapCanvas.tsx snap detection (lines 88-97, 141)
+2. DisplayConfig (remove station_size, line_thickness)
+3. SnapConfig (remove entire struct)
+4. TypeScript types and defaults
+5. E2E mock
+6. Docs
+## CRITICAL: Use f64 for All Size Values
+
+Shot width/hitArea need 0.5-20.0 range. Use `f64` in Rust, `number` in TypeScript.
+
+## Rust Changes
+
+### mod.rs - New structs with f64
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StationConfig {
+    #[serde(default = "default_station_radius")]
+    pub radius: f64,  // 1.0-50.0
+    #[serde(default = "default_station_hit_area")]
+    pub hit_area: f64,  // 1.0-50.0, >= radius
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShotConfig {
+    #[serde(default = "default_shot_width")]
+    pub width: f64,  // 0.5-20.0
+    #[serde(default = "default_shot_hit_area")]
+    pub hit_area: f64,  // 0.5-20.0, >= width
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapSnapConfig {
+    #[serde(default = "default_snap_threshold")]
+    pub threshold: f64,  // 1.0-50.0
+    #[serde(default = "default_true")]
+    pub enabled_draw: bool,
+    #[serde(default = "default_true")]
+    pub enabled_merge: bool,
+    #[serde(default = "default_true")]
+    pub enabled_measure: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DebugConfig {
+    #[serde(default)]
+    pub map: MapDebugConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MapDebugConfig {
+    #[serde(default)]
+    pub show_hitboxes: bool,
+    #[serde(default)]
+    pub log_hit_detection: bool,
+}
+```
+
+### Update MapConfig with serde(default)
+
+```rust
+pub struct MapConfig {
+    // REMOVE: snap_threshold_pixels
+
+    #[serde(default)]  // CRITICAL for migration
+    pub station: StationConfig,
+    #[serde(default)]  // CRITICAL for migration
+    pub shot: ShotConfig,
+    #[serde(default)]  // CRITICAL for migration
+    pub snap: MapSnapConfig,
+    // ... other fields
+}
+```
+
+### Update Config with serde(default)
+
+```rust
+pub struct Config {
+    // REMOVE: snap: SnapConfig
+
+    #[serde(default)]  // CRITICAL for migration
+    pub debug: DebugConfig,
+    // ... other fields
+}
+```
+
+### defaults.rs - Float literals
+
+```rust
+fn default_station_radius() -> f64 { 4.0 }
+fn default_station_hit_area() -> f64 { 10.0 }
+fn default_shot_width() -> f64 { 2.0 }
+fn default_shot_hit_area() -> f64 { 8.0 }
+fn default_snap_threshold() -> f64 { 10.0 }
+```
+
+### Validation
+
+```rust
+impl StationConfig {
+    pub fn normalize(&mut self) {
+        if self.radius.is_finite() {
+            self.radius = self.radius.clamp(1.0, 50.0);
+        } else {
+            self.radius = 4.0;
+        }
+        if self.hit_area.is_finite() {
+            self.hit_area = self.hit_area.clamp(1.0, 50.0).max(self.radius);
+        } else {
+            self.hit_area = 10.0;
+        }
+    }
+}
+// Similar for ShotConfig, MapSnapConfig
+```
+
+## TypeScript Changes
+
+Mirror Rust with `number` type and float defaults:
+
+```typescript
+interface StationConfig {
+  radius: number;    // 4.0
+  hit_area: number;  // 10.0 (use snake_case to match Rust serde)
+}
+// OR use hitArea if camelCase is preferred, with serde rename
+```
+
+## Remove old fields
+
+- `SnapConfig` struct and `config.snap`
+- `map.snap_threshold_pixels`
+- `display.station_size`, `display.line_thickness`
 ## CRITICAL: Snap Config Migration
 
 Current state has duplication:
@@ -299,24 +537,13 @@ Add validation for bounds:
 - Shot width/hitArea: 0.5 to 20.0
 - Snap threshold: 1.0 to 50.0
 ## Acceptance
-- [ ] Rust `StationConfig` struct with radius and hit_area fields
-- [ ] Rust `ShotConfig` struct with width and hit_area fields
-- [ ] Rust `MapSnapConfig` struct with threshold and enabled_* fields
-- [ ] Rust `DebugConfig` and `MapDebugConfig` structs
-- [ ] Rust `MapConfig` updated with station, shot, snap sub-configs
-- [ ] Rust `Config` updated with debug field
-- [ ] All fields have `#[serde(default)]` for forward compatibility
-- [ ] Rust defaults: station.radius=4, station.hitArea=10, shot.width=2, shot.hitArea=8, snap.threshold=10
-- [ ] Rust validation: is_finite() checks, clamp bounds, hitArea >= visual size
-- [ ] REMOVED: `SnapConfig` struct entirely
-- [ ] REMOVED: `config.snap` field from Config
-- [ ] REMOVED: `map.snap_threshold_pixels` from MapConfig (vestigial)
-- [ ] REMOVED: `display.station_size` and `display.line_thickness`
-- [ ] TypeScript interfaces mirror Rust structs exactly
-- [ ] TypeScript `defaultConfig` matches Rust defaults
-- [ ] Test added asserting no `config.snap` consumers remain
-- [ ] All `config.snap.*` references updated to `config.map.snap.*`
-- [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
+- [ ] Snake_case field names in Rust (hit_area, not hitArea)
+- [ ] Every nested struct has `Default` impl
+- [ ] Every nested struct has `#[derive(Default)]`
+- [ ] f64 for all size fields with float defaults
+- [ ] TypeScript uses snake_case matching Rust
+- [ ] All migration checklist items completed
+- [ ] `cargo test` passes
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD

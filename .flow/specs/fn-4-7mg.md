@@ -2,120 +2,165 @@
 
 ## Problem
 
-The current interaction areas for stations (4px radius circles) and shots (2px wide lines) are too small to click accurately. Users must position their mouse precisely to select, delete, or interact with survey elements, which is frustrating and slows down workflow.
+The current interaction areas for stations (4px radius circles) and shots (2px wide lines) are too small to click accurately.
 
 ## Approach
 
-Implement "hitbox" layers rendered beneath visual layers with larger configurable sizes.
+Add hitbox layers with larger configurable sizes for improved click/hover detection.
 
 ### Technical Implementation
 
-1. **Hitbox Layers**: Add MapLibre layers using same GeoJSON source as visual layers:
-   - `survey-stations-hitbox`: Circle layer, radius from `map.station.hitArea`
-   - `survey-shots-hitbox`: Line layer, width from `map.shot.hitArea`
-   - Ghost hitbox layers for merge preview
-   - **Use `opacity: 0.001`** (not 0) to ensure `queryRenderedFeatures` works
-   - Transparent color (`rgba(0,0,0,0)`) with non-zero opacity
+1. **Hitbox Layers**:
+   - `survey-stations-hitbox`, `survey-shots-hitbox`
+   - Ghost hitbox layers **non-interactive** (not queried, only visual for debug)
+   - Use `opacity: 0.001` with transparent color
 
-2. **Layer Order**: Hitbox layers FIRST, then visual layers, then labels. Satellite insertion anchors on `survey-stations-hitbox`.
+2. **Layer Order**: Hitboxes first, then visual, then labels. Satellite anchors on `survey-stations-hitbox`.
 
-3. **Event Handling**: Move ALL handlers to hitbox layers including global empty-click handler.
+3. **Event Handling**:
+   - **Click/contextmenu**: Query hitbox layers, use nearest-to-click resolution
+   - **Hover**: Keep using `mouseenter`/`mouseleave` on hitbox layers (MapLibre gives topmost feature). **Nearest resolution is for CLICK ONLY** - hover uses standard per-layer behavior.
+   - Update global empty-click handler to query hitbox layers
 
-4. **Nearest-to-Click Resolution**:
-   - For stations: Project point to screen, compute distance to click
-   - **For shots**: Compute distance-to-line-segment in screen space (project segment endpoints, find perpendicular distance or endpoint distance, whichever is smaller)
-   - Use same resolver for click, hover, context menu
+4. **Nearest-to-Click Resolution** (click/contextmenu ONLY):
+   - Stations: project point, compute distance
+   - Shots: distance-to-line-segment in screen space
 
-5. **Visual Sizing with State Scaling**:
-   - Base radius from `config.map.station.radius` (default 4.0)
-   - **Zero datum**: `radius * 2` (8px at default)
-   - **Snapped**: `radius + 3` (7px at default)
-   - **Hovered**: `radius + 2` for selection feedback
-   - Apply same delta pattern to shots with `config.map.shot.width`
+5. **Visual Sizing**:
+   - Base from config, explicit scaling rules
+   - Zero datum: `radius * 2`, Snapped: `radius + 3`
 
-6. **Debug Mode**: When `showHitboxes` true, set BOTH color alpha AND layer opacity to 1.
+6. **Debug Mode**: Set both color and opacity. Ghost hitboxes visible in debug but NOT interactive.
 
 ### Configuration Schema
 
-**Use `f64` for all size values to support fractional values (0.5-20 for shots):**
+**Use snake_case consistently** (matches existing config pattern):
 
 ```toml
 [map.station]
-radius = 4.0            # Visual size (f64, 1.0-50.0)
-hit_area = 10.0         # Clickable area (f64, 1.0-50.0, >= radius)
+radius = 4.0            # f64, 1.0-50.0
+hit_area = 10.0         # f64, 1.0-50.0, >= radius
 
 [map.shot]
-width = 2.0             # Visual width (f64, 0.5-20.0)
-hit_area = 8.0          # Clickable area (f64, 0.5-20.0, >= width)
+width = 2.0             # f64, 0.5-20.0
+hit_area = 8.0          # f64, 0.5-20.0, >= width
 
 [map.snap]
-threshold = 10.0        # Snap radius (f64, 1.0-50.0)
+threshold = 10.0        # f64, 1.0-50.0
 enabled_draw = true
 enabled_merge = true
 enabled_measure = true
 
 [debug.map]
 show_hitboxes = false
-log_hit_detection = false  # Logs only on CLICK/CONTEXTMENU, not hover
+log_hit_detection = false
 ```
 
-**Config file**: Use `Config::config_path()` (platform-specific via `directories::ProjectDirs`).
-
-**Migration**:
-1. Remove `SnapConfig` struct and `config.snap` field
-2. Remove `map.snap_threshold_pixels` (vestigial)
-3. Remove `display.station_size`, `display.line_thickness`
-4. Add `#[serde(default)]` on: `MapConfig.station`, `MapConfig.shot`, `MapConfig.snap`, `Config.debug`, `DebugConfig.map`
-
-### Config Reload
-
-**API Contract** - `reload_config` returns only the new config:
+**Rust struct naming**: Use snake_case field names to match TOML:
 ```rust
-#[tauri::command]
-pub fn reload_config(state: State<AppState>) -> Result<Config, String> {
-    let new_config = Config::load()?;
-    *state.config.lock().unwrap() = new_config.clone();
-    Ok(new_config)
+pub struct StationConfig {
+    pub radius: f64,
+    pub hit_area: f64,  // snake_case matches TOML key
 }
 ```
 
-**Diffing done client-side** (simpler, more flexible):
+**TypeScript**: Use snake_case to match Rust serialization:
+```typescript
+interface StationConfig {
+  radius: number;
+  hit_area: number;  // Match Rust/TOML
+}
+```
+
+### Default Implementations
+
+**Every nested config struct MUST have `Default` impl**:
+
+```rust
+impl Default for StationConfig {
+    fn default() -> Self {
+        Self { radius: 4.0, hit_area: 10.0 }
+    }
+}
+impl Default for ShotConfig {
+    fn default() -> Self {
+        Self { width: 2.0, hit_area: 8.0 }
+    }
+}
+impl Default for MapSnapConfig {
+    fn default() -> Self {
+        Self {
+            threshold: 10.0,
+            enabled_draw: true,
+            enabled_merge: true,
+            enabled_measure: true,
+        }
+    }
+}
+impl Default for DebugConfig {
+    fn default() -> Self {
+        Self { map: MapDebugConfig::default() }
+    }
+}
+impl Default for MapDebugConfig {
+    fn default() -> Self {
+        Self { show_hitboxes: false, log_hit_detection: false }
+    }
+}
+```
+
+### Config Reload
+
+**Don't call `update_config` on reload** (that would save/persist). Only update store state:
+
 ```typescript
 const handleReloadConfig = async () => {
   const newConfig = await invoke<Config>('reload_config');
-  const changes = computeConfigDiff(localConfig, newConfig);  // Frontend diff
+  const changes = computeConfigDiff(localConfig, newConfig);
+
   setLocalConfig(newConfig);
-  updateConfig(newConfig);
-  showChangesDialog(changes);
+  // Update store directly without persisting
+  projectStore.setState({ config: newConfig });
+
+  // Show diff dialog
 };
 ```
 
-**Live-applied settings** (this feature):
-- `map.station.*`, `map.shot.*`, `map.snap.*`, `debug.map.*`
+### Migration Checklist
 
-**Require restart** (out of scope):
-- `display.default_background`, `display.grid_color`, etc.
+**All consumers of removed fields that must be updated:**
 
-**UX**: Disable reload button when `isDirty`.
+1. `config.snap.threshold_pixels`:
+   - `src/components/Map/MapCanvas.tsx:88-97` (checkSnapToStation)
+   - `src/components/Map/MapCanvas.tsx:141` (checkPlacementSnap)
 
-### Debug Logging Scope
+2. `config.snap.enabled_*`:
+   - `src/components/Map/MapCanvas.tsx:89-91` (shouldSnap check)
 
-`debug.map.logHitDetection` logs **only on click and contextmenu**, NOT on hover/mousemove (prevents spam):
-```typescript
-private handleStationClick = (e: MapLayerMouseEvent) => {
-  if (this.config?.debug?.map?.logHitDetection) {
-    console.log('[HitDetection] Station click', { ... });
-  }
-};
-// NO logging in mouseenter/mousemove handlers
-```
+3. `display.station_size`:
+   - `src/types/config.ts:42` (interface)
+   - `src/types/config.ts:164` (defaultConfig)
+   - `src-tauri/src/config/mod.rs` (struct)
+   - `src-tauri/src/config/defaults.rs` (default)
 
-## Edge Cases
+4. `display.line_thickness`:
+   - `src/types/config.ts:43` (interface)
+   - `src/types/config.ts:165` (defaultConfig)
+   - `src-tauri/src/config/mod.rs` (struct)
+   - `src-tauri/src/config/defaults.rs` (default)
 
-- **Overlapping hitboxes**: Nearest-to-click wins (stations first, then shots)
-- **Shot distance**: Use perpendicular distance to line segment, not just endpoints
-- **Config reload**: Only hitbox/visual settings applied live; other settings require restart
-- **Performance**: O(N) snap acceptable for now; can optimize later
+5. E2E mock:
+   - `e2e-playwright/mocks/tauri-ipc.ts` (mock config)
+
+6. Documentation:
+   - `docs/configuration.md`
+
+### Ghost Hitbox Layers
+
+Ghost layers are **NOT interactive**:
+- Don't include in click/contextmenu queries
+- Only visible when `debug.map.show_hitboxes` is true
+- Purpose: visual debugging only during merge preview
 
 ## Quick Commands
 
@@ -127,14 +172,11 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 ## Acceptance Criteria
 
-- [ ] All size fields use `f64` (Rust) / `number` (TS) with float defaults
-- [ ] Hitbox layers use `opacity: 0.001`
-- [ ] Visual state scaling: zeroDatum = radius*2, snapped = radius+3
-- [ ] Shot selection uses distance-to-line-segment in screen space
-- [ ] `reload_config` returns Config only; diffing done client-side
-- [ ] `logHitDetection` logs only click/contextmenu (not hover)
-- [ ] `#[serde(default)]` on all nested config structs for migration
-- [ ] Satellite layer anchors on `survey-stations-hitbox`
-- [ ] Global empty-click handler queries hitbox layers
-- [ ] E2E tests use mock station coords or expose test helper
-- [ ] TypeScript and Rust config types synchronized
+- [ ] Snake_case naming throughout (Rust fields, TOML keys, TS interfaces)
+- [ ] Every nested config struct has `Default` impl
+- [ ] Nearest-to-click resolution for CLICK/CONTEXTMENU only (not hover)
+- [ ] Hover uses standard mouseenter/mouseleave (no nearest resolution)
+- [ ] Ghost hitbox layers are non-interactive
+- [ ] Config reload updates store without persisting (no `update_config`)
+- [ ] All migration checklist items updated
+- [ ] f64 for all size fields

@@ -624,6 +624,9 @@ export default function MapCanvas() {
   useEffect(() => {
     if (!map.current) return;
 
+    // Placement mode manages its own cursor - don't override
+    if (placementMode) return;
+
     const cursors: Record<string, string> = {
       select: 'default',
       pan: 'grab',
@@ -647,7 +650,7 @@ export default function MapCanvas() {
         map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
       }
     }
-  }, [activeTool, ctrlHeld, isHoveringFeature]);
+  }, [activeTool, ctrlHeld, isHoveringFeature, placementMode]);
 
   // Disable map drag pan for tools that need custom interaction
   // (Ctrl+drag panning is handled by custom implementation, not dragPan)
@@ -825,8 +828,9 @@ export default function MapCanvas() {
 
     // Left-click capture: stop propagation to prevent SurveyLayer selection
     // Actual zoom is handled by zoom box end handler (handleZoomBoxEnd)
+    // Don't intercept Ctrl+click (used for Ctrl+drag panning)
     const handleClickCapture = (e: MouseEvent) => {
-      if (e.button === 0) {
+      if (e.button === 0 && !e.ctrlKey) {
         e.stopPropagation();
         e.stopImmediatePropagation();
         // Zoom-in is handled by handleZoomBoxEnd for <10px drags
@@ -1117,8 +1121,13 @@ export default function MapCanvas() {
   );
 
   // Determine mousedown handler based on mode and tool
+  // Only process events that originate from the map container (not overlay UI)
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      // Ignore clicks on overlay UI (buttons, indicators, etc.)
+      if (!mapContainer.current?.contains(e.target as Node)) {
+        return;
+      }
       if (placementMode) {
         handlePlacementClick(e);
       } else if (activeTool === 'zoom') {
