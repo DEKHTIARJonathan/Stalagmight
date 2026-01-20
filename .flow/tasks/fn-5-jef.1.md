@@ -1,8 +1,111 @@
 # fn-5-jef.1 Wire showDepthGradient toggle to SurveyLayer
 
 ## Description
-Wire up the `showDepthGradient` UI toggle to SurveyLayer.
+Wire `showDepthGradient` toggle to SurveyLayer by extending the existing update effect.
 
+## Files to Modify
+
+### `src/components/Map/MapCanvas.tsx`
+**Extend existing survey data effect (around L580):**
+
+Add `showDepthGradient` and stats depth values to dependencies. Use actual variable names from MapCanvas:
+```typescript
+// Add showDepthGradient and stats to dependencies
+useEffect(() => {
+  if (!surveyLayerRef.current || !project) return;
+  surveyLayerRef.current.update(
+    project.sections,
+    stations,  // Actual variable name in MapCanvas
+    project.station_merges,  // Actual variable name
+    project.loop_closures,   // Actual variable name
+    gpsOrigin,
+    showDepthGradient,  // NEW parameter
+    { min: stats?.min_depth ?? 0, max: stats?.max_depth ?? 50 }  // NEW parameter
+  );
+}, [project, stations, gpsOrigin, showDepthGradient, 
+    stats?.min_depth, stats?.max_depth, mapLoaded]);
+```
+
+Extract from stores:
+- `showDepthGradient` from useUIStore (add to existing destructure)
+- `stats` from useProjectStore (already available as `project?.stats` or separate `stats`)
+
+### `src/components/Map/SurveyLayer.tsx`
+**Extend update() signature (L704):**
+```typescript
+update(
+  sections: Section[],
+  stations: Station[],
+  stationMerges?: StationMerge[],
+  loopClosures?: LoopClosure[],
+  gpsOrigin?: GpsOrigin | null,
+  showDepthGradient: boolean = false,  // NEW
+  depthRange: { min: number; max: number } = { min: 0, max: 50 }  // NEW
+): void
+```
+
+Store locally for use throughout the method:
+```typescript
+// At start of update()
+const useDepthColors = showDepthGradient;
+const range = depthRange;
+```
+
+## Why This Approach
+Extending the existing effect is cleaner than adding a separate setter method because:
+- Toggling triggers a full update (colors recalculate)
+- No need to store previous update args
+- Follows existing pattern for display changes
+## Files to Modify
+
+### `src/components/Map/MapCanvas.tsx`
+**Extend existing survey data effect (around L580):**
+```typescript
+// Add showDepthGradient and stats to dependencies
+useEffect(() => {
+  if (!surveyLayerRef.current || !project) return;
+  surveyLayerRef.current.update(
+    project.sections,
+    allStations,
+    stationMerges,
+    loopClosures,
+    gpsOrigin,
+    showDepthGradient,  // NEW parameter
+    { min: stats?.min_depth ?? 0, max: stats?.max_depth ?? 50 }  // NEW parameter
+  );
+}, [project, allStations, stationMerges, loopClosures, gpsOrigin, 
+    showDepthGradient, stats?.min_depth, stats?.max_depth, mapLoaded]);
+```
+
+Extract from stores:
+- `showDepthGradient` from useUIStore
+- `stats` from useProjectStore (already available)
+
+### `src/components/Map/SurveyLayer.tsx`
+**Extend update() signature (L704):**
+```typescript
+update(
+  sections: Section[],
+  stations: Station[],
+  stationMerges?: StationMerge[],
+  loopClosures?: LoopClosure[],
+  gpsOrigin?: GpsOrigin | null,
+  showDepthGradient: boolean = false,  // NEW
+  depthRange: { min: number; max: number } = { min: 0, max: 50 }  // NEW
+): void
+```
+
+Store locally for use throughout the method:
+```typescript
+this.currentShowDepthGradient = showDepthGradient;
+this.currentDepthRange = depthRange;
+```
+
+## Why This Approach
+Extending the existing effect is cleaner than adding a separate setter method because:
+- Toggling triggers a full update (colors recalculate)
+- No need to store previous update args
+- Follows existing pattern for display changes
 ## Files to Modify
 
 ### `src/components/Map/MapCanvas.tsx`
@@ -56,12 +159,13 @@ setShowDepthGradient(show: boolean, minDepth: number, maxDepth: number) {
 - Follow existing pattern from `setShowStations()`, `setShowSectionNames()` etc.
 - The toggle is already defined in uiStore and DisplayMenu - just needs wiring to the layer
 ## Acceptance
-- [ ] `showDepthGradient` extracted in MapCanvas
-- [ ] `stats` (depth range) extracted from useProjectStore  
-- [ ] `setShowDepthGradient(show, minDepth, maxDepth)` method added to SurveyLayer
-- [ ] Depth range stored for use during feature building
-- [ ] useEffect syncs toggle and depth range to layer
-- [ ] Toggling triggers re-render (colors update)
+- [ ] `showDepthGradient` extracted in MapCanvas from useUIStore
+- [ ] `stats` depth values available from useProjectStore
+- [ ] `update()` signature extended with showDepthGradient and depthRange params
+- [ ] Depth parameters used throughout update() method
+- [ ] Effect dependency array includes showDepthGradient and stats depth values
+- [ ] Variable names match actual MapCanvas code (stations, project.station_merges, etc.)
+- [ ] Toggling triggers re-render with new colors
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD

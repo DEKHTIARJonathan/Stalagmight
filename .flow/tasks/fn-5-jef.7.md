@@ -1,8 +1,12 @@
 # fn-5-jef.7 Add depth gradient to keyboard shortcuts config
 
 ## Description
-Add depth gradient toggle to keyboard shortcuts configuration.
+**DEFERRED TO SEPARATE EPIC**
 
+This task requires wiring config.shortcuts to useKeyboardShortcuts hook.
+See epic spec "Future Work" section.
+
+Original requirement: Add depth gradient to keyboard shortcuts config
 ## Requirements
 - Add entry in keyboard shortcuts config structure
 - No default binding (user must assign manually)
@@ -30,11 +34,7 @@ Ensure the new shortcut appears in the configurable list under "Display" categor
 - The action should match what DisplayMenu button does
 - User can assign any key combination in settings
 ## Acceptance
-- [ ] Depth gradient shortcut added to config
-- [ ] No default key binding
-- [ ] Appears in settings UI under Display category
-- [ ] Action correctly toggles showDepthGradient
-- [ ] `pnpm tsc --noEmit` passes
+- [ ] DEFERRED - see epic "Future Work" section
 ## Done summary
 TBD
 

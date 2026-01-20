@@ -12,6 +12,152 @@ interface DepthLegendProps {
   maxDepth: number;
   shallowColor?: string;  // Default: '#00bfff'
   deepColor?: string;     // Default: '#ff4444'
+  visible: boolean;
+}
+```
+
+### Position & Style
+Use CSS positioning relative to map container bottom-left:
+```css
+position: absolute;
+bottom: 50px;  /* Approximate - above scale bar */
+left: 10px;
+background: rgba(0, 0, 0, 0.7);
+border-radius: 4px;
+padding: 8px;
+z-index: 1;  /* Above map, below dialogs */
+```
+
+### Component Structure with Test IDs
+```tsx
+export function DepthLegend({ minDepth, maxDepth, shallowColor = '#00bfff', deepColor = '#ff4444', visible }: DepthLegendProps) {
+  if (!visible) return null;
+  
+  const gradientId = React.useId();
+  const isFlat = minDepth === maxDepth;
+  
+  return (
+    <div 
+      data-testid="depth-legend"  // For E2E testing
+      className="depth-legend"
+      style={{ position: 'absolute', bottom: 50, left: 10, ... }}
+    >
+      <svg 
+        width="16" 
+        height="80" 
+        role="img" 
+        aria-label={`Depth scale: ${minDepth.toFixed(1)}m (shallow) to ${maxDepth.toFixed(1)}m (deep)`}
+      >
+        <defs>
+          <linearGradient id={gradientId} x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor={shallowColor} />
+            <stop offset="100%" stopColor={isFlat ? shallowColor : deepColor} />
+          </linearGradient>
+        </defs>
+        <rect width="16" height="80" fill={`url(#${gradientId})`} rx="2" />
+      </svg>
+      <div className="legend-labels">
+        <span data-testid="depth-legend-min">{minDepth.toFixed(1)}m</span>
+        {isFlat && <span>(Flat)</span>}
+        <span data-testid="depth-legend-max">{maxDepth.toFixed(1)}m</span>
+      </div>
+    </div>
+  );
+}
+```
+
+### Labels
+- Top label: min depth (shallow) - format: `${minDepth.toFixed(1)}m`
+- Bottom label: max depth (deep) - format: `${maxDepth.toFixed(1)}m`
+- Style: `font-size: 11px; color: white; text-shadow: 0 1px 2px rgba(0,0,0,0.8);`
+
+### Special Cases
+- **minDepth === maxDepth**: Show single value with "(Flat)" indicator, solid color bar
+- **not visible**: Return null (don't render)
+
+### Integration in MapCanvas
+Add to JSX after map container, conditionally rendered:
+```tsx
+{showDepthGradient && stats && (
+  <DepthLegend
+    minDepth={stats.min_depth}
+    maxDepth={stats.max_depth}
+    visible={showDepthGradient}
+  />
+)}
+```
+## New File: `src/components/Map/DepthLegend.tsx`
+
+### Props
+```typescript
+interface DepthLegendProps {
+  minDepth: number;
+  maxDepth: number;
+  shallowColor?: string;  // Default: '#00bfff'
+  deepColor?: string;     // Default: '#ff4444'
+  visible: boolean;
+}
+```
+
+### Position & Style
+Use CSS positioning relative to map container bottom-left:
+```css
+position: absolute;
+bottom: 50px;  /* Approximate - above scale bar */
+left: 10px;
+background: rgba(0, 0, 0, 0.7);
+border-radius: 4px;
+padding: 8px;
+z-index: 1;  /* Above map, below dialogs */
+```
+
+### SVG Gradient Bar (Vertical)
+```tsx
+<svg 
+  width="16" 
+  height="80" 
+  role="img" 
+  aria-label={`Depth scale: ${minDepth.toFixed(1)}m (shallow) to ${maxDepth.toFixed(1)}m (deep)`}
+>
+  <defs>
+    <linearGradient id="depth-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stopColor={shallowColor} />
+      <stop offset="100%" stopColor={deepColor} />
+    </linearGradient>
+  </defs>
+  <rect width="16" height="80" fill="url(#depth-gradient)" rx="2" />
+</svg>
+```
+
+### Labels
+- Top label: min depth (shallow) - format: `${minDepth.toFixed(1)}m`
+- Bottom label: max depth (deep) - format: `${maxDepth.toFixed(1)}m`
+- Style: `font-size: 11px; color: white; text-shadow: 0 1px 2px rgba(0,0,0,0.8);`
+
+### Special Cases
+- **minDepth === maxDepth**: Show single value with "(Flat)" indicator, solid color bar
+- **not visible**: Return null (don't render)
+
+### Integration in MapCanvas
+Add to JSX after map container, conditionally rendered:
+```tsx
+{showDepthGradient && stats && (
+  <DepthLegend
+    minDepth={stats.min_depth}
+    maxDepth={stats.max_depth}
+    visible={showDepthGradient}
+  />
+)}
+```
+## New File: `src/components/Map/DepthLegend.tsx`
+
+### Props
+```typescript
+interface DepthLegendProps {
+  minDepth: number;
+  maxDepth: number;
+  shallowColor?: string;  // Default: '#00bfff'
+  deepColor?: string;     // Default: '#ff4444'
   unit: 'm' | 'ft';
   visible: boolean;
 }
@@ -117,12 +263,15 @@ Add DepthLegend as sibling to existing overlays, conditionally rendered when sho
 ## Acceptance
 - [ ] DepthLegend component created at `src/components/Map/DepthLegend.tsx`
 - [ ] SVG gradient bar 16×80px rendered correctly
-- [ ] Min/max depth labels in correct units (m/ft)
+- [ ] Min/max depth labels formatted as `X.Xm`
 - [ ] Semi-transparent dark background (rgba(0,0,0,0.7))
-- [ ] Positioned bottom:50px, left:10px (above scale bar)
-- [ ] Hidden when showDepthGradient is false
+- [ ] Positioned bottom-left above scale bar area
+- [ ] Hidden when showDepthGradient is false (returns null)
 - [ ] Single-depth case shows "(Flat)" with solid color
 - [ ] Accessible with role="img" and aria-label
+- [ ] `data-testid="depth-legend"` on container for E2E testing
+- [ ] `data-testid="depth-legend-min"` and `data-testid="depth-legend-max"` on labels
+- [ ] Unique gradient ID using React.useId()
 - [ ] Integrated in MapCanvas
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
