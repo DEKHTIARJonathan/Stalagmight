@@ -454,6 +454,16 @@ export default function MapCanvas() {
     };
   }, []);
 
+  // Expose map instance for E2E testing (development only)
+  useEffect(() => {
+    if (map.current) {
+      (window as unknown as { __cavechef_map__?: maplibregl.Map }).__cavechef_map__ = map.current;
+    }
+    return () => {
+      delete (window as unknown as { __cavechef_map__?: maplibregl.Map }).__cavechef_map__;
+    };
+  }, [mapLoaded]);
+
   // Update survey layer when data changes or map loads
   useEffect(() => {
     if (surveyLayerRef.current && project) {

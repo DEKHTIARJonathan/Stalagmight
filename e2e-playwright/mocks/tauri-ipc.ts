@@ -99,6 +99,35 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'create_project': {
             const name = (args?.name as string) ?? 'Untitled Project';
             const now = new Date().toISOString();
+            sectionCounter = 0;
+
+            // Pre-populate with sections for testing (provides mock stations)
+            const defaultSections = [
+              {
+                id: ++sectionCounter,
+                name: 'Mock Tunnel A',
+                surveyor: 'Test Surveyor',
+                date: now.split('T')[0],
+                color: '#4ECDC4',
+                shots: [
+                  { id: 1, azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: 0, depth_out: -2 },
+                  { id: 2, azimuth_in: 90, azimuth_out: 270, length: 15, depth_in: -2, depth_out: -5 },
+                  { id: 3, azimuth_in: 120, azimuth_out: 300, length: 8, depth_in: -5, depth_out: -3 },
+                ],
+              },
+              {
+                id: ++sectionCounter,
+                name: 'Mock Tunnel B',
+                surveyor: 'Test Surveyor',
+                date: now.split('T')[0],
+                color: '#FF6B6B',
+                shots: [
+                  { id: 1, azimuth_in: 180, azimuth_out: 0, length: 12, depth_in: -5, depth_out: -8 },
+                  { id: 2, azimuth_in: 210, azimuth_out: 30, length: 9, depth_in: -8, depth_out: -6 },
+                ],
+              },
+            ];
+
             currentProject = {
               id: 1,
               name,
@@ -106,7 +135,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               created_at: now,
               modified_at: now,
               file_path: null,
-              sections: [],
+              sections: defaultSections,
               station_merges: [],
               zero_datums: [],
               loop_closures: [],
