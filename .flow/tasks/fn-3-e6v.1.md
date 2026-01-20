@@ -1,8 +1,25 @@
 # fn-3-e6v.1 Add showShots state and Shots toggle to DisplayMenu
 
 ## Description
-Add `showShots` state and "Shots" toggle - complete implementation.
+Add `showShots` state and toggle.
 
+## Files to Modify
+
+### `src/store/uiStore.ts`
+- Add `showShots: boolean` to UIState interface
+- Add `'showShots'` to DisplayToggleKey union
+- Add `showShots: true` to initial state
+- Add `showShots: true` to resetDisplaySettings()
+- **In loadDisplaySettings, add fallback:**
+  ```typescript
+  showShots: settings.showShots ?? true
+  ```
+
+### `src/components/SingleSystemView/DisplayMenu.tsx`
+- Add to displayOptions before "Virtual Shots"
+
+### `e2e-playwright/mocks/tauri-ipc.ts`
+- Add `showShots: true` to mock
 ## Files to Modify
 
 ### `src/store/uiStore.ts`
@@ -95,11 +112,9 @@ export type DisplayToggleKey =
 ## Depends On
 Nothing - this is a foundational task.
 ## Acceptance
-- [ ] `showShots` in UIState interface
-- [ ] `'showShots'` in DisplayToggleKey union
-- [ ] `showShots: true` in initial state
-- [ ] `showShots: true` in resetDisplaySettings()
-- [ ] "Shots" toggle in DisplayMenu
+- [ ] `showShots` in interface, union, defaults, reset
+- [ ] Fallback `?? true` in loadDisplaySettings
+- [ ] DisplayMenu entry added
 - [ ] Playwright mocks updated
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary

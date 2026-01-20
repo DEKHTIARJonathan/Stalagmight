@@ -2,160 +2,88 @@
 
 ## Problem
 
-The "Display → Stations" toggle exists in the UI but does not hide station markers or prevent selection.
+Display toggles don't actually hide elements or prevent selection.
 
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `src/store/uiStore.ts` | Toggle state, selection actions, resetDisplaySettings() |
-| `src/components/Map/SurveyLayer.tsx` | Layer visibility, sources |
-| `src/components/Map/MapCanvas.tsx` | Toggle sync, highlight wiring |
-| `src/components/SingleSystemView/DisplayMenu.tsx` | Toggle UI |
-| `src/hooks/useMapTools.ts` | Tool handlers |
-| `e2e-playwright/mocks/tauri-ipc.ts` | Playwright mocks |
-
-## Approach
-
-### Adding `showShots` Toggle - Complete Checklist
+## Adding `showShots` - Complete Checklist
 
 1. **`src/store/uiStore.ts`:**
-   - Add `showShots: boolean` to UIState interface
-   - Add `'showShots'` to `DisplayToggleKey` union
-   - Add `showShots: true` to initial state defaults
-   - **Add `showShots: true` to `resetDisplaySettings()`**
-   - Persistence works automatically
+   - Add `showShots: boolean` to UIState
+   - Add to DisplayToggleKey union
+   - Add `showShots: true` to defaults
+   - Add to `resetDisplaySettings()`
+   - **Update `loadDisplaySettings`:**
+     ```typescript
+     const displayState: Partial<UIState> = {};
+     let sawShowShots = false;
+     for (const [key, value] of Object.entries(map)) {
+       if (key === 'showShots') {
+         displayState.showShots = value === 'true';
+         sawShowShots = true;
+       }
+       // ... existing key handling
+     }
+     // Fallback for missing showShots
+     if (!sawShowShots) {
+       displayState.showShots = true;
+     }
+     set(displayState);
+     ```
 
-2. **`src/components/SingleSystemView/DisplayMenu.tsx`:**
-   - Add to displayOptions before "Virtual Shots"
+2. **DisplayMenu, MapCanvas, mocks** - as before
 
-3. **`src/components/Map/MapCanvas.tsx`:**
-   - Destructure `showShots`
-   - Add useEffect sync to SurveyLayer
+## Station Highlight Layer Ordering
 
-4. **`e2e-playwright/mocks/tauri-ipc.ts`:**
-   - Add `showShots: true` to mock
-
-### New Store Actions
-
+**Insert ABOVE stations layer, BELOW labels:**
 ```typescript
-clearSelectionByType: (type: 'station' | 'shot' | 'section') => { ... },
-filterSelection: (predicate: (s: Selection) => boolean) => { ... },
+// In initializeLayers(), after survey-stations, before station-labels
+this.map.addLayer({
+  id: 'survey-stations-highlight',
+  type: 'circle',
+  source: 'survey-data-stations',
+  filter: ['==', ['get', 'sectionId'], -9999],
+  paint: { ... }
+}, 'station-labels');  // beforeId ensures it's below labels
 ```
 
-### Station Highlight Layer
+## Selection Entry Points - Guard Placement
 
-**Source**: `survey-data-stations`
-
-**Wiring in MapCanvas:**
+**Context menu guard BEFORE selection:**
 ```typescript
-useEffect(() => {
-  if (!surveyLayerRef.current) return;
-  
-  const highlightIds: string[] = [];
-  if (snappedStation) highlightIds.push(snappedStation);
-  if (drawFromStation && !highlightIds.includes(drawFromStation)) {
-    highlightIds.push(drawFromStation);
-  }
-  if (mergeStationA && !highlightIds.includes(mergeStationA)) {
-    highlightIds.push(mergeStationA);
-  }
-  if (mergeStationB && !highlightIds.includes(mergeStationB)) {
-    highlightIds.push(mergeStationB);
-  }
-  
-  surveyLayerRef.current.setHighlightedStations(highlightIds);
-}, [snappedStation, drawFromStation, mergeStationA, mergeStationB, mapLoaded]);
-```
-
-### Selection Clearing
-
-**When `showStations` OFF:**
-```typescript
-useEffect(() => {
-  if (!showStations) {
-    clearSelectionByType('station');
-    setHoveredStation(null);
-    surveyLayerRef.current?.clearAllInteractionState();
-  }
-}, [showStations]);
-```
-
-**When `showShots` OFF:**
-- Clear ALL shot selections
-- Clear hover
-- **Shot labels (`showShotData`) cascade off** (already specified in toggle cascade)
-
-```typescript
-useEffect(() => {
-  if (!showShots) {
-    clearSelectionByType('shot');
-    setHoveredShot(null);
-    surveyLayerRef.current?.clearShotHover();
-  }
-}, [showShots]);
-```
-
-**When `showVirtualShots` OFF:**
-
-Use **stable dependency** to avoid repeated re-runs:
-```typescript
-const { project } = useProjectStore();
-const projectId = project?.id;  // Stable primitive
-
-useEffect(() => {
-  if (!showVirtualShots && project?.sections) {
-    filterSelection((s) => {
-      if (s.type !== 'shot') return true;
-      const section = project.sections.find(sec => sec.id === s.sectionId);
-      const shot = section?.shots.find(sh => sh.id === s.shotId);
-      return !shot?.is_virtual;
-    });
-    surveyLayerRef.current?.clearShotHover();
-  }
-}, [showVirtualShots, projectId]);  // Depend on projectId, not sections array
-```
-
-### Toggle Cascade
-
-**When `showShots` OFF:**
-- Store `_prevShowVirtualShots`, `_prevShowShotData` in-memory
-- Set `showShotData = false` (labels cascade off)
-
-### Tool Guards
-
-**Generic `!showStations` guard in handleStationClick applies to ALL station click paths, including merge tool.** No need for separate merge-specific click guard - the generic guard covers it.
-
-**Merge snap guard in handleEmptyClick:**
-```typescript
-if (activeTool === 'merge' && snappedStation && !showStations) {
-  showToast("Enable 'Stations' in Display menu to merge", 'stations-hidden');
+// In handleContextMenu, at TOP before any setSelection
+if (target.type === 'station' && !showStations) {
+  showToast("Enable 'Stations' in Display menu...", 'stations-hidden');
+  return;  // Return before setSelection
+}
+if (target.type === 'shot' && !showShots) {
+  showToast("Enable 'Shots' in Display menu...", 'shots-hidden');
   return;
 }
+// Then proceed with selection and menu opening
 ```
 
-### DisplayMenu Disabled State
+## Ghost Merge Preview
 
-Uses existing button pattern. Add `disabledWhen` to interface.
+Call `setGhostSection(null)` when stations hidden.
 
-### Toast System
+## Virtual Shot Hover
 
-Per-key throttle (5s), Portal, z-index 99999.
+Add `setHoveredShot(null)` in effect.
 
-## Quick Commands
+## Highlight Wiring
 
-```bash
-pnpm tsc --noEmit
-pnpm test:ui
-cargo test --manifest-path src-tauri/Cargo.toml
-```
+Convert StationRef to string ID format.
+
+## Toggle Cascade
+
+_prev values in-memory only.
+
+## Toast System
+
+Per-key throttle, Portal, z-index 99999.
 
 ## Acceptance Criteria
 
-- [ ] `showShots` added to resetDisplaySettings()
-- [ ] Highlight layer wired to snappedStation/drawFromStation/mergeStationA/B in useEffect
-- [ ] Virtual shot effect uses stable `projectId` dependency
-- [ ] Shot labels (`showShotData`) cascade off when `showShots` is off
-- [ ] Generic station click guard covers merge (no separate merge click guard)
-- [ ] Merge snap path has explicit guard
+- [ ] `loadDisplaySettings` uses `sawShowShots` flag for fallback
+- [ ] Context menu guard placed BEFORE setSelection calls
+- [ ] Highlight layer inserted with `beforeId` for ordering above stations, below labels
 - [ ] E2E and unit tests pass
