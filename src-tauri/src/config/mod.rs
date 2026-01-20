@@ -38,8 +38,9 @@ struct LegacySnapConfig {
     enabled_merge: Option<bool>,
     #[serde(default)]
     enabled_measure: Option<bool>,
+    /// Old threshold was u32, but accept f64 for forward compatibility
     #[serde(default)]
-    threshold_pixels: Option<u32>,
+    threshold_pixels: Option<f64>,
 }
 
 /// Station visual and interaction configuration
@@ -481,10 +482,16 @@ impl Config {
 
     /// Migrate legacy config fields to new structure
     /// Called during load() before normalize()
+    ///
+    /// Note: Migration only occurs when map.snap has default values.
+    /// If a user explicitly sets map.snap to defaults AND has a legacy [snap] section,
+    /// the legacy values will override. This edge case is accepted as the user likely
+    /// wants to migrate their old settings.
     fn migrate_legacy(&mut self) {
         // Migrate old [snap] section to new map.snap
         if let Some(legacy) = self.legacy_snap.take() {
-            // Only migrate if map.snap is still at defaults (hasn't been set explicitly)
+            // Only migrate if map.snap appears to be at defaults (not explicitly set)
+            // Limitation: Cannot distinguish explicit defaults from missing section
             let snap_is_default = self.map.snap.threshold == default_snap_threshold()
                 && self.map.snap.enabled_draw
                 && self.map.snap.enabled_merge
@@ -501,7 +508,7 @@ impl Config {
                     self.map.snap.enabled_measure = enabled_measure;
                 }
                 if let Some(threshold_pixels) = legacy.threshold_pixels {
-                    self.map.snap.threshold = threshold_pixels as f64;
+                    self.map.snap.threshold = threshold_pixels;
                 }
                 tracing::info!("Migrated legacy [snap] config to map.snap");
             }
