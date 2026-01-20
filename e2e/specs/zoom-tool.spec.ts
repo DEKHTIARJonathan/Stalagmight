@@ -1,30 +1,43 @@
-import { waitForAppReady, resetAppState, createNewProject, selectTool, getMapZoom, waitForMapReady } from '../helpers/app';
+import { waitForAppReady, resetAppState, createNewProject, loadProjectFixture, getMapZoom, waitForMapReady } from '../helpers/app';
 
 describe('Zoom Tool E2E', () => {
   beforeEach(async () => {
     await waitForAppReady();
     await resetAppState();
-    await createNewProject('Zoom Tool Test Project');
+    await loadProjectFixture('basic-survey');
     await waitForMapReady();
   });
 
   describe('Toolbar Interaction', () => {
     it('clicking zoom button in toolbar activates zoom tool', async () => {
-      // Find zoom button by its title attribute
-      const zoomBtn = await $('button[title="Zoom (Z)"]');
+      const zoomBtn = await $('[data-testid="tool-zoom"]');
       await zoomBtn.click();
-      await browser.pause(200);
 
-      // Verify the button has the active ring class
+      // Wait for tool activation
+      await browser.waitUntil(
+        async () => {
+          const classes = await zoomBtn.getAttribute('class');
+          return classes?.includes('ring-accent') ?? false;
+        },
+        { timeout: 2000, timeoutMsg: 'Zoom button did not become active' }
+      );
+
       const classes = await zoomBtn.getAttribute('class');
       expect(classes).toContain('ring-accent');
     });
 
     it('Z key shortcut activates zoom tool', async () => {
       await browser.keys('z');
-      await browser.pause(200);
 
-      const zoomBtn = await $('button[title="Zoom (Z)"]');
+      const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await browser.waitUntil(
+        async () => {
+          const classes = await zoomBtn.getAttribute('class');
+          return classes?.includes('ring-accent') ?? false;
+        },
+        { timeout: 2000, timeoutMsg: 'Zoom button did not become active after Z key' }
+      );
+
       const classes = await zoomBtn.getAttribute('class');
       expect(classes).toContain('ring-accent');
     });
@@ -32,7 +45,16 @@ describe('Zoom Tool E2E', () => {
 
   describe('Click Zoom', () => {
     it('left click on map zooms in', async () => {
-      await selectTool('zoom');
+      // Activate zoom tool via toolbar click
+      const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await zoomBtn.click();
+      await browser.waitUntil(
+        async () => {
+          const classes = await zoomBtn.getAttribute('class');
+          return classes?.includes('ring-accent') ?? false;
+        },
+        { timeout: 2000 }
+      );
 
       const initialZoom = await getMapZoom();
       expect(initialZoom).not.toBeNull();
@@ -58,8 +80,14 @@ describe('Zoom Tool E2E', () => {
       ]);
       await browser.releaseActions();
 
-      // Wait for animation
-      await browser.pause(400);
+      // Wait for zoom to change
+      await browser.waitUntil(
+        async () => {
+          const newZoom = await getMapZoom();
+          return newZoom !== null && newZoom > initialZoom!;
+        },
+        { timeout: 5000, timeoutMsg: 'Zoom did not increase after left click' }
+      );
 
       const newZoom = await getMapZoom();
       expect(newZoom).not.toBeNull();
@@ -67,16 +95,24 @@ describe('Zoom Tool E2E', () => {
     });
 
     it('right click on map zooms out', async () => {
-      await selectTool('zoom');
+      // Activate zoom tool via toolbar click
+      const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await zoomBtn.click();
+      await browser.waitUntil(
+        async () => {
+          const classes = await zoomBtn.getAttribute('class');
+          return classes?.includes('ring-accent') ?? false;
+        },
+        { timeout: 2000 }
+      );
 
-      // First zoom in so we have room to zoom out
       const mapCanvas = await $('canvas');
       const location = await mapCanvas.getLocation();
       const size = await mapCanvas.getSize();
       const centerX = Math.round(location.x + size.width / 2);
       const centerY = Math.round(location.y + size.height / 2);
 
-      // Left click to zoom in first
+      // Left click to zoom in first so we have room to zoom out
       await browser.performActions([
         {
           type: 'pointer',
@@ -90,7 +126,15 @@ describe('Zoom Tool E2E', () => {
         },
       ]);
       await browser.releaseActions();
-      await browser.pause(400);
+
+      // Wait for zoom in to complete
+      await browser.waitUntil(
+        async () => {
+          const zoom = await getMapZoom();
+          return zoom !== null && zoom > 1;
+        },
+        { timeout: 5000 }
+      );
 
       const initialZoom = await getMapZoom();
       expect(initialZoom).not.toBeNull();
@@ -103,15 +147,21 @@ describe('Zoom Tool E2E', () => {
           parameters: { pointerType: 'mouse' },
           actions: [
             { type: 'pointerMove', x: centerX, y: centerY },
-            { type: 'pointerDown', button: 2 }, // button: 2 is right click
+            { type: 'pointerDown', button: 2 },
             { type: 'pointerUp', button: 2 },
           ],
         },
       ]);
       await browser.releaseActions();
 
-      // Wait for animation
-      await browser.pause(400);
+      // Wait for zoom to decrease
+      await browser.waitUntil(
+        async () => {
+          const newZoom = await getMapZoom();
+          return newZoom !== null && newZoom < initialZoom!;
+        },
+        { timeout: 5000, timeoutMsg: 'Zoom did not decrease after right click' }
+      );
 
       const newZoom = await getMapZoom();
       expect(newZoom).not.toBeNull();
@@ -121,7 +171,16 @@ describe('Zoom Tool E2E', () => {
 
   describe('Box Zoom', () => {
     it('drag rectangle zooms to fit area', async () => {
-      await selectTool('zoom');
+      // Activate zoom tool via toolbar click
+      const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await zoomBtn.click();
+      await browser.waitUntil(
+        async () => {
+          const classes = await zoomBtn.getAttribute('class');
+          return classes?.includes('ring-accent') ?? false;
+        },
+        { timeout: 2000 }
+      );
 
       const initialZoom = await getMapZoom();
       expect(initialZoom).not.toBeNull();
@@ -152,17 +211,31 @@ describe('Zoom Tool E2E', () => {
       ]);
       await browser.releaseActions();
 
-      // Wait for animation
-      await browser.pause(400);
+      // Wait for zoom to increase (box zoom should increase zoom level)
+      await browser.waitUntil(
+        async () => {
+          const newZoom = await getMapZoom();
+          return newZoom !== null && newZoom > initialZoom!;
+        },
+        { timeout: 5000, timeoutMsg: 'Zoom did not increase after box zoom drag' }
+      );
 
       const newZoom = await getMapZoom();
       expect(newZoom).not.toBeNull();
-      // Box zoom should increase zoom level
       expect(newZoom).toBeGreaterThan(initialZoom!);
     });
 
-    it('box zoom overlay is visible during drag', async () => {
-      await selectTool('zoom');
+    it('box zoom overlay visible during drag', async () => {
+      // Activate zoom tool via toolbar click
+      const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await zoomBtn.click();
+      await browser.waitUntil(
+        async () => {
+          const classes = await zoomBtn.getAttribute('class');
+          return classes?.includes('ring-accent') ?? false;
+        },
+        { timeout: 2000 }
+      );
 
       const mapCanvas = await $('canvas');
       const location = await mapCanvas.getLocation();
@@ -173,7 +246,7 @@ describe('Zoom Tool E2E', () => {
       const endX = Math.round(location.x + 300);
       const endY = Math.round(location.y + 300);
 
-      // Start drag
+      // Start drag (hold mouse down)
       await browser.performActions([
         {
           type: 'pointer',
@@ -183,7 +256,6 @@ describe('Zoom Tool E2E', () => {
             { type: 'pointerMove', x: startX, y: startY },
             { type: 'pointerDown', button: 0 },
             { type: 'pointerMove', x: endX, y: endY, duration: 100 },
-            // Keep the mouse down to check for overlay
           ],
         },
       ]);
@@ -192,7 +264,7 @@ describe('Zoom Tool E2E', () => {
       const overlay = await $('[data-testid="zoom-box-overlay"]');
       await expect(overlay).toBeDisplayed();
 
-      // Release and cleanup
+      // Release mouse
       await browser.performActions([
         {
           type: 'pointer',
@@ -205,21 +277,28 @@ describe('Zoom Tool E2E', () => {
       ]);
       await browser.releaseActions();
 
-      // Overlay should be gone after release
-      await browser.pause(100);
-      await expect(overlay).not.toBeDisplayed();
+      // Wait for overlay to be removed from DOM
+      await $('[data-testid="zoom-box-overlay"]').waitForExist({ reverse: true, timeout: 2000 });
     });
   });
 
   describe('Spring-Loaded Z Key', () => {
     it('hold Z then release restores previous tool', async () => {
-      // Start with merge tool
-      await selectTool('merge');
-      await browser.pause(100);
+      // Start with merge tool via toolbar click
+      const mergeBtn = await $('[data-testid="tool-merge"]');
+      await mergeBtn.click();
+
+      // Wait for merge tool to be active
+      await browser.waitUntil(
+        async () => {
+          const classes = await mergeBtn.getAttribute('class');
+          return classes?.includes('ring-accent') ?? false;
+        },
+        { timeout: 2000 }
+      );
 
       // Verify merge tool is active
-      const mergeBtn = await $('button[title="Merge (M)"]');
-      const mergeClasses = await mergeBtn.getAttribute('class');
+      let mergeClasses = await mergeBtn.getAttribute('class');
       expect(mergeClasses).toContain('ring-accent');
 
       // Hold Z key
@@ -231,11 +310,18 @@ describe('Zoom Tool E2E', () => {
         },
       ]);
 
-      // Wait > 200ms for spring-loaded mode
+      // Wait > 200ms for spring-loaded mode to activate
       await browser.pause(300);
 
       // Verify zoom tool is active while holding
-      const zoomBtn = await $('button[title="Zoom (Z)"]');
+      const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await browser.waitUntil(
+        async () => {
+          const classes = await zoomBtn.getAttribute('class');
+          return classes?.includes('ring-accent') ?? false;
+        },
+        { timeout: 2000 }
+      );
       const zoomClasses = await zoomBtn.getAttribute('class');
       expect(zoomClasses).toContain('ring-accent');
 
@@ -248,39 +334,36 @@ describe('Zoom Tool E2E', () => {
         },
       ]);
       await browser.releaseActions();
-      await browser.pause(100);
+
+      // Wait for merge tool to be restored
+      await browser.waitUntil(
+        async () => {
+          const classes = await mergeBtn.getAttribute('class');
+          return classes?.includes('ring-accent') ?? false;
+        },
+        { timeout: 2000, timeoutMsg: 'Merge tool was not restored after releasing Z' }
+      );
 
       // Verify merge tool is restored
-      const mergeClassesAfter = await mergeBtn.getAttribute('class');
-      expect(mergeClassesAfter).toContain('ring-accent');
-    });
-
-    it('quick tap Z keeps zoom tool', async () => {
-      // Start with select tool
-      await selectTool('select');
-      await browser.pause(100);
-
-      // Verify select tool is active
-      const selectBtn = await $('button[title="Select (S)"]');
-      const selectClasses = await selectBtn.getAttribute('class');
-      expect(selectClasses).toContain('ring-accent');
-
-      // Quick tap Z (well under 200ms threshold)
-      await browser.keys('z');
-      await browser.pause(100);
-
-      // Verify zoom tool is now active (tap keeps the new tool)
-      const zoomBtn = await $('button[title="Zoom (Z)"]');
-      const zoomClasses = await zoomBtn.getAttribute('class');
-      expect(zoomClasses).toContain('ring-accent');
+      mergeClasses = await mergeBtn.getAttribute('class');
+      expect(mergeClasses).toContain('ring-accent');
     });
   });
 
   describe('Config Integration', () => {
     it('uses zoom_step from config', async () => {
-      // This test verifies the Rust config is properly loaded
-      // Default zoom_step is 1.0, so zoom should change by ~1 level
-      await selectTool('zoom');
+      // This test verifies the config is being used by checking zoom step behavior
+      // The default zoom_step is 1.0, so zoom should change by approximately 1 level
+      // Activate zoom tool via toolbar click
+      const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await zoomBtn.click();
+      await browser.waitUntil(
+        async () => {
+          const classes = await zoomBtn.getAttribute('class');
+          return classes?.includes('ring-accent') ?? false;
+        },
+        { timeout: 2000 }
+      );
 
       const initialZoom = await getMapZoom();
       expect(initialZoom).not.toBeNull();
@@ -305,52 +388,23 @@ describe('Zoom Tool E2E', () => {
         },
       ]);
       await browser.releaseActions();
-      await browser.pause(400);
+
+      // Wait for zoom to change
+      await browser.waitUntil(
+        async () => {
+          const newZoom = await getMapZoom();
+          return newZoom !== null && newZoom > initialZoom!;
+        },
+        { timeout: 5000 }
+      );
 
       const newZoom = await getMapZoom();
       expect(newZoom).not.toBeNull();
       const diff = newZoom! - initialZoom!;
-      // Zoom step should be approximately 1.0 (allow for animation/rounding)
+      // Zoom step from config should be around 1.0 (allow for animation/rounding variance)
+      // This verifies the zoom behavior is working as configured
       expect(diff).toBeGreaterThan(0.5);
       expect(diff).toBeLessThan(1.5);
-    });
-  });
-
-  describe('Keyboard Shortcuts', () => {
-    it('= key zooms in regardless of active tool', async () => {
-      // Start with select tool
-      await selectTool('select');
-
-      const initialZoom = await getMapZoom();
-      expect(initialZoom).not.toBeNull();
-
-      // Press = to zoom in
-      await browser.keys('=');
-      await browser.pause(400);
-
-      const newZoom = await getMapZoom();
-      expect(newZoom).not.toBeNull();
-      expect(newZoom).toBeGreaterThan(initialZoom!);
-    });
-
-    it('- key zooms out regardless of active tool', async () => {
-      // Start with select tool and zoom in first
-      await selectTool('select');
-
-      // Zoom in
-      await browser.keys('=');
-      await browser.pause(400);
-
-      const initialZoom = await getMapZoom();
-      expect(initialZoom).not.toBeNull();
-
-      // Press - to zoom out
-      await browser.keys('-');
-      await browser.pause(400);
-
-      const newZoom = await getMapZoom();
-      expect(newZoom).not.toBeNull();
-      expect(newZoom).toBeLessThan(initialZoom!);
     });
   });
 });

@@ -74,6 +74,7 @@ export default function Toolbar({
               onClick={() => setActiveTool(tool.id)}
               tooltip={`${tool.label} (${tool.shortcut})`}
               size="sm"
+              data-testid={`tool-${tool.id}`}
             />
           ))}
         </div>
