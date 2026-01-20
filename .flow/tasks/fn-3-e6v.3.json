@@ -8,10 +8,19 @@
     "fn-3-e6v.2"
   ],
   "epic": "fn-3-e6v",
+  "evidence": {
+    "commits": [
+      "1366e3146105b5c537052055b352a5326071de0d"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-3-e6v.3",
   "priority": null,
   "spec_path": ".flow/tasks/fn-3-e6v.3.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Wire visibility toggles in MapCanvas useEffect hooks",
-  "updated_at": "2026-01-20T17:41:39.457467Z"
+  "updated_at": "2026-01-20T17:47:23.898838Z"
 }

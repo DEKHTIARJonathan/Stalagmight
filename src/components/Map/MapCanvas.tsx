@@ -67,6 +67,7 @@ export default function MapCanvas() {
     showStationLabels,
     showStations,
     showShots,
+    showVirtualShots,
     selection,
     mergeStationA,
     measureStart,
@@ -604,11 +605,11 @@ export default function MapCanvas() {
     surveyLayerRef.current.setSnappedStation(snappedStation);
   }, [snappedStation]);
 
-  // Sync shot data labels visibility with SurveyLayer
+  // Sync shot data labels visibility with SurveyLayer (gated by showShots)
   useEffect(() => {
     if (!surveyLayerRef.current) return;
-    surveyLayerRef.current.setShowShotLabels(showShotData);
-  }, [showShotData, mapLoaded]);
+    surveyLayerRef.current.setShowShotLabels(showShots && showShotData);
+  }, [showShotData, showShots, mapLoaded]);
 
   // Sync section name labels visibility with SurveyLayer
   useEffect(() => {
@@ -633,6 +634,12 @@ export default function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setShowShots(showShots);
   }, [showShots, mapLoaded]);
+
+  // Sync virtual shots visibility with SurveyLayer (gated by showShots)
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setShowVirtualShots(showShots && showVirtualShots);
+  }, [showVirtualShots, showShots, mapLoaded]);
 
   // Handle scale bar toggle
   useEffect(() => {
