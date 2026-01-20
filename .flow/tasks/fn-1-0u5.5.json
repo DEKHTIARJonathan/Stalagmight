@@ -8,10 +8,23 @@
     "fn-1-0u5.4"
   ],
   "epic": "fn-1-0u5",
+  "evidence": {
+    "commits": [
+      "4a019ad",
+      "02352cf",
+      "2e55978",
+      "f094eda"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "cargo test --manifest-path src-tauri/Cargo.toml"
+    ]
+  },
   "id": "fn-1-0u5.5",
   "priority": null,
   "spec_path": ".flow/tasks/fn-1-0u5.5.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Frontend integration - types, tile URL, hooks, UI",
-  "updated_at": "2026-01-20T08:00:57.025980Z"
+  "updated_at": "2026-01-20T08:23:10.722878Z"
 }
