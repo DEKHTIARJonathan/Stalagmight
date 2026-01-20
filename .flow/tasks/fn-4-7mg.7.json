@@ -7,10 +7,20 @@
     "fn-4-7mg.1"
   ],
   "epic": "fn-4-7mg",
+  "evidence": {
+    "commits": [
+      "d30a0d71b9df4e2df1ddd3bc31c91f2540cfa5e2"
+    ],
+    "prs": [],
+    "tests": [
+      "cargo test --manifest-path src-tauri/Cargo.toml",
+      "pnpm test -- --run src/types/__tests__/config.test.ts"
+    ]
+  },
   "id": "fn-4-7mg.7",
   "priority": null,
   "spec_path": ".flow/tasks/fn-4-7mg.7.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add unit tests for config loading and validation",
-  "updated_at": "2026-01-20T21:40:18.572956Z"
+  "updated_at": "2026-01-20T21:53:15.966182Z"
 }
