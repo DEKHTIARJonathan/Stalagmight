@@ -6,35 +6,70 @@ The current interaction areas for stations (4px radius circles) and shots (2px w
 
 ## Approach
 
-Add hitbox layers with larger configurable sizes for improved click/hover detection.
+Add hitbox layers with larger configurable sizes for improved click detection.
 
 ### Technical Implementation
 
-1. **Hitbox Layers**:
-   - `survey-stations-hitbox`, `survey-shots-hitbox`
-   - Ghost hitbox layers **non-interactive** (not queried, only visual for debug)
-   - Use `opacity: 0.001` with transparent color
+#### 1. Hitbox Layers
 
-2. **Layer Order**: Hitboxes first, then visual, then labels. Satellite anchors on `survey-stations-hitbox`.
+- `survey-stations-hitbox`, `survey-shots-hitbox` with `opacity: 0.001`
+- Ghost hitbox layers: **non-interactive** (debug visualization only, NOT in queries)
 
-3. **Event Handling**:
-   - **Click/contextmenu**: Query hitbox layers, use nearest-to-click resolution
-   - **Hover**: Keep using `mouseenter`/`mouseleave` on hitbox layers (MapLibre gives topmost feature). **Nearest resolution is for CLICK ONLY** - hover uses standard per-layer behavior.
-   - Update global empty-click handler to query hitbox layers
+#### 2. Hover UX Change (Intentional)
 
-4. **Nearest-to-Click Resolution** (click/contextmenu ONLY):
-   - Stations: project point, compute distance
-   - Shots: distance-to-line-segment in screen space
+Hover triggers within hitbox area, not just visual glyph. **Intentional and acceptable**.
 
-5. **Visual Sizing**:
-   - Base from config, explicit scaling rules
-   - Zero datum: `radius * 2`, Snapped: `radius + 3`
+#### 3. Click/Contextmenu Handling
 
-6. **Debug Mode**: Set both color and opacity. Ghost hitboxes visible in debug but NOT interactive.
+**ALWAYS query hitbox layers and use nearest resolver** (don't rely on `e.features[0]`):
+
+```typescript
+private handleStationClick = (e: MapLayerMouseEvent) => {
+  // Query hitbox layer explicitly
+  const features = this.map.queryRenderedFeatures(e.point, {
+    layers: [this.stationsHitboxLayerId]
+  });
+  const nearest = this.resolveNearestStation(e, features);
+  if (!nearest) return;
+  // ...
+};
+```
+
+#### 4. Query Sites (all must query hitbox layers, NOT ghost)
+
+1. `SurveyLayer.handleStationClick` - query `survey-stations-hitbox`
+2. `SurveyLayer.handleShotClick` - query `survey-shots-hitbox`
+3. `SurveyLayer global empty-click` - query both hitbox layers
+4. `SurveyLayer.handleContextMenu` - query both hitbox layers
+5. `MapCanvas box select` - query `survey-stations-hitbox`
+
+#### 5. Visual State Scaling
+
+Stations (from `config.map.station.radius`): zeroDatum=radius*2, snapped=radius+3, hovered=radius+2, selected=radius+1
+Shots (from `config.map.shot.width`): hovered=width+2, selected=width+1
+
+#### 6. Config Wiring
+
+```typescript
+// SurveyLayer.ts
+public setConfig(config: Config): void {
+  this.config = config;
+  this.updateHitboxLayers();
+  this.updateVisualState();
+  this.updateDebugVisualization();
+}
+
+// MapCanvas.tsx - add useEffect
+useEffect(() => {
+  if (surveyLayerRef.current && config) {
+    surveyLayerRef.current.setConfig(config);
+  }
+}, [config]);
+```
 
 ### Configuration Schema
 
-**Use snake_case consistently** (matches existing config pattern):
+Snake_case. All nested structs have `Default` impl + `#[serde(default)]`.
 
 ```toml
 [map.station]
@@ -56,127 +91,102 @@ show_hitboxes = false
 log_hit_detection = false
 ```
 
-**Rust struct naming**: Use snake_case field names to match TOML:
-```rust
-pub struct StationConfig {
-    pub radius: f64,
-    pub hit_area: f64,  // snake_case matches TOML key
-}
-```
+### Config Validation (Rust)
 
-**TypeScript**: Use snake_case to match Rust serialization:
-```typescript
-interface StationConfig {
-  radius: number;
-  hit_area: number;  // Match Rust/TOML
-}
-```
-
-### Default Implementations
-
-**Every nested config struct MUST have `Default` impl**:
+**Add to `Config::normalize()` called from `load()` and `save()`:**
 
 ```rust
-impl Default for StationConfig {
-    fn default() -> Self {
-        Self { radius: 4.0, hit_area: 10.0 }
+impl StationConfig {
+    pub fn normalize(&mut self) {
+        if !self.radius.is_finite() { self.radius = 4.0; }
+        if !self.hit_area.is_finite() { self.hit_area = 10.0; }
+        self.radius = self.radius.clamp(1.0, 50.0);
+        self.hit_area = self.hit_area.clamp(1.0, 50.0).max(self.radius);
     }
 }
-impl Default for ShotConfig {
-    fn default() -> Self {
-        Self { width: 2.0, hit_area: 8.0 }
-    }
-}
-impl Default for MapSnapConfig {
-    fn default() -> Self {
-        Self {
-            threshold: 10.0,
-            enabled_draw: true,
-            enabled_merge: true,
-            enabled_measure: true,
-        }
-    }
-}
-impl Default for DebugConfig {
-    fn default() -> Self {
-        Self { map: MapDebugConfig::default() }
-    }
-}
-impl Default for MapDebugConfig {
-    fn default() -> Self {
-        Self { show_hitboxes: false, log_hit_detection: false }
+
+impl ShotConfig {
+    pub fn normalize(&mut self) {
+        if !self.width.is_finite() { self.width = 2.0; }
+        if !self.hit_area.is_finite() { self.hit_area = 8.0; }
+        self.width = self.width.clamp(0.5, 20.0);
+        self.hit_area = self.hit_area.clamp(0.5, 20.0).max(self.width);
     }
 }
 ```
 
 ### Config Reload
 
-**Don't call `update_config` on reload** (that would save/persist). Only update store state:
+**Rust command (add to `commands/config.rs` AND register in `lib.rs`):**
+
+```rust
+#[tauri::command]
+pub fn reload_config(state: State<AppState>) -> Result<Config, String> {
+    let mut new_config = Config::load().map_err(|e| e.to_string())?;
+    new_config.normalize();
+    *state.config.lock().unwrap() = new_config.clone();
+    Ok(new_config)
+}
+```
+
+**Register in `src-tauri/src/lib.rs`:**
+```rust
+.invoke_handler(tauri::generate_handler![
+    // ... existing ...
+    commands::config::reload_config,
+])
+```
+
+**Frontend (SettingsDialog):**
 
 ```typescript
+const { setConfig } = useProjectStore();
+
 const handleReloadConfig = async () => {
   const newConfig = await invoke<Config>('reload_config');
   const changes = computeConfigDiff(localConfig, newConfig);
-
   setLocalConfig(newConfig);
-  // Update store directly without persisting
-  projectStore.setState({ config: newConfig });
-
-  // Show diff dialog
+  setConfig(newConfig);  // Store action, doesn't persist
+  // Show changes dialog
 };
 ```
 
+**Disabled when isDirty** - button disabled with tooltip "Save or discard local changes first"
+
 ### Migration Checklist
 
-**All consumers of removed fields that must be updated:**
+**Rust:**
+- `src-tauri/src/config/mod.rs`: Add StationConfig, ShotConfig, MapSnapConfig, DebugConfig with Default impls
+- `src-tauri/src/config/mod.rs`: Remove SnapConfig struct, config.snap field
+- `src-tauri/src/config/defaults.rs`: Update defaults
+- `src-tauri/src/lib.rs`: Register reload_config command
 
-1. `config.snap.threshold_pixels`:
-   - `src/components/Map/MapCanvas.tsx:88-97` (checkSnapToStation)
-   - `src/components/Map/MapCanvas.tsx:141` (checkPlacementSnap)
+**TypeScript:**
+- `src/types/config.ts`: Update types, remove SnapConfig
+- `src/store/projectStore.ts`: Add setConfig action
+- `src/components/Map/MapCanvas.tsx`: Update snap refs, add config useEffect
+- `src/components/Dialogs/SettingsDialog.tsx`: Add reload button
 
-2. `config.snap.enabled_*`:
-   - `src/components/Map/MapCanvas.tsx:89-91` (shouldSnap check)
+**E2E:**
+- `e2e-playwright/mocks/tauri-ipc.ts`: Update mock config
+- Add test helper to expose station coordinates: `window.__E2E_TEST__.stations`
 
-3. `display.station_size`:
-   - `src/types/config.ts:42` (interface)
-   - `src/types/config.ts:164` (defaultConfig)
-   - `src-tauri/src/config/mod.rs` (struct)
-   - `src-tauri/src/config/defaults.rs` (default)
-
-4. `display.line_thickness`:
-   - `src/types/config.ts:43` (interface)
-   - `src/types/config.ts:165` (defaultConfig)
-   - `src-tauri/src/config/mod.rs` (struct)
-   - `src-tauri/src/config/defaults.rs` (default)
-
-5. E2E mock:
-   - `e2e-playwright/mocks/tauri-ipc.ts` (mock config)
-
-6. Documentation:
-   - `docs/configuration.md`
-
-### Ghost Hitbox Layers
-
-Ghost layers are **NOT interactive**:
-- Don't include in click/contextmenu queries
-- Only visible when `debug.map.show_hitboxes` is true
-- Purpose: visual debugging only during merge preview
-
-## Quick Commands
-
-```bash
-pnpm tsc --noEmit
-pnpm test:ui
-cargo test --manifest-path src-tauri/Cargo.toml
-```
+**Docs:**
+- `docs/configuration.md`: Update
 
 ## Acceptance Criteria
 
-- [ ] Snake_case naming throughout (Rust fields, TOML keys, TS interfaces)
-- [ ] Every nested config struct has `Default` impl
-- [ ] Nearest-to-click resolution for CLICK/CONTEXTMENU only (not hover)
-- [ ] Hover uses standard mouseenter/mouseleave (no nearest resolution)
-- [ ] Ghost hitbox layers are non-interactive
-- [ ] Config reload updates store without persisting (no `update_config`)
-- [ ] All migration checklist items updated
-- [ ] f64 for all size fields
+- [ ] Snake_case naming throughout
+- [ ] Every nested config struct has Default impl + #[serde(default)]
+- [ ] Config validation: is_finite(), clamp, hit_area >= radius/width
+- [ ] Click/contextmenu use queryRenderedFeatures + nearest resolver (not e.features[0])
+- [ ] Hover uses standard layer events (intentional UX change documented)
+- [ ] Ghost hitbox layers NOT in any queries
+- [ ] Visual scaling: zeroDatum=radius*2, snapped=radius+3, hovered=radius+2, selected=radius+1
+- [ ] Shot scaling: hovered=width+2, selected=width+1
+- [ ] SurveyLayer.setConfig() wired via MapCanvas useEffect
+- [ ] reload_config command registered in lib.rs
+- [ ] Store setConfig action (no persist)
+- [ ] Reload button disabled when isDirty
+- [ ] E2E test helper exposes station coordinates
+- [ ] All migration checklist items completed

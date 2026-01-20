@@ -1,8 +1,54 @@
 # fn-4-7mg.5 Add Reload Config button to Settings dialog
 
 ## Description
-Add Reload Config button that updates store WITHOUT persisting.
+Add Reload Config button using new setConfig store action.
 
+## Store Update Mechanism
+
+Add `setConfig` action to projectStore (doesn't persist, just updates state):
+
+```typescript
+// In src/store/projectStore.ts
+interface ProjectStore {
+  // ... existing ...
+  setConfig: (config: Config) => void;
+}
+
+export const useProjectStore = create<ProjectStore>((set) => ({
+  // ... existing ...
+  setConfig: (config) => set({ config }),
+}));
+```
+
+## Usage in SettingsDialog
+
+```typescript
+const { setConfig } = useProjectStore();
+
+const handleReloadConfig = async () => {
+  try {
+    const newConfig = await invoke<Config>('reload_config');
+    const changes = computeConfigDiff(localConfig, newConfig);
+
+    setLocalConfig(newConfig);
+    setConfig(newConfig);  // Updates store via new action
+
+    if (changes.length > 0) {
+      const changeList = changes.map(c => `• ${c.path}: ${c.oldValue} → ${c.newValue}`).join('\n');
+      alert(`Config reloaded:\n\n${changeList}`);
+    } else {
+      alert('Config reloaded (no changes)');
+    }
+  } catch (error) {
+    alert(`Failed to reload config: ${error}`);
+  }
+};
+```
+
+## Button UX
+
+- Disabled when `isDirty`
+- Tooltip: "Save or discard local changes first"
 ## CRITICAL: Don't Call update_config
 
 `update_config` saves to disk. On reload, we only want to refresh from disk, NOT save back:
@@ -394,11 +440,11 @@ If config file has parse errors:
 - Show error toast with details
 - Keep previous config (don't crash)
 ## Acceptance
-- [ ] Reload updates store WITHOUT persisting (no updateConfig call)
-- [ ] Uses setState or internal method to update config state
+- [ ] `setConfig` action added to projectStore
+- [ ] setConfig updates state without persisting
+- [ ] handleReloadConfig uses setConfig action
 - [ ] Client-side diffing with computeConfigDiff()
 - [ ] Button disabled when isDirty
-- [ ] `cargo test` passes
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD
