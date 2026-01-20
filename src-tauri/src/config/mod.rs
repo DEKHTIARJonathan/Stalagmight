@@ -321,8 +321,8 @@ pub struct MapConfig {
 }
 
 impl MapConfig {
-    /// Normalize all float values to valid ranges
-    /// Also handles NaN/inf by falling back to defaults
+    /// Normalize zoom_step and nested config values (station, shot, snap) to valid ranges
+    /// Handles NaN/inf by falling back to defaults
     pub fn normalize(&mut self) {
         if !self.zoom_step.is_finite() {
             self.zoom_step = default_zoom_step();
