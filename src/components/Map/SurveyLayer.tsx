@@ -534,96 +534,11 @@ export default class SurveyLayer {
   }
 
   private initializeEventHandlers() {
-    // Station click handler - use HITBOX layer for larger clickable area
-    this.map.on('click', this.stationsHitboxLayerId, (e) => {
-      e.preventDefault();
-      const feature = e.features?.[0];
-      if (feature?.properties) {
-        const { sectionId, stationIndex } = feature.properties;
-        const ref: StationRef = {
-          section_id: sectionId as number,
-          station_index: stationIndex as number,
-        };
-        this.callbacks.onStationClick?.(ref, e);
-      }
-    });
+    // UNIFIED click handler - queries both hitbox layers with station priority
+    // This replaces per-layer click handlers to ensure proper nearest-to-click resolution
+    this.map.on('click', this.handleMapClick);
 
-    // Shot click handler - use HITBOX layer, stations take priority
-    this.map.on('click', this.shotsHitboxLayerId, (e) => {
-      // Check if there's a station hitbox at this point - stations always take priority
-      const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsHitboxLayerId] });
-      if (stationFeatures.length > 0) {
-        return; // Station will handle this click
-      }
-
-      e.preventDefault();
-      const feature = e.features?.[0];
-      if (feature?.properties) {
-        const { sectionId, shotId } = feature.properties;
-        this.callbacks.onShotClick?.(sectionId as number, shotId as number, e);
-      }
-    });
-
-    // Empty click handler (on map, not on features)
-    // Uses HITBOX layers for detection (NOT ghost hitbox layers - those are debug only)
-    this.map.on('click', (e) => {
-      // Check if we clicked on a feature using HITBOX layers (larger clickable area)
-      const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsHitboxLayerId] });
-      const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsHitboxLayerId] });
-
-      // If we hit a hitbox, let the layer-specific handlers deal with it
-      if (stationFeatures.length > 0 || shotFeatures.length > 0) {
-        return;
-      }
-
-      // Check for clicks on hidden features (stations take priority)
-      // Use a 15-pixel threshold for "near" detection
-      const HIDDEN_CLICK_THRESHOLD_PX = 15;
-
-      if (!this.stationsVisible && this.callbacks.onHiddenStationClick) {
-        // Query source features (works even when layer is hidden)
-        const sourceFeatures = this.map.querySourceFeatures(this.sourceId + '-stations');
-        for (const feature of sourceFeatures) {
-          if (feature.geometry.type === 'Point') {
-            const coords = feature.geometry.coordinates as [number, number];
-            const projected = this.map.project(coords);
-            const dx = projected.x - e.point.x;
-            const dy = projected.y - e.point.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            if (distance < HIDDEN_CLICK_THRESHOLD_PX) {
-              this.callbacks.onHiddenStationClick();
-              return;
-            }
-          }
-        }
-      }
-
-      if (!this.shotsVisible && this.callbacks.onHiddenShotClick) {
-        // Query shot source features
-        const sourceFeatures = this.map.querySourceFeatures(this.sourceId + '-shots');
-        for (const feature of sourceFeatures) {
-          if (feature.geometry.type === 'LineString') {
-            const lineCoords = feature.geometry.coordinates as [number, number][];
-            // Check distance to line segment
-            for (let i = 0; i < lineCoords.length - 1; i++) {
-              const coord1 = lineCoords[i];
-              const coord2 = lineCoords[i + 1];
-              if (!coord1 || !coord2) continue;
-              const p1 = this.map.project(coord1);
-              const p2 = this.map.project(coord2);
-              const dist = this.pointToSegmentDistance(e.point.x, e.point.y, p1.x, p1.y, p2.x, p2.y);
-              if (dist < HIDDEN_CLICK_THRESHOLD_PX) {
-                this.callbacks.onHiddenShotClick();
-                return;
-              }
-            }
-          }
-        }
-      }
-
-      // No hidden features nearby, fire empty click
-      this.callbacks.onEmptyClick?.(e);
-    });
+    // Note: Per-layer click handlers removed - unified handler handles all click logic
 
     // Station hover handlers - use HITBOX layer for larger hover area
     // Stations take priority over shots
@@ -683,31 +598,243 @@ export default class SurveyLayer {
       this.updateVisualState();
     });
 
-    // Context menu handler - uses HITBOX layers (NOT ghost hitbox layers)
-    this.map.on('contextmenu', (e) => {
-      const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsHitboxLayerId] });
-      const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsHitboxLayerId] });
+    // UNIFIED context menu handler - queries both hitbox layers with station priority
+    this.map.on('contextmenu', this.handleContextMenu);
+  }
 
-      if (stationFeatures.length > 0) {
-        const feature = stationFeatures[0];
-        if (feature?.properties) {
-          const { sectionId, stationIndex } = feature.properties;
-          const ref: StationRef = {
-            section_id: sectionId as number,
-            station_index: stationIndex as number,
-          };
-          this.callbacks.onContextMenu?.({ type: 'station', ref }, e);
-        }
-      } else if (shotFeatures.length > 0) {
-        const feature = shotFeatures[0];
-        if (feature?.properties) {
-          const { sectionId, shotId } = feature.properties;
-          this.callbacks.onContextMenu?.({ type: 'shot', sectionId: sectionId as number, shotId: shotId as number }, e);
-        }
-      } else {
-        this.callbacks.onContextMenu?.(null, e);
+  /**
+   * UNIFIED click handler - queries both hitbox layers and resolves priority.
+   * Stations always take priority over shots. Uses nearest-to-click resolution
+   * when multiple features overlap.
+   */
+  private handleMapClick = (e: MapMouseEvent): void => {
+    // Query both hitbox layers (NOT ghost layers - those are debug only)
+    const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsHitboxLayerId] });
+    const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsHitboxLayerId] });
+
+    // Stations take priority - resolve nearest station first
+    const nearestStation = this.resolveNearestStation(e, stationFeatures);
+    if (nearestStation) {
+      const { sectionId, stationIndex } = nearestStation.properties ?? {};
+      if (sectionId !== undefined && stationIndex !== undefined) {
+        const ref: StationRef = {
+          section_id: sectionId as number,
+          station_index: stationIndex as number,
+        };
+        this.callbacks.onStationClick?.(ref, e);
+        return;
       }
-    });
+    }
+
+    // Then shots - resolve nearest shot
+    const nearestShot = this.resolveNearestShot(e, shotFeatures);
+    if (nearestShot) {
+      const { sectionId, shotId } = nearestShot.properties ?? {};
+      if (sectionId !== undefined && shotId !== undefined) {
+        this.callbacks.onShotClick?.(sectionId as number, shotId as number, e);
+        return;
+      }
+    }
+
+    // Empty click - check for hidden features before firing empty callback
+    this.handleEmptyClick(e);
+  };
+
+  /**
+   * UNIFIED context menu handler - queries both hitbox layers and resolves priority.
+   * Same pattern as click handler: stations take priority, uses nearest resolution.
+   */
+  private handleContextMenu = (e: MapMouseEvent): void => {
+    // Query both hitbox layers (NOT ghost layers)
+    const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsHitboxLayerId] });
+    const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsHitboxLayerId] });
+
+    // Stations take priority
+    const nearestStation = this.resolveNearestStation(e, stationFeatures);
+    if (nearestStation) {
+      const { sectionId, stationIndex } = nearestStation.properties ?? {};
+      if (sectionId !== undefined && stationIndex !== undefined) {
+        const ref: StationRef = {
+          section_id: sectionId as number,
+          station_index: stationIndex as number,
+        };
+        this.callbacks.onContextMenu?.({ type: 'station', ref }, e);
+        return;
+      }
+    }
+
+    // Then shots
+    const nearestShot = this.resolveNearestShot(e, shotFeatures);
+    if (nearestShot) {
+      const { sectionId, shotId } = nearestShot.properties ?? {};
+      if (sectionId !== undefined && shotId !== undefined) {
+        this.callbacks.onContextMenu?.({ type: 'shot', sectionId: sectionId as number, shotId: shotId as number }, e);
+        return;
+      }
+    }
+
+    // Empty context menu
+    this.callbacks.onContextMenu?.(null, e);
+  };
+
+  /**
+   * Handle empty click - check for hidden features before firing empty callback.
+   * This provides toast feedback when clicking near hidden stations/shots.
+   */
+  private handleEmptyClick(e: MapMouseEvent): void {
+    const HIDDEN_CLICK_THRESHOLD_PX = 15;
+
+    // Check for clicks on hidden stations (stations take priority)
+    if (!this.stationsVisible && this.callbacks.onHiddenStationClick) {
+      const sourceFeatures = this.map.querySourceFeatures(this.sourceId + '-stations');
+      for (const feature of sourceFeatures) {
+        if (feature.geometry.type === 'Point') {
+          const coords = feature.geometry.coordinates as [number, number];
+          const projected = this.map.project(coords);
+          const dx = projected.x - e.point.x;
+          const dy = projected.y - e.point.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          if (distance < HIDDEN_CLICK_THRESHOLD_PX) {
+            this.callbacks.onHiddenStationClick();
+            return;
+          }
+        }
+      }
+    }
+
+    // Check for clicks on hidden shots
+    if (!this.shotsVisible && this.callbacks.onHiddenShotClick) {
+      const sourceFeatures = this.map.querySourceFeatures(this.sourceId + '-shots');
+      for (const feature of sourceFeatures) {
+        if (feature.geometry.type === 'LineString') {
+          const lineCoords = feature.geometry.coordinates as [number, number][];
+          for (let i = 0; i < lineCoords.length - 1; i++) {
+            const coord1 = lineCoords[i];
+            const coord2 = lineCoords[i + 1];
+            if (!coord1 || !coord2) continue;
+            const p1 = this.map.project(coord1);
+            const p2 = this.map.project(coord2);
+            const dist = this.distanceToLineSegment(e.point.x, e.point.y, p1.x, p1.y, p2.x, p2.y);
+            if (dist < HIDDEN_CLICK_THRESHOLD_PX) {
+              this.callbacks.onHiddenShotClick();
+              return;
+            }
+          }
+        }
+      }
+    }
+
+    // No hidden features nearby, fire empty click
+    this.callbacks.onEmptyClick?.(e);
+  }
+
+  /**
+   * Resolve nearest station feature to click point.
+   * For multiple overlapping station hitboxes, returns the one whose center
+   * is closest to the click point.
+   */
+  private resolveNearestStation(
+    e: MapMouseEvent,
+    features: maplibregl.MapGeoJSONFeature[]
+  ): maplibregl.MapGeoJSONFeature | null {
+    if (features.length === 0) return null;
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- length check above ensures element exists
+    if (features.length === 1) return features[0]!;
+
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- length >= 2 ensures element exists
+    let nearest: maplibregl.MapGeoJSONFeature = features[0]!;
+    let nearestDist = Infinity;
+
+    for (const feature of features) {
+      const geom = feature.geometry;
+      if (geom.type === 'Point') {
+        const coords = geom.coordinates as [number, number];
+        const screenPos = this.map.project(coords);
+        const dist = Math.sqrt(
+          (screenPos.x - e.point.x) ** 2 + (screenPos.y - e.point.y) ** 2
+        );
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearest = feature;
+        }
+      }
+    }
+
+    return nearest;
+  }
+
+  /**
+   * Resolve nearest shot feature to click point.
+   * Uses perpendicular distance to line segment for accurate selection
+   * when multiple shot hitboxes overlap.
+   */
+  private resolveNearestShot(
+    e: MapMouseEvent,
+    features: maplibregl.MapGeoJSONFeature[]
+  ): maplibregl.MapGeoJSONFeature | null {
+    if (features.length === 0) return null;
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- length check above ensures element exists
+    if (features.length === 1) return features[0]!;
+
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- length >= 2 ensures element exists
+    let nearest: maplibregl.MapGeoJSONFeature = features[0]!;
+    let nearestDist = Infinity;
+
+    for (const feature of features) {
+      const geom = feature.geometry;
+      if (geom.type === 'LineString' && geom.coordinates.length >= 2) {
+        // Project line endpoints to screen coordinates
+        const [lng1, lat1] = geom.coordinates[0] as [number, number];
+        const [lng2, lat2] = geom.coordinates[1] as [number, number];
+        const p1 = this.map.project([lng1, lat1]);
+        const p2 = this.map.project([lng2, lat2]);
+
+        // Compute distance to line segment
+        const dist = this.distanceToLineSegment(
+          e.point.x, e.point.y,
+          p1.x, p1.y, p2.x, p2.y
+        );
+
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearest = feature;
+        }
+      }
+    }
+
+    return nearest;
+  }
+
+  /**
+   * Calculate distance from point (px, py) to line segment (x1,y1)-(x2,y2).
+   * Returns perpendicular distance if projection falls on segment,
+   * otherwise returns distance to nearest endpoint.
+   */
+  private distanceToLineSegment(
+    px: number, py: number,
+    x1: number, y1: number,
+    x2: number, y2: number
+  ): number {
+    const A = px - x1;
+    const B = py - y1;
+    const C = x2 - x1;
+    const D = y2 - y1;
+
+    const dot = A * C + B * D;
+    const lenSq = C * C + D * D;
+    let param = lenSq !== 0 ? dot / lenSq : -1;
+
+    let xx: number, yy: number;
+    if (param < 0) {
+      xx = x1; yy = y1;  // Closest to start
+    } else if (param > 1) {
+      xx = x2; yy = y2;  // Closest to end
+    } else {
+      xx = x1 + param * C;  // Perpendicular point on segment
+      yy = y1 + param * D;
+    }
+
+    return Math.sqrt((px - xx) ** 2 + (py - yy) ** 2);
   }
 
   // Update visual state for selection/hover/snap highlighting
@@ -923,40 +1050,6 @@ export default class SurveyLayer {
       // Hide virtual shots only
       this.map.setFilter(this.shotsLayerId, ['!=', ['get', 'isVirtual'], true]);
     }
-  }
-
-  /**
-   * Calculate distance from point (px, py) to line segment (x1,y1)-(x2,y2).
-   * Used for detecting clicks near hidden shot lines.
-   */
-  private pointToSegmentDistance(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
-    const A = px - x1;
-    const B = py - y1;
-    const C = x2 - x1;
-    const D = y2 - y1;
-
-    const dot = A * C + B * D;
-    const lenSq = C * C + D * D;
-    let param = -1;
-    if (lenSq !== 0) {
-      param = dot / lenSq;
-    }
-
-    let xx: number, yy: number;
-    if (param < 0) {
-      xx = x1;
-      yy = y1;
-    } else if (param > 1) {
-      xx = x2;
-      yy = y2;
-    } else {
-      xx = x1 + param * C;
-      yy = y1 + param * D;
-    }
-
-    const dx = px - xx;
-    const dy = py - yy;
-    return Math.sqrt(dx * dx + dy * dy);
   }
 
   // Set highlighted stations by their string IDs (format: "sectionId:stationIndex")
