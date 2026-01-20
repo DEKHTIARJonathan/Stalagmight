@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 import type { PanelsConfig } from '../types/config';
+import { DISPLAY_DEFAULTS } from './displaySelectors';
 
 export type ViewType = 'global' | 'single';
 
@@ -409,19 +410,19 @@ export const useUIStore = create<UIStore>((set) => ({
   triggerFitToBounds: () => set({ requestFitToBounds: true }),
   clearFitToBoundsRequest: () => set({ requestFitToBounds: false }),
 
-  // Display toggles
-  showStations: true,
-  showShots: true,
-  showSectionNames: true,
-  showStationLabels: false,
-  showShotData: false,
-  showVirtualShots: true,
-  showZeroDatum: true,
-  showGrid: false,
-  showScaleBar: true,
-  showSatellite: false,
-  showDepthGradient: false,
-  gridSpacing: 10,
+  // Display toggles (initial values from DISPLAY_DEFAULTS - single source of truth)
+  showStations: DISPLAY_DEFAULTS.showStations,
+  showShots: DISPLAY_DEFAULTS.showShots,
+  showSectionNames: DISPLAY_DEFAULTS.showSectionNames,
+  showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
+  showShotData: DISPLAY_DEFAULTS.showShotData,
+  showVirtualShots: DISPLAY_DEFAULTS.showVirtualShots,
+  showZeroDatum: DISPLAY_DEFAULTS.showZeroDatum,
+  showGrid: DISPLAY_DEFAULTS.showGrid,
+  showScaleBar: DISPLAY_DEFAULTS.showScaleBar,
+  showSatellite: DISPLAY_DEFAULTS.showSatellite,
+  showDepthGradient: DISPLAY_DEFAULTS.showDepthGradient,
+  gridSpacing: DISPLAY_DEFAULTS.gridSpacing,
   toggleDisplay: (key) => {
     const state = useUIStore.getState();
     const newValue = !state[key];
@@ -473,20 +474,20 @@ export const useUIStore = create<UIStore>((set) => ({
     }
   },
   resetDisplaySettings: () => {
-    // Reset all display toggles to their default values
+    // Reset all display toggles to their default values (from DISPLAY_DEFAULTS - single source of truth)
     set({
-      showStations: true,
-      showShots: true,
-      showSectionNames: true,
-      showStationLabels: false,
-      showShotData: false,
-      showVirtualShots: true,
-      showZeroDatum: true,
-      showGrid: false,
-      showScaleBar: true,
-      showSatellite: false,
-      showDepthGradient: false,
-      gridSpacing: 10,
+      showStations: DISPLAY_DEFAULTS.showStations,
+      showShots: DISPLAY_DEFAULTS.showShots,
+      showSectionNames: DISPLAY_DEFAULTS.showSectionNames,
+      showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
+      showShotData: DISPLAY_DEFAULTS.showShotData,
+      showVirtualShots: DISPLAY_DEFAULTS.showVirtualShots,
+      showZeroDatum: DISPLAY_DEFAULTS.showZeroDatum,
+      showGrid: DISPLAY_DEFAULTS.showGrid,
+      showScaleBar: DISPLAY_DEFAULTS.showScaleBar,
+      showSatellite: DISPLAY_DEFAULTS.showSatellite,
+      showDepthGradient: DISPLAY_DEFAULTS.showDepthGradient,
+      gridSpacing: DISPLAY_DEFAULTS.gridSpacing,
     });
   },
 

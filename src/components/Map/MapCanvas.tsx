@@ -2,6 +2,10 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import maplibregl from 'maplibre-gl';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
+import {
+  getEffectiveShowVirtualShots,
+  getEffectiveShowShotData,
+} from '../../store/displaySelectors';
 import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
 import { useMapTools } from '../../hooks/useMapTools';
@@ -659,7 +663,7 @@ export default function MapCanvas() {
   // Sync shot data labels visibility with SurveyLayer (gated by showShots)
   useEffect(() => {
     if (!surveyLayerRef.current) return;
-    surveyLayerRef.current.setShowShotLabels(showShots && showShotData);
+    surveyLayerRef.current.setShowShotLabels(getEffectiveShowShotData(showShots, showShotData));
   }, [showShotData, showShots, mapLoaded]);
 
   // Sync section name labels visibility with SurveyLayer
@@ -689,7 +693,7 @@ export default function MapCanvas() {
   // Sync virtual shots visibility with SurveyLayer (gated by showShots)
   useEffect(() => {
     if (!surveyLayerRef.current) return;
-    surveyLayerRef.current.setShowVirtualShots(showShots && showVirtualShots);
+    surveyLayerRef.current.setShowVirtualShots(getEffectiveShowVirtualShots(showShots, showVirtualShots));
   }, [showVirtualShots, showShots, mapLoaded]);
 
   // Clear station selection, hover, and cancel merge when stations hidden

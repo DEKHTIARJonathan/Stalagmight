@@ -1,0 +1,644 @@
+/**
+ * Unit tests for display toggle state logic in uiStore.
+ * Tests toggle defaults, toggle action, toast throttling, and selection clearing.
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
+
+// Mock Tauri invoke to prevent noisy console warnings and verify persistence calls
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn().mockResolvedValue({}),
+}));
+
+import { useUIStore, type DisplayToggleKey } from '../uiStore';
+import {
+  DISPLAY_DEFAULTS,
+  getEffectiveShowVirtualShots,
+  getEffectiveShowShotData,
+} from '../displaySelectors';
+
+// Helper function to get a clean test state for non-default tests
+// This is used to reset between tests that modify state, NOT for testing defaults
+const getCleanTestState = () => ({
+  showStations: true,
+  showShots: true,
+  showSectionNames: true,
+  showStationLabels: false,
+  showShotData: false,
+  showVirtualShots: true,
+  showZeroDatum: true,
+  showGrid: false,
+  showScaleBar: true,
+  showSatellite: false,
+  showDepthGradient: false,
+  gridSpacing: 10,
+  toast: null,
+  lastToastByKey: {},
+  selection: null,
+  multiSelection: [],
+});
+
+describe('Display Toggle State', () => {
+  describe('Store Uses DISPLAY_DEFAULTS', () => {
+    // These tests verify that the store derives its values from DISPLAY_DEFAULTS.
+    // Since uiStore imports and uses DISPLAY_DEFAULTS for initial state, we verify
+    // the store values match DISPLAY_DEFAULTS at any point after reset.
+    // This catches drift if someone changes one but not the other.
+
+    beforeEach(() => {
+      // Reset to verify the store's resetDisplaySettings uses DISPLAY_DEFAULTS
+      useUIStore.getState().resetDisplaySettings();
+    });
+
+    it('store showStations uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().showStations).toBe(DISPLAY_DEFAULTS.showStations);
+    });
+
+    it('store showShots uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().showShots).toBe(DISPLAY_DEFAULTS.showShots);
+    });
+
+    it('store showSectionNames uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().showSectionNames).toBe(DISPLAY_DEFAULTS.showSectionNames);
+    });
+
+    it('store showStationLabels uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().showStationLabels).toBe(DISPLAY_DEFAULTS.showStationLabels);
+    });
+
+    it('store showShotData uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().showShotData).toBe(DISPLAY_DEFAULTS.showShotData);
+    });
+
+    it('store showVirtualShots uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().showVirtualShots).toBe(DISPLAY_DEFAULTS.showVirtualShots);
+    });
+
+    it('store showZeroDatum uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().showZeroDatum).toBe(DISPLAY_DEFAULTS.showZeroDatum);
+    });
+
+    it('store showGrid uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().showGrid).toBe(DISPLAY_DEFAULTS.showGrid);
+    });
+
+    it('store showScaleBar uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().showScaleBar).toBe(DISPLAY_DEFAULTS.showScaleBar);
+    });
+
+    it('store showSatellite uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().showSatellite).toBe(DISPLAY_DEFAULTS.showSatellite);
+    });
+
+    it('store showDepthGradient uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().showDepthGradient).toBe(DISPLAY_DEFAULTS.showDepthGradient);
+    });
+
+    it('store gridSpacing uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().gridSpacing).toBe(DISPLAY_DEFAULTS.gridSpacing);
+    });
+
+    it('DISPLAY_DEFAULTS contains all expected toggle keys', () => {
+      // Verify DISPLAY_DEFAULTS has all the keys we expect
+      // This catches if someone adds a new toggle to the store but forgets DISPLAY_DEFAULTS
+      const expectedKeys = [
+        'showStations',
+        'showShots',
+        'showSectionNames',
+        'showStationLabels',
+        'showShotData',
+        'showVirtualShots',
+        'showZeroDatum',
+        'showGrid',
+        'showScaleBar',
+        'showSatellite',
+        'showDepthGradient',
+        'gridSpacing',
+      ];
+      for (const key of expectedKeys) {
+        expect(DISPLAY_DEFAULTS).toHaveProperty(key);
+      }
+    });
+  });
+
+  describe('resetDisplaySettings Action', () => {
+    it('resets all display settings to DISPLAY_DEFAULTS', () => {
+      // Modify ALL settings to non-default values
+      useUIStore.setState({
+        showStations: !DISPLAY_DEFAULTS.showStations,
+        showShots: !DISPLAY_DEFAULTS.showShots,
+        showSectionNames: !DISPLAY_DEFAULTS.showSectionNames,
+        showStationLabels: !DISPLAY_DEFAULTS.showStationLabels,
+        showShotData: !DISPLAY_DEFAULTS.showShotData,
+        showVirtualShots: !DISPLAY_DEFAULTS.showVirtualShots,
+        showZeroDatum: !DISPLAY_DEFAULTS.showZeroDatum,
+        showGrid: !DISPLAY_DEFAULTS.showGrid,
+        showScaleBar: !DISPLAY_DEFAULTS.showScaleBar,
+        showSatellite: !DISPLAY_DEFAULTS.showSatellite,
+        showDepthGradient: !DISPLAY_DEFAULTS.showDepthGradient,
+        gridSpacing: 99,
+      });
+
+      // Reset
+      useUIStore.getState().resetDisplaySettings();
+
+      // Verify ALL defaults are restored matching DISPLAY_DEFAULTS
+      const state = useUIStore.getState();
+      expect(state.showStations).toBe(DISPLAY_DEFAULTS.showStations);
+      expect(state.showShots).toBe(DISPLAY_DEFAULTS.showShots);
+      expect(state.showSectionNames).toBe(DISPLAY_DEFAULTS.showSectionNames);
+      expect(state.showStationLabels).toBe(DISPLAY_DEFAULTS.showStationLabels);
+      expect(state.showShotData).toBe(DISPLAY_DEFAULTS.showShotData);
+      expect(state.showVirtualShots).toBe(DISPLAY_DEFAULTS.showVirtualShots);
+      expect(state.showZeroDatum).toBe(DISPLAY_DEFAULTS.showZeroDatum);
+      expect(state.showGrid).toBe(DISPLAY_DEFAULTS.showGrid);
+      expect(state.showScaleBar).toBe(DISPLAY_DEFAULTS.showScaleBar);
+      expect(state.showSatellite).toBe(DISPLAY_DEFAULTS.showSatellite);
+      expect(state.showDepthGradient).toBe(DISPLAY_DEFAULTS.showDepthGradient);
+      expect(state.gridSpacing).toBe(DISPLAY_DEFAULTS.gridSpacing);
+    });
+  });
+
+  describe('toggleDisplay Action', () => {
+    beforeEach(() => {
+      useUIStore.setState(getCleanTestState());
+      vi.clearAllMocks();
+    });
+
+    it('toggles showStations from true to false', () => {
+      const { toggleDisplay } = useUIStore.getState();
+      expect(useUIStore.getState().showStations).toBe(true);
+      toggleDisplay('showStations');
+      expect(useUIStore.getState().showStations).toBe(false);
+    });
+
+    it('toggles showStations from false to true', () => {
+      useUIStore.setState({ showStations: false });
+      const { toggleDisplay } = useUIStore.getState();
+      expect(useUIStore.getState().showStations).toBe(false);
+      toggleDisplay('showStations');
+      expect(useUIStore.getState().showStations).toBe(true);
+    });
+
+    it('toggles showShots correctly', () => {
+      const { toggleDisplay } = useUIStore.getState();
+      expect(useUIStore.getState().showShots).toBe(true);
+      toggleDisplay('showShots');
+      expect(useUIStore.getState().showShots).toBe(false);
+      toggleDisplay('showShots');
+      expect(useUIStore.getState().showShots).toBe(true);
+    });
+
+    it('toggles all display keys independently', () => {
+      const toggleKeys: DisplayToggleKey[] = [
+        'showStations',
+        'showShots',
+        'showSectionNames',
+        'showStationLabels',
+        'showShotData',
+        'showVirtualShots',
+        'showZeroDatum',
+        'showGrid',
+        'showScaleBar',
+        'showSatellite',
+        'showDepthGradient',
+      ];
+
+      for (const key of toggleKeys) {
+        const initialValue = useUIStore.getState()[key];
+        useUIStore.getState().toggleDisplay(key);
+        expect(useUIStore.getState()[key]).toBe(!initialValue);
+      }
+    });
+
+    it('persists toggle state via invoke', async () => {
+      const { toggleDisplay } = useUIStore.getState();
+
+      toggleDisplay('showStations');
+
+      // Wait for async persistence
+      await vi.waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('save_display_setting', {
+          key: 'showStations',
+          value: 'false',
+        });
+      });
+    });
+
+    it('persists each toggle with correct value', async () => {
+      const { toggleDisplay } = useUIStore.getState();
+
+      // Toggle showGrid (default false -> true)
+      toggleDisplay('showGrid');
+
+      await vi.waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('save_display_setting', {
+          key: 'showGrid',
+          value: 'true',
+        });
+      });
+    });
+  });
+});
+
+describe('Effective Value Selectors', () => {
+  // These tests verify the effective value gating logic used for rendering.
+  // Effective values determine actual visibility based on parent-child toggle relationships.
+
+  describe('getEffectiveShowVirtualShots', () => {
+    it('returns true when both showShots and showVirtualShots are true', () => {
+      expect(getEffectiveShowVirtualShots(true, true)).toBe(true);
+    });
+
+    it('returns false when showShots is false (regardless of showVirtualShots)', () => {
+      expect(getEffectiveShowVirtualShots(false, true)).toBe(false);
+      expect(getEffectiveShowVirtualShots(false, false)).toBe(false);
+    });
+
+    it('returns false when showVirtualShots is false (regardless of showShots)', () => {
+      expect(getEffectiveShowVirtualShots(true, false)).toBe(false);
+    });
+  });
+
+  describe('getEffectiveShowShotData', () => {
+    it('returns true when both showShots and showShotData are true', () => {
+      expect(getEffectiveShowShotData(true, true)).toBe(true);
+    });
+
+    it('returns false when showShots is false (regardless of showShotData)', () => {
+      expect(getEffectiveShowShotData(false, true)).toBe(false);
+      expect(getEffectiveShowShotData(false, false)).toBe(false);
+    });
+
+    it('returns false when showShotData is false (regardless of showShots)', () => {
+      expect(getEffectiveShowShotData(true, false)).toBe(false);
+    });
+  });
+
+  describe('Effective values from store state', () => {
+    // These tests verify that effective values computed from store state
+    // match what the pure selector functions return.
+    // This validates the integration between store state and selectors.
+
+    beforeEach(() => {
+      useUIStore.setState(getCleanTestState());
+    });
+
+    it('effective virtual shots is true when store has showShots=true and showVirtualShots=true', () => {
+      const state = useUIStore.getState();
+      expect(getEffectiveShowVirtualShots(state.showShots, state.showVirtualShots)).toBe(true);
+    });
+
+    it('effective virtual shots is false when showShots is toggled off', () => {
+      useUIStore.getState().toggleDisplay('showShots');
+      const state = useUIStore.getState();
+      expect(getEffectiveShowVirtualShots(state.showShots, state.showVirtualShots)).toBe(false);
+    });
+
+    it('effective virtual shots is false when showVirtualShots is toggled off', () => {
+      useUIStore.getState().toggleDisplay('showVirtualShots');
+      const state = useUIStore.getState();
+      expect(getEffectiveShowVirtualShots(state.showShots, state.showVirtualShots)).toBe(false);
+    });
+
+    it('effective shot data is false by default (showShotData defaults to false)', () => {
+      const state = useUIStore.getState();
+      expect(getEffectiveShowShotData(state.showShots, state.showShotData)).toBe(false);
+    });
+
+    it('effective shot data is true when showShotData is toggled on', () => {
+      useUIStore.getState().toggleDisplay('showShotData');
+      const state = useUIStore.getState();
+      expect(getEffectiveShowShotData(state.showShots, state.showShotData)).toBe(true);
+    });
+
+    it('effective shot data is false when showShots is off (even with showShotData=true)', () => {
+      useUIStore.getState().toggleDisplay('showShotData'); // on
+      useUIStore.getState().toggleDisplay('showShots'); // off
+      const state = useUIStore.getState();
+      expect(getEffectiveShowShotData(state.showShots, state.showShotData)).toBe(false);
+    });
+  });
+});
+
+describe('Toggle State Preservation', () => {
+  // These tests verify that the store preserves toggle states independently.
+  // The "effective value" gating is computed by selectors; the store just holds state.
+
+  beforeEach(() => {
+    useUIStore.setState(getCleanTestState());
+  });
+
+  it('showVirtualShots state is preserved when showShots toggles off/on', () => {
+    // Initial: showShots=true, showVirtualShots=true
+    expect(useUIStore.getState().showShots).toBe(true);
+    expect(useUIStore.getState().showVirtualShots).toBe(true);
+
+    // Turn off showVirtualShots
+    useUIStore.getState().toggleDisplay('showVirtualShots');
+    expect(useUIStore.getState().showVirtualShots).toBe(false);
+
+    // Toggle showShots off
+    useUIStore.getState().toggleDisplay('showShots');
+    expect(useUIStore.getState().showShots).toBe(false);
+
+    // showVirtualShots state should be preserved (still false)
+    expect(useUIStore.getState().showVirtualShots).toBe(false);
+
+    // Toggle showShots back on
+    useUIStore.getState().toggleDisplay('showShots');
+    expect(useUIStore.getState().showShots).toBe(true);
+
+    // showVirtualShots should still be false (preserved state)
+    expect(useUIStore.getState().showVirtualShots).toBe(false);
+  });
+
+  it('showShotData state is preserved when showShots toggles off/on', () => {
+    // Turn on showShotData
+    useUIStore.getState().toggleDisplay('showShotData');
+    expect(useUIStore.getState().showShotData).toBe(true);
+
+    // Toggle showShots off
+    useUIStore.getState().toggleDisplay('showShots');
+
+    // showShotData state should be preserved
+    expect(useUIStore.getState().showShotData).toBe(true);
+
+    // Toggle showShots back on
+    useUIStore.getState().toggleDisplay('showShots');
+
+    // showShotData should still be true (preserved state)
+    expect(useUIStore.getState().showShotData).toBe(true);
+  });
+
+  it('multiple dependent toggles preserve state through parent toggle cycle', () => {
+    // Set up: showShots=true, showVirtualShots=false, showShotData=true
+    useUIStore.getState().toggleDisplay('showVirtualShots'); // true -> false
+    useUIStore.getState().toggleDisplay('showShotData'); // false -> true
+
+    expect(useUIStore.getState().showShots).toBe(true);
+    expect(useUIStore.getState().showVirtualShots).toBe(false);
+    expect(useUIStore.getState().showShotData).toBe(true);
+
+    // Toggle parent off then on
+    useUIStore.getState().toggleDisplay('showShots');
+    useUIStore.getState().toggleDisplay('showShots');
+
+    // Both dependent states should be preserved
+    expect(useUIStore.getState().showVirtualShots).toBe(false);
+    expect(useUIStore.getState().showShotData).toBe(true);
+  });
+});
+
+describe('Toast Throttling', () => {
+  beforeEach(() => {
+    useUIStore.setState(getCleanTestState());
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    // Clear any pending timers before switching back to real timers
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it('first toast shows immediately', () => {
+    const { showToast } = useUIStore.getState();
+    showToast('Test message', 'test-key');
+    expect(useUIStore.getState().toast?.message).toBe('Test message');
+  });
+
+  it('rapid toasts with same key are throttled', () => {
+    const { showToast } = useUIStore.getState();
+    showToast('First', 'same-key');
+    expect(useUIStore.getState().toast?.message).toBe('First');
+
+    showToast('Second', 'same-key'); // Should be ignored (within 5s cooldown)
+    expect(useUIStore.getState().toast?.message).toBe('First');
+  });
+
+  it('toast shows after 5 second cooldown', () => {
+    const { showToast } = useUIStore.getState();
+    showToast('First', 'test-key');
+    expect(useUIStore.getState().toast?.message).toBe('First');
+
+    // Advance time past 5 second cooldown
+    vi.advanceTimersByTime(5001);
+
+    showToast('Second', 'test-key');
+    expect(useUIStore.getState().toast?.message).toBe('Second');
+  });
+
+  it('toast auto-clears after 3 seconds', () => {
+    const { showToast } = useUIStore.getState();
+    showToast('Test', 'test-key');
+    expect(useUIStore.getState().toast).not.toBeNull();
+
+    // Advance time past 3 second auto-clear
+    vi.advanceTimersByTime(3001);
+
+    expect(useUIStore.getState().toast).toBeNull();
+  });
+
+  it('separate throttle tracking for different keys', () => {
+    const { showToast } = useUIStore.getState();
+
+    // Show toast for stations key
+    showToast('Stations message', 'stations');
+    expect(useUIStore.getState().toast?.message).toBe('Stations message');
+
+    // Show toast for shots key (different key, should show)
+    showToast('Shots message', 'shots');
+    expect(useUIStore.getState().toast?.message).toBe('Shots message');
+
+    // Try again for stations key (same key, should be throttled)
+    showToast('Stations again', 'stations');
+    expect(useUIStore.getState().toast?.message).toBe('Shots message');
+  });
+
+  it('toast tracks lastToastByKey correctly', () => {
+    const { showToast } = useUIStore.getState();
+
+    // Initial state has no toast history
+    expect(useUIStore.getState().lastToastByKey).toEqual({});
+
+    // Show first toast
+    showToast('Test', 'key-a');
+    expect(useUIStore.getState().lastToastByKey['key-a']).toBeDefined();
+    expect(typeof useUIStore.getState().lastToastByKey['key-a']).toBe('number');
+
+    // Show toast with different key
+    showToast('Test 2', 'key-b');
+    expect(useUIStore.getState().lastToastByKey['key-a']).toBeDefined();
+    expect(useUIStore.getState().lastToastByKey['key-b']).toBeDefined();
+  });
+
+  it('clearToast removes current toast', () => {
+    const { showToast, clearToast } = useUIStore.getState();
+
+    showToast('Test', 'key');
+    expect(useUIStore.getState().toast).not.toBeNull();
+
+    clearToast();
+    expect(useUIStore.getState().toast).toBeNull();
+  });
+});
+
+describe('Selection Clearing', () => {
+  beforeEach(() => {
+    useUIStore.setState(getCleanTestState());
+  });
+
+  it('clearSelectionByType clears only stations when type is station', () => {
+    const stationSelection = {
+      type: 'station' as const,
+      stationRef: { section_id: 1, station_index: 0 },
+    };
+    const shotSelection = {
+      type: 'shot' as const,
+      sectionId: 1,
+      shotId: 0,
+    };
+
+    // Add both selections
+    useUIStore.getState().addToSelection(stationSelection);
+    useUIStore.getState().addToSelection(shotSelection);
+
+    expect(useUIStore.getState().multiSelection).toHaveLength(2);
+
+    // Clear only stations
+    useUIStore.getState().clearSelectionByType('station');
+
+    // Only shot should remain
+    const remaining = useUIStore.getState().multiSelection;
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.type).toBe('shot');
+    expect(remaining[0]!.sectionId).toBe(1);
+    expect(remaining[0]!.shotId).toBe(0);
+  });
+
+  it('clearSelectionByType clears only shots when type is shot', () => {
+    const stationSelection = {
+      type: 'station' as const,
+      stationRef: { section_id: 1, station_index: 0 },
+    };
+    const shotSelection = {
+      type: 'shot' as const,
+      sectionId: 1,
+      shotId: 0,
+    };
+
+    // Add both selections
+    useUIStore.getState().addToSelection(stationSelection);
+    useUIStore.getState().addToSelection(shotSelection);
+
+    expect(useUIStore.getState().multiSelection).toHaveLength(2);
+
+    // Clear only shots
+    useUIStore.getState().clearSelectionByType('shot');
+
+    // Only station should remain
+    const remaining = useUIStore.getState().multiSelection;
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.type).toBe('station');
+    expect(remaining[0]!.stationRef?.section_id).toBe(1);
+    expect(remaining[0]!.stationRef?.station_index).toBe(0);
+  });
+
+  it('clearSelectionByType updates selection to last remaining item', () => {
+    const stationSelection1 = {
+      type: 'station' as const,
+      stationRef: { section_id: 1, station_index: 0 },
+    };
+    const stationSelection2 = {
+      type: 'station' as const,
+      stationRef: { section_id: 1, station_index: 1 },
+    };
+    const shotSelection = {
+      type: 'shot' as const,
+      sectionId: 1,
+      shotId: 0,
+    };
+
+    // Add selections in order
+    useUIStore.getState().addToSelection(stationSelection1);
+    useUIStore.getState().addToSelection(stationSelection2);
+    useUIStore.getState().addToSelection(shotSelection);
+
+    // Current selection should be the last added (shot)
+    expect(useUIStore.getState().selection?.type).toBe('shot');
+
+    // Clear shots - selection should update to last remaining station (station2)
+    useUIStore.getState().clearSelectionByType('shot');
+
+    const selection = useUIStore.getState().selection;
+    expect(selection?.type).toBe('station');
+    // Verify it's specifically station2 (station_index: 1), not station1
+    expect(selection?.stationRef?.station_index).toBe(1);
+    expect(useUIStore.getState().multiSelection).toHaveLength(2);
+  });
+
+  it('filterSelection removes items that fail predicate', () => {
+    const stationSelection = {
+      type: 'station' as const,
+      stationRef: { section_id: 1, station_index: 0 },
+    };
+    const shotSelection = {
+      type: 'shot' as const,
+      sectionId: 1,
+      shotId: 0,
+    };
+
+    // Add both selections
+    useUIStore.getState().addToSelection(stationSelection);
+    useUIStore.getState().addToSelection(shotSelection);
+
+    // Filter to keep only stations
+    useUIStore.getState().filterSelection((s) => s.type === 'station');
+
+    const remaining = useUIStore.getState().multiSelection;
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.type).toBe('station');
+    expect(remaining[0]!.stationRef?.section_id).toBe(1);
+    expect(remaining[0]!.stationRef?.station_index).toBe(0);
+  });
+
+  it('clearSelectionByType with empty selection does nothing', () => {
+    expect(useUIStore.getState().multiSelection).toHaveLength(0);
+    expect(useUIStore.getState().selection).toBeNull();
+
+    useUIStore.getState().clearSelectionByType('station');
+
+    expect(useUIStore.getState().multiSelection).toHaveLength(0);
+    expect(useUIStore.getState().selection).toBeNull();
+  });
+});
+
+describe('Grid Spacing', () => {
+  beforeEach(() => {
+    useUIStore.setState(getCleanTestState());
+    vi.clearAllMocks();
+  });
+
+  it('setGridSpacing updates gridSpacing value', () => {
+    expect(useUIStore.getState().gridSpacing).toBe(10);
+
+    useUIStore.getState().setGridSpacing(25);
+    expect(useUIStore.getState().gridSpacing).toBe(25);
+
+    useUIStore.getState().setGridSpacing(5);
+    expect(useUIStore.getState().gridSpacing).toBe(5);
+  });
+
+  it('setGridSpacing persists value via invoke', async () => {
+    useUIStore.getState().setGridSpacing(25);
+
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('save_display_setting', {
+        key: 'gridSpacing',
+        value: '25',
+      });
+    });
+  });
+});
