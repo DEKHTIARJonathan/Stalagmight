@@ -310,10 +310,18 @@ export const useUIStore = create<UIStore>((set) => ({
     }),
   clearSelection: () => set({ selection: null, multiSelection: [] }),
   clearSelectionByType: (type) =>
-    set((state) => ({
-      selection: state.selection?.type === type ? null : state.selection,
-      multiSelection: state.multiSelection.filter((s) => s.type !== type),
-    })),
+    set((state) => {
+      const filteredMulti = state.multiSelection.filter((s) => s.type !== type);
+      // If current selection is being cleared, update to last remaining item
+      const newSelection =
+        state.selection?.type === type
+          ? (filteredMulti[filteredMulti.length - 1] ?? null)
+          : state.selection;
+      return {
+        selection: newSelection,
+        multiSelection: filteredMulti,
+      };
+    }),
   filterSelection: (predicate) =>
     set((state) => ({
       selection: state.selection && predicate(state.selection) ? state.selection : null,
