@@ -36,3 +36,6 @@ Playwright tests must waitForFunction(__cavechef_map__) after canvas appears to 
 
 ## 2026-01-20 manual [pitfall]
 When clearing hover state for one feature type (stations/shots), only fire onFeatureHover(false) if no other feature type is currently hovered
+
+## 2026-01-20 manual [pitfall]
+MapLibre hitbox layers should use opaque colors with tiny opacity (0.001) - using rgba(0,0,0,0) can cause queryRenderedFeatures to fail due to render optimization
