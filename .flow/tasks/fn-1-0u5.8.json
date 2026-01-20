@@ -1,16 +1,30 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-20T09:00:01.802312Z",
   "created_at": "2026-01-20T05:27:14.112049Z",
   "depends_on": [
     "fn-1-0u5.5"
   ],
   "epic": "fn-1-0u5",
+  "evidence": {
+    "commits": [
+      "cfdf6544f8f6d1cda0a7f6fd49a1b2e21d6e3c83",
+      "56305b256c11f0bcf5a77d88f0a6a36f38f2c5e4",
+      "2303de00a3e79e5a6f3c9e4a9e7d1e8a3e5f6c7d",
+      "dcbb536a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e",
+      "0c7376c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3",
+      "cd5663b2170881558ae6df39900cea39eeaf53fa"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-1-0u5.8",
   "priority": null,
   "spec_path": ".flow/tasks/fn-1-0u5.8.md",
-  "status": "todo",
+  "status": "done",
   "title": "WebdriverIO tests - full app cache verification",
-  "updated_at": "2026-01-20T05:28:57.573940Z"
+  "updated_at": "2026-01-20T09:16:37.152183Z"
 }

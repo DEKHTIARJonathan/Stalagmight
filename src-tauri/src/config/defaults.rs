@@ -14,6 +14,7 @@ impl Default for Config {
             shortcuts: ShortcutsConfig::default(),
             snap: SnapConfig::default(),
             panels: PanelsConfig::default(),
+            cache: CacheConfig::default(),
         }
     }
 }
@@ -180,6 +181,16 @@ impl Default for PanelsConfig {
             sections_panel_width: 250,
             detail_panel_width: 300,
             data_table_height: 200,
+        }
+    }
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            tile_cache_enabled: true,
+            tile_cache_max_mb: 500, // per SPEC.md
+            tile_ttl_days: 30,
         }
     }
 }
