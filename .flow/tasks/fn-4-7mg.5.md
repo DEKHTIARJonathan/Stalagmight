@@ -1,8 +1,223 @@
 # fn-4-7mg.5 Add Reload Config button to Settings dialog
 
 ## Description
-Add a "Reload Config" button to the Settings dialog that re-reads the config file and applies changes immediately.
+Add a "Reload Config" button to the Settings dialog that re-reads the config file from disk.
 
+## UX: Disable When isDirty
+
+The Settings dialog has local state (`localConfig`, `isDirty`) for pending edits. Reload button should be disabled when there are unsaved local changes to avoid confusion.
+
+## Implementation
+
+### SettingsDialog.tsx
+
+**Add reload button to dialog footer**:
+
+```typescript
+<DialogFooter>
+  <Button
+    variant="outline"
+    onClick={handleReloadConfig}
+    disabled={isDirty}
+    title={isDirty ? "Save or discard local changes first" : "Reload config from file"}
+  >
+    Reload Config
+  </Button>
+  <Button variant="outline" onClick={handleClose}>
+    Cancel
+  </Button>
+  <Button onClick={handleSave} disabled={!isDirty}>
+    Save
+  </Button>
+</DialogFooter>
+```
+
+**Add handleReloadConfig function**:
+
+```typescript
+const handleReloadConfig = async () => {
+  try {
+    const result = await invoke<{ config: Config; changes: ConfigChange[] }>('reload_config');
+
+    setLocalConfig(result.config);
+    updateConfig(result.config);  // Update store
+
+    if (result.changes.length > 0) {
+      // Show changes via existing dialog pattern
+      // Could use alert() or a simple modal showing the diff
+      const changeList = result.changes
+        .map(c => `• ${c.path}: ${c.old_value} → ${c.new_value}`)
+        .join('\n');
+      alert(`Config reloaded:\n\n${changeList}`);
+    } else {
+      alert('Config reloaded (no changes)');
+    }
+  } catch (error) {
+    alert(`Failed to reload config: ${error}`);
+  }
+};
+```
+
+### Rust command (src-tauri/src/commands/config.rs)
+
+**Add reload_config command that returns changes**:
+
+```rust
+#[derive(Serialize)]
+pub struct ConfigChange {
+    path: String,
+    old_value: String,
+    new_value: String,
+}
+
+#[derive(Serialize)]
+pub struct ReloadConfigResult {
+    config: Config,
+    changes: Vec<ConfigChange>,
+}
+
+#[tauri::command]
+pub fn reload_config(state: tauri::State<'_, AppState>) -> Result<ReloadConfigResult, String> {
+    let new_config = Config::load().map_err(|e| e.to_string())?;
+
+    let mut state_guard = state.config.lock().unwrap();
+    let old_config = state_guard.clone();
+
+    // Compute changes (simplified - compare key fields)
+    let changes = compute_config_diff(&old_config, &new_config);
+
+    *state_guard = new_config.clone();
+
+    Ok(ReloadConfigResult {
+        config: new_config,
+        changes,
+    })
+}
+
+fn compute_config_diff(old: &Config, new: &Config) -> Vec<ConfigChange> {
+    let mut changes = Vec::new();
+
+    // Compare map.station settings
+    if old.map.station.radius != new.map.station.radius {
+        changes.push(ConfigChange {
+            path: "map.station.radius".to_string(),
+            old_value: old.map.station.radius.to_string(),
+            new_value: new.map.station.radius.to_string(),
+        });
+    }
+    // ... compare other relevant fields
+
+    changes
+}
+```
+
+Register in main.rs with other config commands.
+
+## Error handling
+
+- If config file has parse errors, show error via alert with details
+- Keep previous config in state (don't crash)
+- Log detailed error to console for debugging
+
+## No new toast system needed
+
+Use existing patterns: `alert()` for simple feedback, or existing dialog components if available. Don't introduce new toast infrastructure in this change.
+## Scope
+
+This task adds only the reload button. Config editing remains file-only (no UI sliders for hitArea values in this iteration).
+
+## Implementation
+
+### SettingsDialog.tsx
+
+**Add reload button to dialog footer** (around L162-185):
+
+```typescript
+<DialogFooter>
+  <Button variant="outline" onClick={handleReloadConfig}>
+    Reload Config
+  </Button>
+  <Button variant="outline" onClick={handleClose}>
+    Cancel
+  </Button>
+  <Button onClick={handleSave} disabled={!isDirty}>
+    Save
+  </Button>
+</DialogFooter>
+```
+
+**Add handleReloadConfig function:**
+
+```typescript
+const handleReloadConfig = async () => {
+  try {
+    const newConfig = await invoke<Config>('reload_config');
+    const changes = diffConfigs(localConfig, newConfig);
+
+    setLocalConfig(newConfig);
+    updateConfig(newConfig);  // Update store
+
+    if (changes.length > 0) {
+      toast.success(`Config reloaded:\n${changes.map(c => `• ${c.path}: ${c.old} → ${c.new}`).join('\n')}`);
+    } else {
+      toast.info('Config reloaded (no changes)');
+    }
+  } catch (error) {
+    toast.error(`Failed to reload config: ${error}`);
+  }
+};
+```
+
+**Add diffConfigs helper:**
+
+```typescript
+function diffConfigs(oldConfig: Config, newConfig: Config): { path: string; old: unknown; new: unknown }[] {
+  const changes: { path: string; old: unknown; new: unknown }[] = [];
+  // Deep compare configs, collect differences
+  // Focus on map.station.*, map.shot.*, map.snap.*, debug.map.*
+  return changes;
+}
+```
+
+### Rust command (src-tauri/src/commands/config.rs)
+
+**Add reload_config command:**
+
+```rust
+#[tauri::command]
+pub fn reload_config(state: tauri::State<'_, AppState>) -> Result<Config, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    *state.config.lock().unwrap() = config.clone();
+    Ok(config)
+}
+```
+
+Register in main.rs with other config commands.
+
+## Error handling
+
+- If config file has parse errors, show error toast with details
+- Keep previous config in state (don't crash)
+- Log detailed error to console for debugging
+
+## Toast feedback
+
+Success toast shows changed settings:
+```
+Config reloaded:
+• map.station.hitArea: 10 → 15
+• map.shot.hitArea: 8 → 12
+```
+
+No changes toast:
+```
+Config reloaded (no changes)
+```
+
+Error toast:
+```
+Failed to reload config: TOML parse error at line 45...
+```
 ## Implementation
 
 ### Settings Dialog UI
@@ -52,14 +267,19 @@ If config file has parse errors:
 - Keep previous config (don't crash)
 ## Acceptance
 - [ ] "Reload Config" button added to Settings dialog footer
-- [ ] Button triggers config file re-read from disk
-- [ ] Config changes propagate to all components
-- [ ] Toast shows list of changed settings
-- [ ] Toast shows "no changes" if config unchanged
-- [ ] Error toast shown if config file has parse errors
+- [ ] Button disabled when `isDirty` is true
+- [ ] Button has tooltip explaining disabled state
+- [ ] Rust `reload_config` command returns config + list of changes
+- [ ] `ConfigChange` struct with path, old_value, new_value
+- [ ] `compute_config_diff()` compares key config fields
+- [ ] Config changes propagate to store and components
+- [ ] Changes shown via alert/dialog (no new toast system)
+- [ ] "No changes" message when config unchanged
+- [ ] Error message shown if config file has parse errors
 - [ ] Previous config preserved on parse error
+- [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 - [ ] `pnpm tsc --noEmit` passes
-- [ ] Manual testing: change config file, click Reload, verify toast and effect
+- [ ] Manual test: edit config file, click Reload, verify dialog and effect
 ## Done summary
 TBD
 

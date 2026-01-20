@@ -813,13 +813,15 @@ export default function MapCanvas() {
   // Extract zoom config values for stable dependencies
   const zoomStep = config?.map.zoom_step ?? 1.0;
   const zoomMin = config?.map.zoom_min ?? 0;
-  const zoomMax = config?.map.zoom_max ?? 22;
 
-  // Zoom tool capture handlers - intercept clicks before SurveyLayer to prevent selection
-  // and handle right-click zoom out behavior
+  // Zoom tool capture handlers - intercept clicks on the map canvas to prevent SurveyLayer selection
+  // and handle right-click zoom out behavior. Attaches to the canvas element specifically to avoid
+  // breaking MapLibre UI controls (NavigationControl, ScaleControl, etc.)
   useEffect(() => {
-    const mapElement = mapContainer.current;
-    if (!mapElement || !map.current || activeTool !== 'zoom') return;
+    if (!map.current || activeTool !== 'zoom') return;
+
+    const canvas = map.current.getCanvas();
+    if (!canvas) return;
 
     // Left-click capture: stop propagation to prevent SurveyLayer selection
     // Actual zoom is handled by zoom box end handler (handleZoomBoxEnd)
@@ -867,14 +869,14 @@ export default function MapCanvas() {
       });
     };
 
-    mapElement.addEventListener('click', handleClickCapture, { capture: true });
-    mapElement.addEventListener('contextmenu', handleContextMenuCapture, { capture: true });
+    canvas.addEventListener('click', handleClickCapture, { capture: true });
+    canvas.addEventListener('contextmenu', handleContextMenuCapture, { capture: true });
 
     return () => {
-      mapElement.removeEventListener('click', handleClickCapture, { capture: true });
-      mapElement.removeEventListener('contextmenu', handleContextMenuCapture, { capture: true });
+      canvas.removeEventListener('click', handleClickCapture, { capture: true });
+      canvas.removeEventListener('contextmenu', handleContextMenuCapture, { capture: true });
     };
-  }, [activeTool, zoomStep, zoomMin, zoomMax, placementMode, zoomBox.start]);
+  }, [activeTool, zoomStep, zoomMin, placementMode, zoomBox.start]);
 
   // Get satellite tile URL based on provider config
   // Uses custom cavechef-tiles:// protocol for offline caching

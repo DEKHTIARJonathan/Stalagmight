@@ -381,8 +381,17 @@ Requires fn-2-f4f.1 for `config.map.zoom_step` value.
 - [ ] Cursor forced to zoom-in when zoom tool active
 - [ ] pnpm tsc --noEmit passes
 ## Done summary
-TBD
+## Summary
+Task fn-2-f4f.2 (Implement click-to-zoom behavior) was already implemented in prior commits.
 
+The implementation includes:
+1. **Capture phase click handler** (lines 826-832) - stops propagation to prevent SurveyLayer selection
+2. **Capture phase contextmenu handler** (lines 835-868) - zooms out at click point, cancels zoom box if active
+3. **Config integration** - uses zoom_min, zoom_max, and zoom_step with proper fallbacks
+4. **doubleClickZoom toggle** (lines 666-674) - disabled for zoom tool, enabled for others
+5. **Cursor forcing** (lines 641-648) - zoom-in cursor forced even on feature hover
+
+All acceptance criteria verified as implemented.
 ## Evidence
 - Commits:
 - Tests:
