@@ -1,8 +1,233 @@
 # fn-3-e6v.5 Clear selection and cancel operations when visibility changes
 
 ## Description
-Clear selection and cancel operations when visibility changes.
+Add selection actions and clear selection on visibility changes.
 
+## `src/store/uiStore.ts` - New actions
+
+```typescript
+clearSelectionByType: (type) => { ... },
+filterSelection: (predicate) => { ... },
+```
+
+## `src/components/Map/MapCanvas.tsx` - Effects
+
+**showStations OFF:**
+```typescript
+useEffect(() => {
+  if (!showStations) {
+    clearSelectionByType('station');
+    setHoveredStation(null);
+    surveyLayerRef.current?.clearAllInteractionState();
+  }
+}, [showStations]);
+```
+
+**showShots OFF:**
+```typescript
+useEffect(() => {
+  if (!showShots) {
+    clearSelectionByType('shot');
+    setHoveredShot(null);
+    surveyLayerRef.current?.clearShotHover();
+  }
+}, [showShots]);
+```
+
+**showVirtualShots OFF - use stable dependency:**
+```typescript
+const { project } = useProjectStore();
+const projectId = project?.id;
+
+useEffect(() => {
+  if (!showVirtualShots && project?.sections) {
+    filterSelection((s) => {
+      if (s.type !== 'shot') return true;
+      const section = project.sections.find(sec => sec.id === s.sectionId);
+      const shot = section?.shots.find(sh => sh.id === s.shotId);
+      return !shot?.is_virtual;
+    });
+    surveyLayerRef.current?.clearShotHover();
+  }
+}, [showVirtualShots, projectId]);  // projectId is stable
+```
+## Files to Modify
+
+### `src/store/uiStore.ts` - Add new actions
+
+```typescript
+clearSelectionByType: (type: 'station' | 'shot' | 'section') => {
+  const current = get();
+  set({
+    selection: current.selection?.type === type ? null : current.selection,
+    multiSelection: current.multiSelection.filter(s => s.type !== type),
+  });
+},
+
+filterSelection: (predicate: (s: Selection) => boolean) => {
+  const current = get();
+  set({
+    selection: current.selection && predicate(current.selection) ? current.selection : null,
+    multiSelection: current.multiSelection.filter(predicate),
+  });
+},
+```
+
+### `src/components/Map/MapCanvas.tsx` - Visibility change effects
+
+**When showStations OFF:**
+```typescript
+useEffect(() => {
+  if (!showStations) {
+    clearSelectionByType('station');
+    setHoveredStation(null);
+    surveyLayerRef.current?.clearAllInteractionState();
+    // Cancel operations with toast...
+  }
+}, [showStations]);
+```
+
+**When showShots OFF:**
+```typescript
+useEffect(() => {
+  if (!showShots) {
+    clearSelectionByType('shot');
+    setHoveredShot(null);
+    surveyLayerRef.current?.clearShotHover();
+  }
+}, [showShots]);
+```
+
+**When showVirtualShots OFF:**
+```typescript
+const { project } = useProjectStore();
+
+useEffect(() => {
+  if (!showVirtualShots) {
+    if (!project?.sections) return;  // Guard for null
+    filterSelection((s) => {
+      if (s.type !== 'shot') return true;
+      const section = project.sections.find(sec => sec.id === s.sectionId);
+      const shot = section?.shots.find(sh => sh.id === s.shotId);
+      return !shot?.is_virtual;
+    });
+    surveyLayerRef.current?.clearShotHover();
+  }
+}, [showVirtualShots, project?.sections]);
+```
+## Files to Modify
+
+### `src/store/uiStore.ts`
+
+Add `filterSelection` action:
+```typescript
+filterSelection: (predicate: (s: Selection) => boolean) => {
+  const current = get();
+  set({
+    selection: current.selection && predicate(current.selection) ? current.selection : null,
+    multiSelection: current.multiSelection.filter(predicate),
+  });
+},
+```
+
+### `src/components/Map/MapCanvas.tsx`
+
+**Access project data correctly:**
+```typescript
+const { project } = useProjectStore();  // NOT { sections }
+```
+
+**When showStations OFF:**
+```typescript
+useEffect(() => {
+  if (!showStations && surveyLayerRef.current) {
+    surveyLayerRef.current.clearAllInteractionState();
+    clearSelectionByType('station');
+    // Cancel operations...
+  }
+}, [showStations]);
+```
+
+**When showShots OFF - clear ALL shot selections:**
+```typescript
+useEffect(() => {
+  if (!showShots) {
+    clearSelectionByType('shot');  // Clears ALL shots
+    surveyLayerRef.current?.clearShotHover();
+    setHoveredShot(null);
+  }
+}, [showShots]);
+```
+
+**When showVirtualShots OFF - filter virtual shots:**
+```typescript
+useEffect(() => {
+  if (!showVirtualShots && project?.sections) {
+    // Filter out virtual shots from selection
+    filterSelection((s) => {
+      if (s.type !== 'shot') return true;
+      const section = project.sections.find(sec => sec.id === s.sectionId);
+      const shot = section?.shots.find(sh => sh.id === s.shotId);
+      return !shot?.is_virtual;  // Keep non-virtual
+    });
+    surveyLayerRef.current?.clearShotHover();
+  }
+}, [showVirtualShots, project?.sections]);
+```
+## Files to Modify
+
+### `src/store/uiStore.ts`
+
+Add in-memory state and clearSelectionByType as before.
+
+### `src/components/Map/MapCanvas.tsx`
+
+**Clear virtual shot selection using project data:**
+
+```typescript
+const { sections } = useProjectStore();
+
+useEffect(() => {
+  if (!showStations && surveyLayerRef.current) {
+    surveyLayerRef.current.clearAllInteractionState();
+    clearSelectionByType('station');
+    // ... cancel operations
+  }
+}, [showStations]);
+
+useEffect(() => {
+  if (!showShots && surveyLayerRef.current) {
+    surveyLayerRef.current.clearShotHover();
+    clearSelectionByType('shot');
+  }
+}, [showShots]);
+
+// Virtual shots - check project data for virtuality
+useEffect(() => {
+  if (!showVirtualShots) {
+    // Clear virtual shot selection
+    if (selection?.type === 'shot') {
+      const section = sections.find(s => s.id === selection.sectionId);
+      const shot = section?.shots.find(sh => sh.id === selection.shotId);
+      if (shot?.isVirtual) {
+        clearSelection();
+      }
+    }
+    // Clear multiSelection of virtual shots
+    const virtualShotRefs = multiSelection.filter(s => {
+      if (s.type !== 'shot') return false;
+      const section = sections.find(sec => sec.id === s.sectionId);
+      const shot = section?.shots.find(sh => sh.id === s.shotId);
+      return shot?.isVirtual;
+    });
+    if (virtualShotRefs.length > 0) {
+      // Filter out virtual shots from multiSelection
+      // (may need new action or filter logic)
+    }
+    surveyLayerRef.current?.clearVirtualShotState();
+  }
+}, [showVirtualShots, sections]);
+```
 ## Files to Modify
 
 ### `src/store/uiStore.ts`
@@ -321,15 +546,10 @@ When visibility toggles change during an active tool operation:
 ## Depends On
 - Task 3: Visibility toggle wiring must be in place
 ## Acceptance
-- [ ] `_prevShowVirtualShots` and `_prevShowShotData` in state (in-memory only)
-- [ ] `clearSelectionByType(type)` action exists and filters correctly
-- [ ] `toggleDisplay('showShots')` stores prev values, cascades showShotData
-- [ ] `toggleDisplay('showShots')` restores prev values when re-enabling
-- [ ] useEffect calls `clearAllInteractionState()` when stations hidden
-- [ ] useEffect clears shot state when shots hidden
-- [ ] useEffect clears virtual shot hover when showVirtualShots off
-- [ ] Station operations canceled with toast
-- [ ] Store selection and SurveyLayer internal state are synchronized
+- [ ] `clearSelectionByType` and `filterSelection` actions added
+- [ ] `setHoveredStation(null)` called when stations hidden
+- [ ] `setHoveredShot(null)` called when shots hidden
+- [ ] Virtual shot effect uses `projectId` dependency (stable)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD
