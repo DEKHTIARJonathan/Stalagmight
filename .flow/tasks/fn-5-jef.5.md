@@ -3,6 +3,68 @@
 ## Description
 Create DepthLegend component that shows depth color gradient with min/max labels.
 
+## New File: `src/components/Map/DepthLegend.tsx`
+
+### Props
+```typescript
+interface DepthLegendProps {
+  minDepth: number;
+  maxDepth: number;
+  shallowColor?: string;  // Default: '#00bfff'
+  deepColor?: string;     // Default: '#ff4444'
+  unit: 'm' | 'ft';
+  visible: boolean;
+}
+```
+
+### Position & Style
+```css
+position: absolute;
+bottom: 50px;  /* 10px above scale bar (scale bar height ~40px) */
+left: 10px;
+background: rgba(0, 0, 0, 0.7);
+border-radius: 4px;
+padding: 8px;
+```
+
+### SVG Gradient Bar (Vertical)
+```tsx
+<svg width="16" height="80" role="img" aria-label={`Depth scale: ${minDepth}${unit} to ${maxDepth}${unit}`}>
+  <defs>
+    <linearGradient id="depth-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stopColor={shallowColor} />
+      <stop offset="100%" stopColor={deepColor} />
+    </linearGradient>
+  </defs>
+  <rect width="16" height="80" fill="url(#depth-gradient)" rx="2" />
+</svg>
+```
+
+### Labels
+- Top label: min depth (shallow) - e.g., "0.0m"
+- Bottom label: max depth (deep) - e.g., "45.2m"
+- Style: `font-size: 11px; color: white; text-shadow: 0 1px 2px rgba(0,0,0,0.8);`
+
+### Special Cases
+- **minDepth === maxDepth**: Show single value with "(Flat)" indicator, solid color bar
+- **not visible**: Return null (don't render)
+
+### Accessibility
+- `role="img"` on SVG
+- `aria-label` with depth range description
+
+## Integration in MapCanvas
+Add after scale bar area:
+```tsx
+{showDepthGradient && stats && (
+  <DepthLegend
+    minDepth={stats.min_depth}
+    maxDepth={stats.max_depth}
+    unit={config?.measurement_unit ?? 'm'}
+    visible={showDepthGradient}
+  />
+)}
+```
 ## Component Specification
 
 ### Location
@@ -55,11 +117,12 @@ Add DepthLegend as sibling to existing overlays, conditionally rendered when sho
 ## Acceptance
 - [ ] DepthLegend component created at `src/components/Map/DepthLegend.tsx`
 - [ ] SVG gradient bar 16×80px rendered correctly
-- [ ] Min/max depth labels in correct units
-- [ ] Semi-transparent dark background
-- [ ] Positioned bottom-left above scale bar
+- [ ] Min/max depth labels in correct units (m/ft)
+- [ ] Semi-transparent dark background (rgba(0,0,0,0.7))
+- [ ] Positioned bottom:50px, left:10px (above scale bar)
 - [ ] Hidden when showDepthGradient is false
-- [ ] Single-depth case shows single value with solid color
+- [ ] Single-depth case shows "(Flat)" with solid color
+- [ ] Accessible with role="img" and aria-label
 - [ ] Integrated in MapCanvas
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary

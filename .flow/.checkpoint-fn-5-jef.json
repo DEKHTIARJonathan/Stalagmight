@@ -1,0 +1,185 @@
+{
+  "created_at": "2026-01-20T14:21:52.777282Z",
+  "epic": {
+    "data": {
+      "branch_name": "fn-5-jef",
+      "created_at": "2026-01-20T14:09:30.304440Z",
+      "depends_on_epics": [],
+      "id": "fn-5-jef",
+      "next_task": 1,
+      "plan_review_status": "unknown",
+      "plan_reviewed_at": null,
+      "spec_path": ".flow/specs/fn-5-jef.md",
+      "status": "open",
+      "title": "Bugfix: Depth Gradient Display Not Working",
+      "updated_at": "2026-01-20T14:20:57.234106Z"
+    },
+    "spec": "# Bugfix: Depth Gradient Display Not Working\n\n## Problem\n\nThe \"Display \u2192 Depth Gradient\" toggle exists in the UI but does nothing. When enabled, stations and shots continue to display section-based colors instead of depth-based colors. The toggle state persists correctly, but the actual rendering logic to apply depth colors was never implemented.\n\n**Root cause**: MapCanvas doesn't pass `showDepthGradient` to SurveyLayer, and SurveyLayer always uses section colors without any conditional logic for depth mode.\n\n## Approach\n\n### 1. Wire up depth gradient toggle to SurveyLayer\n- Extract `showDepthGradient` in MapCanvas (follow pattern at L598-614 for showShotData)\n- Add `setShowDepthGradient(show: boolean, minDepth: number, maxDepth: number)` to SurveyLayer\n- Store depth range to avoid recalculation during feature building\n- Call `this.update()` when toggle changes\n\n### 2. Pass depth range to SurveyLayer\n**Decision**: Pass depth range via setter method (NOT modifying update() signature)\n```typescript\n// In MapCanvas useEffect:\nsurveyLayerRef.current.setShowDepthGradient(\n  showDepthGradient,\n  stats?.min_depth ?? 0,\n  stats?.max_depth ?? 50\n);\n```\n\n### 3. Modify color computation in SurveyLayer.update()\n- When depth gradient enabled, compute colors using `getDepthColor()` instead of section color\n- Apply to: stations, shots (including virtual), station labels, shot data labels\n- Exclude: loop closures (keep error-severity colors), merges (keep distinct styling), ghost previews\n\n### 4. Update getDepthColor() utility\n- Modify to use HSL interpolation (shortest hue path) instead of RGB\n- Handle edge cases: NaN depth, division by zero (when min===max)\n- Colors: shallow=#00bfff (light blue) \u2192 deep=#ff4444 (red)\n- Clamp depth values outside range to nearest boundary\n\n### 5. Special cases\n- **Zero datum stations**: Gold border (#ffd700) with depth-colored fill\n- **z=0**: Treated as surface level, gets shallowest color\n- **min_depth === max_depth**: Return shallow color, legend shows single value\n- **Negative depths**: Clamp to shallow color\n- **Selection/hover highlights**: Unaffected, use existing highlight colors\n\n### 6. Add depth legend component\n- New `DepthLegend.tsx` React component in MapCanvas\n- Position: `bottom: 50px; left: 10px;` (10px above scale bar)\n- Format: vertical SVG gradient bar (16px wide \u00d7 80px tall) with min/max depth labels\n- Semi-transparent dark background: `rgba(0,0,0,0.7)`, 4px border-radius\n- Labels: 11px white text with text-shadow for contrast\n- Respects project measurement units (m/ft)\n- Single-depth case: shows single value \"(Flat cave)\" with solid color\n- **Accessibility**: Add `role=\"img\"` and `aria-label` for screen readers\n- Hidden when depth gradient toggle is OFF\n\n### 7. Export color mode option\n- Add dropdown to ExportDialog: \"Section Colors\" / \"Depth Gradient\"\n- Default: Section Colors\n- Implementation: Use async/await to avoid visual flash:\n  1. Store current showDepthGradient value\n  2. Set desired mode\n  3. Wait for SurveyLayer to update (requestAnimationFrame)\n  4. Capture map\n  5. Restore original mode\n- **Legend in export**: Yes, capture entire map container including overlay\n\n### 8. Keyboard shortcut infrastructure\n- Add depth gradient toggle to keyboard shortcuts config\n- ID: `toggleDepthGradient`\n- No default binding\n- Action: `useUIStore.getState().toggleDisplay('showDepthGradient')`\n\n## Edge Cases\n\n| Case | Handling |\n|------|----------|\n| All stations at z=0 | All get shallow color, legend shows \"0.0m (Flat)\" |\n| min_depth === max_depth | Return shallow color, legend shows single value |\n| Negative depths (z<0) | Clamp to shallow color |\n| NaN depth values | Skip depth color, use section color fallback |\n| stats not yet loaded | Default range 0-50m until stats available |\n| Empty project | Legend hidden, no features to color |\n| Real-time import | New stations use depth colors immediately (update() called) |\n| Very large projects | Use loops not Math.min/max spread (memory pitfall) |\n\n## Error Handling\n\n- `getDepthColor()` validates inputs: isFinite check before interpolation\n- Division by zero guarded: if (maxDepth === minDepth) return shallowColor\n- Invalid hex colors: fall back to defaults\n- MapLibre expression errors: log warning, don't crash\n\n## Quick commands\n```bash\n# Type check\npnpm tsc --noEmit\n\n# Unit tests\npnpm test\n\n# Playwright tests\npnpm test:ui\n```\n\n## Acceptance Criteria\n\n- [ ] Toggling \"Depth Gradient\" ON colors stations/shots/labels by depth using HSL interpolation\n- [ ] Toggling OFF instantly reverts to section colors\n- [ ] Zero datum stations have gold border with depth-colored fill\n- [ ] Loop closures and merges keep their distinct styling\n- [ ] Depth legend appears 10px above scale bar when enabled, hidden when disabled\n- [ ] Legend shows project's min/max depth in correct units\n- [ ] Legend accessible with ARIA label\n- [ ] Single-depth projects show \"(Flat cave)\" indicator\n- [ ] Export dialog has color mode dropdown defaulting to section colors\n- [ ] Export captures legend when depth mode selected\n- [ ] Keyboard shortcut configurable (no default binding)\n- [ ] Unit tests for getDepthColor() HSL interpolation\n- [ ] Playwright tests for toggle behavior and legend visibility\n- [ ] WebdriverIO tests for cross-browser compatibility\n- [ ] `pnpm tsc --noEmit` passes\n- [ ] All existing tests pass\n\n## References\n\n### Key Files\n- `src/store/uiStore.ts:L152,L226,L358,L416` - showDepthGradient toggle state\n- `src/components/Map/MapCanvas.tsx:L598-614` - Display toggle sync pattern\n- `src/components/Map/SurveyLayer.tsx:L704-980` - update() method for coloring\n- `src/components/Map/SurveyLayer.tsx:L601-625` - Setter method patterns\n- `src/utils/colors.ts:L52-68` - Current getDepthColor() implementation\n- `src/components/Dialogs/ExportDialog.tsx:L126-163` - Export options pattern\n- `src/types/project.ts:L170-179` - ProjectStats with min_depth/max_depth\n\n### Architecture Notes\n- Display toggle flow: uiStore \u2192 MapCanvas useEffect \u2192 SurveyLayer setter\n- Color computation: Precompute in update() for performance\n- Scale bar uses MapLibre ScaleControl at 'bottom-left' (L622)\n\n### Memory Pitfalls\n- Use loops not Math.min/max spread for large arrays (overflow risk)\n- Check is_finite() before normalizing depth values\n"
+  },
+  "epic_id": "fn-5-jef",
+  "schema_version": 1,
+  "tasks": [
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-20T14:10:02.855100Z",
+        "depends_on": [],
+        "epic": "fn-5-jef",
+        "id": "fn-5-jef.1",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-5-jef.1.md",
+        "status": "todo",
+        "title": "Wire showDepthGradient toggle to SurveyLayer",
+        "updated_at": "2026-01-20T14:21:11.560146Z"
+      },
+      "id": "fn-5-jef.1",
+      "spec": "# fn-5-jef.1 Wire showDepthGradient toggle to SurveyLayer\n\n## Description\nWire up the `showDepthGradient` UI toggle to SurveyLayer.\n\n## Files to Modify\n\n### `src/components/Map/MapCanvas.tsx`\n- Extract `showDepthGradient` from useUIStore (L52-77 area)\n- Extract `stats` from useProjectStore for depth range\n- Add useEffect following pattern at L598-614 (showShotData sync):\n```typescript\nuseEffect(() => {\n  if (!surveyLayerRef.current) return;\n  surveyLayerRef.current.setShowDepthGradient(\n    showDepthGradient,\n    stats?.min_depth ?? 0,\n    stats?.max_depth ?? 50\n  );\n}, [showDepthGradient, stats?.min_depth, stats?.max_depth, mapLoaded]);\n```\n\n### `src/components/Map/SurveyLayer.tsx`\n- Add private fields:\n```typescript\nprivate showDepthGradient = false;\nprivate depthRange = { min: 0, max: 50 };\n```\n- Add setter method (follow pattern at L601-625):\n```typescript\nsetShowDepthGradient(show: boolean, minDepth: number, maxDepth: number) {\n  const changed = this.showDepthGradient !== show ||\n                  this.depthRange.min !== minDepth ||\n                  this.depthRange.max !== maxDepth;\n  this.showDepthGradient = show;\n  this.depthRange = { min: minDepth, max: maxDepth };\n  if (changed) {\n    this.update(...);  // Need to call update with current data\n  }\n}\n```\n\n**Challenge**: update() requires sections/stations/merges/closures but setter doesn't have access. Solution: store last data in private fields, or use a separate re-render method that only updates colors.\n## Files to Modify\n\n### `src/components/Map/MapCanvas.tsx`\n- Extract `showDepthGradient` from useUIStore (around L52-77)\n- Add `setShowDepthGradient()` call in useEffect that syncs display settings to SurveyLayer\n\n### `src/components/Map/SurveyLayer.tsx`\n- Add private field: `private showDepthGradient = false;`\n- Add method: `setShowDepthGradient(show: boolean)` that stores value and triggers re-render if needed\n- Method should call `this.update()` if the value changed\n\n## Implementation Notes\n- Follow existing pattern from `setShowStations()`, `setShowSectionNames()` etc.\n- The toggle is already defined in uiStore and DisplayMenu - just needs wiring to the layer\n## Acceptance\n- [ ] `showDepthGradient` extracted in MapCanvas\n- [ ] `stats` (depth range) extracted from useProjectStore  \n- [ ] `setShowDepthGradient(show, minDepth, maxDepth)` method added to SurveyLayer\n- [ ] Depth range stored for use during feature building\n- [ ] useEffect syncs toggle and depth range to layer\n- [ ] Toggling triggers re-render (colors update)\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-20T14:10:02.901105Z",
+        "depends_on": [],
+        "epic": "fn-5-jef",
+        "id": "fn-5-jef.2",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-5-jef.2.md",
+        "status": "todo",
+        "title": "Modify getDepthColor() to use HSL interpolation",
+        "updated_at": "2026-01-20T14:10:49.015838Z"
+      },
+      "id": "fn-5-jef.2",
+      "spec": "# fn-5-jef.2 Modify getDepthColor() to use HSL interpolation\n\n## Description\nModify `getDepthColor()` in `src/utils/colors.ts` to use HSL interpolation instead of RGB.\n\n## Current Implementation (L52-68)\nCurrently uses linear RGB interpolation which can produce muddy intermediate colors.\n\n## New Implementation\nUse HSL color space interpolation with shortest hue path:\n\n```typescript\nexport function getDepthColor(\n  depth: number,\n  shallowColor: string,  // Default: '#00bfff' (light blue)\n  deepColor: string,     // Default: '#ff4444' (red)\n  shallowDepth: number,  // Default: 0\n  deepDepth: number      // Default: project max depth\n): string {\n  // Clamp depth to range\n  const t = Math.max(0, Math.min(1, (depth - shallowDepth) / (deepDepth - shallowDepth)));\n\n  // Convert hex to HSL\n  const shallowHSL = hexToHSL(shallowColor);\n  const deepHSL = hexToHSL(deepColor);\n\n  // Interpolate in HSL space (shortest hue path)\n  const h = interpolateHue(shallowHSL.h, deepHSL.h, t);\n  const s = shallowHSL.s + (deepHSL.s - shallowHSL.s) * t;\n  const l = shallowHSL.l + (deepHSL.l - shallowHSL.l) * t;\n\n  return hslToHex(h, s, l);\n}\n```\n\n## Helper Functions to Add\n- `hexToHSL(hex: string): { h: number, s: number, l: number }`\n- `hslToHex(h: number, s: number, l: number): string`\n- `interpolateHue(h1: number, h2: number, t: number): number` - takes shortest path around color wheel\n\n## Notes\n- Keep existing function signature for backward compatibility\n- Handle edge case: if deepDepth === shallowDepth, return shallowColor\n- Default colors: shallow=#00bfff (light blue), deep=#ff4444 (red)\n## Acceptance\n- [ ] `getDepthColor()` uses HSL interpolation with shortest hue path\n- [ ] Helper functions `hexToHSL()`, `hslToHex()`, `interpolateHue()` added\n- [ ] Edge case: same shallow/deep depth returns shallow color\n- [ ] Function signature unchanged for backward compatibility\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-20T14:10:02.943675Z",
+        "depends_on": [],
+        "epic": "fn-5-jef",
+        "id": "fn-5-jef.3",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-5-jef.3.md",
+        "status": "todo",
+        "title": "Implement depth-based coloring in SurveyLayer.update()",
+        "updated_at": "2026-01-20T14:21:25.443178Z"
+      },
+      "id": "fn-5-jef.3",
+      "spec": "# fn-5-jef.3 Implement depth-based coloring in SurveyLayer.update()\n\n## Description\nImplement depth-based coloring logic in `SurveyLayer.update()`.\n\n## File: `src/components/Map/SurveyLayer.tsx`\n\n### Station Feature Building (L770-790)\nCurrent code at ~L772-773:\n```typescript\ncolor: section?.color ?? '#ffffff',\n```\nChange to:\n```typescript\nconst stationDepth = station.coordinates.z;\nconst color = this.showDepthGradient && isFinite(stationDepth)\n  ? getDepthColor(stationDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)\n  : section?.color ?? '#ffffff';\n```\n\n### Shot Feature Building (L723-740)\nCurrent code at ~L735:\n```typescript\ncolor: section.color,\n```\nChange to:\n```typescript\nconst fromDepth = fromStation.coordinates.z;\nconst toDepth = toStation.coordinates.z;\nconst avgDepth = (fromDepth + toDepth) / 2;\nconst color = this.showDepthGradient && isFinite(avgDepth)\n  ? getDepthColor(avgDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)\n  : section.color;\n```\n\n### Station Labels (~L800-820)\nApply same depth color to station index labels when enabled.\n\n### Shot Data Labels\nApply same depth color to shot azimuth/length/depth labels when enabled.\n\n### Unchanged Elements\n- Loop closures (L223-235): Keep error-severity coloring\n- Merges (L193-221): Keep distinct styling\n- Ghost previews: Keep ghost styling\n\n## Imports\nAdd at top of file:\n```typescript\nimport { getDepthColor } from '@/utils/colors';\n```\n\n## Performance Note\nUse existing loop structure - avoid creating large arrays for Math.min/max (memory overflow risk on large projects).\n## Files to Modify\n\n### `src/components/Map/SurveyLayer.tsx`\nModify `update()` method (L704-980) to conditionally use depth colors.\n\n## Implementation\n\n### 1. Get depth range from project stats\n```typescript\n// In update(), get min/max depth from project\nconst minDepth = this.project?.stats?.min_depth ?? 0;\nconst maxDepth = this.project?.stats?.max_depth ?? 50;\n```\n\n### 2. Modify station feature building (L770-790)\n```typescript\n// Current: color: section?.color ?? '#ffffff'\n// New:\nconst color = this.showDepthGradient\n  ? getDepthColor(station.coordinates.z, '#00bfff', '#ff4444', minDepth, maxDepth)\n  : section?.color ?? '#ffffff';\n```\n\n### 3. Modify shot feature building (L732-740)\n```typescript\n// Current: color: section.color\n// New:\nconst avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;\nconst color = this.showDepthGradient\n  ? getDepthColor(avgDepth, '#00bfff', '#ff4444', minDepth, maxDepth)\n  : section.color;\n```\n\n### 4. Modify station labels (around L800-820)\nApply depth color to station index labels when enabled.\n\n### 5. Modify shot data labels\nApply depth color to shot azimuth/length/depth labels when enabled.\n\n### 6. Keep excluded elements unchanged\n- Loop closures (keep error-severity colors)\n- Merges (keep distinct styling)\n- Ghost previews (keep ghost styling)\n\n## Notes\n- Import `getDepthColor` from `@/utils/colors`\n- Virtual shots use same depth coloring as regular shots\n- z=0 is treated as surface level (shallowest color)\n## Acceptance\n- [ ] Stations colored by depth when `showDepthGradient` enabled\n- [ ] Shots colored by average depth of endpoints when enabled\n- [ ] Station labels colored by depth when enabled  \n- [ ] Shot data labels colored by depth when enabled\n- [ ] Virtual shots use depth coloring (same code path)\n- [ ] Loop closures keep error-severity colors unchanged\n- [ ] Merges keep distinct styling unchanged\n- [ ] NaN depth values fall back to section color\n- [ ] `getDepthColor` imported from `@/utils/colors`\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-20T14:10:02.986278Z",
+        "depends_on": [],
+        "epic": "fn-5-jef",
+        "id": "fn-5-jef.4",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-5-jef.4.md",
+        "status": "todo",
+        "title": "Handle zero datum stations with gold border + depth fill",
+        "updated_at": "2026-01-20T14:11:14.895144Z"
+      },
+      "id": "fn-5-jef.4",
+      "spec": "# fn-5-jef.4 Handle zero datum stations with gold border + depth fill\n\n## Description\nHandle zero datum stations with gold border and depth-colored fill.\n\n## Current Behavior\nZero datum stations (entry points) have:\n- Larger radius (8 vs 4)\n- Gold fill color (#ffd700)\n- Black stroke\n\n## New Behavior with Depth Gradient\nWhen `showDepthGradient` enabled:\n- Keep larger radius (8)\n- Fill: depth-based color (from getDepthColor)\n- Stroke: gold (#ffd700) instead of black\n- Stroke width: increase to 2-3px for visibility\n\n## Files to Modify\n\n### `src/components/Map/SurveyLayer.tsx`\n\n#### In `initializeLayers()` (L249-271)\nUpdate stations layer paint to support dynamic stroke color:\n```typescript\npaint: {\n  'circle-radius': ['case', ['get', 'isZeroDatum'], 8, 4],\n  'circle-color': ['get', 'color'],  // Already dynamic\n  'circle-stroke-width': ['case', ['get', 'isZeroDatum'], 2, 1],\n  'circle-stroke-color': ['get', 'strokeColor'],  // New property\n}\n```\n\n#### In `update()` station feature building\nAdd `strokeColor` property:\n```typescript\nconst isZeroDatum = station.is_zero_datum ?? false;\nconst strokeColor = this.showDepthGradient && isZeroDatum ? '#ffd700' : '#000000';\n// Feature properties:\nstrokeColor,\n```\n\n## Visual Result\n- Normal stations: depth color fill, black border\n- Zero datum stations: depth color fill, gold border (stands out as entry point)\n## Acceptance\n- [ ] Zero datum stations have gold stroke when depth gradient on\n- [ ] Zero datum stations have depth-colored fill when depth gradient on\n- [ ] Normal stations keep black stroke\n- [ ] Stroke width increased for zero datum visibility\n- [ ] `strokeColor` property added to station features\n- [ ] MapLibre paint uses `['get', 'strokeColor']`\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-20T14:10:03.028024Z",
+        "depends_on": [],
+        "epic": "fn-5-jef",
+        "id": "fn-5-jef.5",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-5-jef.5.md",
+        "status": "todo",
+        "title": "Create DepthLegend component",
+        "updated_at": "2026-01-20T14:21:41.411973Z"
+      },
+      "id": "fn-5-jef.5",
+      "spec": "# fn-5-jef.5 Create DepthLegend component\n\n## Description\nCreate DepthLegend component that shows depth color gradient with min/max labels.\n\n## New File: `src/components/Map/DepthLegend.tsx`\n\n### Props\n```typescript\ninterface DepthLegendProps {\n  minDepth: number;\n  maxDepth: number;\n  shallowColor?: string;  // Default: '#00bfff'\n  deepColor?: string;     // Default: '#ff4444'\n  unit: 'm' | 'ft';\n  visible: boolean;\n}\n```\n\n### Position & Style\n```css\nposition: absolute;\nbottom: 50px;  /* 10px above scale bar (scale bar height ~40px) */\nleft: 10px;\nbackground: rgba(0, 0, 0, 0.7);\nborder-radius: 4px;\npadding: 8px;\n```\n\n### SVG Gradient Bar (Vertical)\n```tsx\n<svg width=\"16\" height=\"80\" role=\"img\" aria-label={`Depth scale: ${minDepth}${unit} to ${maxDepth}${unit}`}>\n  <defs>\n    <linearGradient id=\"depth-gradient\" x1=\"0%\" y1=\"0%\" x2=\"0%\" y2=\"100%\">\n      <stop offset=\"0%\" stopColor={shallowColor} />\n      <stop offset=\"100%\" stopColor={deepColor} />\n    </linearGradient>\n  </defs>\n  <rect width=\"16\" height=\"80\" fill=\"url(#depth-gradient)\" rx=\"2\" />\n</svg>\n```\n\n### Labels\n- Top label: min depth (shallow) - e.g., \"0.0m\"\n- Bottom label: max depth (deep) - e.g., \"45.2m\"\n- Style: `font-size: 11px; color: white; text-shadow: 0 1px 2px rgba(0,0,0,0.8);`\n\n### Special Cases\n- **minDepth === maxDepth**: Show single value with \"(Flat)\" indicator, solid color bar\n- **not visible**: Return null (don't render)\n\n### Accessibility\n- `role=\"img\"` on SVG\n- `aria-label` with depth range description\n\n## Integration in MapCanvas\nAdd after scale bar area:\n```tsx\n{showDepthGradient && stats && (\n  <DepthLegend\n    minDepth={stats.min_depth}\n    maxDepth={stats.max_depth}\n    unit={config?.measurement_unit ?? 'm'}\n    visible={showDepthGradient}\n  />\n)}\n```\n## Component Specification\n\n### Location\n`src/components/Map/DepthLegend.tsx`\n\n### Props\n```typescript\ninterface DepthLegendProps {\n  minDepth: number;\n  maxDepth: number;\n  shallowColor: string;  // Default: '#00bfff'\n  deepColor: string;     // Default: '#ff4444'\n  unit: 'm' | 'ft';      // From project config\n  visible: boolean;      // Controlled by showDepthGradient toggle\n}\n```\n\n### Visual Design\n- Position: bottom-left corner, above scale bar (CSS: `bottom: 40px; left: 10px`)\n- Size: 16px wide \u00d7 80px tall gradient bar\n- Background: semi-transparent dark (`rgba(0,0,0,0.7)`, rounded corners)\n- Padding: 8px\n- Total size with labels: ~40px wide \u00d7 100px tall\n\n### SVG Gradient Bar\n```tsx\n<svg width=\"16\" height=\"80\">\n  <defs>\n    <linearGradient id=\"depth-gradient\" x1=\"0%\" y1=\"0%\" x2=\"0%\" y2=\"100%\">\n      <stop offset=\"0%\" stopColor={shallowColor} />\n      <stop offset=\"100%\" stopColor={deepColor} />\n    </linearGradient>\n  </defs>\n  <rect width=\"16\" height=\"80\" fill=\"url(#depth-gradient)\" rx=\"2\" />\n</svg>\n```\n\n### Labels\n- Top label: min depth (shallow) - e.g., \"0.0m\"\n- Bottom label: max depth (deep) - e.g., \"45.2m\"\n- Font: 11px, white, monospace for alignment\n- Match project measurement unit\n\n### Special Cases\n- If minDepth === maxDepth: show single value, solid color bar\n- If not visible: return null (don't render)\n\n## Integration in MapCanvas\nAdd DepthLegend as sibling to existing overlays, conditionally rendered when showDepthGradient is true.\n## Acceptance\n- [ ] DepthLegend component created at `src/components/Map/DepthLegend.tsx`\n- [ ] SVG gradient bar 16\u00d780px rendered correctly\n- [ ] Min/max depth labels in correct units (m/ft)\n- [ ] Semi-transparent dark background (rgba(0,0,0,0.7))\n- [ ] Positioned bottom:50px, left:10px (above scale bar)\n- [ ] Hidden when showDepthGradient is false\n- [ ] Single-depth case shows \"(Flat)\" with solid color\n- [ ] Accessible with role=\"img\" and aria-label\n- [ ] Integrated in MapCanvas\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-20T14:10:03.069828Z",
+        "depends_on": [],
+        "epic": "fn-5-jef",
+        "id": "fn-5-jef.6",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-5-jef.6.md",
+        "status": "todo",
+        "title": "Add color mode dropdown to export dialog",
+        "updated_at": "2026-01-20T14:11:40.750601Z"
+      },
+      "id": "fn-5-jef.6",
+      "spec": "# fn-5-jef.6 Add color mode dropdown to export dialog\n\n## Description\nAdd color mode dropdown to the export dialog.\n\n## Export Dialog Location\nFind the existing export dialog/modal component and add a color mode selector.\n\n## UI Addition\n\n### Dropdown Element\n```tsx\n<label>Color Mode</label>\n<select value={colorMode} onChange={e => setColorMode(e.target.value)}>\n  <option value=\"section\">Section Colors</option>\n  <option value=\"depth\">Depth Gradient</option>\n</select>\n```\n\n### State\n- Add `colorMode: 'section' | 'depth'` state\n- Default: `'section'` (always, regardless of current display setting)\n\n### Export Logic\nWhen exporting:\n1. Temporarily set `showDepthGradient` to match selected color mode\n2. Capture map image\n3. Restore original `showDepthGradient` setting\n\n## Files to Modify\n- Export dialog component (search for export modal/dialog)\n- May need to pass colorMode to capture function\n\n## Notes\n- This affects PNG/image export\n- PDF/SVG export should also respect this if applicable\n- Don't persist the export color mode preference - always reset to 'section'\n## Acceptance\n- [ ] Color mode dropdown added to export dialog\n- [ ] Options: \"Section Colors\" and \"Depth Gradient\"\n- [ ] Default selection: Section Colors\n- [ ] Export respects selected color mode\n- [ ] Original display setting restored after export\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-20T14:10:03.112991Z",
+        "depends_on": [],
+        "epic": "fn-5-jef",
+        "id": "fn-5-jef.7",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-5-jef.7.md",
+        "status": "todo",
+        "title": "Add depth gradient to keyboard shortcuts config",
+        "updated_at": "2026-01-20T14:11:49.580278Z"
+      },
+      "id": "fn-5-jef.7",
+      "spec": "# fn-5-jef.7 Add depth gradient to keyboard shortcuts config\n\n## Description\nAdd depth gradient toggle to keyboard shortcuts configuration.\n\n## Requirements\n- Add entry in keyboard shortcuts config structure\n- No default binding (user must assign manually)\n- Action: toggle `showDepthGradient` display setting\n\n## Files to Modify\n\n### Keyboard shortcuts config (find existing location)\nAdd entry:\n```typescript\n{\n  id: 'toggleDepthGradient',\n  label: 'Toggle Depth Gradient',\n  category: 'Display',\n  defaultBinding: null,  // No default\n  action: () => useUIStore.getState().toggleDisplay('showDepthGradient')\n}\n```\n\n### Settings UI (keyboard shortcuts section)\nEnsure the new shortcut appears in the configurable list under \"Display\" category.\n\n## Notes\n- Follow existing pattern for other display toggle shortcuts\n- The action should match what DisplayMenu button does\n- User can assign any key combination in settings\n## Acceptance\n- [ ] Depth gradient shortcut added to config\n- [ ] No default key binding\n- [ ] Appears in settings UI under Display category\n- [ ] Action correctly toggles showDepthGradient\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-20T14:10:03.154883Z",
+        "depends_on": [],
+        "epic": "fn-5-jef",
+        "id": "fn-5-jef.8",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-5-jef.8.md",
+        "status": "todo",
+        "title": "Add unit tests for getDepthColor() HSL interpolation",
+        "updated_at": "2026-01-20T14:12:03.094936Z"
+      },
+      "id": "fn-5-jef.8",
+      "spec": "# fn-5-jef.8 Add unit tests for getDepthColor() HSL interpolation\n\n## Description\nAdd unit tests for the modified `getDepthColor()` function.\n\n## Test File\n`src/utils/__tests__/colors.test.ts` (create if doesn't exist)\n\n## Test Cases\n\n### HSL Interpolation Tests\n```typescript\ndescribe('getDepthColor', () => {\n  it('returns shallow color at minimum depth', () => {\n    const color = getDepthColor(0, '#00bfff', '#ff4444', 0, 50);\n    expect(color).toBe('#00bfff');\n  });\n\n  it('returns deep color at maximum depth', () => {\n    const color = getDepthColor(50, '#00bfff', '#ff4444', 0, 50);\n    expect(color).toBe('#ff4444');\n  });\n\n  it('returns intermediate color at midpoint depth', () => {\n    const color = getDepthColor(25, '#00bfff', '#ff4444', 0, 50);\n    // Should be somewhere between shallow and deep, via HSL\n    expect(color).toMatch(/^#[0-9a-f]{6}$/i);\n    expect(color).not.toBe('#00bfff');\n    expect(color).not.toBe('#ff4444');\n  });\n\n  it('clamps depth below minimum to shallow color', () => {\n    const color = getDepthColor(-10, '#00bfff', '#ff4444', 0, 50);\n    expect(color).toBe('#00bfff');\n  });\n\n  it('clamps depth above maximum to deep color', () => {\n    const color = getDepthColor(100, '#00bfff', '#ff4444', 0, 50);\n    expect(color).toBe('#ff4444');\n  });\n\n  it('handles equal shallow and deep depth', () => {\n    const color = getDepthColor(25, '#00bfff', '#ff4444', 25, 25);\n    expect(color).toBe('#00bfff');  // Returns shallow color\n  });\n});\n```\n\n### Helper Function Tests\n```typescript\ndescribe('hexToHSL', () => {\n  it('converts red correctly', () => {\n    expect(hexToHSL('#ff0000')).toEqual({ h: 0, s: 100, l: 50 });\n  });\n\n  it('converts blue correctly', () => {\n    expect(hexToHSL('#0000ff')).toEqual({ h: 240, s: 100, l: 50 });\n  });\n});\n\ndescribe('interpolateHue', () => {\n  it('takes shortest path across 0/360 boundary', () => {\n    // From 350 to 10 should go through 0, not through 180\n    const result = interpolateHue(350, 10, 0.5);\n    expect(result).toBe(0);  // Midpoint of 350\u219210 via 0\n  });\n});\n```\n## Acceptance\n- [ ] Test file created/updated at `src/utils/__tests__/colors.test.ts`\n- [ ] Tests for getDepthColor at min, max, midpoint depths\n- [ ] Tests for depth clamping (below min, above max)\n- [ ] Test for equal shallow/deep depth edge case\n- [ ] Tests for hexToHSL conversion\n- [ ] Tests for interpolateHue shortest path\n- [ ] All tests pass with `pnpm test`\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-20T14:10:03.199062Z",
+        "depends_on": [],
+        "epic": "fn-5-jef",
+        "id": "fn-5-jef.9",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-5-jef.9.md",
+        "status": "todo",
+        "title": "Add Playwright and WebdriverIO tests for depth gradient",
+        "updated_at": "2026-01-20T14:12:16.041597Z"
+      },
+      "id": "fn-5-jef.9",
+      "spec": "# fn-5-jef.9 Add Playwright and WebdriverIO tests for depth gradient\n\n## Description\nAdd Playwright and WebdriverIO E2E tests for depth gradient functionality.\n\n## Playwright Tests\nLocation: `e2e-playwright/tests/depth-gradient.spec.ts`\n\n### Test Cases\n```typescript\ntest.describe('Depth Gradient', () => {\n  test('toggle enables depth coloring on map', async ({ page }) => {\n    // Load project with depth data\n    // Open Display menu\n    // Toggle Depth Gradient ON\n    // Verify stations/shots changed color (screenshot comparison or color sampling)\n  });\n\n  test('toggle shows/hides depth legend', async ({ page }) => {\n    // Toggle ON: legend visible at bottom-left\n    // Toggle OFF: legend hidden\n  });\n\n  test('legend shows correct depth range', async ({ page }) => {\n    // Load project with known depth range\n    // Enable depth gradient\n    // Check legend labels show correct min/max values\n  });\n\n  test('depth gradient persists across session', async ({ page }) => {\n    // Enable depth gradient\n    // Reload page\n    // Verify still enabled\n  });\n\n  test('export dialog has color mode option', async ({ page }) => {\n    // Open export dialog\n    // Verify dropdown exists with both options\n  });\n});\n```\n\n## WebdriverIO Tests\nLocation: `e2e-wdio/specs/depth-gradient.spec.ts`\n\n### Test Cases\n- Same scenarios as Playwright for cross-browser coverage\n- Focus on Chrome, Firefox, Safari compatibility\n\n## Mock Data\nMay need to add mock project with depth data in `e2e-playwright/mocks/`.\n\n## Notes\n- Use visual regression if available for color verification\n- Test on different project sizes (small, large)\n- Verify performance doesn't degrade significantly with depth gradient on\n## Acceptance\n- [ ] Playwright test file created at `e2e-playwright/tests/depth-gradient.spec.ts`\n- [ ] Tests: toggle behavior, legend visibility, legend values, persistence\n- [ ] Tests: export dialog color mode option\n- [ ] WebdriverIO test file created at `e2e-wdio/specs/depth-gradient.spec.ts`\n- [ ] Cross-browser tests pass (Chrome, Firefox)\n- [ ] Mock data updated if needed\n- [ ] `pnpm test:ui` passes\n- [ ] `pnpm test:wdio` passes (if applicable)\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    }
+  ]
+}

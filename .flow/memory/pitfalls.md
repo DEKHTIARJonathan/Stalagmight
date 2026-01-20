@@ -24,3 +24,6 @@ f64::clamp does not handle NaN/inf - always check is_finite() first when normali
 
 ## 2026-01-20 manual [pitfall]
 When intercepting map clicks, attach capture handlers to canvas element not container - container includes UI controls that need to remain clickable
+
+## 2026-01-20 manual [pitfall]
+React mouse drag handlers should check e.buttons to prevent stuck state on focus loss - window blur may not fire mouseup
