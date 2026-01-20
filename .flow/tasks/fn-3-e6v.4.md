@@ -183,9 +183,29 @@ The disabled toggles should remember their state - when Shots is re-enabled, the
 - [ ] No new external components added (uses existing pattern)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
+## Summary
+Implemented toggle disable relationships in DisplayMenu for Virtual Shots and Shot Data options that depend on Shots being enabled.
 
+### Changes Made:
+1. **DisplayMenu.tsx**:
+   - Added `disabledWhen` property to `DisplayOption` interface
+   - Added `disabledWhen: 'showShots'` to Virtual Shots and Shot Data items
+   - Reordered items so Shots comes before dependent options (clearer UI)
+   - Computed disabled state once per row for performance
+   - Added both `disabled` and `aria-disabled` attributes for accessibility
+   - Applied opacity-50 and cursor-not-allowed styling when disabled
+   - Guard onClick handler to prevent toggling disabled items
+
+2. **MapCanvas.tsx**:
+   - Wired `showVirtualShots` to SurveyLayer via new useEffect
+   - Gated `showShotData` visibility on `showShots` state (fixes user trap)
+   - Gated `showVirtualShots` visibility on `showShots` state
+
+### Behavior:
+- When Shots is OFF: Virtual Shots and Shot Data rows appear disabled (grayed out)
+- Disabled rows cannot be clicked (both UI blocked and render gated)
+- Checked state is preserved - when Shots is re-enabled, previous states restore
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 058ea97
+- Tests: pnpm tsc --noEmit, pnpm test:ui (Display Menu tests), cargo test
 - PRs:
