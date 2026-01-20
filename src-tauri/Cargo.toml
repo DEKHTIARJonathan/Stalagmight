@@ -31,6 +31,8 @@ directories = "5"
 svg2pdf = "0.12"
 usvg = "0.43"
 sha2 = "0.10"
+ureq = "3"
+http = "1"
 
 [profile.release]
 lto = true

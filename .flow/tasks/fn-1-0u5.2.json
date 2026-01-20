@@ -7,10 +7,22 @@
     "fn-1-0u5.1"
   ],
   "epic": "fn-1-0u5",
+  "evidence": {
+    "commits": [
+      "800b039",
+      "d296e62",
+      "2789493",
+      "cbc558a"
+    ],
+    "prs": [],
+    "tests": [
+      "cargo test --manifest-path src-tauri/Cargo.toml cache"
+    ]
+  },
   "id": "fn-1-0u5.2",
   "priority": null,
   "spec_path": ".flow/tasks/fn-1-0u5.2.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Implement TileCache module with Rust unit tests",
-  "updated_at": "2026-01-20T07:10:24.530871Z"
+  "updated_at": "2026-01-20T07:28:17.264685Z"
 }

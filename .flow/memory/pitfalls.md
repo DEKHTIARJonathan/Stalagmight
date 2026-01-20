@@ -15,3 +15,6 @@ Per-project settings need in-memory cache for new unsaved projects (no DB exists
 
 ## 2026-01-17 manual [pitfall]
 Regex alternations with different group positions create brittle code - use explicit variable extraction instead of complex index remapping
+
+## 2026-01-20 manual [pitfall]
+In SQLite queries, distinguish QueryReturnedNoRows (expected miss) from other errors (corruption/IO) - don't mask all errors with unwrap_or(default)
