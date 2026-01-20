@@ -417,11 +417,13 @@ export const useUIStore = create<UIStore>((set) => ({
           }
         }
       }
-      // Fallback: if showShots wasn't in saved settings, default to true
-      if (displayState.showShots === undefined) {
+      // Migration fallback: if we loaded some settings but showShots wasn't among them,
+      // default it to true (older saved settings won't have this newer key)
+      const hasLoadedSettings = Object.keys(displayState).length > 0 || gridSpacing !== undefined;
+      if (hasLoadedSettings && displayState.showShots === undefined) {
         displayState.showShots = true;
       }
-      if (Object.keys(displayState).length > 0 || gridSpacing !== undefined) {
+      if (hasLoadedSettings) {
         set({ ...displayState, ...(gridSpacing !== undefined ? { gridSpacing } : {}) });
       }
     } catch (e) {
