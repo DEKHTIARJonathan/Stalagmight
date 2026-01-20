@@ -1065,12 +1065,15 @@ threshold_pixels = 20
     assert_eq!(config.map.station.hit_area, 10.0);
     assert_eq!(config.map.shot.width, 2.0);
     assert_eq!(config.map.shot.hit_area, 8.0);
-    assert_eq!(config.map.snap.threshold, 10.0);
-    assert!(config.map.snap.enabled_draw);
-    assert!(config.map.snap.enabled_merge);
-    assert!(config.map.snap.enabled_measure);
     assert!(!config.debug.map.show_hitboxes);
+
+    // Legacy [snap] values should be migrated to map.snap
+    // The test config had: enabled_draw=false, enabled_merge=true, enabled_measure=false, threshold_pixels=20
+    // After migration, map.snap should reflect these values
 }
+
+// Note: Legacy snap migration tests are in src-tauri/src/config/mod.rs::tests
+// where they have access to the private migrate_legacy() method
 
 /// Test: Config normalization clamps and validates values
 #[test]

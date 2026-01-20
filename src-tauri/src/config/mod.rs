@@ -22,6 +22,24 @@ pub struct Config {
     pub cache: CacheConfig,
     #[serde(default)]
     pub debug: DebugConfig,
+
+    // Legacy fields for backwards compatibility (deserialize only, never serialize)
+    // Uses alias to match old TOML key name while keeping internal field name distinct
+    #[serde(default, skip_serializing, alias = "snap")]
+    legacy_snap: Option<LegacySnapConfig>,
+}
+
+/// Legacy snap config for migration from old [snap] section
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct LegacySnapConfig {
+    #[serde(default)]
+    enabled_draw: Option<bool>,
+    #[serde(default)]
+    enabled_merge: Option<bool>,
+    #[serde(default)]
+    enabled_measure: Option<bool>,
+    #[serde(default)]
+    threshold_pixels: Option<u32>,
 }
 
 /// Station visual and interaction configuration
@@ -408,7 +426,8 @@ impl Config {
             let contents =
                 std::fs::read_to_string(&config_path).context("Failed to read config file")?;
             let mut config: Config = toml::from_str(&contents).context("Failed to parse config file")?;
-            config.map.normalize();
+            config.migrate_legacy();
+            config.normalize();
             tracing::info!(?config_path, "Loaded config from file");
             Ok(config)
         } else {
@@ -419,7 +438,7 @@ impl Config {
 
     /// Save config to file
     pub fn save(&mut self) -> Result<()> {
-        self.map.normalize();
+        self.normalize();
         let config_path = Self::config_path()?;
 
         if let Some(parent) = config_path.parent() {
@@ -452,5 +471,259 @@ impl Config {
             .first()
             .cloned()
             .unwrap_or_else(|| "#4ecdc4".to_string())
+    }
+
+    /// Normalize all config values to valid ranges
+    /// Handles NaN/inf by falling back to defaults
+    pub fn normalize(&mut self) {
+        self.map.normalize();
+    }
+
+    /// Migrate legacy config fields to new structure
+    /// Called during load() before normalize()
+    fn migrate_legacy(&mut self) {
+        // Migrate old [snap] section to new map.snap
+        if let Some(legacy) = self.legacy_snap.take() {
+            // Only migrate if map.snap is still at defaults (hasn't been set explicitly)
+            let snap_is_default = self.map.snap.threshold == default_snap_threshold()
+                && self.map.snap.enabled_draw
+                && self.map.snap.enabled_merge
+                && self.map.snap.enabled_measure;
+
+            if snap_is_default {
+                if let Some(enabled_draw) = legacy.enabled_draw {
+                    self.map.snap.enabled_draw = enabled_draw;
+                }
+                if let Some(enabled_merge) = legacy.enabled_merge {
+                    self.map.snap.enabled_merge = enabled_merge;
+                }
+                if let Some(enabled_measure) = legacy.enabled_measure {
+                    self.map.snap.enabled_measure = enabled_measure;
+                }
+                if let Some(threshold_pixels) = legacy.threshold_pixels {
+                    self.map.snap.threshold = threshold_pixels as f64;
+                }
+                tracing::info!("Migrated legacy [snap] config to map.snap");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_legacy_snap_migration() {
+        let old_config_toml = r##"
+[general]
+auto_save = true
+auto_save_interval_seconds = 30
+recent_projects_max = 20
+
+[units]
+length = "meters"
+depth = "meters"
+angle = "degrees"
+decimal_precision = 1
+
+[display]
+default_background = "#1a1a2e"
+grid_color = "#333366"
+font_size = 12
+font_color = "#f5f5f5"
+
+[display.depth_gradient]
+enabled = false
+shallow_color = "#00bfff"
+deep_color = "#ff4444"
+shallow_depth = 0.0
+deep_depth = 50.0
+
+[section_colors]
+palette = ["#4ecdc4"]
+
+[map]
+satellite_provider = "openstreetmap"
+satellite_enabled = false
+zoom_default = 15
+zoom_min = 0
+zoom_max = 22
+
+[map.controls]
+pan_speed = 1.0
+zoom_speed = 1.0
+invert_scroll = false
+
+[validation]
+warn_shot_length_min = 0.1
+warn_shot_length_max = 50.0
+warn_depth_change_per_shot_max = 10.0
+warn_azimuth_deviation_max = 30.0
+
+[export]
+default_image_format = "png"
+default_dpi = 300
+default_include_satellite = true
+default_include_grid = false
+default_include_labels = true
+
+[logging]
+level = "info"
+max_directory_size_mb = 128
+
+[shortcuts]
+select = "S"
+pan = "P"
+zoom = "Z"
+draw = "D"
+delete = "X"
+merge = "M"
+measure = "R"
+move_section = "V"
+move_station = "T"
+undo = "Ctrl+Z"
+redo = "Ctrl+Y"
+save = "Ctrl+S"
+
+[snap]
+enabled_draw = false
+enabled_merge = true
+enabled_measure = false
+threshold_pixels = 25
+"##;
+
+        let mut config: Config = toml::from_str(old_config_toml)
+            .expect("Config with legacy [snap] should parse");
+
+        // Before migration, map.snap has defaults
+        assert_eq!(config.map.snap.threshold, 10.0);
+        assert!(config.map.snap.enabled_draw);
+        assert!(config.map.snap.enabled_merge);
+        assert!(config.map.snap.enabled_measure);
+
+        // legacy_snap should have the old values
+        assert!(config.legacy_snap.is_some());
+
+        // Run migration (simulating what Config::load does)
+        config.migrate_legacy();
+        config.normalize();
+
+        // After migration, map.snap should have the legacy values
+        assert_eq!(config.map.snap.threshold, 25.0);
+        assert!(!config.map.snap.enabled_draw);
+        assert!(config.map.snap.enabled_merge);
+        assert!(!config.map.snap.enabled_measure);
+
+        // legacy_snap should be consumed (taken)
+        assert!(config.legacy_snap.is_none());
+    }
+
+    #[test]
+    fn test_legacy_snap_not_migrated_when_new_config_present() {
+        // If user has both old [snap] and new [map.snap], prefer new values
+        let mixed_config_toml = r##"
+[general]
+auto_save = true
+auto_save_interval_seconds = 30
+recent_projects_max = 20
+
+[units]
+length = "meters"
+depth = "meters"
+angle = "degrees"
+decimal_precision = 1
+
+[display]
+default_background = "#1a1a2e"
+grid_color = "#333366"
+font_size = 12
+font_color = "#f5f5f5"
+
+[display.depth_gradient]
+enabled = false
+shallow_color = "#00bfff"
+deep_color = "#ff4444"
+shallow_depth = 0.0
+deep_depth = 50.0
+
+[section_colors]
+palette = ["#4ecdc4"]
+
+[map]
+satellite_provider = "openstreetmap"
+satellite_enabled = false
+zoom_default = 15
+zoom_min = 0
+zoom_max = 22
+
+[map.controls]
+pan_speed = 1.0
+zoom_speed = 1.0
+invert_scroll = false
+
+[map.snap]
+threshold = 30.0
+enabled_draw = true
+enabled_merge = false
+enabled_measure = true
+
+[validation]
+warn_shot_length_min = 0.1
+warn_shot_length_max = 50.0
+warn_depth_change_per_shot_max = 10.0
+warn_azimuth_deviation_max = 30.0
+
+[export]
+default_image_format = "png"
+default_dpi = 300
+default_include_satellite = true
+default_include_grid = false
+default_include_labels = true
+
+[logging]
+level = "info"
+max_directory_size_mb = 128
+
+[shortcuts]
+select = "S"
+pan = "P"
+zoom = "Z"
+draw = "D"
+delete = "X"
+merge = "M"
+measure = "R"
+move_section = "V"
+move_station = "T"
+undo = "Ctrl+Z"
+redo = "Ctrl+Y"
+save = "Ctrl+S"
+
+[snap]
+enabled_draw = false
+enabled_merge = true
+enabled_measure = false
+threshold_pixels = 25
+"##;
+
+        let mut config: Config = toml::from_str(mixed_config_toml)
+            .expect("Config with both snap configs should parse");
+
+        // map.snap has explicit values (not defaults)
+        assert_eq!(config.map.snap.threshold, 30.0);
+        assert!(config.map.snap.enabled_draw);
+        assert!(!config.map.snap.enabled_merge);
+        assert!(config.map.snap.enabled_measure);
+
+        // Run migration
+        config.migrate_legacy();
+        config.normalize();
+
+        // map.snap should NOT be overwritten by legacy values
+        // (because map.snap was explicitly set, not defaults)
+        assert_eq!(config.map.snap.threshold, 30.0);
+        assert!(config.map.snap.enabled_draw);
+        assert!(!config.map.snap.enabled_merge);
+        assert!(config.map.snap.enabled_measure);
     }
 }
