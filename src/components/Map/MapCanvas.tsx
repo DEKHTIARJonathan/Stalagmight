@@ -454,6 +454,19 @@ export default function MapCanvas() {
     };
   }, []);
 
+  // Register custom tile protocol for offline caching
+  // This allows MapLibre to use cavechef-tiles:// URLs which are handled by the Tauri backend
+  useEffect(() => {
+    maplibregl.addProtocol('cavechef-tiles', async (params, abortController) => {
+      const response = await fetch(params.url, { signal: abortController.signal });
+      return { data: await response.arrayBuffer() };
+    });
+
+    return () => {
+      maplibregl.removeProtocol('cavechef-tiles');
+    };
+  }, []);
+
   // Expose map instance for E2E testing (development only)
   useEffect(() => {
     if (map.current) {
@@ -652,33 +665,14 @@ export default function MapCanvas() {
   }, [activeTool]);
 
   // Get satellite tile URL based on provider config
+  // Uses custom cavechef-tiles:// protocol for offline caching
   const getSatelliteTileConfig = useCallback(() => {
-    const provider = config?.map?.satellite_provider ?? 'openstreetmap';
-
-    switch (provider.toLowerCase()) {
-      case 'esri':
-        return {
-          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-          attribution: '&copy; Esri, Maxar, Earthstar Geographics',
-          tileSize: 256,
-        };
-      case 'mapbox':
-        // Mapbox requires an access token - fall back to ESRI if not available
-        return {
-          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-          attribution: '&copy; Esri, Maxar, Earthstar Geographics',
-          tileSize: 256,
-        };
-      case 'openstreetmap':
-      default:
-        // OSM doesn't have satellite - use ESRI as default satellite provider
-        return {
-          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-          attribution: '&copy; Esri, Maxar, Earthstar Geographics',
-          tileSize: 256,
-        };
-    }
-  }, [config?.map?.satellite_provider]);
+    return {
+      tiles: ['cavechef-tiles://esri/{z}/{y}/{x}'],
+      attribution: '&copy; Esri, Maxar, Earthstar Geographics',
+      tileSize: 256,
+    };
+  }, []);
 
   // Handle satellite toggle
   useEffect(() => {

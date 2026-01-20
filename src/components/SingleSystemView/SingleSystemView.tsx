@@ -2,6 +2,7 @@ import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
 import { ResizablePanel } from '../common/Panel';
+import { OfflineIndicator } from '../common/OfflineIndicator';
 import Toolbar from './Toolbar';
 import SectionsPanel from './SectionsPanel';
 import DetailPanel from './DetailPanel';
@@ -80,6 +81,8 @@ export default function SingleSystemView() {
           {/* Map */}
           <div className="flex-1 relative">
             <MapCanvas />
+            {/* Offline indicator - positioned in top-right of map area */}
+            <OfflineIndicator className="absolute top-2 right-14" />
           </div>
 
           {/* Data table */}
