@@ -215,11 +215,29 @@ export function useKeyboardShortcuts() {
 
       // Handle +/- for zoom
       if (key === '+' || key === '=') {
-        // TODO: Zoom in
+        event.preventDefault();
+        const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number; zoomTo: (zoom: number, options?: { duration?: number }) => void } }).__cavechef_map__;
+        if (map) {
+          const config = useProjectStore.getState().config;
+          const zoomStep = config?.map.zoom_step ?? 1.0;
+          const targetZoom = Math.min(22, map.getZoom() + zoomStep);
+          if (targetZoom !== map.getZoom()) {
+            map.zoomTo(targetZoom, { duration: 300 });
+          }
+        }
         return;
       }
       if (key === '-') {
-        // TODO: Zoom out
+        event.preventDefault();
+        const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number; zoomTo: (zoom: number, options?: { duration?: number }) => void } }).__cavechef_map__;
+        if (map) {
+          const config = useProjectStore.getState().config;
+          const zoomStep = config?.map.zoom_step ?? 1.0;
+          const targetZoom = Math.max(0, map.getZoom() - zoomStep);
+          if (targetZoom !== map.getZoom()) {
+            map.zoomTo(targetZoom, { duration: 300 });
+          }
+        }
         return;
       }
 

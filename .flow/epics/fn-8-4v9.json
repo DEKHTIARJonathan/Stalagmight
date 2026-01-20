@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-8-4v9",
+  "created_at": "2026-01-20T14:44:56.132948Z",
+  "depends_on_epics": [],
+  "id": "fn-8-4v9",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-8-4v9.md",
+  "status": "open",
+  "title": "Bugfix: Disable station/shot interactions for Zoom and Pan tools",
+  "updated_at": "2026-01-20T14:45:18.537242Z"
+}
