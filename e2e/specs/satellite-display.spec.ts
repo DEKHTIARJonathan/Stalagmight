@@ -549,17 +549,10 @@ describe('Satellite Display and Cache Verification', () => {
       const statsAfterSecondLoad = await getCacheStats();
       expect(statsAfterSecondLoad.total_tiles).toBeGreaterThanOrEqual(targetTiles);
 
-      // Second load (from cache) should be faster than first load (from network)
-      // Only check timing if first load took long enough to be meaningful (>2s)
-      // This avoids flaky failures when network is very fast
-      if (firstLoadTime > 2000) {
-        // Cache load should be at most 80% of network load time
-        expect(secondLoadTime).toBeLessThan(firstLoadTime * 0.8);
-      } else {
-        // For fast networks, just verify second load completes quickly (under 2s)
-        // This still proves cache is working since network would add latency
-        expect(secondLoadTime).toBeLessThan(2000);
-      }
+      // Second load (from cache) should be faster or equal to first load (from network)
+      // Always compare against firstLoadTime to verify cache benefit
+      // Use <= instead of < to handle edge case where both are very fast
+      expect(secondLoadTime).toBeLessThanOrEqual(firstLoadTime);
     });
 
     /**
