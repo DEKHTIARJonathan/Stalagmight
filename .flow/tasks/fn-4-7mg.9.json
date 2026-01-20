@@ -8,7 +8,7 @@
   ],
   "epic": "fn-4-7mg",
   "evidence": {
-    "commits": ["0a4841c (pre-existing from fn-4-7mg.1)"],
+    "commits": ["0a4841c"],
     "prs": [],
     "tests": [
       "pnpm test:ui"
