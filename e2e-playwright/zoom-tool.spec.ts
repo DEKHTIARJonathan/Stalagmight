@@ -64,7 +64,34 @@ async function waitForZoomChange(page: Page, startZoom: number, direction: 'in' 
     { timeout: 5000 }
   );
   const zoom = await getMapZoom(page);
-  return zoom!;
+  expect(zoom).not.toBeNull();
+  return zoom as number;
+}
+
+/**
+ * Helper to get the map's min/max zoom from the actual map instance.
+ */
+async function getMapZoomLimits(page: Page): Promise<{ minZoom: number; maxZoom: number }> {
+  return page.evaluate(() => {
+    const map = (window as unknown as { __cavechef_map__?: { getMinZoom: () => number; getMaxZoom: () => number } }).__cavechef_map__;
+    return {
+      minZoom: map?.getMinZoom() ?? 0,
+      maxZoom: map?.getMaxZoom() ?? 22,
+    };
+  });
+}
+
+/**
+ * Helper to wait for map to be idle (no ongoing animations).
+ */
+async function waitForMapIdle(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const map = (window as unknown as { __cavechef_map__?: { isMoving: () => boolean; isZooming: () => boolean } }).__cavechef_map__;
+      return map && !map.isMoving() && !map.isZooming();
+    },
+    { timeout: 5000 }
+  );
 }
 
 test.describe('Zoom Tool', () => {
