@@ -7,10 +7,22 @@
     "fn-4-7mg.2"
   ],
   "epic": "fn-4-7mg",
+  "evidence": {
+    "commits": [
+      "7f47484",
+      "603987b",
+      "9ad23eb"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui"
+    ]
+  },
   "id": "fn-4-7mg.4",
   "priority": null,
   "spec_path": ".flow/tasks/fn-4-7mg.4.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add debug.map.showHitboxes visualization",
-  "updated_at": "2026-01-20T21:06:25.994189Z"
+  "updated_at": "2026-01-20T21:18:53.243847Z"
 }

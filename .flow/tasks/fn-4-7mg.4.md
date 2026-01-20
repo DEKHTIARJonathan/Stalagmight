@@ -259,9 +259,8 @@ Hitbox layers remain below visual layers so:
 - [ ] Ghost hitbox layers: opacity = 0 when debug off (not used for hit detection)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added debug.map.showHitboxes visualization that sets BOTH color AND opacity on hitbox layers. Debug mode shows semi-transparent red overlay (opacity=1, color=rgba(255,0,0,0.3)), normal mode uses opaque color with tiny opacity (0.001) to maintain queryRenderedFeatures functionality. Added debug logging to click/contextmenu handlers only (not hover) when logHitDetection is enabled.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 7f47484, 603987b, 9ad23eb
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:

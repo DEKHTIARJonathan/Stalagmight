@@ -38,6 +38,8 @@ interface ProjectStore {
   // Actions
   loadConfig: () => Promise<void>;
   updateConfig: (config: Config) => Promise<CommandResult>;
+  /** Update config state without persisting to disk */
+  setConfig: (config: Config) => void;
 
   createProject: (name: string, location?: string) => Promise<CommandResult>;
   openProject: (path: string) => Promise<CommandResult>;
@@ -120,6 +122,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       await get().loadConfig();
     }
     return result;
+  },
+
+  setConfig: (config: Config) => {
+    set({ config });
   },
 
   // Project operations

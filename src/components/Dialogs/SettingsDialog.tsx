@@ -7,6 +7,125 @@ import { DialogWrapper } from './DialogWrapper';
 import type { CacheStats } from '../../types/cache';
 import type { Config } from '../../types/config';
 
+interface ConfigChange {
+  path: string;
+  oldValue: string;
+  newValue: string;
+}
+
+/**
+ * Compute differences between two config objects
+ * Returns a list of changed paths with old and new values
+ */
+function computeConfigDiff(oldConfig: Config, newConfig: Config): ConfigChange[] {
+  const changes: ConfigChange[] = [];
+
+  // Check map.station
+  if (oldConfig.map.station.radius !== newConfig.map.station.radius) {
+    changes.push({
+      path: 'map.station.radius',
+      oldValue: String(oldConfig.map.station.radius),
+      newValue: String(newConfig.map.station.radius),
+    });
+  }
+  if (oldConfig.map.station.hit_area !== newConfig.map.station.hit_area) {
+    changes.push({
+      path: 'map.station.hit_area',
+      oldValue: String(oldConfig.map.station.hit_area),
+      newValue: String(newConfig.map.station.hit_area),
+    });
+  }
+
+  // Check map.shot
+  if (oldConfig.map.shot.width !== newConfig.map.shot.width) {
+    changes.push({
+      path: 'map.shot.width',
+      oldValue: String(oldConfig.map.shot.width),
+      newValue: String(newConfig.map.shot.width),
+    });
+  }
+  if (oldConfig.map.shot.hit_area !== newConfig.map.shot.hit_area) {
+    changes.push({
+      path: 'map.shot.hit_area',
+      oldValue: String(oldConfig.map.shot.hit_area),
+      newValue: String(newConfig.map.shot.hit_area),
+    });
+  }
+
+  // Check map.snap
+  if (oldConfig.map.snap.threshold !== newConfig.map.snap.threshold) {
+    changes.push({
+      path: 'map.snap.threshold',
+      oldValue: String(oldConfig.map.snap.threshold),
+      newValue: String(newConfig.map.snap.threshold),
+    });
+  }
+  if (oldConfig.map.snap.enabled_draw !== newConfig.map.snap.enabled_draw) {
+    changes.push({
+      path: 'map.snap.enabled_draw',
+      oldValue: String(oldConfig.map.snap.enabled_draw),
+      newValue: String(newConfig.map.snap.enabled_draw),
+    });
+  }
+  if (oldConfig.map.snap.enabled_merge !== newConfig.map.snap.enabled_merge) {
+    changes.push({
+      path: 'map.snap.enabled_merge',
+      oldValue: String(oldConfig.map.snap.enabled_merge),
+      newValue: String(newConfig.map.snap.enabled_merge),
+    });
+  }
+  if (oldConfig.map.snap.enabled_measure !== newConfig.map.snap.enabled_measure) {
+    changes.push({
+      path: 'map.snap.enabled_measure',
+      oldValue: String(oldConfig.map.snap.enabled_measure),
+      newValue: String(newConfig.map.snap.enabled_measure),
+    });
+  }
+
+  // Check debug.map
+  if (oldConfig.debug.map.show_hitboxes !== newConfig.debug.map.show_hitboxes) {
+    changes.push({
+      path: 'debug.map.show_hitboxes',
+      oldValue: String(oldConfig.debug.map.show_hitboxes),
+      newValue: String(newConfig.debug.map.show_hitboxes),
+    });
+  }
+  if (oldConfig.debug.map.log_hit_detection !== newConfig.debug.map.log_hit_detection) {
+    changes.push({
+      path: 'debug.map.log_hit_detection',
+      oldValue: String(oldConfig.debug.map.log_hit_detection),
+      newValue: String(newConfig.debug.map.log_hit_detection),
+    });
+  }
+
+  // Check cache settings
+  if (oldConfig.cache.tile_cache_enabled !== newConfig.cache.tile_cache_enabled) {
+    changes.push({
+      path: 'cache.tile_cache_enabled',
+      oldValue: String(oldConfig.cache.tile_cache_enabled),
+      newValue: String(newConfig.cache.tile_cache_enabled),
+    });
+  }
+  if (oldConfig.cache.tile_cache_max_mb !== newConfig.cache.tile_cache_max_mb) {
+    changes.push({
+      path: 'cache.tile_cache_max_mb',
+      oldValue: String(oldConfig.cache.tile_cache_max_mb),
+      newValue: String(newConfig.cache.tile_cache_max_mb),
+    });
+  }
+
+  // Check map.zoom_step
+  if (oldConfig.map.zoom_step !== newConfig.map.zoom_step) {
+    changes.push({
+      path: 'map.zoom_step',
+      oldValue: String(oldConfig.map.zoom_step),
+      newValue: String(newConfig.map.zoom_step),
+    });
+  }
+
+  return changes;
+}
+
 type SettingsTab = 'general' | 'cache';
 
 const MIN_CACHE_SIZE_MB = 100;
@@ -33,11 +152,12 @@ function clamp(value: number, min: number, max: number): number {
 
 export default function SettingsDialog() {
   const { closeDialog } = useUIStore();
-  const { config, updateConfig } = useProjectStore();
+  const { config, updateConfig, setConfig } = useProjectStore();
   const [activeTab, setActiveTab] = useState<SettingsTab>('cache');
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
   const [isLoadingStats, setIsLoadingStats] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [isReloading, setIsReloading] = useState(false);
   const [localConfig, setLocalConfig] = useState<Config | null>(config);
   const [isDirty, setIsDirty] = useState(false);
 
@@ -181,6 +301,39 @@ export default function SettingsDialog() {
     if (result.success) {
       setIsDirty(false);
       closeDialog();
+    }
+  };
+
+  // Reload config from disk
+  const handleReloadConfig = async () => {
+    if (!localConfig) return;
+
+    setIsReloading(true);
+    try {
+      const newConfig = await invoke<Config>('reload_config');
+      const changes = computeConfigDiff(localConfig, newConfig);
+
+      setLocalConfig(newConfig);
+      setMaxSizeInput(String(newConfig.cache.tile_cache_max_mb));
+      setConfig(newConfig); // Update store without persisting
+
+      if (!mountedRef.current) return;
+
+      if (changes.length > 0) {
+        const changeList = changes
+          .map((c) => `- ${c.path}: ${c.oldValue} -> ${c.newValue}`)
+          .join('\n');
+        alert(`Config reloaded:\n\n${changeList}`);
+      } else {
+        alert('Config reloaded (no changes)');
+      }
+    } catch (error) {
+      console.error('[SettingsDialog] Failed to reload config:', error);
+      alert(`Failed to reload config: ${error}`);
+    } finally {
+      if (mountedRef.current) {
+        setIsReloading(false);
+      }
     }
   };
 
@@ -335,16 +488,27 @@ export default function SettingsDialog() {
           </div>
 
           {/* Actions */}
-          <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-border">
-            <Button onClick={requestClose}>Cancel</Button>
+          <div className="flex justify-between pt-4 mt-4 border-t border-border">
             <Button
-              variant="primary"
-              onClick={handleSave}
-              disabled={!isDirty || !configLoaded}
-              data-testid="settings-save-button"
+              variant="secondary"
+              onClick={handleReloadConfig}
+              disabled={isDirty || !configLoaded || isReloading}
+              title={isDirty ? 'Save or discard local changes first' : 'Reload config from file'}
+              data-testid="reload-config-button"
             >
-              Save
+              {isReloading ? 'Reloading...' : 'Reload Config'}
             </Button>
+            <div className="flex gap-2">
+              <Button onClick={requestClose}>Cancel</Button>
+              <Button
+                variant="primary"
+                onClick={handleSave}
+                disabled={!isDirty || !configLoaded}
+                data-testid="settings-save-button"
+              >
+                Save
+              </Button>
+            </div>
           </div>
         </>
       )}
