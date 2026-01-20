@@ -36,6 +36,185 @@ export async function waitForMapReady(): Promise<void> {
 }
 
 /**
+ * Load a project fixture by name.
+ * Creates a new project with pre-defined survey data for testing.
+ *
+ * Available fixtures:
+ * - 'basic-survey': A simple survey with two sections containing basic shots
+ *
+ * @param fixtureName - The name of the fixture to load
+ */
+export async function loadProjectFixture(fixtureName: string): Promise<void> {
+  // Wait for E2E test helpers to be available
+  await browser.waitUntil(
+    async () => {
+      const hasHelpers = await browser.execute(() => {
+        return !!(window as { __E2E_TEST__?: unknown }).__E2E_TEST__;
+      });
+      return hasHelpers;
+    },
+    {
+      timeout: 10000,
+      timeoutMsg: 'E2E helpers not available on window',
+    }
+  );
+
+  // Define fixtures
+  const fixtures: Record<string, {
+    projectName: string;
+    sections: Array<{
+      name: string;
+      color: string;
+      shots: Array<{
+        azimuth_in: number;
+        azimuth_out: number;
+        length: number;
+        depth_in: number;
+        depth_out: number;
+      }>;
+    }>;
+  }> = {
+    'basic-survey': {
+      projectName: 'Basic Survey Test',
+      sections: [
+        {
+          name: 'Main Passage',
+          color: '#FF6B6B',
+          shots: [
+            { azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: 0, depth_out: -1 },
+            { azimuth_in: 90, azimuth_out: 90, length: 15, depth_in: -1, depth_out: -2 },
+            { azimuth_in: 60, azimuth_out: 60, length: 8, depth_in: -2, depth_out: -3 },
+          ],
+        },
+        {
+          name: 'Side Branch',
+          color: '#4ECDC4',
+          shots: [
+            { azimuth_in: 120, azimuth_out: 120, length: 5, depth_in: -1, depth_out: -1.5 },
+            { azimuth_in: 150, azimuth_out: 150, length: 7, depth_in: -1.5, depth_out: -2 },
+          ],
+        },
+      ],
+    },
+  };
+
+  const fixture = fixtures[fixtureName];
+  if (!fixture) {
+    throw new Error(`Unknown fixture: ${fixtureName}. Available: ${Object.keys(fixtures).join(', ')}`);
+  }
+
+  // Create new project
+  const createResult = await browser.executeAsync(
+    async (
+      projectName: string,
+      done: (result: { success: boolean; error?: string }) => void
+    ) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              createProject: (name: string) => Promise<{ success: boolean; error?: string }>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!e2e) {
+        done({ success: false, error: 'E2E helpers not found' });
+        return;
+      }
+
+      try {
+        const result = await e2e.projectStore.getState().createProject(projectName);
+        done(result);
+      } catch (err) {
+        done({ success: false, error: String(err) });
+      }
+    },
+    fixture.projectName
+  );
+
+  if (!createResult.success) {
+    throw new Error(`Failed to create project: ${createResult.error}`);
+  }
+
+  // Wait for SingleSystemView to appear
+  await browser.waitUntil(
+    async () => {
+      const canvas = await $('canvas');
+      return await canvas.isExisting();
+    },
+    {
+      timeout: 15000,
+      timeoutMsg: 'SingleSystemView did not appear after creating project',
+    }
+  );
+
+  // Create each section
+  for (const section of fixture.sections) {
+    const sectionResult = await browser.executeAsync(
+      async (
+        sectionData: {
+          name: string;
+          color: string;
+          shots: Array<{
+            azimuth_in: number;
+            azimuth_out: number;
+            length: number;
+            depth_in: number;
+            depth_out: number;
+          }>;
+        },
+        done: (result: { success: boolean; error?: string }) => void
+      ) => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            projectStore: {
+              getState: () => {
+                createSection: (data: {
+                  name: string;
+                  color: string;
+                  surveyor: string;
+                  date: string;
+                  shots: Array<{
+                    azimuth_in: number;
+                    azimuth_out: number;
+                    length: number;
+                    depth_in: number;
+                    depth_out: number;
+                  }>;
+                }) => Promise<{ success: boolean; error?: string }>;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+
+        if (!e2e) {
+          done({ success: false, error: 'E2E helpers not found' });
+          return;
+        }
+
+        try {
+          const result = await e2e.projectStore.getState().createSection({
+            ...sectionData,
+            surveyor: 'Test Surveyor',
+            date: new Date().toISOString().split('T')[0],
+          });
+          done(result);
+        } catch (err) {
+          done({ success: false, error: String(err) });
+        }
+      },
+      section
+    );
+
+    if (!sectionResult.success) {
+      throw new Error(`Failed to create section ${section.name}: ${sectionResult.error}`);
+    }
+  }
+}
+
+/**
  * Reset the application state - close any open dialogs and return to global view.
  * Call this in beforeEach to ensure clean test state.
  */
