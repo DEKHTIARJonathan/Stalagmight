@@ -138,8 +138,54 @@ describe('Toast Throttling', () => {
 - [ ] Tests for selection clearing on toggle (if logic is in store)
 - [ ] All unit tests pass: `pnpm test` or equivalent
 ## Done summary
-TBD
+# fn-3-e6v.8 Summary
 
+Created comprehensive unit tests for display toggle state logic in uiStore.
+
+## Test File Created
+- `src/store/__tests__/uiStore.displayToggles.test.ts`
+
+## Test Coverage (31 tests)
+
+### Display Toggle State (Default Values)
+- Tests all 11 display toggle defaults (showStations, showShots, etc.)
+- Tests gridSpacing default value
+
+### toggleDisplay Action
+- Tests toggle from true to false
+- Tests toggle from false to true  
+- Tests toggling all display keys independently
+
+### resetDisplaySettings Action
+- Tests resetting all display settings to defaults
+
+### Toggle Relationships
+- Tests showVirtualShots state preservation when showShots toggles
+- Tests showShotData state preservation when showShots toggles
+
+### Toast Throttling
+- Tests first toast shows immediately
+- Tests rapid toasts with same key are throttled
+- Tests toast shows after 5 second cooldown
+- Tests toast auto-clears after 3 seconds
+- Tests separate throttle tracking for different keys
+- Tests lastToastByKey tracking
+- Tests clearToast removes current toast
+
+### Selection Clearing
+- Tests clearSelectionByType clears only stations when type is station
+- Tests clearSelectionByType clears only shots when type is shot
+- Tests clearSelectionByType updates selection to last remaining item
+- Tests filterSelection removes items that fail predicate
+
+### Grid Spacing
+- Tests setGridSpacing updates gridSpacing value
+
+## Implementation Notes
+- Uses vitest testing framework consistent with existing tests
+- Uses fake timers for toast timing tests
+- Resets store state between tests for isolation
+- Handles Tauri invoke calls gracefully (warnings expected in test environment)
 ## Evidence
 - Commits:
 - Tests:
