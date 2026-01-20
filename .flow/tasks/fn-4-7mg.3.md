@@ -467,9 +467,8 @@ Station hitbox has priority over shot hitbox (existing behavior preserved). If b
 - [ ] Snap uses config.map.snap.* (migration)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Implemented unified click/contextmenu handlers for SurveyLayer that query both hitbox layers with station priority and proper nearest-to-click resolution using screen-space distance calculations.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: c6d26a27e3c96da5ddffd85120dbadc3f9ff54c5, 77a44d06992aece9333edcb55ab8bd8a91a5102c
+- Tests: pnpm tsc --noEmit, cargo test --manifest-path src-tauri/Cargo.toml, pnpm test:ui
 - PRs:

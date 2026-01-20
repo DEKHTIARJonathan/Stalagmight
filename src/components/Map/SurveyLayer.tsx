@@ -636,6 +636,15 @@ export default class SurveyLayer {
           section_id: sectionId as number,
           station_index: stationIndex as number,
         };
+        // Debug logging - only on click, NOT hover (prevents console spam)
+        if (this.config?.debug?.map?.log_hit_detection) {
+          console.log('[HitDetection] Station click', {
+            layer: this.stationsHitboxLayerId,
+            featureId: `${sectionId}:${stationIndex}`,
+            coordinates: e.lngLat,
+            featuresCount: stationFeatures.length,
+          });
+        }
         this.callbacks.onStationClick?.(ref, e);
         return;
       }
@@ -646,6 +655,15 @@ export default class SurveyLayer {
     if (nearestShot) {
       const { sectionId, shotId } = nearestShot.properties ?? {};
       if (sectionId !== undefined && shotId !== undefined) {
+        // Debug logging - only on click, NOT hover (prevents console spam)
+        if (this.config?.debug?.map?.log_hit_detection) {
+          console.log('[HitDetection] Shot click', {
+            layer: this.shotsHitboxLayerId,
+            featureId: `${sectionId}:${shotId}`,
+            coordinates: e.lngLat,
+            featuresCount: shotFeatures.length,
+          });
+        }
         this.callbacks.onShotClick?.(sectionId as number, shotId as number, e);
         return;
       }
@@ -673,6 +691,15 @@ export default class SurveyLayer {
           section_id: sectionId as number,
           station_index: stationIndex as number,
         };
+        // Debug logging - only on contextmenu, NOT hover (prevents console spam)
+        if (this.config?.debug?.map?.log_hit_detection) {
+          console.log('[HitDetection] Station context menu', {
+            layer: this.stationsHitboxLayerId,
+            featureId: `${sectionId}:${stationIndex}`,
+            coordinates: e.lngLat,
+            featuresCount: stationFeatures.length,
+          });
+        }
         this.callbacks.onContextMenu?.({ type: 'station', ref }, e);
         return;
       }
@@ -683,6 +710,15 @@ export default class SurveyLayer {
     if (nearestShot) {
       const { sectionId, shotId } = nearestShot.properties ?? {};
       if (sectionId !== undefined && shotId !== undefined) {
+        // Debug logging - only on contextmenu, NOT hover (prevents console spam)
+        if (this.config?.debug?.map?.log_hit_detection) {
+          console.log('[HitDetection] Shot context menu', {
+            layer: this.shotsHitboxLayerId,
+            featureId: `${sectionId}:${shotId}`,
+            coordinates: e.lngLat,
+            featuresCount: shotFeatures.length,
+          });
+        }
         this.callbacks.onContextMenu?.({ type: 'shot', sectionId: sectionId as number, shotId: shotId as number }, e);
         return;
       }
@@ -962,23 +998,69 @@ export default class SurveyLayer {
   }
 
   // Update debug visualization based on config
-  // ONLY ghost hitbox layers are used for debug visualization
-  // Real hitbox layers must stay functional (opacity 0.001) at all times
+  // Sets BOTH color AND opacity on all hitbox layers for debug mode
   private updateDebugVisualization(): void {
     if (!this.map) return;
 
     const showHitboxes = this.config?.debug?.map?.show_hitboxes ?? false;
+    const debugColor = 'rgba(255, 0, 0, 0.3)'; // Semi-transparent red
+    const transparentColor = 'rgba(0, 0, 0, 0)';
 
-    // Show/hide debug hitbox visualization using ONLY ghost hitbox layers
-    // Real hitbox layers stay invisible (opacity 0.001) - they are functional, not visual
+    // Station hitbox - MUST set both color AND opacity
+    if (this.map.getLayer(this.stationsHitboxLayerId)) {
+      this.map.setPaintProperty(
+        this.stationsHitboxLayerId,
+        'circle-color',
+        showHitboxes ? debugColor : transparentColor
+      );
+      this.map.setPaintProperty(
+        this.stationsHitboxLayerId,
+        'circle-opacity',
+        showHitboxes ? 1 : 0.001
+      );
+    }
+
+    // Shot hitbox - MUST set both color AND opacity
+    if (this.map.getLayer(this.shotsHitboxLayerId)) {
+      this.map.setPaintProperty(
+        this.shotsHitboxLayerId,
+        'line-color',
+        showHitboxes ? debugColor : transparentColor
+      );
+      this.map.setPaintProperty(
+        this.shotsHitboxLayerId,
+        'line-opacity',
+        showHitboxes ? 1 : 0.001
+      );
+    }
+
+    // Ghost station hitbox - MUST set both color AND opacity
     if (this.map.getLayer(this.ghostStationsHitboxLayerId)) {
-      this.map.setPaintProperty(this.ghostStationsHitboxLayerId, 'circle-opacity', showHitboxes ? 0.3 : 0);
+      this.map.setPaintProperty(
+        this.ghostStationsHitboxLayerId,
+        'circle-color',
+        showHitboxes ? debugColor : transparentColor
+      );
+      this.map.setPaintProperty(
+        this.ghostStationsHitboxLayerId,
+        'circle-opacity',
+        showHitboxes ? 1 : 0.001
+      );
     }
+
+    // Ghost shot hitbox - MUST set both color AND opacity
     if (this.map.getLayer(this.ghostShotsHitboxLayerId)) {
-      this.map.setPaintProperty(this.ghostShotsHitboxLayerId, 'line-opacity', showHitboxes ? 0.3 : 0);
+      this.map.setPaintProperty(
+        this.ghostShotsHitboxLayerId,
+        'line-color',
+        showHitboxes ? debugColor : transparentColor
+      );
+      this.map.setPaintProperty(
+        this.ghostShotsHitboxLayerId,
+        'line-opacity',
+        showHitboxes ? 1 : 0.001
+      );
     }
-    // Note: Real hitbox layers (stationsHitboxLayerId, shotsHitboxLayerId) are NOT modified
-    // They must always maintain opacity 0.001 for queryRenderedFeatures to work
   }
 
   // Set selected station (called from outside to sync with uiStore)

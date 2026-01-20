@@ -7,10 +7,22 @@
     "fn-4-7mg.2"
   ],
   "epic": "fn-4-7mg",
+  "evidence": {
+    "commits": [
+      "c6d26a27e3c96da5ddffd85120dbadc3f9ff54c5",
+      "77a44d06992aece9333edcb55ab8bd8a91a5102c"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "cargo test --manifest-path src-tauri/Cargo.toml",
+      "pnpm test:ui"
+    ]
+  },
   "id": "fn-4-7mg.3",
   "priority": null,
   "spec_path": ".flow/tasks/fn-4-7mg.3.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Update click/hover event handlers to use hitbox layers",
-  "updated_at": "2026-01-20T20:49:21.307864Z"
+  "updated_at": "2026-01-20T21:05:26.491903Z"
 }
