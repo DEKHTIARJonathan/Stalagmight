@@ -982,6 +982,8 @@ palette = [
 [map]
 satellite_provider = "openstreetmap"  # "openstreetmap" | "mapbox" | "bing"
 satellite_enabled = false
+# GPS origin for satellite tile alignment (default: Florida Keys)
+satellite_gps_origin = { latitude = 24.55, longitude = -81.78 }
 snap_threshold_pixels = 10
 zoom_default = 15
 zoom_min = 1
@@ -1068,7 +1070,7 @@ Tabbed modal dialog accessible via Edit > Settings menu only (no keyboard shortc
 interface SettingsDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  initialTab?: 'display' | 'validation' | 'export' | 'about';
+  initialTab?: 'general' | 'cache';
 }
 ```
 
@@ -1339,19 +1341,41 @@ const virtualizer = useVirtualizer({
 
 ### 13.5 Tile Caching
 
-```rust
-// Cache structure
-tile_cache/
-├── satellite/
-│   ├── {z}/{x}/{y}.png
-└── cache_index.json
+Satellite tiles are cached using SQLite storage for offline access:
 
-// LRU eviction when over max size
+```
+~/.cache/cavechef/tile_cache.db
+
+-- Schema
+CREATE TABLE tiles (
+    provider TEXT,
+    z INTEGER,
+    y INTEGER,
+    x INTEGER,
+    data BLOB,
+    content_type TEXT,
+    fetched_at INTEGER,
+    accessed_at INTEGER,
+    PRIMARY KEY (provider, z, y, x)
+);
 ```
 
-- Default max: 500 MB
-- Configurable in settings
-- Auto-cache as user views tiles
+**Cache Flow:**
+1. MapLibre requests tile via `cavechef-tiles://esri/{z}/{y}/{x}` protocol
+2. Frontend calls `invoke('fetch_tile', {provider, z, y, x})`
+3. Backend checks SQLite cache → returns if fresh
+4. On cache miss: fetch from ESRI servers → store in cache → return
+5. LRU eviction when cache exceeds max size
+
+**Configuration** (in `[cache]` section):
+- `tile_cache_enabled`: Enable/disable caching (default: true)
+- `tile_cache_max_mb`: Maximum cache size (default: 500 MB)
+- `tile_ttl_days`: Days before tiles considered stale (default: 30)
+
+**IPC Commands:**
+- `get_cache_stats`: Returns tile count, size, per-provider breakdown
+- `clear_tile_cache`: Clears all or provider-specific tiles
+- `fetch_tile`: Fetches a tile (cache-first, network fallback)
 
 ---
 
