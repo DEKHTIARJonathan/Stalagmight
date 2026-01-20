@@ -25,6 +25,13 @@ interface MoveDragState {
   currentLngLat: { lng: number; lat: number };
 }
 
+// Helper to convert StationRef to highlight ID format (section_id:station_index)
+// Moved outside component to avoid recreating on each render
+const stationRefToId = (ref: { section_id: number; station_index: number } | null): string | null => {
+  if (!ref) return null;
+  return `${ref.section_id}:${ref.station_index}`;
+};
+
 export default function MapCanvas() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
@@ -79,8 +86,6 @@ export default function MapCanvas() {
     clearSelectionByType,
     filterSelection,
     clearMergeStations,
-    clearMeasure,
-    setDrawFromStation,
     requestFitToBounds,
     clearFitToBoundsRequest,
     snappedStation,
@@ -96,6 +101,8 @@ export default function MapCanvas() {
   } = useUIStore();
 
   // Snap-to-station detection
+  // Note: Snap detection works even when stations are hidden - the highlight layer
+  // will show the snapped station. Merge tool is an exception (blocked when hidden).
   const checkSnapToStation = useCallback(
     (screenX: number, screenY: number) => {
       if (!map.current || !config) {
@@ -103,17 +110,12 @@ export default function MapCanvas() {
         return;
       }
 
-      // Don't snap when stations are hidden
-      if (!showStations) {
-        setSnappedStation(null);
-        return;
-      }
-
       // Check if snap is enabled for the current tool
+      // Note: Merge requires stations to be visible (can't select merge targets when hidden)
       const snapConfig = config.snap;
       const shouldSnap =
         (activeTool === 'draw' && snapConfig.enabled_draw) ||
-        (activeTool === 'merge' && snapConfig.enabled_merge) ||
+        (activeTool === 'merge' && snapConfig.enabled_merge && showStations) ||
         (activeTool === 'measure' && snapConfig.enabled_measure);
 
       if (!shouldSnap) {
@@ -632,12 +634,6 @@ export default function MapCanvas() {
     surveyLayerRef.current.setSnappedStation(snappedStation);
   }, [snappedStation]);
 
-  // Helper to convert StationRef to highlight ID format (section_id:station_index)
-  const stationRefToId = (ref: { section_id: number; station_index: number } | null): string | null => {
-    if (!ref) return null;
-    return `${ref.section_id}:${ref.station_index}`;
-  };
-
   // Sync highlight layer with snap/draw/merge state
   // Shows snapped/origin stations even when stations layer is hidden
   useEffect(() => {
@@ -696,27 +692,24 @@ export default function MapCanvas() {
     surveyLayerRef.current.setShowVirtualShots(showShots && showVirtualShots);
   }, [showVirtualShots, showShots, mapLoaded]);
 
-  // Clear station selection, hover, and cancel station operations when stations hidden
-  // Note: Toast notifications for canceled operations will be added in task fn-3-e6v.6
+  // Clear station selection, hover, and cancel merge when stations hidden
+  // Note: Draw/Measure/Snap operations continue to work - highlight layer shows snapped stations
   useEffect(() => {
     if (!showStations) {
-      // Clear station selection and hover
+      // Clear station selection and hover (these require visible stations to interact)
       clearSelectionByType('station');
       setHoveredStation(null);
-      // Use targeted clears instead of clearAllInteractionState to preserve shot state
       surveyLayerRef.current?.clearStationHover();
-      surveyLayerRef.current?.clearSnappedStation();
-      // Cancel station-driven operations
+      // Cancel merge (requires visible stations to select targets)
       clearMergeStations();
-      clearMeasure();
-      setDrawFromStation(null);
-      setSnappedStation(null);
       // Cancel placement mode properly (calls onCancel callback and clears cursor)
       if (placementMode) {
         handlePlacementCancel();
       }
+      // Note: Do NOT clear drawFromStation, snappedStation, or measure state
+      // These operations work with hidden stations - highlight layer shows them
     }
-  }, [showStations, clearSelectionByType, setHoveredStation, clearMergeStations, clearMeasure, setDrawFromStation, setSnappedStation, placementMode, handlePlacementCancel]);
+  }, [showStations, clearSelectionByType, setHoveredStation, clearMergeStations, placementMode, handlePlacementCancel]);
 
   // Clear shot selection and hover when shots visibility changes to OFF
   useEffect(() => {
