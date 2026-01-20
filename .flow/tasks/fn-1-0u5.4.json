@@ -7,10 +7,18 @@
     "fn-1-0u5.2"
   ],
   "epic": "fn-1-0u5",
+  "evidence": {
+    "build": "cargo build: success",
+    "commits": [
+      "88a2f71",
+      "11503d3"
+    ],
+    "tests": "cargo test: 76 passed"
+  },
   "id": "fn-1-0u5.4",
   "priority": null,
   "spec_path": ".flow/tasks/fn-1-0u5.4.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add cache IPC commands",
-  "updated_at": "2026-01-20T07:50:27.868755Z"
+  "updated_at": "2026-01-20T08:00:21.107263Z"
 }
