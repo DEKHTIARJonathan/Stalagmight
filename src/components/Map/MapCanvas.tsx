@@ -70,8 +70,10 @@ export default function MapCanvas() {
     showVirtualShots,
     selection,
     mergeStationA,
+    mergeStationB,
     measureStart,
     measureEnd,
+    drawFromStation,
     addToSelection,
     clearSelection,
     clearSelectionByType,
@@ -629,6 +631,34 @@ export default function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setSnappedStation(snappedStation);
   }, [snappedStation]);
+
+  // Helper to convert StationRef to highlight ID format (section_id:station_index)
+  const stationRefToId = (ref: { section_id: number; station_index: number } | null): string | null => {
+    if (!ref) return null;
+    return `${ref.section_id}:${ref.station_index}`;
+  };
+
+  // Sync highlight layer with snap/draw/merge state
+  // Shows snapped/origin stations even when stations layer is hidden
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+
+    const highlightIds: string[] = [];
+
+    const snappedId = stationRefToId(snappedStation);
+    if (snappedId) highlightIds.push(snappedId);
+
+    const drawId = stationRefToId(drawFromStation);
+    if (drawId && !highlightIds.includes(drawId)) highlightIds.push(drawId);
+
+    const mergeAId = stationRefToId(mergeStationA);
+    if (mergeAId && !highlightIds.includes(mergeAId)) highlightIds.push(mergeAId);
+
+    const mergeBId = stationRefToId(mergeStationB);
+    if (mergeBId && !highlightIds.includes(mergeBId)) highlightIds.push(mergeBId);
+
+    surveyLayerRef.current.setHighlightedStations(highlightIds);
+  }, [snappedStation, drawFromStation, mergeStationA, mergeStationB, mapLoaded]);
 
   // Sync shot data labels visibility with SurveyLayer (gated by showShots)
   useEffect(() => {
