@@ -437,9 +437,9 @@ export default class SurveyLayer {
         'visibility': 'none', // Start hidden, controlled by setShowShotLabels
       },
       paint: {
-        'text-color': '#ffffff',
+        'text-color': ['get', 'color'], // Dynamic color for depth gradient support
         'text-halo-color': '#000000',
-        'text-halo-width': 1.5,
+        'text-halo-width': 2, // Increased for readability with depth colors
         'text-opacity': [
           'interpolate',
           ['linear'],
@@ -515,9 +515,9 @@ export default class SurveyLayer {
         'visibility': 'none', // Start hidden, controlled by setShowStationLabels
       },
       paint: {
-        'text-color': '#ffffff',
+        'text-color': ['get', 'color'], // Dynamic color for depth gradient support
         'text-halo-color': '#000000',
-        'text-halo-width': 1.5,
+        'text-halo-width': 2, // Increased for readability with depth colors
         'text-opacity': [
           'interpolate',
           ['linear'],
@@ -1379,6 +1379,9 @@ export default class SurveyLayer {
           // Format: "45° 3.2m -12.5m" (azimuth, length, depth)
           const label = `${shot.azimuth_in.toFixed(0)}° ${shot.length.toFixed(1)}m ${labelDepth.toFixed(1)}m`;
 
+          // Shot label color matches shot color (depth gradient or section color)
+          const shotLabelColor = shotColor;
+
           shotLabelFeatures.push({
             type: 'Feature',
             geometry: {
@@ -1390,6 +1393,7 @@ export default class SurveyLayer {
               index: globalShotIndex,
               sectionId: section.id,
               shotId: shot.id,
+              color: shotLabelColor,
             },
           });
 
@@ -1503,6 +1507,13 @@ export default class SurveyLayer {
 
     const stationLabelFeatures: GeoJSON.Feature[] = stations.map((station, globalOrdinal) => {
       const isFirstInSection = station.station_ref.station_index === sectionMinIndices.get(station.station_ref.section_id);
+
+      // Calculate station label color - use depth gradient if enabled, otherwise default white
+      const stationLabelDepthColor = this.showDepthGradient
+        ? getDepthColor(station.coordinates.z, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)
+        : null;
+      const stationLabelColor = stationLabelDepthColor ?? '#ffffff';
+
       return {
         type: 'Feature',
         geometry: {
@@ -1515,6 +1526,7 @@ export default class SurveyLayer {
           sectionId: station.station_ref.section_id,
           globalOrdinal, // Stable sequential index for filtering
           isFirstInSection, // Always show first station in section
+          color: stationLabelColor,
         },
       };
     });
