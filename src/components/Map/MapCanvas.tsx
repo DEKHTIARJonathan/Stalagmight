@@ -328,10 +328,10 @@ export default function MapCanvas() {
 
     // Only process if box is large enough (not just a click)
     if (maxX - minX > 5 && maxY - minY > 5) {
-      // Query stations in the box
+      // Query stations in the box using hitbox layer (larger clickable area)
       const features = map.current.queryRenderedFeatures(
         [[minX, minY], [maxX, maxY]],
-        { layers: ['survey-stations'] }
+        { layers: ['survey-stations-hitbox'] }
       );
 
       if (features.length > 0) {

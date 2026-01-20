@@ -488,9 +488,8 @@ From bottom to top:
 - [ ] Satellite insertion anchors on survey-shots-hitbox (first/lowest layer)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added transparent hitbox layers to SurveyLayer with config-based sizing for improved click detection. Implemented visual state scaling with correct priority order (snapped > zeroDatum > hovered > selected > base), non-interactive ghost hitbox layers for debug visualization, and proper layer ordering with station hitboxes above shot hitboxes.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 0f340edd9acdca5a272b94e630186f41cebbcb2d, d59bbb3, 1bdad8b
+- Tests: pnpm tsc --noEmit
 - PRs:

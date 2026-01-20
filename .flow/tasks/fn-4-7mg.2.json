@@ -7,10 +7,21 @@
     "fn-4-7mg.1"
   ],
   "epic": "fn-4-7mg",
+  "evidence": {
+    "commits": [
+      "0f340edd9acdca5a272b94e630186f41cebbcb2d",
+      "d59bbb3",
+      "1bdad8b"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-4-7mg.2",
   "priority": null,
   "spec_path": ".flow/tasks/fn-4-7mg.2.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add transparent hitbox layers to SurveyLayer",
-  "updated_at": "2026-01-20T20:16:47.721184Z"
+  "updated_at": "2026-01-20T20:48:06.971458Z"
 }
