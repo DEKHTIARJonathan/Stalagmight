@@ -316,6 +316,74 @@ export default function MapCanvas() {
     setBoxSelect({ start: null, end: null });
   }, [boxSelect, clearSelection, addToSelection]);
 
+  // Zoom box handlers (for click-to-zoom and box zoom in task 3)
+  const handleZoomBoxStart = useCallback(
+    (e: React.MouseEvent) => {
+      if (activeTool !== 'zoom') return;
+      if (!mapContainer.current) return;
+
+      // Only start on left click, not when Ctrl is held (Ctrl+drag is for panning)
+      if (e.button !== 0 || e.ctrlKey) return;
+
+      const rect = mapContainer.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      setZoomBox({ start: { x, y }, end: { x, y } });
+    },
+    [activeTool]
+  );
+
+  const handleZoomBoxMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!zoomBox.start || !mapContainer.current) return;
+
+      const rect = mapContainer.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      setZoomBox((prev) => ({ ...prev, end: { x, y } }));
+    },
+    [zoomBox.start]
+  );
+
+  const handleZoomBoxEnd = useCallback(() => {
+    if (!zoomBox.start || !zoomBox.end || !map.current) {
+      setZoomBox({ start: null, end: null });
+      return;
+    }
+
+    const minX = Math.min(zoomBox.start.x, zoomBox.end.x);
+    const maxX = Math.max(zoomBox.start.x, zoomBox.end.x);
+    const minY = Math.min(zoomBox.start.y, zoomBox.end.y);
+    const maxY = Math.max(zoomBox.start.y, zoomBox.end.y);
+
+    // For small drags (<10px), treat as click-to-zoom
+    // Task 3 will enhance with full box zoom for larger drags
+    if (maxX - minX < 10 && maxY - minY < 10) {
+      // Click zoom-in at center of box (effectively the click point)
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+      const clickLngLat = map.current.unproject([centerX, centerY]);
+
+      const step = config?.map.zoom_step ?? 1.0;
+      const maxZoom = config?.map.zoom_max ?? 22;
+      const currentZoom = map.current.getZoom();
+      const targetZoom = Math.min(maxZoom, currentZoom + step);
+
+      if (targetZoom !== currentZoom) {
+        map.current.easeTo({
+          center: clickLngLat,
+          zoom: targetZoom,
+          duration: 300,
+        });
+      }
+    }
+    // Task 3 will add: else { box zoom to bounds }
+
+    setZoomBox({ start: null, end: null });
+  }, [zoomBox, config]);
+
   // Move drag handlers
   const handleMoveDragMove = useCallback(
     (e: React.MouseEvent) => {
@@ -754,32 +822,12 @@ export default function MapCanvas() {
     if (!mapElement || !map.current || activeTool !== 'zoom') return;
 
     // Left-click capture: stop propagation to prevent SurveyLayer selection
-    // and perform zoom-in at click point
+    // Actual zoom is handled by zoom box end handler (handleZoomBoxEnd)
     const handleClickCapture = (e: MouseEvent) => {
       if (e.button === 0) {
         e.stopPropagation();
         e.stopImmediatePropagation();
-
-        // Zoom-in at click point (task 3 will enhance with box zoom for larger drags)
-        if (!map.current || !mapContainer.current) return;
-
-        const currentZoom = map.current.getZoom();
-        const targetZoom = Math.min(zoomMax, currentZoom + zoomStep);
-
-        // Early return if at max zoom (no recenter)
-        if (targetZoom === currentZoom) return;
-
-        // Convert click to map coords
-        const rect = mapContainer.current.getBoundingClientRect();
-        const screenX = e.clientX - rect.left;
-        const screenY = e.clientY - rect.top;
-        const clickLngLat = map.current.unproject([screenX, screenY]);
-
-        map.current.easeTo({
-          center: clickLngLat,
-          zoom: targetZoom,
-          duration: 300,
-        });
+        // Zoom-in is handled by handleZoomBoxEnd for <10px drags
       }
     };
 
@@ -1012,6 +1060,8 @@ export default function MapCanvas() {
 
       if (moveDrag) {
         handleMoveDragMove(e);
+      } else if (zoomBox.start) {
+        handleZoomBoxMove(e);
       } else if (boxSelect.start) {
         handleBoxSelectMove(e);
       }
@@ -1024,16 +1074,18 @@ export default function MapCanvas() {
         checkSnapToStation(x, y);
       }
     },
-    [moveDrag, boxSelect.start, handleMoveDragMove, handleBoxSelectMove, checkSnapToStation, placementMode, checkPlacementSnap, updatePlacementCursor, updatePlacementSnap]
+    [moveDrag, zoomBox.start, boxSelect.start, handleMoveDragMove, handleZoomBoxMove, handleBoxSelectMove, checkSnapToStation, placementMode, checkPlacementSnap, updatePlacementCursor, updatePlacementSnap]
   );
 
   const handleMouseUp = useCallback(() => {
     if (moveDrag) {
       handleMoveDragEnd();
+    } else if (zoomBox.start) {
+      handleZoomBoxEnd();
     } else if (boxSelect.start) {
       handleBoxSelectEnd();
     }
-  }, [moveDrag, boxSelect.start, handleMoveDragEnd, handleBoxSelectEnd]);
+  }, [moveDrag, zoomBox.start, boxSelect.start, handleMoveDragEnd, handleZoomBoxEnd, handleBoxSelectEnd]);
 
   // Handle placement mode click
   const handlePlacementClick = useCallback(
@@ -1062,11 +1114,25 @@ export default function MapCanvas() {
     [placementMode, handlePlacementCancel]
   );
 
+  // Determine mousedown handler based on mode and tool
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (placementMode) {
+        handlePlacementClick(e);
+      } else if (activeTool === 'zoom') {
+        handleZoomBoxStart(e);
+      } else {
+        handleBoxSelectStart(e);
+      }
+    },
+    [placementMode, activeTool, handlePlacementClick, handleZoomBoxStart, handleBoxSelectStart]
+  );
+
   // Mouse handlers always attached - they check e.ctrlKey internally to decide behavior
   return (
     <div
       className="relative w-full h-full"
-      onMouseDown={placementMode ? handlePlacementClick : handleBoxSelectStart}
+      onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
