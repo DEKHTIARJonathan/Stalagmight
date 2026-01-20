@@ -1889,7 +1889,7 @@ impl AppState {
     }
 
     /// Update config
-    pub fn update_config(&self, config: Config) -> Result<()> {
+    pub fn update_config(&self, mut config: Config) -> Result<()> {
         config.save()?;
         if let Ok(mut cfg) = self.config.lock() {
             *cfg = config;

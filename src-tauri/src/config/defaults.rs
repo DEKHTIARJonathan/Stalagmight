@@ -100,6 +100,7 @@ impl Default for MapConfig {
             zoom_default: 15,
             zoom_min: 1,
             zoom_max: 22,
+            zoom_step: 1.0,
             controls: MapControlsConfig::default(),
         }
     }

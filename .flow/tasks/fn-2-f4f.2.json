@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-20T12:04:01.970797Z",
+  "depends_on": [
+    "fn-2-f4f.1"
+  ],
+  "epic": "fn-2-f4f",
+  "id": "fn-2-f4f.2",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-2-f4f.2.md",
+  "status": "todo",
+  "title": "Implement click-to-zoom behavior",
+  "updated_at": "2026-01-20T12:40:56.184401Z"
+}
