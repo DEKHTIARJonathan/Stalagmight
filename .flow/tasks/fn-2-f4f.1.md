@@ -259,9 +259,8 @@ Forward compatibility: if a user has an older config file without `zoom_step`, s
 - [ ] cargo test passes
 - [ ] pnpm tsc --noEmit passes
 ## Done summary
-TBD
-
+Added zoom_step configuration to Rust MapConfig, TypeScript types, defaults, and Playwright mocks with proper NaN/inf handling in normalize().
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 8e6565bc0ad9c7cdff1e8f1aafb2fa23214d26e7, 31341862740b0ab9754ddb5b09f37083ff5a7d26
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, pnpm tsc --noEmit, pnpm test:ui
 - PRs:

@@ -18,3 +18,6 @@ Regex alternations with different group positions create brittle code - use expl
 
 ## 2026-01-20 manual [pitfall]
 In SQLite queries, distinguish QueryReturnedNoRows (expected miss) from other errors (corruption/IO) - don't mask all errors with unwrap_or(default)
+
+## 2026-01-20 manual [pitfall]
+f64::clamp does not handle NaN/inf - always check is_finite() first when normalizing user-supplied floats

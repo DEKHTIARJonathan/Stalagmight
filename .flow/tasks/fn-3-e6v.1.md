@@ -1,8 +1,38 @@
 # fn-3-e6v.1 Add showShots state and Shots toggle to DisplayMenu
 
 ## Description
-Add `showShots` boolean state to uiStore and the "Shots" toggle to DisplayMenu.
+Add `showShots` state and "Shots" toggle - complete implementation.
 
+## Files to Modify (Complete Checklist)
+
+### 1. `src/store/uiStore.ts`
+- **~L143**: Add `showShots: boolean` to UIState interface
+- **~L216-226**: Add `'showShots'` to `DisplayToggleKey` type union
+- **~L349**: Add `showShots: true` to initial state defaults
+- **~L397-403**: Verify `save_display_setting` handles new key (should work automatically)
+- If `loadDisplaySettings` exists, verify it handles the key
+- If reset logic exists, include `showShots`
+
+### 2. `src/components/SingleSystemView/DisplayMenu.tsx`
+- **~L11-32**: Add to `displayOptions` array:
+  ```typescript
+  { key: 'showShots', label: 'Shots', description: 'Show survey shot lines' }
+  ```
+- Position above "Virtual Shots" entry
+
+### 3. `src/components/Map/MapCanvas.tsx`
+- Destructure `showShots` from uiStore (wherever other display toggles are destructured)
+
+### 4. Tests (check for IPC mocks)
+- If Playwright tests mock display settings IPC, ensure they handle `showShots`
+
+## Implementation Notes
+
+Follow exact pattern of existing `showStations`:
+- Same type in UIState interface
+- Same inclusion in DisplayToggleKey
+- Same default value pattern
+- Same persistence handling
 ## Files to Modify
 
 ### `src/store/uiStore.ts`
@@ -49,12 +79,13 @@ export type DisplayToggleKey =
 ## Depends On
 Nothing - this is a foundational task.
 ## Acceptance
-- [ ] `showShots: boolean` exists in UIState interface (uiStore.ts ~L143)
-- [ ] `showShots` included in `DisplayToggleKey` type union (uiStore.ts ~L216)
-- [ ] `showShots: true` in initial state (uiStore.ts ~L349)
-- [ ] "Shots" toggle appears in Display menu above "Virtual Shots"
-- [ ] Toggle checkbox correctly reflects and updates store state
-- [ ] `pnpm tsc --noEmit` passes
+- [ ] `showShots: boolean` in UIState interface
+- [ ] `'showShots'` in DisplayToggleKey union type
+- [ ] `showShots: true` in initial state defaults
+- [ ] "Shots" toggle in DisplayMenu above "Virtual Shots"
+- [ ] Toggle checkbox correctly updates store state
+- [ ] Persistence works (verify via dev tools or test)
+- [ ] No TypeScript errors: `pnpm tsc --noEmit`
 ## Done summary
 TBD
 

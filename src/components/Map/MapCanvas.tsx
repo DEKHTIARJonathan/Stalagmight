@@ -569,7 +569,8 @@ export default function MapCanvas() {
 
     // If hovering over a feature, SurveyLayer sets cursor to 'pointer'
     // Otherwise, set cursor based on active tool
-    if (!isHoveringFeature) {
+    // Force zoom-in cursor for zoom tool even when hovering over features
+    if (!isHoveringFeature || activeTool === 'zoom') {
       // In supported tools with Ctrl held, show grab cursor for panning
       if (CTRL_PAN_TOOLS.includes(activeTool) && ctrlHeld) {
         map.current.getCanvas().style.cursor = 'grab';
@@ -584,7 +585,7 @@ export default function MapCanvas() {
   useEffect(() => {
     if (!map.current) return;
 
-    const noPanTools = ['select', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station'];
+    const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station'];
 
     if (noPanTools.includes(activeTool)) {
       map.current.dragPan.disable();
@@ -592,6 +593,23 @@ export default function MapCanvas() {
       map.current.dragPan.enable();
     }
   }, [activeTool]);
+
+  // Toggle doubleClickZoom based on active tool (disable for zoom tool, enable otherwise)
+  useEffect(() => {
+    if (!map.current) return;
+    if (activeTool === 'zoom') {
+      map.current.doubleClickZoom.disable();
+    } else {
+      map.current.doubleClickZoom.enable();
+    }
+  }, [activeTool]);
+
+  // Set map zoom limits from config
+  useEffect(() => {
+    if (!map.current || !config) return;
+    map.current.setMinZoom(config.map.zoom_min ?? 0);
+    map.current.setMaxZoom(config.map.zoom_max ?? 22);
+  }, [config]);
 
   // Track Ctrl key for cursor updates and box select cancellation
   useEffect(() => {
@@ -718,6 +736,82 @@ export default function MapCanvas() {
       window.removeEventListener('mouseup', handleMouseUpGlobal);
     };
   }, [activeTool]);
+
+  // Zoom tool capture handlers - intercept clicks before SurveyLayer to prevent selection
+  // and handle right-click zoom out behavior
+  useEffect(() => {
+    const mapElement = mapContainer.current;
+    if (!mapElement || !map.current || activeTool !== 'zoom') return;
+
+    const zoomStep = config?.map.zoom_step ?? 1.0;
+    const minZoom = config?.map.zoom_min ?? 0;
+    const maxZoom = config?.map.zoom_max ?? 22;
+
+    // Left-click capture: stop propagation to prevent SurveyLayer selection
+    const handleClickCapture = (e: MouseEvent) => {
+      if (e.button === 0 && !e.ctrlKey) {
+        e.stopPropagation();
+        // Actual zoom-in on click (if not dragging for box zoom)
+        // For simple clicks, zoom in at click point
+        if (!map.current || !mapContainer.current) return;
+
+        const currentZoom = map.current.getZoom();
+        const targetZoom = Math.min(maxZoom, currentZoom + zoomStep);
+
+        // Early return if at max zoom (no recenter)
+        if (targetZoom === currentZoom) return;
+
+        // Convert click to map coords
+        const rect = mapContainer.current.getBoundingClientRect();
+        const screenX = e.clientX - rect.left;
+        const screenY = e.clientY - rect.top;
+        const clickLngLat = map.current.unproject([screenX, screenY]);
+
+        map.current.easeTo({
+          center: clickLngLat,
+          zoom: targetZoom,
+          duration: 300,
+        });
+      }
+    };
+
+    // Right-click capture: zoom out at click point
+    const handleContextMenuCapture = (e: MouseEvent) => {
+      // Don't intercept during placement mode
+      if (placementMode) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (!map.current || !mapContainer.current) return;
+
+      const currentZoom = map.current.getZoom();
+      const targetZoom = Math.max(minZoom, currentZoom - zoomStep);
+
+      // Early return if at min zoom (no recenter)
+      if (targetZoom === currentZoom) return;
+
+      // Convert click to map coords
+      const rect = mapContainer.current.getBoundingClientRect();
+      const screenX = e.clientX - rect.left;
+      const screenY = e.clientY - rect.top;
+      const clickLngLat = map.current.unproject([screenX, screenY]);
+
+      map.current.easeTo({
+        center: clickLngLat,
+        zoom: targetZoom,
+        duration: 300,
+      });
+    };
+
+    mapElement.addEventListener('click', handleClickCapture, { capture: true });
+    mapElement.addEventListener('contextmenu', handleContextMenuCapture, { capture: true });
+
+    return () => {
+      mapElement.removeEventListener('click', handleClickCapture, { capture: true });
+      mapElement.removeEventListener('contextmenu', handleContextMenuCapture, { capture: true });
+    };
+  }, [activeTool, config, placementMode]);
 
   // Get satellite tile URL based on provider config
   // Uses custom cavechef-tiles:// protocol for offline caching
@@ -848,7 +942,7 @@ export default function MapCanvas() {
       map.current.dragPan.disable();
     } else {
       // Re-enable drag pan when placement mode ends (unless current tool should disable it)
-      const noPanTools = ['select', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station'];
+      const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station'];
       if (!noPanTools.includes(activeTool)) {
         map.current.dragPan.enable();
       }

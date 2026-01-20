@@ -1,8 +1,128 @@
 # fn-3-e6v.7 Show snapped/origin stations during Draw/Merge/Measure
 
 ## Description
-Show snapped/origin stations during Draw/Merge/Measure operations.
+Show snapped/origin stations during Draw/Merge/Measure using highlight layer.
 
+## File to Modify: `src/components/Map/MapCanvas.tsx`
+
+### Understanding Station IDs
+
+Station features now have compound `id` property: `${sectionId}:${stationIndex}`
+
+The `snappedStation`, `drawFromStation`, etc. state may use a different format (e.g., just the index or a StationId type). Need to ensure the format matches.
+
+**Option A**: If state already uses `${sectionId}:${stationIndex}` format, use directly.
+**Option B**: If state uses different format, convert when calling `setHighlightedStations`.
+
+### Implementation
+
+```typescript
+// Helper to convert station state to highlight id
+const getHighlightId = (sectionId: string, stationIndex: number): string => {
+  return \`\${sectionId}:\${stationIndex}\`;
+};
+
+// Update highlight layer when snap/draw state changes
+useEffect(() => {
+  if (!surveyLayerRef.current) return;
+  
+  const highlightIds: string[] = [];
+  
+  // Add snapped station
+  if (snappedStation) {
+    // Convert from state format to compound id format
+    highlightIds.push(getHighlightId(snappedStation.sectionId, snappedStation.index));
+  }
+  
+  // Add draw origin
+  if (drawFromStation) {
+    const id = getHighlightId(drawFromStation.sectionId, drawFromStation.index);
+    if (!highlightIds.includes(id)) highlightIds.push(id);
+  }
+  
+  // Add merge stations
+  if (mergeStationA) {
+    const id = getHighlightId(mergeStationA.sectionId, mergeStationA.index);
+    if (!highlightIds.includes(id)) highlightIds.push(id);
+  }
+  if (mergeStationB) {
+    const id = getHighlightId(mergeStationB.sectionId, mergeStationB.index);
+    if (!highlightIds.includes(id)) highlightIds.push(id);
+  }
+  
+  surveyLayerRef.current.setHighlightedStations(highlightIds);
+}, [snappedStation, drawFromStation, mergeStationA, mergeStationB, mapLoaded]);
+```
+
+### How It Works
+
+1. User hides stations via Display menu
+2. `survey-stations` layer becomes invisible
+3. User starts Draw tool, moves cursor near station
+4. Snap detection finds station (iterates array directly)
+5. `snappedStation` state is set
+6. useEffect triggers, converts to compound id, calls `setHighlightedStations`
+7. `survey-stations-highlight` layer filter updates to show that station
+8. Snapped station visible via highlight layer (cyan, larger)
+9. User completes operation
+10. State clears, highlight clears
+## Key Insight
+
+When `survey-stations` layer visibility is `none`, we CANNOT make individual stations visible by changing their style. Instead, we use a dedicated `survey-stations-highlight` layer that is ALWAYS visible and shows only the currently snapped/active stations.
+
+## Files to Modify
+
+### `src/components/Map/MapCanvas.tsx`
+
+**Sync highlight layer with snap/draw state:**
+
+```typescript
+// Update highlight layer when snapped station or draw origin changes
+useEffect(() => {
+  if (!surveyLayerRef.current) return;
+  
+  const highlightIds: string[] = [];
+  if (snappedStation) highlightIds.push(snappedStation);
+  if (drawFromStation && !highlightIds.includes(drawFromStation)) {
+    highlightIds.push(drawFromStation);
+  }
+  // For merge, both stations should be highlighted
+  if (mergeStationA && !highlightIds.includes(mergeStationA)) {
+    highlightIds.push(mergeStationA);
+  }
+  if (mergeStationB && !highlightIds.includes(mergeStationB)) {
+    highlightIds.push(mergeStationB);
+  }
+  
+  surveyLayerRef.current.setHighlightedStations(highlightIds);
+}, [snappedStation, drawFromStation, mergeStationA, mergeStationB, mapLoaded]);
+
+// Clear highlights when stations become visible (no longer needed)
+useEffect(() => {
+  if (showStations && surveyLayerRef.current) {
+    // Optional: could clear highlights when main layer is visible
+    // Or keep them for consistency
+  }
+}, [showStations]);
+```
+
+**Snap logic remains unchanged** at L103-115 - it iterates `stations` array directly, so snap WILL find hidden stations. This is intentional.
+
+## How It Works
+
+1. User hides stations via Display menu
+2. `survey-stations` layer becomes invisible
+3. User starts Draw tool
+4. User moves cursor near a station
+5. Snap detection finds station (iterates array, not layer)
+6. `snappedStation` state is set
+7. useEffect triggers, calls `setHighlightedStations([snappedStation])`
+8. `survey-stations-highlight` layer filter updates
+9. Snapped station is now visible via highlight layer (cyan, larger)
+10. User clicks to complete draw
+11. `snappedStation` clears
+12. useEffect triggers, `setHighlightedStations([])` 
+13. Highlight disappears
 ## Key Insight
 
 **Snap logic bypasses layer visibility**: The `checkSnapToStation` function at MapCanvas.tsx L103-115 iterates over the `stations` array directly, NOT through `queryRenderedFeatures`. This means snap WILL find hidden stations - this is intentional.
@@ -91,15 +211,16 @@ Alternative approach:
 ## Depends On
 - Task 3: Base visibility must work first
 ## Acceptance
-- [ ] Snapped station visible during Draw/Merge/Measure even when stations hidden
+- [ ] useEffect watches snappedStation, drawFromStation, mergeStationA/B
+- [ ] Station IDs converted to compound format `${sectionId}:${stationIndex}`
+- [ ] Compound ID format matches `id` property in station features
+- [ ] `setHighlightedStations()` called with correct IDs
+- [ ] Snapped station visible during Draw even when stations layer hidden
 - [ ] Draw origin station visible during draw operation
-- [ ] Visible exception stations use snapped visual style (cyan, larger)
-- [ ] Exception stations return to hidden when operation completes
-- [ ] Exception stations return to hidden when operation canceled
-- [ ] Only specific exception stations shown, not all stations
-- [ ] Works for merge (both stations A and B if snapped)
-- [ ] Works for measure (start and end points if snapped to stations)
-- [ ] Filter/exception logic doesn't break normal visibility toggle
+- [ ] Both merge stations highlighted during merge operation
+- [ ] Multiple stations can be highlighted simultaneously
+- [ ] Highlight clears when operation completes (IDs array becomes empty)
+- [ ] Highlight clears when operation canceled
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD

@@ -1,8 +1,60 @@
 # fn-3-e6v.4 Implement toggle disable relationships in DisplayMenu
 
 ## Description
-Implement toggle disable relationships in DisplayMenu.
+Implement toggle disable relationships in DisplayMenu using existing button-row pattern.
 
+## File: `src/components/SingleSystemView/DisplayMenu.tsx`
+
+### Current Pattern
+
+DisplayMenu uses **button rows** with inline checkbox, NOT standalone Checkbox components.
+
+### Implementation
+
+```typescript
+interface DisplayOption {
+  key: DisplayToggleKey;
+  label: string;
+  description: string;
+  disabledWhen?: DisplayToggleKey; // disabled when this toggle is false
+}
+
+const displayOptions = [
+  { key: 'showShots', label: 'Shots', description: 'Show survey shot lines' },
+  { key: 'showVirtualShots', label: 'Virtual Shots', ..., disabledWhen: 'showShots' },
+  { key: 'showShotData', label: 'Shot Data', ..., disabledWhen: 'showShots' },
+  // ... other options
+];
+
+// Helper function
+const isDisabled = (option: DisplayOption) => 
+  option.disabledWhen ? !toggleState[option.disabledWhen] : false;
+
+// In button row render:
+<button
+  onClick={() => !isDisabled(option) && toggleDisplay(option.key)}
+  aria-disabled={isDisabled(option)}
+  className={cn(
+    "flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-gray-100",
+    isDisabled(option) && "opacity-50 cursor-not-allowed hover:bg-transparent"
+  )}
+>
+  <span className={cn(
+    "w-4 h-4 border rounded",
+    toggleState[option.key] && "bg-blue-500",
+    isDisabled(option) && "border-gray-300"
+  )} />
+  <span>{option.label}</span>
+</button>
+```
+
+### Behavior
+
+- When `showShots` is OFF: "Virtual Shots" and "Shot Data" rows show disabled styling
+- Disabled rows have `opacity-50` and `cursor-not-allowed`
+- Clicking disabled row does nothing (guard in onClick)
+- `aria-disabled` for accessibility
+- Checkbox visual state retained (just grayed out)
 ## File to Modify
 
 ### `src/components/SingleSystemView/DisplayMenu.tsx`
@@ -71,13 +123,16 @@ The disabled toggles should remember their state - when Shots is re-enabled, the
 ## Depends On
 - Task 1: showShots state must exist
 ## Acceptance
-- [ ] "Virtual Shots" toggle disabled when "Shots" is unchecked
-- [ ] "Shot Data" toggle disabled when "Shots" is unchecked
-- [ ] Disabled toggles have visual indication (reduced opacity, not-allowed cursor)
-- [ ] Disabled checkbox has `disabled` prop
-- [ ] Disabled toggles retain their checked state (not reset to false)
-- [ ] When "Shots" re-enabled, dependent toggles immediately apply their stored values
-- [ ] User cannot click/change disabled toggles
+- [ ] `disabledWhen` property added to DisplayOption interface
+- [ ] `isDisabled(option)` helper function checks parent toggle state
+- [ ] "Virtual Shots" has `disabledWhen: 'showShots'`
+- [ ] "Shot Data" has `disabledWhen: 'showShots'`
+- [ ] Disabled rows have `opacity-50` class
+- [ ] Disabled rows have `cursor-not-allowed` class
+- [ ] onClick guard prevents toggle when disabled
+- [ ] `aria-disabled` attribute set for accessibility
+- [ ] Disabled rows retain their checked state visually
+- [ ] Re-enabling parent immediately shows correct child states
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD
