@@ -15,6 +15,7 @@ impl Default for Config {
             panels: PanelsConfig::default(),
             cache: CacheConfig::default(),
             debug: DebugConfig::default(),
+            legacy_snap: None,
         }
     }
 }
