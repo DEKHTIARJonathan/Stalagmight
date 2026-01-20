@@ -15,6 +15,7 @@ export interface Config {
   shortcuts: ShortcutsConfig;
   snap: SnapConfig;
   panels: PanelsConfig;
+  cache: CacheConfig;
 }
 
 export interface GeneralConfig {
@@ -124,6 +125,15 @@ export interface PanelsConfig {
   data_table_height: number;
 }
 
+export interface CacheConfig {
+  /** Enable tile caching for offline access */
+  tile_cache_enabled: boolean;
+  /** Maximum cache size in megabytes */
+  tile_cache_max_mb: number;
+  /** Time-to-live for cached tiles in days */
+  tile_ttl_days: number;
+}
+
 export const defaultConfig: Config = {
   general: {
     auto_save: true,
@@ -222,5 +232,10 @@ export const defaultConfig: Config = {
     sections_panel_width: 250,
     detail_panel_width: 300,
     data_table_height: 200,
+  },
+  cache: {
+    tile_cache_enabled: true,
+    tile_cache_max_mb: 500,
+    tile_ttl_days: 30,
   },
 };
