@@ -1321,16 +1321,14 @@ export default class SurveyLayer {
     this.gpsOrigin = gpsOrigin ?? null;
     // Store depth mode parameters for use in feature color calculation
     this.showDepthGradient = showDepthGradient;
-    // Clone and normalize depth range (handle min > max, min === max, NaN)
+    // Clone and normalize depth range (handle min > max, NaN)
+    // getDepthColor() handles min === max (flat cave) by returning shallowColor
     const minD = Number.isFinite(depthRange.min) ? depthRange.min : 0;
     const maxD = Number.isFinite(depthRange.max) ? depthRange.max : 50;
-    const normalizedMin = Math.min(minD, maxD);
-    const normalizedMax = Math.max(minD, maxD);
-    // If min === max, widen by small epsilon to avoid divide-by-zero in gradient calculation
-    const epsilon = 0.001;
-    this.depthRange = normalizedMin === normalizedMax
-      ? { min: normalizedMin - epsilon, max: normalizedMax + epsilon }
-      : { min: normalizedMin, max: normalizedMax };
+    this.depthRange = {
+      min: Math.min(minD, maxD),
+      max: Math.max(minD, maxD),
+    };
     // Build shot features and shot label features
     const shotFeatures: GeoJSON.Feature[] = [];
     const shotLabelFeatures: GeoJSON.Feature[] = [];
