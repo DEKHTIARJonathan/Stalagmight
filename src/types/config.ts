@@ -57,9 +57,16 @@ export interface SectionColorsConfig {
   palette: string[];
 }
 
+export interface GpsOrigin {
+  latitude: number;
+  longitude: number;
+}
+
 export interface MapConfig {
   satellite_provider: string;
   satellite_enabled: boolean;
+  /** GPS origin for satellite tile alignment. Defaults to Florida Keys area. */
+  satellite_gps_origin: GpsOrigin;
   snap_threshold_pixels: number;
   zoom_default: number;
   zoom_min: number;
@@ -179,6 +186,8 @@ export const defaultConfig: Config = {
   map: {
     satellite_provider: 'openstreetmap',
     satellite_enabled: false,
+    // Default to Florida Keys area - popular cave diving location
+    satellite_gps_origin: { latitude: 24.55, longitude: -81.78 },
     snap_threshold_pixels: 10,
     zoom_default: 15,
     zoom_min: 1,

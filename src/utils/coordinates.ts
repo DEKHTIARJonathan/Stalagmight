@@ -1,4 +1,5 @@
 import type { Coordinates, GpsCoordinates } from '../types/project';
+import type { GpsOrigin } from '../types/config';
 
 // Earth radius in meters for coordinate conversions
 const EARTH_RADIUS = 6371000;
@@ -8,21 +9,43 @@ const EARTH_RADIUS = 6371000;
 const METERS_PER_DEGREE = 111320;
 
 /**
- * Transform local meter coordinates to MapLibre-compatible pseudo-lat/lng
- * This allows MapLibre's scale bar to show correct distances
+ * Transform local meter coordinates to MapLibre-compatible lat/lng
+ * If gpsOrigin is provided, coordinates are offset from that origin.
+ * This allows satellite tiles to align with real-world geography.
  */
-export function metersToMapCoords(x: number, y: number): [number, number] {
+export function metersToMapCoords(
+  x: number,
+  y: number,
+  gpsOrigin?: GpsOrigin | null
+): [number, number] {
+  // Calculate meters per degree at the origin latitude for more accurate projection
+  const originLat = gpsOrigin?.latitude ?? 0;
+  const metersPerDegreeLng = METERS_PER_DEGREE * Math.cos((originLat * Math.PI) / 180);
+
+  // Convert meters to degrees and add origin offset
+  const lng = (gpsOrigin?.longitude ?? 0) + x / metersPerDegreeLng;
+  const lat = (gpsOrigin?.latitude ?? 0) + y / METERS_PER_DEGREE;
+
   // lng, lat format for MapLibre
-  return [x / METERS_PER_DEGREE, y / METERS_PER_DEGREE];
+  return [lng, lat];
 }
 
 /**
- * Transform MapLibre pseudo-lat/lng back to local meter coordinates
+ * Transform MapLibre lat/lng back to local meter coordinates
+ * If gpsOrigin is provided, coordinates are relative to that origin.
  */
-export function mapCoordsToMeters(lng: number, lat: number): { x: number; y: number } {
+export function mapCoordsToMeters(
+  lng: number,
+  lat: number,
+  gpsOrigin?: GpsOrigin | null
+): { x: number; y: number } {
+  // Calculate meters per degree at the origin latitude
+  const originLat = gpsOrigin?.latitude ?? 0;
+  const metersPerDegreeLng = METERS_PER_DEGREE * Math.cos((originLat * Math.PI) / 180);
+
   return {
-    x: lng * METERS_PER_DEGREE,
-    y: lat * METERS_PER_DEGREE,
+    x: (lng - (gpsOrigin?.longitude ?? 0)) * metersPerDegreeLng,
+    y: (lat - (gpsOrigin?.latitude ?? 0)) * METERS_PER_DEGREE,
   };
 }
 

@@ -160,14 +160,30 @@ pub struct SectionColorsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpsOrigin {
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MapConfig {
     pub satellite_provider: String,
     pub satellite_enabled: bool,
+    /// GPS origin for satellite tile alignment
+    #[serde(default = "default_satellite_gps_origin")]
+    pub satellite_gps_origin: GpsOrigin,
     pub snap_threshold_pixels: u32,
     pub zoom_default: u32,
     pub zoom_min: u32,
     pub zoom_max: u32,
     pub controls: MapControlsConfig,
+}
+
+fn default_satellite_gps_origin() -> GpsOrigin {
+    GpsOrigin {
+        latitude: 24.55,
+        longitude: -81.78,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

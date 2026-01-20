@@ -125,12 +125,14 @@ fn build_ok_response(data: Vec<u8>, content_type: &str) -> http::Response<Vec<u8
     http::Response::builder()
         .status(http::StatusCode::OK)
         .header(http::header::CONTENT_TYPE, content_type)
+        .header(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(data)
         .unwrap_or_else(|_| {
             // Fallback response if builder fails
             http::Response::builder()
                 .status(http::StatusCode::INTERNAL_SERVER_ERROR)
                 .header(http::header::CONTENT_TYPE, "text/plain")
+                .header(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
                 .body(b"Internal error building response".to_vec())
                 .unwrap()
         })
@@ -141,11 +143,13 @@ fn build_error_response(status: http::StatusCode, message: &str) -> http::Respon
     http::Response::builder()
         .status(status)
         .header(http::header::CONTENT_TYPE, "text/plain")
+        .header(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(message.as_bytes().to_vec())
         .unwrap_or_else(|_| {
             http::Response::builder()
                 .status(http::StatusCode::INTERNAL_SERVER_ERROR)
                 .header(http::header::CONTENT_TYPE, "text/plain")
+                .header(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
                 .body(b"Internal error".to_vec())
                 .unwrap()
         })
@@ -247,6 +251,82 @@ where
     }
 }
 
+/// Fetch a tile and return its bytes directly.
+/// Used by the `fetch_tile` IPC command.
+pub fn tile_fetch_impl(
+    provider: &str,
+    z: u32,
+    y: u32,
+    x: u32,
+    tile_cache: &Arc<Mutex<Option<TileCache>>>,
+) -> Result<Vec<u8>, String> {
+    // Validate provider
+    if !SUPPORTED_PROVIDERS.contains(&provider) {
+        return Err(format!(
+            "Unknown provider: {}. Supported: {:?}",
+            provider, SUPPORTED_PROVIDERS
+        ));
+    }
+
+    // Check cache first (fresh tiles)
+    let cached_tile = {
+        if let Ok(mut cache_guard) = tile_cache.lock() {
+            if let Some(cache) = cache_guard.as_mut() {
+                cache.get(provider, z, y, x)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    if let Some(entry) = cached_tile {
+        tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache hit (fresh)");
+        return Ok(entry.data);
+    }
+
+    // Cache miss - fetch from network
+    tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache miss, fetching from network");
+    match fetch_tile_from_network(provider, z, y, x) {
+        Ok((data, content_type)) => {
+            // Store in cache
+            if let Ok(mut cache_guard) = tile_cache.lock() {
+                if let Some(cache) = cache_guard.as_mut() {
+                    if let Err(e) = cache.put(provider, z, y, x, &data, &content_type) {
+                        tracing::warn!(error = %e, "Failed to cache tile");
+                    }
+                }
+            }
+            Ok(data)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, provider = %provider, z = z, y = y, x = x, "Network fetch failed");
+
+            // Try to serve stale cached tile as offline fallback
+            let stale_tile = {
+                if let Ok(cache_guard) = tile_cache.lock() {
+                    if let Some(cache) = cache_guard.as_ref() {
+                        cache.get_stale(provider, z, y, x)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
+            if let Some(entry) = stale_tile {
+                tracing::info!(provider = %provider, z = z, y = y, x = x, "Serving stale cached tile as offline fallback");
+                return Ok(entry.data);
+            }
+
+            // No cached tile at all
+            Err(format!("Tile not available: {}", e))
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _guard = logging::init();
@@ -321,6 +401,7 @@ pub fn run() {
             commands::cache::get_cache_stats,
             commands::cache::clear_tile_cache,
             commands::cache::get_network_status,
+            commands::cache::fetch_tile,
             // Project commands
             commands::project::create_project,
             commands::project::open_project,
