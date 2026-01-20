@@ -21,10 +21,9 @@ pub struct ProviderStats {
 
 /// Cache statistics returned by the get_cache_stats command.
 ///
-/// This is a frontend-facing struct that provides more detailed stats
-/// than the internal TileCache CacheStats.
+/// Matches the spec-defined CacheStats struct with per-provider breakdown.
 #[derive(Debug, Clone, Serialize)]
-pub struct CacheStatsResponse {
+pub struct CacheStats {
     /// Total number of tiles across all providers
     pub total_tiles: u64,
     /// Total size in bytes across all providers
@@ -36,45 +35,41 @@ pub struct CacheStatsResponse {
 /// Get cache statistics.
 ///
 /// Returns overall cache stats plus per-provider breakdown.
-/// If the cache is disabled or unavailable, returns zero stats.
+/// Returns an error if the cache lock is poisoned.
+/// If the cache is disabled, returns zero stats (not an error).
 #[tauri::command]
-pub fn get_cache_stats(state: State<AppState>) -> CacheStatsResponse {
+pub fn get_cache_stats(state: State<AppState>) -> Result<CacheStats, String> {
     let tile_cache = state.tile_cache();
 
-    let guard = match tile_cache.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            tracing::warn!("Failed to acquire tile cache lock for stats");
-            return CacheStatsResponse {
-                total_tiles: 0,
-                total_bytes: 0,
-                providers: HashMap::new(),
-            };
-        }
-    };
+    let guard = tile_cache
+        .lock()
+        .map_err(|_| "Failed to acquire tile cache lock".to_string())?;
 
     let Some(cache) = guard.as_ref() else {
-        // Cache is disabled
-        return CacheStatsResponse {
+        // Cache is disabled - return zero stats (this is not an error condition)
+        return Ok(CacheStats {
             total_tiles: 0,
             total_bytes: 0,
             providers: HashMap::new(),
-        };
+        });
     };
 
-    let stats = cache.get_stats();
-
-    // Get per-provider stats
+    // Get per-provider stats and derive totals from them for consistency
     let provider_stats = cache.get_provider_stats();
 
-    CacheStatsResponse {
-        total_tiles: stats.tile_count,
-        total_bytes: stats.total_bytes,
+    // Derive totals from provider map to ensure internal consistency
+    let (total_tiles, total_bytes) = provider_stats
+        .values()
+        .fold((0u64, 0u64), |(tiles, bytes), (t, b)| (tiles + t, bytes + b));
+
+    Ok(CacheStats {
+        total_tiles,
+        total_bytes,
         providers: provider_stats
             .into_iter()
             .map(|(provider, (tiles, bytes))| (provider, ProviderStats { tiles, bytes }))
             .collect(),
-    }
+    })
 }
 
 /// Clear the tile cache.
@@ -109,7 +104,8 @@ pub fn clear_tile_cache(state: State<AppState>, provider: Option<String>) -> Res
 /// Check network connectivity status.
 ///
 /// Performs a lightweight connectivity check by attempting to reach a known endpoint.
-/// Returns true if online, false if offline or check fails.
+/// Returns true if the network is reachable (regardless of HTTP status code),
+/// false only for transport errors (DNS failure, connection refused, timeout).
 ///
 /// Note: This is a blocking operation with a short timeout. It's designed for
 /// periodic status checks, not high-frequency polling.
@@ -128,13 +124,18 @@ pub fn get_network_status() -> bool {
 
     // HEAD request is lightweight - we only care about reachability
     match agent.head(CHECK_URL).call() {
-        Ok(response) => {
-            let status = response.status();
-            // Consider 2xx and 3xx as "online"
-            status.is_success() || status.is_redirection()
+        Ok(_) => {
+            // Any successful response means network is reachable
+            true
+        }
+        Err(ureq::Error::StatusCode(code)) => {
+            // HTTP error (4xx, 5xx) - network IS reachable, server responded
+            tracing::debug!(status = code, "Network reachable but server returned error status");
+            true
         }
         Err(e) => {
-            tracing::debug!(error = %e, "Network status check failed");
+            // Transport error (DNS, connection, timeout) - network is NOT reachable
+            tracing::debug!(error = %e, "Network status check failed - transport error");
             false
         }
     }
@@ -156,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_stats_response_serializes() {
+    fn test_cache_stats_serializes() {
         let mut providers = HashMap::new();
         providers.insert(
             "esri".to_string(),
@@ -166,13 +167,13 @@ mod tests {
             },
         );
 
-        let response = CacheStatsResponse {
+        let stats = CacheStats {
             total_tiles: 50,
             total_bytes: 512 * 1024,
             providers,
         };
 
-        let json = serde_json::to_string(&response).unwrap();
+        let json = serde_json::to_string(&stats).unwrap();
         assert!(json.contains("\"total_tiles\":50"));
         assert!(json.contains("\"total_bytes\":524288"));
         assert!(json.contains("\"esri\""));
