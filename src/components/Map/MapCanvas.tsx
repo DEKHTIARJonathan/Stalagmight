@@ -616,6 +616,13 @@ export default function MapCanvas() {
     }
   }, [toolCallbacks]);
 
+  // Sync config with SurveyLayer for visual and hitbox layer updates
+  useEffect(() => {
+    if (surveyLayerRef.current && config) {
+      surveyLayerRef.current.setConfig(config);
+    }
+  }, [config, mapLoaded]);
+
   // Sync selection state with SurveyLayer for visual feedback
   useEffect(() => {
     if (!surveyLayerRef.current) return;
@@ -1070,8 +1077,8 @@ export default function MapCanvas() {
         });
 
         // Add satellite layer below survey layers but above background
-        // 'survey-ghost-shots' is the first/bottom survey layer
-        const firstSurveyLayer = currentMap.getLayer('survey-ghost-shots') ? 'survey-ghost-shots' : undefined;
+        // 'survey-shots-hitbox' is the first/bottom survey layer (hitbox layers are added first)
+        const firstSurveyLayer = currentMap.getLayer('survey-shots-hitbox') ? 'survey-shots-hitbox' : undefined;
         currentMap.addLayer({
           id: 'satellite-tiles',
           type: 'raster',

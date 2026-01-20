@@ -1,7 +1,7 @@
 import type { Map as MaplibreMap, MapMouseEvent } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
 import type { Section, SectionId, ShotId, Station, StationRef, StationMerge, LoopClosure } from '../../types/project';
-import type { GpsOrigin } from '../../types/config';
+import type { Config, GpsOrigin } from '../../types/config';
 import { metersToMapCoords } from '../../utils/coordinates';
 
 export interface SurveyLayerCallbacks {
@@ -56,7 +56,19 @@ export default class SurveyLayer {
   private ghostStationsLayerId = 'survey-ghost-stations';
   private ghostMergeLayerId = 'survey-ghost-merge';
   private stationsHighlightLayerId = 'survey-stations-highlight';
+  // Hitbox layers for improved click detection
+  private stationsHitboxLayerId = 'survey-stations-hitbox';
+  private shotsHitboxLayerId = 'survey-shots-hitbox';
+  private ghostStationsHitboxLayerId = 'survey-ghost-stations-hitbox';
+  private ghostShotsHitboxLayerId = 'survey-ghost-shots-hitbox';
   private callbacks: SurveyLayerCallbacks;
+
+  // Config storage with fallback defaults for when config is null (initial load)
+  private config: Config | null = null;
+  private static readonly DEFAULTS = {
+    station: { radius: 4, hit_area: 10 },
+    shot: { width: 2, hit_area: 8 },
+  };
 
   // Visual state
   private selectedStationId: string | null = null;
@@ -82,6 +94,31 @@ export default class SurveyLayer {
 
   setCallbacks(callbacks: SurveyLayerCallbacks) {
     this.callbacks = callbacks;
+  }
+
+  // Config setter - triggers layer updates when config changes
+  public setConfig(config: Config): void {
+    this.config = config;
+    this.updateHitboxLayers();
+    this.updateVisualState();
+    this.updateDebugVisualization();
+  }
+
+  // Helper methods that use fallback defaults when config is null
+  private getStationRadius(): number {
+    return this.config?.map?.station?.radius ?? SurveyLayer.DEFAULTS.station.radius;
+  }
+
+  private getStationHitArea(): number {
+    return this.config?.map?.station?.hit_area ?? SurveyLayer.DEFAULTS.station.hit_area;
+  }
+
+  private getShotWidth(): number {
+    return this.config?.map?.shot?.width ?? SurveyLayer.DEFAULTS.shot.width;
+  }
+
+  private getShotHitArea(): number {
+    return this.config?.map?.shot?.hit_area ?? SurveyLayer.DEFAULTS.shot.hit_area;
   }
 
   private initializeSources() {
@@ -175,6 +212,72 @@ export default class SurveyLayer {
   }
 
   private initializeLayers() {
+    // === HITBOX LAYERS (invisible, for click detection) ===
+    // Layer order (bottom to top):
+    // 1. survey-shots-hitbox
+    // 2. survey-stations-hitbox (above shots for hover priority)
+    // 3. survey-ghost-shots-hitbox (debug only)
+    // 4. survey-ghost-stations-hitbox (debug only)
+    // Then visual layers follow...
+
+    // Shot hitbox layer - added first (bottom of stack)
+    this.map.addLayer({
+      id: this.shotsHitboxLayerId,
+      type: 'line',
+      source: this.sourceId + '-shots',
+      layout: {
+        'line-cap': 'round', // Better endpoint detection
+      },
+      paint: {
+        'line-width': this.getShotHitArea(),
+        'line-color': 'rgba(0, 0, 0, 0)', // Transparent color
+        'line-opacity': 0.001, // CRITICAL: non-zero for queryRenderedFeatures
+      },
+    });
+
+    // Station hitbox layer - above shots for correct hover priority
+    this.map.addLayer({
+      id: this.stationsHitboxLayerId,
+      type: 'circle',
+      source: this.sourceId + '-stations',
+      paint: {
+        'circle-radius': this.getStationHitArea(),
+        'circle-color': 'rgba(0, 0, 0, 0)', // Transparent color
+        'circle-opacity': 0.001, // CRITICAL: non-zero for queryRenderedFeatures
+        'circle-stroke-width': 0,
+      },
+    });
+
+    // Ghost shot hitbox layer (for debug visualization only - NOT interactive)
+    this.map.addLayer({
+      id: this.ghostShotsHitboxLayerId,
+      type: 'line',
+      source: this.sourceId + '-ghost-shots',
+      layout: {
+        'line-cap': 'round',
+      },
+      paint: {
+        'line-width': this.getShotHitArea(),
+        'line-color': 'rgba(255, 255, 0, 0.3)', // Visible when debug enabled
+        'line-opacity': 0, // Hidden by default, shown via updateDebugVisualization
+      },
+    });
+
+    // Ghost station hitbox layer (for debug visualization only - NOT interactive)
+    this.map.addLayer({
+      id: this.ghostStationsHitboxLayerId,
+      type: 'circle',
+      source: this.sourceId + '-ghost-stations',
+      paint: {
+        'circle-radius': this.getStationHitArea(),
+        'circle-color': 'rgba(255, 255, 0, 0.3)', // Visible when debug enabled
+        'circle-opacity': 0, // Hidden by default, shown via updateDebugVisualization
+        'circle-stroke-width': 0,
+      },
+    });
+
+    // === VISUAL LAYERS ===
+
     // Ghost section shots layer (dashed, semi-transparent) - rendered first so it's behind everything
     this.map.addLayer({
       id: this.ghostShotsLayerId,
@@ -603,7 +706,12 @@ export default class SurveyLayer {
   }
 
   // Update visual state for selection/hover/snap highlighting
+  // Uses config-based base sizes with explicit deltas for states
+  // Priority order: snapped > zeroDatum > hovered > selected > base
   private updateVisualState() {
+    const baseRadius = this.getStationRadius();
+    const baseWidth = this.getShotWidth();
+
     // Build station ID expression for matching
     const stationIdExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]];
 
@@ -631,25 +739,73 @@ export default class SurveyLayer {
       '#000000',
     ]);
 
-    // Update station radius when snapped for extra visibility
+    // Update station radius with state-based scaling
+    // Priority: snapped > zeroDatum > hovered > selected > base
     this.map.setPaintProperty(this.stationsLayerId, 'circle-radius', [
       'case',
       ['==', stationIdExpr, this.snappedStationId ?? ''],
-      7, // Slightly larger when snapped
-      ['get', 'isZeroDatum'],
-      8,
-      4,
+      baseRadius + 3, // 1. Snapped: radius + 3
+      ['==', ['get', 'isZeroDatum'], true],
+      baseRadius * 2, // 2. Zero datum: radius * 2
+      ['==', stationIdExpr, this.hoveredStationId ?? ''],
+      baseRadius + 2, // 3. Hovered: radius + 2
+      ['==', stationIdExpr, this.selectedStationId ?? ''],
+      baseRadius + 1, // 4. Selected: radius + 1
+      baseRadius, // 5. Base
     ]);
 
-    // Update shot line width based on hover/selection
+    // Shot ID expression
+    const shotIdExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'shotId']]];
+
+    // Update shot line width with state-based scaling
+    // Priority: hovered > selected > base
     this.map.setPaintProperty(this.shotsLayerId, 'line-width', [
       'case',
-      ['==', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'shotId']]], this.hoveredShotId ?? ''],
-      4,
-      ['==', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'shotId']]], this.selectedShotId ?? ''],
-      3,
-      2,
+      ['==', shotIdExpr, this.hoveredShotId ?? ''],
+      baseWidth + 2, // Hovered: width + 2
+      ['==', shotIdExpr, this.selectedShotId ?? ''],
+      baseWidth + 1, // Selected: width + 1
+      baseWidth, // Base
     ]);
+  }
+
+  // Update hitbox layer sizes from config
+  private updateHitboxLayers(): void {
+    if (!this.map) return;
+
+    const stationHitArea = this.getStationHitArea();
+    const shotHitArea = this.getShotHitArea();
+
+    // Update hitbox layer sizes
+    this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-radius', stationHitArea);
+    this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-width', shotHitArea);
+    this.map.setPaintProperty(this.ghostStationsHitboxLayerId, 'circle-radius', stationHitArea);
+    this.map.setPaintProperty(this.ghostShotsHitboxLayerId, 'line-width', shotHitArea);
+  }
+
+  // Update debug visualization based on config
+  private updateDebugVisualization(): void {
+    if (!this.map) return;
+
+    const showHitboxes = this.config?.debug?.map?.show_hitboxes ?? false;
+
+    // Show/hide debug hitbox visualization (ghost layers only - real hitboxes stay invisible)
+    this.map.setPaintProperty(this.ghostStationsHitboxLayerId, 'circle-opacity', showHitboxes ? 0.3 : 0);
+    this.map.setPaintProperty(this.ghostShotsHitboxLayerId, 'line-opacity', showHitboxes ? 0.3 : 0);
+
+    // For the actual hitbox layers, show a subtle highlight when debug is enabled
+    // but keep them functional (opacity > 0) at all times
+    if (showHitboxes) {
+      this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-color', 'rgba(0, 255, 255, 0.2)');
+      this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-opacity', 0.3);
+      this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-color', 'rgba(255, 0, 255, 0.2)');
+      this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-opacity', 0.3);
+    } else {
+      this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-color', 'rgba(0, 0, 0, 0)');
+      this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-opacity', 0.001);
+      this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-color', 'rgba(0, 0, 0, 0)');
+      this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-opacity', 0.001);
+    }
   }
 
   // Set selected station (called from outside to sync with uiStore)
@@ -1222,6 +1378,19 @@ export default class SurveyLayer {
     }
     if (this.map.getLayer(this.ghostMergeLayerId)) {
       this.map.removeLayer(this.ghostMergeLayerId);
+    }
+    // Remove hitbox layers
+    if (this.map.getLayer(this.stationsHitboxLayerId)) {
+      this.map.removeLayer(this.stationsHitboxLayerId);
+    }
+    if (this.map.getLayer(this.shotsHitboxLayerId)) {
+      this.map.removeLayer(this.shotsHitboxLayerId);
+    }
+    if (this.map.getLayer(this.ghostStationsHitboxLayerId)) {
+      this.map.removeLayer(this.ghostStationsHitboxLayerId);
+    }
+    if (this.map.getLayer(this.ghostShotsHitboxLayerId)) {
+      this.map.removeLayer(this.ghostShotsHitboxLayerId);
     }
 
     // Remove all sources after layers are removed

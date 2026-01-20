@@ -548,9 +548,8 @@ Add validation for bounds:
 - [ ] `cargo test` passes
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Updated config schema with StationConfig, ShotConfig, MapSnapConfig sub-configs under map, plus DebugConfig. Implemented Config::normalize() and legacy [snap] migration. Added comprehensive tests for backwards compatibility, normalization, and migration.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 0a4841c, 9cb83fa, 570a8bf, a1f6a13
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, pnpm tsc --noEmit
 - PRs:
