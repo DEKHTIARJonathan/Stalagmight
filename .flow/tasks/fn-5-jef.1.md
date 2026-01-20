@@ -168,9 +168,8 @@ setShowDepthGradient(show: boolean, minDepth: number, maxDepth: number) {
 - [ ] Toggling triggers re-render with new colors
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Wired showDepthGradient toggle to SurveyLayer with full depth coloring implementation. Stations and shots now display depth-based colors (blue to red gradient) when the toggle is enabled, falling back to section colors when disabled.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: c44a59927d281af778d4ee1fadc7ed40b9a5db00
+- Tests: pnpm tsc --noEmit
 - PRs:

@@ -1349,9 +1349,10 @@ export default class SurveyLayer {
         if (fromStation && toStation && shot) {
           // Calculate shot color - use depth gradient if enabled, otherwise section color
           const avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
-          const shotColor = this.showDepthGradient && Number.isFinite(avgDepth)
+          const depthColor = this.showDepthGradient
             ? getDepthColor(avgDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)
-            : section.color;
+            : null;
+          const shotColor = depthColor ?? section.color;
 
           shotFeatures.push({
             type: 'Feature',
@@ -1407,9 +1408,10 @@ export default class SurveyLayer {
 
       // Calculate station color - use depth gradient if enabled, otherwise section color
       const stationDepth = station.coordinates.z;
-      const color = this.showDepthGradient && Number.isFinite(stationDepth)
+      const depthColor = this.showDepthGradient
         ? getDepthColor(stationDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)
-        : sectionColor;
+        : null;
+      const color = depthColor ?? sectionColor;
 
       return {
         type: 'Feature',
