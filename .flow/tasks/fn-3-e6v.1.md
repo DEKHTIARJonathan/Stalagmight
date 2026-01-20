@@ -118,9 +118,8 @@ Nothing - this is a foundational task.
 - [ ] Playwright mocks updated
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added showShots boolean state to uiStore with default true, included in DisplayToggleKey union and resetDisplaySettings. Added migration fallback in loadDisplaySettings for older saved settings. Added "Shots" toggle to DisplayMenu above "Virtual Shots". Updated Playwright IPC mock with showShots.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 28eee5a, 1850f47, 3b42d0e
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:

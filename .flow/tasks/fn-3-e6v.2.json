@@ -1,14 +1,33 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-20T17:27:06.866582Z",
   "created_at": "2026-01-20T12:52:10.842668Z",
   "depends_on": [],
   "epic": "fn-3-e6v",
+  "evidence": {
+    "files_modified": [
+      "src/components/Map/SurveyLayer.tsx"
+    ],
+    "layer_added": "survey-stations-highlight",
+    "methods_added": [
+      "setShowStations",
+      "setShowShots",
+      "setHighlightedStations",
+      "clearStationHover",
+      "clearShotHover",
+      "clearSnappedStation",
+      "clearAllInteractionState"
+    ],
+    "playwright_tests": "257 passed, 120 skipped",
+    "rust_tests": "210 unit tests passed, 76 integration tests passed",
+    "tests_passed": true,
+    "typescript_check": "pnpm tsc --noEmit - passed"
+  },
   "id": "fn-3-e6v.2",
   "priority": null,
   "spec_path": ".flow/tasks/fn-3-e6v.2.md",
-  "status": "todo",
+  "status": "done",
   "title": "Implement setShowStations and setShowShots in SurveyLayer",
-  "updated_at": "2026-01-20T13:25:55.758275Z"
+  "updated_at": "2026-01-20T17:30:35.094840Z"
 }
