@@ -1379,8 +1379,12 @@ export default class SurveyLayer {
           // Format: "45° 3.2m -12.5m" (azimuth, length, depth)
           const label = `${shot.azimuth_in.toFixed(0)}° ${shot.length.toFixed(1)}m ${labelDepth.toFixed(1)}m`;
 
-          // Shot label color matches shot color (depth gradient or section color)
-          const shotLabelColor = shotColor;
+          // Shot label color - use depth gradient if enabled, otherwise default white
+          // (labels default to white for readability, unlike shots which use section color)
+          const shotLabelDepthColor = this.showDepthGradient
+            ? getDepthColor(avgDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)
+            : null;
+          const shotLabelColor = shotLabelDepthColor ?? '#ffffff';
 
           shotLabelFeatures.push({
             type: 'Feature',
