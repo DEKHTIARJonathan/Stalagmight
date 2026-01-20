@@ -14,7 +14,7 @@ export default function DetailPanel() {
   const totalWarnings = warnings.length;
 
   return (
-    <div className="h-full bg-panel flex flex-col">
+    <div className="h-full bg-panel flex flex-col" data-testid="detail-panel">
       {/* Tab bar */}
       <div className="flex border-b border-border shrink-0">
         <TabButton
@@ -260,7 +260,7 @@ function StationDetail({ station }: { station: Station }) {
   };
 
   return (
-    <div className="h-full bg-panel overflow-auto">
+    <div className="h-full bg-panel overflow-auto" data-testid="station-detail">
       <Panel title="Station">
         <div className="space-y-3">
           <DetailRow
