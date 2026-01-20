@@ -35,6 +35,8 @@ export default function MapCanvas() {
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
+  // Ref to track if we're in a Ctrl+drag operation (to filter spurious keyup events from Tauri/WebKit)
+  const ctrlDragActiveRef = useRef(false);
   const [isHoveringFeature, setIsHoveringFeature] = useState(false);
   // Placement mode cursor position (screen pixels)
   const [placementCursor, setPlacementCursor] = useState<{ x: number; y: number } | null>(null);
@@ -565,58 +567,45 @@ export default function MapCanvas() {
   }, [activeTool, ctrlHeld, isHoveringFeature]);
 
   // Disable map drag pan for tools that need custom interaction
-  // Exception: Ctrl+drag enables panning in supported tools
+  // (Ctrl+drag panning is handled by custom implementation, not dragPan)
   useEffect(() => {
     if (!map.current) return;
 
-    // Tools that should have map panning disabled (includes CTRL_PAN_TOOLS + move tools)
     const noPanTools = ['select', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station'];
 
-    // Enable panning when Ctrl is held in supported tools
-    if (CTRL_PAN_TOOLS.includes(activeTool) && ctrlHeld) {
-      map.current.dragPan.enable();
-    } else if (noPanTools.includes(activeTool)) {
+    if (noPanTools.includes(activeTool)) {
       map.current.dragPan.disable();
     } else {
       map.current.dragPan.enable();
     }
-  }, [activeTool, ctrlHeld]);
+  }, [activeTool]);
 
-  // Track Ctrl key for pan-in-supported-tools feature
-  // IMPORTANT: Enable dragPan directly in the handler, not via useEffect, to avoid timing issues
+  // Track Ctrl key for cursor updates and box select cancellation
   useEffect(() => {
-    const noPanTools = ['select', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station'];
-
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Control' && !e.repeat) {
         setCtrlHeld(true);
 
         // Cancel any active box select when Ctrl is pressed (mid-drag Ctrl converts to pan)
         setBoxSelect({ start: null, end: null });
-
-        // Enable dragPan immediately when Ctrl is pressed (for supported tools)
-        if (map.current && CTRL_PAN_TOOLS.includes(activeTool)) {
-          map.current.dragPan.enable();
-        }
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Control') {
-        setCtrlHeld(false);
-        // Disable dragPan when Ctrl is released (for tools that don't normally pan)
-        if (map.current && noPanTools.includes(activeTool)) {
-          map.current.dragPan.disable();
+        // WORKAROUND: Tauri/WebKit fires spurious keyup events when clicking while holding Ctrl
+        // If we're in an active Ctrl+drag, ignore the keyup
+        if (ctrlDragActiveRef.current) {
+          return;
         }
+        setCtrlHeld(false);
       }
     };
     // Also handle window blur (Ctrl held, switch windows, release outside)
     const handleBlur = () => {
+      ctrlDragActiveRef.current = false;
       setCtrlHeld(false);
       // Cancel any active box select
       setBoxSelect({ start: null, end: null });
-      if (map.current && noPanTools.includes(activeTool)) {
-        map.current.dragPan.disable();
-      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -628,26 +617,92 @@ export default function MapCanvas() {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
     };
-  }, [activeTool]);
+  }, []);
 
-  // Capture-phase handler to enable dragPan BEFORE MapLibre processes mousedown
-  // This handles the timing issue where Ctrl might be pressed just as mouse is clicked
+  // Custom Ctrl+drag panning implementation
+  // MapLibre's dragPan doesn't work reliably with Ctrl modifier in Tauri/WebKit,
+  // so we implement our own panning by tracking mouse movement and calling panBy() directly
   useEffect(() => {
     const mapElement = mapContainer.current;
     if (!mapElement) return;
 
+    // Track drag start position for custom panning
+    let ctrlPanStart: { x: number; y: number } | null = null;
+
     const handleMouseDownCapture = (e: MouseEvent) => {
       if (e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool) && map.current) {
-        // Enable dragPan BEFORE MapLibre processes this mousedown
-        map.current.dragPan.enable();
+        // Mark that we're starting a Ctrl+drag (to filter spurious keyup events from Tauri/WebKit)
+        ctrlDragActiveRef.current = true;
+        ctrlPanStart = { x: e.clientX, y: e.clientY };
+
+        // Change cursor to indicate panning
+        map.current.getCanvas().style.cursor = 'grabbing';
+      }
+    };
+
+    // Implement custom panning since MapLibre's dragPan doesn't work reliably with Ctrl modifier in Tauri/WebKit
+    const handleMouseMoveCapture = (e: MouseEvent) => {
+      if (ctrlPanStart && e.buttons === 1 && map.current) {
+        const dx = e.clientX - ctrlPanStart.x;
+        const dy = e.clientY - ctrlPanStart.y;
+
+        // Pan the map by the delta (negative because we're dragging the "ground")
+        if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+          map.current.panBy([-dx, -dy], { animate: false });
+          ctrlPanStart = { x: e.clientX, y: e.clientY };
+        }
+      }
+    };
+
+    const handleMouseUpCapture = () => {
+      if (ctrlPanStart && map.current) {
+        ctrlPanStart = null;
+        // Restore cursor
+        const cursors: Record<string, string> = {
+          select: 'default',
+          draw: 'crosshair',
+          delete: 'crosshair',
+          merge: 'crosshair',
+          measure: 'crosshair',
+        };
+        map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
+      }
+    };
+
+    // Track if mouse is currently down (for filtering spurious keyup)
+    let mouseIsDown = false;
+
+    const handleMouseDownGlobal = () => {
+      mouseIsDown = true;
+    };
+
+    const handleMouseUpGlobal = () => {
+      mouseIsDown = false;
+      // When mouse is released, clear the ctrlDragActive flag after a small delay
+      // to allow any final spurious keyup events from Tauri/WebKit to be filtered
+      if (ctrlDragActiveRef.current) {
+        setTimeout(() => {
+          // Only clear if mouse is still up (not in a new drag)
+          if (!mouseIsDown) {
+            ctrlDragActiveRef.current = false;
+          }
+        }, 50);
       }
     };
 
     // Use capture: true to intercept BEFORE MapLibre's handlers
     mapElement.addEventListener('mousedown', handleMouseDownCapture, { capture: true });
+    mapElement.addEventListener('mousemove', handleMouseMoveCapture, { capture: true });
+    mapElement.addEventListener('mouseup', handleMouseUpCapture, { capture: true });
+    window.addEventListener('mousedown', handleMouseDownGlobal, { capture: true });
+    window.addEventListener('mouseup', handleMouseUpGlobal);
 
     return () => {
       mapElement.removeEventListener('mousedown', handleMouseDownCapture, { capture: true });
+      mapElement.removeEventListener('mousemove', handleMouseMoveCapture, { capture: true });
+      mapElement.removeEventListener('mouseup', handleMouseUpCapture, { capture: true });
+      window.removeEventListener('mousedown', handleMouseDownGlobal, { capture: true });
+      window.removeEventListener('mouseup', handleMouseUpGlobal);
     };
   }, [activeTool]);
 
