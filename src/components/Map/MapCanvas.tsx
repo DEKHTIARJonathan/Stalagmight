@@ -45,6 +45,9 @@ export default function MapCanvas() {
   const [pixelsPerMeter, setPixelsPerMeter] = useState(1);
 
   const { project, stations, config, moveSection, moveStation } = useProjectStore();
+
+  // Get GPS origin for coordinate transforms (enables satellite tile alignment)
+  const gpsOrigin = config?.map.satellite_gps_origin ?? null;
   const {
     mapZoom,
     setMapCenter,
@@ -98,7 +101,7 @@ export default function MapCanvas() {
 
       // Check each station's screen position
       for (const station of stations) {
-        const mapCoords = metersToMapCoords(station.coordinates.x, station.coordinates.y);
+        const mapCoords = metersToMapCoords(station.coordinates.x, station.coordinates.y, gpsOrigin);
         const screenPos = map.current.project(mapCoords as [number, number]);
 
         const dx = screenPos.x - screenX;
@@ -141,7 +144,7 @@ export default function MapCanvas() {
 
       // Check each existing station's screen position
       for (const station of stations) {
-        const mapCoords = metersToMapCoords(station.coordinates.x, station.coordinates.y);
+        const mapCoords = metersToMapCoords(station.coordinates.x, station.coordinates.y, gpsOrigin);
         const screenPos = map.current.project(mapCoords as [number, number]);
 
         const dx = screenPos.x - screenX;
@@ -379,7 +382,7 @@ export default function MapCanvas() {
     const centerX = (bounds.minX + bounds.maxX) / 2;
     const centerY = (bounds.minY + bounds.maxY) / 2;
     // Transform to map coordinates
-    const mapCenter = metersToMapCoords(centerX, centerY);
+    const mapCenter = metersToMapCoords(centerX, centerY, gpsOrigin);
 
     map.current = new maplibregl.Map({
       container: mapContainer.current,
@@ -479,9 +482,9 @@ export default function MapCanvas() {
   // Update survey layer when data changes or map loads
   useEffect(() => {
     if (surveyLayerRef.current && project) {
-      surveyLayerRef.current.update(project.sections, stations, project.station_merges, project.loop_closures);
+      surveyLayerRef.current.update(project.sections, stations, project.station_merges, project.loop_closures, gpsOrigin);
     }
-  }, [project, stations, mapLoaded]);
+  }, [project, stations, mapLoaded, gpsOrigin]);
 
   // Update callbacks when they change
   useEffect(() => {
@@ -728,7 +731,7 @@ export default function MapCanvas() {
 
   // Handle satellite toggle
   useEffect(() => {
-    if (!map.current) return;
+    if (!map.current || !mapLoaded) return;
 
     // Store reference for cleanup
     const currentMap = map.current;
@@ -746,17 +749,17 @@ export default function MapCanvas() {
           attribution: tileConfig.attribution,
         });
 
-        currentMap.addLayer(
-          {
-            id: 'satellite-tiles',
-            type: 'raster',
-            source: 'satellite-tiles',
-            paint: {
-              'raster-opacity': 0.7,
-            },
+        // Add satellite layer below survey layers but above background
+        // 'survey-ghost-shots' is the first/bottom survey layer
+        const firstSurveyLayer = currentMap.getLayer('survey-ghost-shots') ? 'survey-ghost-shots' : undefined;
+        currentMap.addLayer({
+          id: 'satellite-tiles',
+          type: 'raster',
+          source: 'satellite-tiles',
+          paint: {
+            'raster-opacity': 0.7,
           },
-          'background'
-        );
+        }, firstSurveyLayer);
 
         // Add error handler for offline fallback
         const sourceId = 'satellite-tiles';
@@ -784,7 +787,7 @@ export default function MapCanvas() {
         currentMap.off('error', errorHandler);
       }
     };
-  }, [showSatellite, getSatelliteTileConfig]);
+  }, [showSatellite, getSatelliteTileConfig, mapLoaded]);
 
   // Fit to survey bounds using transformed coordinates
   const fitToBounds = useCallback(() => {
@@ -794,8 +797,8 @@ export default function MapCanvas() {
     const bounds = getBounds(coords);
 
     // Transform bounds to map coordinates
-    const sw = metersToMapCoords(bounds.minX, bounds.minY);
-    const ne = metersToMapCoords(bounds.maxX, bounds.maxY);
+    const sw = metersToMapCoords(bounds.minX, bounds.minY, gpsOrigin);
+    const ne = metersToMapCoords(bounds.maxX, bounds.maxY, gpsOrigin);
 
     // Calculate 10% padding based on container size
     const container = map.current.getContainer();
@@ -889,7 +892,7 @@ export default function MapCanvas() {
 
         // Convert screen position to map coordinates (meters)
         const lngLat = map.current.unproject([screenX, screenY]);
-        const meters = mapCoordsToMeters(lngLat.lng, lngLat.lat);
+        const meters = mapCoordsToMeters(lngLat.lng, lngLat.lat, gpsOrigin);
         updatePlacementCursor({ x: meters.x, y: meters.y, z: 0 });
 
         // Check for snap to existing station

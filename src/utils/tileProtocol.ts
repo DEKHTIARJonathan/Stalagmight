@@ -1,4 +1,5 @@
 import maplibregl from 'maplibre-gl';
+import { invoke } from '@tauri-apps/api/core';
 
 /**
  * Protocol registration state.
@@ -9,9 +10,61 @@ let protocolRefCount = 0;
 let isRegistered = false;
 
 /**
+ * Parse a cavechef-tiles:// URL to extract provider, z, y, x.
+ * Supports both formats:
+ * - cavechef-tiles://esri/{z}/{y}/{x}
+ * - cavechef-tiles://localhost/esri/{z}/{y}/{x}
+ */
+function parseTileUrl(url: string): { provider: string; z: number; y: number; x: number } | null {
+  try {
+    // Remove protocol prefix
+    const path = url.replace('cavechef-tiles://', '');
+
+    // Split by /
+    const parts = path.split('/').filter(Boolean);
+
+    // Handle both formats: esri/z/y/x or localhost/esri/z/y/x
+    let provider: string;
+    let z: number, y: number, x: number;
+
+    if (parts[0] === 'localhost') {
+      // localhost/esri/z/y/x format
+      if (parts.length < 5) return null;
+      const p1 = parts[1];
+      const p2 = parts[2];
+      const p3 = parts[3];
+      const p4 = parts[4];
+      if (!p1 || !p2 || !p3 || !p4) return null;
+      provider = p1;
+      z = parseInt(p2, 10);
+      y = parseInt(p3, 10);
+      x = parseInt(p4, 10);
+    } else {
+      // esri/z/y/x format
+      if (parts.length < 4) return null;
+      const p0 = parts[0];
+      const p1 = parts[1];
+      const p2 = parts[2];
+      const p3 = parts[3];
+      if (!p0 || !p1 || !p2 || !p3) return null;
+      provider = p0;
+      z = parseInt(p1, 10);
+      y = parseInt(p2, 10);
+      x = parseInt(p3, 10);
+    }
+
+    if (isNaN(z) || isNaN(y) || isNaN(x)) return null;
+
+    return { provider, z, y, x };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Register the cavechef-tiles:// protocol for MapLibre.
- * This protocol routes tile requests through our custom fetch handler
- * which integrates with the Tauri backend for caching.
+ * This protocol routes tile requests through Tauri's invoke API
+ * which integrates with the backend for caching.
  *
  * Uses reference counting to safely handle multiple MapCanvas instances.
  * Call unregisterTileProtocol when the component unmounts.
@@ -25,15 +78,31 @@ export function registerTileProtocol(): void {
   }
 
   maplibregl.addProtocol('cavechef-tiles', async (params, abortController) => {
-    try {
-      const response = await fetch(params.url, { signal: abortController.signal });
+    // Parse the tile URL
+    const parsed = parseTileUrl(params.url);
+    if (!parsed) {
+      throw new Error(`Invalid tile URL format: ${params.url}`);
+    }
 
-      if (!response.ok) {
-        // Return error for non-2xx status codes
-        throw new Error(`Tile fetch failed: ${response.status} ${response.statusText} for ${params.url}`);
+    const { provider, z, y, x } = parsed;
+
+    try {
+      // Check for abort before starting
+      if (abortController.signal.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
       }
 
-      return { data: await response.arrayBuffer() };
+      // Call the Tauri backend to fetch the tile
+      const data = await invoke<number[]>('fetch_tile', { provider, z, y, x });
+
+      // Check for abort after fetch
+      if (abortController.signal.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+
+      // Convert number array to ArrayBuffer
+      const arrayBuffer = new Uint8Array(data).buffer;
+      return { data: arrayBuffer };
     } catch (error) {
       // Handle abort gracefully (user scrolled away, etc.)
       if (error instanceof Error && error.name === 'AbortError') {

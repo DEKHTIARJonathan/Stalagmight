@@ -1,6 +1,7 @@
 import type { Map as MaplibreMap, MapMouseEvent } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
 import type { Section, SectionId, ShotId, Station, StationRef, StationMerge, LoopClosure } from '../../types/project';
+import type { GpsOrigin } from '../../types/config';
 import { metersToMapCoords } from '../../utils/coordinates';
 
 export interface SurveyLayerCallbacks {
@@ -58,6 +59,9 @@ export default class SurveyLayer {
   private hoveredStationId: string | null = null;
   private hoveredShotId: string | null = null;
   private snappedStationId: string | null = null;
+
+  // GPS origin for coordinate transforms (enables satellite tile alignment)
+  private gpsOrigin: GpsOrigin | null = null;
 
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
@@ -638,8 +642,8 @@ export default class SurveyLayer {
           geometry: {
             type: 'LineString',
             coordinates: [
-              metersToMapCoords(shot.from.x, shot.from.y),
-              metersToMapCoords(shot.to.x, shot.to.y),
+              metersToMapCoords(shot.from.x, shot.from.y, this.gpsOrigin),
+              metersToMapCoords(shot.to.x, shot.to.y, this.gpsOrigin),
             ],
           },
           properties: { color: data.color },
@@ -652,7 +656,7 @@ export default class SurveyLayer {
           type: 'Feature',
           geometry: {
             type: 'Point',
-            coordinates: metersToMapCoords(station.x, station.y),
+            coordinates: metersToMapCoords(station.x, station.y, this.gpsOrigin),
           },
           properties: { color: data.color },
         });
@@ -664,7 +668,7 @@ export default class SurveyLayer {
           type: 'Feature',
           geometry: {
             type: 'Point',
-            coordinates: metersToMapCoords(data.mergeStation.x, data.mergeStation.y),
+            coordinates: metersToMapCoords(data.mergeStation.x, data.mergeStation.y, this.gpsOrigin),
           },
           properties: {},
         });
@@ -697,7 +701,9 @@ export default class SurveyLayer {
     }
   }
 
-  update(sections: Section[], stations: Station[], stationMerges?: StationMerge[], loopClosures?: LoopClosure[]) {
+  update(sections: Section[], stations: Station[], stationMerges?: StationMerge[], loopClosures?: LoopClosure[], gpsOrigin?: GpsOrigin | null) {
+    // Store gpsOrigin for coordinate transforms
+    this.gpsOrigin = gpsOrigin ?? null;
     // Build shot features and shot label features
     const shotFeatures: GeoJSON.Feature[] = [];
     const shotLabelFeatures: GeoJSON.Feature[] = [];
@@ -719,8 +725,8 @@ export default class SurveyLayer {
             geometry: {
               type: 'LineString',
               coordinates: [
-                metersToMapCoords(fromStation.coordinates.x, fromStation.coordinates.y),
-                metersToMapCoords(toStation.coordinates.x, toStation.coordinates.y),
+                metersToMapCoords(fromStation.coordinates.x, fromStation.coordinates.y, this.gpsOrigin),
+                metersToMapCoords(toStation.coordinates.x, toStation.coordinates.y, this.gpsOrigin),
               ],
             },
             properties: {
@@ -745,7 +751,7 @@ export default class SurveyLayer {
             type: 'Feature',
             geometry: {
               type: 'Point',
-              coordinates: metersToMapCoords(midX, midY),
+              coordinates: metersToMapCoords(midX, midY, this.gpsOrigin),
             },
             properties: {
               label,
@@ -770,7 +776,7 @@ export default class SurveyLayer {
         type: 'Feature',
         geometry: {
           type: 'Point',
-          coordinates: metersToMapCoords(station.coordinates.x, station.coordinates.y),
+          coordinates: metersToMapCoords(station.coordinates.x, station.coordinates.y, this.gpsOrigin),
         },
         properties: {
           sectionId: station.station_ref.section_id,
@@ -804,8 +810,8 @@ export default class SurveyLayer {
             geometry: {
               type: 'LineString',
               coordinates: [
-                metersToMapCoords(coordsA.x, coordsA.y),
-                metersToMapCoords(coordsB.x, coordsB.y),
+                metersToMapCoords(coordsA.x, coordsA.y, this.gpsOrigin),
+                metersToMapCoords(coordsB.x, coordsB.y, this.gpsOrigin),
               ],
             },
             properties: {
@@ -834,7 +840,7 @@ export default class SurveyLayer {
           type: 'Feature',
           geometry: {
             type: 'Point',
-            coordinates: metersToMapCoords(firstStation.coordinates.x, firstStation.coordinates.y),
+            coordinates: metersToMapCoords(firstStation.coordinates.x, firstStation.coordinates.y, this.gpsOrigin),
           },
           properties: {
             name: section.name,
@@ -862,7 +868,7 @@ export default class SurveyLayer {
         type: 'Feature',
         geometry: {
           type: 'Point',
-          coordinates: metersToMapCoords(station.coordinates.x, station.coordinates.y),
+          coordinates: metersToMapCoords(station.coordinates.x, station.coordinates.y, this.gpsOrigin),
         },
         properties: {
           label: String(station.station_ref.station_index),
@@ -947,8 +953,8 @@ export default class SurveyLayer {
             geometry: {
               type: 'LineString',
               coordinates: [
-                metersToMapCoords(coordsA.x, coordsA.y),
-                metersToMapCoords(coordsB.x, coordsB.y),
+                metersToMapCoords(coordsA.x, coordsA.y, this.gpsOrigin),
+                metersToMapCoords(coordsB.x, coordsB.y, this.gpsOrigin),
               ],
             },
             properties: {

@@ -101,6 +101,33 @@ pub fn clear_tile_cache(state: State<AppState>, provider: Option<String>) -> Res
     }
 }
 
+/// Fetch a map tile, using cache when available.
+///
+/// This is the IPC command for fetching tiles from the frontend.
+/// It checks the cache first, fetches from network on miss, and caches the result.
+/// Returns the raw tile bytes on success.
+#[tauri::command]
+pub async fn fetch_tile(
+    state: State<'_, AppState>,
+    provider: String,
+    z: u32,
+    y: u32,
+    x: u32,
+) -> Result<Vec<u8>, String> {
+    use crate::tile_fetch_impl;
+
+    let tile_cache = state.tile_cache();
+
+    // Run blocking I/O in a separate thread
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        tile_fetch_impl(&provider, z, y, x, &tile_cache)
+    })
+    .await
+    .map_err(|e| format!("Tile fetch task failed: {}", e))?;
+
+    result
+}
+
 /// Check network connectivity status.
 ///
 /// Performs a lightweight connectivity check by attempting to reach a known endpoint.

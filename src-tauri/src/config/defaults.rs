@@ -92,6 +92,10 @@ impl Default for MapConfig {
         Self {
             satellite_provider: "openstreetmap".to_string(),
             satellite_enabled: false,
+            satellite_gps_origin: GpsOrigin {
+                latitude: 24.55,
+                longitude: -81.78,
+            },
             snap_threshold_pixels: 10,
             zoom_default: 15,
             zoom_min: 1,
