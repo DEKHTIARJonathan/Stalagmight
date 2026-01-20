@@ -65,6 +65,8 @@ export default function MapCanvas() {
     showScaleBar,
     showSectionNames,
     showStationLabels,
+    showStations,
+    showShots,
     selection,
     mergeStationA,
     measureStart,
@@ -619,6 +621,18 @@ export default function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setShowStationLabels(showStationLabels);
   }, [showStationLabels, mapLoaded]);
+
+  // Sync stations visibility with SurveyLayer
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setShowStations(showStations);
+  }, [showStations, mapLoaded]);
+
+  // Sync shots visibility with SurveyLayer
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setShowShots(showShots);
+  }, [showShots, mapLoaded]);
 
   // Handle scale bar toggle
   useEffect(() => {
