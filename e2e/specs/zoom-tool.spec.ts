@@ -349,77 +349,123 @@ describe('Zoom Tool E2E', () => {
 
   describe('Config Integration', () => {
     it('uses zoom_step from config', async () => {
-      // Set a non-default zoom_step to verify config is actually being used
+      // This test verifies that the frontend uses config.map.zoom_step for click zoom.
+      // We modify the in-memory config to a non-default value (2.0) and verify the
+      // zoom delta matches that value, proving the frontend reads from config.
       const testZoomStep = 2.0;
-      await browser.execute((step: number) => {
+      let originalZoomStep: number | undefined;
+
+      // Wait for config to be loaded
+      await browser.waitUntil(
+        async () => {
+          const hasConfig = await browser.execute(() => {
+            const e2e = (window as unknown as {
+              __E2E_TEST__?: {
+                projectStore: {
+                  getState: () => {
+                    config: { map: { zoom_step: number } } | null;
+                  };
+                };
+              };
+            }).__E2E_TEST__;
+            return e2e?.projectStore?.getState()?.config !== null;
+          });
+          return hasConfig;
+        },
+        { timeout: 5000, timeoutMsg: 'Config was not loaded' }
+      );
+
+      // Save original value and set test value
+      originalZoomStep = await browser.execute((step: number) => {
         const e2e = (window as unknown as {
           __E2E_TEST__?: {
             projectStore: {
               getState: () => {
                 config: { map: { zoom_step: number } } | null;
-                setConfig: (config: { map: { zoom_step: number } }) => void;
               };
             };
           };
         }).__E2E_TEST__;
-        if (e2e) {
-          const currentConfig = e2e.projectStore.getState().config;
-          if (currentConfig) {
-            currentConfig.map.zoom_step = step;
-          }
+        const config = e2e?.projectStore?.getState()?.config;
+        if (config) {
+          const original = config.map.zoom_step;
+          config.map.zoom_step = step;
+          return original;
         }
+        return undefined;
       }, testZoomStep);
 
-      // Activate zoom tool via toolbar click
-      const zoomBtn = await $('[data-testid="tool-zoom"]');
-      await zoomBtn.click();
-      await browser.waitUntil(
-        async () => {
-          const classes = await zoomBtn.getAttribute('class');
-          return classes?.includes('ring-accent') ?? false;
-        },
-        { timeout: 2000 }
-      );
+      try {
+        // Activate zoom tool via toolbar click
+        const zoomBtn = await $('[data-testid="tool-zoom"]');
+        await zoomBtn.click();
+        await browser.waitUntil(
+          async () => {
+            const classes = await zoomBtn.getAttribute('class');
+            return classes?.includes('ring-accent') ?? false;
+          },
+          { timeout: 2000 }
+        );
 
-      const initialZoom = await getMapZoom();
-      expect(initialZoom).toBeGreaterThanOrEqual(0);
+        const initialZoom = await getMapZoom();
+        expect(initialZoom).toBeGreaterThanOrEqual(0);
 
-      const mapCanvas = await $('canvas');
-      const location = await mapCanvas.getLocation();
-      const size = await mapCanvas.getSize();
-      const centerX = Math.round(location.x + size.width / 2);
-      const centerY = Math.round(location.y + size.height / 2);
+        const mapCanvas = await $('canvas');
+        const location = await mapCanvas.getLocation();
+        const size = await mapCanvas.getSize();
+        const centerX = Math.round(location.x + size.width / 2);
+        const centerY = Math.round(location.y + size.height / 2);
 
-      // Click to zoom in
-      await browser.performActions([
-        {
-          type: 'pointer',
-          id: 'mouse',
-          parameters: { pointerType: 'mouse' },
-          actions: [
-            { type: 'pointerMove', x: centerX, y: centerY },
-            { type: 'pointerDown', button: 0 },
-            { type: 'pointerUp', button: 0 },
-          ],
-        },
-      ]);
-      await browser.releaseActions();
+        // Click to zoom in
+        await browser.performActions([
+          {
+            type: 'pointer',
+            id: 'mouse',
+            parameters: { pointerType: 'mouse' },
+            actions: [
+              { type: 'pointerMove', x: centerX, y: centerY },
+              { type: 'pointerDown', button: 0 },
+              { type: 'pointerUp', button: 0 },
+            ],
+          },
+        ]);
+        await browser.releaseActions();
 
-      // Wait for zoom to change
-      await browser.waitUntil(
-        async () => {
-          const newZoom = await getMapZoom();
-          return newZoom > initialZoom;
-        },
-        { timeout: 5000 }
-      );
+        // Wait for zoom to change
+        await browser.waitUntil(
+          async () => {
+            const newZoom = await getMapZoom();
+            return newZoom > initialZoom;
+          },
+          { timeout: 5000 }
+        );
 
-      const newZoom = await getMapZoom();
-      const diff = newZoom - initialZoom;
-      // Zoom step should be approximately 2.0 (the non-default value we set)
-      // Allow for animation/rounding variance
-      expect(diff).toBeGreaterThan(1.5);
-      expect(diff).toBeLessThan(2.5);
+        const newZoom = await getMapZoom();
+        const diff = newZoom - initialZoom;
+        // Zoom step should be approximately 2.0 (the non-default value we set)
+        // Allow for animation/rounding variance
+        expect(diff).toBeGreaterThan(1.5);
+        expect(diff).toBeLessThan(2.5);
+      } finally {
+        // Restore original config value to prevent state leakage
+        if (originalZoomStep !== undefined) {
+          await browser.execute((original: number) => {
+            const e2e = (window as unknown as {
+              __E2E_TEST__?: {
+                projectStore: {
+                  getState: () => {
+                    config: { map: { zoom_step: number } } | null;
+                  };
+                };
+              };
+            }).__E2E_TEST__;
+            const config = e2e?.projectStore?.getState()?.config;
+            if (config) {
+              config.map.zoom_step = original;
+            }
+          }, originalZoomStep);
+        }
+      }
     });
   });
 });
