@@ -104,9 +104,8 @@ export function getDepthColor(
 - [ ] Helper functions `hexToHSL()`, `hslToHex()`, `interpolateHue()` added
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Implemented HSL color space interpolation for getDepthColor() with shortest hue path, replacing RGB interpolation. Returns null for invalid inputs (NaN, bad hex colors) with proper caller fallback to section colors.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: a15c86d92bf4b9c946d1c52c123d7c3b4f99c8e5, fee4059983aeb9f79d7443c5500b1014872ed2c1
+- Tests: pnpm tsc --noEmit, pnpm test --run
 - PRs:
