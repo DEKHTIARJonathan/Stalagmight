@@ -184,8 +184,13 @@ pub struct MapConfig {
 
 impl MapConfig {
     /// Normalize zoom_step to valid range (0.1-5.0)
+    /// Also handles NaN/inf by falling back to default
     pub fn normalize(&mut self) {
-        self.zoom_step = self.zoom_step.clamp(0.1, 5.0);
+        if !self.zoom_step.is_finite() {
+            self.zoom_step = default_zoom_step();
+        } else {
+            self.zoom_step = self.zoom_step.clamp(0.1, 5.0);
+        }
     }
 }
 

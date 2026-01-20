@@ -659,6 +659,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               display: {
                 default_background: '#1a1a2e',
                 grid_color: '#333366',
+                grid_spacing: 10,
                 station_size: 6,
                 line_thickness: 2,
                 font_size: 12,

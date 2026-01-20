@@ -4,6 +4,83 @@
 Block selection and show throttled toast for hidden elements.
 
 ## Files to Modify
+
+### `src/store/uiStore.ts` - Add toast state
+
+**Add to UIState interface (~L143):**
+```typescript
+toast: { message: string; timestamp: number } | null;
+```
+
+**Add to initial state (~L349):**
+```typescript
+toast: null,
+```
+
+**Add actions:**
+```typescript
+showToast: (message: string) => void;
+clearToast: () => void;
+```
+
+**Throttle implementation:**
+```typescript
+showToast: (message: string) => {
+  const now = Date.now();
+  const current = get().toast;
+  // Throttle: only show if no recent toast (5 second cooldown)
+  if (!current || now - current.timestamp > 5000) {
+    set({ toast: { message, timestamp: now } });
+    // Auto-clear after 3 seconds
+    setTimeout(() => {
+      const t = get().toast;
+      if (t && t.timestamp === now) {
+        set({ toast: null });
+      }
+    }, 3000);
+  }
+},
+```
+
+### `src/App.tsx` or layout component - Render toast
+
+Add toast display component at root level:
+```tsx
+const toast = useUIStore(state => state.toast);
+
+{toast && (
+  <div className="toast-notification">
+    {toast.message}
+  </div>
+)}
+```
+
+### `src/hooks/useMapTools.ts` - Show toast on blocked interaction
+
+**In handleStationClick (L75-183):**
+```typescript
+// At start of handler
+if (!showStations) {
+  showToast("Enable 'Stations' in Display menu to interact with station markers");
+  return;
+}
+```
+
+**In handleShotClick (L186-217):**
+```typescript
+if (!showShots) {
+  showToast("Enable 'Shots' in Display menu to interact with shot lines");
+  return;
+}
+```
+
+## Notes
+
+- MapLibre's `queryRenderedFeatures` naturally returns empty for hidden layers
+- But we should show toast BEFORE the query, when user attempts to click
+- Need to detect click intent on hidden element area (may need separate logic)
+- Alternative: show toast when query returns empty but click was near expected element position
+## Files to Modify
 - `src/hooks/useMapTools.ts` (or selection handling code)
 - `src/components/Map/MapCanvas.tsx` (or event handlers)
 - Possibly add/use a toast notification utility
@@ -45,15 +122,19 @@ When stations are hidden:
 ## Depends On
 - Task 3: Visibility state must be accessible in tool handlers
 ## Acceptance
-- [ ] Clicking on hidden station location does not select it
-- [ ] Clicking on hidden shot location does not select it
-- [ ] No hover effect (blue highlight) on hidden station positions
+- [ ] Toast state exists in uiStore (`toast: { message, timestamp } | null`)
+- [ ] `showToast(message)` action with 5-second throttle logic
+- [ ] Toast auto-clears after 3 seconds
+- [ ] Toast UI renders at root level (visible above all content)
+- [ ] Toast positioned at bottom-center of screen
+- [ ] Clicking hidden station area shows toast
+- [ ] Clicking hidden shot area shows toast  
+- [ ] Toast throttled to max once per 5 seconds per trigger
+- [ ] No hover effect on hidden station positions
 - [ ] No hover effect on hidden shot lines
-- [ ] Toast appears on first interaction attempt with hidden element
-- [ ] Toast is throttled to max once per 5 seconds
-- [ ] Toast message matches spec: "Enable 'Stations' in Display menu..."
-- [ ] Separate throttle tracking for stations vs shots
-- [ ] TypeScript compiles without errors
+- [ ] Toast message for stations: "Enable 'Stations' in Display menu to interact with station markers"
+- [ ] Toast message for shots: "Enable 'Shots' in Display menu to interact with shot lines"
+- [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD
 

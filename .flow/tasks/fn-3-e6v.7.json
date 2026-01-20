@@ -3,12 +3,14 @@
   "claim_note": "",
   "claimed_at": null,
   "created_at": "2026-01-20T12:52:11.042743Z",
-  "depends_on": [],
+  "depends_on": [
+    "fn-3-e6v.3"
+  ],
   "epic": "fn-3-e6v",
   "id": "fn-3-e6v.7",
   "priority": null,
   "spec_path": ".flow/tasks/fn-3-e6v.7.md",
   "status": "todo",
   "title": "Show snapped/origin stations during Draw/Merge/Measure",
-  "updated_at": "2026-01-20T12:53:28.470259Z"
+  "updated_at": "2026-01-20T13:10:13.538413Z"
 }
