@@ -13,170 +13,217 @@ Additionally, a "Shots" toggle is needed to control shot line visibility, with p
 
 | File | Purpose | Key Lines |
 |------|---------|-----------|
-| `src/store/uiStore.ts` | Display toggle state, selection state | L143 (showStations), L216-226 (DisplayToggleKey), L279 (clearSelection), L349 (defaults) |
-| `src/components/Map/SurveyLayer.tsx` | Layer visibility methods, layer IDs | L44-50 (layer IDs), L600-625 (visibility methods pattern) |
-| `src/components/Map/MapCanvas.tsx` | Toggle sync hooks, snap logic | L517-528 (useEffect pattern), L103-115 (snap logic) |
-| `src/components/SingleSystemView/DisplayMenu.tsx` | Toggle UI | L11-32 (displayOptions), L15 (showStations entry) |
-| `src/hooks/useMapTools.ts` | Tool handlers | L75-183 (handleStationClick), L186-217 (handleShotClick) |
-| `src/hooks/useKeyboardShortcuts.ts` | Keyboard shortcuts | L108 (Ctrl+A select all) |
+| `src/store/uiStore.ts` | Display toggle state, selection state | L143, L216-226, L279, L349, L397-403 |
+| `src/components/Map/SurveyLayer.tsx` | Layer visibility, features | L44-50 (layer IDs), L600-625 (visibility methods), update() |
+| `src/components/Map/MapCanvas.tsx` | Toggle sync, snap logic | L517-528 (useEffect pattern), L103-115 (snap) |
+| `src/components/SingleSystemView/DisplayMenu.tsx` | Toggle UI (button rows) | L11-32 |
+| `src/hooks/useMapTools.ts` | Tool handlers | L75-183 (station), L186-217 (shot) |
+| `src/hooks/useKeyboardShortcuts.ts` | Keyboard shortcuts | L108 (Ctrl+A) |
 
 ## Approach
 
+### Adding `showShots` Toggle - Complete Checklist
+
+1. **`src/store/uiStore.ts`:**
+   - Add `showShots: boolean` to UIState interface
+   - Add `'showShots'` to `DisplayToggleKey` union
+   - Add `showShots: true` to initial state
+   - Verify persistence via `save_display_setting` (keys starting with `show` are persisted)
+   - Verify load logic includes it
+
+2. **`src/components/SingleSystemView/DisplayMenu.tsx`:**
+   - Add entry to `displayOptions` array before "Virtual Shots"
+
+3. **`src/components/Map/MapCanvas.tsx`:**
+   - Destructure `showShots` and add useEffect sync
+
+4. **Tests:**
+   - Update Playwright IPC mocks that stub display settings to include `showShots`
+
 ### Core Visibility Implementation
 
-**Stations Toggle (`showStations`):**
-- Add `setShowStations(visible: boolean)` method to `SurveyLayer` class (follow pattern at L600-625)
-- Use MapLibre `setLayoutProperty(layerId, 'visibility', 'none')` to hide `survey-stations` layer
-- Also hide related layers: `survey-merges`, `survey-loop-closures` (they reference stations)
-- Sync toggle state from `MapCanvas.tsx` via useEffect hook (follow pattern at L517-528)
+**Stations Toggle**: Controls `survey-stations`, `survey-merges`, `survey-loop-closures`
+**Shots Toggle**: Controls `survey-shots`
+**Virtual Shots Toggle**: Uses FILTER on shots layer to exclude virtual shots
 
-**New Shots Toggle (`showShots`):**
-- Add `showShots: boolean` state to `uiStore.ts` (default: `true`, add to L143 area)
-- Add to `DisplayToggleKey` type (L216-226)
-- Add `setShowShots(visible: boolean)` method to `SurveyLayer` class
-- Controls visibility of `survey-shots` layer (L44)
+### Station Feature ID Format
 
-**Important**: MapLibre's `queryRenderedFeatures()` automatically returns empty for hidden layers, which naturally blocks click detection in handlers at SurveyLayer.tsx L407-437.
+**Existing structure**: Station features in `SurveyLayer.update()` use `station.station_ref` which is a unique identifier.
 
-### Toggle Relationships
+**Highlight layer filter** will use `station_ref` property (already exists):
+```typescript
+setHighlightedStations(stationRefs: string[]): void {
+  if (!this.map) return;
+  this.map.setFilter(this.stationsHighlightLayerId,
+    stationRefs.length > 0
+      ? ['in', ['get', 'station_ref'], ['literal', stationRefs]]
+      : ['==', 'station_ref', '__none__']
+  );
+}
+```
 
-**When `showShots` is OFF:**
-- Hide all shot lines (regular + virtual)
-- Disable (gray out) "Virtual Shots" toggle in DisplayMenu
-- Disable (gray out) "Shot Data" toggle in DisplayMenu
-- Shot Data labels also immediately hide
+### DisplayMenu Disabled State (Using Existing Button Rows)
 
-**When `showShots` is ON:**
-- Re-enable "Virtual Shots" and "Shot Data" toggles
-- Restore their previous states (Zustand cascade pattern in `set()` callback)
+The current DisplayMenu uses **button rows**, not Checkbox components. Add disabled styling to existing pattern:
 
-**Station Labels**: Remain independently controllable (user decision from interview) - labels may float at positions even when markers are hidden.
+```typescript
+// In DisplayMenu.tsx - add disabled check
+const isDisabled = (option: DisplayOption) => 
+  option.disabledWhen ? !toggleState[option.disabledWhen] : false;
 
-### Selection Behavior
+// In button row:
+<button
+  onClick={() => !isDisabled(option) && toggleDisplay(option.key)}
+  aria-disabled={isDisabled(option)}
+  className={cn(
+    "flex items-center gap-2 w-full px-3 py-2 text-sm",
+    isDisabled(option) && "opacity-50 cursor-not-allowed"
+  )}
+>
+  <Checkbox 
+    checked={toggleState[option.key]} 
+    disabled={isDisabled(option)}
+  />
+  <span>{option.label}</span>
+</button>
+```
 
-**When Stations Hidden:**
-- Clear selected stations immediately via `clearSelection()` or filtered clear (L279)
-- Disable station hover effects (`hoveredStation` should also clear)
-- Block station selection - `queryRenderedFeatures` naturally returns empty
-- Show throttled toast: "Enable 'Stations' in Display menu to interact with station markers"
+### Tool Interaction Rules
 
-**When Shots Hidden:**
-- Clear selected shots immediately
-- Clear `hoveredShot` state
-- Block shot selection
-- Similar throttled toast for shots
+**Clarification**: Snap to hidden stations IS ALLOWED for Draw/Measure (usability). But direct station targeting (Select, Delete, Merge, Move Station) is blocked.
 
-**Mixed selection**: Only clear the type being hidden; keep the other selected. Filter `multiSelection` array by type.
+| Tool | Allows snap to hidden? | Direct interaction blocked? |
+|------|------------------------|----------------------------|
+| Select | N/A | YES - guard blocks |
+| Delete | N/A | YES - guard blocks |
+| Merge | NO - both stations must be visible | YES - guard blocks |
+| Move Station | N/A | YES - guard blocks |
+| Move Section | N/A | NO - section-level operation |
+| Measure | YES - snap shows highlight | NO - point-to-point works |
+| Draw | YES - snap shows highlight | NO - line creation works |
 
-### Toast Notification System
+**Guard placement**:
+- `handleStationClick`: Block all station clicks when `!showStations`
+- `handleShotClick`: Block all shot clicks when `!showShots`
+- `handleEmptyClick` with snap: **ALLOW** snap for Draw/Measure (highlight layer shows station)
+- Merge tool: Block if either target station would be hidden
 
-**No toast system exists** - need to create one:
-- Add `toast: { message: string; timestamp: number } | null` to uiStore
-- Add `showToast(message: string)` action with throttle logic (5 second cooldown using timestamp comparison)
-- Render toast in App layout (position: bottom-center, auto-dismiss after 3 seconds)
-- Use unique throttle keys per message type
+### Virtual Shots Handling
 
-### Tool Behavior When Stations Hidden
+When `showVirtualShots` toggled OFF:
+1. Apply filter: `['!=', ['get', 'isVirtual'], true]`
+2. Clear any selected/hovered **virtual** shot from store
+3. Clear SurveyLayer internal `hoveredShotId` if it's a virtual shot
 
-| Tool | Behavior |
-|------|----------|
-| Select | Cannot select stations (queryRenderedFeatures returns empty) |
-| Delete | Cannot delete stations; can delete selected shots |
-| Merge | Disabled - show toast on attempt |
-| Move Station | Disabled - show toast on attempt |
-| Move Section | Still works (section-level operation) |
-| Measure | Works for arbitrary points; snap indicators still work |
-| Draw | Works; snap shows station temporarily |
+```typescript
+// In uiStore toggleDisplay
+if (key === 'showVirtualShots' && !newVal) {
+  // Clear virtual shot selection/hover
+  const current = get();
+  if (current.selection?.type === 'shot') {
+    // Check if it's virtual and clear if so
+    // (requires checking shot data)
+  }
+}
 
-### Snap Indicator Exception
+// In MapCanvas useEffect
+useEffect(() => {
+  if (!showVirtualShots) {
+    // Clear any virtual shot hover/selection
+    // surveyLayerRef.current?.clearVirtualShotState();
+  }
+}, [showVirtualShots]);
+```
 
-**Key insight**: Snap logic at MapCanvas.tsx L103-115 iterates `stations` array directly, NOT through `queryRenderedFeatures`. This means snap WILL find hidden stations - this is intentional for usability.
+### Selection and Interaction State Sync
 
-When cursor snaps to a hidden station during Draw/Merge/Measure:
-- Show the full station marker temporarily (not just snap ring)
-- Use snapped visual state (cyan #00ffcc, 7px radius, 4px stroke)
-- Origin station in Draw mode becomes visible during the operation
-- Station returns to hidden when operation completes/cancels
+**When visibility toggles flip, call `clearAllInteractionState()`:**
 
-### In-Progress Operation Handling
+```typescript
+// In MapCanvas
+useEffect(() => {
+  if (!showStations && surveyLayerRef.current) {
+    surveyLayerRef.current.clearAllInteractionState();
+    clearSelectionByType('station');
+    // ... rest of cleanup
+  }
+}, [showStations]);
 
-When visibility toggles change during an active operation:
-- Cancel Draw operation (clear `drawFromStation`, pending points)
-- Cancel Merge operation (clear `mergeStationA`, `mergeStationB`)
-- Cancel Measure operation (clear `measureStart`, `measureEnd`)
-- Cancel Placement mode if active
-- Show toast: "Operation canceled - [stations/shots] hidden"
-- Clear any temporary visual state
+useEffect(() => {
+  if (!showShots && surveyLayerRef.current) {
+    surveyLayerRef.current.clearShotHover();
+    clearSelectionByType('shot');
+  }
+}, [showShots]);
+```
 
-### Additional Layers to Hide
+This ensures SurveyLayer internal IDs (`hoveredStationId`, `hoveredShotId`, `selectedStationId`, `selectedShotId`, `snappedStationId`) are all cleared, preventing stale visuals when layer is re-enabled.
 
-When stations hidden, also hide (they reference stations):
-- `survey-merges` (L49) - dashed lines between merged stations
-- `survey-loop-closures` (L50) - error indicators
+### Toggle Cascade (In-Memory Only)
 
-Ghost layers (`survey-ghost-shots`, `survey-ghost-stations`) should also respect visibility during merge preview.
+**When `showShots` OFF:**
+- Store `_prevShowVirtualShots` and `_prevShowShotData` in-memory
+- Set `showShotData = false`
+- These `_prev*` values NOT persisted (not in `save_display_setting`)
 
-### Keyboard Shortcut Considerations
+**When `showShots` ON:**
+- Restore from in-memory values
 
-- `Ctrl+A` select all (L108 in useKeyboardShortcuts.ts): Should skip hidden elements or be blocked entirely when relevant elements hidden
-- `Delete/Backspace`: Works on current selection (already validated)
+### Toast System
 
-### Persistence
+Per-key throttling with React Portal:
+- State: `toast: { message, key, timestamp } | null`, `lastToastByKey: Record<string, number>`
+- Portal to `document.body` with `z-index: 99999`
+- 5 second throttle per key, 3 second auto-dismiss
 
-- All display toggle states persist via `save_display_setting` IPC (L397-403 in uiStore)
-- New `showShots` toggle should follow same pattern
-- Toast state does NOT persist (ephemeral)
+### Highlight Layer
+
+For snapped/origin stations during Draw/Measure:
+- Separate `survey-stations-highlight` layer (always visible)
+- Filter uses `station_ref` property (existing identifier)
+- Called when `snappedStation`, `drawFromStation` etc. change
+
+### Persistence & Testing
+
+- `showShots` persists via existing `save_display_setting` mechanism (keys starting with `show`)
+- `_prev*` values are in-memory only
+- **Playwright mocks**: Update any IPC mocks for display settings to include `showShots`
 
 ## Edge Cases
 
-1. **Multi-section selection**: Clear all selected stations across all sections when hiding
-2. **Mixed selection (stations + shots)**: Only clear the type being hidden
-3. **Snap during hide**: Cancel snap state (`snappedStation: null`)
-4. **Rapid toggle**: Toast throttle (5 second) prevents spam
-5. **Toggle before map loaded**: Check `mapLoaded` state before calling layer methods
-6. **Undo after visibility change**: Selection does NOT restore (state was explicitly cleared)
-7. **Placement mode**: Cancel placement when visibility changes
+1. **Multi-section selection**: `clearSelectionByType('station')` handles all
+2. **Mixed selection**: Only clears the type being hidden
+3. **Virtual shot selection**: Clear when `showVirtualShots` toggled off
+4. **Snap during hide**: `clearAllInteractionState()` handles
+5. **Stale SurveyLayer state**: `clearAllInteractionState()` syncs internal IDs
+6. **Merge with hidden station**: Guard blocks merge tool when stations hidden
 
 ## Quick Commands
 
 ```bash
-# Run TypeScript check
 pnpm tsc --noEmit
-
-# Run E2E tests
 pnpm test:ui
-
-# Run Rust tests
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 ## Acceptance Criteria
 
-- [ ] Stations toggle hides `survey-stations`, `survey-merges`, `survey-loop-closures` layers
-- [ ] Hidden stations cannot be selected (queryRenderedFeatures returns empty)
-- [ ] Hidden stations do not show hover effects
-- [ ] Clicking hidden station area shows throttled toast (max once per 5 sec)
-- [ ] Snap indicators work during Draw/Merge/Measure with hidden stations
-- [ ] Snapped/origin stations become temporarily visible during tool operations
-- [ ] Selection is cleared immediately when toggle turned off
-- [ ] In-progress operations canceled with toast notification
-- [ ] New "Shots" toggle controls `survey-shots` visibility
-- [ ] "Virtual Shots" toggle disabled when "Shots" hidden
-- [ ] "Shot Data" toggle disabled when "Shots" hidden
-- [ ] Toggle states restore correctly when parent toggle re-enabled
-- [ ] All toggle states persist across app restart
-- [ ] Ctrl+A respects visibility (skips hidden elements)
+- [ ] `showShots` toggle added to all required locations
+- [ ] Playwright IPC mocks updated for `showShots`
+- [ ] Guards in `handleStationClick`/`handleShotClick` block when hidden
+- [ ] Snap to hidden stations works for Draw/Measure (highlight shows)
+- [ ] Merge tool blocked when stations hidden
+- [ ] Highlight layer uses `station_ref` filter (existing property)
+- [ ] DisplayMenu uses existing button-row pattern with disabled styling
+- [ ] `showVirtualShots` toggle clears virtual shot selection/hover when off
+- [ ] `clearAllInteractionState()` called when visibility toggles flip
+- [ ] `_prev*` values are in-memory only (not persisted)
+- [ ] Toast uses React Portal with z-index 99999
 - [ ] E2E tests cover visibility toggle behavior
-- [ ] Unit tests cover state logic and toggle relationships
+- [ ] Unit tests cover state logic
 
 ## Out of Scope
 
 - Keyboard shortcuts for display toggles (separate epic)
 - Station Labels auto-disable (user chose independent)
 - Zero Datum toggle behavior (not discussed)
-
-## References
-
-- MapLibre visibility: `setLayoutProperty(layerId, 'visibility', 'none')`
-- Zustand dependent state: cascade in `set()` callback
-- Toast throttle: timestamp comparison with 5000ms threshold

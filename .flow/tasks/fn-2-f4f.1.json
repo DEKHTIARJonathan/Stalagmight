@@ -5,10 +5,22 @@
   "created_at": "2026-01-20T12:03:46.333394Z",
   "depends_on": [],
   "epic": "fn-2-f4f",
+  "evidence": {
+    "commits": [
+      "8e6565bc0ad9c7cdff1e8f1aafb2fa23214d26e7",
+      "31341862740b0ab9754ddb5b09f37083ff5a7d26"
+    ],
+    "prs": [],
+    "tests": [
+      "cargo test --manifest-path src-tauri/Cargo.toml",
+      "pnpm tsc --noEmit",
+      "pnpm test:ui"
+    ]
+  },
   "id": "fn-2-f4f.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-2-f4f.1.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add zoom_step to map config",
-  "updated_at": "2026-01-20T13:01:38.851697Z"
+  "updated_at": "2026-01-20T13:13:20.950430Z"
 }

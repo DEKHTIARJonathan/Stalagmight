@@ -1,7 +1,7 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-20T13:14:48.856792Z",
   "created_at": "2026-01-20T12:04:01.970797Z",
   "depends_on": [
     "fn-2-f4f.1"
@@ -10,7 +10,7 @@
   "id": "fn-2-f4f.2",
   "priority": null,
   "spec_path": ".flow/tasks/fn-2-f4f.2.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Implement click-to-zoom behavior",
-  "updated_at": "2026-01-20T12:40:56.184401Z"
+  "updated_at": "2026-01-20T13:14:48.856803Z"
 }
