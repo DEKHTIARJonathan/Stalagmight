@@ -754,12 +754,32 @@ export default function MapCanvas() {
     if (!mapElement || !map.current || activeTool !== 'zoom') return;
 
     // Left-click capture: stop propagation to prevent SurveyLayer selection
-    // Actual zoom is handled by box end handler (task 3) for <10px drags
+    // and perform zoom-in at click point
     const handleClickCapture = (e: MouseEvent) => {
       if (e.button === 0) {
         e.stopPropagation();
         e.stopImmediatePropagation();
-        // Zoom-in will be handled by zoom box end handler (task 3)
+
+        // Zoom-in at click point (task 3 will enhance with box zoom for larger drags)
+        if (!map.current || !mapContainer.current) return;
+
+        const currentZoom = map.current.getZoom();
+        const targetZoom = Math.min(zoomMax, currentZoom + zoomStep);
+
+        // Early return if at max zoom (no recenter)
+        if (targetZoom === currentZoom) return;
+
+        // Convert click to map coords
+        const rect = mapContainer.current.getBoundingClientRect();
+        const screenX = e.clientX - rect.left;
+        const screenY = e.clientY - rect.top;
+        const clickLngLat = map.current.unproject([screenX, screenY]);
+
+        map.current.easeTo({
+          center: clickLngLat,
+          zoom: targetZoom,
+          duration: 300,
+        });
       }
     };
 
