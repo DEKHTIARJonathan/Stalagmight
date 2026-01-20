@@ -211,6 +211,32 @@ async function getLayerOrder(page: Page): Promise<Record<string, number>> {
 }
 
 /**
+ * Helper to navigate back to GlobalView from a project view.
+ * Handles the "Discard Changes" dialog if it appears.
+ */
+async function navigateToGlobalView(page: Page): Promise<void> {
+  // Go back to GlobalView (close project) using the "Back" button
+  await page.click('button:has-text("Back")');
+
+  // Handle unsaved changes dialog if it appears
+  const discardButton = page.locator('button:has-text("Discard Changes")');
+  if (await discardButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await discardButton.click();
+  }
+
+  // Wait for GlobalView to load
+  await page.waitForSelector('[data-testid="settings-button"], h1:has-text("CaveChef")', { timeout: 5000 });
+}
+
+/**
+ * Helper to open the Settings dialog from GlobalView.
+ */
+async function openSettingsDialog(page: Page): Promise<void> {
+  await page.click('[data-testid="settings-button"]');
+  await page.waitForSelector('[data-testid="settings-dialog"]', { timeout: 5000 });
+}
+
+/**
  * Helper to find an isolated station (no other stations within 2*hitArea + margin).
  */
 async function findIsolatedStation(page: Page, margin = 5): Promise<{
@@ -585,7 +611,7 @@ test.describe('Debug Hitbox Visualization', () => {
     expect(layerOrder['survey-shots-hitbox']).toBeDefined();
   });
 
-  test('hitbox opacity becomes 1 when debug.map.show_hitboxes is enabled', async ({ page }) => {
+  test('hitbox opacity changes when debug.map.show_hitboxes config changes', async ({ page }) => {
     await createProject(page, 'Hitbox Visibility Toggle');
 
     // Poll for layers to be ready
@@ -598,43 +624,91 @@ test.describe('Debug Hitbox Visualization', () => {
     const initialOpacity = await getHitboxLayerOpacity(page, 'survey-stations-hitbox');
     expect(initialOpacity).toBeLessThan(0.01);
 
-    // Enable show_hitboxes via direct map API (simulates config reload effect)
-    // This tests the layer update logic without requiring full Settings dialog interaction
+    // Simulate config reload with show_hitboxes: true via store update
+    // This tests the SurveyLayer's response to config changes
     await page.evaluate(() => {
-      const map = (window as unknown as {
-        __cavechef_map__?: {
-          setPaintProperty: (layer: string, prop: string, value: number) => void;
+      const stores = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              config: { debug: { map: { show_hitboxes: boolean } } } | null;
+            };
+            setState: (update: Partial<{
+              config: { debug: { map: { show_hitboxes: boolean } } } | null;
+            }>) => void;
+          };
         };
-      }).__cavechef_map__;
+      }).__E2E_TEST__;
 
-      if (map) {
-        // Set hitbox layers to visible (opacity 1) as would happen with show_hitboxes: true
-        map.setPaintProperty('survey-stations-hitbox', 'circle-opacity', 1);
-        map.setPaintProperty('survey-shots-hitbox', 'line-opacity', 1);
+      if (stores) {
+        const state = stores.projectStore.getState();
+        if (state.config) {
+          // Update config with show_hitboxes: true
+          stores.projectStore.setState({
+            config: {
+              ...state.config,
+              debug: {
+                ...state.config.debug,
+                map: {
+                  ...state.config.debug.map,
+                  show_hitboxes: true,
+                },
+              },
+            } as typeof state.config,
+          });
+        }
       }
     });
+
+    // Wait for layers to update (SurveyLayer watches config changes)
+    await expect.poll(
+      async () => getHitboxLayerOpacity(page, 'survey-stations-hitbox'),
+      { timeout: 5000 }
+    ).toBe(1);
 
     // Verify opacity is now 1 (fully visible)
     const enabledOpacity = await getHitboxLayerOpacity(page, 'survey-stations-hitbox');
     expect(enabledOpacity).toBe(1);
 
-    // Reset back to near-invisible
+    // Reset config to show_hitboxes: false
     await page.evaluate(() => {
-      const map = (window as unknown as {
-        __cavechef_map__?: {
-          setPaintProperty: (layer: string, prop: string, value: number) => void;
+      const stores = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              config: { debug: { map: { show_hitboxes: boolean } } } | null;
+            };
+            setState: (update: Partial<{
+              config: { debug: { map: { show_hitboxes: boolean } } } | null;
+            }>) => void;
+          };
         };
-      }).__cavechef_map__;
+      }).__E2E_TEST__;
 
-      if (map) {
-        map.setPaintProperty('survey-stations-hitbox', 'circle-opacity', 0.001);
-        map.setPaintProperty('survey-shots-hitbox', 'line-opacity', 0.001);
+      if (stores) {
+        const state = stores.projectStore.getState();
+        if (state.config) {
+          stores.projectStore.setState({
+            config: {
+              ...state.config,
+              debug: {
+                ...state.config.debug,
+                map: {
+                  ...state.config.debug.map,
+                  show_hitboxes: false,
+                },
+              },
+            } as typeof state.config,
+          });
+        }
       }
     });
 
-    // Verify opacity returns to near-invisible
-    const resetOpacity = await getHitboxLayerOpacity(page, 'survey-stations-hitbox');
-    expect(resetOpacity).toBeLessThan(0.01);
+    // Wait for opacity to return to near-invisible
+    await expect.poll(
+      async () => getHitboxLayerOpacity(page, 'survey-stations-hitbox'),
+      { timeout: 5000 }
+    ).toBeLessThan(0.01);
   });
 });
 
@@ -674,44 +748,100 @@ test.describe('Config Reload Effects', () => {
     expect(layerRadius).toBe(hitArea);
   });
 
-  test('shot hitbox layer width reflects config hit_area value', async ({ page }) => {
-    await createProject(page, 'Config Shot Hitbox Test');
+  test('hitbox layer sizes update when config hit_area changes', async ({ page }) => {
+    await createProject(page, 'Config Reload Hitbox Test');
 
     // Poll for layers to be ready
     await expect.poll(async () => {
       const order = await getLayerOrder(page);
-      return order['survey-shots-hitbox'];
+      return order['survey-stations-hitbox'];
     }).toBeDefined();
 
-    // Get the shot hit_area from config
-    const shotHitArea = await page.evaluate(() => {
-      const stores = (window as unknown as {
-        __E2E_TEST__?: {
-          projectStore: { getState: () => { config: { map: { shot: { hit_area: number } } } | null } };
-        };
-      }).__E2E_TEST__;
-
-      if (!stores) return 8; // Default fallback
-      const config = stores.projectStore.getState().config;
-      return config?.map?.shot?.hit_area ?? 8;
-    });
-
-    expect(shotHitArea).toBe(8); // Mock config default
-
-    // Verify the shot hitbox layer line-width matches the config
-    const layerWidth = await page.evaluate(() => {
+    // Verify initial hitbox radius is 10 (default)
+    const initialRadius = await page.evaluate(() => {
       const map = (window as unknown as {
         __cavechef_map__?: {
           getPaintProperty: (layer: string, prop: string) => number;
         };
       }).__cavechef_map__;
+      return map?.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
+    });
+    expect(initialRadius).toBe(10);
 
-      if (!map) return 0;
-      return map.getPaintProperty('survey-shots-hitbox', 'line-width') ?? 0;
+    // Update config via store to simulate config reload
+    await page.evaluate(() => {
+      const stores = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              config: { map: { station: { hit_area: number }; shot: { hit_area: number } } } | null;
+            };
+            setState: (update: Partial<{
+              config: { map: { station: { hit_area: number }; shot: { hit_area: number } } } | null;
+            }>) => void;
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (stores) {
+        const state = stores.projectStore.getState();
+        if (state.config) {
+          stores.projectStore.setState({
+            config: {
+              ...state.config,
+              map: {
+                ...state.config.map,
+                station: {
+                  ...state.config.map.station,
+                  hit_area: 15,
+                },
+                shot: {
+                  ...state.config.map.shot,
+                  hit_area: 12,
+                },
+              },
+            } as typeof state.config,
+          });
+        }
+      }
     });
 
-    // The hitbox layer width should equal the config hit_area
-    expect(layerWidth).toBe(shotHitArea);
+    // Wait for layers to update (SurveyLayer watches config changes)
+    await expect.poll(
+      async () => {
+        return page.evaluate(() => {
+          const map = (window as unknown as {
+            __cavechef_map__?: {
+              getPaintProperty: (layer: string, prop: string) => number;
+            };
+          }).__cavechef_map__;
+          return map?.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
+        });
+      },
+      { timeout: 5000 }
+    ).toBe(15);
+
+    // Verify station hitbox radius updated
+    const updatedStationRadius = await page.evaluate(() => {
+      const map = (window as unknown as {
+        __cavechef_map__?: {
+          getPaintProperty: (layer: string, prop: string) => number;
+        };
+      }).__cavechef_map__;
+      return map?.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
+    });
+    expect(updatedStationRadius).toBe(15);
+
+    // Verify shot hitbox width updated
+    const updatedShotWidth = await page.evaluate(() => {
+      const map = (window as unknown as {
+        __cavechef_map__?: {
+          getPaintProperty: (layer: string, prop: string) => number;
+        };
+      }).__cavechef_map__;
+      return map?.getPaintProperty('survey-shots-hitbox', 'line-width') ?? 0;
+    });
+    expect(updatedShotWidth).toBe(12);
   });
 });
 
