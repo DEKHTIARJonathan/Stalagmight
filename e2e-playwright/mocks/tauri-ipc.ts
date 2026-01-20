@@ -114,6 +114,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       };
       let mockNetworkStatus = true; // Online by default
 
+      // Config override for testing config reload effects
+      interface MockConfigOverrides {
+        debug?: { map?: { show_hitboxes?: boolean; log_hit_detection?: boolean } };
+        map?: { station?: { hit_area?: number }; shot?: { hit_area?: number } };
+      }
+      let mockConfigOverrides: MockConfigOverrides = {};
+
       // Expose reset function for tests via window
       (window as unknown as Record<string, unknown>).__MOCK_CACHE_RESET__ = () => {
         mockCacheStats = {
@@ -127,6 +134,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         mockNetworkStatus = status;
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_CACHE_STATS__ = () => mockCacheStats;
+
+      // Expose config override for testing config reload
+      (window as unknown as Record<string, unknown>).__MOCK_SET_CONFIG_OVERRIDES__ = (overrides: MockConfigOverrides) => {
+        mockConfigOverrides = overrides;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_CONFIG_OVERRIDES__ = () => {
+        mockConfigOverrides = {};
+      };
 
       return function mockCommand(
         cmd: string,
@@ -755,10 +770,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               },
             };
 
-          case 'reload_config':
-            // Return the same mock config as get_config
-            // In real app, this would reload from disk
-            return {
+          case 'reload_config': {
+            // Return mock config with any test overrides applied
+            // This allows tests to modify config values via __MOCK_SET_CONFIG_OVERRIDES__
+            const baseConfig = {
               general: {
                 auto_save: true,
                 auto_save_interval_seconds: 30,
@@ -807,11 +822,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 },
                 station: {
                   radius: 4.0,
-                  hit_area: 10.0,
+                  hit_area: mockConfigOverrides.map?.station?.hit_area ?? 10.0,
                 },
                 shot: {
                   width: 2.0,
-                  hit_area: 8.0,
+                  hit_area: mockConfigOverrides.map?.shot?.hit_area ?? 8.0,
                 },
                 snap: {
                   threshold: 10.0,
@@ -865,11 +880,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               },
               debug: {
                 map: {
-                  show_hitboxes: false,
-                  log_hit_detection: false,
+                  show_hitboxes: mockConfigOverrides.debug?.map?.show_hitboxes ?? false,
+                  log_hit_detection: mockConfigOverrides.debug?.map?.log_hit_detection ?? false,
                 },
               },
             };
+            return baseConfig;
+          }
 
           case 'get_recent_projects':
           case 'list_recent_projects':
