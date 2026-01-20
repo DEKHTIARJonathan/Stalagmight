@@ -7,7 +7,7 @@
   "plan_review_status": "unknown",
   "plan_reviewed_at": null,
   "spec_path": ".flow/specs/fn-1-0u5.md",
-  "status": "open",
+  "status": "done",
   "title": "Satellite Map Tile Caching",
-  "updated_at": "2026-01-20T06:39:54.322055Z"
+  "updated_at": "2026-01-20T16:26:42.510531Z"
 }

@@ -159,8 +159,7 @@ export async function getMapZoom(): Promise<number> {
 - [ ] Helper `getMapZoom()` in app.ts
 - [ ] All WebdriverIO tests pass
 ## Done summary
-TBD
-
+Added explicit waitForExist calls to all zoom-tool.spec.ts tests to properly wait for toolbar buttons to render before clicking. Fixed animation timing issue in config integration test by adding pause to wait for zoom animation to complete before measuring zoom delta. All 8 E2E tests now pass.
 ## Evidence
 - Commits:
 - Tests:

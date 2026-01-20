@@ -1,4 +1,4 @@
-import { waitForAppReady, resetAppState, createNewProject, loadProjectFixture, getMapZoom, waitForMapReady } from '../helpers/app';
+import { waitForAppReady, resetAppState, loadProjectFixture, getMapZoom, waitForMapReady } from '../helpers/app';
 
 describe('Zoom Tool E2E', () => {
   beforeEach(async () => {
@@ -11,6 +11,7 @@ describe('Zoom Tool E2E', () => {
   describe('Toolbar Interaction', () => {
     it('clicking zoom button in toolbar activates zoom tool', async () => {
       const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await zoomBtn.waitForExist({ timeout: 10000, timeoutMsg: 'Zoom tool button did not appear' });
       await zoomBtn.click();
 
       // Wait for tool activation
@@ -27,9 +28,12 @@ describe('Zoom Tool E2E', () => {
     });
 
     it('Z key shortcut activates zoom tool', async () => {
+      // Wait for toolbar to be ready
+      const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await zoomBtn.waitForExist({ timeout: 10000, timeoutMsg: 'Zoom tool button did not appear' });
+
       await browser.keys('z');
 
-      const zoomBtn = await $('[data-testid="tool-zoom"]');
       await browser.waitUntil(
         async () => {
           const classes = await zoomBtn.getAttribute('class');
@@ -47,6 +51,7 @@ describe('Zoom Tool E2E', () => {
     it('left click on map zooms in', async () => {
       // Activate zoom tool via toolbar click
       const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await zoomBtn.waitForExist({ timeout: 10000 });
       await zoomBtn.click();
       await browser.waitUntil(
         async () => {
@@ -59,7 +64,7 @@ describe('Zoom Tool E2E', () => {
       const initialZoom = await getMapZoom();
       expect(initialZoom).toBeGreaterThanOrEqual(0);
 
-      const mapCanvas = await $('canvas');
+      const mapCanvas = await $('canvas.maplibregl-canvas');
       const location = await mapCanvas.getLocation();
       const size = await mapCanvas.getSize();
 
@@ -96,6 +101,7 @@ describe('Zoom Tool E2E', () => {
     it('right click on map zooms out', async () => {
       // Activate zoom tool via toolbar click
       const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await zoomBtn.waitForExist({ timeout: 10000 });
       await zoomBtn.click();
       await browser.waitUntil(
         async () => {
@@ -105,11 +111,14 @@ describe('Zoom Tool E2E', () => {
         { timeout: 2000 }
       );
 
-      const mapCanvas = await $('canvas');
+      const mapCanvas = await $('canvas.maplibregl-canvas');
       const location = await mapCanvas.getLocation();
       const size = await mapCanvas.getSize();
       const centerX = Math.round(location.x + size.width / 2);
       const centerY = Math.round(location.y + size.height / 2);
+
+      // Get zoom before any clicks
+      const zoomBeforeFirstClick = await getMapZoom();
 
       // Left click to zoom in first so we have room to zoom out
       await browser.performActions([
@@ -126,17 +135,17 @@ describe('Zoom Tool E2E', () => {
       ]);
       await browser.releaseActions();
 
-      // Wait for zoom in to complete
+      // Wait for zoom in to complete (relative comparison, not absolute)
       await browser.waitUntil(
         async () => {
           const zoom = await getMapZoom();
-          return zoom > 1;
+          return zoom > zoomBeforeFirstClick;
         },
-        { timeout: 5000 }
+        { timeout: 5000, timeoutMsg: 'Zoom did not increase after first click' }
       );
 
       const initialZoom = await getMapZoom();
-      expect(initialZoom).toBeGreaterThan(1);
+      expect(initialZoom).toBeGreaterThan(zoomBeforeFirstClick);
 
       // Right click to zoom out
       await browser.performActions([
@@ -171,6 +180,7 @@ describe('Zoom Tool E2E', () => {
     it('drag rectangle zooms to fit area', async () => {
       // Activate zoom tool via toolbar click
       const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await zoomBtn.waitForExist({ timeout: 10000 });
       await zoomBtn.click();
       await browser.waitUntil(
         async () => {
@@ -183,7 +193,7 @@ describe('Zoom Tool E2E', () => {
       const initialZoom = await getMapZoom();
       expect(initialZoom).toBeGreaterThanOrEqual(0);
 
-      const mapCanvas = await $('canvas');
+      const mapCanvas = await $('canvas.maplibregl-canvas');
       const location = await mapCanvas.getLocation();
       const size = await mapCanvas.getSize();
 
@@ -225,6 +235,7 @@ describe('Zoom Tool E2E', () => {
     it('box zoom overlay visible during drag', async () => {
       // Activate zoom tool via toolbar click
       const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await zoomBtn.waitForExist({ timeout: 10000 });
       await zoomBtn.click();
       await browser.waitUntil(
         async () => {
@@ -234,7 +245,7 @@ describe('Zoom Tool E2E', () => {
         { timeout: 2000 }
       );
 
-      const mapCanvas = await $('canvas');
+      const mapCanvas = await $('canvas.maplibregl-canvas');
       const location = await mapCanvas.getLocation();
       const size = await mapCanvas.getSize();
 
@@ -283,6 +294,7 @@ describe('Zoom Tool E2E', () => {
     it('hold Z then release restores previous tool', async () => {
       // Start with merge tool via toolbar click
       const mergeBtn = await $('[data-testid="tool-merge"]');
+      await mergeBtn.waitForExist({ timeout: 10000 });
       await mergeBtn.click();
 
       // Wait for merge tool to be active
@@ -366,7 +378,7 @@ describe('Zoom Tool E2E', () => {
                 };
               };
             }).__E2E_TEST__;
-            return e2e?.projectStore?.getState()?.config !== null;
+            return e2e?.projectStore?.getState()?.config != null;
           });
           return hasConfig;
         },
@@ -394,6 +406,7 @@ describe('Zoom Tool E2E', () => {
 
       // Activate zoom tool via toolbar click
       const zoomBtn = await $('[data-testid="tool-zoom"]');
+      await zoomBtn.waitForExist({ timeout: 10000 });
       await zoomBtn.click();
       await browser.waitUntil(
         async () => {
@@ -406,7 +419,7 @@ describe('Zoom Tool E2E', () => {
       const initialZoom = await getMapZoom();
       expect(initialZoom).toBeGreaterThanOrEqual(0);
 
-      const mapCanvas = await $('canvas');
+      const mapCanvas = await $('canvas.maplibregl-canvas');
       const location = await mapCanvas.getLocation();
       const size = await mapCanvas.getSize();
       const centerX = Math.round(location.x + size.width / 2);
@@ -427,13 +440,16 @@ describe('Zoom Tool E2E', () => {
       ]);
       await browser.releaseActions();
 
-      // Wait for zoom to change
+      // Wait for zoom animation to complete (300ms animation + 200ms buffer)
+      await browser.pause(500);
+
+      // Wait for zoom to have changed (should already be done after animation)
       await browser.waitUntil(
         async () => {
           const newZoom = await getMapZoom();
           return newZoom > initialZoom;
         },
-        { timeout: 5000 }
+        { timeout: 5000, timeoutMsg: 'Zoom did not increase' }
       );
 
       const newZoom = await getMapZoom();
