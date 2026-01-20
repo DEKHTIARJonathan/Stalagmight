@@ -84,6 +84,12 @@ export default class SurveyLayer {
   // GPS origin for coordinate transforms (enables satellite tile alignment)
   private gpsOrigin: GpsOrigin | null = null;
 
+  // Bound event handlers stored for proper cleanup in destroy()
+  private boundStationEnter: ((e: maplibregl.MapLayerMouseEvent) => void) | null = null;
+  private boundStationLeave: (() => void) | null = null;
+  private boundShotEnter: ((e: maplibregl.MapLayerMouseEvent) => void) | null = null;
+  private boundShotLeave: (() => void) | null = null;
+
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
     this.callbacks = callbacks;
@@ -222,6 +228,7 @@ export default class SurveyLayer {
     // Then visual layers follow...
 
     // Shot hitbox layer - added first (bottom of stack)
+    // Use opaque color with tiny opacity for reliable queryRenderedFeatures
     this.map.addLayer({
       id: this.shotsHitboxLayerId,
       type: 'line',
@@ -231,19 +238,20 @@ export default class SurveyLayer {
       },
       paint: {
         'line-width': this.getShotHitArea(),
-        'line-color': 'rgba(0, 0, 0, 0)', // Transparent color
+        'line-color': '#000000', // Opaque color - use opacity for invisibility
         'line-opacity': 0.001, // CRITICAL: non-zero for queryRenderedFeatures
       },
     });
 
     // Station hitbox layer - above shots for correct hover priority
+    // Use opaque color with tiny opacity for reliable queryRenderedFeatures
     this.map.addLayer({
       id: this.stationsHitboxLayerId,
       type: 'circle',
       source: this.sourceId + '-stations',
       paint: {
         'circle-radius': this.getStationHitArea(),
-        'circle-color': 'rgba(0, 0, 0, 0)', // Transparent color
+        'circle-color': '#000000', // Opaque color - use opacity for invisibility
         'circle-opacity': 0.001, // CRITICAL: non-zero for queryRenderedFeatures
         'circle-stroke-width': 0,
       },
@@ -542,7 +550,8 @@ export default class SurveyLayer {
 
     // Station hover handlers - use HITBOX layer for larger hover area
     // Stations take priority over shots
-    this.map.on('mouseenter', this.stationsHitboxLayerId, (e) => {
+    // Store bound functions for proper cleanup in destroy()
+    this.boundStationEnter = (e: maplibregl.MapLayerMouseEvent) => {
       this.map.getCanvas().style.cursor = 'pointer';
       this.callbacks.onFeatureHover?.(true);
       const feature = e.features?.[0];
@@ -561,17 +570,20 @@ export default class SurveyLayer {
         this.callbacks.onStationHover?.(ref);
         this.updateVisualState();
       }
-    });
+    };
 
-    this.map.on('mouseleave', this.stationsHitboxLayerId, () => {
+    this.boundStationLeave = () => {
       this.callbacks.onFeatureHover?.(false);
       this.hoveredStationId = null;
       this.callbacks.onStationHover?.(null);
       this.updateVisualState();
-    });
+    };
+
+    this.map.on('mouseenter', this.stationsHitboxLayerId, this.boundStationEnter);
+    this.map.on('mouseleave', this.stationsHitboxLayerId, this.boundStationLeave);
 
     // Shot hover handlers - use HITBOX layer, stations take priority
-    this.map.on('mouseenter', this.shotsHitboxLayerId, (e) => {
+    this.boundShotEnter = (e: maplibregl.MapLayerMouseEvent) => {
       // Don't highlight shots if a station is already hovered
       if (this.hoveredStationId) {
         return;
@@ -586,9 +598,9 @@ export default class SurveyLayer {
         this.callbacks.onShotHover?.({ sectionId: sectionId as number, shotId: shotId as number });
         this.updateVisualState();
       }
-    });
+    };
 
-    this.map.on('mouseleave', this.shotsHitboxLayerId, () => {
+    this.boundShotLeave = () => {
       // Only clear feature hover if no station is being hovered
       if (!this.hoveredStationId) {
         this.callbacks.onFeatureHover?.(false);
@@ -596,7 +608,10 @@ export default class SurveyLayer {
       this.hoveredShotId = null;
       this.callbacks.onShotHover?.(null);
       this.updateVisualState();
-    });
+    };
+
+    this.map.on('mouseenter', this.shotsHitboxLayerId, this.boundShotEnter);
+    this.map.on('mouseleave', this.shotsHitboxLayerId, this.boundShotLeave);
 
     // UNIFIED context menu handler - queries both hitbox layers with station priority
     this.map.on('contextmenu', this.handleContextMenu);
@@ -783,21 +798,25 @@ export default class SurveyLayer {
     for (const feature of features) {
       const geom = feature.geometry;
       if (geom.type === 'LineString' && geom.coordinates.length >= 2) {
-        // Project line endpoints to screen coordinates
-        const [lng1, lat1] = geom.coordinates[0] as [number, number];
-        const [lng2, lat2] = geom.coordinates[1] as [number, number];
-        const p1 = this.map.project([lng1, lat1]);
-        const p2 = this.map.project([lng2, lat2]);
+        // Iterate all segments to find minimum distance
+        // (handles multi-segment lines if shot geometries ever become complex)
+        for (let i = 0; i < geom.coordinates.length - 1; i++) {
+          const coord1 = geom.coordinates[i] as [number, number] | undefined;
+          const coord2 = geom.coordinates[i + 1] as [number, number] | undefined;
+          if (!coord1 || !coord2) continue;
 
-        // Compute distance to line segment
-        const dist = this.distanceToLineSegment(
-          e.point.x, e.point.y,
-          p1.x, p1.y, p2.x, p2.y
-        );
+          const p1 = this.map.project(coord1);
+          const p2 = this.map.project(coord2);
 
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearest = feature;
+          const dist = this.distanceToLineSegment(
+            e.point.x, e.point.y,
+            p1.x, p1.y, p2.x, p2.y
+          );
+
+          if (dist < nearestDist) {
+            nearestDist = dist;
+            nearest = feature;
+          }
         }
       }
     }
@@ -1468,6 +1487,29 @@ export default class SurveyLayer {
   }
 
   destroy() {
+    // Unregister event handlers first (before removing layers)
+    this.map.off('click', this.handleMapClick);
+    this.map.off('contextmenu', this.handleContextMenu);
+
+    if (this.boundStationEnter) {
+      this.map.off('mouseenter', this.stationsHitboxLayerId, this.boundStationEnter);
+    }
+    if (this.boundStationLeave) {
+      this.map.off('mouseleave', this.stationsHitboxLayerId, this.boundStationLeave);
+    }
+    if (this.boundShotEnter) {
+      this.map.off('mouseenter', this.shotsHitboxLayerId, this.boundShotEnter);
+    }
+    if (this.boundShotLeave) {
+      this.map.off('mouseleave', this.shotsHitboxLayerId, this.boundShotLeave);
+    }
+
+    // Clear bound handler references
+    this.boundStationEnter = null;
+    this.boundStationLeave = null;
+    this.boundShotEnter = null;
+    this.boundShotLeave = null;
+
     // Remove all layers first (must be done before removing their sources)
     if (this.map.getLayer(this.labelsLayerId)) {
       this.map.removeLayer(this.labelsLayerId);
