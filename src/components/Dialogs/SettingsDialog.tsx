@@ -311,25 +311,29 @@ export default function SettingsDialog() {
     setIsReloading(true);
     try {
       const newConfig = await invoke<Config>('reload_config');
+
+      // Check if component is still mounted before updating state
+      if (!mountedRef.current) return;
+
       const changes = computeConfigDiff(localConfig, newConfig);
 
       setLocalConfig(newConfig);
       setMaxSizeInput(String(newConfig.cache.tile_cache_max_mb));
       setConfig(newConfig); // Update store without persisting
 
-      if (!mountedRef.current) return;
-
       if (changes.length > 0) {
         const changeList = changes
-          .map((c) => `- ${c.path}: ${c.oldValue} -> ${c.newValue}`)
+          .map((c) => `\u2022 ${c.path}: ${c.oldValue} \u2192 ${c.newValue}`)
           .join('\n');
         alert(`Config reloaded:\n\n${changeList}`);
       } else {
-        alert('Config reloaded (no changes)');
+        alert('Config reloaded (no monitored settings changed)');
       }
     } catch (error) {
       console.error('[SettingsDialog] Failed to reload config:', error);
-      alert(`Failed to reload config: ${error}`);
+      if (mountedRef.current) {
+        alert(`Failed to reload config: ${error}`);
+      }
     } finally {
       if (mountedRef.current) {
         setIsReloading(false);
