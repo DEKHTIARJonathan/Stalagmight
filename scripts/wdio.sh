@@ -334,7 +334,7 @@ run_tests() {
     cd "$PROJECT_ROOT"
 
     # Build the command
-    CMD="SKIP_BUILD=1 pnpm test:e2e"
+    CMD="pnpm test:e2e"
 
     # Add wdio arguments
     if [[ ${#WDIO_ARGS[@]} -gt 0 ]]; then
@@ -345,6 +345,9 @@ run_tests() {
     if $USE_XVFB; then
         CMD="xvfb-run -a $CMD"
     fi
+
+    # Prepend SKIP_BUILD (after xvfb-run handling)
+    CMD="SKIP_BUILD=1 $CMD"
 
     info "Executing: $CMD"
     echo ""

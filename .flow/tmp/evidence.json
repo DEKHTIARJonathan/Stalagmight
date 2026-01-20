@@ -1,1 +1,0 @@
-{"tests_pass": true, "test_cmd": "cargo test core::validation::tests", "tests_added": ["test_validate_shot_length", "test_validate_azimuth_range", "test_validate_lrud_values", "test_validate_gps_coordinates", "test_validate_backsight_tolerance"], "file_changed": "src-tauri/src/core/validation.rs"}
