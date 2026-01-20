@@ -89,6 +89,27 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       let projectPath: string | null = null;
       let sectionCounter = 0;
 
+      // Cache mock state - tracks cache operations for verification
+      const defaultCacheStats = {
+        total_tiles: 150,
+        total_bytes: 25600000, // ~25MB
+        providers: {
+          esri: { tiles: 150, bytes: 25600000 },
+        },
+      };
+      let mockCacheStats = { ...defaultCacheStats, providers: { ...defaultCacheStats.providers } };
+      let mockNetworkStatus = true; // Online by default
+
+      // Expose reset function for tests via window
+      (window as unknown as Record<string, unknown>).__MOCK_CACHE_RESET__ = () => {
+        mockCacheStats = { ...defaultCacheStats, providers: { ...defaultCacheStats.providers } };
+        mockNetworkStatus = true;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_SET_NETWORK_STATUS__ = (status: boolean) => {
+        mockNetworkStatus = status;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_GET_CACHE_STATS__ = () => mockCacheStats;
+
       return function mockCommand(
         cmd: string,
         args?: Record<string, unknown>
@@ -843,6 +864,37 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'set_shot_virtual':
             console.log('[Mock IPC] set_shot_virtual called with:', args);
             return { success: true };
+
+          // Cache commands
+          case 'get_cache_stats':
+            console.log('[Mock IPC] get_cache_stats called');
+            return mockCacheStats;
+
+          case 'clear_tile_cache': {
+            const provider = args?.provider as string | undefined;
+            console.log('[Mock IPC] clear_tile_cache called, provider:', provider);
+            if (provider) {
+              // Clear specific provider
+              delete mockCacheStats.providers[provider as keyof typeof mockCacheStats.providers];
+              // Recalculate totals
+              let totalTiles = 0;
+              let totalBytes = 0;
+              for (const p of Object.values(mockCacheStats.providers)) {
+                totalTiles += p.tiles;
+                totalBytes += p.bytes;
+              }
+              mockCacheStats.total_tiles = totalTiles;
+              mockCacheStats.total_bytes = totalBytes;
+            } else {
+              // Clear all
+              mockCacheStats = { total_tiles: 0, total_bytes: 0, providers: {} };
+            }
+            return undefined; // void return
+          }
+
+          case 'get_network_status':
+            console.log('[Mock IPC] get_network_status called');
+            return mockNetworkStatus;
 
           default:
             console.warn(`[Mock IPC] Unhandled command: ${cmd}`);
