@@ -9,19 +9,20 @@ import { useProjectStore } from './store/projectStore';
 declare global {
   interface Window {
     __E2E_TEST__?: {
-      uiStore: typeof useUIStore;
-      projectStore: typeof useProjectStore;
+      uiStore?: typeof useUIStore;
+      projectStore?: typeof useProjectStore;
     };
   }
 }
 
 // Expose stores for E2E testing (only in dev/test mode)
 // Guarded to prevent shipping internal store access to production builds
+// Uses additive pattern to avoid clobbering other test helpers
 if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
-  window.__E2E_TEST__ = {
-    uiStore: useUIStore,
-    projectStore: useProjectStore,
-  };
+  const testAPI = window.__E2E_TEST__ || {};
+  testAPI.uiStore = useUIStore;
+  testAPI.projectStore = useProjectStore;
+  window.__E2E_TEST__ = testAPI;
 }
 
 const rootElement = document.getElementById('root');
