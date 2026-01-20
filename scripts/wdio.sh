@@ -333,12 +333,13 @@ run_tests() {
 
     cd "$PROJECT_ROOT"
 
-    # Build the command
-    CMD="SKIP_BUILD=1 pnpm test:e2e"
+    # Build the command - use npx wdio directly to properly handle --spec flag
+    # (pnpm test:e2e -- --spec doesn't pass the flag correctly)
+    CMD="SKIP_BUILD=1 npx wdio run wdio.conf.ts"
 
     # Add wdio arguments
     if [[ ${#WDIO_ARGS[@]} -gt 0 ]]; then
-        CMD="$CMD -- ${WDIO_ARGS[*]}"
+        CMD="$CMD ${WDIO_ARGS[*]}"
     fi
 
     # Wrap with xvfb-run if needed

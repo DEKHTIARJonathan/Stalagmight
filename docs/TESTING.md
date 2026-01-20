@@ -295,17 +295,20 @@ See `wdio.conf.ts`. Key settings:
 # Run all tests (auto-detects display, ensures fresh build)
 ./scripts/wdio.sh
 
+# Run a specific spec file
+./scripts/wdio.sh --spec e2e/specs/ctrl-drag-pan-movement.spec.ts
+
 # Force rebuild before tests
 ./scripts/wdio.sh --rebuild
-
-# Run specific spec file
-./scripts/wdio.sh --spec e2e/specs/dmp-integration.spec.ts
 
 # Force headless mode (uses xvfb)
 ./scripts/wdio.sh --headless
 
 # Skip build checks (use with caution - can cause stale binary issues)
 ./scripts/wdio.sh --skip-build
+
+# Combine options: skip build and run single spec
+./scripts/wdio.sh --skip-build --spec e2e/specs/map-interactions.spec.ts
 ```
 
 The `wdio.sh` script automatically handles:
@@ -314,6 +317,7 @@ The `wdio.sh` script automatically handles:
 - Display detection (uses xvfb automatically if headless)
 - Port cleanup (kills stale tauri-driver/cavechef processes)
 - Build freshness checks (rebuilds if source is newer than binary)
+- Proper argument passing to wdio (uses `npx wdio` directly)
 
 **Manual run (not recommended):**
 
@@ -326,7 +330,12 @@ xvfb-run -a pnpm test:e2e
 
 # Skip rebuild if binary already exists
 SKIP_BUILD=1 xvfb-run -a pnpm test:e2e
+
+# Run a single spec file (must use npx wdio directly, not pnpm test:e2e)
+SKIP_BUILD=1 npx wdio run wdio.conf.ts --spec e2e/specs/ctrl-drag-pan-movement.spec.ts
 ```
+
+> **Note**: When running a single spec file manually, you must use `npx wdio run wdio.conf.ts --spec <file>` directly. The `pnpm test:e2e -- --spec <file>` syntax does not properly pass the `--spec` flag.
 
 #### Binary Path Configuration
 
@@ -340,14 +349,6 @@ CARGO_TARGET_DIR=./src-tauri/target xvfb-run -a pnpm test:e2e
 
 # Combined with skip build
 CARGO_TARGET_DIR=./src-tauri/target SKIP_BUILD=1 xvfb-run -a pnpm test:e2e
-```
-
-#### Running Individual Specs
-
-```bash
-# Run a single spec file
-CARGO_TARGET_DIR=./src-tauri/target SKIP_BUILD=1 xvfb-run -a \
-  npx wdio run wdio.conf.ts --spec e2e/specs/keyboard-shortcuts.spec.ts
 ```
 
 ## Backend Rust Tests
