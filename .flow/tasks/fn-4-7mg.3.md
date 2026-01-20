@@ -1,38 +1,52 @@
 # fn-4-7mg.3 Update click/hover event handlers to use hitbox layers
 
 ## Description
-Update event handlers with nearest resolution for CLICK ONLY.
+Update event handlers with unified click handler and station priority.
 
-## Nearest Resolution: Click/Contextmenu ONLY
+## UNIFIED Click/Contextmenu Handler
 
-**Hover uses standard behavior** (mouseenter/mouseleave on hitbox layers). MapLibre gives topmost feature - that's fine for hover.
+**CRITICAL**: Use a single unified click handler that queries both hitbox layers and resolves priority:
 
-**Click and contextmenu use nearest resolution**:
+1. **Stations take priority over shots** - always check stations first
+2. Query both layers, resolve nearest station first
+3. If no station hit, resolve nearest shot
+4. If neither, treat as empty-click
 
 ```typescript
-private handleStationClick = (e: MapLayerMouseEvent) => {
-  const nearest = this.resolveNearestStation(e, e.features ?? []);
-  if (!nearest) return;
-  // ... use nearest
-};
-
-private handleContextMenu = (e: MapLayerMouseEvent) => {
-  // Query and resolve nearest for stations
-  const stationHits = this.map.queryRenderedFeatures(e.point, {
-    layers: [this.stationsHitboxLayerId]  // NOT ghost layers
+private handleMapClick = (e: MapLayerMouseEvent) => {
+  // Query both hitbox layers
+  const stationFeatures = this.map.queryRenderedFeatures(e.point, {
+    layers: [this.stationsHitboxLayerId]
   });
-  const nearestStation = this.resolveNearestStation(e, stationHits);
-
-  // Query and resolve nearest for shots
-  const shotHits = this.map.queryRenderedFeatures(e.point, {
+  const shotFeatures = this.map.queryRenderedFeatures(e.point, {
     layers: [this.shotsHitboxLayerId]
   });
-  const nearestShot = this.resolveNearestShot(e, shotHits);
-  // ...
+
+  // Stations take priority
+  const nearestStation = this.resolveNearestStation(e, stationFeatures);
+  if (nearestStation) {
+    this.handleStationSelection(nearestStation, e);
+    return;
+  }
+
+  // Then shots
+  const nearestShot = this.resolveNearestShot(e, shotFeatures);
+  if (nearestShot) {
+    this.handleShotSelection(nearestShot, e);
+    return;
+  }
+
+  // Empty click
+  this.handleEmptyClick(e);
 };
 ```
 
-**Hover handlers: NO nearest resolution**:
+Same pattern for `handleContextMenu`.
+
+## Hover: Standard Behavior (No Change)
+
+**Hover uses standard behavior** (mouseenter/mouseleave on hitbox layers). MapLibre gives topmost feature - that's fine for hover since station hitbox layers are stacked above shot hitbox layers.
+
 ```typescript
 private handleStationEnter = (e: MapLayerMouseEvent) => {
   // Use e.features[0] directly - standard MapLibre behavior
@@ -444,11 +458,12 @@ Cursor should still change to 'pointer' when hovering hitbox layers (not just vi
 
 Station hitbox has priority over shot hitbox (existing behavior preserved). If both station-hitbox and shot-hitbox features are at the click point, station wins.
 ## Acceptance
-- [ ] Nearest resolution for CLICK and CONTEXTMENU only
-- [ ] Hover uses standard mouseenter/mouseleave (no nearest)
+- [ ] UNIFIED click handler queries both hitbox layers with station priority
+- [ ] UNIFIED contextmenu handler queries both hitbox layers with station priority
+- [ ] Hover uses standard mouseenter/mouseleave (no nearest) - station hitbox above shot hitbox
 - [ ] distanceToLineSegment() for shot selection
 - [ ] Ghost layers NOT included in queries
-- [ ] Global empty-click queries hitbox layers
+- [ ] Empty-click handled in unified handler when no features hit
 - [ ] Snap uses config.map.snap.* (migration)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary

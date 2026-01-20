@@ -14,8 +14,33 @@ Add hitbox layers with larger configurable sizes for improved click detection.
 
 - `survey-stations-hitbox`, `survey-shots-hitbox` with `opacity: 0.001`
 - Ghost hitbox layers: **non-interactive** (debug visualization only, NOT in queries)
-- **Layer order**: Insert hitbox layers before `survey-ghost-shots` (same anchor as visual layers)
-- **Satellite anchor update**: Change `satellite-tiles` insertion to anchor before `survey-stations-hitbox` (first hitbox layer)
+- **Satellite anchor update**: Change `satellite-tiles` insertion to anchor before `survey-shots-hitbox` (first layer in stack)
+
+**Layer insertion order (deterministic scheme)**:
+
+```typescript
+// Step 1: Add shots hitbox (before ghost shots)
+this.map.addLayer(shotsHitboxLayer, 'survey-ghost-shots');
+
+// Step 2: Add stations hitbox BEFORE shots hitbox (so stations above shots)
+this.map.addLayer(stationsHitboxLayer, 'survey-shots-hitbox');
+
+// Step 3: Add ghost hitbox layers
+this.map.addLayer(ghostShotsHitboxLayer, 'survey-shots-hitbox');
+this.map.addLayer(ghostStationsHitboxLayer, 'survey-ghost-shots-hitbox');
+
+// Step 4: Update satellite anchor (AFTER hitbox layers exist)
+// Satellite insertion: before 'survey-shots-hitbox' (now lowest survey layer)
+
+// Step 5: If satellite layer already exists, move it below hitboxes
+if (this.map.getLayer('satellite-tiles')) {
+  this.map.moveLayer('satellite-tiles', 'survey-shots-hitbox');
+}
+```
+
+**Verification**: Add E2E test that verifies `map.getStyle().layers` order has station-hitbox above shot-hitbox.
+
+This ensures **station hitboxes are above shot hitboxes** for correct hover priority.
 
 #### 2. Hover UX Change (Intentional)
 
@@ -23,34 +48,77 @@ Hover triggers within hitbox area, not just visual glyph. **Intentional and acce
 
 #### 3. Click/Contextmenu Handling
 
-**ALWAYS query hitbox layers and use nearest resolver** (don't rely on `e.features[0]`).
+**Use a UNIFIED click handler** that queries both hitbox layers and resolves priority in one place:
+
+1. **Stations take priority over shots** - always check stations first
+2. Query both layers, resolve nearest station first
+3. If no station hit, resolve nearest shot
+4. If neither, treat as empty-click
 
 **Label exclusion behavior change (intentional)**: Previously, clicking a label would prevent empty-click actions. After this change, clicking a label outside a hitbox will count as empty-click and trigger tool behavior. This is an intentional simplification - labels are not interactive targets.
 
 ```typescript
-private handleStationClick = (e: MapLayerMouseEvent) => {
-  // Query hitbox layer explicitly
-  const features = this.map.queryRenderedFeatures(e.point, {
+private handleMapClick = (e: MapLayerMouseEvent) => {
+  // Query both hitbox layers
+  const stationFeatures = this.map.queryRenderedFeatures(e.point, {
     layers: [this.stationsHitboxLayerId]
   });
-  const nearest = this.resolveNearestStation(e, features);
-  if (!nearest) return;
-  // ...
+  const shotFeatures = this.map.queryRenderedFeatures(e.point, {
+    layers: [this.shotsHitboxLayerId]
+  });
+
+  // Stations take priority
+  const nearestStation = this.resolveNearestStation(e, stationFeatures);
+  if (nearestStation) {
+    this.handleStationSelection(nearestStation, e);
+    return;
+  }
+
+  // Then shots
+  const nearestShot = this.resolveNearestShot(e, shotFeatures);
+  if (nearestShot) {
+    this.handleShotSelection(nearestShot, e);
+    return;
+  }
+
+  // Empty click
+  this.handleEmptyClick(e);
 };
 ```
 
+Same pattern for `handleContextMenu`.
+
 #### 4. Query Sites (all must query hitbox layers, NOT ghost)
 
-1. `SurveyLayer.handleStationClick` - query `survey-stations-hitbox`
-2. `SurveyLayer.handleShotClick` - query `survey-shots-hitbox`
-3. `SurveyLayer global empty-click` - query both hitbox layers
-4. `SurveyLayer.handleContextMenu` - query both hitbox layers
-5. `MapCanvas box select` - query `survey-stations-hitbox`
+**Per-layer click handlers are REMOVED** in favor of unified handlers:
+
+1. `SurveyLayer.handleMapClick` (UNIFIED) - queries both hitbox layers, station priority
+2. `SurveyLayer.handleContextMenu` (UNIFIED) - queries both hitbox layers, station priority
+3. `MapCanvas box select` - query `survey-stations-hitbox`
+4. Hover handlers remain per-layer (mouseenter/mouseleave on each hitbox layer)
 
 #### 5. Visual State Scaling
 
 Stations (from `config.map.station.radius`): zeroDatum=radius*2, snapped=radius+3, hovered=radius+2, selected=radius+1
 Shots (from `config.map.shot.width`): hovered=width+2, selected=width+1
+
+**Priority order** (first matching wins in `updateVisualState()`):
+1. **Snapped** - highest priority (radius+3)
+2. **Zero datum** - second (radius*2)
+3. **Hovered** - third (radius+2)
+4. **Selected** - fourth (radius+1)
+5. **Base** - default (radius)
+
+```typescript
+// Station radius with explicit priority
+['case',
+  ['==', stationIdExpr, this.snappedStationId ?? ''], baseRadius + 3,  // 1. Snapped
+  ['==', ['get', 'isZeroDatum'], true], baseRadius * 2,                // 2. Zero datum
+  ['==', stationIdExpr, this.hoveredStationId ?? ''], baseRadius + 2,  // 3. Hovered
+  ['==', stationIdExpr, this.selectedStationId ?? ''], baseRadius + 1, // 4. Selected
+  baseRadius                                                            // 5. Base
+]
+```
 
 #### 6. Config Wiring
 
@@ -116,10 +184,11 @@ log_hit_detection = false
 
 ### Config Validation (Rust)
 
-**Add `Config::normalize()` and call it from these locations:**
-- `Config::load()` - after deserializing
-- `Config::save()` - before serializing
-- `commands::config::update_config()` - after applying updates, before saving
+**Normalization Strategy**: Call `normalize()` ONLY inside `Config::load()` and `Config::save()`. Do NOT call it elsewhere to avoid double-normalization.
+
+- `Config::load()` - calls `normalize()` after deserializing
+- `Config::save()` - calls `normalize()` before serializing
+- `update_config` and `reload_config` commands - use `load()` and `save()` which handle normalization internally
 
 **Implementation:**
 
@@ -150,8 +219,8 @@ impl ShotConfig {
 ```rust
 #[tauri::command]
 pub fn reload_config(state: State<AppState>) -> Result<Config, String> {
-    let mut new_config = Config::load().map_err(|e| e.to_string())?;
-    new_config.normalize();
+    // Config::load() already calls normalize() internally
+    let new_config = Config::load().map_err(|e| e.to_string())?;
     *state.config.lock().unwrap() = new_config.clone();
     Ok(new_config)
 }
@@ -199,12 +268,14 @@ const handleReloadConfig = async () => {
 - `e2e-playwright/mocks/tauri-ipc.ts`: Update mock config
 - Add test helper to expose station coordinates (dev/test only):
   ```typescript
-  // In SurveyLayer.ts or MapCanvas.tsx
+  // In SurveyLayer.update() - called when stations change
   if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
     window.__E2E_TEST__ = window.__E2E_TEST__ || {};
-    window.__E2E_TEST__.stations = stationCoordinates;
+    window.__E2E_TEST__.stations = this.getStationCoordinates();
+    window.__E2E_TEST__.mapInstance = this.map;
   }
   ```
+  **Update timing**: Set in `SurveyLayer.update()` after station data is updated, ensuring tests read current data.
 
 **Docs:**
 - `docs/configuration.md`: Update
@@ -214,12 +285,14 @@ const handleReloadConfig = async () => {
 - [ ] Snake_case naming throughout
 - [ ] Every nested config struct has Default impl + #[serde(default)]
 - [ ] Config validation: is_finite(), clamp, hit_area >= radius/width
-- [ ] Config::normalize() called in load(), save(), and update_config()
-- [ ] Click/contextmenu use queryRenderedFeatures + nearest resolver (not e.features[0])
+- [ ] Config::normalize() called ONLY in load() and save() (not elsewhere)
+- [ ] Unified click/contextmenu handler queries both hitbox layers with station priority
 - [ ] Hover uses standard layer events (intentional UX change documented)
 - [ ] Label exclusion behavior change documented (clicking labels outside hitbox triggers empty-click)
 - [ ] Ghost hitbox layers NOT in any queries
-- [ ] Satellite tiles anchor updated to insert before survey-stations-hitbox
+- [ ] Layer order: station hitboxes above shot hitboxes for correct hover priority
+- [ ] Satellite tiles anchor updated to insert before survey-shots-hitbox (first layer)
+- [ ] Visual scaling priority order: snapped > zeroDatum > hovered > selected > base
 - [ ] Visual scaling: zeroDatum=radius*2, snapped=radius+3, hovered=radius+2, selected=radius+1
 - [ ] Shot scaling: hovered=width+2, selected=width+1
 - [ ] SurveyLayer has fallback defaults (radius=4, width=2, hit_area=10/8)
@@ -227,5 +300,6 @@ const handleReloadConfig = async () => {
 - [ ] reload_config command registered in lib.rs
 - [ ] Store setConfig action (no persist)
 - [ ] Reload button disabled when isDirty
-- [ ] E2E test helper exposes station coordinates (guarded by dev/test mode)
+- [ ] E2E test helper exposes station coordinates (guarded by dev/test mode, updated in SurveyLayer.update())
+- [ ] E2E test verifies layer order (station-hitbox above shot-hitbox via map.getStyle().layers)
 - [ ] All migration checklist items completed

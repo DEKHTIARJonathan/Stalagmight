@@ -49,6 +49,12 @@ export default function MapCanvas() {
 
   // Get GPS origin for coordinate transforms (enables satellite tile alignment)
   const gpsOrigin = config?.map.satellite_gps_origin ?? null;
+
+  // Extract zoom config values for stable dependencies (used by zoom handlers and effects)
+  const zoomStep = config?.map.zoom_step ?? 1.0;
+  const zoomMin = config?.map.zoom_min ?? 0;
+  const zoomMax = config?.map.zoom_max ?? 22;
+
   const {
     mapZoom,
     setMapCenter,
@@ -337,6 +343,8 @@ export default function MapCanvas() {
   const handleZoomBoxMove = useCallback(
     (e: React.MouseEvent) => {
       if (!zoomBox.start || !mapContainer.current) return;
+      // Only update if left mouse button is still pressed (prevents stuck state on focus loss)
+      if (e.buttons !== 1) return;
 
       const rect = mapContainer.current.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -365,10 +373,8 @@ export default function MapCanvas() {
       const centerY = (minY + maxY) / 2;
       const clickLngLat = map.current.unproject([centerX, centerY]);
 
-      const step = config?.map.zoom_step ?? 1.0;
-      const maxZoom = config?.map.zoom_max ?? 22;
       const currentZoom = map.current.getZoom();
-      const targetZoom = Math.min(maxZoom, currentZoom + step);
+      const targetZoom = Math.min(zoomMax, currentZoom + zoomStep);
 
       if (targetZoom !== currentZoom) {
         map.current.easeTo({
@@ -383,17 +389,16 @@ export default function MapCanvas() {
       const sw = map.current.unproject([minX, maxY]); // bottom-left screen = SW
       const ne = map.current.unproject([maxX, minY]); // top-right screen = NE
 
-      const maxZoom = config?.map.zoom_max ?? 22;
       map.current.fitBounds([sw, ne], {
         padding: 20,
         linear: true,
         duration: 300,
-        maxZoom,
+        maxZoom: zoomMax,
       });
     }
 
     setZoomBox({ start: null, end: null });
-  }, [zoomBox, config]);
+  }, [zoomBox, zoomStep, zoomMax]);
 
   // Move drag handlers
   const handleMoveDragMove = useCallback(
@@ -694,14 +699,15 @@ export default function MapCanvas() {
     map.current.setMaxZoom(config.map.zoom_max ?? 22);
   }, [config]);
 
-  // Track Ctrl key for cursor updates and box select cancellation
+  // Track Ctrl key for cursor updates and box/zoom select cancellation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Control' && !e.repeat) {
         setCtrlHeld(true);
 
-        // Cancel any active box select when Ctrl is pressed (mid-drag Ctrl converts to pan)
+        // Cancel any active box select or zoom box when Ctrl is pressed (mid-drag Ctrl converts to pan)
         setBoxSelect({ start: null, end: null });
+        setZoomBox({ start: null, end: null });
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -718,8 +724,9 @@ export default function MapCanvas() {
     const handleBlur = () => {
       ctrlDragActiveRef.current = false;
       setCtrlHeld(false);
-      // Cancel any active box select
+      // Cancel any active box select or zoom box
       setBoxSelect({ start: null, end: null });
+      setZoomBox({ start: null, end: null });
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -782,22 +789,27 @@ export default function MapCanvas() {
       }
     };
 
-    const handleMouseUpCapture = () => {
+    const handleMouseUpCapture = (e: MouseEvent) => {
       if (ctrlPanStart && map.current) {
         ctrlPanStart = null;
-        // Restore cursor using the same mapping as the main cursor effect
-        const cursors: Record<string, string> = {
-          select: 'default',
-          pan: 'grab',
-          zoom: 'zoom-in',
-          draw: 'crosshair',
-          delete: 'not-allowed',
-          merge: 'cell',
-          measure: 'crosshair',
-          move_section: 'move',
-          move_station: 'move',
-        };
-        map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
+        // Restore cursor: if Ctrl still held, show grab cursor for next potential pan
+        // Otherwise restore the tool cursor
+        if (e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool)) {
+          map.current.getCanvas().style.cursor = 'grab';
+        } else {
+          const cursors: Record<string, string> = {
+            select: 'default',
+            pan: 'grab',
+            zoom: 'zoom-in',
+            draw: 'crosshair',
+            delete: 'not-allowed',
+            merge: 'cell',
+            measure: 'crosshair',
+            move_section: 'move',
+            move_station: 'move',
+          };
+          map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
+        }
       }
     };
 
@@ -837,10 +849,6 @@ export default function MapCanvas() {
       window.removeEventListener('mouseup', handleMouseUpGlobal);
     };
   }, [activeTool]);
-
-  // Extract zoom config values for stable dependencies
-  const zoomStep = config?.map.zoom_step ?? 1.0;
-  const zoomMin = config?.map.zoom_min ?? 0;
 
   // Zoom tool capture handlers - intercept clicks on the map canvas to prevent SurveyLayer selection
   // and handle right-click zoom out behavior. Attaches to the canvas element specifically to avoid

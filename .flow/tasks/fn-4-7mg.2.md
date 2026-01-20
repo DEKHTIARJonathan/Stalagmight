@@ -270,24 +270,28 @@ this.map.addLayer({
 });
 ```
 
-### Layer order (FIRST to LAST)
+### Layer order (bottom to top) - CRITICAL for hover priority
 
-1. `survey-stations-hitbox` (NEW - this becomes first survey layer)
-2. `survey-shots-hitbox` (NEW)
-3. `survey-ghost-stations-hitbox` (NEW)
-4. `survey-ghost-shots-hitbox` (NEW)
+**Add layers in this exact sequence** to ensure station hitboxes are ABOVE shot hitboxes:
+
+1. `survey-shots-hitbox` - add FIRST (before `survey-ghost-shots`)
+2. `survey-stations-hitbox` - add SECOND (before `survey-shots-hitbox`, so stations above shots)
+3. `survey-ghost-shots-hitbox` - add third
+4. `survey-ghost-stations-hitbox` - add fourth
 5. `survey-merges`
 6. `survey-loop-closures`
 7. `survey-shots`
 8. ... rest of visual layers
 9. Labels
 
+**Why this order matters**: With station hitboxes above shot hitboxes, hover events on stations take priority when hitboxes overlap.
+
 ### CRITICAL: Update satellite layer insertion
 
-In MapCanvas.tsx, satellite layer insertion uses "before" parameter to insert below survey layers. Currently anchors on `survey-ghost-shots`. **Must change to `survey-stations-hitbox`** (the new first survey layer).
+In MapCanvas.tsx, satellite layer insertion uses "before" parameter to insert below survey layers. Currently anchors on `survey-ghost-shots`. **Must change to `survey-shots-hitbox`** (the new first/lowest survey layer).
 
 Find: `this.map.addLayer(satelliteLayer, 'survey-ghost-shots')`
-Change to: `this.map.addLayer(satelliteLayer, 'survey-stations-hitbox')`
+Change to: `this.map.addLayer(satelliteLayer, 'survey-shots-hitbox')`
 
 ### Refactor updateVisualState() to use config
 
@@ -473,13 +477,15 @@ From bottom to top:
 - Also update visual layers to use `map.station.radius` and `map.shot.width`
 - Add methods to update hitbox layer paint properties when config changes
 ## Acceptance
+- [ ] Station scaling priority: snapped > zeroDatum > hovered > selected > base
 - [ ] Station scaling: zeroDatum=radius*2, snapped=radius+3, hovered=radius+2, selected=radius+1
 - [ ] Shot scaling: hovered=width+2, selected=width+1
 - [ ] Hitbox layers use opacity 0.001
 - [ ] Ghost hitbox layers non-interactive
+- [ ] Layer order: station hitbox ABOVE shot hitbox for hover priority
 - [ ] SurveyLayer stores config and has setConfig method
 - [ ] SurveyLayer has fallback defaults (radius=4, width=2, hit_area=10/8) for when config is null
-- [ ] Satellite insertion anchors on survey-stations-hitbox
+- [ ] Satellite insertion anchors on survey-shots-hitbox (first/lowest layer)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
 TBD
