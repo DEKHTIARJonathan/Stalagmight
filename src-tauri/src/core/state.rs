@@ -27,7 +27,15 @@ pub struct AppState {
     recent_projects: Mutex<Vec<PathBuf>>,
     /// In-memory display settings cache (used when no DB is open, e.g., new unsaved project)
     display_settings_cache: Mutex<HashMap<String, String>>,
-    /// Tile cache for offline satellite imagery (Arc for sharing across threads)
+    /// Tile cache for offline satellite imagery.
+    ///
+    /// Note: Uses Arc<Mutex<...>> rather than plain Mutex<...> because the protocol handler
+    /// runs in a separate async task/thread that outlives the closure scope, requiring
+    /// owned/cloneable access to the cache. This is a deliberate deviation from the spec
+    /// for thread-safety requirements.
+    ///
+    /// Note: Changes to CacheConfig at runtime (via update_config) do NOT re-initialize
+    /// this cache. Users must restart the app for cache config changes to take effect.
     tile_cache: Arc<Mutex<Option<TileCache>>>,
 }
 
