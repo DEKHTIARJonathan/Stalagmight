@@ -90,19 +90,37 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       let sectionCounter = 0;
 
       // Cache mock state - tracks cache operations for verification
-      const defaultCacheStats = {
+      // Use explicit types so providers can be empty and keys can be deleted
+      interface MockProviderStats {
+        tiles: number;
+        bytes: number;
+      }
+      interface MockCacheStats {
+        total_tiles: number;
+        total_bytes: number;
+        providers: Record<string, MockProviderStats>;
+      }
+      const defaultCacheStats: MockCacheStats = {
         total_tiles: 150,
         total_bytes: 25600000, // ~25MB
         providers: {
           esri: { tiles: 150, bytes: 25600000 },
         },
       };
-      let mockCacheStats = { ...defaultCacheStats, providers: { ...defaultCacheStats.providers } };
+      let mockCacheStats: MockCacheStats = {
+        total_tiles: defaultCacheStats.total_tiles,
+        total_bytes: defaultCacheStats.total_bytes,
+        providers: { ...defaultCacheStats.providers },
+      };
       let mockNetworkStatus = true; // Online by default
 
       // Expose reset function for tests via window
       (window as unknown as Record<string, unknown>).__MOCK_CACHE_RESET__ = () => {
-        mockCacheStats = { ...defaultCacheStats, providers: { ...defaultCacheStats.providers } };
+        mockCacheStats = {
+          total_tiles: defaultCacheStats.total_tiles,
+          total_bytes: defaultCacheStats.total_bytes,
+          providers: { ...defaultCacheStats.providers },
+        };
         mockNetworkStatus = true;
       };
       (window as unknown as Record<string, unknown>).__MOCK_SET_NETWORK_STATUS__ = (status: boolean) => {
@@ -871,11 +889,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return mockCacheStats;
 
           case 'clear_tile_cache': {
-            const provider = args?.provider as string | undefined;
+            // Normalize provider: could be string, null, or undefined from frontend
+            const provider = typeof args?.provider === 'string' ? args.provider : undefined;
             console.log('[Mock IPC] clear_tile_cache called, provider:', provider);
             if (provider) {
               // Clear specific provider
-              delete mockCacheStats.providers[provider as keyof typeof mockCacheStats.providers];
+              delete mockCacheStats.providers[provider];
               // Recalculate totals
               let totalTiles = 0;
               let totalBytes = 0;
@@ -889,7 +908,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Clear all
               mockCacheStats = { total_tiles: 0, total_bytes: 0, providers: {} };
             }
-            return undefined; // void return
+            return null; // Tauri serializes () as null
           }
 
           case 'get_network_status':
