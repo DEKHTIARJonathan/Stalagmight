@@ -423,6 +423,34 @@ impl TileCache {
         }
     }
 
+    /// Get per-provider statistics.
+    ///
+    /// Returns a map of provider name to (tile_count, total_bytes).
+    pub fn get_provider_stats(&self) -> std::collections::HashMap<String, (u64, u64)> {
+        let mut result = std::collections::HashMap::new();
+
+        let query_result: Result<(), rusqlite::Error> = (|| {
+            let mut stmt = self.conn.prepare(
+                "SELECT provider, COUNT(*), COALESCE(SUM(size_bytes), 0) FROM tiles GROUP BY provider",
+            )?;
+            let mut rows = stmt.query([])?;
+
+            while let Some(row) = rows.next()? {
+                let provider: String = row.get(0)?;
+                let count: i64 = row.get(1)?;
+                let bytes: i64 = row.get(2)?;
+                result.insert(provider, (count as u64, bytes as u64));
+            }
+            Ok(())
+        })();
+
+        if let Err(e) = query_result {
+            tracing::warn!(error = %e, "Failed to get provider stats");
+        }
+
+        result
+    }
+
     /// Check if a tile exists and is fresh (not expired).
     ///
     /// Returns `false` on DB errors (logs at warn level).
@@ -974,5 +1002,44 @@ mod tests {
             cache.get("esri", 1, 0, 0).is_none(),
             "Tile with lowest id should be evicted first when timestamps tie"
         );
+    }
+
+    // === Test 19: get_provider_stats returns per-provider breakdown ===
+    #[test]
+    fn test_get_provider_stats() {
+        let mut cache = TileCache::in_memory(100, 30).unwrap();
+
+        // Add tiles from multiple providers
+        let tile100 = make_tile_data(100);
+        let tile200 = make_tile_data(200);
+        let tile150 = make_tile_data(150);
+
+        cache.put("esri", 1, 0, 0, &tile100, "image/jpeg").unwrap();
+        cache.put("esri", 1, 0, 1, &tile200, "image/jpeg").unwrap();
+        cache.put("osm", 1, 0, 0, &tile150, "image/png").unwrap();
+
+        let provider_stats = cache.get_provider_stats();
+
+        // Should have 2 providers
+        assert_eq!(provider_stats.len(), 2);
+
+        // ESRI: 2 tiles, 300 bytes
+        let esri = provider_stats.get("esri").unwrap();
+        assert_eq!(esri.0, 2, "ESRI should have 2 tiles");
+        assert_eq!(esri.1, 300, "ESRI should have 300 bytes");
+
+        // OSM: 1 tile, 150 bytes
+        let osm = provider_stats.get("osm").unwrap();
+        assert_eq!(osm.0, 1, "OSM should have 1 tile");
+        assert_eq!(osm.1, 150, "OSM should have 150 bytes");
+    }
+
+    // === Test 20: get_provider_stats returns empty for empty cache ===
+    #[test]
+    fn test_get_provider_stats_empty_cache() {
+        let cache = TileCache::in_memory(100, 30).unwrap();
+
+        let provider_stats = cache.get_provider_stats();
+        assert!(provider_stats.is_empty());
     }
 }

@@ -317,6 +317,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Cache commands
+            commands::cache::get_cache_stats,
+            commands::cache::clear_tile_cache,
+            commands::cache::get_network_status,
             // Project commands
             commands::project::create_project,
             commands::project::open_project,
