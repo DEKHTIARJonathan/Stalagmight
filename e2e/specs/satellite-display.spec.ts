@@ -26,13 +26,14 @@ import {
 const FIXTURES_DIR = path.resolve(process.cwd(), 'e2e', 'fixtures');
 
 /**
- * Helper to invoke IPC command via browser.execute()
- * Uses window.__TAURI__.core.invoke as per spec requirements
+ * Helper to invoke IPC command using window.__TAURI__.core.invoke
+ *
+ * Implementation note: Uses executeAsync instead of execute because Tauri's
+ * invoke() returns a Promise. WebDriver's execute() cannot await Promises
+ * in the browser context, so executeAsync with a done() callback is required
+ * for proper async handling. This follows the pattern in e2e/helpers/app.ts.
  */
 async function invokeIPC<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  // Use executeAsync for proper async handling of Tauri's Promise-based invoke
-  // Note: While spec says "browser.execute()", Tauri invoke returns a Promise
-  // which requires executeAsync for proper async handling in WebDriver context
   const result = await browser.executeAsync(
     async (
       cmd: string,
@@ -549,10 +550,16 @@ describe('Satellite Display and Cache Verification', () => {
       expect(statsAfterSecondLoad.total_tiles).toBeGreaterThanOrEqual(targetTiles);
 
       // Second load (from cache) should be faster than first load (from network)
-      // Use generous threshold (50% of first load time) to account for variability
-      // but still verify meaningful cache benefit
-      const maxAllowedSecondLoad = Math.max(firstLoadTime * 0.8, 2000);
-      expect(secondLoadTime).toBeLessThan(maxAllowedSecondLoad);
+      // Only check timing if first load took long enough to be meaningful (>2s)
+      // This avoids flaky failures when network is very fast
+      if (firstLoadTime > 2000) {
+        // Cache load should be at most 80% of network load time
+        expect(secondLoadTime).toBeLessThan(firstLoadTime * 0.8);
+      } else {
+        // For fast networks, just verify second load completes quickly (under 2s)
+        // This still proves cache is working since network would add latency
+        expect(secondLoadTime).toBeLessThan(2000);
+      }
     });
 
     /**
