@@ -499,4 +499,318 @@ test.describe('Zoom Tool', () => {
       expect(newZoom).toBeGreaterThan(initialZoom!);
     });
   });
+
+  test.describe('Toolbar Interaction', () => {
+    test('clicking zoom button in toolbar activates zoom tool', async ({ page }) => {
+      // First ensure we're not in zoom mode by switching to select
+      await page.keyboard.press('s');
+      await page.waitForTimeout(50);
+
+      const selectButton = page.locator('button[title="Select (S)"]');
+      await expect(selectButton).toHaveClass(/ring-accent/);
+
+      // Click the zoom button in toolbar
+      const zoomButton = page.locator('button[title="Zoom (Z)"]');
+      await zoomButton.click();
+      await page.waitForTimeout(50);
+
+      // Verify zoom tool is now active
+      await expect(zoomButton).toHaveClass(/ring-accent/);
+      await expect(selectButton).not.toHaveClass(/ring-accent/);
+    });
+
+    test('switching between tools via toolbar updates cursor', async ({ page }) => {
+      // Start in select mode
+      await page.keyboard.press('s');
+      await page.waitForTimeout(50);
+
+      // Verify select cursor
+      let cursor = await page.evaluate(() => {
+        const map = (window as unknown as { __cavechef_map__?: { getCanvas: () => HTMLCanvasElement } }).__cavechef_map__;
+        return map?.getCanvas()?.style.cursor ?? null;
+      });
+      expect(cursor).toBe('default');
+
+      // Click zoom button
+      const zoomButton = page.locator('button[title="Zoom (Z)"]');
+      await zoomButton.click();
+      await page.waitForTimeout(50);
+
+      // Verify zoom cursor
+      cursor = await page.evaluate(() => {
+        const map = (window as unknown as { __cavechef_map__?: { getCanvas: () => HTMLCanvasElement } }).__cavechef_map__;
+        return map?.getCanvas()?.style.cursor ?? null;
+      });
+      expect(cursor).toBe('zoom-in');
+
+      // Click pan button
+      const panButton = page.locator('button[title="Pan (P)"]');
+      await panButton.click();
+      await page.waitForTimeout(50);
+
+      // Verify pan cursor
+      cursor = await page.evaluate(() => {
+        const map = (window as unknown as { __cavechef_map__?: { getCanvas: () => HTMLCanvasElement } }).__cavechef_map__;
+        return map?.getCanvas()?.style.cursor ?? null;
+      });
+      expect(cursor).toBe('grab');
+    });
+  });
+
+  test.describe('Config Integration', () => {
+    test('uses zoom_step from config for click zoom', async ({ page }) => {
+      // Wait for config to be loaded from mock backend
+      await page.waitForFunction(
+        () => {
+          const stores = (window as unknown as {
+            __E2E_TEST__?: {
+              projectStore: {
+                getState: () => {
+                  config: { map: { zoom_step: number } } | null;
+                };
+              };
+            };
+          }).__E2E_TEST__;
+          return stores?.projectStore?.getState()?.config != null;
+        },
+        { timeout: 5000 }
+      );
+
+      // Read the zoom_step value from config
+      const configuredZoomStep = await page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: {
+            projectStore: {
+              getState: () => {
+                config: { map: { zoom_step: number } } | null;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+        return stores?.projectStore?.getState()?.config?.map?.zoom_step ?? null;
+      });
+
+      expect(configuredZoomStep).not.toBeNull();
+      expect(typeof configuredZoomStep).toBe('number');
+      expect(configuredZoomStep).toBeGreaterThan(0);
+
+      // Switch to zoom tool
+      await page.keyboard.press('z');
+      await page.waitForTimeout(50);
+
+      const canvas = page.locator('canvas').first();
+      const box = await canvas.boundingBox();
+      expect(box).not.toBeNull();
+
+      const initialZoom = await getMapZoom(page);
+      expect(initialZoom).not.toBeNull();
+
+      // Left click to zoom in
+      await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+
+      // Wait for zoom animation to complete
+      await page.waitForTimeout(500);
+
+      const newZoom = await getMapZoom(page);
+      expect(newZoom).not.toBeNull();
+
+      const actualDiff = newZoom! - initialZoom!;
+
+      // Verify the zoom delta matches the configured zoom_step
+      // Allow for animation/rounding variance (within 0.5 of configured value)
+      expect(actualDiff).toBeGreaterThan(configuredZoomStep! - 0.5);
+      expect(actualDiff).toBeLessThan(configuredZoomStep! + 0.5);
+    });
+
+    test('uses zoom_step from config for keyboard zoom', async ({ page }) => {
+      // Wait for config to be loaded
+      await page.waitForFunction(
+        () => {
+          const stores = (window as unknown as {
+            __E2E_TEST__?: {
+              projectStore: {
+                getState: () => {
+                  config: { map: { zoom_step: number } } | null;
+                };
+              };
+            };
+          }).__E2E_TEST__;
+          return stores?.projectStore?.getState()?.config != null;
+        },
+        { timeout: 5000 }
+      );
+
+      // Read the zoom_step value from config
+      const configuredZoomStep = await page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: {
+            projectStore: {
+              getState: () => {
+                config: { map: { zoom_step: number } } | null;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+        return stores?.projectStore?.getState()?.config?.map?.zoom_step ?? null;
+      });
+
+      expect(configuredZoomStep).not.toBeNull();
+
+      const initialZoom = await getMapZoom(page);
+      expect(initialZoom).not.toBeNull();
+
+      // Press = to zoom in
+      await page.keyboard.press('=');
+
+      // Wait for zoom animation to complete
+      await page.waitForTimeout(500);
+
+      const newZoom = await getMapZoom(page);
+      expect(newZoom).not.toBeNull();
+
+      const actualDiff = newZoom! - initialZoom!;
+
+      // Verify the zoom delta matches the configured zoom_step
+      expect(actualDiff).toBeGreaterThan(configuredZoomStep! - 0.5);
+      expect(actualDiff).toBeLessThan(configuredZoomStep! + 0.5);
+    });
+
+    test('respects zoom_min boundary', async ({ page }) => {
+      // Switch to zoom tool
+      await page.keyboard.press('z');
+      await page.waitForTimeout(50);
+
+      const canvas = page.locator('canvas').first();
+      const box = await canvas.boundingBox();
+      expect(box).not.toBeNull();
+
+      // Set zoom to min (1 per mock config)
+      await page.evaluate(() => {
+        const map = (window as unknown as { __cavechef_map__?: { setZoom: (z: number) => void } }).__cavechef_map__;
+        map?.setZoom(1);
+      });
+      await page.waitForTimeout(100);
+
+      const zoomAtMin = await getMapZoom(page);
+      expect(zoomAtMin).toBe(1);
+
+      // Right click should be ignored at min zoom
+      await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2, { button: 'right' });
+      await page.waitForTimeout(400);
+
+      const zoomAfter = await getMapZoom(page);
+      expect(zoomAfter).toBe(1);
+    });
+
+    test('respects zoom_max boundary', async ({ page }) => {
+      // Switch to zoom tool
+      await page.keyboard.press('z');
+      await page.waitForTimeout(50);
+
+      const canvas = page.locator('canvas').first();
+      const box = await canvas.boundingBox();
+      expect(box).not.toBeNull();
+
+      // Set zoom to max (22 per mock config)
+      await page.evaluate(() => {
+        const map = (window as unknown as { __cavechef_map__?: { setZoom: (z: number) => void } }).__cavechef_map__;
+        map?.setZoom(22);
+      });
+      await page.waitForTimeout(100);
+
+      const zoomAtMax = await getMapZoom(page);
+      expect(zoomAtMax).toBe(22);
+
+      // Left click should be ignored at max zoom
+      await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+      await page.waitForTimeout(400);
+
+      const zoomAfter = await getMapZoom(page);
+      expect(zoomAfter).toBe(22);
+    });
+  });
+
+  test.describe('Wheel Zoom Interaction', () => {
+    test('scroll wheel zooms in and out', async ({ page }) => {
+      const canvas = page.locator('canvas').first();
+      const box = await canvas.boundingBox();
+      expect(box).not.toBeNull();
+
+      // Move mouse to center of canvas
+      await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+
+      const initialZoom = await getMapZoom(page);
+      expect(initialZoom).not.toBeNull();
+
+      // Scroll up (zoom in)
+      await page.mouse.wheel(0, -100);
+      await page.waitForTimeout(400);
+
+      const zoomAfterScrollUp = await getMapZoom(page);
+      expect(zoomAfterScrollUp).not.toBeNull();
+      expect(zoomAfterScrollUp!).toBeGreaterThan(initialZoom!);
+
+      // Scroll down (zoom out)
+      await page.mouse.wheel(0, 100);
+      await page.waitForTimeout(400);
+
+      const zoomAfterScrollDown = await getMapZoom(page);
+      expect(zoomAfterScrollDown).not.toBeNull();
+      expect(zoomAfterScrollDown!).toBeLessThan(zoomAfterScrollUp!);
+    });
+
+    test('wheel zoom works regardless of active tool', async ({ page }) => {
+      // Switch to select tool
+      await page.keyboard.press('s');
+      await page.waitForTimeout(50);
+
+      const canvas = page.locator('canvas').first();
+      const box = await canvas.boundingBox();
+      expect(box).not.toBeNull();
+
+      await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+
+      const initialZoom = await getMapZoom(page);
+      expect(initialZoom).not.toBeNull();
+
+      // Scroll up (zoom in) while in select mode
+      await page.mouse.wheel(0, -100);
+      await page.waitForTimeout(400);
+
+      const newZoom = await getMapZoom(page);
+      expect(newZoom).not.toBeNull();
+      expect(newZoom!).toBeGreaterThan(initialZoom!);
+    });
+  });
+
+  test.describe('Center on Click', () => {
+    test('click-to-zoom centers map on click location', async ({ page }) => {
+      // Switch to zoom tool
+      await page.keyboard.press('z');
+      await page.waitForTimeout(50);
+
+      const canvas = page.locator('canvas').first();
+      const box = await canvas.boundingBox();
+      expect(box).not.toBeNull();
+
+      const initialCenter = await getMapCenter(page);
+      expect(initialCenter).not.toBeNull();
+
+      // Click off-center to zoom (but not too far to avoid map bounds issues)
+      const clickX = box!.x + box!.width / 4;
+      const clickY = box!.y + box!.height / 4;
+      await page.mouse.click(clickX, clickY);
+
+      // Wait for zoom animation to complete
+      await page.waitForTimeout(500);
+
+      const newCenter = await getMapCenter(page);
+      expect(newCenter).not.toBeNull();
+
+      // The map center should have changed toward the click location
+      const centerChanged = Math.abs(newCenter!.lng - initialCenter!.lng) > 0.0001 ||
+                            Math.abs(newCenter!.lat - initialCenter!.lat) > 0.0001;
+      expect(centerChanged).toBe(true);
+    });
+  });
 });

@@ -1,14 +1,14 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-20T16:39:11.859449Z",
   "created_at": "2026-01-20T12:52:44.161232Z",
   "depends_on": [],
   "epic": "fn-2-f4f",
   "id": "fn-2-f4f.8",
   "priority": null,
   "spec_path": ".flow/tasks/fn-2-f4f.8.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Add Playwright tests for zoom interactions",
-  "updated_at": "2026-01-20T12:52:44.161244Z"
+  "updated_at": "2026-01-20T16:39:11.859462Z"
 }
