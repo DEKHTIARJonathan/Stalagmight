@@ -3,8 +3,8 @@
 use super::{cache, config, export, history, import, project, section, shot, station, validation};
 use crate::core::{AppState, CommandResult};
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, SectionUpdates, ShotData, ShotUpdates,
-    StationRef, SurveyDirection,
+    ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
+    ShotUpdates, StationRef, SurveyDirection,
 };
 use chrono::NaiveDate;
 use std::path::PathBuf;
@@ -16,6 +16,12 @@ use tempfile::{NamedTempFile, TempDir};
 fn app_with_state() -> tauri::App<MockRuntime> {
     let app = mock_app();
     app.manage(AppState::new().expect("app state"));
+    app
+}
+
+fn app_with_custom_state(state: AppState) -> tauri::App<MockRuntime> {
+    let app = mock_app();
+    app.manage(state);
     app
 }
 
@@ -97,6 +103,19 @@ fn create_section_with_shots(app: &tauri::App<MockRuntime>, shots: Vec<ShotData>
     );
     assert_success(&result);
     result.section_id.expect("section id")
+}
+
+fn project_with_section(shots: Vec<ShotData>) -> Project {
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("Section A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        shots,
+    });
+    project
 }
 
 fn save_project_to_temp(app: &tauri::App<MockRuntime>, dir: &TempDir) -> PathBuf {
@@ -1286,6 +1305,72 @@ fn test_unresolve_warning_fails_without_db() {
         "ZERO_LENGTH".to_string(),
     );
     assert!(result.is_err());
+}
+
+#[test]
+fn test_resolve_warning_marks_resolved_in_list() {
+    let project = project_with_section(vec![shot_data(0.0)]);
+    let (state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(state);
+
+    let warnings = validation::get_project_warnings(state(&app));
+    let warning = warnings
+        .iter()
+        .find(|w| w.code == "ZERO_LENGTH")
+        .expect("zero length warning");
+    assert!(!warning.is_resolved);
+
+    validation::resolve_warning(
+        state(&app),
+        warning.section_id,
+        warning.shot_id,
+        warning.code.clone(),
+        Some("ack".to_string()),
+    )
+    .unwrap();
+
+    let warnings_after = validation::get_project_warnings(state(&app));
+    let warning_after = warnings_after
+        .iter()
+        .find(|w| w.code == "ZERO_LENGTH")
+        .expect("zero length warning");
+    assert!(warning_after.is_resolved);
+}
+
+#[test]
+fn test_unresolve_warning_clears_resolved_flag() {
+    let project = project_with_section(vec![shot_data(0.0)]);
+    let (state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(state);
+
+    let warning = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .find(|w| w.code == "ZERO_LENGTH")
+        .expect("zero length warning");
+
+    validation::resolve_warning(
+        state(&app),
+        warning.section_id,
+        warning.shot_id,
+        warning.code.clone(),
+        None,
+    )
+    .unwrap();
+
+    validation::unresolve_warning(
+        state(&app),
+        warning.section_id,
+        warning.shot_id,
+        warning.code.clone(),
+    )
+    .unwrap();
+
+    let warnings_after = validation::get_project_warnings(state(&app));
+    let warning_after = warnings_after
+        .iter()
+        .find(|w| w.code == "ZERO_LENGTH")
+        .expect("zero length warning");
+    assert!(!warning_after.is_resolved);
 }
 
 #[test]
