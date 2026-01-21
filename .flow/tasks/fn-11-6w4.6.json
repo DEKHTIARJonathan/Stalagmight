@@ -7,10 +7,24 @@
     "fn-11-6w4.2"
   ],
   "epic": "fn-11-6w4",
+  "evidence": {
+    "commits": [
+      "27c91f9",
+      "050b0c9",
+      "6455aae",
+      "57d8b75",
+      "b42280e"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "cargo test --manifest-path src-tauri/Cargo.toml"
+    ]
+  },
   "id": "fn-11-6w4.6",
   "priority": null,
   "spec_path": ".flow/tasks/fn-11-6w4.6.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add color mode and preset selectors to ExportDialog",
-  "updated_at": "2026-01-21T12:56:57.167169Z"
+  "updated_at": "2026-01-21T13:18:59.850505Z"
 }
