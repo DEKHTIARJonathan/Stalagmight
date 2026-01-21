@@ -4,6 +4,9 @@ import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '..
 import type { PanelsConfig } from '../types/config';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 
+// Re-export tool utilities for convenience
+export { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
+
 export type ViewType = 'global' | 'single';
 
 export type DetailPanelTab = 'details' | 'warnings';

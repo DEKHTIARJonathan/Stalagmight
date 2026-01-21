@@ -2,6 +2,7 @@ import { useEffect, useCallback } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
+import { isNonInteractiveTool } from '../utils/toolUtils';
 import type { ToolType, Selection } from '../store/uiStore';
 
 /** Shortcuts that use spring-loaded behavior (tool shortcuts only) */
@@ -113,8 +114,12 @@ export function useKeyboardShortcuts() {
             event.preventDefault();
             toggleDataTable();
             return;
-          case 'a':
+          case 'a': {
+            // ALWAYS prevent browser select-all
             event.preventDefault();
+            // GUARD: No select all for pan/zoom tools
+            const currentToolA = useUIStore.getState().activeTool;
+            if (isNonInteractiveTool(currentToolA)) return;
             // GUARD: Block select all when stations are hidden
             if (!showStations) {
               showToast("Enable 'Stations' in Display menu to select all", 'stations-hidden');
@@ -128,6 +133,7 @@ export function useKeyboardShortcuts() {
               selectAll(allStations);
             }
             return;
+          }
           case '0':
             event.preventDefault();
             triggerFitToBounds();
@@ -198,6 +204,10 @@ export function useKeyboardShortcuts() {
 
       // Handle Delete/Backspace - delete selected items
       if (key === 'delete' || key === 'backspace') {
+        // GUARD: No delete for pan/zoom tools
+        const currentToolDel = useUIStore.getState().activeTool;
+        if (isNonInteractiveTool(currentToolDel)) return;
+
         if (selection) {
           if (selection.type === 'shot' && selection.sectionId !== undefined && selection.shotId !== undefined) {
             openDialog('confirm-delete', {

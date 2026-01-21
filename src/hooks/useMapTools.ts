@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useUIStore, type Selection } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
+import { isNonInteractiveTool } from '../utils/toolUtils';
 import type { SectionId, ShotId, StationRef, Coordinates } from '../types/project';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 
@@ -77,6 +78,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   // Handle station click based on active tool
   const handleStationClick = useCallback(
     (ref: StationRef, event: { originalEvent: MouseEvent }) => {
+      // GUARD: No interactions for pan/zoom tools
+      if (isNonInteractiveTool(activeTool)) return;
+
       // GUARD: Block all station interactions when hidden
       if (!showStations) {
         showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden');
@@ -196,6 +200,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   // Handle shot click based on active tool
   const handleShotClick = useCallback(
     (sectionId: SectionId, shotId: ShotId, event: { originalEvent: MouseEvent }) => {
+      // GUARD: No interactions for pan/zoom tools
+      if (isNonInteractiveTool(activeTool)) return;
+
       // GUARD: Block all shot interactions when hidden
       if (!showShots) {
         showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden');
@@ -323,17 +330,27 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   // Handle station hover
   const handleStationHover = useCallback(
     (ref: StationRef | null) => {
+      // GUARD: No hover for pan/zoom tools
+      if (isNonInteractiveTool(activeTool)) {
+        setHoveredStation(null);
+        return;
+      }
       setHoveredStation(ref);
     },
-    [setHoveredStation]
+    [activeTool, setHoveredStation]
   );
 
   // Handle shot hover
   const handleShotHover = useCallback(
     (shot: { sectionId: SectionId; shotId: ShotId } | null) => {
+      // GUARD: No hover for pan/zoom tools
+      if (isNonInteractiveTool(activeTool)) {
+        setHoveredShot(null);
+        return;
+      }
       setHoveredShot(shot);
     },
-    [setHoveredShot]
+    [activeTool, setHoveredShot]
   );
 
   // Handle context menu
@@ -342,7 +359,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       target: { type: 'station'; ref: StationRef } | { type: 'shot'; sectionId: SectionId; shotId: ShotId } | null,
       event: { originalEvent: MouseEvent }
     ) => {
+      // ALWAYS prevent native context menu
       event.originalEvent.preventDefault();
+
+      // GUARD: No context menu for pan/zoom tools
+      if (isNonInteractiveTool(activeTool)) return;
 
       if (target) {
         // Select the target first
@@ -359,7 +380,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         });
       }
     },
-    [openDialog, setSelection]
+    [activeTool, openDialog, setSelection]
   );
 
   return {
