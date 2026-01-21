@@ -41,10 +41,8 @@ This task is investigation only. Proceed to fn-6-yz5.2 for the fix.
 - [x] Correct fix pattern identified
 
 ## Done summary
-
 Investigation complete. Root cause is JavaScript truthy/falsy bug where `!sectionId` returns `true` when `sectionId === 0`. Found 4 affected files with 6 total code locations to fix.
-
 ## Evidence
-
-- Research: context-scout, practice-scout, docs-scout, memory-scout agents
-- Files analyzed: EditSectionDialog.tsx, EditShotDialog.tsx, SectionAdjustDialog.tsx, DataTable.tsx, ConfirmDialog.tsx
+- Commits:
+- Tests:
+- PRs:
