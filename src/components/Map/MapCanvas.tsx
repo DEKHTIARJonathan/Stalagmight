@@ -98,6 +98,8 @@ export default function MapCanvas() {
     setSnappedStation,
     setHoveredStation,
     setHoveredShot,
+    hoveredSectionId,
+    // setHoveredSectionId will be added in fn-9-d6v.8 for bidirectional map-to-panel sync
     placementMode,
     updatePlacementCursor,
     updatePlacementSnap,
@@ -642,12 +644,20 @@ export default function MapCanvas() {
     if (selection?.type === 'station' && selection.stationRef) {
       surveyLayerRef.current.setSelectedStation(selection.stationRef);
       surveyLayerRef.current.setSelectedShot(null, null);
+      surveyLayerRef.current.setSelectedSection(null);
     } else if (selection?.type === 'shot' && selection.sectionId !== undefined && selection.shotId !== undefined) {
       surveyLayerRef.current.setSelectedStation(null);
       surveyLayerRef.current.setSelectedShot(selection.sectionId, selection.shotId);
+      surveyLayerRef.current.setSelectedSection(null);
+    } else if (selection?.type === 'section' && selection.sectionId !== undefined) {
+      // Section selection
+      surveyLayerRef.current.setSelectedStation(null);
+      surveyLayerRef.current.setSelectedShot(null, null);
+      surveyLayerRef.current.setSelectedSection(selection.sectionId);
     } else {
       surveyLayerRef.current.setSelectedStation(null);
       surveyLayerRef.current.setSelectedShot(null, null);
+      surveyLayerRef.current.setSelectedSection(null);
     }
   }, [selection]);
 
@@ -656,6 +666,12 @@ export default function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setSnappedStation(snappedStation);
   }, [snappedStation]);
+
+  // Sync hoveredSectionId from uiStore to SurveyLayer
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setHoveredSection(hoveredSectionId);
+  }, [hoveredSectionId]);
 
   // Sync highlight layer with snap/draw/merge state
   // Shows snapped/origin stations even when stations layer is hidden
