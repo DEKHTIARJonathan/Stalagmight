@@ -33,6 +33,10 @@ const DEBOUNCE_DELAY = 300;
 /**
  * Export preview component that shows a 300x300 preview of what the
  * exported map image will look like. Updates are debounced for performance.
+ *
+ * NOTE: Depth color mode rendering (using presetColors and options.color_mode)
+ * is implemented in task fn-11-6w4.7. The presetColors prop is accepted here
+ * but not yet used for coloring - currently shows section colors only.
  */
 export default function ExportPreview({ options, theme, presetColors: _presetColors }: ExportPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
