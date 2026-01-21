@@ -168,6 +168,9 @@ interface UIStore {
   requestFitToBounds: boolean;
   triggerFitToBounds: () => void;
   clearFitToBoundsRequest: () => void;
+  requestZoomToSection: SectionId | null;
+  triggerZoomToSection: (sectionId: SectionId) => void;
+  clearZoomToSectionRequest: () => void;
 
   // Display toggles
   showStations: boolean;
@@ -430,6 +433,9 @@ export const useUIStore = create<UIStore>((set) => ({
   requestFitToBounds: false,
   triggerFitToBounds: () => set({ requestFitToBounds: true }),
   clearFitToBoundsRequest: () => set({ requestFitToBounds: false }),
+  requestZoomToSection: null,
+  triggerZoomToSection: (sectionId: SectionId) => set({ requestZoomToSection: sectionId }),
+  clearZoomToSectionRequest: () => set({ requestZoomToSection: null }),
 
   // Display toggles (initial values from DISPLAY_DEFAULTS - single source of truth)
   showStations: DISPLAY_DEFAULTS.showStations,
