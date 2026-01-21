@@ -36,9 +36,8 @@ setHoveredSectionId: (sectionId) => set({ hoveredSectionId: sectionId }),
 - [ ] Type exports updated if needed
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added hoveredSectionId state and setHoveredSectionId action to uiStore for bidirectional section hover sync, following existing hover state patterns. Updated setActiveTool to clear hoveredSectionId when switching to non-interactive tools, using explicit null checks to handle section ID 0.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: eddbc624f3e60ff7db0b600a5a2cf7f2f8105e60, aff2209427a35cd9fc8983e6b7b3107339dfb39e
+- Tests: pnpm tsc --noEmit
 - PRs:
