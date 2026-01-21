@@ -24,9 +24,8 @@ Add "Zoom to Section" item to the section context menu.
 - [ ] Menu closes after click
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added "Zoom to Section" context menu item to section context menu. The item appears after "Adjust Position..." and before the separator/Delete Section, triggers zoom action via triggerZoomToSection, and closes the menu after click.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 1baaa9e3dd8a3c23c5f9150dcb8a0b5a586f7317
+- Tests: pnpm tsc --noEmit
 - PRs:
