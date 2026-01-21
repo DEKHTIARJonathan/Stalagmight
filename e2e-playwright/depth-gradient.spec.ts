@@ -1,0 +1,264 @@
+import { test, expect, Page } from '@playwright/test';
+import { setupTauriMocks } from './mocks/tauri-ipc';
+
+/**
+ * E2E tests for depth gradient functionality.
+ * Tests toggle behavior, depth legend visibility, and settings persistence.
+ */
+
+/**
+ * Helper to create a new project with mock sections/stations
+ */
+async function createProject(page: Page, name: string): Promise<void> {
+  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
+  await newProjectBtn.click();
+  await page.waitForSelector('.fixed.inset-0');
+  await page.locator('.fixed.inset-0 input').first().fill(name);
+  await page.click('.fixed.inset-0 button:has-text("Create")');
+  await page.waitForSelector('canvas', { timeout: 10000 });
+}
+
+/**
+ * Helper to open the Display menu
+ */
+async function openDisplayMenu(page: Page): Promise<void> {
+  const displayButton = page.locator('button:has-text("Display")');
+  await displayButton.click();
+  await expect(page.locator('[data-testid="display-toggle-showStations"]')).toBeVisible({ timeout: 2000 });
+}
+
+/**
+ * Helper to get the toggle checkbox state
+ */
+async function isToggleOn(page: Page, toggleKey: string): Promise<boolean> {
+  const toggle = page.locator(`[data-testid="display-toggle-${toggleKey}"]`);
+  const checkbox = toggle.locator('div.rounded').last();
+  const classes = await checkbox.getAttribute('class');
+  return classes?.includes('bg-accent') ?? false;
+}
+
+/**
+ * Helper to toggle a display option and wait for state change
+ */
+async function toggleDisplayOption(page: Page, toggleKey: string): Promise<void> {
+  const toggle = page.locator(`[data-testid="display-toggle-${toggleKey}"]`);
+  const currentState = await isToggleOn(page, toggleKey);
+  await toggle.click();
+  await expect.poll(async () => isToggleOn(page, toggleKey), { timeout: 2000 }).not.toBe(currentState);
+}
+
+/**
+ * Helper to wait for map to be loaded
+ */
+async function waitForMapLoaded(page: Page): Promise<void> {
+  await expect.poll(async () => {
+    const loaded = await page.evaluate(() => {
+      const map = (window as unknown as { __cavechef_map__?: { loaded: () => boolean } }).__cavechef_map__;
+      return map?.loaded() ?? false;
+    });
+    return loaded;
+  }, { timeout: 10000 }).toBe(true);
+}
+
+test.describe('Depth Gradient', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await createProject(page, 'Depth Gradient Test');
+    await waitForMapLoaded(page);
+  });
+
+  test('toggle enables depth coloring on map', async ({ page }) => {
+    // Open Display menu
+    await openDisplayMenu(page);
+
+    // Verify depth gradient is OFF by default
+    expect(await isToggleOn(page, 'showDepthGradient')).toBe(false);
+
+    // Verify store state matches
+    const depthGradientBefore = await page.evaluate(() => {
+      const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { showDepthGradient: boolean } } } }).__E2E_TEST__;
+      return stores?.uiStore?.getState()?.showDepthGradient ?? false;
+    });
+    expect(depthGradientBefore).toBe(false);
+
+    // Toggle depth gradient ON
+    await toggleDisplayOption(page, 'showDepthGradient');
+
+    // Verify toggle state changed
+    expect(await isToggleOn(page, 'showDepthGradient')).toBe(true);
+
+    // Verify store state changed
+    const depthGradientAfter = await page.evaluate(() => {
+      const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { showDepthGradient: boolean } } } }).__E2E_TEST__;
+      return stores?.uiStore?.getState()?.showDepthGradient ?? false;
+    });
+    expect(depthGradientAfter).toBe(true);
+  });
+
+  test('toggle shows depth legend when enabled', async ({ page }) => {
+    // Verify legend is hidden initially
+    await expect(page.locator('[data-testid="depth-legend"]')).not.toBeVisible();
+
+    // Enable depth gradient
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showDepthGradient');
+
+    // Verify legend is now visible
+    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
+  });
+
+  test('toggle hides depth legend when disabled', async ({ page }) => {
+    // Enable depth gradient first
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showDepthGradient');
+
+    // Verify legend is visible
+    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
+
+    // Disable depth gradient
+    await toggleDisplayOption(page, 'showDepthGradient');
+
+    // Verify legend is now hidden
+    await expect(page.locator('[data-testid="depth-legend"]')).not.toBeVisible();
+  });
+
+  test('legend shows correct depth range labels', async ({ page }) => {
+    // Enable depth gradient
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showDepthGradient');
+
+    // Verify legend is visible
+    const legend = page.locator('[data-testid="depth-legend"]');
+    await expect(legend).toBeVisible();
+
+    // Verify legend contains depth values with unit 'm'
+    await expect(legend).toContainText('m');
+
+    // Verify min and max labels exist
+    await expect(page.locator('[data-testid="depth-legend-min"]')).toBeVisible();
+    await expect(page.locator('[data-testid="depth-legend-max"]')).toBeVisible();
+
+    // Verify min and max labels contain numeric values
+    const minText = await page.locator('[data-testid="depth-legend-min"]').textContent();
+    const maxText = await page.locator('[data-testid="depth-legend-max"]').textContent();
+
+    expect(minText).toMatch(/\d+(\.\d+)?m/);
+    expect(maxText).toMatch(/\d+(\.\d+)?m/);
+  });
+
+  test('depth gradient setting calls save_display_setting on toggle', async ({ page }) => {
+    // Track IPC calls via console logs (mock logs them)
+    const ipcCalls: string[] = [];
+    page.on('console', (msg) => {
+      const text = msg.text();
+      if (text.includes('[Mock IPC]')) {
+        ipcCalls.push(text);
+      }
+    });
+
+    // Enable depth gradient
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showDepthGradient');
+
+    // Verify legend is visible
+    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
+
+    // Give time for async save call
+    await page.waitForTimeout(100);
+
+    // Verify the setting was saved (checked via mock console)
+    // The UI should call save_display_setting when toggle changes
+    const saveCall = ipcCalls.find((call) => call.includes('save_display_setting'));
+    expect(saveCall).toBeDefined();
+  });
+
+  test('depth gradient toggle updates immediately without page reload', async ({ page }) => {
+    // Enable depth gradient
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showDepthGradient');
+
+    // Verify legend appears immediately
+    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible({ timeout: 500 });
+
+    // Disable depth gradient
+    await toggleDisplayOption(page, 'showDepthGradient');
+
+    // Verify legend hides immediately
+    await expect(page.locator('[data-testid="depth-legend"]')).not.toBeVisible({ timeout: 500 });
+  });
+
+  test('depth gradient toggle is independent of other display toggles', async ({ page }) => {
+    await openDisplayMenu(page);
+
+    // Enable depth gradient
+    await toggleDisplayOption(page, 'showDepthGradient');
+    expect(await isToggleOn(page, 'showDepthGradient')).toBe(true);
+
+    // Verify other toggles remain unchanged
+    expect(await isToggleOn(page, 'showStations')).toBe(true);
+    expect(await isToggleOn(page, 'showShots')).toBe(true);
+    expect(await isToggleOn(page, 'showSatellite')).toBe(false);
+    expect(await isToggleOn(page, 'showGrid')).toBe(false);
+
+    // Toggle stations off
+    await toggleDisplayOption(page, 'showStations');
+
+    // Depth gradient should still be on
+    expect(await isToggleOn(page, 'showDepthGradient')).toBe(true);
+    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
+  });
+
+  test('legend has proper accessibility attributes', async ({ page }) => {
+    // Enable depth gradient
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showDepthGradient');
+
+    // Verify legend SVG has role and aria-label
+    const legendSvg = page.locator('[data-testid="depth-legend"] svg');
+    await expect(legendSvg).toBeVisible();
+    await expect(legendSvg).toHaveAttribute('role', 'img');
+
+    const ariaLabel = await legendSvg.getAttribute('aria-label');
+    expect(ariaLabel).toMatch(/Depth scale/i);
+    expect(ariaLabel).toMatch(/shallow/i);
+    expect(ariaLabel).toMatch(/deep/i);
+  });
+});
+
+test.describe('Depth Gradient with Menu Interactions', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await createProject(page, 'Depth Gradient Menu Test');
+    await waitForMapLoaded(page);
+  });
+
+  test('toggle states persist when menu is closed and reopened', async ({ page }) => {
+    // Open menu and enable depth gradient
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showDepthGradient');
+    expect(await isToggleOn(page, 'showDepthGradient')).toBe(true);
+
+    // Close menu
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-testid="display-toggle-showDepthGradient"]')).not.toBeVisible();
+
+    // Reopen menu
+    await openDisplayMenu(page);
+
+    // Verify state is preserved
+    expect(await isToggleOn(page, 'showDepthGradient')).toBe(true);
+  });
+
+  test('depth gradient label shows in Display menu', async ({ page }) => {
+    await openDisplayMenu(page);
+
+    // Verify the toggle has proper label
+    const toggle = page.locator('[data-testid="display-toggle-showDepthGradient"]');
+    await expect(toggle).toContainText('Depth Gradient');
+    await expect(toggle).toContainText('Color by depth');
+  });
+});

@@ -5,10 +5,19 @@
   "created_at": "2026-01-20T14:10:03.154883Z",
   "depends_on": [],
   "epic": "fn-5-jef",
+  "evidence": {
+    "commits": [
+      "4f6ec5e863d074c32511ea7796ca59e434d6527b"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm vitest run --dir src"
+    ]
+  },
   "id": "fn-5-jef.8",
   "priority": null,
   "spec_path": ".flow/tasks/fn-5-jef.8.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add unit tests for getDepthColor() HSL interpolation",
-  "updated_at": "2026-01-21T02:13:38.916262Z"
+  "updated_at": "2026-01-21T02:21:26.958636Z"
 }

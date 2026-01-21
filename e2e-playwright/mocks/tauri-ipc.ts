@@ -960,6 +960,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               showStations: 'true',
               showShots: 'true',
               showSectionNames: 'true',
+              showDepthGradient: 'false',
             };
 
           case 'save_display_setting':
