@@ -302,6 +302,16 @@ describe('getDepthColor', () => {
       const result = getDepthColor(25, 0, 50, []);
       expect(result).toBe('#000000');
     });
+
+    it('clamps depth below min to first color', () => {
+      const result = getDepthColor(-10, 0, 100, stops);
+      expect(result.toLowerCase()).toBe('#00bfff');
+    });
+
+    it('clamps depth above max to last color', () => {
+      const result = getDepthColor(150, 0, 100, stops);
+      expect(result.toLowerCase()).toBe('#ff4444');
+    });
   });
 });
 
