@@ -1,7 +1,7 @@
 //! Depth color presets and interpolation for export visualization.
 //!
 //! Provides preset color gradients for depth-based visualization of cave survey data.
-//! Colors are interpolated using RGB interpolation with multi-stop support.
+//! Colors are interpolated using HSL interpolation with shortest hue path for multi-stop support.
 
 use serde::{Deserialize, Serialize};
 
@@ -129,23 +129,32 @@ impl DepthPreset {
 /// # Returns
 /// A hex color string (e.g., "#ff4444")
 pub fn get_depth_color(depth: f64, min_depth: f64, max_depth: f64, preset: DepthPreset) -> String {
+    // Compute colors once to avoid multiple allocations
+    let colors = preset.colors();
+
     // CRITICAL: Check for NaN/infinite values
     if !depth.is_finite() || !min_depth.is_finite() || !max_depth.is_finite() {
-        return preset.colors().stops.first().map_or("#000000".to_string(), |s| s.color.clone());
+        return colors
+            .stops
+            .first()
+            .map_or("#000000".to_string(), |s| s.color.clone());
     }
 
     // Handle flat depth range (all stations at same depth)
     if (max_depth - min_depth).abs() < f64::EPSILON {
-        return preset.colors().stops.first().map_or("#000000".to_string(), |s| s.color.clone());
+        return colors
+            .stops
+            .first()
+            .map_or("#000000".to_string(), |s| s.color.clone());
     }
 
     // Normalize depth to 0.0-1.0 range and clamp
     let t = ((depth - min_depth) / (max_depth - min_depth)).clamp(0.0, 1.0);
 
-    interpolate_stops(t, &preset.colors().stops)
+    interpolate_stops(t, &colors.stops)
 }
 
-/// Interpolate between color stops at position t.
+/// Interpolate between color stops at position t using HSL interpolation.
 ///
 /// # Arguments
 /// * `t` - Position in gradient (0.0 to 1.0)
@@ -173,32 +182,139 @@ fn interpolate_stops(t: f64, stops: &[ColorStop]) -> String {
                 return stops[i].color.clone();
             }
             let local_t = (t - stops[i].position) / (stops[i + 1].position - stops[i].position);
-            return interpolate_rgb(&stops[i].color, &stops[i + 1].color, local_t);
+            // Clamp local_t to prevent float edge cases
+            let local_t = local_t.clamp(0.0, 1.0);
+            return interpolate_hsl(&stops[i].color, &stops[i + 1].color, local_t);
         }
     }
 
     // If we somehow didn't find a bracket (shouldn't happen with valid stops), return last color
-    stops.last().map_or("#000000".to_string(), |s| s.color.clone())
+    stops
+        .last()
+        .map_or("#000000".to_string(), |s| s.color.clone())
 }
 
 /// Parse a hex color string to RGB components.
+/// Returns (0, 0, 0) for malformed input.
 fn hex_to_rgb(hex: &str) -> (u8, u8, u8) {
     let hex = hex.trim_start_matches('#');
+    // Validate length to prevent panics on malformed input
+    if hex.len() < 6 {
+        return (0, 0, 0);
+    }
     let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
     (r, g, b)
 }
 
-/// Interpolate between two hex colors using RGB interpolation.
-fn interpolate_rgb(color1: &str, color2: &str, t: f64) -> String {
+/// Convert RGB to HSL color space.
+/// Returns (hue: 0-360, saturation: 0-1, lightness: 0-1)
+fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f64, f64, f64) {
+    let r = r as f64 / 255.0;
+    let g = g as f64 / 255.0;
+    let b = b as f64 / 255.0;
+
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+
+    if (max - min).abs() < f64::EPSILON {
+        // Achromatic (gray)
+        return (0.0, 0.0, l);
+    }
+
+    let d = max - min;
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
+
+    let h = if (max - r).abs() < f64::EPSILON {
+        let mut h = (g - b) / d;
+        if g < b {
+            h += 6.0;
+        }
+        h / 6.0
+    } else if (max - g).abs() < f64::EPSILON {
+        ((b - r) / d + 2.0) / 6.0
+    } else {
+        ((r - g) / d + 4.0) / 6.0
+    };
+
+    (h * 360.0, s, l)
+}
+
+/// Convert HSL to RGB color space.
+fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
+    if s.abs() < f64::EPSILON {
+        // Achromatic (gray)
+        let v = (l * 255.0).round() as u8;
+        return (v, v, v);
+    }
+
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
+    let p = 2.0 * l - q;
+    let h = h / 360.0;
+
+    let r = hue_to_rgb(p, q, h + 1.0 / 3.0);
+    let g = hue_to_rgb(p, q, h);
+    let b = hue_to_rgb(p, q, h - 1.0 / 3.0);
+
+    (
+        (r * 255.0).round() as u8,
+        (g * 255.0).round() as u8,
+        (b * 255.0).round() as u8,
+    )
+}
+
+/// Helper function for HSL to RGB conversion.
+fn hue_to_rgb(p: f64, q: f64, t: f64) -> f64 {
+    let t = if t < 0.0 {
+        t + 1.0
+    } else if t > 1.0 {
+        t - 1.0
+    } else {
+        t
+    };
+
+    if t < 1.0 / 6.0 {
+        p + (q - p) * 6.0 * t
+    } else if t < 1.0 / 2.0 {
+        q
+    } else if t < 2.0 / 3.0 {
+        p + (q - p) * (2.0 / 3.0 - t) * 6.0
+    } else {
+        p
+    }
+}
+
+/// Interpolate between two hex colors using HSL interpolation with shortest hue path.
+fn interpolate_hsl(color1: &str, color2: &str, t: f64) -> String {
     let (r1, g1, b1) = hex_to_rgb(color1);
     let (r2, g2, b2) = hex_to_rgb(color2);
 
-    let r = (r1 as f64 + (r2 as f64 - r1 as f64) * t).round() as u8;
-    let g = (g1 as f64 + (g2 as f64 - g1 as f64) * t).round() as u8;
-    let b = (b1 as f64 + (b2 as f64 - b1 as f64) * t).round() as u8;
+    let (h1, s1, l1) = rgb_to_hsl(r1, g1, b1);
+    let (h2, s2, l2) = rgb_to_hsl(r2, g2, b2);
 
+    // Shortest hue path interpolation
+    let mut dh = h2 - h1;
+    if dh > 180.0 {
+        dh -= 360.0;
+    } else if dh < -180.0 {
+        dh += 360.0;
+    }
+
+    let h = (h1 + dh * t).rem_euclid(360.0);
+    let s = s1 + (s2 - s1) * t;
+    let l = l1 + (l2 - l1) * t;
+
+    let (r, g, b) = hsl_to_rgb(h, s, l);
     format!("#{:02x}{:02x}{:02x}", r, g, b)
 }
 
@@ -272,14 +388,14 @@ mod tests {
     }
 
     #[test]
-    fn test_get_depth_color_midpoint() {
+    fn test_get_depth_color_midpoint_grayscale() {
         let color = get_depth_color(50.0, 0.0, 100.0, DepthPreset::Grayscale);
         // Grayscale: white (#ffffff) to black (#000000)
         // At 50%, should be gray (#808080 or close)
         let (r, g, b) = hex_to_rgb(&color);
-        assert!(r >= 127 && r <= 129); // Allow for rounding
-        assert!(g >= 127 && g <= 129);
-        assert!(b >= 127 && b <= 129);
+        assert!(r >= 127 && r <= 129, "r={}", r); // Allow for rounding
+        assert!(g >= 127 && g <= 129, "g={}", g);
+        assert!(b >= 127 && b <= 129, "b={}", b);
     }
 
     #[test]
@@ -391,28 +507,98 @@ mod tests {
         assert_eq!(hex_to_rgb("#FF00ff"), (255, 0, 255));
     }
 
-    // === interpolate_rgb tests ===
+    #[test]
+    fn test_hex_to_rgb_malformed_short() {
+        // Malformed input should return black, not panic
+        assert_eq!(hex_to_rgb("#fff"), (0, 0, 0));
+        assert_eq!(hex_to_rgb(""), (0, 0, 0));
+        assert_eq!(hex_to_rgb("#"), (0, 0, 0));
+    }
+
+    // === HSL conversion tests ===
 
     #[test]
-    fn test_interpolate_rgb_at_zero() {
-        let color = interpolate_rgb("#ff0000", "#0000ff", 0.0);
+    fn test_rgb_to_hsl_red() {
+        let (h, s, l) = rgb_to_hsl(255, 0, 0);
+        assert!((h - 0.0).abs() < 1.0, "h={}", h);
+        assert!((s - 1.0).abs() < 0.01, "s={}", s);
+        assert!((l - 0.5).abs() < 0.01, "l={}", l);
+    }
+
+    #[test]
+    fn test_rgb_to_hsl_green() {
+        let (h, s, l) = rgb_to_hsl(0, 255, 0);
+        assert!((h - 120.0).abs() < 1.0, "h={}", h);
+        assert!((s - 1.0).abs() < 0.01, "s={}", s);
+        assert!((l - 0.5).abs() < 0.01, "l={}", l);
+    }
+
+    #[test]
+    fn test_rgb_to_hsl_blue() {
+        let (h, s, l) = rgb_to_hsl(0, 0, 255);
+        assert!((h - 240.0).abs() < 1.0, "h={}", h);
+        assert!((s - 1.0).abs() < 0.01, "s={}", s);
+        assert!((l - 0.5).abs() < 0.01, "l={}", l);
+    }
+
+    #[test]
+    fn test_rgb_to_hsl_gray() {
+        let (h, s, l) = rgb_to_hsl(128, 128, 128);
+        assert_eq!(h, 0.0); // Achromatic
+        assert_eq!(s, 0.0); // Achromatic
+        assert!((l - 0.502).abs() < 0.01, "l={}", l);
+    }
+
+    #[test]
+    fn test_hsl_to_rgb_red() {
+        let (r, g, b) = hsl_to_rgb(0.0, 1.0, 0.5);
+        assert_eq!(r, 255);
+        assert_eq!(g, 0);
+        assert_eq!(b, 0);
+    }
+
+    #[test]
+    fn test_hsl_to_rgb_gray() {
+        let (r, g, b) = hsl_to_rgb(0.0, 0.0, 0.5);
+        assert!(r >= 127 && r <= 128, "r={}", r);
+        assert!(g >= 127 && g <= 128, "g={}", g);
+        assert!(b >= 127 && b <= 128, "b={}", b);
+    }
+
+    // === HSL interpolation tests ===
+
+    #[test]
+    fn test_interpolate_hsl_at_zero() {
+        let color = interpolate_hsl("#ff0000", "#0000ff", 0.0);
         assert_eq!(color, "#ff0000");
     }
 
     #[test]
-    fn test_interpolate_rgb_at_one() {
-        let color = interpolate_rgb("#ff0000", "#0000ff", 1.0);
+    fn test_interpolate_hsl_at_one() {
+        let color = interpolate_hsl("#ff0000", "#0000ff", 1.0);
         assert_eq!(color, "#0000ff");
     }
 
     #[test]
-    fn test_interpolate_rgb_at_midpoint() {
-        let color = interpolate_rgb("#000000", "#ffffff", 0.5);
-        // Should be close to #808080
+    fn test_interpolate_hsl_shortest_path() {
+        // Red to blue: shortest path goes through magenta, not through green/yellow/cyan
+        let color = interpolate_hsl("#ff0000", "#0000ff", 0.5);
         let (r, g, b) = hex_to_rgb(&color);
-        assert!(r >= 127 && r <= 129);
-        assert!(g >= 127 && g <= 129);
-        assert!(b >= 127 && b <= 129);
+        // At midpoint between red (0 deg) and blue (240 deg), shortest path goes through magenta
+        // Midpoint hue should be around 300 deg (magenta area)
+        assert!(r > 100, "r={} should be high (magenta)", r);
+        assert!(g < 50, "g={} should be low (magenta)", g);
+        assert!(b > 100, "b={} should be high (magenta)", b);
+    }
+
+    #[test]
+    fn test_interpolate_hsl_grayscale_midpoint() {
+        let color = interpolate_hsl("#000000", "#ffffff", 0.5);
+        let (r, g, b) = hex_to_rgb(&color);
+        // Should be gray
+        assert!(r >= 127 && r <= 129, "r={}", r);
+        assert!(g >= 127 && g <= 129, "g={}", g);
+        assert!(b >= 127 && b <= 129, "b={}", b);
     }
 
     // === Tauri command test ===
