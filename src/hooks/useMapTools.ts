@@ -329,6 +329,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   );
 
   // Handle station hover
+  // When a station is hovered, set hoveredSectionId for panel highlight
+  // When leaving a station (null), only clear hoveredSectionId if no shot is hovered
+  // This prevents flicker when transitioning between features in the same section
   const handleStationHover = useCallback(
     (ref: StationRef | null) => {
       // GUARD: No hover for pan/zoom tools
@@ -338,13 +341,25 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         return;
       }
       setHoveredStation(ref);
-      // Derive section and set for panel highlight (bidirectional map-to-panel sync)
-      setHoveredSectionId(ref?.section_id ?? null);
+      if (ref) {
+        // Entering a station - set section for panel highlight
+        setHoveredSectionId(ref.section_id);
+      } else {
+        // Leaving a station - only clear section if no shot is hovered
+        // Check current state to avoid flicker during feature transitions
+        const { hoveredShot } = useUIStore.getState();
+        if (!hoveredShot) {
+          setHoveredSectionId(null);
+        }
+      }
     },
     [activeTool, setHoveredStation, setHoveredSectionId]
   );
 
   // Handle shot hover
+  // When a shot is hovered, set hoveredSectionId for panel highlight
+  // When leaving a shot (null), only clear hoveredSectionId if no station is hovered
+  // This prevents flicker when transitioning between features in the same section
   const handleShotHover = useCallback(
     (shot: { sectionId: SectionId; shotId: ShotId } | null) => {
       // GUARD: No hover for pan/zoom tools
@@ -354,8 +369,17 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         return;
       }
       setHoveredShot(shot);
-      // Derive section and set for panel highlight (bidirectional map-to-panel sync)
-      setHoveredSectionId(shot?.sectionId ?? null);
+      if (shot) {
+        // Entering a shot - set section for panel highlight
+        setHoveredSectionId(shot.sectionId);
+      } else {
+        // Leaving a shot - only clear section if no station is hovered
+        // Check current state to avoid flicker during feature transitions
+        const { hoveredStation } = useUIStore.getState();
+        if (!hoveredStation) {
+          setHoveredSectionId(null);
+        }
+      }
     },
     [activeTool, setHoveredShot, setHoveredSectionId]
   );
