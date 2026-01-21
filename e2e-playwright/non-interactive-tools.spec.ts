@@ -56,9 +56,21 @@ async function createProjectWithStations(page: Page): Promise<void> {
   await page.locator('[data-testid="place-and-finish-button"]').click();
   await expect(page.locator('[data-testid="dmp-section-config-dialog"]')).not.toBeVisible({ timeout: 5000 });
 
-  // Wait for stations to render on the map
-  await page.waitForTimeout(500);
+  // Wait for stations to actually render on the map (deterministic wait)
   await waitForMapReady(page);
+  await expect.poll(
+    async () => {
+      return page.evaluate(() => {
+        const map = (window as unknown as {
+          __cavechef_map__?: {
+            queryRenderedFeatures: (options?: { layers?: string[] }) => unknown[];
+          };
+        }).__cavechef_map__;
+        return map?.queryRenderedFeatures({ layers: ['survey-stations'] })?.length ?? 0;
+      });
+    },
+    { timeout: 10000 }
+  ).toBeGreaterThan(0);
 }
 
 /**
@@ -141,15 +153,24 @@ test.describe('Non-interactive tools', () => {
     // Right-click on canvas
     await page.mouse.click(canvasBox.x + 200, canvasBox.y + 200, { button: 'right' });
 
-    // Verify context menu dialog is NOT open
-    const activeDialog = await page.evaluate(() => {
-      return (window as unknown as {
-        __E2E_TEST__?: {
-          uiStore: { getState: () => { activeDialog: string | null } };
-        };
-      }).__E2E_TEST__?.uiStore?.getState()?.activeDialog;
-    });
-    expect(activeDialog).not.toBe('context-menu');
+    // Verify context menu dialog is NOT open (poll for a short window to catch async updates)
+    // We check multiple times to ensure it never becomes 'context-menu'
+    let sawContextMenu = false;
+    for (let i = 0; i < 5; i++) {
+      const activeDialog = await page.evaluate(() => {
+        return (window as unknown as {
+          __E2E_TEST__?: {
+            uiStore: { getState: () => { activeDialog: string | null } };
+          };
+        }).__E2E_TEST__?.uiStore?.getState()?.activeDialog;
+      });
+      if (activeDialog === 'context-menu') {
+        sawContextMenu = true;
+        break;
+      }
+      await page.waitForTimeout(50);
+    }
+    expect(sawContextMenu).toBe(false);
   });
 
   test('Switching to pan clears existing hover', async ({ page }) => {
@@ -163,34 +184,51 @@ test.describe('Non-interactive tools', () => {
     await page.keyboard.press('s');
     await page.waitForTimeout(100);
 
-    // Hover with select tool
+    // Hover over the station to trigger hover state
     await page.mouse.move(canvasBox.x + stationPos!.x, canvasBox.y + stationPos!.y);
-    await page.waitForTimeout(200);
 
-    // Verify hover is set
-    let hoveredStation = await page.evaluate(() => {
-      return (window as unknown as {
-        __E2E_TEST__?: {
-          uiStore: { getState: () => { hoveredStation: unknown } };
-        };
-      }).__E2E_TEST__?.uiStore?.getState()?.hoveredStation ?? null;
-    });
-    // Allow for the hover to be set (may or may not work depending on station hitbox)
-    // The important test is that it gets cleared when switching to pan
+    // Wait for hover state to be set (poll until it appears or timeout)
+    let hoverWasSet = false;
+    try {
+      await expect.poll(
+        async () => {
+          return page.evaluate(() => {
+            return (window as unknown as {
+              __E2E_TEST__?: {
+                uiStore: { getState: () => { hoveredStation: unknown } };
+              };
+            }).__E2E_TEST__?.uiStore?.getState()?.hoveredStation ?? null;
+          });
+        },
+        { timeout: 2000 }
+      ).not.toBeNull();
+      hoverWasSet = true;
+    } catch {
+      // Hover detection can be flaky in E2E tests due to hitbox timing
+      // If hover wasn't set, the test still validates that pan tool doesn't
+      // accidentally SET hover (which would be a bug)
+    }
 
     // Switch to pan
     await page.keyboard.press('p');
     await page.waitForTimeout(100);
 
-    // Verify hover is cleared
-    hoveredStation = await page.evaluate(() => {
+    // Verify hover is cleared (or remains null)
+    const hoveredStation = await page.evaluate(() => {
       return (window as unknown as {
         __E2E_TEST__?: {
           uiStore: { getState: () => { hoveredStation: unknown } };
         };
       }).__E2E_TEST__?.uiStore?.getState()?.hoveredStation ?? null;
     });
-    expect(hoveredStation).toBeNull();
+
+    if (hoverWasSet) {
+      // If hover was set, verify it got cleared when switching to pan
+      expect(hoveredStation).toBeNull();
+    } else {
+      // If hover was never set, just verify it stays null (no false positive)
+      expect(hoveredStation).toBeNull();
+    }
   });
 
   test('Ctrl+A does nothing when pan active', async ({ page }) => {
