@@ -125,15 +125,17 @@ export default class SurveyLayer {
   /**
    * Set the active tool. When switching to a non-interactive tool (pan/zoom),
    * clears hover state and notifies callbacks to sync MapCanvas state.
+   * Self-healing: also clears stale hover if already in a non-interactive tool.
    */
   public setActiveTool(tool: ToolType): void {
-    const wasNonInteractive = isNonInteractiveTool(this.activeTool);
-    const isNonInteractive = isNonInteractiveTool(tool);
-
     this.activeTool = tool;
 
-    // Clear hover when switching to non-interactive tool
-    if (!wasNonInteractive && isNonInteractive) {
+    const isNonInteractive = isNonInteractiveTool(tool);
+
+    // Clear hover when in non-interactive tool AND there's stale hover state
+    // This is self-healing: handles both transitions (interactive→non-interactive)
+    // and missed initial syncs or future refactors
+    if (isNonInteractive && (this.hoveredStationId || this.hoveredShotId)) {
       this.hoveredStationId = null;
       this.hoveredShotId = null;
       this.updateVisualState();
