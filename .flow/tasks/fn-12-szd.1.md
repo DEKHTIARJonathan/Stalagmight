@@ -42,9 +42,8 @@ Add `MapAnimationConfig` to both Rust config schema and TypeScript types. This p
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added MapAnimationConfig struct to Rust config with serde defaults (enabled=true, duration=300, point_zoom=18) and corresponding TypeScript interface, following existing per-field serde(default) pattern for forward compatibility.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 333faf1e45b08bd342a6b88da7bef1e1fd2b569c
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, pnpm tsc --noEmit
 - PRs:
