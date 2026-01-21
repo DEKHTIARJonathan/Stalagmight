@@ -249,10 +249,46 @@ Use Vitest (already configured in project) with `pnpm test`.
 - [ ] Mock integration test verifying setPaintProperty receives correct expression
 - [ ] All tests pass with `pnpm test`
 ## Done summary
-TBD
+# Task fn-9-d6v.9 Summary: Unit tests for expression builder
 
-<!-- Updated by plan-sync: fn-9-d6v.2 implementation returns false constant for null values instead of empty string fallback; updated null handling tests to expect false instead of empty string -->
+Created comprehensive unit tests for the MapLibre expression builder utility.
 
+## Changes Made
+
+### New File: `src/utils/maplibre-expressions.test.ts`
+
+Created 16 unit tests covering all acceptance criteria:
+
+**buildPriorityExpression tests (6 tests):**
+- Returns literal expression when priorities array is empty (numeric fallback)
+- Returns literal expression with string fallback when empty
+- Builds correct case expression with single priority
+- Maintains priority order (first condition wins)
+- Handles string fallback values
+- Handles string values in priorities
+
+**compositeIdEquals tests (3 tests):**
+- Creates concat + equality expression
+- Handles different property names
+- Handles null value by returning false constant
+
+**inSection tests (3 tests):**
+- Creates to-string + equality expression
+- Handles different section ID values
+- Handles null sectionId by returning false constant
+
+**Mock integration tests (4 tests):**
+- Produces valid expressions for setPaintProperty
+- Produces valid expressions with compositeIdEquals
+- Handles priority combinations (station > section > default)
+- Handles null values in priority conditions
+
+## Verification
+
+- All 16 tests pass with `pnpm test --run src/utils/maplibre-expressions.test.ts`
+- Type check passes with `pnpm tsc --noEmit`
+- Tests use type-only import for ExpressionSpecification (no runtime MapLibre dependency)
+- Tests assert on plain array structure as specified
 ## Evidence
 - Commits:
 - Tests:

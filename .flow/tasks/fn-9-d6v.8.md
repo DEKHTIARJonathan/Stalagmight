@@ -112,9 +112,8 @@ The SectionsPanel already reads `hoveredSectionId` from uiStore (from task 6), s
 - [ ] Uses either callback extension or effect-based approach
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added bidirectional map-to-panel hover sync: hovering stations/shots on the map now highlights the corresponding section row in SectionsPanel. Section hover styling is visually distinct from individual hover (reduced width/different color), and flicker is prevented during feature transitions by conditionally clearing hoveredSectionId.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 310ced7aa0d1a0d94fb2afca4ba68f1b04a23b37, 235578a8eea17272f1fb2626f2785b3dd99504c5
+- Tests: pnpm tsc --noEmit
 - PRs:
