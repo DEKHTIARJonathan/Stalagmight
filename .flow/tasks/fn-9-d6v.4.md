@@ -130,7 +130,7 @@ private updateVisualState() {
 
 Import at top:
 ```typescript
-import { buildPriorityExpression, featureEquals, inSection } from '@/utils/maplibre-expressions';
+import { buildPriorityExpression, compositeIdEquals, inSection } from '../../utils/maplibre-expressions';
 ```
 
 **Priority order for stations (circle-stroke-width):**
@@ -144,42 +144,41 @@ import { buildPriorityExpression, featureEquals, inSection } from '@/utils/mapli
 **Implementation:**
 ```typescript
 private updateVisualState() {
-  const stationIdExpr = ['concat', ['get', 'sectionId'], ':', ['to-string', ['get', 'stationIndex']]];
-
   // Station stroke width with section-level priorities
   const stationStrokeWidth = buildPriorityExpression([
-    { condition: ['==', stationIdExpr, this.snappedStationId ?? ''], value: 4 },
-    { condition: ['==', stationIdExpr, this.hoveredStationId ?? ''], value: 3 },
+    { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.snappedStationId), value: 4 },
+    { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.hoveredStationId), value: 3 },
     { condition: inSection(this.hoveredSectionId), value: 3 },
-    { condition: ['==', stationIdExpr, this.selectedStationId ?? ''], value: 2 },
+    { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.selectedStationId), value: 2 },
     { condition: inSection(this.selectedSectionId), value: 2 },
   ], 1);
-  
+
   this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-width', stationStrokeWidth);
 
   // Station stroke color (same priority order)
   const stationStrokeColor = buildPriorityExpression([
-    { condition: ['==', stationIdExpr, this.snappedStationId ?? ''], value: '#00ffcc' },
-    { condition: ['==', stationIdExpr, this.selectedStationId ?? ''], value: '#00aaff' },
+    { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.snappedStationId), value: '#00ffcc' },
+    { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.selectedStationId), value: '#00aaff' },
     { condition: inSection(this.selectedSectionId), value: '#00aaff' },
-    { condition: ['==', stationIdExpr, this.hoveredStationId ?? ''], value: '#0066ff' },
+    { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.hoveredStationId), value: '#0066ff' },
     { condition: inSection(this.hoveredSectionId), value: '#0066ff' },
   ], ['get', 'strokeColor']);
 
   this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-color', stationStrokeColor);
 
   // Shot line width with section priorities
-  const shotIdExpr = ['concat', ['get', 'sectionId'], ':', ['get', 'shotId']];
   const shotLineWidth = buildPriorityExpression([
-    { condition: ['==', shotIdExpr, this.hoveredShotId ?? ''], value: 4 },
+    { condition: compositeIdEquals(['sectionId', 'shotId'], this.hoveredShotId), value: 4 },
     { condition: inSection(this.hoveredSectionId), value: 4 },
-    { condition: ['==', shotIdExpr, this.selectedShotId ?? ''], value: 3 },
+    { condition: compositeIdEquals(['sectionId', 'shotId'], this.selectedShotId), value: 3 },
     { condition: inSection(this.selectedSectionId), value: 3 },
   ], 2);
 
   this.map.setPaintProperty(this.shotsLayerId, 'line-width', shotLineWidth);
 }
 ```
+
+<!-- Updated by plan-sync: fn-9-d6v.2 uses compositeIdEquals() not inline expressions, removed featureEquals() which doesn't exist in actual implementation -->
 
 ## Visual Treatment
 - Section hover/selection uses SAME visual style as individual hover/selection

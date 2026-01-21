@@ -136,8 +136,8 @@ Use Vitest (already configured in project) with `pnpm test`.
 **1. buildPriorityExpression tests:**
 ```typescript
 describe('buildPriorityExpression', () => {
-  it('returns fallback when priorities array is empty', () => {
-    expect(buildPriorityExpression([], 1)).toBe(1);
+  it('returns literal expression when priorities array is empty', () => {
+    expect(buildPriorityExpression([], 1)).toEqual(['literal', 1]);
   });
 
   it('builds correct case expression with single priority', () => {
@@ -167,19 +167,23 @@ describe('buildPriorityExpression', () => {
 });
 ```
 
-**2. featureEquals tests:**
+**2. compositeIdEquals tests:**
 ```typescript
-describe('featureEquals', () => {
-  it('creates equality expression for property', () => {
-    expect(featureEquals('id', 'station-1')).toEqual(
-      ['==', ['get', 'id'], 'station-1']
-    );
+describe('compositeIdEquals', () => {
+  it('creates concat + equality expression', () => {
+    const result = compositeIdEquals(['sectionId', 'stationIndex'], '123:0');
+
+    expect(result).toEqual([
+      '==',
+      ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]],
+      '123:0'
+    ]);
   });
 
-  it('handles null value by using empty string', () => {
-    expect(featureEquals('id', null)).toEqual(
-      ['==', ['get', 'id'], '']
-    );
+  it('handles null value by returning false constant', () => {
+    const result = compositeIdEquals(['sectionId', 'stationIndex'], null);
+
+    expect(result).toBe(false);  // Returns constant false expression
   });
 });
 ```
@@ -187,16 +191,20 @@ describe('featureEquals', () => {
 **3. inSection tests:**
 ```typescript
 describe('inSection', () => {
-  it('creates sectionId equality expression', () => {
-    expect(inSection('section-abc')).toEqual(
-      ['==', ['get', 'sectionId'], 'section-abc']
-    );
+  it('creates to-string + equality expression', () => {
+    const result = inSection('123');
+
+    expect(result).toEqual([
+      '==',
+      ['to-string', ['get', 'sectionId']],
+      '123'
+    ]);
   });
 
-  it('handles null sectionId', () => {
-    expect(inSection(null)).toEqual(
-      ['==', ['get', 'sectionId'], '']
-    );
+  it('handles null sectionId by returning false constant', () => {
+    const result = inSection(null);
+
+    expect(result).toBe(false);  // Returns constant false expression
   });
 });
 ```
@@ -230,18 +238,20 @@ Use Vitest (already configured in project) with `pnpm test`.
 - [ ] Test file created at `src/utils/maplibre-expressions.test.ts`
 - [ ] Uses type-only import for ExpressionSpecification (no runtime dependency)
 - [ ] Tests assert on plain array structure (nested arrays)
-- [ ] Tests for `buildPriorityExpression` with empty array (returns fallback)
+- [ ] Tests for `buildPriorityExpression` with empty array (returns literal expression)
 - [ ] Tests for `buildPriorityExpression` with single priority
 - [ ] Tests for `buildPriorityExpression` with multiple priorities (order preserved)
 - [ ] Tests for `buildPriorityExpression` with string fallback values
 - [ ] Tests for `compositeIdEquals` with valid value (concat + to-string)
-- [ ] Tests for `compositeIdEquals` with null value (empty string fallback)
+- [ ] Tests for `compositeIdEquals` with null value (returns false constant)
 - [ ] Tests for `inSection` with valid sectionId (to-string conversion)
-- [ ] Tests for `inSection` with null sectionId (empty string fallback)
+- [ ] Tests for `inSection` with null sectionId (returns false constant)
 - [ ] Mock integration test verifying setPaintProperty receives correct expression
 - [ ] All tests pass with `pnpm test`
 ## Done summary
 TBD
+
+<!-- Updated by plan-sync: fn-9-d6v.2 implementation returns false constant for null values instead of empty string fallback; updated null handling tests to expect false instead of empty string -->
 
 ## Evidence
 - Commits:
