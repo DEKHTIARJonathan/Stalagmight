@@ -7,6 +7,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
+import { LoadingProgress } from '../LoadingProgress/LoadingProgress';
 import ExportPreview, { type ExportTheme, type DepthPresetColors } from './ExportPreview';
 import type { ExportImageOptions, ImageFormat, DepthPreset } from '../../types/commands';
 
@@ -401,34 +402,15 @@ export default function ExportDialog() {
         )}
       </div>
 
-      {/* Export Progress */}
-      {isExporting && exportProgress && (
-        <div className="mt-4 p-3 bg-surface-alt rounded" data-testid="export-progress">
-          <div className="flex justify-between text-sm text-text-secondary mb-1">
-            <span>{exportProgress.stage}</span>
-            <span>{exportProgress.percent}%</span>
-          </div>
-          <div className="h-1.5 bg-border rounded-full overflow-hidden">
-            <div
-              className="h-full bg-accent transition-all duration-300"
-              style={{ width: `${exportProgress.percent}%` }}
-              role="progressbar"
-              aria-label="Export progress"
-              aria-valuenow={exportProgress.percent}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            />
-          </div>
-          {exportProgress.message && (
-            <div className="text-xs text-text-tertiary mt-1">{exportProgress.message}</div>
-          )}
-        </div>
-      )}
-
-      {/* Simple exporting indicator (fallback if no progress events received yet) */}
-      {isExporting && !exportProgress && (
-        <div className="mt-4 text-text-secondary text-sm" data-testid="export-loading">
-          Exporting...
+      {/* Export Progress - uses shared LoadingProgress component for consistent UI */}
+      {isExporting && (
+        <div className="mt-4 flex justify-center" data-testid="export-progress-container">
+          <LoadingProgress
+            title="Exporting..."
+            phase={exportProgress?.stage ?? 'Preparing...'}
+            {...(exportProgress?.percent !== undefined && { phaseProgress: exportProgress.percent })}
+            overallProgress={exportProgress?.percent ?? 0}
+          />
         </div>
       )}
 

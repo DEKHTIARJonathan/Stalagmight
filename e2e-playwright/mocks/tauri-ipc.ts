@@ -1296,7 +1296,27 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'export_image':
             console.log('[Mock IPC] export_image called with:', args);
-            return { success: true, path: args?.path };
+            // Emit export-progress events to test progress UI
+            setTimeout(() => {
+              window.__TAURI_INTERNALS__?.invoke('plugin:event|emit', {
+                event: 'export-progress',
+                payload: { stage: 'Generating SVG', percent: 30, message: null },
+              }).catch(() => {});
+            }, 50);
+            setTimeout(() => {
+              window.__TAURI_INTERNALS__?.invoke('plugin:event|emit', {
+                event: 'export-progress',
+                payload: { stage: 'Writing file', percent: 90, message: null },
+              }).catch(() => {});
+            }, 100);
+            setTimeout(() => {
+              window.__TAURI_INTERNALS__?.invoke('plugin:event|emit', {
+                event: 'export-progress',
+                payload: { stage: 'Export complete', percent: 100, message: null },
+              }).catch(() => {});
+            }, 150);
+            // Return after a small delay to allow progress events to be received
+            return new Promise(resolve => setTimeout(() => resolve({ success: true, path: args?.path }), 200));
 
           // Section and shot editing commands
           case 'update_shot': {
