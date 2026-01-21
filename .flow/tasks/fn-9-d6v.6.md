@@ -105,9 +105,8 @@ const handleSectionMouseLeave = () => {
 - [ ] Uses template literals for conditional classes (no cn() utility)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added mouse hover handlers to SectionsPanel for panel-to-map hover highlighting, with cleanup on unmount and proper event handling to prevent selection on delete button click or right-click.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: c8b6e57e57ee0b06e86a4f6afd7a15fe83f3dd15, 0fa124d569c159304b4c75ff353fb85b1dcf4935
+- Tests: pnpm tsc --noEmit
 - PRs:
