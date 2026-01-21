@@ -4,7 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
-import { useBeforeUnload } from './hooks/useBeforeUnload';
+import { useBeforeUnload, useLoadingProgress } from './hooks';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, DuplicateImportDialog, SettingsDialog } from './components/Dialogs';
@@ -62,6 +62,9 @@ function calculateStationPositions(shots: ImportedSectionConfig['shots']): Array
 function App() {
   const { project, stations, loadConfig, config, isDirty, createSection, createSectionAndMerge, setZeroDatum, mergeStations, moveSection, importDmp } = useProjectStore();
   const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, hasImportedDmpPath, addImportedDmpPath, triggerFitToBounds, toast } = useUIStore();
+
+  // Listen for loading progress events from backend
+  useLoadingProgress();
 
   // Track whether we're hovering with a valid DMP file
   const [isDraggingDmp, setIsDraggingDmp] = useState(false);
