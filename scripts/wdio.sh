@@ -335,7 +335,8 @@ run_tests() {
 
     # Build the command - use npx wdio directly to properly handle --spec flag
     # (pnpm test:e2e -- --spec doesn't pass the flag correctly)
-    CMD="SKIP_BUILD=1 npx wdio run wdio.conf.ts"
+    # Use env to set SKIP_BUILD so it works correctly when wrapped by xvfb-run
+    CMD="env SKIP_BUILD=1 npx wdio run wdio.conf.ts"
 
     # Add wdio arguments
     if [[ ${#WDIO_ARGS[@]} -gt 0 ]]; then
