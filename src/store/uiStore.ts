@@ -281,9 +281,10 @@ export const useUIStore = create<UIStore>((set) => ({
     set((state) => {
       // Clear hover state when switching to non-interactive tools (pan/zoom)
       // This ensures store consistency regardless of how hover was set
+      // Use explicit null checks (not truthiness) because SectionId can be 0
       if (
         isNonInteractiveTool(activeTool) &&
-        (state.hoveredStation || state.hoveredShot || state.hoveredSectionId)
+        (state.hoveredStation !== null || state.hoveredShot !== null || state.hoveredSectionId !== null)
       ) {
         return { activeTool, hoveredStation: null, hoveredShot: null, hoveredSectionId: null };
       }
