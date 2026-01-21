@@ -1152,4 +1152,18 @@ mod tests {
         assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
         assert_eq!(response.body(), b"test error");
     }
+
+    #[test]
+    fn test_build_ok_response_fallback_on_invalid_content_type() {
+        let response = build_ok_response(b"data".to_vec(), "invalid\r\nheader");
+        assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.body(), b"Internal error building response");
+    }
+
+    #[test]
+    fn test_fetch_tile_from_network_unknown_provider_errors() {
+        let result = fetch_tile_from_network("unknown", 0, 0, 0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unknown provider"));
+    }
 }

@@ -2039,6 +2039,7 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::models::{ShotData, SurveyDirection};
+    use tempfile::TempDir;
 
     /// Helper to create a basic shot data for testing
     fn test_shot_data(length: f64) -> ShotData {
@@ -2072,6 +2073,77 @@ mod tests {
         let project = project.unwrap();
         assert_eq!(project.name, "Test Cave");
         assert_eq!(project.location, Some("Test Location".to_string()));
+    }
+
+    #[test]
+    fn test_merge_projects_archives_sources_and_adds_extension() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let mut project_a = Project::new("A".to_string(), None);
+        project_a.add_section(SectionData {
+            name: Some("Section A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(1.0)],
+        });
+
+        let mut project_b = Project::new("B".to_string(), None);
+        project_b.add_section(SectionData {
+            name: Some("Section B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: Some(SurveyDirection::Out),
+            shots: vec![test_shot_data(2.0)],
+        });
+
+        let source_a = temp_dir.path().join("a.cvproj");
+        let source_b = temp_dir.path().join("b.cvproj");
+
+        let mut db_a = Database::open(&source_a).unwrap();
+        db_a.save_project(&project_a).unwrap();
+        let mut db_b = Database::open(&source_b).unwrap();
+        db_b.save_project(&project_b).unwrap();
+        drop(db_a);
+        drop(db_b);
+
+        let existing_archive = temp_dir.path().join("a.cvproj.archived");
+        std::fs::write(&existing_archive, b"archived").unwrap();
+
+        let state = AppState::new().unwrap();
+        let output_path = temp_dir.path().join("merged-output");
+
+        let result = state.execute(Command::MergeProjects {
+            source_paths: vec![source_a.clone(), source_b.clone()],
+            output_path: output_path.clone(),
+            output_name: "Merged".to_string(),
+            archive_originals: true,
+        });
+
+        assert!(result.success);
+
+        let output_with_ext = output_path.with_extension("cvproj");
+        assert!(output_with_ext.exists());
+
+        assert!(!source_a.exists());
+        assert!(!source_b.exists());
+
+        let archived_entries: Vec<_> = std::fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with("a.cvproj.archived"))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        assert!(!archived_entries.is_empty());
+        assert!(temp_dir.path().join("b.cvproj.archived").exists());
     }
 
     #[test]
