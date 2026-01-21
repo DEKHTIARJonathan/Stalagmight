@@ -103,17 +103,68 @@ impl Default for ExportImageOptions {
 /// rendering the map view, which is done in the frontend. This function
 /// generates a basic SVG representation.
 pub fn export_image(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
+    // Use the progress version with a no-op callback
+    export_image_with_progress(project, path, options, |_| {})
+}
+
+/// Export project as an image with progress callbacks
+///
+/// The progress callback is called at key stages during the export process.
+pub fn export_image_with_progress<F>(
+    project: &Project,
+    path: &Path,
+    options: &ExportImageOptions,
+    emit_progress: F,
+) -> Result<()>
+where
+    F: Fn(super::ExportProgress),
+{
+    // Start progress
+    emit_progress(super::ExportProgress {
+        stage: "Preparing export".to_string(),
+        percent: 10,
+        message: None,
+    });
+
     match options.format {
-        ImageFormat::Svg => export_svg(project, path, options),
-        ImageFormat::Png => export_png(project, path, options),
-        ImageFormat::Pdf => export_pdf(project, path, options),
+        ImageFormat::Svg => export_svg_with_progress(project, path, options, emit_progress),
+        ImageFormat::Png => export_png_with_progress(project, path, options, emit_progress),
+        ImageFormat::Pdf => export_pdf_with_progress(project, path, options, emit_progress),
     }
 }
 
 /// Export project as PDF using svg2pdf
+#[allow(dead_code)]
 fn export_pdf(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
-    // First generate SVG content
+    export_pdf_with_progress(project, path, options, |_| {})
+}
+
+/// Export project as PDF with progress callbacks
+fn export_pdf_with_progress<F>(
+    project: &Project,
+    path: &Path,
+    options: &ExportImageOptions,
+    emit_progress: F,
+) -> Result<()>
+where
+    F: Fn(super::ExportProgress),
+{
+    let station_count = project.compute_station_coordinates().len();
+
+    // Generate SVG
+    emit_progress(super::ExportProgress {
+        stage: "Generating SVG".to_string(),
+        percent: 30,
+        message: Some(format!("{} stations", station_count)),
+    });
     let svg_content = generate_svg_string(project, options)?;
+
+    // Convert to PDF
+    emit_progress(super::ExportProgress {
+        stage: "Converting to PDF".to_string(),
+        percent: 60,
+        message: None,
+    });
 
     // Parse SVG using usvg with fonts loaded for text rendering
     let mut opt = Options::default();
@@ -128,8 +179,20 @@ fn export_pdf(project: &Project, path: &Path, options: &ExportImageOptions) -> R
         svg2pdf::PageOptions::default(),
     ).map_err(|e| anyhow::anyhow!("Failed to convert SVG to PDF: {:?}", e))?;
 
-    // Write PDF file
+    // Write file
+    emit_progress(super::ExportProgress {
+        stage: "Writing file".to_string(),
+        percent: 90,
+        message: None,
+    });
     std::fs::write(path, pdf).context("Failed to write PDF file")?;
+
+    // Complete
+    emit_progress(super::ExportProgress {
+        stage: "Export complete".to_string(),
+        percent: 100,
+        message: None,
+    });
 
     tracing::info!(path = ?path, "Exported PDF");
     Ok(())
@@ -139,14 +202,42 @@ fn export_pdf(project: &Project, path: &Path, options: &ExportImageOptions) -> R
 const MAX_PNG_DIMENSION: u32 = 16384;
 
 /// Export project as PNG using resvg rasterization
+#[allow(dead_code)]
 fn export_png(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
+    export_png_with_progress(project, path, options, |_| {})
+}
+
+/// Export project as PNG with progress callbacks
+fn export_png_with_progress<F>(
+    project: &Project,
+    path: &Path,
+    options: &ExportImageOptions,
+    emit_progress: F,
+) -> Result<()>
+where
+    F: Fn(super::ExportProgress),
+{
     // Validate DPI before processing
     if options.dpi == 0 {
         anyhow::bail!("DPI must be at least 1");
     }
 
-    // Generate SVG content first
+    let station_count = project.compute_station_coordinates().len();
+
+    // Generate SVG
+    emit_progress(super::ExportProgress {
+        stage: "Generating SVG".to_string(),
+        percent: 30,
+        message: Some(format!("{} stations", station_count)),
+    });
     let svg_content = generate_svg_string(project, options)?;
+
+    // Rasterizing PNG
+    emit_progress(super::ExportProgress {
+        stage: "Rasterizing PNG".to_string(),
+        percent: 60,
+        message: Some(format!("{} DPI", options.dpi)),
+    });
 
     // Parse SVG using usvg with fonts loaded for text rendering
     let mut opt = Options::default();
@@ -177,17 +268,66 @@ fn export_png(project: &Project, path: &Path, options: &ExportImageOptions) -> R
     let transform = tiny_skia::Transform::from_scale(scale, scale);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
-    // Save PNG
+    // Writing file
+    emit_progress(super::ExportProgress {
+        stage: "Writing file".to_string(),
+        percent: 90,
+        message: None,
+    });
     pixmap.save_png(path).context("Failed to save PNG file")?;
+
+    // Complete
+    emit_progress(super::ExportProgress {
+        stage: "Export complete".to_string(),
+        percent: 100,
+        message: None,
+    });
 
     tracing::info!(path = ?path, dpi = options.dpi, width = width, height = height, "Exported PNG");
     Ok(())
 }
 
 /// Export project as SVG
+#[allow(dead_code)]
 fn export_svg(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
+    export_svg_with_progress(project, path, options, |_| {})
+}
+
+/// Export project as SVG with progress callbacks
+fn export_svg_with_progress<F>(
+    project: &Project,
+    path: &Path,
+    options: &ExportImageOptions,
+    emit_progress: F,
+) -> Result<()>
+where
+    F: Fn(super::ExportProgress),
+{
+    let station_count = project.compute_station_coordinates().len();
+
+    // Generate SVG
+    emit_progress(super::ExportProgress {
+        stage: "Generating SVG".to_string(),
+        percent: 50,
+        message: Some(format!("{} stations", station_count)),
+    });
     let svg = generate_svg_string(project, options)?;
+
+    // Writing file
+    emit_progress(super::ExportProgress {
+        stage: "Writing file".to_string(),
+        percent: 90,
+        message: None,
+    });
     std::fs::write(path, svg).context("Failed to write SVG file")?;
+
+    // Complete
+    emit_progress(super::ExportProgress {
+        stage: "Export complete".to_string(),
+        percent: 100,
+        message: None,
+    });
+
     tracing::info!(path = ?path, "Exported SVG");
     Ok(())
 }

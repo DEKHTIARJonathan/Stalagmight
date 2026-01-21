@@ -302,9 +302,10 @@ export default function ExportPreview({ options, theme, presetColors }: ExportPr
     // Compute depth range using pure function
     const depthRange = calculateDepthRange(stations);
 
-    // Get unit and precision for labels
+    // Get unit and precision for labels (clamp precision to match Rust backend's MAX_DECIMAL_PRECISION)
     const depthUnit = options.depth_unit || 'm';
-    const decimalPrecision = options.decimal_precision ?? 1;
+    const rawPrecision = options.decimal_precision ?? 1;
+    const decimalPrecision = Math.max(0, Math.min(6, Math.floor(rawPrecision) || 0));
 
     // Build shot features
     const shotFeatures: GeoJSON.Feature[] = [];
