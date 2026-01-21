@@ -20,7 +20,7 @@ import type {
 } from '../types/project';
 import type { Config } from '../types/config';
 import type { CommandResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand } from '../types/commands';
-import type { LoadProjectFullResult } from '../types/loading';
+import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
 /**
  * Structured loading state for project load/create operations.
@@ -352,7 +352,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     }
   },
 
-  // Project operations
+  // Project operations - uses consolidated create_project_full command
   createProject: async (name: string, location?: string) => {
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
@@ -360,25 +360,32 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const clientOpId = get().startLoading(name, '');
 
     try {
-      const result = await invoke<CommandResult>('create_project', { name, location });
+      const result = await invoke<CreateProjectFullResult>('create_project_full', { name, location });
 
       // Check clientOpId hasn't changed
       if (get().loading.clientOpId !== clientOpId) {
         return { success: false, error: 'Cancelled', warnings: [] };
       }
 
-      if (result.success) {
-        await get().refreshProjectState();
-        // Reset display settings to defaults for new project
-        useUIStore.getState().resetDisplaySettings();
-        useUIStore.getState().setView('single');
-        await get().loadRecentProjects();
-        set({ isDirty: false });
-        get().resetLoading();
-      } else {
-        get().setLoadingError(result.error ?? 'Failed to create project');
-      }
-      return result;
+      // Set backend loadingId from result for event correlation
+      get().setLoadingProgress({ loadingId: result.loadingId });
+
+      // Apply project state from result
+      set({
+        project: result.project,
+        stations: [],
+        stats: null,
+        warnings: [],
+        isDirty: false,
+      });
+
+      // Apply display settings from backend (defaults for new project)
+      useUIStore.getState().applyDisplaySettings(result.displaySettings);
+      useUIStore.getState().setView('single');
+      await get().loadRecentProjects();
+      get().resetLoading();
+
+      return { success: true, error: null, warnings: [] };
     } catch (e) {
       const error = parseLoadError(e);
       if (get().loading.clientOpId === clientOpId) {

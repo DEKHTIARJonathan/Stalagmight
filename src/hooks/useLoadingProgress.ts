@@ -10,14 +10,23 @@ import type { LoadingProgressPayload } from '../types/loading';
 
 const TIMEOUT_MS = 30000; // 30 second timeout
 
+// Track the highest seen backend loadingId globally to filter truly stale events
+// when store.loadingId is 0 (awaiting first event from new load)
+let lastSeenBackendLoadingId = 0;
+
 export function useLoadingProgress() {
   const setLoadingProgress = useProjectStore((s) => s.setLoadingProgress);
   const loading = useProjectStore((s) => s.loading);
   const timeoutRef = useRef<number | null>(null);
+  // Capture the clientOpId at effect start to detect if a new load started
+  const clientOpIdRef = useRef(loading.clientOpId);
 
   useEffect(() => {
     // Only listen when loading is active and no error yet
     if (!loading.isLoading || loading.error) return;
+
+    // Update clientOpId ref when effect runs (new load started)
+    clientOpIdRef.current = loading.clientOpId;
 
     // Track whether effect has been cleaned up (for async listener setup race)
     let disposed = false;
@@ -39,10 +48,31 @@ export function useLoadingProgress() {
         const currentState = useProjectStore.getState().loading;
         const { loadingId: eventLoadingId } = event.payload;
 
+        // Check if a newer load started (clientOpId changed)
+        if (currentState.clientOpId !== clientOpIdRef.current) {
+          if (import.meta.env.DEV) {
+            console.debug('[Loading] Ignoring event - new load started');
+          }
+          return;
+        }
+
         // Filter stale events:
-        // - If store.loadingId is 0, accept the first event and set the loadingId
+        // - If store.loadingId is 0, only accept events with ID > lastSeenBackendLoadingId
         // - If store.loadingId is set, only accept events with matching ID
-        if (currentState.loadingId !== 0 && eventLoadingId !== currentState.loadingId) {
+        if (currentState.loadingId === 0) {
+          // Awaiting first event - only accept if it's newer than any we've seen
+          if (eventLoadingId <= lastSeenBackendLoadingId) {
+            if (import.meta.env.DEV) {
+              console.debug(
+                '[Loading] Ignoring stale event (awaiting handshake)',
+                eventLoadingId,
+                '<=',
+                lastSeenBackendLoadingId
+              );
+            }
+            return;
+          }
+        } else if (eventLoadingId !== currentState.loadingId) {
           if (import.meta.env.DEV) {
             console.debug(
               '[Loading] Ignoring stale event',
@@ -52,6 +82,11 @@ export function useLoadingProgress() {
             );
           }
           return;
+        }
+
+        // Update global tracker
+        if (eventLoadingId > lastSeenBackendLoadingId) {
+          lastSeenBackendLoadingId = eventLoadingId;
         }
 
         // Reset timeout on each progress event
@@ -110,5 +145,5 @@ export function useLoadingProgress() {
       }
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
-  }, [loading.isLoading, loading.error, setLoadingProgress]);
+  }, [loading.isLoading, loading.error, loading.clientOpId, setLoadingProgress]);
 }
