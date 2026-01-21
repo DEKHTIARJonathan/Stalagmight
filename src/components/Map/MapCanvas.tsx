@@ -99,7 +99,7 @@ export default function MapCanvas() {
     setHoveredStation,
     setHoveredShot,
     hoveredSectionId,
-    // setHoveredSectionId will be added in fn-9-d6v.8 for bidirectional map-to-panel sync
+    setHoveredSectionId: _setHoveredSectionId, // Used in fn-9-d6v.8 for bidirectional map-to-panel sync
     placementMode,
     updatePlacementCursor,
     updatePlacementSnap,
@@ -668,10 +668,11 @@ export default function MapCanvas() {
   }, [snappedStation]);
 
   // Sync hoveredSectionId from uiStore to SurveyLayer
+  // Depends on mapLoaded to re-run when SurveyLayer becomes available
   useEffect(() => {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setHoveredSection(hoveredSectionId);
-  }, [hoveredSectionId]);
+  }, [hoveredSectionId, mapLoaded]);
 
   // Sync highlight layer with snap/draw/merge state
   // Shows snapped/origin stations even when stations layer is hidden
