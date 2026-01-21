@@ -7,10 +7,21 @@
     "fn-6-yz5.2"
   ],
   "epic": "fn-6-yz5",
+  "evidence": {
+    "commits": [
+      "0f67cb658029ed216e720778a542268b51e8f28c",
+      "58b6709150e60785b0770d960b83c484d03b8aba"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm test:ui --project=chromium (308 passed)",
+      "cargo test --manifest-path src-tauri/Cargo.toml (80 passed)"
+    ]
+  },
   "id": "fn-6-yz5.3",
   "priority": null,
   "spec_path": ".flow/tasks/fn-6-yz5.3.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add E2E tests for Edit Section/Shot dialog save functionality",
-  "updated_at": "2026-01-21T03:20:47.516535Z"
+  "updated_at": "2026-01-21T03:53:42.648537Z"
 }

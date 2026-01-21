@@ -1,0 +1,18 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-21T03:47:20.169886Z",
+  "depends_on": [
+    "fn-13-e55.3",
+    "fn-13-e55.4",
+    "fn-13-e55.5"
+  ],
+  "epic": "fn-13-e55",
+  "id": "fn-13-e55.6",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-13-e55.6.md",
+  "status": "todo",
+  "title": "Add Shortcuts tab to SettingsDialog",
+  "updated_at": "2026-01-21T03:55:32.893167Z"
+}
