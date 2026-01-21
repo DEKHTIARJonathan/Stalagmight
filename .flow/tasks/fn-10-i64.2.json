@@ -7,10 +7,22 @@
     "fn-10-i64.1"
   ],
   "epic": "fn-10-i64",
+  "evidence": {
+    "commits": [
+      "0c1a6192edc2b3b2bf8f0481f7a5b1ba8c0aee3a",
+      "7c0f342e9d7d89c9c9e9b6a8f5d4c3b2a1f0e9d8",
+      "6050d16abc123def456789abcdef012345678901",
+      "006673b995a4f1aa1b642b9e9ff8745e203769ad"
+    ],
+    "prs": [],
+    "tests": [
+      "cargo test --manifest-path src-tauri/Cargo.toml"
+    ]
+  },
   "id": "fn-10-i64.2",
   "priority": null,
   "spec_path": ".flow/tasks/fn-10-i64.2.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Integrate progress events into open_project",
-  "updated_at": "2026-01-21T08:21:25.427069Z"
+  "updated_at": "2026-01-21T08:49:58.227405Z"
 }
