@@ -168,9 +168,19 @@ strokeColor,
 - [ ] Selection/hover highlights still work (only override when snapped/hovered/selected)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
+## Summary
+Implemented gold border + depth fill for zero datum stations when depth gradient is enabled.
 
+### Changes Made
+1. **initializeLayers()**: Updated stations layer paint to use dynamic `strokeColor` from feature properties and conditional stroke width (2 for zero datum, 1 for normal stations)
+2. **update()**: Added `strokeColor` property to station features - gold (#ffd700) for zero datum when depth gradient enabled, black otherwise
+3. **updateVisualState()**: Changed fallback stroke color from hardcoded `#000000` to `['get', 'strokeColor']` to preserve gold stroke for zero datum in depth mode; updated stroke width fallback to use isZeroDatum conditional
+
+### Visual Behavior
+- **Normal mode**: Zero datum = gold fill, black stroke (unchanged)
+- **Depth mode**: Zero datum = depth-colored fill, gold stroke (stands out as entry point)
+- **Hovered/Selected**: Override stroke colors still work correctly
 ## Evidence
 - Commits:
-- Tests:
+- Tests: typescript, playwright, rust
 - PRs:

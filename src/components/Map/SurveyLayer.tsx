@@ -375,6 +375,7 @@ export default class SurveyLayer {
     });
 
     // Stations layer (circles)
+    // Fill color from feature property (handles both normal mode gold for zero datum and depth mode)
     this.map.addLayer({
       id: this.stationsLayerId,
       type: 'circle',
@@ -386,15 +387,13 @@ export default class SurveyLayer {
           8,
           4,
         ],
-        'circle-color': [
-          'case',
-          ['get', 'isZeroDatum'],
-          '#ffd700',
-          ['get', 'color'],
-        ],
-        // Stroke width varies based on selection/hover state (updated dynamically)
-        'circle-stroke-width': 1,
-        'circle-stroke-color': '#000000',
+        // Color from feature property - computed in update() based on depth mode and zero datum status
+        'circle-color': ['get', 'color'],
+        // Stroke width varies: 2 for zero datum (visibility), 1 for others
+        // Updated dynamically in updateVisualState() for selection/hover
+        'circle-stroke-width': ['case', ['get', 'isZeroDatum'], 2, 1],
+        // Stroke color from feature property (gold for zero datum in depth mode, black otherwise)
+        'circle-stroke-color': ['get', 'strokeColor'],
       },
     });
 
@@ -908,6 +907,7 @@ export default class SurveyLayer {
     const stationIdExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]];
 
     // Update station stroke width based on snap/hover/selection (snap takes priority for visual feedback)
+    // Fallback: 2 for zero datum stations (visibility), 1 for others
     this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-width', [
       'case',
       ['==', stationIdExpr, this.snappedStationId ?? ''],
@@ -916,19 +916,23 @@ export default class SurveyLayer {
       3,
       ['==', stationIdExpr, this.selectedStationId ?? ''],
       2,
-      1,
+      ['get', 'isZeroDatum'],
+      2, // Zero datum: stroke width 2 for visibility
+      1, // Normal stations: stroke width 1
     ]);
 
     // Update station stroke color for snap/selection/hover
+    // Priority order: snapped > hovered > selected (matches stroke width priority)
+    // Fallback uses feature's strokeColor (gold for zero datum in depth mode, black otherwise)
     this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-color', [
       'case',
       ['==', stationIdExpr, this.snappedStationId ?? ''],
       '#00ffcc', // Cyan/teal for snap indicator
-      ['==', stationIdExpr, this.selectedStationId ?? ''],
-      '#00aaff',
       ['==', stationIdExpr, this.hoveredStationId ?? ''],
       '#0066ff',
-      '#000000',
+      ['==', stationIdExpr, this.selectedStationId ?? ''],
+      '#00aaff',
+      ['get', 'strokeColor'], // Default from feature (gold for zero datum in depth mode, black otherwise)
     ]);
 
     // Update station radius with state-based scaling
@@ -1412,12 +1416,23 @@ export default class SurveyLayer {
       const section = sections.find((s) => s.id === station.station_ref.section_id);
       const sectionColor = section?.color ?? '#ffffff';
 
-      // Calculate station color - use depth gradient if enabled, otherwise section color
+      const isZeroDatum = station.is_zero_datum;
       const stationDepth = station.coordinates.z;
-      const depthColor = this.showDepthGradient
-        ? getDepthColor(stationDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)
-        : null;
-      const color = depthColor ?? sectionColor;
+
+      // Calculate station fill color:
+      // - Depth mode: use depth-based color for all stations (including zero datum)
+      // - Normal mode: gold for zero datum, section color for others
+      let color: string;
+      if (this.showDepthGradient) {
+        // getDepthColor can return null for invalid inputs, fallback to section color
+        color = getDepthColor(stationDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max) ?? sectionColor;
+      } else {
+        color = isZeroDatum ? '#ffd700' : sectionColor;
+      }
+
+      // Stroke color: gold for zero datum when depth gradient enabled (so entry points stand out),
+      // black otherwise (normal mode keeps zero datum with gold fill + black stroke)
+      const strokeColor = this.showDepthGradient && isZeroDatum ? '#ffd700' : '#000000';
 
       return {
         type: 'Feature',
@@ -1432,6 +1447,7 @@ export default class SurveyLayer {
           isMerged: station.merged_with.length > 0,
           depth: station.coordinates.z,
           color,
+          strokeColor,
         },
       };
     });
