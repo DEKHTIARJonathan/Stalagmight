@@ -4,6 +4,7 @@ import type { Section, SectionId, ShotId, Station, StationRef, StationMerge, Loo
 import type { Config, GpsOrigin } from '../../types/config';
 import { metersToMapCoords } from '../../utils/coordinates';
 import { getDepthColor } from '../../utils/colors';
+import { hasLiveStyle } from './mapUtils';
 
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
@@ -1651,21 +1652,117 @@ export default class SurveyLayer {
   }
 
   destroy() {
-    // Unregister event handlers first (before removing layers)
-    this.map.off('click', this.handleMapClick);
-    this.map.off('contextmenu', this.handleContextMenu);
+    // Guard against map being destroyed (race condition on unmount)
+    if (!hasLiveStyle(this.map)) {
+      // Clear bound handler references even if map is destroyed
+      this.boundStationEnter = null;
+      this.boundStationLeave = null;
+      this.boundShotEnter = null;
+      this.boundShotLeave = null;
+      return;
+    }
 
-    if (this.boundStationEnter) {
-      this.map.off('mouseenter', this.stationsHitboxLayerId, this.boundStationEnter);
-    }
-    if (this.boundStationLeave) {
-      this.map.off('mouseleave', this.stationsHitboxLayerId, this.boundStationLeave);
-    }
-    if (this.boundShotEnter) {
-      this.map.off('mouseenter', this.shotsHitboxLayerId, this.boundShotEnter);
-    }
-    if (this.boundShotLeave) {
-      this.map.off('mouseleave', this.shotsHitboxLayerId, this.boundShotLeave);
+    try {
+      // Unregister event handlers first (before removing layers)
+      this.map.off('click', this.handleMapClick);
+      this.map.off('contextmenu', this.handleContextMenu);
+
+      if (this.boundStationEnter) {
+        this.map.off('mouseenter', this.stationsHitboxLayerId, this.boundStationEnter);
+      }
+      if (this.boundStationLeave) {
+        this.map.off('mouseleave', this.stationsHitboxLayerId, this.boundStationLeave);
+      }
+      if (this.boundShotEnter) {
+        this.map.off('mouseenter', this.shotsHitboxLayerId, this.boundShotEnter);
+      }
+      if (this.boundShotLeave) {
+        this.map.off('mouseleave', this.shotsHitboxLayerId, this.boundShotLeave);
+      }
+
+      // Remove all layers first (must be done before removing their sources)
+      if (this.map.getLayer(this.labelsLayerId)) {
+        this.map.removeLayer(this.labelsLayerId);
+      }
+      if (this.map.getLayer(this.shotLabelsLayerId)) {
+        this.map.removeLayer(this.shotLabelsLayerId);
+      }
+      if (this.map.getLayer(this.stationLabelsLayerId)) {
+        this.map.removeLayer(this.stationLabelsLayerId);
+      }
+      if (this.map.getLayer(this.stationsLayerId)) {
+        this.map.removeLayer(this.stationsLayerId);
+      }
+      if (this.map.getLayer(this.stationsHighlightLayerId)) {
+        this.map.removeLayer(this.stationsHighlightLayerId);
+      }
+      if (this.map.getLayer(this.shotsLayerId)) {
+        this.map.removeLayer(this.shotsLayerId);
+      }
+      if (this.map.getLayer(this.mergesLayerId)) {
+        this.map.removeLayer(this.mergesLayerId);
+      }
+      if (this.map.getLayer(this.loopClosuresLayerId)) {
+        this.map.removeLayer(this.loopClosuresLayerId);
+      }
+      // Remove ghost section layers
+      if (this.map.getLayer(this.ghostShotsLayerId)) {
+        this.map.removeLayer(this.ghostShotsLayerId);
+      }
+      if (this.map.getLayer(this.ghostStationsLayerId)) {
+        this.map.removeLayer(this.ghostStationsLayerId);
+      }
+      if (this.map.getLayer(this.ghostMergeLayerId)) {
+        this.map.removeLayer(this.ghostMergeLayerId);
+      }
+      // Remove hitbox layers
+      if (this.map.getLayer(this.stationsHitboxLayerId)) {
+        this.map.removeLayer(this.stationsHitboxLayerId);
+      }
+      if (this.map.getLayer(this.shotsHitboxLayerId)) {
+        this.map.removeLayer(this.shotsHitboxLayerId);
+      }
+      if (this.map.getLayer(this.ghostStationsHitboxLayerId)) {
+        this.map.removeLayer(this.ghostStationsHitboxLayerId);
+      }
+      if (this.map.getLayer(this.ghostShotsHitboxLayerId)) {
+        this.map.removeLayer(this.ghostShotsHitboxLayerId);
+      }
+
+      // Remove all sources after layers are removed
+      if (this.map.getSource(this.sourceId + '-shots')) {
+        this.map.removeSource(this.sourceId + '-shots');
+      }
+      if (this.map.getSource(this.sourceId + '-stations')) {
+        this.map.removeSource(this.sourceId + '-stations');
+      }
+      if (this.map.getSource(this.sourceId + '-merges')) {
+        this.map.removeSource(this.sourceId + '-merges');
+      }
+      if (this.map.getSource(this.sourceId + '-loop-closures')) {
+        this.map.removeSource(this.sourceId + '-loop-closures');
+      }
+      if (this.map.getSource(this.sourceId + '-section-labels')) {
+        this.map.removeSource(this.sourceId + '-section-labels');
+      }
+      if (this.map.getSource(this.sourceId + '-shot-labels')) {
+        this.map.removeSource(this.sourceId + '-shot-labels');
+      }
+      if (this.map.getSource(this.sourceId + '-station-labels')) {
+        this.map.removeSource(this.sourceId + '-station-labels');
+      }
+      // Remove ghost section sources
+      if (this.map.getSource(this.sourceId + '-ghost-shots')) {
+        this.map.removeSource(this.sourceId + '-ghost-shots');
+      }
+      if (this.map.getSource(this.sourceId + '-ghost-stations')) {
+        this.map.removeSource(this.sourceId + '-ghost-stations');
+      }
+      if (this.map.getSource(this.sourceId + '-ghost-merge')) {
+        this.map.removeSource(this.sourceId + '-ghost-merge');
+      }
+    } catch {
+      // Map already destroyed during unmount, cleanup not needed
     }
 
     // Clear bound handler references
@@ -1673,87 +1770,5 @@ export default class SurveyLayer {
     this.boundStationLeave = null;
     this.boundShotEnter = null;
     this.boundShotLeave = null;
-
-    // Remove all layers first (must be done before removing their sources)
-    if (this.map.getLayer(this.labelsLayerId)) {
-      this.map.removeLayer(this.labelsLayerId);
-    }
-    if (this.map.getLayer(this.shotLabelsLayerId)) {
-      this.map.removeLayer(this.shotLabelsLayerId);
-    }
-    if (this.map.getLayer(this.stationLabelsLayerId)) {
-      this.map.removeLayer(this.stationLabelsLayerId);
-    }
-    if (this.map.getLayer(this.stationsLayerId)) {
-      this.map.removeLayer(this.stationsLayerId);
-    }
-    if (this.map.getLayer(this.stationsHighlightLayerId)) {
-      this.map.removeLayer(this.stationsHighlightLayerId);
-    }
-    if (this.map.getLayer(this.shotsLayerId)) {
-      this.map.removeLayer(this.shotsLayerId);
-    }
-    if (this.map.getLayer(this.mergesLayerId)) {
-      this.map.removeLayer(this.mergesLayerId);
-    }
-    if (this.map.getLayer(this.loopClosuresLayerId)) {
-      this.map.removeLayer(this.loopClosuresLayerId);
-    }
-    // Remove ghost section layers
-    if (this.map.getLayer(this.ghostShotsLayerId)) {
-      this.map.removeLayer(this.ghostShotsLayerId);
-    }
-    if (this.map.getLayer(this.ghostStationsLayerId)) {
-      this.map.removeLayer(this.ghostStationsLayerId);
-    }
-    if (this.map.getLayer(this.ghostMergeLayerId)) {
-      this.map.removeLayer(this.ghostMergeLayerId);
-    }
-    // Remove hitbox layers
-    if (this.map.getLayer(this.stationsHitboxLayerId)) {
-      this.map.removeLayer(this.stationsHitboxLayerId);
-    }
-    if (this.map.getLayer(this.shotsHitboxLayerId)) {
-      this.map.removeLayer(this.shotsHitboxLayerId);
-    }
-    if (this.map.getLayer(this.ghostStationsHitboxLayerId)) {
-      this.map.removeLayer(this.ghostStationsHitboxLayerId);
-    }
-    if (this.map.getLayer(this.ghostShotsHitboxLayerId)) {
-      this.map.removeLayer(this.ghostShotsHitboxLayerId);
-    }
-
-    // Remove all sources after layers are removed
-    if (this.map.getSource(this.sourceId + '-shots')) {
-      this.map.removeSource(this.sourceId + '-shots');
-    }
-    if (this.map.getSource(this.sourceId + '-stations')) {
-      this.map.removeSource(this.sourceId + '-stations');
-    }
-    if (this.map.getSource(this.sourceId + '-merges')) {
-      this.map.removeSource(this.sourceId + '-merges');
-    }
-    if (this.map.getSource(this.sourceId + '-loop-closures')) {
-      this.map.removeSource(this.sourceId + '-loop-closures');
-    }
-    if (this.map.getSource(this.sourceId + '-section-labels')) {
-      this.map.removeSource(this.sourceId + '-section-labels');
-    }
-    if (this.map.getSource(this.sourceId + '-shot-labels')) {
-      this.map.removeSource(this.sourceId + '-shot-labels');
-    }
-    if (this.map.getSource(this.sourceId + '-station-labels')) {
-      this.map.removeSource(this.sourceId + '-station-labels');
-    }
-    // Remove ghost section sources
-    if (this.map.getSource(this.sourceId + '-ghost-shots')) {
-      this.map.removeSource(this.sourceId + '-ghost-shots');
-    }
-    if (this.map.getSource(this.sourceId + '-ghost-stations')) {
-      this.map.removeSource(this.sourceId + '-ghost-stations');
-    }
-    if (this.map.getSource(this.sourceId + '-ghost-merge')) {
-      this.map.removeSource(this.sourceId + '-ghost-merge');
-    }
   }
 }
