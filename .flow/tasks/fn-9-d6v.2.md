@@ -150,9 +150,8 @@ this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-width', strokeWid
 - [ ] Uses relative imports (no @/ path alias)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Created MapLibre expression builder utility with buildPriorityExpression(), compositeIdEquals(), and inSection() helper functions for priority-based map styling. Uses ExpressionSpecification type from maplibre-gl for type safety, with null handling that returns constant false to prevent unintended matches.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 251fa9f, 9200225
+- Tests: pnpm tsc --noEmit
 - PRs:
