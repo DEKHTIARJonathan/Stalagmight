@@ -143,6 +143,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         mockConfigOverrides = {};
       };
 
+      // Expose currentProject setter for E2E tests (allows injecting test fixtures)
+      (window as unknown as Record<string, unknown>).__E2E_MOCKS__ = {
+        setCurrentProject: (project: typeof currentProject) => {
+          currentProject = project;
+        },
+        getCurrentProject: () => currentProject,
+      };
+
       // Display settings persistence - in-memory storage for testing reload behavior
       const mockDisplaySettings: Record<string, string> = {
         showStations: 'true',
@@ -1031,17 +1039,47 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, path: args?.path };
 
           // Section and shot editing commands
-          case 'update_shot':
+          case 'update_shot': {
             console.log('[Mock IPC] update_shot called with:', args);
+            // Mutate currentProject to support persistence testing
+            // Note: Tauri invoke passes camelCase from JS side
+            if (currentProject && args) {
+              const sectionId = args.sectionId as number;
+              const shotId = args.shotId as number;
+              const updates = args.updates as Record<string, unknown>;
+              const section = (currentProject.sections as Array<{ id: number; shots: Array<{ id: number } & Record<string, unknown>> }>)
+                .find(s => s.id === sectionId);
+              if (section) {
+                const shot = section.shots.find(sh => sh.id === shotId);
+                if (shot && updates) {
+                  Object.assign(shot, updates);
+                  console.log('[Mock IPC] update_shot: applied updates to shot', shotId, updates);
+                }
+              }
+            }
             return { success: true };
+          }
 
           case 'delete_shot':
             console.log('[Mock IPC] delete_shot called with:', args);
             return { success: true };
 
-          case 'update_section':
+          case 'update_section': {
             console.log('[Mock IPC] update_section called with:', args);
+            // Mutate currentProject to support persistence testing
+            // Note: Tauri invoke passes camelCase from JS side
+            if (currentProject && args) {
+              const sectionId = args.sectionId as number;
+              const updates = args.updates as Record<string, unknown>;
+              const section = (currentProject.sections as Array<{ id: number } & Record<string, unknown>>)
+                .find(s => s.id === sectionId);
+              if (section && updates) {
+                Object.assign(section, updates);
+                console.log('[Mock IPC] update_section: applied updates to section', sectionId, updates);
+              }
+            }
             return { success: true };
+          }
 
           case 'delete_section':
             console.log('[Mock IPC] delete_section called with:', args);
