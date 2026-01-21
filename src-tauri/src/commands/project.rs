@@ -98,7 +98,7 @@ pub struct ProjectState {
 pub async fn load_project_full(
     app_handle: tauri::AppHandle,
     path: PathBuf,
-) -> Result<LoadProjectFullResult, String> {
+) -> Result<LoadProjectFullResult, LoadError> {
     // Use tauri's spawn_blocking - matches existing codebase pattern
     // Access state inside the blocking closure via app_handle
     let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
@@ -110,10 +110,10 @@ pub async fn load_project_full(
 
     match result {
         Ok(Ok(load_result)) => Ok(load_result),
-        Ok(Err(load_error)) => Err(load_error.to_string()),
+        Ok(Err(load_error)) => Err(load_error),
         Err(join_error) => {
             // Task panicked or was cancelled
-            Err(LoadError::internal(join_error.to_string()).to_string())
+            Err(LoadError::internal(join_error.to_string()))
         }
     }
 }

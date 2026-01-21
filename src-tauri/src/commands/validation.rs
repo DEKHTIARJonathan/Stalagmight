@@ -16,8 +16,8 @@ pub fn get_project_warnings(state: State<AppState>) -> Vec<ProjectWarning> {
         None => return Vec::new(),
     };
 
-    // Delegate to AppState method
-    state.compute_project_warnings(&project)
+    // Delegate to AppState method (uses self.database since project is already loaded)
+    state.compute_project_warnings(&project, None)
 }
 
 /// Resolve a warning (mark it as acknowledged)
