@@ -190,8 +190,10 @@ interface UIStore {
   // Hover state
   hoveredStation: StationRef | null;
   hoveredShot: { sectionId: SectionId; shotId: ShotId } | null;
+  hoveredSectionId: SectionId | null;
   setHoveredStation: (ref: StationRef | null) => void;
   setHoveredShot: (shot: { sectionId: SectionId; shotId: ShotId } | null) => void;
+  setHoveredSectionId: (sectionId: SectionId | null) => void;
 
   // Toast state (per-key throttling)
   toast: { message: string; key: string; timestamp: number } | null;
@@ -279,8 +281,11 @@ export const useUIStore = create<UIStore>((set) => ({
     set((state) => {
       // Clear hover state when switching to non-interactive tools (pan/zoom)
       // This ensures store consistency regardless of how hover was set
-      if (isNonInteractiveTool(activeTool) && (state.hoveredStation || state.hoveredShot)) {
-        return { activeTool, hoveredStation: null, hoveredShot: null };
+      if (
+        isNonInteractiveTool(activeTool) &&
+        (state.hoveredStation || state.hoveredShot || state.hoveredSectionId)
+      ) {
+        return { activeTool, hoveredStation: null, hoveredShot: null, hoveredSectionId: null };
       }
       return { activeTool };
     }),
@@ -506,8 +511,10 @@ export const useUIStore = create<UIStore>((set) => ({
   // Hover state
   hoveredStation: null,
   hoveredShot: null,
+  hoveredSectionId: null,
   setHoveredStation: (hoveredStation) => set({ hoveredStation }),
   setHoveredShot: (hoveredShot) => set({ hoveredShot }),
+  setHoveredSectionId: (hoveredSectionId) => set({ hoveredSectionId }),
 
   // Toast state (per-key throttling)
   toast: null,
