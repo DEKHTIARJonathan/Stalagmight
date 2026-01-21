@@ -189,4 +189,63 @@ test.describe('Back Button Navigation', () => {
     // Should return to Global View without crashing
     await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 10000 });
   });
+
+  test('should handle Back button with grid overlay visible', async ({ page }) => {
+    // Create a project
+    await createProject(page, 'Grid Visible Test Project');
+
+    // Wait for project to be fully loaded
+    await expect(page.locator('canvas').first()).toBeVisible();
+
+    // Enable grid overlay via store
+    await page.evaluate(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: {
+            setState: (state: { showGrid: boolean }) => void;
+          };
+        };
+      }).__E2E_TEST__;
+      if (e2e && e2e.uiStore) {
+        e2e.uiStore.setState({ showGrid: true });
+      }
+    });
+
+    // Wait for grid to render
+    await page.waitForTimeout(500);
+
+    // Click Back button
+    await page.click('[data-testid="back-button"]');
+
+    // Should return to Global View without crashing (grid cleanup should work)
+    await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 10000 });
+  });
+
+  test('should handle Back button with grid overlay hidden', async ({ page }) => {
+    // Create a project
+    await createProject(page, 'Grid Hidden Test Project');
+
+    // Wait for project to be fully loaded
+    await expect(page.locator('canvas').first()).toBeVisible();
+
+    // Ensure grid overlay is hidden (default state)
+    await page.evaluate(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: {
+            setState: (state: { showGrid: boolean }) => void;
+          };
+        };
+      }).__E2E_TEST__;
+      if (e2e && e2e.uiStore) {
+        e2e.uiStore.setState({ showGrid: false });
+      }
+    });
+
+    // Click Back button
+    await page.click('[data-testid="back-button"]');
+
+    // Should return to Global View without crashing
+    await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 10000 });
+  });
 });
