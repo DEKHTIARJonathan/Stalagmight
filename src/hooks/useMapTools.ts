@@ -35,6 +35,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     setDrawFromStation,
     setHoveredStation,
     setHoveredShot,
+    setHoveredSectionId,
     openDialog,
     snappedStation,
     showStations,
@@ -333,11 +334,14 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       // GUARD: No hover for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) {
         setHoveredStation(null);
+        setHoveredSectionId(null);
         return;
       }
       setHoveredStation(ref);
+      // Derive section and set for panel highlight (bidirectional map-to-panel sync)
+      setHoveredSectionId(ref?.section_id ?? null);
     },
-    [activeTool, setHoveredStation]
+    [activeTool, setHoveredStation, setHoveredSectionId]
   );
 
   // Handle shot hover
@@ -346,11 +350,14 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       // GUARD: No hover for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) {
         setHoveredShot(null);
+        setHoveredSectionId(null);
         return;
       }
       setHoveredShot(shot);
+      // Derive section and set for panel highlight (bidirectional map-to-panel sync)
+      setHoveredSectionId(shot?.sectionId ?? null);
     },
-    [activeTool, setHoveredShot]
+    [activeTool, setHoveredShot, setHoveredSectionId]
   );
 
   // Handle context menu
