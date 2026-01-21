@@ -522,6 +522,252 @@ mod tests {
         assert_eq!(result, None);
     }
 
+    fn expect(provider: &str, z: u32, y: u32, x: u32) -> Option<(String, u32, u32, u32)> {
+        Some((provider.to_string(), z, y, x))
+    }
+
+    macro_rules! parse_case {
+        ($name:ident, $uri:expr, $expected:expr) => {
+            #[test]
+            fn $name() {
+                let uri: http::Uri = $uri.parse().unwrap();
+                let result = parse_tile_uri(&uri);
+                assert_eq!(result, $expected);
+            }
+        };
+    }
+
+    parse_case!(
+        test_parse_tile_uri_path_based_png_extension,
+        "cavechef-tiles://localhost/esri/10/500/250.png",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_jpeg_extension,
+        "cavechef-tiles://localhost/esri/10/500/250.jpeg",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_leading_zeros,
+        "cavechef-tiles://localhost/esri/01/002/0003",
+        expect("esri", 1, 2, 3)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_uppercase_provider,
+        "cavechef-tiles://localhost/ESRI/10/500/250",
+        expect("ESRI", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_provider_with_dash,
+        "cavechef-tiles://localhost/esri-v2/10/500/250",
+        expect("esri-v2", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_provider_with_dot,
+        "cavechef-tiles://localhost/esri.v1/10/500/250",
+        expect("esri.v1", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_extra_segments,
+        "cavechef-tiles://localhost/esri/10/500/250/extra",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_trailing_slash,
+        "cavechef-tiles://localhost/esri/10/500/250/",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_query,
+        "cavechef-tiles://localhost/esri/10/500/250?token=abc",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_zero_coords,
+        "cavechef-tiles://localhost/esri/0/0/0",
+        expect("esri", 0, 0, 0)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_large_coords,
+        "cavechef-tiles://localhost/esri/4294967295/4294967295/4294967295",
+        expect("esri", 4294967295, 4294967295, 4294967295)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_with_port,
+        "cavechef-tiles://localhost:1234/esri/10/500/250",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_x_double_extension,
+        "cavechef-tiles://localhost/esri/10/500/250.png.jpg",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_x_trailing_dot,
+        "cavechef-tiles://localhost/esri/10/500/250.",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_x_decimal_truncates,
+        "cavechef-tiles://localhost/esri/10/500/250.5",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_invalid_y,
+        "cavechef-tiles://localhost/esri/10/abc/250",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_invalid_x,
+        "cavechef-tiles://localhost/esri/10/500/abc",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_invalid_z,
+        "cavechef-tiles://localhost/esri/abc/500/250",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_negative_z,
+        "cavechef-tiles://localhost/esri/-1/500/250",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_negative_y,
+        "cavechef-tiles://localhost/esri/10/-1/250",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_negative_x,
+        "cavechef-tiles://localhost/esri/10/500/-1",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_missing_x_trailing_slash,
+        "cavechef-tiles://localhost/esri/10/500/",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_only_provider,
+        "cavechef-tiles://localhost/esri",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_provider_and_z,
+        "cavechef-tiles://localhost/esri/10",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_double_slash,
+        "cavechef-tiles://localhost/esri//500/250",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_z_float,
+        "cavechef-tiles://localhost/esri/10.5/500/250",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_path_based_y_float,
+        "cavechef-tiles://localhost/esri/10/500.1/250",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_png_extension,
+        "cavechef-tiles://esri/10/500/250.png",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_uppercase_provider,
+        "cavechef-tiles://ESRI/10/500/250",
+        expect("ESRI", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_provider_with_dot,
+        "cavechef-tiles://esri.v1/10/500/250",
+        expect("esri.v1", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_provider_numeric,
+        "cavechef-tiles://123/10/500/250",
+        expect("123", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_with_port,
+        "cavechef-tiles://esri:1234/10/500/250",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_extra_segments,
+        "cavechef-tiles://esri/10/500/250/extra",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_trailing_slash,
+        "cavechef-tiles://esri/10/500/250/",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_query,
+        "cavechef-tiles://esri/10/500/250?x=1",
+        expect("esri", 10, 500, 250)
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_zero_coords,
+        "cavechef-tiles://esri/0/0/0",
+        expect("esri", 0, 0, 0)
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_large_coords,
+        "cavechef-tiles://esri/4294967295/4294967295/4294967295",
+        expect("esri", 4294967295, 4294967295, 4294967295)
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_missing_y,
+        "cavechef-tiles://esri/10",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_missing_x,
+        "cavechef-tiles://esri/10/500",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_invalid_y,
+        "cavechef-tiles://esri/10/abc/250",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_invalid_x,
+        "cavechef-tiles://esri/10/500/abc",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_negative_x,
+        "cavechef-tiles://esri/10/500/-1",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_negative_y,
+        "cavechef-tiles://esri/10/-1/250",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_negative_z,
+        "cavechef-tiles://esri/-1/500/250",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_z_float,
+        "cavechef-tiles://esri/10.5/500/250",
+        None
+    );
+    parse_case!(
+        test_parse_tile_uri_host_based_numeric_first_segment_non_localhost,
+        "cavechef-tiles://tiles/10/20/30",
+        expect("tiles", 10, 20, 30)
+    );
+
     // === sanitize_content_type tests ===
 
     #[test]
@@ -560,6 +806,141 @@ mod tests {
             DEFAULT_CONTENT_TYPE
         );
     }
+
+    macro_rules! sanitize_case {
+        ($name:ident, $input:expr, $expected:expr) => {
+            #[test]
+            fn $name() {
+                assert_eq!(sanitize_content_type($input), $expected);
+            }
+        };
+    }
+
+    sanitize_case!(
+        test_sanitize_content_type_valid_jpg,
+        "image/jpg",
+        "image/jpg"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_uppercase_png,
+        "IMAGE/PNG",
+        "image/png"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_mixed_case_jpeg,
+        "Image/Jpeg",
+        "image/jpeg"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_trim_spaces,
+        " image/jpeg ",
+        "image/jpeg"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_png_with_charset,
+        "image/png; charset=utf-8",
+        "image/png"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_jpg_with_charset,
+        "image/jpg; charset=utf-8",
+        "image/jpg"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_jpeg_multi_params,
+        "image/jpeg;param=1;param2=2",
+        "image/jpeg"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_invalid_text_plain,
+        "text/plain",
+        DEFAULT_CONTENT_TYPE
+    );
+    sanitize_case!(
+        test_sanitize_content_type_invalid_gif,
+        "image/gif",
+        DEFAULT_CONTENT_TYPE
+    );
+    sanitize_case!(
+        test_sanitize_content_type_empty_string,
+        "",
+        DEFAULT_CONTENT_TYPE
+    );
+    sanitize_case!(
+        test_sanitize_content_type_whitespace_only,
+        "   ",
+        DEFAULT_CONTENT_TYPE
+    );
+    sanitize_case!(
+        test_sanitize_content_type_uppercase_jpg_with_param,
+        "IMAGE/JPG;foo=bar",
+        "image/jpg"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_uppercase_png_with_param,
+        "IMAGE/PNG;foo=bar",
+        "image/png"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_no_space_before_charset,
+        "image/jpeg;charset=utf-8",
+        "image/jpeg"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_charset_uppercase,
+        "image/jpeg; charset=UTF-8",
+        "image/jpeg"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_charset_with_spaces,
+        "image/jpeg; charset=utf-8 ; q=0.9",
+        "image/jpeg"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_uppercase_charset,
+        "IMAGE/JPEG;CHARSET=UTF-8",
+        "image/jpeg"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_jpg_multi_params,
+        "image/jpg;foo=bar;baz=qux",
+        "image/jpg"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_png_trailing_semicolon,
+        "image/png;",
+        "image/png"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_leading_semicolon,
+        ";charset=utf-8",
+        DEFAULT_CONTENT_TYPE
+    );
+    sanitize_case!(
+        test_sanitize_content_type_invalid_json,
+        "application/json",
+        DEFAULT_CONTENT_TYPE
+    );
+    sanitize_case!(
+        test_sanitize_content_type_invalid_avif,
+        "image/avif",
+        DEFAULT_CONTENT_TYPE
+    );
+    sanitize_case!(
+        test_sanitize_content_type_invalid_short_jpeg,
+        "image/jpe",
+        DEFAULT_CONTENT_TYPE
+    );
+    sanitize_case!(
+        test_sanitize_content_type_jpg_space_before_semicolon,
+        "image/jpg ; charset=utf-8",
+        "image/jpg"
+    );
+    sanitize_case!(
+        test_sanitize_content_type_jpeg_space_before_semicolon,
+        "image/jpeg ; charset=utf-8",
+        "image/jpeg"
+    );
 
     // === Provider validation tests ===
 
@@ -704,6 +1085,50 @@ mod tests {
         let response =
             handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, mock_fetch);
         assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn test_handle_tile_request_cache_miss_network_fails_uses_stale_tile() {
+        let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(1, 0).unwrap())));
+
+        {
+            let mut guard = cache.lock().unwrap();
+            guard
+                .as_mut()
+                .unwrap()
+                .put("esri", 1, 2, 3, b"stale_tile", "image/png")
+                .unwrap();
+        }
+
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
+            Err("Network down".to_string())
+        };
+
+        let response = handle_tile_request_with_fetcher("esri", 1, 2, 3, &cache, mock_fetch);
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(response.body(), b"stale_tile");
+    }
+
+    // === tile_fetch_impl tests ===
+
+    #[test]
+    fn test_tile_fetch_impl_unknown_provider_errors() {
+        let cache = make_test_cache();
+        let err = tile_fetch_impl("unknown", 1, 2, 3, &cache).unwrap_err();
+        assert!(err.contains("Unknown provider"));
+    }
+
+    #[test]
+    fn test_tile_fetch_impl_cache_hit_returns_bytes() {
+        let cache = make_test_cache();
+        {
+            let mut guard = cache.lock().unwrap();
+            let c = guard.as_mut().unwrap();
+            c.put("esri", 1, 2, 3, b"tile_bytes", "image/png")
+                .unwrap();
+        }
+        let data = tile_fetch_impl("esri", 1, 2, 3, &cache).unwrap();
+        assert_eq!(data, b"tile_bytes");
     }
 
     // === Response builder tests ===
