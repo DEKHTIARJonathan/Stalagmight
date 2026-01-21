@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-21T01:34:58.056710Z",
+  "depends_on": [
+    "fn-11-6w4.8"
+  ],
+  "epic": "fn-11-6w4",
+  "id": "fn-11-6w4.11",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-11-6w4.11.md",
+  "status": "todo",
+  "title": "Write Playwright E2E tests for export color modes",
+  "updated_at": "2026-01-21T01:56:46.052518Z"
+}

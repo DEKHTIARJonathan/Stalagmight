@@ -36,8 +36,19 @@ Ensure the new shortcut appears in the configurable list under "Display" categor
 ## Acceptance
 - [ ] DEFERRED - see epic "Future Work" section
 ## Done summary
-TBD
+Blocked:
+# Block Reason
 
+Deferred to separate epic - requires configurable keyboard shortcuts infrastructure.
+
+The task spec requires:
+1. A keyboard shortcuts config structure with customizable bindings
+2. A settings UI for users to assign key combinations
+3. Wiring `config.shortcuts` to `useKeyboardShortcuts` hook
+
+Current state: `useKeyboardShortcuts.ts` has hardcoded shortcuts. No configurable shortcuts system exists.
+
+See epic spec "Future Work" section.
 ## Evidence
 - Commits:
 - Tests:
