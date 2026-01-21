@@ -1,3 +1,4 @@
+import { useRef, useEffect } from 'react';
 import { type Section, type SectionId } from '../../types/project';
 import { useUIStore } from '../../store/uiStore';
 
@@ -8,7 +9,25 @@ interface SectionsPanelProps {
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { selection, setSelection, hoveredSectionId, setHoveredSectionId, openDialog } = useUIStore();
 
-  const handleSectionClick = (section: Section) => {
+  // Track the last hovered section ID set by this panel (for cleanup on unmount)
+  const lastHoveredIdRef = useRef<SectionId | null>(null);
+
+  // Clear hoveredSectionId on unmount if it was set by this panel
+  useEffect(() => {
+    return () => {
+      if (lastHoveredIdRef.current !== null) {
+        // Only clear if the store still has the ID we set
+        const currentHoveredId = useUIStore.getState().hoveredSectionId;
+        if (currentHoveredId === lastHoveredIdRef.current) {
+          useUIStore.getState().setHoveredSectionId(null);
+        }
+      }
+    };
+  }, []);
+
+  const handleSectionClick = (section: Section, e: React.MouseEvent) => {
+    // Only handle left mouse button
+    if (e.button !== 0) return;
     setSelection({
       type: 'section',
       sectionId: section.id,
@@ -16,11 +35,18 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   };
 
   const handleSectionMouseEnter = (sectionId: SectionId) => {
+    lastHoveredIdRef.current = sectionId;
     setHoveredSectionId(sectionId);
   };
 
   const handleSectionMouseLeave = () => {
+    lastHoveredIdRef.current = null;
     setHoveredSectionId(null);
+  };
+
+  const handleDeleteMouseDown = (e: React.MouseEvent) => {
+    // Stop propagation to prevent row selection
+    e.stopPropagation();
   };
 
   const handleAddSection = () => {
@@ -84,10 +110,10 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                 <li
                   key={section.id}
                   data-testid={`section-row-${section.id}`}
-                  className={`px-3 py-2 cursor-pointer group hover:bg-background/50 ${
-                    isSelected || hoveredSectionId === section.id ? 'bg-accent/20' : ''
+                  className={`px-3 py-2 cursor-pointer group transition-colors ${
+                    isSelected || hoveredSectionId === section.id ? 'bg-accent/20' : 'hover:bg-accent/20'
                   }`}
-                  onMouseDown={() => handleSectionClick(section)}
+                  onMouseDown={(e) => handleSectionClick(section, e)}
                   onContextMenu={(e) => handleSectionContextMenu(e, section.id)}
                   onMouseEnter={() => handleSectionMouseEnter(section.id)}
                   onMouseLeave={handleSectionMouseLeave}
@@ -102,6 +128,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                     </span>
                     <button
                       onClick={(e) => handleDeleteSection(section.id, e)}
+                      onMouseDown={handleDeleteMouseDown}
                       className="text-text-secondary hover:text-error opacity-0 group-hover:opacity-100"
                       title="Delete section"
                     >
