@@ -15,3 +15,6 @@ Place concurrency guards at store level (not hook level) when multiple UI paths 
 
 ## 2026-01-21 manual [convention]
 Use single event listener at app root level to avoid duplicate subscriptions when components mount/unmount
+
+## 2026-01-21 manual [convention]
+Frontend color gradient interpolation should match backend algorithm (HSL vs RGB) to ensure preview matches export
