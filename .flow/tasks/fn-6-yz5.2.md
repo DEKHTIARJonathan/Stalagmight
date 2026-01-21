@@ -192,9 +192,8 @@ Repeat for Edit Shot dialog with depth and other fields.
 - [ ] Manual test: Edit section with id=0 saves correctly
 - [ ] Manual test: Edit shot with id=0 saves correctly
 ## Done summary
-TBD
-
+Fixed falsy ID checks in EditSectionDialog.tsx, EditShotDialog.tsx, SectionAdjustDialog.tsx, and DataTable.tsx to use explicit undefined/null checks instead of truthy checks. This ensures sections and shots with id=0 work correctly.
 ## Evidence
 - Commits:
-- Tests:
+- Tests: tsc, playwright
 - PRs:

@@ -152,7 +152,7 @@ export default function EditSectionDialog() {
   }, [nextTempId]);
 
   const handleSave = async () => {
-    if (!sectionId) return;
+    if (sectionId === undefined) return;
 
     setIsLoading(true);
     setError(null);

@@ -79,7 +79,7 @@ export default function EditShotDialog() {
   };
 
   const handleSave = async () => {
-    if (!sectionId || !shotId) return;
+    if (sectionId === undefined || shotId === undefined) return;
 
     if (!validateForm()) return;
 
