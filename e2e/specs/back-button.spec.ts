@@ -227,4 +227,85 @@ describe('Back Button Navigation', () => {
     });
     expect(isMounted).toBe(true);
   });
+
+  it('should handle Back button with grid overlay visible', async () => {
+    // Create a new project
+    await createNewProject('Grid Visible E2E Test');
+
+    // Wait for canvas to be visible
+    const canvas = await $('canvas');
+    await canvas.waitForExist({ timeout: 15000 });
+
+    // Enable grid overlay via store
+    await browser.execute(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: {
+            setState: (state: { showGrid: boolean }) => void;
+          };
+        };
+      }).__E2E_TEST__;
+      if (e2e && e2e.uiStore) {
+        e2e.uiStore.setState({ showGrid: true });
+      }
+    });
+
+    // Wait for grid to render
+    await browser.pause(500);
+
+    // Click Back button
+    const backButton = await $('[data-testid="back-button"]');
+    await backButton.waitForDisplayed({ timeout: 5000 });
+    await backButton.click();
+
+    // Should return to Global View without crashing (grid cleanup should work)
+    const globalView = await $('[data-testid="global-view"]');
+    await globalView.waitForExist({ timeout: 10000 });
+
+    // Verify React still mounted
+    const isMounted = await browser.execute(() => {
+      const root = document.getElementById('root');
+      return root && root.innerHTML.length > 50;
+    });
+    expect(isMounted).toBe(true);
+  });
+
+  it('should handle Back button with grid overlay hidden', async () => {
+    // Create a new project
+    await createNewProject('Grid Hidden E2E Test');
+
+    // Wait for canvas to be visible
+    const canvas = await $('canvas');
+    await canvas.waitForExist({ timeout: 15000 });
+
+    // Ensure grid overlay is hidden (default state)
+    await browser.execute(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: {
+            setState: (state: { showGrid: boolean }) => void;
+          };
+        };
+      }).__E2E_TEST__;
+      if (e2e && e2e.uiStore) {
+        e2e.uiStore.setState({ showGrid: false });
+      }
+    });
+
+    // Click Back button
+    const backButton = await $('[data-testid="back-button"]');
+    await backButton.waitForDisplayed({ timeout: 5000 });
+    await backButton.click();
+
+    // Should return to Global View without crashing
+    const globalView = await $('[data-testid="global-view"]');
+    await globalView.waitForExist({ timeout: 10000 });
+
+    // Verify React still mounted
+    const isMounted = await browser.execute(() => {
+      const root = document.getElementById('root');
+      return root && root.innerHTML.length > 50;
+    });
+    expect(isMounted).toBe(true);
+  });
 });
