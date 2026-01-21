@@ -7,10 +7,19 @@
     "fn-13-e55.6"
   ],
   "epic": "fn-13-e55",
+  "evidence": {
+    "commits": [
+      "1db7cf7f3c273d0676c5352916410d4cb78c397e"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm test:ui -- e2e-playwright/settings-shortcuts.spec.ts (23 passed)"
+    ]
+  },
   "id": "fn-13-e55.9",
   "priority": null,
   "spec_path": ".flow/tasks/fn-13-e55.9.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Playwright E2E tests for shortcuts configuration",
-  "updated_at": "2026-01-21T19:16:45.893204Z"
+  "updated_at": "2026-01-21T19:40:37.728308Z"
 }
