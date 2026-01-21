@@ -7,10 +7,22 @@
     "fn-11-6w4.7"
   ],
   "epic": "fn-11-6w4",
+  "evidence": {
+    "commits": [
+      "c9ccc79ec218f00bae2a3024e6e0958ea862ade3"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm vitest run src/utils/__tests__/export-colors.test.ts",
+      "pnpm vitest run src/",
+      "cargo test --manifest-path src-tauri/Cargo.toml",
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-11-6w4.10",
   "priority": null,
   "spec_path": ".flow/tasks/fn-11-6w4.10.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Write TypeScript unit tests for export components",
-  "updated_at": "2026-01-21T14:55:51.321810Z"
+  "updated_at": "2026-01-21T15:17:23.518358Z"
 }
