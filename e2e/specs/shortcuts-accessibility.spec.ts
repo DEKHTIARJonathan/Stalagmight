@@ -196,21 +196,42 @@ describe('Shortcuts Settings Accessibility', () => {
       // Press Tab to navigate to next focusable element
       await browser.keys(['Tab']);
 
-      // Wait for focus to move
-      await browser.pause(200);
+      // Wait for focus to move to a valid shortcuts tab element
+      await browser.waitUntil(
+        async () => {
+          const focused = await browser.execute(() => {
+            const el = document.activeElement;
+            const testId = el?.getAttribute('data-testid') || '';
+            const role = el?.getAttribute('role');
+            // Valid targets: category toggle buttons, shortcut recorders, reset buttons
+            const isValidTarget =
+              testId.startsWith('shortcut-category-toggle-') ||
+              testId.startsWith('shortcut-primary-') ||
+              testId.startsWith('shortcut-secondary-') ||
+              testId.startsWith('shortcut-reset-') ||
+              testId === 'shortcuts-reset-all' ||
+              role === 'button';
+            return isValidTarget && testId !== 'shortcuts-search';
+          });
+          return focused;
+        },
+        { timeout: 3000, timeoutMsg: 'Tab did not navigate to a valid shortcuts element' }
+      );
 
-      // Check that focus moved to another element
+      // Verify the focused element is within shortcuts tab content
       const nextFocused = await browser.execute(() => {
         const el = document.activeElement;
+        const shortcutsContent = document.querySelector('[data-testid="shortcuts-tab-content"]');
         return {
           tagName: el?.tagName,
           role: el?.getAttribute('role'),
           testId: el?.getAttribute('data-testid'),
+          isWithinShortcutsTab: shortcutsContent?.contains(el) || false,
         };
       });
 
-      // Should have moved from search input
       expect(nextFocused.testId).not.toBe('shortcuts-search');
+      expect(nextFocused.isWithinShortcutsTab).toBe(true);
     });
 
     it('Tab cycles through multiple shortcut recorders', async () => {
@@ -422,10 +443,23 @@ describe('Shortcuts Settings Accessibility', () => {
       await openShortcutsTab();
     });
 
-    it('live region exists for announcements', async () => {
-      // Look for aria-live regions in shortcut recorders
-      const liveRegion = await $('[aria-live="polite"]');
+    it('live region exists for announcements within shortcut recorders', async () => {
+      // Each ShortcutRecorder should have its own aria-live region for screen reader announcements
+      // Scope the search to a specific recorder to avoid false positives from unrelated live regions
+      const recorder = await $('[data-testid="shortcut-primary-select"]');
+      await expect(recorder).toBeExisting();
+
+      // The live region should be inside the recorder component
+      const liveRegion = await recorder.$('[aria-live="polite"]');
       await expect(liveRegion).toBeExisting();
+
+      // Verify the live region has proper attributes for screen readers
+      const ariaAtomic = await liveRegion.getAttribute('aria-atomic');
+      expect(ariaAtomic).toBe('true');
+
+      // Also verify role="status" for proper SR support
+      const role = await liveRegion.getAttribute('role');
+      expect(role).toBe('status');
     });
 
     it('live region announces when recording starts', async () => {
@@ -465,6 +499,7 @@ describe('Shortcuts Settings Accessibility', () => {
 
     it('live region announces when recording is cancelled', async () => {
       const recorder = await $('[data-testid="shortcut-primary-pan"]');
+      const liveRegion = await recorder.$('[aria-live="polite"]');
 
       // Start recording
       await recorder.click();
@@ -488,13 +523,25 @@ describe('Shortcuts Settings Accessibility', () => {
         { timeout: 2000 }
       );
 
-      // Check announcement
-      const liveRegion = await recorder.$('[aria-live="polite"]');
-      const announcement = await liveRegion.getText();
+      // Wait for cancellation announcement in live region (use textContent for sr-only elements)
+      await browser.waitUntil(
+        async () => {
+          const text = await browser.execute((el) => {
+            return (el as HTMLElement).textContent || '';
+          }, liveRegion);
+          return text.toLowerCase().includes('cancel');
+        },
+        { timeout: 2000, timeoutMsg: 'Live region did not announce cancellation' }
+      );
+
+      // Verify the announcement text
+      const announcement = await browser.execute((el) => {
+        return (el as HTMLElement).textContent || '';
+      }, liveRegion);
       expect(announcement.toLowerCase()).toMatch(/cancel/);
     });
 
-    it('live region announces conflicts', async () => {
+    it('conflict error is shown visually', async () => {
       // Find a shortcut that's already bound (select = S)
       // Try to assign the same shortcut to pan
       const panRecorder = await $('[data-testid="shortcut-primary-pan"]');
@@ -515,7 +562,7 @@ describe('Shortcuts Settings Accessibility', () => {
       // Wait for key capture and release to complete recording attempt
       await browser.pause(200);
 
-      // Check for error message in the shortcuts tab
+      // Check for error message in the shortcuts tab (visual feedback)
       const errorElement = await $('[data-testid="shortcut-error"]');
 
       // Wait for error to appear
@@ -533,27 +580,89 @@ describe('Shortcuts Settings Accessibility', () => {
       expect(errorText.toLowerCase()).toMatch(/already|conflict|used/);
     });
 
+    it('live region announces recording state changes for screen readers', async () => {
+      // The ShortcutRecorder component has an internal live region that announces
+      // state changes for screen readers. Test that it updates appropriately.
+      const recorder = await $('[data-testid="shortcut-primary-draw"]');
+      const liveRegion = await recorder.$('[aria-live="polite"]');
+      await expect(liveRegion).toBeExisting();
+
+      // Start recording
+      await recorder.click();
+      await browser.waitUntil(
+        async () => {
+          const pressed = await recorder.getAttribute('aria-pressed');
+          return pressed === 'true';
+        },
+        { timeout: 2000 }
+      );
+
+      // Wait for recording announcement in the live region
+      await browser.waitUntil(
+        async () => {
+          // Use textContent via execute since sr-only elements may not return text via getText
+          const text = await browser.execute((el) => {
+            return (el as HTMLElement).textContent || '';
+          }, liveRegion);
+          return text.toLowerCase().includes('recording') || text.toLowerCase().includes('press');
+        },
+        { timeout: 2000, timeoutMsg: 'Live region did not announce recording state' }
+      );
+
+      // Capture a key
+      await browser.keys(['q']);
+      await browser.pause(100);
+
+      // Wait for capture announcement
+      await browser.waitUntil(
+        async () => {
+          const text = await browser.execute((el) => {
+            return (el as HTMLElement).textContent || '';
+          }, liveRegion);
+          return text.toLowerCase().includes('captured') || text.toLowerCase().includes('set');
+        },
+        { timeout: 2000, timeoutMsg: 'Live region did not announce key capture' }
+      );
+    });
+
     it('screen reader can identify all shortcut actions', async () => {
-      // Get all shortcut rows
+      // Get all shortcut rows - verify all are accessible
       const rows = await $$('[data-testid^="shortcut-row-"]');
       expect(rows.length).toBeGreaterThan(0);
 
-      // Check that each row has identifiable action name
-      for (const row of rows.slice(0, 5)) {
-        // Check first 5 for performance
+      // Track verified rows to ensure we check all
+      let verifiedCount = 0;
+      let totalRowsWithRecorder = 0;
+
+      // Check ALL rows for proper ARIA labeling
+      for (const row of rows) {
         const testId = await row.getAttribute('data-testid');
         const actionName = testId?.replace('shortcut-row-', '');
 
-        // Find recorders in this row
+        // Find primary recorder in this row
         const primaryRecorder = await row.$(`[data-testid="shortcut-primary-${actionName}"]`);
 
         if (await primaryRecorder.isExisting()) {
+          totalRowsWithRecorder++;
           const ariaLabel = await primaryRecorder.getAttribute('aria-label');
+
+          // Every recorder must have an aria-label
           expect(ariaLabel).toBeTruthy();
-          // Label should contain a description of the action
+          // Label should be descriptive (contain more than just a key name)
           expect(ariaLabel.length).toBeGreaterThan(10);
+          // Label should include the word "shortcut" for context
+          expect(ariaLabel.toLowerCase()).toContain('shortcut');
+
+          verifiedCount++;
         }
       }
+
+      // Ensure we actually verified a meaningful number of rows
+      expect(totalRowsWithRecorder).toBeGreaterThan(0);
+      expect(verifiedCount).toBe(totalRowsWithRecorder);
+
+      // Log for debugging: total actions verified
+      console.log(`Verified ${verifiedCount} shortcut actions for screen reader accessibility`);
     });
 
     it('reset buttons have accessible labels', async () => {
@@ -663,6 +772,7 @@ describe('Shortcuts Settings Accessibility', () => {
 
     it('blocked key feedback is accessible', async () => {
       const recorder = await $('[data-testid="shortcut-primary-zoom"]');
+      const liveRegion = await recorder.$('[aria-live="polite"]');
 
       // Start recording
       await recorder.click();
@@ -676,14 +786,26 @@ describe('Shortcuts Settings Accessibility', () => {
 
       // Try to press a blocked key (F1)
       await browser.keys(['F1']);
-      await browser.pause(200);
 
-      // Check for announcement about blocked key
-      const liveRegion = await recorder.$('[aria-live="polite"]');
-      const announcement = await liveRegion.getText();
+      // Wait for blocked key announcement in live region (use textContent for sr-only elements)
+      await browser.waitUntil(
+        async () => {
+          const text = await browser.execute((el) => {
+            return (el as HTMLElement).textContent || '';
+          }, liveRegion);
+          return text.toLowerCase().includes('not allowed') ||
+                 text.toLowerCase().includes('cannot') ||
+                 text.toLowerCase().includes('blocked') ||
+                 text.toLowerCase().includes('try a different');
+        },
+        { timeout: 2000, timeoutMsg: 'Live region did not announce blocked key' }
+      );
 
-      // Should mention the key is not allowed
-      expect(announcement.toLowerCase()).toMatch(/not allowed|cannot|blocked/);
+      // Verify the announcement text
+      const announcement = await browser.execute((el) => {
+        return (el as HTMLElement).textContent || '';
+      }, liveRegion);
+      expect(announcement.toLowerCase()).toMatch(/not allowed|cannot|blocked|try a different/);
 
       // Clean up - Escape to exit recording
       await browser.keys(['Escape']);
@@ -740,7 +862,14 @@ describe('Shortcuts Settings Accessibility', () => {
       await browser.keys(['Escape']);
     });
 
-    it('error state is visually distinct', async () => {
+    it('error state is visually distinct from normal state', async () => {
+      // First, get styles of a normal (non-error) element for comparison
+      const shortcutsContent = await $('[data-testid="shortcuts-tab-content"]');
+      const normalBgColor = await browser.execute((el) => {
+        const styles = window.getComputedStyle(el);
+        return styles.backgroundColor;
+      }, shortcutsContent);
+
       const panRecorder = await $('[data-testid="shortcut-primary-pan"]');
 
       // Trigger a conflict error by trying to assign S (which is used by select)
@@ -773,9 +902,20 @@ describe('Shortcuts Settings Accessibility', () => {
         };
       }, errorElement);
 
-      // Should have some form of error indication
-      // The component uses bg-error/10 and border-error/30
-      expect(errorStyles).toBeTruthy();
+      // Parse background color to check it's not fully transparent
+      const bgColor = errorStyles.backgroundColor;
+      const isTransparent = bgColor === 'rgba(0, 0, 0, 0)' || bgColor === 'transparent';
+
+      // Error element should have a visible background (not transparent)
+      // The component uses bg-error/10 which gives a semi-transparent red tint
+      expect(isTransparent).toBe(false);
+
+      // Error text color should differ from the background (ensuring contrast)
+      expect(errorStyles.color).not.toBe(errorStyles.backgroundColor);
+
+      // Error background should differ from the normal container background
+      // (proving error state is visually distinct)
+      expect(errorStyles.backgroundColor).not.toBe(normalBgColor);
     });
   });
 });
