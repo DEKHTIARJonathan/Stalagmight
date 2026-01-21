@@ -112,9 +112,10 @@ fn export_pdf(project: &Project, path: &Path, options: &ExportImageOptions) -> R
     // First generate SVG content
     let svg_content = generate_svg_string(project, options)?;
 
-    // Parse SVG using usvg
-    let options_usvg = Options::default();
-    let tree = Tree::from_str(&svg_content, &options_usvg)
+    // Parse SVG using usvg with fonts loaded for text rendering
+    let mut opt = Options::default();
+    opt.fontdb_mut().load_system_fonts();
+    let tree = Tree::from_str(&svg_content, &opt)
         .context("Failed to parse SVG")?;
 
     // Convert to PDF
@@ -136,18 +137,24 @@ const MAX_PNG_DIMENSION: u32 = 16384;
 
 /// Export project as PNG using resvg rasterization
 fn export_png(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
+    // Validate DPI before processing
+    if options.dpi == 0 {
+        anyhow::bail!("DPI must be at least 1");
+    }
+
     // Generate SVG content first
     let svg_content = generate_svg_string(project, options)?;
 
-    // Parse SVG using usvg
-    let opt = Options::default();
+    // Parse SVG using usvg with fonts loaded for text rendering
+    let mut opt = Options::default();
+    opt.fontdb_mut().load_system_fonts();
     let tree = Tree::from_str(&svg_content, &opt).context("Failed to parse SVG for PNG conversion")?;
 
-    // Calculate size with DPI scaling
+    // Calculate size with DPI scaling, using ceil to avoid clipping edges
     let size = tree.size();
     let scale = options.dpi as f32 / 72.0;
-    let width = (size.width() * scale) as u32;
-    let height = (size.height() * scale) as u32;
+    let width = ((size.width() * scale).ceil() as u32).max(1);
+    let height = ((size.height() * scale).ceil() as u32).max(1);
 
     // Validate size to prevent OOM
     if width > MAX_PNG_DIMENSION || height > MAX_PNG_DIMENSION {
@@ -215,13 +222,14 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
     // Scale to target size (allows both scale-up and scale-down)
     const TARGET_SIZE: f64 = 800.0;
     let scale = TARGET_SIZE / width.max(height);
-    let svg_width = width * scale;
-    let svg_height = height * scale;
+    // Ensure minimum dimension of 1.0 to produce valid SVG
+    let svg_width = (width * scale).max(1.0);
+    let svg_height = (height * scale).max(1.0);
 
     let mut svg = String::new();
     svg.push_str(&format!(
         r##"<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="{:.0}" height="{:.0}" viewBox="{:.1} {:.1} {:.1} {:.1}">
+<svg xmlns="http://www.w3.org/2000/svg" width="{:.2}" height="{:.2}" viewBox="{:.1} {:.1} {:.1} {:.1}">
 <style>
   .shot {{ stroke-width: 2; fill: none; }}
   .station {{ fill: #ffffff; stroke: #000000; stroke-width: 1; }}
@@ -568,5 +576,23 @@ mod tests {
         assert!(path.exists());
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_export_png_dpi_zero_error() {
+        let project = create_test_project();
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("png");
+
+        let options = ExportImageOptions {
+            format: ImageFormat::Png,
+            dpi: 0,
+            ..Default::default()
+        };
+
+        let result = export_png(&project, &path, &options);
+        assert!(result.is_err(), "PNG export should fail for DPI=0");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("DPI must be at least 1"), "Error should mention DPI requirement: {}", err);
     }
 }
