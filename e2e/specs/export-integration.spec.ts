@@ -223,15 +223,119 @@ describe('Export Integration', () => {
   });
 
   /**
-   * Test 16.3: should export map as SVG image
+   * Test 16.3: should export map as PNG image
+   *
+   * Validates PNG export workflow:
+   * - Create project with imported data
+   * - Export to PNG file via resvg rasterization
+   * - Verify file creation
+   * - Validate PNG content (magic bytes header)
+   *
+   * Note: PNG export now works via resvg in the backend (no SVG fallback).
+   */
+  it('should export map as PNG image', async () => {
+    // Create a new project
+    await createNewProject('PNG Export Test');
+
+    // Import survey data
+    const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
+    const importResult = await importDmpFile(dmpPath);
+    expect(importResult.success).toBe(true);
+    expect(importResult.sectionCount).toBeGreaterThan(0);
+
+    // Get sections to verify data exists
+    const sections = await getProjectSections();
+    expect(sections.length).toBeGreaterThan(0);
+
+    // Export to PNG with default options
+    const pngPath = path.join(tempDir, 'export-test.png');
+    const exportResult = await browser.executeAsync(
+      async (
+        exportPath: string,
+        done: (result: { success: boolean; error?: string }) => void
+      ) => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            projectStore: {
+              getState: () => {
+                exportImage: (
+                  path: string,
+                  options: {
+                    format: string;
+                    dpi: number;
+                    include_satellite: boolean;
+                    include_grid: boolean;
+                    include_labels: boolean;
+                    include_section_names: boolean;
+                    include_shot_data: boolean;
+                    color_mode: string;
+                    depth_preset: string;
+                    include_legend: boolean;
+                    depth_unit: string;
+                    decimal_precision: number;
+                  }
+                ) => Promise<void>;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+
+        if (!e2e) {
+          done({ success: false, error: 'E2E helpers not found' });
+          return;
+        }
+
+        try {
+          await e2e.projectStore.getState().exportImage(exportPath, {
+            format: 'png',
+            dpi: 150, // Lower DPI for faster test
+            include_satellite: false,
+            include_grid: false,
+            include_labels: true,
+            include_section_names: true,
+            include_shot_data: false,
+            color_mode: 'section',
+            depth_preset: 'thermal',
+            include_legend: false,
+            depth_unit: 'm',
+            decimal_precision: 1,
+          });
+          done({ success: true });
+        } catch (err) {
+          done({ success: false, error: String(err) });
+        }
+      },
+      pngPath
+    );
+
+    // Verify export succeeded - PNG should work, not fallback to SVG
+    expect(exportResult.success).toBe(true);
+    expect(exportResult.error).toBeUndefined();
+
+    // Wait for file to be written
+    await browser.pause(500);
+
+    // Verify PNG file exists (not SVG fallback)
+    expect(fs.existsSync(pngPath)).toBe(true);
+
+    // Validate PNG magic bytes (first 8 bytes of PNG signature)
+    const pngContent = fs.readFileSync(pngPath);
+    const pngMagic = pngContent.slice(0, 8);
+    const expectedMagic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    expect(pngMagic.equals(expectedMagic)).toBe(true);
+
+    // Verify file size is reasonable (more than just a header)
+    expect(pngContent.length).toBeGreaterThan(100);
+  });
+
+  /**
+   * Test 16.4: should export map as SVG image
    *
    * Validates SVG export workflow:
    * - Create project with imported data
    * - Export to SVG file
    * - Verify file creation
    * - Validate SVG content (magic bytes/header and basic structure)
-   *
-   * Note: PNG export falls back to SVG in backend, so we test SVG directly.
    */
   it('should export map as SVG image', async () => {
     // Create a new project
@@ -327,7 +431,7 @@ describe('Export Integration', () => {
   });
 
   /**
-   * Test 16.4: should export with custom options
+   * Test 16.5: should export with custom options
    *
    * Validates export customization:
    * - Create project with imported data

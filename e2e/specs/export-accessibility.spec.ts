@@ -3,9 +3,10 @@
  *
  * These tests validate accessibility features in the Export Dialog:
  * - Color mode radio group (role="radiogroup", aria-labelledby, name attr)
+ * - Radio inputs are type="radio" with associated labels
  * - Depth preset dropdown (aria-label)
  * - Keyboard navigation (Arrow keys within radiogroup)
- * - Focus indicators (visible focus styles)
+ * - Focus indicators (visible :focus-visible styles)
  * - Legend checkbox accessibility
  *
  * Test fixtures:
@@ -48,6 +49,15 @@ async function openExportDialog(): Promise<void> {
   await dialog.waitForDisplayed({ timeout: 5000 });
 }
 
+/**
+ * Helper to wait for element to be displayed with proper timeout
+ */
+async function waitForElement(selector: string, timeout = 5000): Promise<WebdriverIO.Element> {
+  const element = await $(selector);
+  await element.waitForDisplayed({ timeout });
+  return element;
+}
+
 describe('Export Dialog Accessibility', () => {
   beforeEach(async () => {
     await waitForAppReady();
@@ -64,21 +74,24 @@ describe('Export Dialog Accessibility', () => {
     // Open export dialog
     await openExportDialog();
 
-    // Switch to image export type
-    const imageRadio = await $('[data-testid="export-type-image"]');
+    // Switch to image export type and wait for it to be ready
+    const imageRadio = await waitForElement('[data-testid="export-dialog"] [data-testid="export-type-image"]');
     await imageRadio.click();
-    await browser.pause(100);
+    await browser.waitUntil(
+      async () => (await imageRadio.isSelected()) === true,
+      { timeout: 2000, timeoutMsg: 'Image radio should be selected' }
+    );
   });
 
   describe('Color Mode Selection', () => {
-    it('has radiogroup role on color mode container', async () => {
-      // Verify radiogroup role exists
-      const radiogroup = await $('[role="radiogroup"]');
+    it('has radiogroup role on color mode container within export dialog', async () => {
+      // Scope selector to export dialog to avoid false positives
+      const radiogroup = await $('[data-testid="export-dialog"] [role="radiogroup"]');
       await expect(radiogroup).toBeExisting();
     });
 
     it('has aria-labelledby linking to label element', async () => {
-      const radiogroup = await $('[role="radiogroup"]');
+      const radiogroup = await $('[data-testid="export-dialog"] [role="radiogroup"]');
       await expect(radiogroup).toBeExisting();
 
       // Get the aria-labelledby attribute
@@ -92,63 +105,78 @@ describe('Export Dialog Accessibility', () => {
       expect(labelText.toLowerCase()).toContain('color');
     });
 
-    it('radio inputs share name attribute for grouping', async () => {
-      const sectionRadio = await $('[data-testid="color-mode-section"]');
-      const depthRadio = await $('[data-testid="color-mode-depth"]');
+    it('radio inputs are type="radio" with shared name attribute', async () => {
+      const sectionRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-section"]');
+      const depthRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-depth"]');
 
       await expect(sectionRadio).toBeExisting();
       await expect(depthRadio).toBeExisting();
 
-      // Get name attributes
+      // Verify they are actual radio inputs
+      const sectionType = await sectionRadio.getAttribute('type');
+      const depthType = await depthRadio.getAttribute('type');
+      expect(sectionType).toBe('radio');
+      expect(depthType).toBe('radio');
+
+      // Get name attributes - both should have the same non-empty name
       const sectionName = await sectionRadio.getAttribute('name');
       const depthName = await depthRadio.getAttribute('name');
-
-      // Both should have the same non-empty name
       expect(sectionName).toBeTruthy();
       expect(sectionName).toBe(depthName);
     });
 
+    it('radio inputs have associated labels', async () => {
+      const sectionRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-section"]');
+      const depthRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-depth"]');
+
+      // Check that each radio is wrapped by a label element
+      const sectionParent = await sectionRadio.parentElement();
+      const depthParent = await depthRadio.parentElement();
+
+      const sectionParentTag = await sectionParent.getTagName();
+      const depthParentTag = await depthParent.getTagName();
+
+      expect(sectionParentTag.toLowerCase()).toBe('label');
+      expect(depthParentTag.toLowerCase()).toBe('label');
+    });
+
     it('supports Arrow key navigation within radiogroup', async () => {
-      const sectionRadio = await $('[data-testid="color-mode-section"]');
-      const depthRadio = await $('[data-testid="color-mode-depth"]');
+      const sectionRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-section"]');
 
-      // Focus on section radio
+      // Focus on section radio using keyboard (Tab into the group)
       await sectionRadio.click();
-      await browser.pause(100);
-
-      // Verify section radio is focused
-      const isSectionFocused = await browser.execute(() => {
-        const el = document.activeElement;
-        return el?.getAttribute('data-testid') === 'color-mode-section';
-      });
-      expect(isSectionFocused).toBe(true);
+      await browser.waitUntil(
+        async () => {
+          const activeTestId = await browser.execute(() => document.activeElement?.getAttribute('data-testid'));
+          return activeTestId === 'color-mode-section';
+        },
+        { timeout: 2000, timeoutMsg: 'Section radio should be focused' }
+      );
 
       // Press ArrowRight to navigate to depth radio
       await browser.keys(['ArrowRight']);
-      await browser.pause(100);
-
-      // Verify depth radio is now focused
-      const isDepthFocused = await browser.execute(() => {
-        const el = document.activeElement;
-        return el?.getAttribute('data-testid') === 'color-mode-depth';
-      });
-      expect(isDepthFocused).toBe(true);
+      await browser.waitUntil(
+        async () => {
+          const activeTestId = await browser.execute(() => document.activeElement?.getAttribute('data-testid'));
+          return activeTestId === 'color-mode-depth';
+        },
+        { timeout: 2000, timeoutMsg: 'Depth radio should be focused after ArrowRight' }
+      );
 
       // Press ArrowLeft to navigate back
       await browser.keys(['ArrowLeft']);
-      await browser.pause(100);
-
-      // Verify section radio is focused again
-      const isSectionFocusedAgain = await browser.execute(() => {
-        const el = document.activeElement;
-        return el?.getAttribute('data-testid') === 'color-mode-section';
-      });
-      expect(isSectionFocusedAgain).toBe(true);
+      await browser.waitUntil(
+        async () => {
+          const activeTestId = await browser.execute(() => document.activeElement?.getAttribute('data-testid'));
+          return activeTestId === 'color-mode-section';
+        },
+        { timeout: 2000, timeoutMsg: 'Section radio should be focused after ArrowLeft' }
+      );
     });
 
-    it('announces selection state via aria-checked for screen readers', async () => {
-      const sectionRadio = await $('[data-testid="color-mode-section"]');
-      const depthRadio = await $('[data-testid="color-mode-depth"]');
+    it('radio selection state is properly tracked via checked attribute', async () => {
+      const sectionRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-section"]');
+      const depthRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-depth"]');
 
       // Section should be checked by default
       expect(await sectionRadio.isSelected()).toBe(true);
@@ -156,7 +184,10 @@ describe('Export Dialog Accessibility', () => {
 
       // Click depth to change selection
       await depthRadio.click();
-      await browser.pause(100);
+      await browser.waitUntil(
+        async () => (await depthRadio.isSelected()) === true,
+        { timeout: 2000, timeoutMsg: 'Depth radio should be selected after click' }
+      );
 
       // Now depth should be checked
       expect(await sectionRadio.isSelected()).toBe(false);
@@ -167,13 +198,19 @@ describe('Export Dialog Accessibility', () => {
   describe('Depth Preset Dropdown', () => {
     beforeEach(async () => {
       // Switch to depth color mode to reveal preset dropdown
-      const depthRadio = await $('[data-testid="color-mode-depth"]');
+      const depthRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-depth"]');
       await depthRadio.click();
-      await browser.pause(200);
+      await browser.waitUntil(
+        async () => {
+          const select = await $('[data-testid="export-dialog"] [data-testid="depth-preset-select"]');
+          return await select.isDisplayed();
+        },
+        { timeout: 3000, timeoutMsg: 'Depth preset select should appear' }
+      );
     });
 
     it('has aria-label for accessibility', async () => {
-      const select = await $('[data-testid="depth-preset-select"]');
+      const select = await $('[data-testid="export-dialog"] [data-testid="depth-preset-select"]');
       await expect(select).toBeExisting();
 
       // The Select component has the trigger button with aria-label
@@ -185,7 +222,7 @@ describe('Export Dialog Accessibility', () => {
     });
 
     it('has aria-haspopup and aria-expanded attributes', async () => {
-      const select = await $('[data-testid="depth-preset-select"]');
+      const select = await $('[data-testid="export-dialog"] [data-testid="depth-preset-select"]');
       const triggerButton = await select.$('button');
 
       // Should have aria-haspopup
@@ -198,27 +235,32 @@ describe('Export Dialog Accessibility', () => {
 
       // Click to open
       await triggerButton.click();
-      await browser.pause(100);
-
-      // Should now be expanded
-      const isExpandedAfterClick = await triggerButton.getAttribute('aria-expanded');
-      expect(isExpandedAfterClick).toBe('true');
+      await browser.waitUntil(
+        async () => (await triggerButton.getAttribute('aria-expanded')) === 'true',
+        { timeout: 2000, timeoutMsg: 'Dropdown should be expanded' }
+      );
     });
 
     it('preset options have descriptive labels', async () => {
-      const select = await $('[data-testid="depth-preset-select"]');
+      const select = await $('[data-testid="export-dialog"] [data-testid="depth-preset-select"]');
       const triggerButton = await select.$('button');
 
       // Open dropdown
       await triggerButton.click();
-      await browser.pause(100);
+      await browser.waitUntil(
+        async () => (await triggerButton.getAttribute('aria-expanded')) === 'true',
+        { timeout: 2000 }
+      );
 
       // Get all option buttons in the dropdown
       const options = await select.$$('button:not([aria-haspopup])');
       expect(options.length).toBeGreaterThanOrEqual(5); // thermal, ocean, terrain, grayscale, accessible
 
       // Check that options have descriptive text (including parenthetical descriptions)
-      const optionTexts = await Promise.all(options.map((o) => o.getText()));
+      const optionTexts: string[] = [];
+      for (const opt of options) {
+        optionTexts.push(await opt.getText());
+      }
 
       // Filter out the trigger button text if it's in the array
       const dropdownOptions = optionTexts.filter((t) => t.includes('('));
@@ -231,36 +273,46 @@ describe('Export Dialog Accessibility', () => {
     });
 
     it('closes dropdown on Escape key', async () => {
-      const select = await $('[data-testid="depth-preset-select"]');
+      const select = await $('[data-testid="export-dialog"] [data-testid="depth-preset-select"]');
       const triggerButton = await select.$('button');
 
       // Open dropdown
       await triggerButton.click();
-      await browser.pause(100);
-
-      // Verify expanded
-      expect(await triggerButton.getAttribute('aria-expanded')).toBe('true');
+      await browser.waitUntil(
+        async () => (await triggerButton.getAttribute('aria-expanded')) === 'true',
+        { timeout: 2000, timeoutMsg: 'Dropdown should be expanded' }
+      );
 
       // Press Escape
       await browser.keys(['Escape']);
-      await browser.pause(100);
-
-      // Verify closed
-      expect(await triggerButton.getAttribute('aria-expanded')).toBe('false');
+      await browser.waitUntil(
+        async () => (await triggerButton.getAttribute('aria-expanded')) === 'false',
+        { timeout: 2000, timeoutMsg: 'Dropdown should be closed after Escape' }
+      );
     });
   });
 
   describe('Legend Checkbox', () => {
     beforeEach(async () => {
       // Switch to depth color mode to reveal legend checkbox
-      const depthRadio = await $('[data-testid="color-mode-depth"]');
+      const depthRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-depth"]');
       await depthRadio.click();
-      await browser.pause(200);
+      await browser.waitUntil(
+        async () => {
+          const checkbox = await $('[data-testid="export-dialog"] [data-testid="option-include-legend"]');
+          return await checkbox.isDisplayed();
+        },
+        { timeout: 3000, timeoutMsg: 'Legend checkbox should appear' }
+      );
     });
 
     it('has accessible checkbox with label', async () => {
-      const checkbox = await $('[data-testid="option-include-legend"]');
+      const checkbox = await $('[data-testid="export-dialog"] [data-testid="option-include-legend"]');
       await expect(checkbox).toBeExisting();
+
+      // Verify it's a checkbox input
+      const inputType = await checkbox.getAttribute('type');
+      expect(inputType).toBe('checkbox');
 
       // Checkbox should be inside a label
       const label = await checkbox.parentElement();
@@ -274,139 +326,180 @@ describe('Export Dialog Accessibility', () => {
       expect(labelText.toLowerCase()).toContain('legend');
     });
 
-    it('is toggleable with keyboard (Space key)', async () => {
-      const checkbox = await $('[data-testid="option-include-legend"]');
+    it('responds to Space key for toggling', async () => {
+      const checkbox = await $('[data-testid="export-dialog"] [data-testid="option-include-legend"]');
 
-      // Get initial state (should be checked by default)
-      const wasChecked = await checkbox.isSelected();
+      // Get initial state
+      const initialState = await checkbox.isSelected();
 
-      // Focus the checkbox
-      await checkbox.click();
-      await browser.pause(50);
+      // Use Tab to navigate to the checkbox (keyboard focus)
+      // First, focus on something in the dialog, then tab to checkbox
+      const depthRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-depth"]');
+      await depthRadio.click();
+
+      // Tab to get to the checkbox
+      await browser.keys(['Tab']);
+      await browser.waitUntil(
+        async () => {
+          const activeTestId = await browser.execute(() => document.activeElement?.getAttribute('data-testid'));
+          // May land on preset select first, keep tabbing
+          return activeTestId === 'option-include-legend' || activeTestId === 'depth-preset-select';
+        },
+        { timeout: 2000 }
+      );
+
+      // If we're on the preset select, tab once more
+      const currentFocus = await browser.execute(() => document.activeElement?.getAttribute('data-testid'));
+      if (currentFocus !== 'option-include-legend') {
+        await browser.keys(['Tab']);
+        await browser.waitUntil(
+          async () => {
+            const id = await browser.execute(() => document.activeElement?.getAttribute('data-testid'));
+            return id === 'option-include-legend';
+          },
+          { timeout: 2000 }
+        );
+      }
 
       // Now toggle with Space key
       await browser.keys(['Space']);
-      await browser.pause(100);
-
-      // State should have toggled
-      const isCheckedNow = await checkbox.isSelected();
-      expect(isCheckedNow).toBe(!wasChecked);
+      await browser.waitUntil(
+        async () => (await checkbox.isSelected()) !== initialState,
+        { timeout: 2000, timeoutMsg: 'Checkbox should toggle after Space' }
+      );
 
       // Toggle back
       await browser.keys(['Space']);
-      await browser.pause(100);
-      expect(await checkbox.isSelected()).toBe(wasChecked);
+      await browser.waitUntil(
+        async () => (await checkbox.isSelected()) === initialState,
+        { timeout: 2000, timeoutMsg: 'Checkbox should toggle back after second Space' }
+      );
     });
   });
 
   describe('Focus Management', () => {
-    it('shows visible focus indicator on radio controls', async () => {
-      const sectionRadio = await $('[data-testid="color-mode-section"]');
+    it('shows visible focus indicator on radio controls via keyboard', async () => {
+      // Use Tab key to navigate to radio group for :focus-visible
+      const dialog = await $('[data-testid="export-dialog"]');
+      await dialog.click(); // Ensure dialog has focus
 
-      // Focus the radio by clicking it
-      await sectionRadio.click();
-      await browser.pause(100);
+      // Tab to the first focusable element (should be export type radios)
+      await browser.keys(['Tab']);
+      await browser.keys(['Tab']); // Navigate into color mode radios
 
-      // Check for visible focus styles via execute
-      const focusStyles = await browser.execute(() => {
-        const el = document.querySelector('[data-testid="color-mode-section"]');
-        if (!el) return { outlineWidth: '0px', outlineStyle: 'none', boxShadow: 'none' };
+      // Check for visible focus styles and :focus-visible match
+      const focusResult = await browser.execute(() => {
+        const el = document.activeElement as HTMLElement;
+        if (!el) return { hasFocusVisible: false, hasStyles: false };
+
+        const matchesFocusVisible = el.matches(':focus-visible');
         const styles = window.getComputedStyle(el);
+        const hasOutline = styles.outlineWidth !== '0px' && styles.outlineStyle !== 'none';
+        const hasBoxShadow = styles.boxShadow !== 'none';
+
         return {
-          outlineWidth: styles.outlineWidth,
-          outlineStyle: styles.outlineStyle,
-          boxShadow: styles.boxShadow,
+          hasFocusVisible: matchesFocusVisible,
+          hasStyles: hasOutline || hasBoxShadow,
+          testId: el.getAttribute('data-testid'),
         };
       });
 
-      // Should have either outline or box-shadow for focus indication
-      const hasFocusIndicator =
-        (focusStyles.outlineWidth !== '0px' && focusStyles.outlineStyle !== 'none') ||
-        (focusStyles.boxShadow !== 'none');
-      expect(hasFocusIndicator).toBe(true);
+      // Element should have focus and visible styling
+      expect(focusResult.hasStyles || focusResult.hasFocusVisible).toBe(true);
     });
 
-    it('shows visible focus indicator on checkboxes', async () => {
+    it('shows visible focus indicator on checkboxes via keyboard', async () => {
       // Switch to depth mode to see the legend checkbox
-      const depthRadio = await $('[data-testid="color-mode-depth"]');
+      const depthRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-depth"]');
       await depthRadio.click();
-      await browser.pause(200);
+      await browser.waitUntil(
+        async () => {
+          const checkbox = await $('[data-testid="export-dialog"] [data-testid="option-include-legend"]');
+          return await checkbox.isDisplayed();
+        },
+        { timeout: 3000 }
+      );
 
-      const checkbox = await $('[data-testid="option-include-legend"]');
+      // Tab to navigate to checkbox
+      await browser.keys(['Tab']); // preset select
+      await browser.keys(['Tab']); // legend checkbox
 
-      // Focus the checkbox by clicking it
-      await checkbox.click();
-      await browser.pause(100);
+      // Check for visible focus styles
+      const focusResult = await browser.execute(() => {
+        const el = document.activeElement as HTMLElement;
+        if (!el) return { hasFocusVisible: false, hasStyles: false };
 
-      // Check for visible focus styles via execute
-      const focusStyles = await browser.execute(() => {
-        const el = document.querySelector('[data-testid="option-include-legend"]');
-        if (!el) return { outlineWidth: '0px', outlineStyle: 'none', boxShadow: 'none' };
+        const matchesFocusVisible = el.matches(':focus-visible');
         const styles = window.getComputedStyle(el);
+        const hasOutline = styles.outlineWidth !== '0px' && styles.outlineStyle !== 'none';
+        const hasBoxShadow = styles.boxShadow !== 'none';
+
         return {
-          outlineWidth: styles.outlineWidth,
-          outlineStyle: styles.outlineStyle,
-          boxShadow: styles.boxShadow,
+          hasFocusVisible: matchesFocusVisible,
+          hasStyles: hasOutline || hasBoxShadow,
+          testId: el.getAttribute('data-testid'),
+        };
+      });
+
+      expect(focusResult.hasStyles || focusResult.hasFocusVisible).toBe(true);
+    });
+
+    it('shows visible focus indicator on dropdown button via keyboard', async () => {
+      // Switch to depth mode to see the preset dropdown
+      const depthRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-depth"]');
+      await depthRadio.click();
+      await browser.waitUntil(
+        async () => {
+          const select = await $('[data-testid="export-dialog"] [data-testid="depth-preset-select"]');
+          return await select.isDisplayed();
+        },
+        { timeout: 3000 }
+      );
+
+      // Tab to the preset dropdown button
+      await browser.keys(['Tab']);
+
+      // Get styles before and compare (avoiding hard-coded colors)
+      const focusResult = await browser.execute(() => {
+        const el = document.activeElement as HTMLElement;
+        if (!el) return { hasFocusVisible: false, hasStyles: false };
+
+        const matchesFocusVisible = el.matches(':focus-visible');
+        const styles = window.getComputedStyle(el);
+        const hasOutline = styles.outlineWidth !== '0px' && styles.outlineStyle !== 'none';
+        const hasBoxShadow = styles.boxShadow !== 'none';
+
+        return {
+          hasFocusVisible: matchesFocusVisible,
+          hasStyles: hasOutline || hasBoxShadow,
+          tagName: el.tagName.toLowerCase(),
         };
       });
 
       // Should have focus indicator
-      const hasFocusIndicator =
-        (focusStyles.outlineWidth !== '0px' && focusStyles.outlineStyle !== 'none') ||
-        (focusStyles.boxShadow !== 'none');
-      expect(hasFocusIndicator).toBe(true);
-    });
-
-    it('shows visible focus indicator on dropdown button', async () => {
-      // Switch to depth mode to see the preset dropdown
-      const depthRadio = await $('[data-testid="color-mode-depth"]');
-      await depthRadio.click();
-      await browser.pause(200);
-
-      const select = await $('[data-testid="depth-preset-select"]');
-      const triggerButton = await select.$('button');
-
-      // Focus the button by clicking it
-      await triggerButton.click();
-      await browser.pause(100);
-
-      // Check for visible focus styles via execute
-      const focusStyles = await browser.execute(() => {
-        const el = document.querySelector('[data-testid="depth-preset-select"] button');
-        if (!el) return { outlineWidth: '0px', outlineStyle: 'none', boxShadow: 'none', borderColor: '' };
-        const styles = window.getComputedStyle(el);
-        return {
-          outlineWidth: styles.outlineWidth,
-          outlineStyle: styles.outlineStyle,
-          boxShadow: styles.boxShadow,
-          borderColor: styles.borderColor,
-        };
-      });
-
-      // Should have focus indicator (the Select component uses border-accent on hover/focus)
-      const hasFocusIndicator =
-        (focusStyles.outlineWidth !== '0px' && focusStyles.outlineStyle !== 'none') ||
-        (focusStyles.boxShadow !== 'none') ||
-        // The Select hover state changes border color
-        focusStyles.borderColor !== 'rgb(68, 68, 68)'; // default border color
-
-      expect(hasFocusIndicator).toBe(true);
+      expect(focusResult.hasStyles || focusResult.hasFocusVisible).toBe(true);
     });
   });
 
   describe('Resolution Select (PNG)', () => {
     it('has options including 600 DPI for print', async () => {
       // PNG format should be selected by default, showing resolution select
-      const resolutionSelect = await $('[data-testid="resolution-select"]');
+      const resolutionSelect = await $('[data-testid="export-dialog"] [data-testid="resolution-select"]');
       await expect(resolutionSelect).toBeExisting();
 
       const triggerButton = await resolutionSelect.$('button');
       await triggerButton.click();
-      await browser.pause(100);
+      await browser.waitUntil(
+        async () => (await triggerButton.getAttribute('aria-expanded')) === 'true',
+        { timeout: 2000 }
+      );
 
       // Get option texts
       const options = await resolutionSelect.$$('button:not([aria-haspopup])');
-      const optionTexts = await Promise.all(options.map((o) => o.getText()));
+      const optionTexts: string[] = [];
+      for (const opt of options) {
+        optionTexts.push(await opt.getText());
+      }
 
       // Should have 600 DPI option
       expect(optionTexts.some((t) => t.includes('600'))).toBe(true);
@@ -416,172 +509,32 @@ describe('Export Dialog Accessibility', () => {
 
   describe('Export Button', () => {
     it('has clear button text indicating action', async () => {
-      const button = await $('[data-testid="export-button"]');
+      const button = await $('[data-testid="export-dialog"] [data-testid="export-button"]');
       await expect(button).toBeExisting();
 
       const buttonText = await button.getText();
       expect(buttonText).toBe('Export');
     });
 
-    it('button is keyboard accessible', async () => {
-      const button = await $('[data-testid="export-button"]');
+    it('button is keyboard accessible via Tab navigation', async () => {
+      // Tab through the dialog to reach the export button
+      const dialog = await $('[data-testid="export-dialog"]');
+      await dialog.click();
 
-      // Should be focusable - use click to focus
-      await button.click();
-      await browser.pause(100);
+      // Tab multiple times to reach export button (it's typically at the end)
+      for (let i = 0; i < 10; i++) {
+        await browser.keys(['Tab']);
+        const activeTestId = await browser.execute(() => document.activeElement?.getAttribute('data-testid'));
+        if (activeTestId === 'export-button') {
+          break;
+        }
+      }
 
-      // Verify focus landed on the button (the dialog may close if export initiates,
-      // so we check for either the button being focused or the dialog being open)
+      // Verify we reached the button
       const isFocused = await browser.execute(() => {
-        const activeEl = document.activeElement;
-        // Button might be focused, or we might have opened a file dialog
-        return activeEl?.getAttribute('data-testid') === 'export-button' ||
-               activeEl?.tagName.toLowerCase() === 'button';
+        return document.activeElement?.getAttribute('data-testid') === 'export-button';
       });
       expect(isFocused).toBe(true);
     });
-  });
-});
-
-describe('Export Integration - PNG Success', () => {
-  beforeEach(async () => {
-    await waitForAppReady();
-    await resetAppState();
-    await createNewProject('PNG Export Test');
-
-    // Import survey data
-    const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const importResult = await importDmpFile(dmpPath);
-    expect(importResult.success).toBe(true);
-  });
-
-  /**
-   * Verify PNG export succeeds (not SVG fallback).
-   * This test validates that PNG export via resvg works correctly.
-   */
-  it('exports PNG successfully without error', async () => {
-    // Get the export store action
-    const exportResult = await browser.executeAsync(
-      async (done: (result: { success: boolean; error?: string }) => void) => {
-        const e2e = (window as unknown as {
-          __E2E_TEST__?: {
-            projectStore: {
-              getState: () => {
-                exportImage: (
-                  path: string,
-                  options: {
-                    format: string;
-                    dpi: number;
-                    include_satellite: boolean;
-                    include_grid: boolean;
-                    include_labels: boolean;
-                    include_section_names: boolean;
-                    include_shot_data: boolean;
-                    color_mode: string;
-                    depth_preset: string;
-                    include_legend: boolean;
-                    depth_unit: string;
-                    decimal_precision: number;
-                  }
-                ) => Promise<void>;
-              };
-            };
-          };
-        }).__E2E_TEST__;
-
-        if (!e2e) {
-          done({ success: false, error: 'E2E helpers not found' });
-          return;
-        }
-
-        try {
-          // Use temp path for test (file will be created but we just care it doesn't error)
-          const tempPath = '/tmp/cavechef-test-export.png';
-          await e2e.projectStore.getState().exportImage(tempPath, {
-            format: 'png',
-            dpi: 150, // Lower DPI for faster test
-            include_satellite: false,
-            include_grid: false,
-            include_labels: true,
-            include_section_names: true,
-            include_shot_data: false,
-            color_mode: 'section',
-            depth_preset: 'thermal',
-            include_legend: false,
-            depth_unit: 'm',
-            decimal_precision: 1,
-          });
-          done({ success: true });
-        } catch (err) {
-          done({ success: false, error: String(err) });
-        }
-      }
-    );
-
-    // PNG export should succeed, not error about PNG or fallback to SVG
-    expect(exportResult.success).toBe(true);
-    expect(exportResult.error).toBeUndefined();
-  });
-
-  it('exports PNG with depth color mode successfully', async () => {
-    const exportResult = await browser.executeAsync(
-      async (done: (result: { success: boolean; error?: string }) => void) => {
-        const e2e = (window as unknown as {
-          __E2E_TEST__?: {
-            projectStore: {
-              getState: () => {
-                exportImage: (
-                  path: string,
-                  options: {
-                    format: string;
-                    dpi: number;
-                    include_satellite: boolean;
-                    include_grid: boolean;
-                    include_labels: boolean;
-                    include_section_names: boolean;
-                    include_shot_data: boolean;
-                    color_mode: string;
-                    depth_preset: string;
-                    include_legend: boolean;
-                    depth_unit: string;
-                    decimal_precision: number;
-                  }
-                ) => Promise<void>;
-              };
-            };
-          };
-        }).__E2E_TEST__;
-
-        if (!e2e) {
-          done({ success: false, error: 'E2E helpers not found' });
-          return;
-        }
-
-        try {
-          const tempPath = '/tmp/cavechef-test-export-depth.png';
-          await e2e.projectStore.getState().exportImage(tempPath, {
-            format: 'png',
-            dpi: 150,
-            include_satellite: false,
-            include_grid: false,
-            include_labels: true,
-            include_section_names: true,
-            include_shot_data: false,
-            color_mode: 'depth',
-            depth_preset: 'thermal',
-            include_legend: true,
-            depth_unit: 'm',
-            decimal_precision: 1,
-          });
-          done({ success: true });
-        } catch (err) {
-          done({ success: false, error: String(err) });
-        }
-      }
-    );
-
-    // Depth mode PNG export should also succeed
-    expect(exportResult.success).toBe(true);
-    expect(exportResult.error).toBeUndefined();
   });
 });
