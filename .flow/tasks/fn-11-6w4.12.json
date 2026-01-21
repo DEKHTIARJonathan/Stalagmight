@@ -7,10 +7,22 @@
     "fn-11-6w4.11"
   ],
   "epic": "fn-11-6w4",
+  "evidence": {
+    "commits": [
+      "7a59d0e",
+      "f010d72",
+      "4273f94"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "cargo test --manifest-path src-tauri/Cargo.toml"
+    ]
+  },
   "id": "fn-11-6w4.12",
   "priority": null,
   "spec_path": ".flow/tasks/fn-11-6w4.12.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Write WebdriverIO accessibility tests for export dialog",
-  "updated_at": "2026-01-21T15:36:35.878954Z"
+  "updated_at": "2026-01-21T16:04:18.268645Z"
 }
