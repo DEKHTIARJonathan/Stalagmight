@@ -163,18 +163,38 @@ export interface LoggingConfig {
 }
 
 export interface ShortcutsConfig {
-  select: string;
-  pan: string;
-  zoom: string;
-  draw: string;
-  delete: string;
-  merge: string;
-  measure: string;
-  move_section: string;
-  move_station: string;
-  undo: string;
-  redo: string;
-  save: string;
+  // Tools
+  select: string[];
+  pan: string[];
+  zoom: string[];
+  quick_zoom: string[];
+  draw: string[];
+  delete_tool: string[];
+  merge: string[];
+  measure: string[];
+  move_section: string[];
+  move_station: string[];
+
+  // Edit
+  undo: string[];
+  redo: string[];
+  save: string[];
+
+  // View
+  toggle_depth_gradient: string[];
+  toggle_grid: string[];
+  toggle_satellite: string[];
+  toggle_station_labels: string[];
+  toggle_shot_labels: string[];
+  toggle_section_labels: string[];
+  fit_to_bounds: string[];
+  zoom_in: string[];
+  zoom_out: string[];
+
+  // Panels
+  toggle_sections_panel: string[];
+  toggle_detail_panel: string[];
+  toggle_data_table: string[];
 }
 
 export interface PanelsConfig {
@@ -286,18 +306,38 @@ export const defaultConfig: Config = {
     max_directory_size_mb: 128,
   },
   shortcuts: {
-    select: 'S',
-    pan: 'P',
-    zoom: 'Z',
-    draw: 'D',
-    delete: 'X',
-    merge: 'M',
-    measure: 'R',
-    move_section: 'V',
-    move_station: 'T',
-    undo: 'Ctrl+Z',
-    redo: 'Ctrl+Y',
-    save: 'Ctrl+S',
+    // Tools
+    select: ['S'],
+    pan: ['P'],
+    zoom: ['Z'],
+    quick_zoom: ['Q'],
+    draw: ['D'],
+    delete_tool: ['X'],
+    merge: ['M'],
+    measure: ['R'],
+    move_section: ['V'],
+    move_station: ['T'],
+
+    // Edit
+    undo: ['Ctrl+Z'],
+    redo: ['Ctrl+Y', 'Ctrl+Shift+Z'],
+    save: ['Ctrl+S'],
+
+    // View
+    toggle_depth_gradient: ['G'],
+    toggle_grid: ['Shift+G'],
+    toggle_satellite: ['B'],
+    toggle_station_labels: ['L'],
+    toggle_shot_labels: ['Shift+L'],
+    toggle_section_labels: ['Ctrl+L'],
+    fit_to_bounds: ['F'],
+    zoom_in: ['Equal', 'Plus'],
+    zoom_out: ['Minus'],
+
+    // Panels
+    toggle_sections_panel: ['1'],
+    toggle_detail_panel: ['2'],
+    toggle_data_table: ['3'],
   },
   panels: {
     sections_panel_width: 250,
