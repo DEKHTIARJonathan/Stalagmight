@@ -7,10 +7,22 @@
     "fn-7-gba.1"
   ],
   "epic": "fn-7-gba",
+  "evidence": {
+    "commits": [
+      "075840e",
+      "f3cb40a"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui",
+      "cargo test --manifest-path src-tauri/Cargo.toml"
+    ]
+  },
   "id": "fn-7-gba.2",
   "priority": null,
   "spec_path": ".flow/tasks/fn-7-gba.2.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Audit and fix all map overlay components for cleanup issues",
-  "updated_at": "2026-01-21T04:06:59.951916Z"
+  "updated_at": "2026-01-21T04:20:53.419093Z"
 }

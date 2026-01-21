@@ -9,3 +9,6 @@ Config structs need per-field #[serde(default)] for forward compatibility with p
 
 ## 2026-01-20 manual [convention]
 Use dependency injection (accept fetch function as parameter) for testable network code - enables deterministic unit tests without real network calls
+
+## 2026-01-21 manual [convention]
+Place concurrency guards at store level (not hook level) when multiple UI paths can trigger the same action

@@ -249,9 +249,8 @@ if (map && map.style && map.getLayer(layerId)) {
 - [ ] UnsavedChangesDialog respects closing guard
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Audited and fixed all map overlay components for cleanup issues. Added hasLiveStyle guard and try/catch to SurveyLayer.destroy() method. Implemented store-level isClosing guard in projectStore to prevent concurrent close operations from both Back button and UnsavedChangesDialog paths.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 075840e, f3cb40a
+- Tests: pnpm tsc --noEmit, pnpm test:ui, cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:

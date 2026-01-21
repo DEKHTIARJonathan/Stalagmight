@@ -39,7 +39,7 @@ export default function Toolbar({
     <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-panel">
       {/* Left section */}
       <div className="flex items-center gap-2">
-        <Button onClick={onBack} size="sm">
+        <Button onClick={onBack} size="sm" data-testid="back-button">
           ← Back
         </Button>
         <Button onClick={onSave} size="sm">
