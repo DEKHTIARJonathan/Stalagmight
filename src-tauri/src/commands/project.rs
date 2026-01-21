@@ -94,13 +94,17 @@ pub struct ProjectState {
 ///
 /// Returns LoadProjectFullResult containing project, stations, stats, warnings, and display settings.
 /// Emits "loading-progress" events during load for progress UI.
+///
+/// Note: Uses AppHandle instead of State<'_, AppState> because State's lifetime
+/// cannot be moved into spawn_blocking. AppHandle is 'static and provides access
+/// to managed state via app_handle.state::<T>().
 #[tauri::command]
 pub async fn load_project_full(
     app_handle: tauri::AppHandle,
     path: PathBuf,
 ) -> Result<LoadProjectFullResult, LoadError> {
-    // Use tauri's spawn_blocking - matches existing codebase pattern
     // Access state inside the blocking closure via app_handle
+    // (State<'_, T> cannot be moved into spawn_blocking due to lifetime constraints)
     let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
