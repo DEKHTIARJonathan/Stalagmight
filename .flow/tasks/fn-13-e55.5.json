@@ -1,7 +1,7 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-21T18:05:09.328828Z",
   "created_at": "2026-01-21T03:47:20.127221Z",
   "depends_on": [
     "fn-13-e55.2",
@@ -11,7 +11,7 @@
   "id": "fn-13-e55.5",
   "priority": null,
   "spec_path": ".flow/tasks/fn-13-e55.5.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Refactor useKeyboardShortcuts to read from config",
-  "updated_at": "2026-01-21T03:55:32.848356Z"
+  "updated_at": "2026-01-21T18:05:09.328841Z"
 }

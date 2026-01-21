@@ -309,8 +309,8 @@ export const defaultConfig: Config = {
     // Tools
     select: ['S'],
     pan: ['P'],
-    zoom: ['Z'],
-    quick_zoom: ['Q'],
+    zoom: [], // No default - use quick_zoom for spring-loaded Z
+    quick_zoom: ['Z'], // Spring-loaded (keydown activates, keyup restores)
     draw: ['D'],
     delete_tool: ['X'],
     merge: ['M'],
