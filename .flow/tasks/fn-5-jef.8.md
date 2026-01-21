@@ -144,9 +144,8 @@ describe('interpolateHue', () => {
 - [ ] Tests for interpolateHue shortest path
 - [ ] All tests pass with `pnpm test`
 ## Done summary
-TBD
-
+Added 49 comprehensive unit tests for getDepthColor() HSL interpolation and supporting color utility functions. Exported hexToHSL, hslToHex, and interpolateHue for testability.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 4f6ec5e863d074c32511ea7796ca59e434d6527b
+- Tests: pnpm vitest run --dir src
 - PRs:
