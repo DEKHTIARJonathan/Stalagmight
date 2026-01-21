@@ -3,7 +3,29 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use usvg::{Options, Tree};
 
+use super::depth_colors::DepthPreset;
 use crate::models::Project;
+
+/// Color mode for export visualization.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ColorMode {
+    /// Use section colors (default behavior)
+    #[default]
+    Section,
+    /// Use depth gradient colors
+    Depth,
+}
+
+/// Default depth unit (meters).
+fn default_depth_unit() -> String {
+    "m".to_string()
+}
+
+/// Default decimal precision for depth labels.
+fn default_precision() -> u8 {
+    1
+}
 
 /// Options for image export
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +44,21 @@ pub struct ExportImageOptions {
     pub include_section_names: bool,
     /// Include shot data (azimuth, length, depth)
     pub include_shot_data: bool,
+    /// Color mode for visualization
+    #[serde(default)]
+    pub color_mode: ColorMode,
+    /// Depth color preset (only used when color_mode is Depth)
+    #[serde(default)]
+    pub depth_preset: DepthPreset,
+    /// Include depth legend (only used when color_mode is Depth)
+    #[serde(default)]
+    pub include_legend: bool,
+    /// Depth unit from frontend config ("m" or "ft")
+    #[serde(default = "default_depth_unit")]
+    pub depth_unit: String,
+    /// Decimal precision for depth labels
+    #[serde(default = "default_precision")]
+    pub decimal_precision: u8,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -42,6 +79,11 @@ impl Default for ExportImageOptions {
             include_labels: true,
             include_section_names: true,
             include_shot_data: false,
+            color_mode: ColorMode::Section,
+            depth_preset: DepthPreset::Thermal,
+            include_legend: true,
+            depth_unit: default_depth_unit(),
+            decimal_precision: default_precision(),
         }
     }
 }

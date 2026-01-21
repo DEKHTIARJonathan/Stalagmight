@@ -16,6 +16,13 @@ export default function ExportDialog() {
   const [dataFormat, setDataFormat] = useState<'csv' | 'json'>('csv');
   const [imageFormat, setImageFormat] = useState<ImageFormat>('png');
   const [previewTheme, setPreviewTheme] = useState<ExportTheme>('dark');
+  const config = useProjectStore(state => state.config);
+
+  // Get depth unit and precision from config with fallbacks
+  // depth unit: 'meters' or 'feet' -> export uses 'm' or 'ft'
+  const depthUnit = config?.units?.depth === 'feet' ? 'ft' : 'm';
+  const decimalPrecision = config?.units?.decimal_precision ?? 1;
+
   const [imageOptions, setImageOptions] = useState<ExportImageOptions>({
     format: 'png',
     dpi: 300,
@@ -24,6 +31,11 @@ export default function ExportDialog() {
     include_labels: true,
     include_section_names: true,
     include_shot_data: false,
+    color_mode: 'section',
+    depth_preset: 'thermal',
+    include_legend: true,
+    depth_unit: depthUnit,
+    decimal_precision: decimalPrecision,
   });
 
   const handleExport = async () => {
