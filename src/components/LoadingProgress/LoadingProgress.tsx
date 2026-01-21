@@ -88,6 +88,7 @@ export function LoadingProgress({
         className="w-80 bg-panel rounded-lg shadow-lg p-6"
         role="alert"
         aria-live="assertive"
+        data-testid="loading-progress"
       >
         {/* Error Title */}
         <h2 className="text-lg font-medium text-error mb-2">
@@ -161,6 +162,7 @@ export function LoadingProgress({
       role="dialog"
       aria-labelledby={titleId}
       aria-describedby={phaseId}
+      data-testid="loading-progress"
     >
       {/* Title */}
       <h2 id={titleId} className="text-lg font-medium text-text-primary mb-4">

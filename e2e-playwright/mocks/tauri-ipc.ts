@@ -1385,6 +1385,34 @@ export async function setupTauriMocks(page: Page): Promise<void> {
     // Store the mock module for potential interception
     (window as unknown as Record<string, unknown>).__TAURI_DIALOG_MOCK__ = mockDialogModule;
 
+    // Mock event system for E2E tests (loading progress events, etc.)
+    // This allows tests to emit events via page.evaluate() and have listeners respond
+    interface TauriEventMock {
+      listeners: Map<string, Set<(event: { payload: unknown }) => void>>;
+      listen: (event: string, handler: (event: { payload: unknown }) => void) => Promise<() => void>;
+      emit: (event: string, payload: unknown) => void;
+    }
+    const tauriEventMock: TauriEventMock = {
+      listeners: new Map(),
+      listen: async (event: string, handler: (event: { payload: unknown }) => void) => {
+        if (!tauriEventMock.listeners.has(event)) {
+          tauriEventMock.listeners.set(event, new Set());
+        }
+        tauriEventMock.listeners.get(event)!.add(handler);
+        // Return unlisten function
+        return () => {
+          tauriEventMock.listeners.get(event)?.delete(handler);
+        };
+      },
+      emit: (event: string, payload: unknown) => {
+        const handlers = tauriEventMock.listeners.get(event);
+        if (handlers) {
+          handlers.forEach((handler) => handler({ payload }));
+        }
+      },
+    };
+    (window as unknown as Record<string, unknown>).__tauriEventMock = tauriEventMock;
+
     console.log('[Mock IPC] Tauri mocks installed');
   });
 }
