@@ -41,3 +41,4 @@ strip = true
 
 [dev-dependencies]
 tempfile = "3.24.0"
+tauri = { version = "2", features = ["test"] }
