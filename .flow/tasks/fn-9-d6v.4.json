@@ -1,14 +1,35 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-21T06:15:26.125380Z",
   "created_at": "2026-01-20T15:43:16.294182Z",
   "depends_on": [],
   "epic": "fn-9-d6v",
+  "evidence": {
+    "acceptance_criteria": {
+      "compositeIdEquals_replaces_inline": true,
+      "expression_builder_imported": true,
+      "hoveredSectionId_selectedSectionId_state": "already present from fn-9-d6v.3",
+      "inSection_for_section_matching": true,
+      "priority_order_correct": true,
+      "shot_line_width_section_priorities": true,
+      "station_stroke_color_fallback_black": true,
+      "station_stroke_color_section_priorities": true,
+      "station_stroke_width_section_priorities": true,
+      "virtual_shots_highlight": true
+    },
+    "files_modified": [
+      "src/components/Map/SurveyLayer.tsx"
+    ],
+    "playwright_tests": "319 passed, 124 skipped",
+    "rust_tests": "252 unit tests + 80 integration tests passed",
+    "tests_passed": true,
+    "typescript_check": "pnpm tsc --noEmit - passed"
+  },
   "id": "fn-9-d6v.4",
   "priority": null,
   "spec_path": ".flow/tasks/fn-9-d6v.4.md",
-  "status": "todo",
+  "status": "done",
   "title": "Update SurveyLayer.updateVisualState for section highlighting",
-  "updated_at": "2026-01-20T16:04:33.770930Z"
+  "updated_at": "2026-01-21T06:18:40.368829Z"
 }

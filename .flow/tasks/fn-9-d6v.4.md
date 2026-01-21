@@ -198,8 +198,34 @@ private updateVisualState() {
 - [ ] Virtual shots highlight (inSection matches their sectionId)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
+## Summary
 
+Updated `SurveyLayer.updateVisualState()` to include section-level highlighting using the expression builder utilities from `maplibre-expressions.ts`.
+
+### Changes Made
+
+1. **Added import** for expression builder utilities:
+   - `buildPriorityExpression`, `compositeIdEquals`, `inSection` from `../../utils/maplibre-expressions`
+
+2. **Refactored station stroke-width** to use expression builder with section priorities:
+   - Priority: snap (4px) > individual hover (3px) > section hover (3px) > individual selected (2px) > section selected (2px) > zeroDatum (2px) > normal (1px)
+   - Zero datum check wraps the expression to ensure minimum 2px stroke
+
+3. **Refactored station stroke-color** to use expression builder with section priorities:
+   - Priority: snapped (#00ffcc) > selected (#00aaff) > section selected (#00aaff) > hovered (#0066ff) > section hover (#0066ff) > fallback (#000000)
+
+4. **Refactored shot line-width** to use expression builder with section priorities:
+   - Priority: individual hover (4px) > section hover (4px) > individual selected (3px) > section selected (3px) > normal (2px)
+
+5. **Station radius** kept as inline expression (no section-level radius changes per spec)
+
+### Key Implementation Details
+
+- `compositeIdEquals()` replaces inline station/shot ID matching expressions for cleaner, testable code
+- `inSection()` handles number→string conversion for sectionId comparison
+- Zero-datum gold FILL preserved (expression only changes stroke, not fill color)
+- Virtual shots included in section highlighting (they have sectionId, so inSection() matches them)
+- Private state `hoveredSectionId` and `selectedSectionId` were already present from fn-9-d6v.3
 ## Evidence
 - Commits:
 - Tests:

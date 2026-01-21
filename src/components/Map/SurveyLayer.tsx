@@ -7,6 +7,7 @@ import { getDepthColor } from '../../utils/colors';
 import { hasLiveStyle } from './mapUtils';
 import { isNonInteractiveTool } from '../../utils/toolUtils';
 import type { ToolType } from '../../store/uiStore';
+import { buildPriorityExpression, compositeIdEquals, inSection } from '../../utils/maplibre-expressions';
 
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
@@ -937,73 +938,65 @@ export default class SurveyLayer {
     return Math.sqrt((px - xx) ** 2 + (py - yy) ** 2);
   }
 
-  // Update visual state for selection/hover/snap highlighting
-  // Uses config-based base sizes with explicit deltas for states
-  // Priority order: snapped > zeroDatum > hovered > selected > base
+  // Update visual state for selection/hover/snap highlighting with section-level support
+  // Uses expression builder utilities for clean, testable priority expressions
+  // Priority order: snap > individual hover > section hover > individual selected > section selected > zeroDatum > normal
   private updateVisualState() {
     const baseRadius = this.getStationRadius();
-    const baseWidth = this.getShotWidth();
 
-    // Build station ID expression for matching
-    const stationIdExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]];
-
-    // Update station stroke width based on snap/hover/selection (snap takes priority for visual feedback)
-    // Fallback: 2 for zero datum stations (visibility), 1 for others
+    // Station stroke width with section-level priorities
+    // Priority: snap (4) > individual hover (3) > section hover (3) > individual selected (2) > section selected (2) > zeroDatum (2) > normal (1)
+    const stationStrokeWidth = buildPriorityExpression([
+      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.snappedStationId), value: 4 },
+      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.hoveredStationId), value: 3 },
+      { condition: inSection(this.hoveredSectionId), value: 3 },
+      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.selectedStationId), value: 2 },
+      { condition: inSection(this.selectedSectionId), value: 2 },
+    ], 1);
+    // Wrap with zeroDatum check since buildPriorityExpression doesn't handle property-based fallbacks
     this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-width', [
       'case',
-      ['==', stationIdExpr, this.snappedStationId ?? ''],
-      4, // Snapped station has prominent ring
-      ['==', stationIdExpr, this.hoveredStationId ?? ''],
-      3,
-      ['==', stationIdExpr, this.selectedStationId ?? ''],
-      2,
       ['get', 'isZeroDatum'],
-      2, // Zero datum: stroke width 2 for visibility
-      1, // Normal stations: stroke width 1
+      ['max', 2, stationStrokeWidth], // Zero datum: at least 2px for visibility
+      stationStrokeWidth,
     ]);
 
-    // Update station stroke color for snap/selection/hover
-    // Priority order: snapped > hovered > selected (matches stroke width priority)
-    // Fallback uses feature's strokeColor (gold for zero datum in depth mode, black otherwise)
-    this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-color', [
-      'case',
-      ['==', stationIdExpr, this.snappedStationId ?? ''],
-      '#00ffcc', // Cyan/teal for snap indicator
-      ['==', stationIdExpr, this.hoveredStationId ?? ''],
-      '#0066ff',
-      ['==', stationIdExpr, this.selectedStationId ?? ''],
-      '#00aaff',
-      ['get', 'strokeColor'], // Default from feature (gold for zero datum in depth mode, black otherwise)
-    ]);
+    // Station stroke color with section-level priorities
+    // Priority: snapped > selected > section selected > hovered > section hover > fallback (#000000)
+    const stationStrokeColor = buildPriorityExpression([
+      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.snappedStationId), value: '#00ffcc' },
+      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.selectedStationId), value: '#00aaff' },
+      { condition: inSection(this.selectedSectionId), value: '#00aaff' },
+      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.hoveredStationId), value: '#0066ff' },
+      { condition: inSection(this.hoveredSectionId), value: '#0066ff' },
+    ], '#000000');
+    this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-color', stationStrokeColor);
 
-    // Update station radius with state-based scaling
+    // Station radius - keep existing inline expression (no section-level radius changes needed)
     // Priority: snapped > zeroDatum > hovered > selected > base
+    const stationIdExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]];
     this.map.setPaintProperty(this.stationsLayerId, 'circle-radius', [
       'case',
       ['==', stationIdExpr, this.snappedStationId ?? ''],
-      baseRadius + 3, // 1. Snapped: radius + 3
+      baseRadius + 3,
       ['==', ['get', 'isZeroDatum'], true],
-      baseRadius * 2, // 2. Zero datum: radius * 2
+      baseRadius * 2,
       ['==', stationIdExpr, this.hoveredStationId ?? ''],
-      baseRadius + 2, // 3. Hovered: radius + 2
+      baseRadius + 2,
       ['==', stationIdExpr, this.selectedStationId ?? ''],
-      baseRadius + 1, // 4. Selected: radius + 1
-      baseRadius, // 5. Base
+      baseRadius + 1,
+      baseRadius,
     ]);
 
-    // Shot ID expression
-    const shotIdExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'shotId']]];
-
-    // Update shot line width with state-based scaling
-    // Priority: hovered > selected > base
-    this.map.setPaintProperty(this.shotsLayerId, 'line-width', [
-      'case',
-      ['==', shotIdExpr, this.hoveredShotId ?? ''],
-      baseWidth + 2, // Hovered: width + 2
-      ['==', shotIdExpr, this.selectedShotId ?? ''],
-      baseWidth + 1, // Selected: width + 1
-      baseWidth, // Base
-    ]);
+    // Shot line width with section-level priorities
+    // Priority: individual hover (4) > section hover (4) > individual selected (3) > section selected (3) > normal (2)
+    const shotLineWidth = buildPriorityExpression([
+      { condition: compositeIdEquals(['sectionId', 'shotId'], this.hoveredShotId), value: 4 },
+      { condition: inSection(this.hoveredSectionId), value: 4 },
+      { condition: compositeIdEquals(['sectionId', 'shotId'], this.selectedShotId), value: 3 },
+      { condition: inSection(this.selectedSectionId), value: 3 },
+    ], 2);
+    this.map.setPaintProperty(this.shotsLayerId, 'line-width', shotLineWidth);
 
     // Update highlight layer radius to match snapped state (baseRadius + 3)
     this.map.setPaintProperty(this.stationsHighlightLayerId, 'circle-radius', baseRadius + 3);
