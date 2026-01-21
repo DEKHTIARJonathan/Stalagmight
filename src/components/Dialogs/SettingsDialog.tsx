@@ -1,11 +1,22 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { ShortcutRecorder } from '../Settings/ShortcutRecorder';
+import {
+  normalizeShortcut,
+  checkReservedConflict,
+  findConflict,
+  formatShortcut,
+  formatActionName,
+  isMac,
+  RESERVED_SHORTCUTS,
+} from '../../utils/shortcuts';
 import type { CacheStats } from '../../types/cache';
-import type { Config } from '../../types/config';
+import type { Config, ShortcutsConfig } from '../../types/config';
+import { defaultConfig } from '../../types/config';
 
 interface ConfigChange {
   path: string;
@@ -126,7 +137,79 @@ function computeConfigDiff(oldConfig: Config, newConfig: Config): ConfigChange[]
   return changes;
 }
 
-type SettingsTab = 'general' | 'cache';
+type SettingsTab = 'general' | 'cache' | 'shortcuts';
+
+/**
+ * Categories for organizing shortcuts in the settings UI.
+ */
+interface ShortcutCategory {
+  id: string;
+  label: string;
+  actions: (keyof ShortcutsConfig)[];
+}
+
+const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
+  {
+    id: 'tools',
+    label: 'Tools',
+    actions: ['select', 'pan', 'zoom', 'quick_zoom', 'draw', 'delete_tool', 'merge', 'measure', 'move_section', 'move_station'],
+  },
+  {
+    id: 'edit',
+    label: 'Edit',
+    actions: ['undo', 'redo', 'save'],
+  },
+  {
+    id: 'view',
+    label: 'View',
+    actions: ['toggle_depth_gradient', 'toggle_grid', 'toggle_satellite', 'toggle_station_labels', 'toggle_shot_labels', 'toggle_section_labels', 'fit_to_bounds', 'zoom_in', 'zoom_out'],
+  },
+  {
+    id: 'panels',
+    label: 'Panels',
+    actions: ['toggle_sections_panel', 'toggle_detail_panel', 'toggle_data_table'],
+  },
+];
+
+/**
+ * Reserved shortcut descriptions for display.
+ * Derived from RESERVED_SHORTCUTS to avoid drift.
+ */
+const RESERVED_SHORTCUT_DESCRIPTIONS: Record<string, string> = {
+  Escape: 'Cancel / Close dialogs',
+  Delete: 'Delete selection',
+  Backspace: 'Delete selection',
+  'Ctrl+I': 'Import DMP',
+  'Ctrl+E': 'Export',
+  'Ctrl+A': 'Select all',
+};
+
+/**
+ * Get reserved shortcuts for display, derived from the canonical source.
+ */
+function getReservedShortcutsForDisplay(): Array<{ shortcut: string; description: string }> {
+  return Array.from(RESERVED_SHORTCUTS).map((shortcut) => ({
+    shortcut,
+    description: RESERVED_SHORTCUT_DESCRIPTIONS[shortcut] || 'Reserved',
+  }));
+}
+
+/**
+ * Get abbreviated action name for display (with tooltip for full name).
+ */
+function getAbbreviatedName(action: string): { short: string; full: string } {
+  const full = formatActionName(action);
+  // For longer names, abbreviate
+  if (full.length > 16) {
+    const words = full.split(' ');
+    if (words.length >= 3) {
+      // Take first letter of each word except last, plus last word
+      const abbrev = words.slice(0, -1).map(w => w[0]).join('') + ' ' + words[words.length - 1];
+      return { short: abbrev, full };
+    }
+  }
+  return { short: full, full };
+}
 
 const MIN_CACHE_SIZE_MB = 100;
 const MAX_CACHE_SIZE_MB = 10000;
@@ -150,6 +233,380 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+/**
+ * Props for ShortcutsTabContent component.
+ */
+interface ShortcutsTabContentProps {
+  localConfig: Config | null;
+  setLocalConfig: React.Dispatch<React.SetStateAction<Config | null>>;
+  setIsDirty: React.Dispatch<React.SetStateAction<boolean>>;
+  shortcutSearch: string;
+  setShortcutSearch: React.Dispatch<React.SetStateAction<string>>;
+  collapsedCategories: Set<string>;
+  setCollapsedCategories: React.Dispatch<React.SetStateAction<Set<string>>>;
+  shortcutError: string | null;
+  setShortcutError: React.Dispatch<React.SetStateAction<string | null>>;
+}
+
+/**
+ * Shortcuts tab content component.
+ * Separated for cleaner code organization.
+ */
+function ShortcutsTabContent({
+  localConfig,
+  setLocalConfig,
+  setIsDirty,
+  shortcutSearch,
+  setShortcutSearch,
+  collapsedCategories,
+  setCollapsedCategories,
+  shortcutError,
+  setShortcutError,
+}: ShortcutsTabContentProps) {
+  // Build registry map for conflict detection
+  const shortcutRegistry = useMemo(() => {
+    if (!localConfig) return new Map<string, string[]>();
+    const registry = new Map<string, string[]>();
+    const shortcuts = localConfig.shortcuts;
+    for (const category of SHORTCUT_CATEGORIES) {
+      for (const action of category.actions) {
+        const bindings = shortcuts[action];
+        if (Array.isArray(bindings)) {
+          registry.set(action, bindings);
+        }
+      }
+    }
+    return registry;
+  }, [localConfig]);
+
+  // Filter actions based on search (by action name or key name)
+  const filterAction = useCallback(
+    (action: keyof ShortcutsConfig): boolean => {
+      if (!shortcutSearch.trim()) return true;
+      const search = shortcutSearch.toLowerCase();
+
+      // Match action name
+      const actionName = formatActionName(action).toLowerCase();
+      if (actionName.includes(search)) return true;
+
+      // Match key names in bindings
+      if (localConfig) {
+        const bindings = localConfig.shortcuts[action];
+        if (Array.isArray(bindings)) {
+          for (const binding of bindings) {
+            const formatted = formatShortcut(binding, isMac()).toLowerCase();
+            if (formatted.includes(search)) return true;
+            // Also check raw binding
+            if (binding.toLowerCase().includes(search)) return true;
+          }
+        }
+      }
+
+      return false;
+    },
+    [shortcutSearch, localConfig]
+  );
+
+  // Toggle category collapse
+  const toggleCategory = useCallback((categoryId: string) => {
+    setCollapsedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(categoryId)) {
+        next.delete(categoryId);
+      } else {
+        next.add(categoryId);
+      }
+      return next;
+    });
+  }, [setCollapsedCategories]);
+
+  // Handle shortcut change for an action
+  const handleShortcutChange = useCallback(
+    (action: keyof ShortcutsConfig, slot: 'primary' | 'secondary', newValue: string | null) => {
+      if (!localConfig) return;
+
+      setShortcutError(null);
+
+      if (newValue) {
+        // Check for reserved shortcut (broader check that matches runtime behavior)
+        const reservedConflict = checkReservedConflict(newValue);
+        if (reservedConflict) {
+          setShortcutError(
+            `"${formatShortcut(newValue, isMac())}" cannot be assigned (reserved for: ${reservedConflict.reason}).`
+          );
+          return;
+        }
+
+        // Check for conflicts with other actions
+        const conflict = findConflict(newValue, shortcutRegistry, action);
+        if (conflict) {
+          setShortcutError(
+            `"${formatShortcut(newValue, isMac())}" is already used by "${formatActionName(conflict)}".`
+          );
+          return;
+        }
+
+        // Check for intra-action duplicate (same shortcut in both slots)
+        const normalized = normalizeShortcut(newValue);
+        const currentBindings = localConfig.shortcuts[action] || [];
+        const otherSlotIndex = slot === 'primary' ? 1 : 0;
+        const otherSlotValue = currentBindings[otherSlotIndex];
+        if (otherSlotValue && normalizeShortcut(otherSlotValue) === normalized) {
+          setShortcutError(
+            `"${formatShortcut(newValue, isMac())}" is already assigned to the ${slot === 'primary' ? 'secondary' : 'primary'} slot.`
+          );
+          return;
+        }
+      }
+
+      // Update config
+      const currentBindings = [...(localConfig.shortcuts[action] || [])];
+      const slotIndex = slot === 'primary' ? 0 : 1;
+
+      if (newValue) {
+        const normalized = normalizeShortcut(newValue);
+        if (normalized) {
+          currentBindings[slotIndex] = normalized;
+        }
+      } else {
+        // Remove binding at slot
+        if (slotIndex < currentBindings.length) {
+          currentBindings.splice(slotIndex, 1);
+        }
+      }
+
+      // Filter out empty strings
+      const filteredBindings = currentBindings.filter((b) => b && b.trim());
+
+      setLocalConfig({
+        ...localConfig,
+        shortcuts: {
+          ...localConfig.shortcuts,
+          [action]: filteredBindings,
+        },
+      });
+      setIsDirty(true);
+    },
+    [localConfig, setLocalConfig, setIsDirty, shortcutRegistry, setShortcutError]
+  );
+
+  // Reset single action to defaults
+  const handleResetAction = useCallback(
+    (action: keyof ShortcutsConfig) => {
+      if (!localConfig) return;
+      setShortcutError(null);
+
+      setLocalConfig({
+        ...localConfig,
+        shortcuts: {
+          ...localConfig.shortcuts,
+          [action]: [...defaultConfig.shortcuts[action]],
+        },
+      });
+      setIsDirty(true);
+    },
+    [localConfig, setLocalConfig, setIsDirty, setShortcutError]
+  );
+
+  // Reset all shortcuts to defaults
+  const handleResetAll = useCallback(() => {
+    if (!localConfig) return;
+    setShortcutError(null);
+
+    setLocalConfig({
+      ...localConfig,
+      shortcuts: { ...defaultConfig.shortcuts },
+    });
+    setIsDirty(true);
+  }, [localConfig, setLocalConfig, setIsDirty, setShortcutError]);
+
+  // Handle blocked key from ShortcutRecorder
+  const handleBlockedKey = useCallback(
+    (key: string) => {
+      setShortcutError(`"${key}" cannot be used as a shortcut.`);
+    },
+    [setShortcutError]
+  );
+
+  if (!localConfig) {
+    return <p className="text-text-secondary">Loading configuration...</p>;
+  }
+
+  return (
+    <div className="space-y-4" data-testid="shortcuts-tab-content">
+      {/* Search bar */}
+      <div className="relative">
+        <input
+          type="text"
+          value={shortcutSearch}
+          onChange={(e) => setShortcutSearch(e.target.value)}
+          placeholder="Search shortcuts..."
+          className="w-full px-3 py-2 pl-9 bg-background border border-border rounded text-sm"
+          data-testid="shortcuts-search"
+        />
+        <svg
+          className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-secondary"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+          />
+        </svg>
+      </div>
+
+      {/* Error message */}
+      {shortcutError && (
+        <div
+          className="p-2 bg-error/10 border border-error/30 rounded text-error text-sm"
+          data-testid="shortcut-error"
+        >
+          {shortcutError}
+        </div>
+      )}
+
+      {/* Reserved shortcuts section */}
+      <div className="mb-4">
+        <h3 className="text-sm font-medium mb-2 text-text-secondary">Reserved Shortcuts</h3>
+        <div
+          className="bg-background/50 rounded-lg p-3 grid grid-cols-2 gap-2 text-sm"
+          data-testid="reserved-shortcuts"
+        >
+          {getReservedShortcutsForDisplay().map(({ shortcut, description }) => (
+            <div key={shortcut} className="flex items-center gap-2">
+              <span className="inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-medium bg-panel border border-border rounded min-w-[3rem] text-text-secondary">
+                {formatShortcut(shortcut, isMac())}
+              </span>
+              <span className="text-text-secondary text-xs">{description}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Scrollable shortcuts list */}
+      <div className="max-h-[300px] overflow-y-auto space-y-4 pr-2">
+        {SHORTCUT_CATEGORIES.map((category) => {
+          const filteredActions = category.actions.filter(filterAction);
+          if (filteredActions.length === 0) return null;
+
+          const isCollapsed = collapsedCategories.has(category.id);
+
+          return (
+            <div key={category.id} data-testid={`shortcut-category-${category.id}`}>
+              {/* Category header */}
+              <button
+                type="button"
+                onClick={() => toggleCategory(category.id)}
+                className="flex items-center gap-2 w-full text-left text-sm font-medium mb-2 hover:text-accent transition-colors"
+                data-testid={`shortcut-category-toggle-${category.id}`}
+              >
+                <svg
+                  className={`w-4 h-4 transition-transform ${isCollapsed ? '' : 'rotate-90'}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 5l7 7-7 7"
+                  />
+                </svg>
+                {category.label}
+              </button>
+
+              {/* Category content */}
+              {!isCollapsed && (
+                <div className="space-y-2 pl-6">
+                  {filteredActions.map((action) => {
+                    const bindings = localConfig.shortcuts[action] || [];
+                    const primary = bindings[0] || null;
+                    const secondary = bindings[1] || null;
+                    const { short, full } = getAbbreviatedName(action);
+                    const hasChanges =
+                      JSON.stringify(bindings) !== JSON.stringify(defaultConfig.shortcuts[action]);
+
+                    return (
+                      <div
+                        key={action}
+                        className="flex items-center gap-3 py-1"
+                        data-testid={`shortcut-row-${action}`}
+                      >
+                        {/* Action name */}
+                        <div
+                          className="w-32 text-sm truncate"
+                          title={short !== full ? full : undefined}
+                        >
+                          {short}
+                        </div>
+
+                        {/* Primary slot */}
+                        <ShortcutRecorder
+                          value={primary}
+                          onChange={(value) => handleShortcutChange(action, 'primary', value)}
+                          onBlockedKey={handleBlockedKey}
+                          ariaLabel={`Primary shortcut for ${full}`}
+                          data-testid={`shortcut-primary-${action}`}
+                        />
+
+                        {/* Secondary slot */}
+                        <ShortcutRecorder
+                          value={secondary}
+                          onChange={(value) => handleShortcutChange(action, 'secondary', value)}
+                          onBlockedKey={handleBlockedKey}
+                          ariaLabel={`Secondary shortcut for ${full}`}
+                          data-testid={`shortcut-secondary-${action}`}
+                        />
+
+                        {/* Reset button */}
+                        <button
+                          type="button"
+                          onClick={() => handleResetAction(action)}
+                          disabled={!hasChanges}
+                          className={`p-1 rounded hover:bg-panel transition-colors ${
+                            hasChanges ? 'text-text-secondary hover:text-text' : 'text-border cursor-not-allowed'
+                          }`}
+                          title="Reset to default"
+                          data-testid={`shortcut-reset-${action}`}
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                            />
+                          </svg>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Reset All button */}
+      <div className="pt-2 border-t border-border">
+        <Button
+          variant="danger"
+          onClick={handleResetAll}
+          data-testid="shortcuts-reset-all"
+        >
+          Reset All Shortcuts
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsDialog() {
   const { closeDialog } = useUIStore();
   const { config, updateConfig, setConfig } = useProjectStore();
@@ -165,6 +622,11 @@ export default function SettingsDialog() {
   const [maxSizeInput, setMaxSizeInput] = useState<string>(
     String(config?.cache?.tile_cache_max_mb ?? 500)
   );
+
+  // Shortcuts tab state
+  const [shortcutSearch, setShortcutSearch] = useState('');
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
 
   // Track if component is mounted to avoid state updates after unmount
   const mountedRef = useRef(true);
@@ -378,6 +840,17 @@ export default function SettingsDialog() {
             >
               Cache
             </button>
+            <button
+              onClick={() => setActiveTab('shortcuts')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'shortcuts'
+                  ? 'border-accent text-accent'
+                  : 'border-transparent text-text-secondary hover:text-text'
+              }`}
+              data-testid="settings-tab-shortcuts"
+            >
+              Shortcuts
+            </button>
           </div>
 
           {/* Tab content */}
@@ -488,6 +961,20 @@ export default function SettingsDialog() {
                   )}
                 </div>
               </div>
+            )}
+
+            {activeTab === 'shortcuts' && (
+              <ShortcutsTabContent
+                localConfig={localConfig}
+                setLocalConfig={setLocalConfig}
+                setIsDirty={setIsDirty}
+                shortcutSearch={shortcutSearch}
+                setShortcutSearch={setShortcutSearch}
+                collapsedCategories={collapsedCategories}
+                setCollapsedCategories={setCollapsedCategories}
+                shortcutError={shortcutError}
+                setShortcutError={setShortcutError}
+              />
             )}
           </div>
 
