@@ -29,6 +29,7 @@ impl Default for GeneralConfig {
             recent_projects: Vec::new(),
             undo_history_limit: 100,
             undo_persist_limit: 20,
+            shortcut_feedback: ShortcutFeedback::default(),
         }
     }
 }

@@ -257,6 +257,19 @@ fn default_tile_ttl_days() -> u32 {
     30
 }
 
+/// Shortcut feedback preference for toast notifications
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ShortcutFeedback {
+    /// No toasts for any shortcuts
+    None,
+    /// Toast for view/panel toggles only (default)
+    #[default]
+    NonObvious,
+    /// Toast for all shortcut actions
+    All,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneralConfig {
     pub auto_save: bool,
@@ -270,6 +283,9 @@ pub struct GeneralConfig {
     /// Maximum undo entries to persist to project file (default: 20)
     #[serde(default = "default_undo_persist_limit")]
     pub undo_persist_limit: usize,
+    /// Shortcut feedback preference: none, non_obvious (default), or all
+    #[serde(default)]
+    pub shortcut_feedback: ShortcutFeedback,
 }
 
 fn default_undo_history_limit() -> usize {
@@ -2076,5 +2092,103 @@ delete = "X"
         assert_eq!(deserialized.delete_tool, original.delete_tool);
         assert_eq!(deserialized.zoom_in, original.zoom_in);
         assert_eq!(deserialized.toggle_station_labels, original.toggle_station_labels);
+    }
+
+    // ========================================================================
+    // ShortcutFeedback Enum Tests
+    // ========================================================================
+
+    #[test]
+    fn test_shortcut_feedback_default() {
+        // Default should be NonObvious
+        let feedback = ShortcutFeedback::default();
+        assert_eq!(feedback, ShortcutFeedback::NonObvious);
+    }
+
+    #[test]
+    fn test_shortcut_feedback_serialize_none() {
+        // TOML requires key-value pairs, so use wrapper struct
+        #[derive(Serialize)]
+        struct Wrapper { value: ShortcutFeedback }
+        let w = Wrapper { value: ShortcutFeedback::None };
+        let serialized = toml::to_string(&w).expect("Should serialize");
+        assert!(serialized.contains("value = \"none\""));
+    }
+
+    #[test]
+    fn test_shortcut_feedback_serialize_non_obvious() {
+        #[derive(Serialize)]
+        struct Wrapper { value: ShortcutFeedback }
+        let w = Wrapper { value: ShortcutFeedback::NonObvious };
+        let serialized = toml::to_string(&w).expect("Should serialize");
+        assert!(serialized.contains("value = \"non_obvious\""));
+    }
+
+    #[test]
+    fn test_shortcut_feedback_serialize_all() {
+        #[derive(Serialize)]
+        struct Wrapper { value: ShortcutFeedback }
+        let w = Wrapper { value: ShortcutFeedback::All };
+        let serialized = toml::to_string(&w).expect("Should serialize");
+        assert!(serialized.contains("value = \"all\""));
+    }
+
+    #[test]
+    fn test_shortcut_feedback_deserialize_none() {
+        #[derive(Deserialize)]
+        struct Wrapper { value: ShortcutFeedback }
+        let w: Wrapper = toml::from_str("value = \"none\"").expect("Should deserialize");
+        assert_eq!(w.value, ShortcutFeedback::None);
+    }
+
+    #[test]
+    fn test_shortcut_feedback_deserialize_non_obvious() {
+        #[derive(Deserialize)]
+        struct Wrapper { value: ShortcutFeedback }
+        let w: Wrapper = toml::from_str("value = \"non_obvious\"").expect("Should deserialize");
+        assert_eq!(w.value, ShortcutFeedback::NonObvious);
+    }
+
+    #[test]
+    fn test_shortcut_feedback_deserialize_all() {
+        #[derive(Deserialize)]
+        struct Wrapper { value: ShortcutFeedback }
+        let w: Wrapper = toml::from_str("value = \"all\"").expect("Should deserialize");
+        assert_eq!(w.value, ShortcutFeedback::All);
+    }
+
+    #[test]
+    fn test_general_config_shortcut_feedback_default() {
+        // When shortcut_feedback is missing from TOML, should use default
+        let toml_str = r#"
+auto_save = true
+auto_save_interval_seconds = 30
+recent_projects_max = 20
+"#;
+        let config: GeneralConfig = toml::from_str(toml_str).expect("Should deserialize");
+        assert_eq!(config.shortcut_feedback, ShortcutFeedback::NonObvious);
+    }
+
+    #[test]
+    fn test_general_config_shortcut_feedback_explicit() {
+        let toml_str = r#"
+auto_save = true
+auto_save_interval_seconds = 30
+recent_projects_max = 20
+shortcut_feedback = "all"
+"#;
+        let config: GeneralConfig = toml::from_str(toml_str).expect("Should deserialize");
+        assert_eq!(config.shortcut_feedback, ShortcutFeedback::All);
+    }
+
+    #[test]
+    fn test_general_config_shortcut_feedback_roundtrip() {
+        let mut config = GeneralConfig::default();
+        config.shortcut_feedback = ShortcutFeedback::None;
+
+        let serialized = toml::to_string_pretty(&config).expect("Should serialize");
+        let deserialized: GeneralConfig = toml::from_str(&serialized).expect("Should deserialize");
+
+        assert_eq!(deserialized.shortcut_feedback, ShortcutFeedback::None);
     }
 }

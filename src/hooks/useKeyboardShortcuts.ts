@@ -5,7 +5,7 @@ import { useProjectStore } from '../store/projectStore';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
 import type { ToolType, Selection, DisplayToggleKey } from '../store/uiStore';
-import type { ShortcutsConfig } from '../types/config';
+import type { ShortcutsConfig, ShortcutFeedback } from '../types/config';
 import { defaultConfig } from '../types/config';
 
 /**
@@ -68,6 +68,65 @@ const DISPLAY_TOGGLE_ACTIONS: Partial<Record<ShortcutAction, DisplayToggleKey>> 
   toggle_shot_labels: 'showShotData',
   toggle_section_labels: 'showSectionNames',
 };
+
+/**
+ * Actions that are "non-obvious" - view toggles and panel toggles.
+ * These show toasts when feedback is set to 'non_obvious' or 'all'.
+ */
+const NON_OBVIOUS_ACTIONS: Set<ShortcutAction> = new Set([
+  // View toggles
+  'toggle_depth_gradient',
+  'toggle_grid',
+  'toggle_satellite',
+  'toggle_station_labels',
+  'toggle_shot_labels',
+  'toggle_section_labels',
+  // Panel toggles
+  'toggle_sections_panel',
+  'toggle_detail_panel',
+  'toggle_data_table',
+]);
+
+/**
+ * Human-readable labels for shortcut actions (used in toast messages).
+ */
+const ACTION_LABELS: Record<ShortcutAction, string> = {
+  select: 'Select tool',
+  pan: 'Pan tool',
+  zoom: 'Zoom tool',
+  quick_zoom: 'Quick zoom',
+  draw: 'Draw tool',
+  delete_tool: 'Delete tool',
+  merge: 'Merge tool',
+  measure: 'Measure tool',
+  move_section: 'Move section tool',
+  move_station: 'Move station tool',
+  undo: 'Undo',
+  redo: 'Redo',
+  save: 'Save',
+  toggle_depth_gradient: 'Depth gradient',
+  toggle_grid: 'Grid',
+  toggle_satellite: 'Satellite',
+  toggle_station_labels: 'Station labels',
+  toggle_shot_labels: 'Shot labels',
+  toggle_section_labels: 'Section labels',
+  fit_to_bounds: 'Fit to bounds',
+  zoom_in: 'Zoom in',
+  zoom_out: 'Zoom out',
+  toggle_sections_panel: 'Sections panel',
+  toggle_detail_panel: 'Detail panel',
+  toggle_data_table: 'Data table',
+};
+
+/**
+ * Determine if a toast should be shown for an action based on feedback preference.
+ */
+function shouldShowToast(action: ShortcutAction, feedback: ShortcutFeedback): boolean {
+  if (feedback === 'none') return false;
+  if (feedback === 'all') return true;
+  // 'non_obvious' - only show for view/panel toggles
+  return NON_OBVIOUS_ACTIONS.has(action);
+}
 
 /**
  * Check if a shortcut string contains only a key (no modifiers).
@@ -432,6 +491,16 @@ export function useKeyboardShortcuts() {
       const zoomStep = currentConfig?.map.zoom_step ?? 1.0;
       const zoomMin = currentConfig?.map.zoom_min ?? 0;
       const zoomMax = currentConfig?.map.zoom_max ?? 22;
+      const shortcutFeedback = currentConfig?.general.shortcut_feedback ?? 'non_obvious';
+
+      // Helper to show toast if appropriate for this action
+      const maybeShowToast = (actionName: ShortcutAction, stateInfo?: string) => {
+        if (shouldShowToast(actionName, shortcutFeedback)) {
+          const label = ACTION_LABELS[actionName];
+          const message = stateInfo ? `${label}: ${stateInfo}` : label;
+          showToast(message, `shortcut-${actionName}`);
+        }
+      };
 
       // Handle action
       switch (action) {
@@ -448,6 +517,7 @@ export function useKeyboardShortcuts() {
           if (tool) {
             event.preventDefault();
             setActiveTool(tool);
+            maybeShowToast(action);
           }
           break;
         }
@@ -456,29 +526,34 @@ export function useKeyboardShortcuts() {
           // Regular toggle to zoom tool (not spring-loaded)
           event.preventDefault();
           setActiveTool('zoom');
+          maybeShowToast(action);
           break;
 
         case 'quick_zoom':
           // With modifier key - regular toggle (spring-loaded handled above)
           event.preventDefault();
           setActiveTool('zoom');
+          maybeShowToast(action);
           break;
 
         // Edit actions
         case 'undo':
           event.preventDefault();
           undo();
+          maybeShowToast(action);
           break;
 
         case 'redo':
           event.preventDefault();
           redo();
+          maybeShowToast(action);
           break;
 
         case 'save':
           event.preventDefault();
           if (project) {
             saveProject();
+            maybeShowToast(action);
           }
           break;
 
@@ -492,7 +567,10 @@ export function useKeyboardShortcuts() {
           const toggleKey = DISPLAY_TOGGLE_ACTIONS[action];
           if (toggleKey) {
             event.preventDefault();
+            // Get current state before toggle to report new state
+            const currentState = useUIStore.getState()[toggleKey];
             toggleDisplay(toggleKey);
+            maybeShowToast(action, currentState ? 'Off' : 'On');
           }
           break;
         }
@@ -500,33 +578,45 @@ export function useKeyboardShortcuts() {
         case 'fit_to_bounds':
           event.preventDefault();
           triggerFitToBounds();
+          maybeShowToast(action);
           break;
 
         case 'zoom_in':
           event.preventDefault();
           handleZoomIn(zoomStep, zoomMax);
+          maybeShowToast(action);
           break;
 
         case 'zoom_out':
           event.preventDefault();
           handleZoomOut(zoomStep, zoomMin);
+          maybeShowToast(action);
           break;
 
         // Panel actions
-        case 'toggle_sections_panel':
+        case 'toggle_sections_panel': {
           event.preventDefault();
+          const sectionsPanelOpen = useUIStore.getState().sectionsPanelOpen;
           toggleSectionsPanel();
+          maybeShowToast(action, sectionsPanelOpen ? 'Hidden' : 'Visible');
           break;
+        }
 
-        case 'toggle_detail_panel':
+        case 'toggle_detail_panel': {
           event.preventDefault();
+          const detailPanelOpen = useUIStore.getState().detailPanelOpen;
           toggleDetailPanel();
+          maybeShowToast(action, detailPanelOpen ? 'Hidden' : 'Visible');
           break;
+        }
 
-        case 'toggle_data_table':
+        case 'toggle_data_table': {
           event.preventDefault();
+          const dataTableOpen = useUIStore.getState().dataTableOpen;
           toggleDataTable();
+          maybeShowToast(action, dataTableOpen ? 'Hidden' : 'Visible');
           break;
+        }
       }
     },
     [
