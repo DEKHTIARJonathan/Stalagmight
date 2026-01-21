@@ -1,14 +1,32 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-21T07:19:34.020339Z",
   "created_at": "2026-01-20T15:43:24.897773Z",
   "depends_on": [],
   "epic": "fn-9-d6v",
+  "evidence": {
+    "passing_tests": 8,
+    "skip_reason": "MapLibre layer-level hover events not reliably triggered by Playwright mouse.move()",
+    "skipped_tests": 5,
+    "test_categories": [
+      "Panel hover \u2192 map highlight",
+      "Panel click \u2192 map selection",
+      "Map hover \u2192 panel highlight (bidirectional) - skipped due to MapLibre limitations",
+      "Priority conflicts",
+      "Unhover behavior",
+      "Keyboard navigation",
+      "Edge cases"
+    ],
+    "test_count": 13,
+    "tests_created": "e2e-playwright/section-highlighting.spec.ts",
+    "type_check": "pnpm tsc --noEmit passed",
+    "verification": "pnpm test:ui section-highlighting.spec.ts"
+  },
   "id": "fn-9-d6v.10",
   "priority": null,
   "spec_path": ".flow/tasks/fn-9-d6v.10.md",
-  "status": "todo",
+  "status": "done",
   "title": "Playwright E2E tests for section highlighting",
-  "updated_at": "2026-01-20T15:58:50.296831Z"
+  "updated_at": "2026-01-21T07:26:44.071880Z"
 }
