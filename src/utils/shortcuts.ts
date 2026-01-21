@@ -305,6 +305,78 @@ export function isReservedShortcut(shortcut: string): boolean {
 }
 
 /**
+ * Reserved keys that cannot be used in any shortcut combination.
+ * These keys trigger reserved handlers regardless of modifiers.
+ * For example, Delete key triggers delete regardless of Ctrl/Alt/Shift.
+ */
+export const RESERVED_KEYS: ReadonlySet<string> = new Set([
+  'Escape',
+  'Delete',
+  'Backspace',
+]);
+
+/**
+ * Reserved key+modifier combinations.
+ * The modifier (Ctrl) plus these keys are reserved.
+ */
+export const RESERVED_CTRL_KEYS: ReadonlySet<string> = new Set([
+  'I', // Import DMP
+  'E', // Export
+  'A', // Select all
+]);
+
+/**
+ * Check if a shortcut conflicts with reserved shortcuts.
+ * This is broader than isReservedShortcut - it blocks:
+ * 1. Any shortcut using Escape, Delete, or Backspace (regardless of modifiers)
+ * 2. Any shortcut using Ctrl+I, Ctrl+E, or Ctrl+A (regardless of additional modifiers)
+ *
+ * This matches the runtime behavior where reserved handlers fire even with extra modifiers.
+ *
+ * @param shortcut - Shortcut string (will be normalized before checking)
+ * @returns Object with isReserved flag and reason string, or null if not reserved
+ */
+export function checkReservedConflict(shortcut: string): { isReserved: boolean; reason: string } | null {
+  const normalized = normalizeShortcut(shortcut);
+  if (normalized === null) {
+    return null;
+  }
+
+  // Extract key from shortcut (last part after splitting by +)
+  const parts = normalized.split('+');
+  const key = parts[parts.length - 1] ?? '';
+  const hasCtrl = parts.includes('Ctrl');
+
+  // Check if the key itself is reserved (Escape, Delete, Backspace)
+  if (key && RESERVED_KEYS.has(key)) {
+    const descriptions: Record<string, string> = {
+      Escape: 'Cancel / Close dialogs',
+      Delete: 'Delete selection',
+      Backspace: 'Delete selection',
+    };
+    return {
+      isReserved: true,
+      reason: descriptions[key] ?? `Reserved for ${key}`,
+    };
+  }
+
+  // Check if Ctrl + reserved key (I, E, A)
+  if (key && hasCtrl && RESERVED_CTRL_KEYS.has(key)) {
+    const descriptions: Record<string, string> = {
+      I: 'Import DMP',
+      E: 'Export',
+      A: 'Select all',
+    };
+    return {
+      isReserved: true,
+      reason: descriptions[key] ?? `Reserved for Ctrl+${key}`,
+    };
+  }
+
+  return null;
+}
+
+/**
  * Find a conflict for a shortcut in the registry.
  * Returns the action name if the shortcut is already assigned, or null if no conflict.
  *

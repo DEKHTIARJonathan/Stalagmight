@@ -8,10 +8,23 @@
     "fn-13-e55.3"
   ],
   "epic": "fn-13-e55",
+  "evidence": {
+    "commits": [
+      "4f17e2d1715b5e09ea97cfd1e6f269a75f6d975c"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm vitest run src/hooks/__tests__/useKeyboardShortcuts.test.ts src/utils/__tests__/shortcuts.test.ts",
+      "pnpm test:ui --grep 'Spring-Loaded Z Key'",
+      "pnpm test:ui --grep 'Keyboard Shortcuts'",
+      "pnpm test:ui --grep 'Zoom Tool'"
+    ]
+  },
   "id": "fn-13-e55.5",
   "priority": null,
   "spec_path": ".flow/tasks/fn-13-e55.5.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Refactor useKeyboardShortcuts to read from config",
-  "updated_at": "2026-01-21T18:05:09.328841Z"
+  "updated_at": "2026-01-21T18:18:59.205930Z"
 }
