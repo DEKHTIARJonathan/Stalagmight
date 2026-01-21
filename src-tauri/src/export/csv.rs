@@ -92,4 +92,20 @@ mod tests {
         assert!(contents.contains("Main"));
         assert!(contents.contains("10.00"));
     }
+
+    #[test]
+    fn test_escape_csv_handles_commas_quotes_and_newlines() {
+        assert_eq!(escape_csv("plain"), "plain");
+        assert_eq!(escape_csv("a,b"), "\"a,b\"");
+        assert_eq!(escape_csv("a\"b"), "\"a\"\"b\"");
+        assert_eq!(escape_csv("a\nb"), "\"a\nb\"");
+        assert_eq!(escape_csv("a,\"b\""), "\"a,\"\"b\"\"\"");
+    }
+
+    #[test]
+    fn test_format_optional_outputs_two_decimals_or_empty() {
+        assert_eq!(format_optional(Some(1.234)), "1.23");
+        assert_eq!(format_optional(Some(1.235)), "1.24");
+        assert_eq!(format_optional(None), "");
+    }
 }
