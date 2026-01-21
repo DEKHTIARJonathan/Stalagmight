@@ -11,8 +11,8 @@
     "acceptance_criteria": {
       "all_presets_valid_colors": true,
       "depth_clamping_tested": true,
-      "hex_to_hsl_tested": true,
-      "hsl_to_hex_roundtrip": true,
+      "hex_rgb_hsl_conversion_tested": true,
+      "hsl_rgb_roundtrip_tested": true,
       "min_max_midpoint_tested": true,
       "nan_depth_tested": true,
       "preset_colors_tested": true,
@@ -20,11 +20,12 @@
       "shortest_hue_path_tested": true
     },
     "files_verified": [
-      "src-tauri/src/export/depth_colors.rs"
+      "src-tauri/src/export/depth_colors.rs",
+      "src-tauri/src/export/image.rs"
     ],
-    "notes": "Tests already existed in the module. All acceptance criteria met by existing test suite.",
+    "notes": "Tests already existed in the module. 36 tests in depth_colors.rs + 1 integration test in image.rs (test_svg_depth_mode_uses_depth_colors). The spec mentions hex_to_hsl/hsl_to_hex but the module uses hex_to_rgb + rgb_to_hsl + hsl_to_rgb + format to hex chain, which is fully tested.",
     "test_command": "cargo test --manifest-path src-tauri/Cargo.toml depth_colors",
-    "test_output": "37 passed; 0 failed; 0 ignored",
+    "test_output": "37 passed; 0 failed; 0 ignored (36 in depth_colors.rs + 1 in image.rs)",
     "tests_passed": true
   },
   "id": "fn-11-6w4.9",
