@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-21T03:39:53.709972Z",
+  "depends_on": [
+    "fn-12-szd.3"
+  ],
+  "epic": "fn-12-szd",
+  "id": "fn-12-szd.7",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-12-szd.7.md",
+  "status": "todo",
+  "title": "Add tooltip hint to section items",
+  "updated_at": "2026-01-21T03:40:48.353171Z"
+}

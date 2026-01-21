@@ -1,0 +1,160 @@
+{
+  "created_at": "2026-01-21T03:41:10.534758Z",
+  "epic": {
+    "data": {
+      "branch_name": "fn-12-szd",
+      "created_at": "2026-01-21T03:39:30.497053Z",
+      "depends_on_epics": [],
+      "id": "fn-12-szd",
+      "next_task": 1,
+      "plan_review_status": "unknown",
+      "plan_reviewed_at": null,
+      "spec_path": ".flow/specs/fn-12-szd.md",
+      "status": "open",
+      "title": "Double-click section to zoom and focus on map",
+      "updated_at": "2026-01-21T03:39:47.240470Z"
+    },
+    "spec": "# Double-click section to zoom and focus on map\n\n## Overview\n\nAdd ability to quickly navigate to a specific section on the map by double-clicking it in the Sections panel, using a keyboard shortcut, or via context menu. The map smoothly animates to show the section filling ~80% of the visible area (accounting for open side panels).\n\n## Scope\n\n**In scope:**\n- Double-click handler on section items in SectionsPanel\n- \"Zoom to Section\" context menu option\n- Ctrl+G keyboard shortcut (global, focuses selected section)\n- Configurable animation settings (enable/disable, duration, point zoom level)\n- Panel-aware padding calculation\n- Tooltip showing shortcut hint\n\n**Out of scope:**\n- Station/shot focus (future iteration)\n- Animation cancellation via Escape key\n\n## Approach\n\n### State Management\nFollow existing `requestFitToBounds` pattern in UIStore:\n- Add `requestZoomToSection: SectionId | null`\n- Add `triggerZoomToSection(sectionId)` / `clearZoomToSectionRequest()`\n- MapCanvas watches state and calls new `fitToSection()` method\n\n### Zoom Calculation\n1. Filter stations by `section_id` to get section geometry\n2. Calculate bounds via existing `getBounds()` utility\n3. Convert to map coords via `metersToMapCoords()`\n4. Calculate padding based on visible panels (read actual widths from DOM/state)\n5. Call `map.stop()` then `map.fitBounds()` with padding and animation settings\n\n### Edge Cases\n- **Single station**: Center on station, zoom to `config.map.animation.point_zoom` (default 18)\n- **Empty section**: No-op (section has no stations to zoom to)\n- **Rapid clicks**: `map.stop()` cancels previous animation before starting new one\n- **No selection** (Ctrl+G): No-op\n\n### Config Changes\nAdd to `MapConfig`:\n```typescript\nanimation: {\n  enabled: boolean;    // default: true\n  duration: number;    // default: 300 (ms)\n  point_zoom: number;  // default: 18\n}\n```\nRequires Rust TOML schema update + TypeScript types.\n\n## Quick commands\n\n```bash\n# Type check\npnpm tsc --noEmit\n\n# Run UI tests\npnpm test:ui\n\n# Run Rust tests\ncargo test --manifest-path src-tauri/Cargo.toml\n```\n\n## Key Files\n\n| File | Change |\n|------|--------|\n| `src/store/uiStore.ts:163` | Add `requestZoomToSection` state + actions |\n| `src/components/Map/MapCanvas.tsx:1130` | Add `fitToSection()` method |\n| `src/components/SingleSystemView/SectionsPanel.tsx:76` | Add `onDoubleClick` handler |\n| `src/hooks/useKeyboardShortcuts.ts:131` | Add Ctrl+G handler |\n| `src/components/common/ContextMenu.tsx:166` | Add \"Zoom to Section\" menu item |\n| `src/types/config.ts:104` | Add `MapAnimationConfig` type |\n| `src-tauri/src/config.rs` | Add animation config to Rust |\n\n## Risks\n\n- **MapLibre padding accumulation bug**: Call `map.setPadding({...0s})` before `fitBounds()` to avoid accumulated padding from previous `flyTo` calls\n- **Double-click vs single-click**: Use `event.detail === 2` pattern - single click fires first, but selection is additive so this is acceptable\n\n## Acceptance\n\n- [ ] Double-clicking a section in Sections panel selects it and smoothly animates map to show section at ~80% of visible area\n- [ ] \"Zoom to Section\" appears in section context menu and works identically\n- [ ] Ctrl+G focuses the currently selected section (no-op if no selection)\n- [ ] Padding calculation accounts for visible side panels\n- [ ] Animation respects `config.map.animation.enabled` and `duration` settings\n- [ ] Single-station sections center and zoom to configured level (default 18)\n- [ ] Empty sections (no stations) are ignored\n- [ ] Rapid double-clicks cancel previous animation and start new one\n- [ ] Tooltip \"Double-click to zoom (Ctrl+G)\" appears on section items\n"
+  },
+  "epic_id": "fn-12-szd",
+  "schema_version": 1,
+  "tasks": [
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-21T03:39:53.451163Z",
+        "depends_on": [],
+        "epic": "fn-12-szd",
+        "id": "fn-12-szd.1",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-12-szd.1.md",
+        "status": "todo",
+        "title": "Add animation config to Rust and TypeScript",
+        "updated_at": "2026-01-21T03:40:39.954176Z"
+      },
+      "id": "fn-12-szd.1",
+      "spec": "# fn-12-szd.1 Add animation config to Rust and TypeScript\n\n## Description\nAdd `MapAnimationConfig` to both Rust config schema and TypeScript types. This provides configurable animation settings for map focus transitions.\n\n**Size:** S\n**Files:** `src-tauri/src/config.rs`, `src/types/config.ts`\n\n## Approach\n\n- Follow existing `MapConfig` pattern at `src/types/config.ts:104`\n- Add `animation` field to `MapConfig` struct in Rust with `#[serde(default)]` for each field\n- Add TypeScript interface `MapAnimationConfig` with matching fields\n- Default values: `enabled: true`, `duration: 300`, `point_zoom: 18`\n\n## Key context\n\n- Rust config uses `#[serde(default)]` per-field for forward compatibility (from memory)\n- TypeScript config loaded via Tauri invoke at app startup\n## Acceptance\n- [ ] `MapAnimationConfig` type added to `src/types/config.ts`\n- [ ] `animation` field added to `MapConfig` in TypeScript\n- [ ] Rust `MapConfig` struct updated with `animation: MapAnimationConfig`\n- [ ] Default values: enabled=true, duration=300, point_zoom=18\n- [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-21T03:39:53.494791Z",
+        "depends_on": [],
+        "epic": "fn-12-szd",
+        "id": "fn-12-szd.2",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-12-szd.2.md",
+        "status": "todo",
+        "title": "Add section zoom state to UIStore",
+        "updated_at": "2026-01-21T03:40:40.148290Z"
+      },
+      "id": "fn-12-szd.2",
+      "spec": "# fn-12-szd.2 Add section zoom state to UIStore\n\n## Description\nAdd section zoom request state to UIStore following the existing `requestFitToBounds` pattern.\n\n**Size:** S\n**Files:** `src/store/uiStore.ts`\n\n## Approach\n\n- Follow pattern at `src/store/uiStore.ts:163-165` (`requestFitToBounds`, `triggerFitToBounds`, `clearFitToBoundsRequest`)\n- Add `requestZoomToSection: SectionId | null` state\n- Add `triggerZoomToSection(sectionId: SectionId)` action\n- Add `clearZoomToSectionRequest()` action\n\n## Key context\n\n- `SectionId` is a number type alias from `src/types/project.ts`\n- UIStore uses Zustand with immer middleware\n## Acceptance\n- [ ] `requestZoomToSection: SectionId | null` state added to UIStore\n- [ ] `triggerZoomToSection(sectionId)` action triggers zoom request\n- [ ] `clearZoomToSectionRequest()` clears the request after handling\n- [ ] Type exports updated if needed\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-21T03:39:53.538829Z",
+        "depends_on": [
+          "fn-12-szd.1",
+          "fn-12-szd.2"
+        ],
+        "epic": "fn-12-szd",
+        "id": "fn-12-szd.3",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-12-szd.3.md",
+        "status": "todo",
+        "title": "Implement fitToSection in MapCanvas",
+        "updated_at": "2026-01-21T03:40:48.179978Z"
+      },
+      "id": "fn-12-szd.3",
+      "spec": "# fn-12-szd.3 Implement fitToSection in MapCanvas\n\n## Description\nImplement the core `fitToSection()` method in MapCanvas that zooms the map to show a specific section at ~80% of visible area, accounting for open side panels.\n\n**Size:** M\n**Files:** `src/components/Map/MapCanvas.tsx`\n\n## Approach\n\n- Follow existing `fitToBounds()` pattern at `src/components/Map/MapCanvas.tsx:1130-1150`\n- Watch `requestZoomToSection` from UIStore via useEffect\n- Filter stations by `section_id` to get section geometry\n- Use `getBounds()` from `src/utils/coordinates.ts:118` for bounds calculation\n- Use `metersToMapCoords()` for coordinate transformation\n- Calculate padding: read panel widths from UIStore/DOM, add 10% margin\n- Call `map.stop()` before `map.fitBounds()` to cancel any running animation\n- Handle edge cases:\n  - Single station: use `map.easeTo()` with `point_zoom` from config\n  - Empty section (0 stations): no-op, just clear request\n- Respect `config.map.animation.enabled` and `duration` settings\n\n## Key context\n\n- MapLibre padding accumulation bug: call `map.setPadding({top:0,right:0,bottom:0,left:0})` before fitBounds\n- Use `linear: true` in fitBounds options for easeTo behavior\n- Panel widths available from UIStore: `sectionsPanelWidth`, `detailPanelWidth`\n## Acceptance\n- [ ] `fitToSection(sectionId)` method implemented in MapCanvas\n- [ ] useEffect watches `requestZoomToSection` and calls `fitToSection`\n- [ ] Stations filtered by section_id correctly\n- [ ] Padding accounts for visible side panels + 10% margin\n- [ ] `map.stop()` called before starting new animation\n- [ ] Single-station sections center at `point_zoom` level\n- [ ] Empty sections handled gracefully (no-op)\n- [ ] Animation respects config.map.animation settings\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-21T03:39:53.581763Z",
+        "depends_on": [
+          "fn-12-szd.3"
+        ],
+        "epic": "fn-12-szd",
+        "id": "fn-12-szd.4",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-12-szd.4.md",
+        "status": "todo",
+        "title": "Add double-click handler to SectionsPanel",
+        "updated_at": "2026-01-21T03:40:48.224326Z"
+      },
+      "id": "fn-12-szd.4",
+      "spec": "# fn-12-szd.4 Add double-click handler to SectionsPanel\n\n## Description\nAdd double-click handler to section items in SectionsPanel that triggers zoom to section.\n\n**Size:** S\n**Files:** `src/components/SingleSystemView/SectionsPanel.tsx`\n\n## Approach\n\n- Add `onDoubleClick` handler to section list item at line 76\n- Handler calls both `setSelection` (to select) and `triggerZoomToSection` (to zoom)\n- Single-click continues to work as before (selection only)\n- Use `event.detail === 2` check if needed to differentiate, but since both actions are additive (select + zoom), the natural browser behavior is acceptable\n\n## Key context\n\n- Existing pattern: `onClick={handleSectionClick}` sets selection\n- Double-click fires after two single clicks (browser behavior)\n- Both handlers can coexist since select + zoom is the desired double-click behavior\n## Acceptance\n- [ ] `onDoubleClick` handler added to section list items\n- [ ] Double-click selects section AND triggers zoom to section\n- [ ] Single-click behavior unchanged (selection only)\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-21T03:39:53.624705Z",
+        "depends_on": [
+          "fn-12-szd.3"
+        ],
+        "epic": "fn-12-szd",
+        "id": "fn-12-szd.5",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-12-szd.5.md",
+        "status": "todo",
+        "title": "Add Ctrl+G keyboard shortcut",
+        "updated_at": "2026-01-21T03:40:48.267105Z"
+      },
+      "id": "fn-12-szd.5",
+      "spec": "# fn-12-szd.5 Add Ctrl+G keyboard shortcut\n\n## Description\nAdd Ctrl+G keyboard shortcut to focus the currently selected section on the map.\n\n**Size:** S\n**Files:** `src/hooks/useKeyboardShortcuts.ts`\n\n## Approach\n\n- Follow existing Ctrl+0 pattern at `src/hooks/useKeyboardShortcuts.ts:131-134`\n- Add case for `g` key with Ctrl modifier\n- Check if current selection is a section (`selection?.type === 'section'`)\n- If section selected, call `triggerZoomToSection(selection.sectionId)`\n- If no section selected, no-op (do nothing)\n\n## Key context\n\n- Keyboard shortcuts must not fire when user is typing in input/textarea\n- Existing guards in useKeyboardShortcuts handle this\n## Acceptance\n- [ ] Ctrl+G handler added to useKeyboardShortcuts\n- [ ] Zooms to selected section when section is selected\n- [ ] No-op when no section is selected\n- [ ] Does not interfere with text input (existing guards)\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-21T03:39:53.667582Z",
+        "depends_on": [
+          "fn-12-szd.3"
+        ],
+        "epic": "fn-12-szd",
+        "id": "fn-12-szd.6",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-12-szd.6.md",
+        "status": "todo",
+        "title": "Add Zoom to Section context menu item",
+        "updated_at": "2026-01-21T03:40:48.309765Z"
+      },
+      "id": "fn-12-szd.6",
+      "spec": "# fn-12-szd.6 Add Zoom to Section context menu item\n\n## Description\nAdd \"Zoom to Section\" item to the section context menu.\n\n**Size:** S\n**Files:** `src/components/common/ContextMenu.tsx`\n\n## Approach\n\n- Find section menu items at `src/components/common/ContextMenu.tsx:166-188`\n- Add \"Zoom to Section\" item before \"Delete Section\"\n- Item calls `triggerZoomToSection(sectionId)` and closes the menu\n- Icon: use a zoom/focus icon (e.g., `ZoomIn` or `Focus` from lucide-react)\n\n## Key context\n\n- Context menu receives `dialogData.target` with `{ type: 'section', sectionId }`\n- Menu items are React components with onClick handlers\n## Acceptance\n- [ ] \"Zoom to Section\" menu item added to section context menu\n- [ ] Item appears before \"Delete Section\"\n- [ ] Click triggers zoom to section\n- [ ] Menu closes after click\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    },
+    {
+      "data": {
+        "assignee": null,
+        "claim_note": "",
+        "claimed_at": null,
+        "created_at": "2026-01-21T03:39:53.709972Z",
+        "depends_on": [
+          "fn-12-szd.3"
+        ],
+        "epic": "fn-12-szd",
+        "id": "fn-12-szd.7",
+        "priority": null,
+        "spec_path": ".flow/tasks/fn-12-szd.7.md",
+        "status": "todo",
+        "title": "Add tooltip hint to section items",
+        "updated_at": "2026-01-21T03:40:48.353171Z"
+      },
+      "id": "fn-12-szd.7",
+      "spec": "# fn-12-szd.7 Add tooltip hint to section items\n\n## Description\nAdd tooltip to section items showing \"Double-click to zoom (Ctrl+G)\" for discoverability.\n\n**Size:** S\n**Files:** `src/components/SingleSystemView/SectionsPanel.tsx`\n\n## Approach\n\n- Add `title` attribute to section list item element\n- Text: \"Double-click to zoom (Ctrl+G)\"\n- Native browser tooltip is sufficient (no custom tooltip component needed)\n\n## Key context\n\n- Keep it simple - native `title` attribute provides adequate discoverability\n- Tooltip appears on hover after brief delay (browser default)\n## Acceptance\n- [ ] `title` attribute added to section list items\n- [ ] Tooltip text: \"Double-click to zoom (Ctrl+G)\"\n- [ ] Tooltip appears on hover\n- [ ] `pnpm tsc --noEmit` passes\n## Done summary\nTBD\n\n## Evidence\n- Commits:\n- Tests:\n- PRs:\n"
+    }
+  ]
+}
