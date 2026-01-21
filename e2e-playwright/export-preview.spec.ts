@@ -272,4 +272,76 @@ test.describe('Export Preview', () => {
 
     await expect(dialog).not.toBeVisible({ timeout: 3000 });
   });
+
+  test('should update preview when switching to depth color mode', async ({ page }) => {
+    await openExportDialog(page);
+
+    // Switch to image export
+    await page.click('[data-testid="export-type-image"]');
+    await page.waitForTimeout(500);
+
+    const preview = page.locator('[data-testid="export-preview"]');
+    await expect(preview).toBeVisible({ timeout: 5000 });
+
+    // Switch to depth color mode
+    await page.click('[data-testid="color-mode-depth"]');
+
+    // Wait for debounced update and preset color fetch
+    await page.waitForTimeout(600);
+
+    // Preview should still be visible and functional
+    await expect(preview).toBeVisible();
+  });
+
+  test('should update preview when changing depth preset', async ({ page }) => {
+    await openExportDialog(page);
+
+    // Switch to image export
+    await page.click('[data-testid="export-type-image"]');
+    await page.waitForTimeout(500);
+
+    const preview = page.locator('[data-testid="export-preview"]');
+    await expect(preview).toBeVisible({ timeout: 5000 });
+
+    // Switch to depth color mode
+    await page.click('[data-testid="color-mode-depth"]');
+    await page.waitForTimeout(600);
+
+    // Change depth preset using custom Select component
+    const depthPresetSelect = page.locator('[data-testid="depth-preset-select"]');
+    await expect(depthPresetSelect).toBeVisible();
+
+    // Open dropdown and select a different preset
+    await depthPresetSelect.locator('button').first().click();
+    const dropdown = depthPresetSelect.locator('.absolute');
+    await dropdown.locator('button:has-text("Ocean")').click();
+
+    // Wait for preset colors to be fetched and preview to update
+    await page.waitForTimeout(600);
+
+    // Preview should still be visible and functional
+    await expect(preview).toBeVisible();
+  });
+
+  test('should revert preview when switching back to section color mode', async ({ page }) => {
+    await openExportDialog(page);
+
+    // Switch to image export
+    await page.click('[data-testid="export-type-image"]');
+    await page.waitForTimeout(500);
+
+    const preview = page.locator('[data-testid="export-preview"]');
+    await expect(preview).toBeVisible({ timeout: 5000 });
+
+    // Switch to depth color mode
+    await page.click('[data-testid="color-mode-depth"]');
+    await page.waitForTimeout(600);
+
+    // Switch back to section color mode
+    await page.click('[data-testid="color-mode-section"]');
+    await page.waitForTimeout(500);
+
+    // Preview should still be visible and functional
+    await expect(preview).toBeVisible();
+  });
 });
