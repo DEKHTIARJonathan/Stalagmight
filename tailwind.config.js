@@ -3,6 +3,16 @@ export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
+      animation: {
+        'pulse-shimmer': 'pulse-shimmer 1.5s ease-in-out infinite',
+      },
+      keyframes: {
+        'pulse-shimmer': {
+          '0%': { opacity: '0.5', transform: 'translateX(-100%)' },
+          '50%': { opacity: '1' },
+          '100%': { opacity: '0.5', transform: 'translateX(100%)' },
+        },
+      },
       colors: {
         // UI Colors from spec
         background: '#1a1a2e',
