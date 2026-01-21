@@ -88,6 +88,16 @@ export interface MapSnapConfig {
   enabled_measure: boolean;
 }
 
+/** Animation configuration for map focus transitions */
+export interface MapAnimationConfig {
+  /** Whether animations are enabled */
+  enabled: boolean;
+  /** Animation duration in milliseconds */
+  duration: number;
+  /** Zoom level for single-point focus */
+  point_zoom: number;
+}
+
 /** Debug configuration */
 export interface DebugConfig {
   map: MapDebugConfig;
@@ -118,6 +128,8 @@ export interface MapConfig {
   shot: ShotConfig;
   /** Snap-to-station settings */
   snap: MapSnapConfig;
+  /** Animation settings for map focus transitions */
+  animation: MapAnimationConfig;
 }
 
 export interface MapControlsConfig {
@@ -247,6 +259,11 @@ export const defaultConfig: Config = {
       enabled_draw: true,
       enabled_merge: true,
       enabled_measure: true,
+    },
+    animation: {
+      enabled: true,
+      duration: 300,
+      point_zoom: 18,
     },
   },
   validation: {

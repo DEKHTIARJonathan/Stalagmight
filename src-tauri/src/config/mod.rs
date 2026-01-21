@@ -170,6 +170,38 @@ fn default_true() -> bool {
     true
 }
 
+/// Animation configuration for map focus transitions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapAnimationConfig {
+    /// Whether animations are enabled
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Animation duration in milliseconds
+    #[serde(default = "default_animation_duration")]
+    pub duration: u32,
+    /// Zoom level for single-point focus
+    #[serde(default = "default_point_zoom")]
+    pub point_zoom: u8,
+}
+
+impl Default for MapAnimationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            duration: default_animation_duration(),
+            point_zoom: default_point_zoom(),
+        }
+    }
+}
+
+fn default_animation_duration() -> u32 {
+    300
+}
+
+fn default_point_zoom() -> u8 {
+    18
+}
+
 /// Debug configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DebugConfig {
@@ -337,6 +369,9 @@ pub struct MapConfig {
     /// Snap-to-station settings
     #[serde(default)]
     pub snap: MapSnapConfig,
+    /// Animation settings for map focus transitions
+    #[serde(default)]
+    pub animation: MapAnimationConfig,
 }
 
 impl MapConfig {

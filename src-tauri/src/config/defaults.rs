@@ -103,6 +103,7 @@ impl Default for MapConfig {
             station: StationConfig::default(),
             shot: ShotConfig::default(),
             snap: MapSnapConfig::default(),
+            animation: MapAnimationConfig::default(),
         }
     }
 }

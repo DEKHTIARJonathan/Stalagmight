@@ -18,3 +18,6 @@ Use single event listener at app root level to avoid duplicate subscriptions whe
 
 ## 2026-01-21 manual [convention]
 Frontend color gradient interpolation should match backend algorithm (HSL vs RGB) to ensure preview matches export
+
+## 2026-01-21 manual [convention]
+WebdriverIO: use closest('[data-testid]') to detect focus on elements inside containers with data-testid when the focused element itself lacks the attribute
