@@ -42,3 +42,6 @@ MapLibre hitbox layers should use opaque colors with tiny opacity (0.001) - usin
 
 ## 2026-01-21 manual [pitfall]
 useEffect syncing state to a ref-based object (e.g. SurveyLayer) should include mapLoaded in deps to re-run after ref becomes valid
+
+## 2026-01-21 manual [pitfall]
+When combining mouse hover and keyboard focus for highlight state, mouse leave handlers must check if keyboard focus is active to avoid clearing the highlight

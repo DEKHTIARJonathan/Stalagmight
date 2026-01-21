@@ -5,10 +5,21 @@
   "created_at": "2026-01-20T15:43:20.290686Z",
   "depends_on": [],
   "epic": "fn-9-d6v",
+  "evidence": {
+    "commits": [
+      "f436d59",
+      "c261cb0",
+      "f2e3a60"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-9-d6v.7",
   "priority": null,
   "spec_path": ".flow/tasks/fn-9-d6v.7.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add keyboard accessibility to SectionsPanel",
-  "updated_at": "2026-01-21T06:45:39.947447Z"
+  "updated_at": "2026-01-21T06:54:42.402074Z"
 }
