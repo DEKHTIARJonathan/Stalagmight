@@ -82,6 +82,7 @@ export default function DataTable({ sections }: DataTableProps) {
         const tooltipText = shotWarnings.map((w) => w.message).join('\n');
         return (
           <span
+            data-testid={`warning-${selectedSectionId}-${shot.id}`}
             className={hasError ? 'text-red-400' : 'text-yellow-400'}
             title={tooltipText}
           >
