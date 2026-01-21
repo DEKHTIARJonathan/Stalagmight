@@ -19,6 +19,8 @@ export function useLoadingProgress() {
     // Only listen when loading is active and no error yet
     if (!loading.isLoading || loading.error) return;
 
+    // Track whether effect has been cleaned up (for async listener setup race)
+    let disposed = false;
     let unlisten: UnlistenFn | null = null;
 
     const checkTimeout = () => {
@@ -33,17 +35,20 @@ export function useLoadingProgress() {
     };
 
     const setupListener = async () => {
-      unlisten = await listen<LoadingProgressPayload>('loading-progress', (event) => {
-        const currentLoadingId = useProjectStore.getState().loading.loadingId;
+      const listener = await listen<LoadingProgressPayload>('loading-progress', (event) => {
+        const currentState = useProjectStore.getState().loading;
+        const { loadingId: eventLoadingId } = event.payload;
 
-        // CRITICAL: Ignore stale events from cancelled/previous loads
-        if (event.payload.loadingId !== currentLoadingId) {
+        // Filter stale events:
+        // - If store.loadingId is 0, accept the first event and set the loadingId
+        // - If store.loadingId is set, only accept events with matching ID
+        if (currentState.loadingId !== 0 && eventLoadingId !== currentState.loadingId) {
           if (import.meta.env.DEV) {
             console.debug(
               '[Loading] Ignoring stale event',
-              event.payload.loadingId,
+              eventLoadingId,
               '!=',
-              currentLoadingId
+              currentState.loadingId
             );
           }
           return;
@@ -56,6 +61,7 @@ export function useLoadingProgress() {
           event.payload;
 
         setLoadingProgress({
+          loadingId: eventLoadingId, // Set/update backend loadingId
           phase,
           phaseIndex,
           phaseCount,
@@ -83,6 +89,13 @@ export function useLoadingProgress() {
           );
         }
       });
+
+      // If cleanup ran while we were setting up, immediately unlisten
+      if (disposed) {
+        listener();
+      } else {
+        unlisten = listener;
+      }
     };
 
     // Start initial timeout
@@ -90,7 +103,11 @@ export function useLoadingProgress() {
     setupListener();
 
     return () => {
-      unlisten?.();
+      disposed = true;
+      // Unlisten if setup completed
+      if (unlisten) {
+        unlisten();
+      }
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
   }, [loading.isLoading, loading.error, setLoadingProgress]);

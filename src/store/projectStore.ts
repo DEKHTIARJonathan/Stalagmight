@@ -27,8 +27,17 @@ import type { LoadProjectFullResult } from '../types/loading';
  * Tracks progress phases, current/total counts, and error states.
  */
 export interface LoadingState {
-  /** Unique ID for this load operation (increments on each load to detect stale events) */
+  /**
+   * Backend loading ID for filtering stale progress events.
+   * Set from the first progress event or result.loadingId.
+   * Value of 0 means "accept events until we learn the backend ID".
+   */
   loadingId: number;
+  /**
+   * Client operation ID for race detection (local to frontend).
+   * Incremented on each load start. Used to detect if a newer load started.
+   */
+  clientOpId: number;
   /** Whether a load operation is currently in progress */
   isLoading: boolean;
   /** Name of the project being loaded */
@@ -57,9 +66,13 @@ export interface LoadingState {
 
 const initialLoadingState: LoadingState = {
   loadingId: 0,
+  clientOpId: 0,
   isLoading: false,
   overallProgress: 0,
 };
+
+// Separate client operation ID for race detection (independent of backend loading ID)
+let clientOpIdCounter = 0;
 
 /**
  * Parsed error from Tauri backend.
@@ -224,19 +237,22 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   // Loading state actions
   startLoading: (projectName: string, projectPath: string) => {
-    const newId = get().loading.loadingId + 1;
+    clientOpIdCounter += 1;
+    const newClientOpId = clientOpIdCounter;
     set({
       loading: {
         ...initialLoadingState,
-        loadingId: newId,
+        loadingId: 0, // Will be set from first progress event or result
+        clientOpId: newClientOpId,
         isLoading: true,
         projectName,
         projectPath,
         phase: 'opening_database',
         lastEventTime: Date.now(),
       },
+      error: null, // Clear any stale error state
     });
-    return newId;
+    return newClientOpId;
   },
 
   setLoadingProgress: (progress: Partial<LoadingState>) =>
@@ -250,7 +266,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   resetLoading: () =>
     set((state) => ({
-      loading: { ...initialLoadingState, loadingId: state.loading.loadingId },
+      loading: { ...initialLoadingState, clientOpId: state.loading.clientOpId },
     })),
 
   setLoadingError: (message: string, details?: string) =>
@@ -279,16 +295,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     // cancel_loading is idempotent on backend
     await get().cancelLoading();
 
-    const initialName = path.split('/').pop()?.replace(/\.(cvproj|cvchef)$/, '') ?? 'Project';
-    const loadingId = get().startLoading(initialName, path);
+    // Use cross-platform path splitting for project name extraction
+    const initialName = path.split(/[/\\]/).pop()?.replace(/\.(cvproj|cvchef)$/, '') ?? 'Project';
+    const clientOpId = get().startLoading(initialName, path);
 
     try {
       const result = await invoke<LoadProjectFullResult>('load_project_full', { path });
 
-      // Check loadingId hasn't changed (cancelled/new load started)
-      if (get().loading.loadingId !== loadingId) {
+      // Check clientOpId hasn't changed (cancelled/new load started)
+      if (get().loading.clientOpId !== clientOpId) {
         return { success: false };
       }
+
+      // Set backend loadingId from result for event correlation
+      get().setLoadingProgress({ loadingId: result.loadingId });
 
       // Update loading title with actual project name from result
       if (result.project.name !== initialName) {
@@ -325,7 +345,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       }
 
       // Only set error if this is still the current load operation
-      if (get().loading.loadingId === loadingId) {
+      if (get().loading.clientOpId === clientOpId) {
         get().setLoadingError(error.message, error.details);
       }
       return { success: false };
@@ -334,27 +354,21 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   // Project operations
   createProject: async (name: string, location?: string) => {
-    console.log('[projectStore] createProject called:', name);
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
 
-    const loadingId = get().startLoading(name, '');
-    set({ error: null });
+    const clientOpId = get().startLoading(name, '');
 
     try {
-      console.log('[projectStore] Invoking create_project...');
       const result = await invoke<CommandResult>('create_project', { name, location });
-      console.log('[projectStore] create_project result:', result);
 
-      // Check loadingId hasn't changed
-      if (get().loading.loadingId !== loadingId) {
+      // Check clientOpId hasn't changed
+      if (get().loading.clientOpId !== clientOpId) {
         return { success: false, error: 'Cancelled', warnings: [] };
       }
 
       if (result.success) {
-        console.log('[projectStore] Calling refreshProjectState...');
         await get().refreshProjectState();
-        console.log('[projectStore] refreshProjectState done');
         // Reset display settings to defaults for new project
         useUIStore.getState().resetDisplaySettings();
         useUIStore.getState().setView('single');
@@ -367,7 +381,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       return result;
     } catch (e) {
       const error = parseLoadError(e);
-      if (get().loading.loadingId === loadingId) {
+      if (get().loading.clientOpId === clientOpId) {
         get().setLoadingError(error.message, error.details);
       }
       return { success: false, error: error.message, warnings: [] };
@@ -375,27 +389,23 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   openProject: async (path: string) => {
-    console.log('[projectStore] openProject called with path:', path);
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
 
-    const initialName = path.split('/').pop()?.replace(/\.(cvproj|cvchef)$/, '') ?? 'Project';
-    const loadingId = get().startLoading(initialName, path);
-    set({ error: null });
+    // Use cross-platform path splitting for project name extraction
+    const initialName = path.split(/[/\\]/).pop()?.replace(/\.(cvproj|cvchef)$/, '') ?? 'Project';
+    const clientOpId = get().startLoading(initialName, path);
 
     try {
       const result = await invoke<CommandResult>('open_project', { path });
-      console.log('[projectStore] open_project result:', result);
 
-      // Check loadingId hasn't changed
-      if (get().loading.loadingId !== loadingId) {
+      // Check clientOpId hasn't changed
+      if (get().loading.clientOpId !== clientOpId) {
         return { success: false, error: 'Cancelled', warnings: [] };
       }
 
       if (result.success) {
-        console.log('[projectStore] Calling refreshProjectState');
         await get().refreshProjectState();
-        console.log('[projectStore] refreshProjectState complete, project:', get().project?.name);
         await get().loadRecentProjects();
         // Load display settings from the opened project
         await useUIStore.getState().loadDisplaySettings();
@@ -405,13 +415,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         set({ isDirty: false });
         get().resetLoading();
       } else {
-        console.error('[projectStore] open_project failed:', result.error);
         get().setLoadingError(result.error ?? 'Failed to open project');
       }
       return result;
     } catch (e) {
       const error = parseLoadError(e);
-      if (get().loading.loadingId === loadingId) {
+      if (get().loading.clientOpId === clientOpId) {
         get().setLoadingError(error.message, error.details);
       }
       return { success: false, error: error.message, warnings: [] };
