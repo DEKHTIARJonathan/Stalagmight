@@ -118,9 +118,8 @@ Also add similar guard checks in:
 - [ ] layerAdded.current is reset in all code paths
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Created hasLiveStyle() helper in mapUtils.ts and updated GridOverlay cleanup effect to guard against map destruction during unmount race conditions, preventing TypeError crashes when clicking Back button.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: ae5acc48c325c7ca9d294bdf6c7ff903e07733a3
+- Tests: pnpm tsc --noEmit
 - PRs:
