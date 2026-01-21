@@ -39,6 +39,10 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent, currentIndex: number) => {
+    // Only handle keyboard events when the list item itself is focused,
+    // not when focus is on nested controls (like the delete button)
+    if (e.target !== e.currentTarget) return;
+
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault();
@@ -95,8 +99,10 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const handleContainerBlur = (e: React.FocusEvent<HTMLUListElement>) => {
     // CRITICAL: Only clear when focus leaves the listbox ENTIRELY
     // Using relatedTarget to check if new focus target is within container
-    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+    const next = e.relatedTarget;
+    if (!next || !(next instanceof Node) || !e.currentTarget.contains(next)) {
       setFocusedIndex(-1);
+      lastHoveredIdRef.current = null;
       setHoveredSectionId(null);
     }
   };
@@ -195,6 +201,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                   onMouseLeave={handleSectionMouseLeave}
                   onFocus={() => {
                     setFocusedIndex(index);
+                    lastHoveredIdRef.current = section.id;
                     setHoveredSectionId(section.id);
                   }}
                   onKeyDown={(e) => handleKeyDown(e, index)}
@@ -210,6 +217,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                     <button
                       onClick={(e) => handleDeleteSection(section.id, e)}
                       onMouseDown={handleDeleteMouseDown}
+                      tabIndex={-1}
                       className="text-text-secondary hover:text-error opacity-0 group-hover:opacity-100"
                       title="Delete section"
                     >
