@@ -71,7 +71,7 @@ test.describe('Depth Gradient', () => {
 ```
 
 ## Mock Data
-Update `e2e-playwright/mocks/tauri-ipc.ts` to include `showDepthGradient: 'true'` in display settings mock.
+Update `e2e-playwright/mocks/tauri-ipc.ts` to include `showDepthGradient` in display settings mock with default `'false'` (so toggle-enable tests can verify the state changes from off to on).
 
 ## Test IDs to Add
 - `data-testid="depth-legend"` on DepthLegend component

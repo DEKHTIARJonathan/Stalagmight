@@ -83,6 +83,24 @@ test.describe('Depth Gradient', () => {
     });
     expect(depthGradientBefore).toBe(false);
 
+    // Wait for station features to be rendered before capturing colors
+    await expect.poll(async () => {
+      const count = await page.evaluate(() => {
+        const map = (window as unknown as {
+          __cavechef_map__?: {
+            queryRenderedFeatures: (opts: { layers: string[] }) => Array<unknown>;
+          };
+        }).__cavechef_map__;
+        if (!map) return 0;
+        try {
+          return map.queryRenderedFeatures({ layers: ['survey-stations'] }).length;
+        } catch {
+          return 0;
+        }
+      });
+      return count;
+    }, { timeout: 5000 }).toBeGreaterThan(0);
+
     // Get station colors BEFORE enabling depth gradient
     const colorsBefore = await page.evaluate(() => {
       const map = (window as unknown as {
@@ -101,6 +119,9 @@ test.describe('Depth Gradient', () => {
       }
     });
 
+    // Ensure we have features to compare
+    expect(colorsBefore.length).toBeGreaterThan(0);
+
     // Toggle depth gradient ON
     await toggleDisplayOption(page, 'showDepthGradient');
 
@@ -118,34 +139,31 @@ test.describe('Depth Gradient', () => {
     await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
 
     // Poll for station colors to change after enabling depth gradient
-    // Use expect.poll instead of fixed timeout
-    // Wait for features to be available AND colors to change
-    if (colorsBefore.length > 0) {
-      await expect.poll(async () => {
-        const colorsAfter = await page.evaluate(() => {
-          const map = (window as unknown as {
-            __cavechef_map__?: {
-              queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
-                properties: { color?: string };
-              }>;
-            };
-          }).__cavechef_map__;
-          if (!map) return [];
-          try {
-            const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-            return features.slice(0, 5).map((f) => f.properties?.color ?? 'none');
-          } catch {
-            return [];
-          }
-        });
+    // Features are guaranteed to exist from the check above
+    await expect.poll(async () => {
+      const colorsAfter = await page.evaluate(() => {
+        const map = (window as unknown as {
+          __cavechef_map__?: {
+            queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
+              properties: { color?: string };
+            }>;
+          };
+        }).__cavechef_map__;
+        if (!map) return [];
+        try {
+          const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
+          return features.slice(0, 5).map((f) => f.properties?.color ?? 'none');
+        } catch {
+          return [];
+        }
+      });
 
-        // Keep polling if features not yet available (map still loading)
-        if (colorsAfter.length === 0) return 'waiting';
-        // Check if colors changed from before
-        const colorsChanged = !colorsBefore.every((c, i) => c === colorsAfter[i]);
-        return colorsChanged ? 'changed' : 'waiting';
-      }, { timeout: 3000 }).toBe('changed');
-    }
+      // Keep polling if features not yet available (map still loading)
+      if (colorsAfter.length === 0) return 'waiting';
+      // Check if colors changed from before
+      const colorsChanged = !colorsBefore.every((c, i) => c === colorsAfter[i]);
+      return colorsChanged ? 'changed' : 'waiting';
+    }, { timeout: 3000 }).toBe('changed');
   });
 
   test('toggle shows depth legend when enabled', async ({ page }) => {
