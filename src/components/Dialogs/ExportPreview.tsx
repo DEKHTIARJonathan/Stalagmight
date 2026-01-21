@@ -54,16 +54,101 @@ function rgbToHex(r: number, g: number, b: number): string {
 }
 
 /**
- * Interpolate between two hex colors.
+ * Convert RGB to HSL color space.
+ * Returns [hue: 0-360, saturation: 0-1, lightness: 0-1]
  */
-function interpolateRgb(color1: string, color2: string, t: number): string {
-  const c1 = hexToRgb(color1);
-  const c2 = hexToRgb(color2);
-  return rgbToHex(
-    c1.r + (c2.r - c1.r) * t,
-    c1.g + (c2.g - c1.g) * t,
-    c1.b + (c2.b - c1.b) * t
-  );
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+  const rNorm = r / 255;
+  const gNorm = g / 255;
+  const bNorm = b / 255;
+
+  const max = Math.max(rNorm, gNorm, bNorm);
+  const min = Math.min(rNorm, gNorm, bNorm);
+  const l = (max + min) / 2;
+
+  if (Math.abs(max - min) < Number.EPSILON) {
+    // Achromatic (gray)
+    return [0, 0, l];
+  }
+
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+
+  let h: number;
+  if (Math.abs(max - rNorm) < Number.EPSILON) {
+    h = (gNorm - bNorm) / d;
+    if (gNorm < bNorm) h += 6;
+    h /= 6;
+  } else if (Math.abs(max - gNorm) < Number.EPSILON) {
+    h = ((bNorm - rNorm) / d + 2) / 6;
+  } else {
+    h = ((rNorm - gNorm) / d + 4) / 6;
+  }
+
+  return [h * 360, s, l];
+}
+
+/**
+ * Helper for HSL to RGB conversion.
+ */
+function hueToRgb(p: number, q: number, t: number): number {
+  let tNorm = t;
+  if (tNorm < 0) tNorm += 1;
+  if (tNorm > 1) tNorm -= 1;
+
+  if (tNorm < 1 / 6) return p + (q - p) * 6 * tNorm;
+  if (tNorm < 1 / 2) return q;
+  if (tNorm < 2 / 3) return p + (q - p) * (2 / 3 - tNorm) * 6;
+  return p;
+}
+
+/**
+ * Convert HSL to RGB color space.
+ */
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  if (Math.abs(s) < Number.EPSILON) {
+    // Achromatic (gray)
+    const v = Math.round(l * 255);
+    return [v, v, v];
+  }
+
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const hNorm = h / 360;
+
+  return [
+    Math.round(hueToRgb(p, q, hNorm + 1 / 3) * 255),
+    Math.round(hueToRgb(p, q, hNorm) * 255),
+    Math.round(hueToRgb(p, q, hNorm - 1 / 3) * 255),
+  ];
+}
+
+/**
+ * Interpolate between two hex colors using HSL with shortest hue path.
+ * Matches Rust backend's interpolate_hsl implementation.
+ */
+function interpolateHsl(color1: string, color2: string, t: number): string {
+  const rgb1 = hexToRgb(color1);
+  const rgb2 = hexToRgb(color2);
+
+  const [h1, s1, l1] = rgbToHsl(rgb1.r, rgb1.g, rgb1.b);
+  const [h2, s2, l2] = rgbToHsl(rgb2.r, rgb2.g, rgb2.b);
+
+  // Shortest hue path interpolation
+  let dh = h2 - h1;
+  if (dh > 180) {
+    dh -= 360;
+  } else if (dh < -180) {
+    dh += 360;
+  }
+
+  // Use modulo to keep hue in valid range
+  const h = ((h1 + dh * t) % 360 + 360) % 360;
+  const s = s1 + (s2 - s1) * t;
+  const l = l1 + (l2 - l1) * t;
+
+  const [r, g, b] = hslToRgb(h, s, l);
+  return rgbToHex(r, g, b);
 }
 
 /**
@@ -97,7 +182,7 @@ function interpolateStops(t: number, stops: ColorStop[]): string {
         return currentStop.color;
       }
       const localT = (clampedT - currentStop.position) / denominator;
-      return interpolateRgb(currentStop.color, nextStop.color, localT);
+      return interpolateHsl(currentStop.color, nextStop.color, localT);
     }
   }
 
