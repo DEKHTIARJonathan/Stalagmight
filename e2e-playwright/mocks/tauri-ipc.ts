@@ -222,6 +222,167 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, project: currentProject };
           }
 
+          case 'create_project_full': {
+            // Consolidated create_project_full command for loading progress feature
+            const name = (args?.name as string) ?? 'Untitled Project';
+            const now = new Date().toISOString();
+            sectionCounter = 0;
+
+            // Pre-populate with sections for testing (provides mock stations)
+            const defaultSections = [
+              {
+                id: ++sectionCounter,
+                name: 'Mock Tunnel A',
+                surveyor: 'Test Surveyor',
+                date: now.split('T')[0],
+                color: '#4ECDC4',
+                shots: [
+                  { id: 1, azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: 0, depth_out: -2, is_virtual: false },
+                  { id: 2, azimuth_in: 90, azimuth_out: 270, length: 15, depth_in: -2, depth_out: -5, is_virtual: false },
+                  { id: 3, azimuth_in: 120, azimuth_out: 300, length: 8, depth_in: -5, depth_out: -3, is_virtual: true },
+                ],
+              },
+              {
+                id: ++sectionCounter,
+                name: 'Mock Tunnel B',
+                surveyor: 'Test Surveyor',
+                date: now.split('T')[0],
+                color: '#FF6B6B',
+                shots: [
+                  { id: 1, azimuth_in: 180, azimuth_out: 0, length: 12, depth_in: -5, depth_out: -8, is_virtual: false },
+                  { id: 2, azimuth_in: 210, azimuth_out: 30, length: 9, depth_in: -8, depth_out: -6, is_virtual: false },
+                ],
+              },
+              {
+                id: ++sectionCounter,
+                name: 'Empty Section',
+                surveyor: 'Test Surveyor',
+                date: now.split('T')[0],
+                color: '#9B59B6',
+                shots: [],
+              },
+            ];
+
+            currentProject = {
+              id: 1,
+              name,
+              location: null,
+              created_at: now,
+              modified_at: now,
+              file_path: null,
+              sections: defaultSections,
+              station_merges: [],
+              zero_datums: [],
+              loop_closures: [],
+              section_offsets: {},
+            };
+
+            // Return CreateProjectFullResult format
+            return {
+              loadingId: Date.now(),
+              project: currentProject,
+              displaySettings: {
+                showStations: true,
+                showSectionNames: true,
+                showStationLabels: false,
+                showShotData: false,
+                showVirtualShots: true,
+                showZeroDatum: true,
+                showGrid: false,
+                showScaleBar: true,
+                showSatellite: false,
+                showDepthGradient: false,
+                gridSpacing: 10,
+              },
+            };
+          }
+
+          case 'load_project_full': {
+            // Consolidated load_project_full command for loading progress feature
+            projectPath = (args?.path as string) ?? null;
+            const now = new Date().toISOString();
+            sectionCounter = 0;
+
+            // Create a project with sections for testing
+            const defaultSections = [
+              {
+                id: ++sectionCounter,
+                name: 'Mock Tunnel A',
+                surveyor: 'Test Surveyor',
+                date: now.split('T')[0],
+                color: '#4ECDC4',
+                shots: [
+                  { id: 1, azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: 0, depth_out: -2, is_virtual: false },
+                  { id: 2, azimuth_in: 90, azimuth_out: 270, length: 15, depth_in: -2, depth_out: -5, is_virtual: false },
+                ],
+              },
+            ];
+
+            currentProject = {
+              id: 1,
+              name: 'Test Project',
+              location: null,
+              created_at: now,
+              modified_at: now,
+              file_path: projectPath,
+              sections: defaultSections,
+              station_merges: [],
+              zero_datums: [],
+              loop_closures: [],
+              section_offsets: {},
+            };
+
+            // Generate mock stations from sections
+            const mockStations: Array<{
+              station_ref: { section_id: number; station_index: number };
+              coordinates: { x: number; y: number; z: number };
+              is_zero_datum: boolean;
+              gps_coordinates: null;
+              merged_with: never[];
+            }> = [];
+
+            for (const section of currentProject.sections as Array<{ id: number; shots: unknown[] }>) {
+              const shotCount = section.shots?.length ?? 0;
+              for (let i = 0; i <= shotCount; i++) {
+                mockStations.push({
+                  station_ref: { section_id: section.id, station_index: i },
+                  coordinates: { x: i * 10, y: 0, z: 0 },
+                  is_zero_datum: i === 0,
+                  gps_coordinates: null,
+                  merged_with: [],
+                });
+              }
+            }
+
+            // Return LoadProjectFullResult format
+            return {
+              loadingId: Date.now(),
+              project: currentProject,
+              stations: mockStations,
+              stats: {
+                section_count: currentProject.sections.length,
+                shot_count: mockStations.length > 0 ? mockStations.length - 1 : 0,
+                total_length: 25,
+                min_depth: -5,
+                max_depth: 0,
+              },
+              warnings: [],
+              displaySettings: {
+                showStations: true,
+                showSectionNames: true,
+                showStationLabels: false,
+                showShotData: false,
+                showVirtualShots: true,
+                showZeroDatum: true,
+                showGrid: false,
+                showScaleBar: true,
+                showSatellite: false,
+                showDepthGradient: false,
+                gridSpacing: 10,
+              },
+            };
+          }
+
           case 'load_project':
           case 'open_project': {
             projectPath = (args?.path as string) ?? null;
@@ -256,6 +417,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             currentProject = null;
             projectPath = null;
             return { success: true };
+          }
+
+          case 'cancel_loading': {
+            // Idempotent - does nothing but shouldn't error
+            return undefined;
           }
 
           case 'get_project':

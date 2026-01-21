@@ -12,8 +12,7 @@ import type { ProjectMetadata } from '../../types/project';
  */
 export default function MergeProjectsDialog() {
   const { closeDialog, dialogData } = useUIStore();
-  const { mergeProjects, openProject } = useProjectStore();
-  const { setView } = useUIStore();
+  const { mergeProjects, loadProject } = useProjectStore();
 
   const selectedProjects = dialogData.selectedProjects as ProjectMetadata[] | undefined;
 
@@ -96,11 +95,9 @@ export default function MergeProjectsDialog() {
       if (result.success) {
         closeDialog();
         // Open the merged project if requested
+        // loadProject handles view switching internally
         if (openAfterMerge) {
-          const openResult = await openProject(outputPath);
-          if (openResult.success) {
-            setView('single');
-          }
+          await loadProject(outputPath);
         }
       } else {
         setError(result.error ?? 'Failed to merge projects');
@@ -110,7 +107,7 @@ export default function MergeProjectsDialog() {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedProjects, outputName, archiveOriginals, openAfterMerge, mergeProjects, closeDialog, openProject, setView]);
+  }, [selectedProjects, outputName, archiveOriginals, openAfterMerge, mergeProjects, closeDialog, loadProject]);
 
   if (!selectedProjects || selectedProjects.length < 2) {
     return null;

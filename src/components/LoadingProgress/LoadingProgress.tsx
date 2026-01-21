@@ -7,10 +7,11 @@ export interface LoadingProgressProps {
   phaseCurrent?: number;            // e.g., 23
   phaseTotal?: number;              // e.g., 50
   overallProgress: number;          // 0-100
-  onCancel?: () => void;            // Cancel handler
+  onCancel?: () => void;            // Cancel handler (also used for dismiss on error)
+  onRetry?: () => void;             // Retry handler (shown on error)
   error?: {
     message: string;
-    details?: string;
+    details?: string | undefined;
   };
 }
 
@@ -28,6 +29,7 @@ export function LoadingProgress({
   phaseTotal,
   overallProgress,
   onCancel,
+  onRetry,
   error,
 }: LoadingProgressProps) {
   const [detailsExpanded, setDetailsExpanded] = React.useState(false);
@@ -136,6 +138,27 @@ export function LoadingProgress({
               )}
             </>
           )}
+          {/* Error Action Buttons */}
+          <div className="mt-3 flex gap-2">
+            {onRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="px-3 py-1 text-sm bg-accent text-white rounded hover:bg-accent/90 transition-colors"
+              >
+                Retry
+              </button>
+            )}
+            {onCancel && (
+              <button
+                type="button"
+                onClick={onCancel}
+                className="px-3 py-1 text-sm text-text-secondary hover:text-text-primary transition-colors"
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

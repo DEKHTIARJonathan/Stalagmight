@@ -30,19 +30,14 @@ export function useProject() {
     }
 
     if (path) {
-      console.log('[useProject] Opening project:', path);
-      const result = await store.openProject(path);
-      console.log('[useProject] Open result:', result);
-      if (result.success) {
-        setView('single');
-      } else if (result.error) {
-        // Show error to user via dialog
-        openDialog('error', { message: result.error });
-      }
+      console.log('[useProject] Opening project via loadProject:', path);
+      // loadProject handles view switching and error display internally via LoadingProgress
+      const result = await store.loadProject(path);
+      console.log('[useProject] loadProject result:', result);
       return result;
     }
     return null;
-  }, [store, setView, openDialog]);
+  }, [store]);
 
   const handleSaveProjectAs = useCallback(async () => {
     const selected = await save({
