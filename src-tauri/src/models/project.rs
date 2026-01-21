@@ -583,9 +583,28 @@ impl Project {
 
     // === Coordinate computation ===
 
-    /// Compute all station coordinates from shots
+    /// Compute all station coordinates from shots.
+    /// Backward-compat wrapper that calls `compute_station_coordinates_with_progress(None)`.
     pub fn compute_station_coordinates(&self) -> Vec<Station> {
+        self.compute_station_coordinates_with_progress(None)
+    }
+
+    /// Compute all station coordinates from shots with optional progress callback.
+    ///
+    /// The callback receives (current, total) station counts for progress reporting.
+    /// Total stations = shots + 1 per section (first station).
+    pub fn compute_station_coordinates_with_progress(
+        &self,
+        mut on_progress: Option<&mut dyn FnMut(u32, u32)>,
+    ) -> Vec<Station> {
+        // Calculate total stations first for progress reporting
+        let total_stations: u32 = self.sections
+            .iter()
+            .map(|s| s.shots.len() as u32 + 1)
+            .sum();
+
         let mut stations: Vec<Station> = Vec::new();
+        let mut station_count = 0u32;
 
         for section in &self.sections {
             // Get section offset (from merges)
@@ -595,6 +614,12 @@ impl Project {
             // First station of section
             let first_station_ref = StationRef::new(section.id, 0);
             stations.push(Station::with_coordinates(first_station_ref, current_coords));
+            station_count += 1;
+
+            // Report progress for first station
+            if let Some(ref mut cb) = on_progress {
+                cb(station_count, total_stations);
+            }
 
             // Compute subsequent stations from shots
             for (i, shot) in section.shots.iter().enumerate() {
@@ -614,6 +639,12 @@ impl Project {
 
                 let station_ref = StationRef::new(section.id, (i + 1) as u32);
                 stations.push(Station::with_coordinates(station_ref, current_coords));
+                station_count += 1;
+
+                // Report progress after each station
+                if let Some(ref mut cb) = on_progress {
+                    cb(station_count, total_stations);
+                }
             }
         }
 

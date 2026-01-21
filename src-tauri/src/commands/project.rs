@@ -1,7 +1,8 @@
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::core::{AppState, Command, CommandResult};
+use crate::core::loading::{LoadError, LoadProjectFullResult};
 use crate::models::{Project, ProjectMetadata, ProjectStats, Station};
 
 /// Create a new project
@@ -86,4 +87,40 @@ pub struct ProjectState {
     pub project: Project,
     pub stations: Vec<Station>,
     pub stats: ProjectStats,
+}
+
+/// Load project with full progress reporting.
+/// Uses spawn_blocking for UI responsiveness during computation phases.
+///
+/// Returns LoadProjectFullResult containing project, stations, stats, warnings, and display settings.
+/// Emits "loading-progress" events during load for progress UI.
+#[tauri::command]
+pub async fn load_project_full(
+    app_handle: tauri::AppHandle,
+    path: PathBuf,
+) -> Result<LoadProjectFullResult, String> {
+    // Use tauri's spawn_blocking - matches existing codebase pattern
+    // Access state inside the blocking closure via app_handle
+    let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
+        tauri::async_runtime::spawn_blocking(move || {
+            let state = app_handle.state::<AppState>();
+            state.do_load_project_full(path)
+        })
+        .await;
+
+    match result {
+        Ok(Ok(load_result)) => Ok(load_result),
+        Ok(Err(load_error)) => Err(load_error.to_string()),
+        Err(join_error) => {
+            // Task panicked or was cancelled
+            Err(LoadError::internal(join_error.to_string()).to_string())
+        }
+    }
+}
+
+/// Cancel any active loading operation.
+/// Idempotent - safe to call anytime, even when no load is active.
+#[tauri::command]
+pub fn cancel_loading(state: State<AppState>) {
+    state.cancel_loading();
 }

@@ -487,6 +487,29 @@ impl ProgressEmitter {
 }
 
 // ============================================================================
+// LoadProjectFullResult
+// ============================================================================
+
+/// Result of a successful load_project_full operation.
+/// Contains all data needed to initialize the frontend state.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadProjectFullResult {
+    /// Unique ID for this load operation (for filtering stale events)
+    pub loading_id: u64,
+    /// The loaded project
+    pub project: crate::models::Project,
+    /// Computed station coordinates
+    pub stations: Vec<crate::models::Station>,
+    /// Project statistics
+    pub stats: crate::models::ProjectStats,
+    /// Project warnings (validation results)
+    pub warnings: Vec<crate::models::ProjectWarning>,
+    /// Display settings from the project database
+    pub display_settings: DisplaySettings,
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -591,6 +614,38 @@ mod tests {
         assert!(!settings.show_stations);
         assert!(settings.show_grid);
         assert!((settings.grid_spacing - 5.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_display_settings_from_stored_all_11_fields() {
+        // Verify ALL 11 fields are mapped correctly from stored HashMap
+        let mut stored = HashMap::new();
+        stored.insert("showStations".to_string(), "false".to_string());
+        stored.insert("showSectionNames".to_string(), "false".to_string());
+        stored.insert("showStationLabels".to_string(), "true".to_string());
+        stored.insert("showShotData".to_string(), "true".to_string());
+        stored.insert("showVirtualShots".to_string(), "false".to_string());
+        stored.insert("showZeroDatum".to_string(), "false".to_string());
+        stored.insert("showGrid".to_string(), "true".to_string());
+        stored.insert("showScaleBar".to_string(), "false".to_string());
+        stored.insert("showSatellite".to_string(), "true".to_string());
+        stored.insert("showDepthGradient".to_string(), "true".to_string());
+        stored.insert("gridSpacing".to_string(), "25.5".to_string());
+
+        let settings = DisplaySettings::from_stored(&stored);
+
+        // Verify all 11 fields - each should be the opposite of the default
+        assert!(!settings.show_stations, "showStations should be false");
+        assert!(!settings.show_section_names, "showSectionNames should be false");
+        assert!(settings.show_station_labels, "showStationLabels should be true");
+        assert!(settings.show_shot_data, "showShotData should be true");
+        assert!(!settings.show_virtual_shots, "showVirtualShots should be false");
+        assert!(!settings.show_zero_datum, "showZeroDatum should be false");
+        assert!(settings.show_grid, "showGrid should be true");
+        assert!(!settings.show_scale_bar, "showScaleBar should be false");
+        assert!(settings.show_satellite, "showSatellite should be true");
+        assert!(settings.show_depth_gradient, "showDepthGradient should be true");
+        assert!((settings.grid_spacing - 25.5).abs() < 0.001, "gridSpacing should be 25.5");
     }
 
     #[test]

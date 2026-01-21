@@ -1,17 +1,20 @@
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use tauri::AppHandle;
 
 use crate::cache::TileCache;
 use crate::config::Config;
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, Project, ProjectMetadata, Section, SectionData,
-    SectionId, SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, StationRef,
+    ClosureStrategy, Coordinates, GpsCoordinates, Project, ProjectMetadata, ProjectWarning,
+    Section, SectionData, SectionId, SectionUpdates, Shot, ShotData, ShotId, ShotUpdates,
+    StationRef,
 };
 use crate::persistence::Database;
 
-use super::{Command, CommandResult, UndoData, UndoStack, Validator};
+use super::{Command, CommandResult, UndoData, UndoStack, Validator, WarningSeverity};
 
 /// Application state managed by Tauri
 pub struct AppState {
@@ -37,6 +40,10 @@ pub struct AppState {
     /// Note: Changes to CacheConfig at runtime (via update_config) do NOT re-initialize
     /// this cache. Users must restart the app for cache config changes to take effect.
     tile_cache: Arc<Mutex<Option<TileCache>>>,
+    /// Tauri app handle for emitting events (set during app setup)
+    app_handle: Mutex<Option<AppHandle>>,
+    /// Active loading cancellation token (if any load operation is in progress)
+    active_loading: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 impl AppState {
@@ -72,6 +79,8 @@ impl AppState {
             recent_projects: Mutex::new(recent),
             display_settings_cache: Mutex::new(HashMap::new()),
             tile_cache: Arc::new(Mutex::new(tile_cache)),
+            app_handle: Mutex::new(None),
+            active_loading: Mutex::new(None),
         })
     }
 
@@ -86,6 +95,121 @@ impl AppState {
     /// Get a clone of the tile cache Arc for sharing across threads
     pub fn tile_cache(&self) -> Arc<Mutex<Option<TileCache>>> {
         Arc::clone(&self.tile_cache)
+    }
+
+    /// Set the app handle (called during app setup)
+    pub fn set_app_handle(&self, handle: AppHandle) {
+        if let Ok(mut h) = self.app_handle.lock() {
+            *h = Some(handle);
+        }
+    }
+
+    /// Get the app handle
+    pub fn get_app_handle(&self) -> Option<AppHandle> {
+        self.app_handle.lock().ok().and_then(|h| h.clone())
+    }
+
+    /// Start a new loading operation, cancelling any existing one.
+    /// Returns the cancellation token for the new operation.
+    pub fn start_new_load(&self) -> Arc<AtomicBool> {
+        let mut guard = self.active_loading.lock().unwrap();
+
+        // Cancel any existing load
+        if let Some(old_token) = guard.take() {
+            old_token.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        // Create new token
+        let token = Arc::new(AtomicBool::new(false));
+        *guard = Some(Arc::clone(&token));
+        token
+    }
+
+    /// Clear the active loading token (called when load completes or fails)
+    pub fn clear_active_load(&self) {
+        if let Ok(mut guard) = self.active_loading.lock() {
+            *guard = None;
+        }
+    }
+
+    /// Cancel any active loading operation (idempotent - safe to call anytime)
+    pub fn cancel_loading(&self) {
+        if let Ok(guard) = self.active_loading.lock() {
+            if let Some(token) = guard.as_ref() {
+                token.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        // No error if no active load - cancel_loading is idempotent
+    }
+
+    /// Compute project warnings from the given project.
+    /// Used by both get_project_warnings command and load_project_full for validation phase.
+    /// Needs &self for access to config and DB (resolved warnings).
+    pub fn compute_project_warnings(&self, project: &Project) -> Vec<ProjectWarning> {
+        // Load resolved warnings from database
+        let resolved_set: HashSet<String> = self
+            .load_resolved_warnings()
+            .unwrap_or_default()
+            .iter()
+            .map(|r| format!("{}:{}:{}", r.section_id, r.shot_id, r.warning_code))
+            .collect();
+
+        let config = self.get_config();
+        let mut all_warnings = Vec::new();
+
+        for section in &project.sections {
+            for (shot_index, shot) in section.shots.iter().enumerate() {
+                // Convert Shot to ShotData for validation
+                let shot_data = ShotData {
+                    azimuth_in: shot.azimuth_in,
+                    azimuth_out: shot.azimuth_out,
+                    length: shot.length,
+                    depth_in: shot.depth_in,
+                    depth_out: shot.depth_out,
+                    pitch_in: shot.pitch_in,
+                    pitch_out: shot.pitch_out,
+                    left: shot.left,
+                    right: shot.right,
+                    up: shot.up,
+                    down: shot.down,
+                    comment: shot.comment.clone(),
+                    is_virtual: shot.is_virtual,
+                    marker_index: shot.marker_index,
+                    temperature: shot.temperature,
+                };
+
+                let warnings = Validator::validate_shot(&shot_data, &config.validation, shot_index);
+                for warning in warnings {
+                    let key = format!("{}:{}:{}", section.id, shot.id, warning.code);
+                    let is_resolved = resolved_set.contains(&key);
+                    all_warnings.push(ProjectWarning {
+                        section_id: section.id,
+                        shot_id: shot.id,
+                        shot_index,
+                        code: warning.code,
+                        message: warning.message,
+                        severity: warning.severity,
+                        is_resolved,
+                    });
+                }
+            }
+        }
+
+        // Sort by resolved (unresolved first), then severity (errors first), then by section and shot
+        all_warnings.sort_by(|a, b| {
+            let resolved_order = |r: bool| if r { 1 } else { 0 };
+            let severity_order = |s: &WarningSeverity| match s {
+                WarningSeverity::Error => 0,
+                WarningSeverity::Warning => 1,
+            };
+            resolved_order(a.is_resolved)
+                .cmp(&resolved_order(b.is_resolved))
+                .then_with(|| severity_order(&a.severity).cmp(&severity_order(&b.severity)))
+                .then_with(|| a.section_id.cmp(&b.section_id))
+                .then_with(|| a.shot_index.cmp(&b.shot_index))
+        });
+
+        all_warnings
     }
 
     /// Execute a command and return the result
@@ -2042,6 +2166,207 @@ impl AppState {
         } else {
             CommandResult::failure("No project open".to_string())
         }
+    }
+
+    // === Consolidated Load Operations ===
+
+    /// Load a project with full progress reporting.
+    /// This is the main implementation used by load_project_full command.
+    ///
+    /// All computation happens locally, then state is mutated atomically at the end.
+    /// Each mutation is guarded by a cancel check for clean abort on cancellation.
+    pub fn do_load_project_full(
+        &self,
+        path: PathBuf,
+    ) -> Result<super::loading::LoadProjectFullResult, super::loading::LoadError> {
+        use super::loading::{DisplaySettings, LoadError, LoadProjectFullResult, LoadingPhase, ProgressEmitter};
+
+        let handle = self.get_app_handle()
+            .ok_or_else(|| LoadError::internal("AppHandle not initialized"))?;
+
+        // Start new load - cancels any existing load
+        let cancel_token = self.start_new_load();
+        let mut progress = ProgressEmitter::new_for_open(handle, cancel_token);
+
+        // === PHASE 0: Opening database (5%) ===
+        progress.start_phase(LoadingPhase::OpeningDatabase);
+        if !path.exists() {
+            self.clear_active_load();
+            return Err(LoadError::not_found(&path.display().to_string()));
+        }
+        // Local variable only - NO state mutation until Finalizing
+        let db = match Database::open_existing(&path) {
+            Ok(db) => db,
+            Err(e) => {
+                self.clear_active_load();
+                return Err(LoadError::new("DATABASE", e.to_string()));
+            }
+        };
+        if progress.is_cancelled() {
+            self.clear_active_load();
+            return Err(LoadError::cancelled());
+        }
+        progress.complete_phase(LoadingPhase::OpeningDatabase);
+
+        // === PHASE 1: Loading project data (20%) ===
+        progress.start_phase(LoadingPhase::LoadingProjectData);
+        let mut project = match db.load_project() {
+            Ok(p) => p,
+            Err(e) => {
+                self.clear_active_load();
+                return Err(LoadError::new("DATABASE", e.to_string()));
+            }
+        };
+        project.file_path = Some(path.clone());
+        progress.update_phase(LoadingPhase::LoadingProjectData, 1, 1);
+        if progress.is_cancelled() {
+            self.clear_active_load();
+            return Err(LoadError::cancelled());
+        }
+        progress.complete_phase(LoadingPhase::LoadingProjectData);
+
+        // === PHASE 2: Loading sections (15%) ===
+        progress.start_phase(LoadingPhase::LoadingSections);
+        let total_sections = project.sections.len() as u32;
+        for (i, _section) in project.sections.iter().enumerate() {
+            if progress.is_cancelled() {
+                self.clear_active_load();
+                return Err(LoadError::cancelled());
+            }
+            progress.update_phase(LoadingPhase::LoadingSections, i as u32 + 1, total_sections);
+        }
+        progress.complete_phase(LoadingPhase::LoadingSections);
+
+        // === PHASE 3: Computing stations (20%) ===
+        progress.start_phase(LoadingPhase::ComputingStations);
+        let stations = project.compute_station_coordinates_with_progress(Some(&mut |current, total| {
+            if !progress.is_cancelled() {
+                progress.update_phase(LoadingPhase::ComputingStations, current, total);
+            }
+        }));
+        if progress.is_cancelled() {
+            self.clear_active_load();
+            return Err(LoadError::cancelled());
+        }
+        progress.complete_phase(LoadingPhase::ComputingStations);
+
+        // === PHASE 4: Computing statistics (15%) - INDETERMINATE ===
+        progress.start_phase(LoadingPhase::ComputingStatistics);
+        // Stats computation is coarse-grained, emit indeterminate
+        progress.heartbeat(LoadingPhase::ComputingStatistics);
+        let mut stats = project.stats();
+        // Calculate penetration distance with computed stations
+        stats.penetration_distance = project.calculate_penetration(&stations);
+        if progress.is_cancelled() {
+            self.clear_active_load();
+            return Err(LoadError::cancelled());
+        }
+        progress.complete_phase(LoadingPhase::ComputingStatistics);
+
+        // === PHASE 5: Validating data (10%) ===
+        // NOTE: We cannot validate with resolved warnings yet because db is not stored in self.
+        // Instead, we compute warnings after storing the db in Finalizing.
+        // For now, just emit progress and defer actual validation to after state mutation.
+        progress.start_phase(LoadingPhase::ValidatingData);
+        progress.heartbeat(LoadingPhase::ValidatingData);
+        if progress.is_cancelled() {
+            self.clear_active_load();
+            return Err(LoadError::cancelled());
+        }
+        progress.complete_phase(LoadingPhase::ValidatingData);
+
+        // === PHASE 6: Loading settings (5%) ===
+        progress.start_phase(LoadingPhase::LoadingSettings);
+        let stored_settings = db.load_display_settings().unwrap_or_default();
+        let display_settings = DisplaySettings::from_stored(&stored_settings);
+        if progress.is_cancelled() {
+            self.clear_active_load();
+            return Err(LoadError::cancelled());
+        }
+        progress.complete_phase(LoadingPhase::LoadingSettings);
+
+        // === PHASE 7: Finalizing (10%) - ALL STATE MUTATIONS GUARDED ===
+        progress.start_phase(LoadingPhase::Finalizing);
+
+        // Load undo stack from database BEFORE storing db
+        let loaded_undo = db.load_undo_stack().unwrap_or_default();
+        let undo_entries: Vec<_> = loaded_undo
+            .into_iter()
+            .map(|(_, cmd, undo)| (cmd, undo))
+            .collect();
+
+        // Guard 1: Project state mutation
+        if progress.is_cancelled() {
+            self.clear_active_load();
+            return Err(LoadError::cancelled());
+        }
+        *self.project.lock().unwrap() = Some(project.clone());
+
+        // Guard 2: Database handle mutation
+        if progress.is_cancelled() {
+            self.clear_active_load();
+            return Err(LoadError::cancelled());
+        }
+        *self.database.lock().unwrap() = Some(db);
+
+        // Guard 3: Display settings cache clear
+        if progress.is_cancelled() {
+            self.clear_active_load();
+            return Err(LoadError::cancelled());
+        }
+        self.clear_display_settings_cache();
+
+        // Guard 4: Undo stack restore
+        if progress.is_cancelled() {
+            self.clear_active_load();
+            return Err(LoadError::cancelled());
+        }
+        if let Ok(mut undo_stack) = self.undo_stack.lock() {
+            if undo_entries.is_empty() {
+                undo_stack.clear();
+            } else {
+                undo_stack.load_from_persisted(undo_entries);
+                tracing::info!(count = undo_stack.len(), "Restored undo stack from database");
+            }
+        }
+
+        // Guard 5: Recent projects update
+        if progress.is_cancelled() {
+            self.clear_active_load();
+            return Err(LoadError::cancelled());
+        }
+        if let Ok(mut recent) = self.recent_projects.lock() {
+            recent.retain(|p| p != &path);
+            recent.insert(0, path.clone());
+            if let Ok(mut config) = self.config.lock() {
+                recent.truncate(config.general.recent_projects_max);
+                config.general.recent_projects = recent.clone();
+                if let Err(e) = config.save() {
+                    tracing::warn!("Failed to save config with recent projects: {}", e);
+                }
+            }
+        }
+
+        progress.complete_phase(LoadingPhase::Finalizing);
+
+        // Clear active load AFTER all mutations complete
+        self.clear_active_load();
+
+        // Now we can compute warnings with access to the stored database
+        let warnings = self.compute_project_warnings(&project);
+
+        let loading_id = progress.loading_id();
+
+        tracing::info!(path = ?path, "Project loaded via load_project_full");
+
+        Ok(LoadProjectFullResult {
+            loading_id,
+            project,
+            stations,
+            stats,
+            warnings,
+            display_settings,
+        })
     }
 }
 
