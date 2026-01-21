@@ -449,6 +449,7 @@ pub fn run() {
             commands::export::export_csv,
             commands::export::export_json,
             commands::export::export_image,
+            commands::export::get_depth_preset_colors,
             // Config
             commands::config::get_config,
             commands::config::update_config,

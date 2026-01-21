@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use tauri::State;
 
 use crate::core::AppState;
-use crate::export::ExportImageOptions;
+use crate::export::{DepthPreset, DepthPresetColors, ExportImageOptions};
 
 /// Export project data to CSV
 #[tauri::command]
@@ -36,4 +36,10 @@ pub fn export_image(
         .ok_or_else(|| "No project open".to_string())?;
 
     crate::export::export_image(&project, &path, &options).map_err(|e| e.to_string())
+}
+
+/// Get depth color preset colors
+#[tauri::command]
+pub fn get_depth_preset_colors(preset: DepthPreset) -> DepthPresetColors {
+    crate::export::get_depth_preset_colors(preset)
 }
