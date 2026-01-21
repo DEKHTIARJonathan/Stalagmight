@@ -50,16 +50,31 @@ export default function ExportDialog() {
   const [presetColors, setPresetColors] = useState<DepthPresetColors | null>(null);
 
   // Fetch preset colors when depth mode is active and preset changes
+  // Uses active flag to prevent stale responses from setting state after unmount or dependency change
   useEffect(() => {
+    let active = true;
+
     if (imageOptions.color_mode === 'depth') {
       invoke<DepthPresetColors>('get_depth_preset_colors', {
         preset: imageOptions.depth_preset,
       })
-        .then(setPresetColors)
-        .catch((err) => console.error('Failed to fetch preset colors:', err));
+        .then((colors) => {
+          if (active) {
+            setPresetColors(colors);
+          }
+        })
+        .catch((err) => {
+          if (active) {
+            console.error('Failed to fetch preset colors:', err);
+          }
+        });
     } else {
       setPresetColors(null);
     }
+
+    return () => {
+      active = false;
+    };
   }, [imageOptions.color_mode, imageOptions.depth_preset]);
 
   const handleExport = async () => {
