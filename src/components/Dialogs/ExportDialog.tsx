@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { listen } from '@tauri-apps/api/event';
 import { save } from '@tauri-apps/plugin-dialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -50,39 +50,21 @@ export default function ExportDialog() {
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
 
-  // Listen for export progress events
+  // Track if component is mounted to prevent setState on unmounted component
+  const isMountedRef = useRef(true);
   useEffect(() => {
-    if (!isExporting) {
-      setExportProgress(null);
-      return;
-    }
-
-    let unlisten: UnlistenFn | null = null;
-    let disposed = false;
-
-    const setupListener = async () => {
-      const listener = await listen<ExportProgress>('export-progress', (event) => {
-        if (!disposed) {
-          setExportProgress(event.payload);
-        }
-      });
-
-      if (disposed) {
-        listener();
-      } else {
-        unlisten = listener;
-      }
-    };
-
-    setupListener();
-
+    isMountedRef.current = true;
     return () => {
-      disposed = true;
-      if (unlisten) {
-        unlisten();
-      }
+      isMountedRef.current = false;
     };
-  }, [isExporting]);
+  }, []);
+
+  // Guarded close handler - no-op while exporting to prevent closing mid-export
+  const handleClose = useCallback(() => {
+    if (!isExporting) {
+      closeDialog();
+    }
+  }, [isExporting, closeDialog]);
 
   // Fetch preset colors when depth mode is active and preset changes
   // Uses active flag to prevent stale responses from setting state after unmount or dependency change
@@ -146,7 +128,16 @@ export default function ExportDialog() {
         });
 
         if (selected) {
+          // Register listener BEFORE starting export to avoid race condition with early events
+          const unlisten = await listen<ExportProgress>('export-progress', (event) => {
+            if (isMountedRef.current) {
+              setExportProgress(event.payload);
+            }
+          });
+
           setIsExporting(true);
+          setExportProgress(null);
+
           try {
             // Override depth_unit and decimal_precision with current config values at export time
             // to ensure they reflect the latest config, even if config loaded after dialog opened
@@ -159,20 +150,30 @@ export default function ExportDialog() {
               decimal_precision: currentDecimalPrecision,
             });
           } finally {
-            setIsExporting(false);
+            // Clean up listener and reset state only if still mounted
+            unlisten();
+            if (isMountedRef.current) {
+              setIsExporting(false);
+              setExportProgress(null);
+            }
           }
         }
       }
 
-      closeDialog();
+      if (isMountedRef.current) {
+        closeDialog();
+      }
     } catch (e) {
       console.error('Export failed:', e);
-      setIsExporting(false);
+      if (isMountedRef.current) {
+        setIsExporting(false);
+        setExportProgress(null);
+      }
     }
   };
 
   return (
-    <DialogWrapper title="Export" onClose={closeDialog} size="lg" data-testid="export-dialog">
+    <DialogWrapper title="Export" onClose={handleClose} size="lg" data-testid="export-dialog">
       <div className="flex gap-6">
         {/* Left column: Options */}
         <div className="flex-1 space-y-4">
@@ -433,7 +434,7 @@ export default function ExportDialog() {
 
       {/* Actions */}
       <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-border">
-        <Button onClick={closeDialog} disabled={isExporting}>Cancel</Button>
+        <Button onClick={handleClose} disabled={isExporting}>Cancel</Button>
         <Button
           variant="primary"
           onClick={handleExport}
