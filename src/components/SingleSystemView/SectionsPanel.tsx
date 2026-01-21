@@ -7,7 +7,7 @@ interface SectionsPanelProps {
 }
 
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
-  const { selection, setSelection, clearSelection, hoveredSectionId, setHoveredSectionId, openDialog } = useUIStore();
+  const { selection, setSelection, clearSelection, hoveredSectionId, setHoveredSectionId, openDialog, triggerZoomToSection } = useUIStore();
 
   // Track the last hovered section ID set by this panel (for cleanup on unmount)
   const lastHoveredIdRef = useRef<SectionId | null>(null);
@@ -126,6 +126,22 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     e.stopPropagation();
   };
 
+  const handleSectionDoubleClick = (section: Section, e: React.MouseEvent) => {
+    // Only handle left mouse button
+    if (e.button !== 0) return;
+    // Don't trigger if double-clicking nested controls (like delete button)
+    if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('button')) return;
+    // Ensure selection happens (in case mouseDown was prevented)
+    handleSectionClick(section, e);
+    // Trigger zoom to section
+    triggerZoomToSection(section.id);
+  };
+
+  const handleDeleteDoubleClick = (e: React.MouseEvent) => {
+    // Stop propagation to prevent row zoom
+    e.stopPropagation();
+  };
+
   const handleAddSection = () => {
     openDialog('import');
   };
@@ -200,6 +216,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                     isSelected || hoveredSectionId === section.id ? 'bg-accent/20' : 'hover:bg-accent/20'
                   }`}
                   onMouseDown={(e) => handleSectionClick(section, e)}
+                  onDoubleClick={(e) => handleSectionDoubleClick(section, e)}
                   onContextMenu={(e) => handleSectionContextMenu(e, section.id)}
                   onMouseEnter={() => handleSectionMouseEnter(section.id)}
                   onMouseLeave={handleSectionMouseLeave}
@@ -221,6 +238,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                     <button
                       onClick={(e) => handleDeleteSection(section.id, e)}
                       onMouseDown={handleDeleteMouseDown}
+                      onDoubleClick={handleDeleteDoubleClick}
                       tabIndex={-1}
                       className="text-text-secondary hover:text-error opacity-0 group-hover:opacity-100"
                       title="Delete section"

@@ -37,8 +37,15 @@ Add double-click handler to section items in SectionsPanel that triggers zoom to
 - [ ] Single-click behavior unchanged (selection only)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
+Added double-click handler to SectionsPanel section items that triggers zoom to section:
 
+- Added `triggerZoomToSection` to the destructured imports from `useUIStore`
+- Added `onDoubleClick` handler to section list item `<li>` element
+- Handler calls `triggerZoomToSection(section.id)` to trigger the map zoom animation
+- Single-click behavior unchanged (selection only via `onMouseDown`)
+- Both handlers coexist cleanly - single click selects, double click triggers zoom
+
+The implementation uses React's native `onDoubleClick` event as specified in the task spec.
 ## Evidence
 - Commits:
 - Tests:

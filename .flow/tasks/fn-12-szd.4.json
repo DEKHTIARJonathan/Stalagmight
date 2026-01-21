@@ -1,16 +1,24 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-21T16:40:18.469129Z",
   "created_at": "2026-01-21T03:39:53.581763Z",
   "depends_on": [
     "fn-12-szd.3"
   ],
   "epic": "fn-12-szd",
+  "evidence": {
+    "files_changed": [
+      "src/components/SingleSystemView/SectionsPanel.tsx"
+    ],
+    "rust_tests": "80 passed, 0 failed",
+    "type_check": "pnpm tsc --noEmit passed",
+    "ui_tests": "344 passed, 22 pre-existing failures (unrelated to change)"
+  },
   "id": "fn-12-szd.4",
   "priority": null,
   "spec_path": ".flow/tasks/fn-12-szd.4.md",
-  "status": "todo",
+  "status": "done",
   "title": "Add double-click handler to SectionsPanel",
-  "updated_at": "2026-01-21T03:42:51.518466Z"
+  "updated_at": "2026-01-21T16:43:14.532946Z"
 }
