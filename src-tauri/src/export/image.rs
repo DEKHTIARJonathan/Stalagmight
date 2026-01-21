@@ -313,7 +313,7 @@ fn escape_xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{SectionData, Shot, ShotData};
+    use crate::models::{GpsCoordinates, SectionData, Shot, ShotData, StationRef};
     use tempfile::NamedTempFile;
 
     fn simple_project() -> Project {
@@ -416,6 +416,49 @@ mod tests {
         assert!(contents.contains("<svg"));
 
         std::fs::remove_file(&svg_path).ok();
+    }
+
+    #[test]
+    fn test_generate_svg_string_virtual_shots_and_zero_datum_labels() {
+        let mut project = Project::new("Virtual".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            shots: vec![
+                ShotData {
+                    azimuth_in: 0.0,
+                    azimuth_out: 180.0,
+                    length: 10.0,
+                    depth_in: 5.0,
+                    depth_out: 5.0,
+                    is_virtual: true,
+                    ..Default::default()
+                },
+                ShotData {
+                    azimuth_in: 90.0,
+                    azimuth_out: 270.0,
+                    length: 5.0,
+                    depth_in: 5.0,
+                    depth_out: 6.0,
+                    ..Default::default()
+                },
+            ],
+        });
+
+        project
+            .set_zero_datum(StationRef::new(0, 0), GpsCoordinates::new(10.0, 20.0, 5.0).unwrap())
+            .expect("zero datum");
+
+        let mut options = ExportImageOptions::default();
+        options.include_labels = true;
+
+        let svg = generate_svg_string(&project, &options).unwrap();
+        assert!(svg.contains("stroke-dasharray=\"4,4\""));
+        assert!(svg.contains("class=\"zero-datum\""));
+        assert!(svg.contains(">ZD</text>"));
     }
 
     #[test]
