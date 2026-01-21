@@ -1,30 +1,208 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { isNonInteractiveTool } from '../utils/toolUtils';
-import type { ToolType, Selection } from '../store/uiStore';
+import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
+import type { ToolType, Selection, DisplayToggleKey } from '../store/uiStore';
+import type { ShortcutsConfig } from '../types/config';
+import { defaultConfig } from '../types/config';
 
-/** Shortcuts that use spring-loaded behavior (tool shortcuts only) */
-const SPRING_LOADED_SHORTCUTS: Partial<Record<string, ToolType>> = {
-  z: 'zoom',
+/**
+ * Action types that can be triggered by keyboard shortcuts.
+ */
+type ShortcutAction =
+  // Tools
+  | 'select'
+  | 'pan'
+  | 'zoom'
+  | 'quick_zoom'
+  | 'draw'
+  | 'delete_tool'
+  | 'merge'
+  | 'measure'
+  | 'move_section'
+  | 'move_station'
+  // Edit
+  | 'undo'
+  | 'redo'
+  | 'save'
+  // View
+  | 'toggle_depth_gradient'
+  | 'toggle_grid'
+  | 'toggle_satellite'
+  | 'toggle_station_labels'
+  | 'toggle_shot_labels'
+  | 'toggle_section_labels'
+  | 'fit_to_bounds'
+  | 'zoom_in'
+  | 'zoom_out'
+  // Panels
+  | 'toggle_sections_panel'
+  | 'toggle_detail_panel'
+  | 'toggle_data_table';
+
+/**
+ * Map of action names to the corresponding tool types.
+ */
+const TOOL_ACTIONS: Partial<Record<ShortcutAction, ToolType>> = {
+  select: 'select',
+  pan: 'pan',
+  zoom: 'zoom',
+  draw: 'draw',
+  delete_tool: 'delete',
+  merge: 'merge',
+  measure: 'measure',
+  move_section: 'move_section',
+  move_station: 'move_station',
 };
 
-interface ShortcutConfig {
-  [key: string]: ToolType | 'undo' | 'redo' | 'save' | 'toggle_sections' | 'toggle_detail' | 'toggle_data';
+/**
+ * Map of action names to display toggle keys.
+ */
+const DISPLAY_TOGGLE_ACTIONS: Partial<Record<ShortcutAction, DisplayToggleKey>> = {
+  toggle_depth_gradient: 'showDepthGradient',
+  toggle_grid: 'showGrid',
+  toggle_satellite: 'showSatellite',
+  toggle_station_labels: 'showStationLabels',
+  toggle_shot_labels: 'showShotData',
+  toggle_section_labels: 'showSectionNames',
+};
+
+/**
+ * Check if a shortcut string contains only a key (no modifiers).
+ * Used to determine if quick_zoom should use spring-loaded behavior.
+ */
+function isNonModifierShortcut(shortcut: string): boolean {
+  const normalized = normalizeShortcut(shortcut);
+  if (!normalized) return false;
+  // If it contains +, it has modifiers
+  return !normalized.includes('+');
 }
 
-// Note: Spring-loaded shortcuts (z) are NOT in DEFAULT_SHORTCUTS to avoid duplication
-const DEFAULT_SHORTCUTS: ShortcutConfig = {
-  s: 'select',
-  p: 'pan',
-  d: 'draw',
-  x: 'delete',
-  m: 'merge',
-  r: 'measure',
-  v: 'move_section',
-  t: 'move_station',
-};
+/**
+ * Build a set of normalized shortcuts that should use spring-loaded behavior.
+ * Only non-modifier shortcuts (single keys) are included.
+ */
+function buildSpringLoadedSet(bindings: string[]): Set<string> {
+  const springLoaded = new Set<string>();
+  for (const binding of bindings) {
+    if (isNonModifierShortcut(binding)) {
+      const normalized = normalizeShortcut(binding);
+      if (normalized) {
+        springLoaded.add(normalized);
+      }
+    }
+  }
+  return springLoaded;
+}
+
+/**
+ * Build a map from normalized shortcut strings to their action names.
+ * This allows O(1) lookup during keydown handling.
+ */
+function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutAction> {
+  const map = new Map<string, ShortcutAction>();
+
+  const actions: (keyof ShortcutsConfig)[] = [
+    // Tools
+    'select',
+    'pan',
+    'zoom',
+    'quick_zoom',
+    'draw',
+    'delete_tool',
+    'merge',
+    'measure',
+    'move_section',
+    'move_station',
+    // Edit
+    'undo',
+    'redo',
+    'save',
+    // View
+    'toggle_depth_gradient',
+    'toggle_grid',
+    'toggle_satellite',
+    'toggle_station_labels',
+    'toggle_shot_labels',
+    'toggle_section_labels',
+    'fit_to_bounds',
+    'zoom_in',
+    'zoom_out',
+    // Panels
+    'toggle_sections_panel',
+    'toggle_detail_panel',
+    'toggle_data_table',
+  ];
+
+  for (const action of actions) {
+    const bindings = shortcuts[action];
+    if (!Array.isArray(bindings)) continue;
+
+    for (const binding of bindings) {
+      const normalized = normalizeShortcut(binding);
+      if (normalized) {
+        map.set(normalized, action as ShortcutAction);
+      }
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Get global map reference from window.
+ */
+function getMap(): {
+  getZoom: () => number;
+  getMinZoom: () => number;
+  getMaxZoom: () => number;
+  zoomTo: (zoom: number, options?: { duration?: number }) => void;
+} | null {
+  return (
+    window as unknown as {
+      __cavechef_map__?: {
+        getZoom: () => number;
+        getMinZoom: () => number;
+        getMaxZoom: () => number;
+        zoomTo: (zoom: number, options?: { duration?: number }) => void;
+      };
+    }
+  ).__cavechef_map__ ?? null;
+}
+
+/**
+ * Handle zoom in action with configurable step and limits.
+ */
+function handleZoomIn(zoomStep: number, zoomMax: number): void {
+  const map = getMap();
+  if (!map) return;
+
+  const currentZoom = map.getZoom();
+  const maxZoom = Math.min(zoomMax, map.getMaxZoom());
+  const targetZoom = Math.min(maxZoom, currentZoom + zoomStep);
+
+  if (targetZoom !== currentZoom) {
+    map.zoomTo(targetZoom, { duration: 300 });
+  }
+}
+
+/**
+ * Handle zoom out action with configurable step and limits.
+ */
+function handleZoomOut(zoomStep: number, zoomMin: number): void {
+  const map = getMap();
+  if (!map) return;
+
+  const currentZoom = map.getZoom();
+  const minZoom = Math.max(zoomMin, map.getMinZoom());
+  const targetZoom = Math.max(minZoom, currentZoom - zoomStep);
+
+  if (targetZoom !== currentZoom) {
+    map.zoomTo(targetZoom, { duration: 300 });
+  }
+}
 
 export function useKeyboardShortcuts() {
   const {
@@ -32,10 +210,10 @@ export function useKeyboardShortcuts() {
     toggleSectionsPanel,
     toggleDetailPanel,
     toggleDataTable,
+    toggleDisplay,
     clearSelection,
     selectAll,
     triggerFitToBounds,
-    triggerZoomToSection,
     selection,
     openDialog,
     clearMergeStations,
@@ -46,15 +224,30 @@ export function useKeyboardShortcuts() {
     showStations,
     showToast,
   } = useUIStore();
-  const { undo, redo, saveProject, project, stations, importDmp } = useProjectStore();
+  const { undo, redo, saveProject, project, stations, importDmp, config } = useProjectStore();
   const { setImportContext, hasImportedDmpPath, addImportedDmpPath } = useUIStore();
+
+  // Ref to track which quick_zoom bindings are non-modifier (spring-loaded)
+  // Uses ref to avoid stale closures in event handlers (per pitfall)
+  // Initialize with defaults to handle first render before useEffect runs
+  const springLoadedBindingsRef = useRef<Set<string>>(buildSpringLoadedSet(defaultConfig.shortcuts.quick_zoom));
+  const shortcutMapRef = useRef<Map<string, ShortcutAction>>(buildShortcutMap(defaultConfig.shortcuts));
+
+  // Update refs when config changes - use defaultConfig as fallback
+  useEffect(() => {
+    const shortcuts = config?.shortcuts ?? defaultConfig.shortcuts;
+
+    // Build the shortcut map
+    shortcutMapRef.current = buildShortcutMap(shortcuts);
+
+    // Build set of spring-loaded bindings for quick_zoom
+    springLoadedBindingsRef.current = buildSpringLoadedSet(shortcuts.quick_zoom ?? []);
+  }, [config?.shortcuts]);
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
-      const key = event.key.toLowerCase();
-
       // Handle Escape FIRST - works even when focus is in an input
-      if (key === 'escape') {
+      if (event.key === 'Escape') {
         // Close any open dialog
         const { activeDialog, closeDialog } = useUIStore.getState();
         if (activeDialog) {
@@ -79,139 +272,14 @@ export function useKeyboardShortcuts() {
       ) {
         return;
       }
+
       const isCtrlOrCmd = event.ctrlKey || event.metaKey;
 
-      // Handle Ctrl/Cmd shortcuts
-      if (isCtrlOrCmd) {
-        switch (key) {
-          case 'z':
-            if (event.shiftKey) {
-              event.preventDefault();
-              redo();
-            } else {
-              event.preventDefault();
-              undo();
-            }
-            return;
-          case 'y':
-            event.preventDefault();
-            redo();
-            return;
-          case 's':
-            event.preventDefault();
-            if (project) {
-              saveProject();
-            }
-            return;
-          case '1':
-            event.preventDefault();
-            toggleSectionsPanel();
-            return;
-          case '2':
-            event.preventDefault();
-            toggleDetailPanel();
-            return;
-          case '3':
-            event.preventDefault();
-            toggleDataTable();
-            return;
-          case 'a': {
-            // ALWAYS prevent browser select-all
-            event.preventDefault();
-            // GUARD: No select all for pan/zoom tools
-            const currentToolA = useUIStore.getState().activeTool;
-            if (isNonInteractiveTool(currentToolA)) return;
-            // GUARD: Block select all when stations are hidden
-            if (!showStations) {
-              showToast("Enable 'Stations' in Display menu to select all", 'stations-hidden');
-              return;
-            }
-            if (stations.length > 0) {
-              const allStations: Selection[] = stations.map((station) => ({
-                type: 'station' as const,
-                stationRef: station.station_ref,
-              }));
-              selectAll(allStations);
-            }
-            return;
-          }
-          case '0':
-            event.preventDefault();
-            triggerFitToBounds();
-            return;
-          case 'g':
-            // Zoom to currently selected section (no-op if no section selected)
-            if (selection?.type === 'section' && selection.sectionId !== undefined) {
-              event.preventDefault();
-              triggerZoomToSection(selection.sectionId);
-            }
-            return;
-          case 'i':
-            event.preventDefault();
-            // Context-aware DMP import
-            (async () => {
-              try {
-                const selected = await open({
-                  multiple: false,
-                  filters: [{ name: 'mNemo DMP', extensions: ['dmp'] }],
-                });
-
-                if (!selected || typeof selected !== 'string') {
-                  return;
-                }
-
-                // Check for duplicate import (existing project only)
-                if (project && hasImportedDmpPath(selected)) {
-                  // Show confirmation dialog for duplicate import
-                  openDialog('confirm-duplicate-import', {
-                    filePath: selected,
-                  });
-                  return;
-                }
-
-                const dmpFile = await importDmp(selected);
-                if (!dmpFile) return;
-
-                // Track this file as imported
-                addImportedDmpPath(selected);
-
-                // Determine context: are we creating a new project or adding to existing?
-                if (project) {
-                  // Existing project: open Step 1 (selection) directly
-                  setImportContext('existing-project');
-                  openDialog('dmp-selection', {
-                    dmpFile,
-                    filePath: selected,
-                  });
-                } else {
-                  // No project: show NewProjectDialog for import
-                  setImportContext('new-project');
-                  const fileName = selected.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
-                  openDialog('new-project-for-import', {
-                    dmpFile,
-                    filePath: selected,
-                    defaultName: fileName,
-                  });
-                }
-              } catch (e) {
-                openDialog('error', {
-                  title: 'Import Failed',
-                  message: e instanceof Error ? e.message : 'Failed to parse DMP file',
-                });
-              }
-            })();
-            return;
-          case 'e':
-            event.preventDefault();
-            if (project) {
-              openDialog('export');
-            }
-            return;
-        }
-      }
+      // ===== RESERVED SHORTCUTS (hardcoded) =====
+      // These cannot be overridden by config
 
       // Handle Delete/Backspace - delete selected items
-      if (key === 'delete' || key === 'backspace') {
+      if (event.key === 'Delete' || event.key === 'Backspace') {
         // GUARD: No delete for pan/zoom tools
         const currentToolDel = useUIStore.getState().activeTool;
         if (isNonInteractiveTool(currentToolDel)) return;
@@ -238,58 +306,256 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // Handle +/- for zoom (only without Ctrl/Cmd to preserve browser/app zoom behavior)
-      if (!isCtrlOrCmd && (key === '+' || key === '=')) {
+      // Handle Ctrl+I - Import DMP (reserved)
+      if (isCtrlOrCmd && event.key.toLowerCase() === 'i') {
         event.preventDefault();
-        const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number; getMinZoom: () => number; getMaxZoom: () => number; zoomTo: (zoom: number, options?: { duration?: number }) => void } }).__cavechef_map__;
-        if (map) {
-          const config = useProjectStore.getState().config;
-          const zoomStep = config?.map.zoom_step ?? 1.0;
-          const maxZoom = config?.map.zoom_max ?? map.getMaxZoom();
-          const currentZoom = map.getZoom();
-          const targetZoom = Math.min(maxZoom, currentZoom + zoomStep);
-          if (targetZoom !== currentZoom) {
-            map.zoomTo(targetZoom, { duration: 300 });
+        // Context-aware DMP import
+        (async () => {
+          try {
+            const selected = await open({
+              multiple: false,
+              filters: [{ name: 'mNemo DMP', extensions: ['dmp'] }],
+            });
+
+            if (!selected || typeof selected !== 'string') {
+              return;
+            }
+
+            // Check for duplicate import (existing project only)
+            if (project && hasImportedDmpPath(selected)) {
+              // Show confirmation dialog for duplicate import
+              openDialog('confirm-duplicate-import', {
+                filePath: selected,
+              });
+              return;
+            }
+
+            const dmpFile = await importDmp(selected);
+            if (!dmpFile) return;
+
+            // Track this file as imported
+            addImportedDmpPath(selected);
+
+            // Determine context: are we creating a new project or adding to existing?
+            if (project) {
+              // Existing project: open Step 1 (selection) directly
+              setImportContext('existing-project');
+              openDialog('dmp-selection', {
+                dmpFile,
+                filePath: selected,
+              });
+            } else {
+              // No project: show NewProjectDialog for import
+              setImportContext('new-project');
+              const fileName = selected.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
+              openDialog('new-project-for-import', {
+                dmpFile,
+                filePath: selected,
+                defaultName: fileName,
+              });
+            }
+          } catch (e) {
+            openDialog('error', {
+              title: 'Import Failed',
+              message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+            });
           }
-        }
+        })();
         return;
       }
-      if (!isCtrlOrCmd && key === '-') {
+
+      // Handle Ctrl+E - Export (reserved)
+      if (isCtrlOrCmd && event.key.toLowerCase() === 'e') {
         event.preventDefault();
-        const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number; getMinZoom: () => number; getMaxZoom: () => number; zoomTo: (zoom: number, options?: { duration?: number }) => void } }).__cavechef_map__;
-        if (map) {
-          const config = useProjectStore.getState().config;
-          const zoomStep = config?.map.zoom_step ?? 1.0;
-          const minZoom = config?.map.zoom_min ?? map.getMinZoom();
-          const currentZoom = map.getZoom();
-          const targetZoom = Math.max(minZoom, currentZoom - zoomStep);
-          if (targetZoom !== currentZoom) {
-            map.zoomTo(targetZoom, { duration: 300 });
-          }
+        if (project) {
+          openDialog('export');
         }
         return;
       }
 
-      // Handle spring-loaded shortcuts (e.g., Z for zoom)
-      const springLoadedTool = SPRING_LOADED_SHORTCUTS[key];
-      if (springLoadedTool && !event.repeat) {
+      // Handle Ctrl+A - Select all (reserved)
+      if (isCtrlOrCmd && event.key.toLowerCase() === 'a') {
+        // ALWAYS prevent browser select-all
+        event.preventDefault();
+        // GUARD: No select all for pan/zoom tools
+        const currentToolA = useUIStore.getState().activeTool;
+        if (isNonInteractiveTool(currentToolA)) return;
+        // GUARD: Block select all when stations are hidden
+        if (!showStations) {
+          showToast("Enable 'Stations' in Display menu to select all", 'stations-hidden');
+          return;
+        }
+        if (stations.length > 0) {
+          const allStations: Selection[] = stations.map((station) => ({
+            type: 'station' as const,
+            stationRef: station.station_ref,
+          }));
+          selectAll(allStations);
+        }
+        return;
+      }
+
+      // ===== CONFIGURABLE SHORTCUTS =====
+      // Parse the key event into normalized form for lookup
+      const normalizedKey = parseKeyEvent(event);
+      if (!normalizedKey || normalizedKey === 'Ctrl' || normalizedKey === 'Alt' || normalizedKey === 'Shift') {
+        // Modifier-only press, ignore
+        return;
+      }
+
+      const shortcutMap = shortcutMapRef.current;
+      const action = shortcutMap.get(normalizedKey);
+
+      if (!action) {
+        // No action mapped to this shortcut
+        return;
+      }
+
+      // Check if this is a spring-loaded quick_zoom (non-modifier key)
+      const isSpringLoadedQuickZoom =
+        action === 'quick_zoom' && springLoadedBindingsRef.current.has(normalizedKey) && !event.repeat;
+
+      if (isSpringLoadedQuickZoom) {
         const { activeDialog, placementMode, activeTool, springLoadedState } = useUIStore.getState();
         // Don't activate during dialogs or placement mode
         if (activeDialog || placementMode) return;
-        // Don't activate if already in target tool or already spring-loaded
-        if (activeTool === springLoadedTool || springLoadedState) return;
+        // Don't activate if already in zoom tool or already spring-loaded
+        if (activeTool === 'zoom' || springLoadedState) return;
 
-        activateSpringLoaded(springLoadedTool);
+        event.preventDefault();
+        activateSpringLoaded('zoom');
         return;
       }
 
-      // Handle tool shortcuts (non-spring-loaded)
-      const toolShortcut = DEFAULT_SHORTCUTS[key];
-      if (toolShortcut && typeof toolShortcut === 'string' && toolShortcut !== 'undo' && toolShortcut !== 'redo' && toolShortcut !== 'save') {
-        setActiveTool(toolShortcut as ToolType);
+      // Get config values for zoom actions
+      const currentConfig = useProjectStore.getState().config;
+      const zoomStep = currentConfig?.map.zoom_step ?? 1.0;
+      const zoomMin = currentConfig?.map.zoom_min ?? 0;
+      const zoomMax = currentConfig?.map.zoom_max ?? 22;
+
+      // Handle action
+      switch (action) {
+        // Tool actions
+        case 'select':
+        case 'pan':
+        case 'draw':
+        case 'delete_tool':
+        case 'merge':
+        case 'measure':
+        case 'move_section':
+        case 'move_station': {
+          const tool = TOOL_ACTIONS[action];
+          if (tool) {
+            event.preventDefault();
+            setActiveTool(tool);
+          }
+          break;
+        }
+
+        case 'zoom':
+          // Regular toggle to zoom tool (not spring-loaded)
+          event.preventDefault();
+          setActiveTool('zoom');
+          break;
+
+        case 'quick_zoom':
+          // With modifier key - regular toggle (spring-loaded handled above)
+          event.preventDefault();
+          setActiveTool('zoom');
+          break;
+
+        // Edit actions
+        case 'undo':
+          event.preventDefault();
+          undo();
+          break;
+
+        case 'redo':
+          event.preventDefault();
+          redo();
+          break;
+
+        case 'save':
+          event.preventDefault();
+          if (project) {
+            saveProject();
+          }
+          break;
+
+        // View toggle actions
+        case 'toggle_depth_gradient':
+        case 'toggle_grid':
+        case 'toggle_satellite':
+        case 'toggle_station_labels':
+        case 'toggle_shot_labels':
+        case 'toggle_section_labels': {
+          const toggleKey = DISPLAY_TOGGLE_ACTIONS[action];
+          if (toggleKey) {
+            event.preventDefault();
+            toggleDisplay(toggleKey);
+          }
+          break;
+        }
+
+        case 'fit_to_bounds':
+          event.preventDefault();
+          triggerFitToBounds();
+          break;
+
+        case 'zoom_in':
+          event.preventDefault();
+          handleZoomIn(zoomStep, zoomMax);
+          break;
+
+        case 'zoom_out':
+          event.preventDefault();
+          handleZoomOut(zoomStep, zoomMin);
+          break;
+
+        // Panel actions
+        case 'toggle_sections_panel':
+          event.preventDefault();
+          toggleSectionsPanel();
+          break;
+
+        case 'toggle_detail_panel':
+          event.preventDefault();
+          toggleDetailPanel();
+          break;
+
+        case 'toggle_data_table':
+          event.preventDefault();
+          toggleDataTable();
+          break;
       }
     },
-    [setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection, selectAll, triggerFitToBounds, triggerZoomToSection, clearMergeStations, clearMeasure, setDrawFromStation, selection, openDialog, undo, redo, saveProject, project, stations, importDmp, setImportContext, hasImportedDmpPath, addImportedDmpPath, activateSpringLoaded, showStations, showToast]
+    [
+      clearSelection,
+      clearMergeStations,
+      clearMeasure,
+      setDrawFromStation,
+      selection,
+      openDialog,
+      project,
+      hasImportedDmpPath,
+      addImportedDmpPath,
+      importDmp,
+      setImportContext,
+      showStations,
+      showToast,
+      stations,
+      selectAll,
+      activateSpringLoaded,
+      setActiveTool,
+      undo,
+      redo,
+      saveProject,
+      toggleDisplay,
+      triggerFitToBounds,
+      toggleSectionsPanel,
+      toggleDetailPanel,
+      toggleDataTable,
+    ]
   );
 
   useEffect(() => {
@@ -303,11 +569,11 @@ export function useKeyboardShortcuts() {
   // Unconditionally deactivate when a spring-loaded key is released
   useEffect(() => {
     const handleKeyUp = (event: KeyboardEvent) => {
-      const key = event.key.toLowerCase();
+      // Parse the key event to get normalized form
+      const normalizedKey = parseKeyEvent(event);
 
-      // If this is a spring-loaded key, unconditionally deactivate
-      // This handles both normal key release and stuck state recovery
-      if (SPRING_LOADED_SHORTCUTS[key]) {
+      // Check if this is a spring-loaded key
+      if (springLoadedBindingsRef.current.has(normalizedKey)) {
         deactivateSpringLoaded();
       }
     };
@@ -316,7 +582,7 @@ export function useKeyboardShortcuts() {
     return () => window.removeEventListener('keyup', handleKeyUp);
   }, [deactivateSpringLoaded]);
 
-  // Blur handler for stuck spring-loaded keys (e.g., Alt+Tab while Z held)
+  // Blur handler for stuck spring-loaded keys (e.g., Alt+Tab while key held)
   // Uses cancelSpringLoaded to force restore (ignores tap threshold)
   useEffect(() => {
     const handleBlur = () => {
