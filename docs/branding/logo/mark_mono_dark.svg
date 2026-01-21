@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="StalagMight - app icon with headings and depth">
+  <title>StalagMight</title>
+  <defs></defs>
+  <g transform="translate(512 512) scale(1.18) translate(-512 -512)">
+<!-- Double rings -->
+    <circle cx="512" cy="512" r="310" fill="none" stroke="#1A120B" stroke-width="22" opacity="1"/>
+    <circle cx="512" cy="512" r="310" fill="none" stroke="#1A120B" stroke-width="14" opacity="1"/>
+
+    <circle cx="512" cy="512" r="240" fill="none" stroke="#1A120B" stroke-width="16" opacity="1"/>
+    <circle cx="512" cy="512" r="240" fill="none" stroke="#1A120B" stroke-width="10" opacity="1"/>
+
+    <!-- Bearing rays -->
+    <g stroke="#1A120B" stroke-width="10" stroke-linecap="round" opacity="1">
+      <path d="M512 210V270"/><path d="M512 754V814"/><path d="M210 512H270"/><path d="M754 512H814"/>
+      <path d="M708 316l-40 40"/><path d="M316 708l-40 40"/><path d="M316 316l40 40"/><path d="M708 708l40 40"/>
+    </g>
+
+    <!-- Survey network -->
+    <g fill="none" stroke="#1A120B" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" opacity="1">
+      <path d="M320 620 L430 520 L520 600 L640 460 L730 540"/>
+      <path d="M430 520 L420 390 L540 360 L640 460"/>
+      <path d="M520 600 L520 740"/>
+    </g>
+<!-- Big outlined cave arrow marker -->
+    <g transform="translate(359,585) rotate(137.7) scale(2.70)" opacity="1">
+      <path d="M0 0 L-22 10 L-22 -10 Z" fill="none" stroke="#1A120B" stroke-width="2.2" stroke-linejoin="round" opacity="1"/>
+      <path d="M0 0 L-26 14 L-26 -14 Z" fill="#1A120B" opacity="1"/>
+      <path d="M0 0 L-22 10 L-22 -10 Z" fill="#1A120B"/>
+    </g>
+
+    <!-- Nodes -->
+    <g fill="#1A120B" opacity="1">
+      <circle cx="320" cy="620" r="15"/><circle cx="430" cy="520" r="15"/><circle cx="520" cy="600" r="15"/><circle cx="640" cy="460" r="15"/>
+      <circle cx="730" cy="540" r="15"/><circle cx="420" cy="390" r="15"/><circle cx="540" cy="360" r="15"/><circle cx="520" cy="740" r="15"/>
+    </g>
+
+  </g>
+</svg>
