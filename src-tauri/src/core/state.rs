@@ -148,6 +148,63 @@ impl AppState {
         // No error if no active load - cancel_loading is idempotent
     }
 
+    /// Resolve the project file path from a name and optional directory.
+    /// Sanitizes the name and ensures .cvproj extension.
+    ///
+    /// # Arguments
+    /// * `name` - Project name (will be sanitized for filesystem use)
+    /// * `directory` - Optional directory to save in. If None, uses user's documents directory.
+    ///
+    /// # Returns
+    /// The full path to the project file (e.g., `/path/to/dir/ProjectName.cvproj`)
+    fn resolve_project_path(&self, name: &str, directory: Option<&PathBuf>) -> Result<PathBuf, String> {
+        // Validate name is not empty
+        if name.trim().is_empty() {
+            return Err("Project name cannot be empty".to_string());
+        }
+
+        // Sanitize the project name for filesystem use
+        let sanitized_name: String = name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+
+        // Remove leading/trailing whitespace and ensure not empty after sanitization
+        let sanitized_name = sanitized_name.trim();
+        if sanitized_name.is_empty() {
+            return Err("Project name must contain at least one alphanumeric character".to_string());
+        }
+
+        // Determine the directory to use
+        let dir = match directory {
+            Some(d) => {
+                // Validate the provided directory is a directory (or doesn't exist yet)
+                if d.exists() && !d.is_dir() {
+                    return Err(format!("Path is not a directory: {}", d.display()));
+                }
+                d.clone()
+            }
+            None => {
+                // Default to user's documents directory
+                directories::UserDirs::new()
+                    .and_then(|ud| ud.document_dir().map(|d| d.to_path_buf()))
+                    .ok_or_else(|| "Could not determine documents directory".to_string())?
+            }
+        };
+
+        // Build the full path with .cvproj extension
+        let filename = format!("{}.cvproj", sanitized_name);
+        let full_path = dir.join(filename);
+
+        Ok(full_path)
+    }
+
     /// Compute project warnings from the given project.
     /// Used by both get_project_warnings command and load_project_full for validation phase.
     ///
@@ -2386,11 +2443,16 @@ impl AppState {
     /// 3. SavingSettings (20%) - Save default display settings
     ///
     /// All phases are indeterminate since creation is typically fast.
+    ///
+    /// # Arguments
+    /// * `name` - Project name
+    /// * `location` - Optional location metadata (cave location, not file path)
+    /// * `directory` - Optional directory to save the project in. If None, uses default projects directory.
     pub fn do_create_project_full(
         &self,
         name: String,
         location: Option<String>,
-        path: PathBuf,
+        directory: Option<PathBuf>,
     ) -> Result<super::loading::CreateProjectFullResult, super::loading::LoadError> {
         use super::loading::{CreateProjectFullResult, DisplaySettings, LoadError, LoadingPhase, ProgressEmitter};
 
@@ -2421,12 +2483,17 @@ impl AppState {
         // === PHASE 0: Creating database (40%) ===
         progress.start_phase(LoadingPhase::CreatingDatabase);
 
-        // Ensure .cvproj extension
-        let db_path = if path.extension().map_or(true, |ext| ext != "cvproj") {
-            path.with_extension("cvproj")
-        } else {
-            path.clone()
-        };
+        // Resolve the database path from name and optional directory
+        let db_path = self.resolve_project_path(&name, directory.as_ref())
+            .map_err(|e| LoadError::new("IO", e))?;
+
+        // CRITICAL: Fail if file already exists to prevent data corruption
+        if db_path.exists() {
+            early_return_err!(LoadError::new(
+                "ALREADY_EXISTS",
+                format!("Project file already exists: {}", db_path.display())
+            ));
+        }
 
         // Create parent directories if they don't exist
         if let Some(parent) = db_path.parent() {
@@ -2478,9 +2545,13 @@ impl AppState {
             ("gridSpacing", display_settings.grid_spacing.to_string()),
         ];
 
-        for (key, value) in settings_map {
-            if let Err(e) = db.save_display_setting(key, &value) {
-                tracing::warn!("Failed to save display setting {}: {}", key, e);
+        for (key, value) in &settings_map {
+            if let Err(e) = db.save_display_setting(key, value) {
+                // Fail the command if display settings can't be saved - this indicates a real DB error
+                early_return_err!(LoadError::new(
+                    "DATABASE",
+                    format!("Failed to save display setting {}: {}", key, e)
+                ));
             }
         }
         check_cancelled!();
