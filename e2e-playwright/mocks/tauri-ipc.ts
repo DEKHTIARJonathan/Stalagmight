@@ -1318,6 +1318,30 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] export_image called with:', args);
             // Store args for test assertions via __E2E_MOCKS__.getLastExportImageArgs()
             const exportOptions = args?.options as Record<string, unknown> | undefined;
+
+            // Validate required new options are present (per spec requirements)
+            if (exportOptions) {
+              if (exportOptions.color_mode === undefined) {
+                throw new Error('[Mock IPC] export_image: missing required option "color_mode"');
+              }
+              if (exportOptions.depth_preset === undefined) {
+                throw new Error('[Mock IPC] export_image: missing required option "depth_preset"');
+              }
+              if (exportOptions.include_legend === undefined) {
+                throw new Error('[Mock IPC] export_image: missing required option "include_legend"');
+              }
+              // Validate color_mode is a valid value
+              const validColorModes = ['section', 'depth'];
+              if (!validColorModes.includes(exportOptions.color_mode as string)) {
+                throw new Error(`[Mock IPC] export_image: invalid color_mode "${exportOptions.color_mode}", must be one of: ${validColorModes.join(', ')}`);
+              }
+              // Validate depth_preset is a valid value
+              const validPresets = ['thermal', 'ocean', 'terrain', 'grayscale', 'accessible'];
+              if (!validPresets.includes(exportOptions.depth_preset as string)) {
+                throw new Error(`[Mock IPC] export_image: invalid depth_preset "${exportOptions.depth_preset}", must be one of: ${validPresets.join(', ')}`);
+              }
+            }
+
             lastExportImageArgs = {
               path: args?.path,
               options: exportOptions ? { ...exportOptions } : null,
