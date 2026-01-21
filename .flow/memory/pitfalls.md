@@ -54,3 +54,6 @@ AtomicU64::new(0) with fetch_add returns 0 for first call; reserve 0 for sentine
 
 ## 2026-01-21 manual [pitfall]
 When clearing async requests in useEffect, always clear immediately before any early returns AND store in ref if target state not ready, then process in separate effect when ready
+
+## 2026-01-21 manual [pitfall]
+React event handlers in useEffect can have stale closures; use refs for values needed in keydown/keyup handlers
