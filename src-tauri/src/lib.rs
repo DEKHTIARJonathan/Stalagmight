@@ -7,6 +7,8 @@ pub mod logging;
 pub mod models;
 pub mod parsers;
 pub mod persistence;
+#[cfg(test)]
+pub mod test_helpers;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
