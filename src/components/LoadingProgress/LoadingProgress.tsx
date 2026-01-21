@@ -33,17 +33,27 @@ export function LoadingProgress({
   error,
 }: LoadingProgressProps) {
   const [detailsExpanded, setDetailsExpanded] = React.useState(false);
+  const [copyFeedback, setCopyFeedback] = React.useState<'idle' | 'copied' | 'failed'>('idle');
   const isIndeterminate = phaseProgress === undefined;
   const titleId = React.useId();
   const phaseId = React.useId();
+  const detailsId = React.useId();
 
-  /** Copy error message and details to clipboard */
-  const handleCopyError = React.useCallback(() => {
-    if (error) {
-      const errorText = error.details
-        ? `${error.message}\n\n${error.details}`
-        : error.message;
-      navigator.clipboard.writeText(errorText);
+  /** Copy error message and details to clipboard with error handling */
+  const handleCopyError = React.useCallback(async () => {
+    if (!error) return;
+
+    const errorText = error.details
+      ? `${error.message}\n\n${error.details}`
+      : error.message;
+
+    try {
+      await navigator.clipboard?.writeText(errorText);
+      setCopyFeedback('copied');
+      setTimeout(() => setCopyFeedback('idle'), 2000);
+    } catch {
+      setCopyFeedback('failed');
+      setTimeout(() => setCopyFeedback('idle'), 2000);
     }
   }, [error]);
 
@@ -76,11 +86,16 @@ export function LoadingProgress({
               type="button"
               onClick={() => setDetailsExpanded(v => !v)}
               className="text-sm text-text-tertiary hover:text-text-secondary"
+              aria-expanded={detailsExpanded}
+              aria-controls={detailsId}
             >
               {detailsExpanded ? '▼ Hide details' : '▶ Show details'}
             </button>
             {detailsExpanded && (
-              <pre className="mt-2 p-2 bg-surface-alt rounded text-xs text-text-tertiary overflow-auto max-h-32">
+              <pre
+                id={detailsId}
+                className="mt-2 p-2 bg-surface-alt rounded text-xs text-text-tertiary overflow-auto max-h-32"
+              >
                 {error.details}
               </pre>
             )}
@@ -98,22 +113,21 @@ export function LoadingProgress({
               Retry
             </button>
           )}
-          {onCancel && (
-            <button
-              type="button"
-              onClick={onCancel}
-              className="px-3 py-1.5 bg-surface-alt text-text-primary rounded hover:bg-border transition-colors"
-            >
-              Dismiss
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={!onCancel}
+            className="px-3 py-1.5 bg-surface-alt text-text-primary rounded hover:bg-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Dismiss
+          </button>
           <button
             type="button"
             onClick={handleCopyError}
             className="px-3 py-1.5 text-text-secondary hover:text-text-primary transition-colors"
             title="Copy error to clipboard"
           >
-            Copy
+            {copyFeedback === 'copied' ? 'Copied!' : copyFeedback === 'failed' ? 'Failed' : 'Copy'}
           </button>
         </div>
       </div>
