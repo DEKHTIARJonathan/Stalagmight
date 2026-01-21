@@ -22,9 +22,8 @@ Add tooltip to section items showing "Double-click to zoom (Ctrl+G)" for discove
 - [ ] Tooltip appears on hover
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added tooltip to section list items showing "Double-click to zoom (Ctrl+G)" for discoverability of the zoom feature.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 38b4b6b9cb95bba4b77cb350c46dda046b428927
+- Tests: pnpm tsc --noEmit
 - PRs:
