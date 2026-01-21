@@ -11,6 +11,15 @@ pub fn create_shot(
     shot: ShotData,
     after_shot_id: Option<ShotId>,
 ) -> CommandResult {
+    create_shot_impl(state.inner(), section_id, shot, after_shot_id)
+}
+
+pub(crate) fn create_shot_impl(
+    state: &AppState,
+    section_id: SectionId,
+    shot: ShotData,
+    after_shot_id: Option<ShotId>,
+) -> CommandResult {
     state.execute(Command::CreateShot {
         section_id,
         shot,
@@ -22,6 +31,15 @@ pub fn create_shot(
 #[tauri::command]
 pub fn update_shot(
     state: State<AppState>,
+    section_id: SectionId,
+    shot_id: ShotId,
+    updates: ShotUpdates,
+) -> CommandResult {
+    update_shot_impl(state.inner(), section_id, shot_id, updates)
+}
+
+pub(crate) fn update_shot_impl(
+    state: &AppState,
     section_id: SectionId,
     shot_id: ShotId,
     updates: ShotUpdates,
@@ -40,6 +58,14 @@ pub fn delete_shot(
     section_id: SectionId,
     shot_id: ShotId,
 ) -> CommandResult {
+    delete_shot_impl(state.inner(), section_id, shot_id)
+}
+
+pub(crate) fn delete_shot_impl(
+    state: &AppState,
+    section_id: SectionId,
+    shot_id: ShotId,
+) -> CommandResult {
     state.execute(Command::DeleteShot {
         section_id,
         shot_id,
@@ -50,6 +76,15 @@ pub fn delete_shot(
 #[tauri::command]
 pub fn set_shot_virtual(
     state: State<AppState>,
+    section_id: SectionId,
+    shot_id: ShotId,
+    is_virtual: bool,
+) -> CommandResult {
+    set_shot_virtual_impl(state.inner(), section_id, shot_id, is_virtual)
+}
+
+pub(crate) fn set_shot_virtual_impl(
+    state: &AppState,
     section_id: SectionId,
     shot_id: ShotId,
     is_virtual: bool,
