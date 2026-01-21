@@ -71,6 +71,40 @@ function createMockSection(overrides?: Partial<MockSection>): MockSection {
  */
 export async function setupTauriMocks(page: Page): Promise<void> {
   await page.addInitScript(() => {
+    // Event listener registry for mock Tauri events (plugin:event|listen/emit/unlisten)
+    // This is defined early so it can be used by both mockHandler and __tauriEventMock
+    interface EventListener {
+      handler: number; // The callback ID (transformCallback ID)
+      event: string;
+    }
+    const eventListeners = new Map<number, EventListener>();
+    let eventListenerId = 0;
+    // Callback registry: transformCallback stores callbacks as window[`_${id}`]
+    const callbackRegistry = new Map<string, (arg: unknown) => void>();
+
+    // Helper to emit events to all listeners
+    const emitEvent = (eventName: string, payload: unknown) => {
+      eventListeners.forEach((listener) => {
+        if (listener.event === eventName) {
+          const callbackId = listener.handler;
+          // Callbacks are stored as window[`_${id}`] by transformCallback
+          const callbackKey = `_${callbackId}`;
+          const callback = (window as unknown as Record<string, unknown>)[callbackKey] as
+            | ((arg: unknown) => void)
+            | undefined;
+          if (callback) {
+            callback({ payload });
+          } else {
+            // Also check our local registry
+            const localCallback = callbackRegistry.get(String(callbackId));
+            if (localCallback) {
+              localCallback({ payload });
+            }
+          }
+        }
+      });
+    };
+
     // Store the mock command handler
     const mockHandler = (() => {
       let currentProject: {
@@ -303,6 +337,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const now = new Date().toISOString();
             sectionCounter = 0;
 
+            // Generate a consistent loadingId for this load operation
+            const loadingId = Date.now();
+
+            // Emit progress events (these are received by useLoadingProgress hook)
+            // Phase 1: Opening database
+            emitEvent('loading-progress', {
+              loadingId,
+              phase: 'opening_database',
+              phaseIndex: 0,
+              phaseCount: 8,
+              current: null,
+              total: null,
+              overallPercent: 5,
+              isIndeterminate: true,
+            });
+
             // Create a project with sections for testing
             const defaultSections = [
               {
@@ -332,6 +382,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               section_offsets: {},
             };
 
+            // Phase 2: Loading project data
+            emitEvent('loading-progress', {
+              loadingId,
+              phase: 'loading_project_data',
+              phaseIndex: 1,
+              phaseCount: 8,
+              current: 1,
+              total: 1,
+              overallPercent: 20,
+              isIndeterminate: false,
+            });
+
             // Generate mock stations from sections
             const mockStations: Array<{
               station_ref: { section_id: number; station_index: number };
@@ -354,9 +416,33 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }
             }
 
+            // Phase 3-7: Computing stations, validating, etc.
+            emitEvent('loading-progress', {
+              loadingId,
+              phase: 'computing_stations',
+              phaseIndex: 3,
+              phaseCount: 8,
+              current: mockStations.length,
+              total: mockStations.length,
+              overallPercent: 60,
+              isIndeterminate: false,
+            });
+
+            // Phase 8: Finalizing
+            emitEvent('loading-progress', {
+              loadingId,
+              phase: 'finalizing',
+              phaseIndex: 7,
+              phaseCount: 8,
+              current: null,
+              total: null,
+              overallPercent: 95,
+              isIndeterminate: true,
+            });
+
             // Return LoadProjectFullResult format
             return {
-              loadingId: Date.now(),
+              loadingId,
               project: currentProject,
               stations: mockStations,
               stats: {
@@ -1312,6 +1398,31 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] get_network_status called');
             return mockNetworkStatus;
 
+          // Plugin: event system handlers for @tauri-apps/api/event
+          case 'plugin:event|listen': {
+            const event = args?.event as string;
+            const handler = args?.handler as number;
+            console.log('[Mock IPC] plugin:event|listen', event, 'handler:', handler);
+            const listenerId = ++eventListenerId;
+            eventListeners.set(listenerId, { handler, event });
+            return listenerId;
+          }
+
+          case 'plugin:event|unlisten': {
+            const listenerId = args?.event as number; // unlisten passes event as the listener ID
+            console.log('[Mock IPC] plugin:event|unlisten', listenerId);
+            eventListeners.delete(listenerId);
+            return undefined;
+          }
+
+          case 'plugin:event|emit': {
+            const event = args?.event as string;
+            const payload = args?.payload;
+            console.log('[Mock IPC] plugin:event|emit', event, payload);
+            emitEvent(event, payload);
+            return undefined;
+          }
+
           default:
             console.warn(`[Mock IPC] Unhandled command: ${cmd}`);
             return null;
@@ -1386,29 +1497,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
     (window as unknown as Record<string, unknown>).__TAURI_DIALOG_MOCK__ = mockDialogModule;
 
     // Mock event system for E2E tests (loading progress events, etc.)
-    // This allows tests to emit events via page.evaluate() and have listeners respond
+    // This is wired to the plugin:event system so @tauri-apps/api/event.listen() works
     interface TauriEventMock {
-      listeners: Map<string, Set<(event: { payload: unknown }) => void>>;
-      listen: (event: string, handler: (event: { payload: unknown }) => void) => Promise<() => void>;
       emit: (event: string, payload: unknown) => void;
     }
     const tauriEventMock: TauriEventMock = {
-      listeners: new Map(),
-      listen: async (event: string, handler: (event: { payload: unknown }) => void) => {
-        if (!tauriEventMock.listeners.has(event)) {
-          tauriEventMock.listeners.set(event, new Set());
-        }
-        tauriEventMock.listeners.get(event)!.add(handler);
-        // Return unlisten function
-        return () => {
-          tauriEventMock.listeners.get(event)?.delete(handler);
-        };
-      },
+      // Emit events through the same system that @tauri-apps/api/event.listen uses
       emit: (event: string, payload: unknown) => {
-        const handlers = tauriEventMock.listeners.get(event);
-        if (handlers) {
-          handlers.forEach((handler) => handler({ payload }));
-        }
+        console.log('[Mock Event] emitEvent:', event, payload);
+        emitEvent(event, payload);
       },
     };
     (window as unknown as Record<string, unknown>).__tauriEventMock = tauriEventMock;
