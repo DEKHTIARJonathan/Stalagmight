@@ -120,10 +120,18 @@ export default function ExportDialog() {
         });
 
         if (selected) {
-          if (dataFormat === 'csv') {
-            await exportCsv(selected);
-          } else {
-            await exportJson(selected);
+          // Disable button during data export (no progress events for CSV/JSON)
+          setIsExporting(true);
+          try {
+            if (dataFormat === 'csv') {
+              await exportCsv(selected);
+            } else {
+              await exportJson(selected);
+            }
+          } finally {
+            if (isMountedRef.current) {
+              setIsExporting(false);
+            }
           }
         }
       } else {
@@ -429,9 +437,15 @@ export default function ExportDialog() {
         const phase = EXPORT_PHASE_LABELS[exportProgress?.phase ?? ''] ?? 'Preparing...';
         const overall = exportProgress?.overallPercent ?? 0;
         const isIndeterminate = exportProgress?.isIndeterminate ?? true;
+        // Compute phase progress from current/total (not overallPercent)
+        const current = exportProgress?.current;
+        const total = exportProgress?.total;
+        const phasePercent = (current != null && total != null && total > 0)
+          ? Math.round((current / total) * 100)
+          : undefined;
         return (
           <div className="mt-4 flex justify-center" data-testid="export-progress-container">
-            {isIndeterminate ? (
+            {isIndeterminate || phasePercent === undefined ? (
               <LoadingProgress
                 title="Exporting..."
                 phase={phase}
@@ -441,7 +455,7 @@ export default function ExportDialog() {
               <LoadingProgress
                 title="Exporting..."
                 phase={phase}
-                phaseProgress={overall}
+                phaseProgress={phasePercent}
                 overallProgress={overall}
               />
             )}

@@ -84,6 +84,16 @@ export function useLoadingProgress() {
           return;
         }
 
+        // Filter out export-related events - those are handled by ExportDialog directly
+        // Export phases use a separate flow and should not update project loading state
+        const { phase } = event.payload;
+        if (phase.startsWith('export_')) {
+          if (import.meta.env.DEV) {
+            console.debug('[Loading] Ignoring export event in project loading hook', phase);
+          }
+          return;
+        }
+
         // Update global tracker
         if (eventLoadingId > lastSeenBackendLoadingId) {
           lastSeenBackendLoadingId = eventLoadingId;
@@ -92,7 +102,7 @@ export function useLoadingProgress() {
         // Reset timeout on each progress event
         checkTimeout();
 
-        const { phase, phaseIndex, phaseCount, current, total, overallPercent, isIndeterminate } =
+        const { phaseIndex, phaseCount, current, total, overallPercent, isIndeterminate } =
           event.payload;
 
         setLoadingProgress({
