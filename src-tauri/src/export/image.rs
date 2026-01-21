@@ -313,11 +313,10 @@ fn escape_xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{SectionData, ShotData};
+    use crate::models::{SectionData, Shot, ShotData};
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn test_export_svg() {
+    fn simple_project() -> Project {
         let mut project = Project::new("Test".to_string(), None);
         project.add_section(SectionData {
             name: Some("Main".to_string()),
@@ -325,25 +324,32 @@ mod tests {
             date: None,
             color: "#4ecdc4".to_string(),
             direction: None,
-            shots: vec![
-                ShotData {
-                    azimuth_in: 0.0,
-                    azimuth_out: 180.0,
-                    length: 10.0,
-                    depth_in: 5.0,
-                    depth_out: 5.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    azimuth_in: 90.0,
-                    azimuth_out: 270.0,
-                    length: 10.0,
-                    depth_in: 5.0,
-                    depth_out: 6.0,
-                    ..Default::default()
-                },
-            ],
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 180.0,
+                length: 10.0,
+                depth_in: 5.0,
+                depth_out: 5.0,
+                ..Default::default()
+            }],
         });
+        project
+    }
+
+    #[test]
+    fn test_export_svg() {
+        let mut project = simple_project();
+        project.sections[0].shots.push(Shot::new(
+            2,
+            ShotData {
+                azimuth_in: 90.0,
+                azimuth_out: 270.0,
+                length: 10.0,
+                depth_in: 5.0,
+                depth_out: 6.0,
+                ..Default::default()
+            },
+        ));
 
         let file = NamedTempFile::new().unwrap();
         let path = file.path().with_extension("svg");
@@ -356,5 +362,59 @@ mod tests {
         assert!(contents.contains("Main"));
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_escape_xml_replaces_special_chars() {
+        let escaped = escape_xml(r#"<tag attr="a&b">'quote'</tag>"#);
+        assert_eq!(
+            escaped,
+            "&lt;tag attr=&quot;a&amp;b&quot;&gt;&apos;quote&apos;&lt;/tag&gt;"
+        );
+    }
+
+    #[test]
+    fn test_generate_svg_string_includes_grid_and_labels() {
+        let project = simple_project();
+        let mut options = ExportImageOptions::default();
+        options.include_grid = true;
+        options.include_labels = true;
+        options.include_section_names = true;
+
+        let svg = generate_svg_string(&project, &options).unwrap();
+        assert!(svg.contains("class=\"grid\""));
+        assert!(svg.contains("class=\"labels\""));
+        assert!(svg.contains("class=\"section-names\""));
+    }
+
+    #[test]
+    fn test_generate_svg_string_excludes_labels_when_disabled() {
+        let project = simple_project();
+        let mut options = ExportImageOptions::default();
+        options.include_labels = false;
+        options.include_section_names = false;
+
+        let svg = generate_svg_string(&project, &options).unwrap();
+        assert!(!svg.contains("class=\"labels\""));
+        assert!(!svg.contains("class=\"section-names\""));
+    }
+
+    #[test]
+    fn test_export_image_png_returns_error_and_writes_svg() {
+        let project = simple_project();
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("png");
+
+        let mut options = ExportImageOptions::default();
+        options.format = ImageFormat::Png;
+
+        let result = export_image(&project, &path, &options);
+        assert!(result.is_err());
+
+        let svg_path = path.with_extension("svg");
+        let contents = std::fs::read_to_string(&svg_path).unwrap();
+        assert!(contents.contains("<svg"));
+
+        std::fs::remove_file(&svg_path).ok();
     }
 }

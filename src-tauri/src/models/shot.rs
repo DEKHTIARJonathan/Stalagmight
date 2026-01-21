@@ -232,3 +232,93 @@ impl From<Shot> for ShotData {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_shot_data() -> ShotData {
+        ShotData {
+            azimuth_in: 10.0,
+            azimuth_out: 20.0,
+            length: 30.0,
+            depth_in: 5.0,
+            depth_out: 7.0,
+            pitch_in: Some(1.0),
+            pitch_out: Some(2.0),
+            left: Some(0.5),
+            right: Some(0.6),
+            up: Some(0.7),
+            down: Some(0.8),
+            comment: Some("note".to_string()),
+            is_virtual: false,
+            marker_index: Some(3),
+            temperature: Some(21.5),
+        }
+    }
+
+    #[test]
+    fn apply_updates_changes_only_provided_fields() {
+        let mut shot = Shot::new(1, base_shot_data());
+        let updates = ShotUpdates {
+            azimuth_in: Some(11.0),
+            depth_out: Some(8.0),
+            pitch_in: Some(None),
+            right: Some(Some(1.2)),
+            comment: Some(Some("updated".to_string())),
+            is_virtual: Some(true),
+            marker_index: Some(None),
+            ..Default::default()
+        };
+
+        shot.apply_updates(&updates);
+
+        assert_eq!(shot.azimuth_in, 11.0);
+        assert_eq!(shot.depth_out, 8.0);
+        assert!(shot.pitch_in.is_none());
+        assert_eq!(shot.right, Some(1.2));
+        assert_eq!(shot.comment.as_deref(), Some("updated"));
+        assert!(shot.is_virtual);
+        assert!(shot.marker_index.is_none());
+
+        assert_eq!(shot.azimuth_out, 20.0);
+        assert_eq!(shot.length, 30.0);
+        assert_eq!(shot.depth_in, 5.0);
+        assert_eq!(shot.pitch_out, Some(2.0));
+        assert_eq!(shot.left, Some(0.5));
+        assert_eq!(shot.up, Some(0.7));
+        assert_eq!(shot.down, Some(0.8));
+        assert_eq!(shot.temperature, Some(21.5));
+    }
+
+    #[test]
+    fn average_azimuth_handles_wraparound() {
+        let shot = Shot::new(
+            1,
+            ShotData {
+                azimuth_in: 350.0,
+                azimuth_out: 10.0,
+                length: 1.0,
+                depth_in: 0.0,
+                depth_out: 0.0,
+                ..Default::default()
+            },
+        );
+        let average = shot.average_azimuth();
+        assert!((average - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn depth_change_and_conversion_roundtrip() {
+        let shot = Shot::new(4, base_shot_data());
+        assert!((shot.depth_change() - 2.0).abs() < 1e-6);
+
+        let data = shot.to_shot_data();
+        assert_eq!(data.azimuth_in, 10.0);
+        assert_eq!(data.comment.as_deref(), Some("note"));
+
+        let from_shot: ShotData = Shot::new(5, base_shot_data()).into();
+        assert_eq!(from_shot.length, 30.0);
+        assert_eq!(from_shot.marker_index, Some(3));
+    }
+}
