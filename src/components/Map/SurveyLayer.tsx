@@ -5,6 +5,8 @@ import type { Config, GpsOrigin } from '../../types/config';
 import { metersToMapCoords } from '../../utils/coordinates';
 import { getDepthColor } from '../../utils/colors';
 import { hasLiveStyle } from './mapUtils';
+import { isNonInteractiveTool } from '../../utils/toolUtils';
+import type { ToolType } from '../../store/uiStore';
 
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
@@ -79,6 +81,9 @@ export default class SurveyLayer {
   private hoveredShotId: string | null = null;
   private snappedStationId: string | null = null;
 
+  // Active tool state (for disabling interactions when non-interactive tools are active)
+  private activeTool: ToolType = 'select';
+
   // Visibility state (for hidden feature detection)
   private stationsVisible: boolean = true;
   private shotsVisible: boolean = true;
@@ -115,6 +120,30 @@ export default class SurveyLayer {
     this.updateGhostVisualLayers();
     this.updateVisualState();
     this.updateDebugVisualization();
+  }
+
+  /**
+   * Set the active tool. When switching to a non-interactive tool (pan/zoom),
+   * clears hover state and notifies callbacks to sync MapCanvas state.
+   */
+  public setActiveTool(tool: ToolType): void {
+    const wasNonInteractive = isNonInteractiveTool(this.activeTool);
+    const isNonInteractive = isNonInteractiveTool(tool);
+
+    this.activeTool = tool;
+
+    // Clear hover when switching to non-interactive tool
+    if (!wasNonInteractive && isNonInteractive) {
+      this.hoveredStationId = null;
+      this.hoveredShotId = null;
+      this.updateVisualState();
+      this.map.getCanvas().style.cursor = '';
+
+      // CRITICAL: Also notify callbacks to clear MapCanvas state
+      this.callbacks.onFeatureHover?.(false);
+      this.callbacks.onStationHover?.(null);
+      this.callbacks.onShotHover?.(null);
+    }
   }
 
   // Helper methods that use fallback defaults when config is null
@@ -557,6 +586,9 @@ export default class SurveyLayer {
     // Stations take priority over shots
     // Store bound functions for proper cleanup in destroy()
     this.boundStationEnter = (e: maplibregl.MapLayerMouseEvent) => {
+      // Don't show hover effects for non-interactive tools (pan/zoom)
+      if (isNonInteractiveTool(this.activeTool)) return;
+
       this.map.getCanvas().style.cursor = 'pointer';
       this.callbacks.onFeatureHover?.(true);
       const feature = e.features?.[0];
@@ -589,6 +621,9 @@ export default class SurveyLayer {
 
     // Shot hover handlers - use HITBOX layer, stations take priority
     this.boundShotEnter = (e: maplibregl.MapLayerMouseEvent) => {
+      // Don't show hover effects for non-interactive tools (pan/zoom)
+      if (isNonInteractiveTool(this.activeTool)) return;
+
       // Don't highlight shots if a station is already hovered
       if (this.hoveredStationId) {
         return;
