@@ -45,3 +45,6 @@ useEffect syncing state to a ref-based object (e.g. SurveyLayer) should include 
 
 ## 2026-01-21 manual [pitfall]
 When combining mouse hover and keyboard focus for highlight state, mouse leave handlers must check if keyboard focus is active to avoid clearing the highlight
+
+## 2026-01-21 manual [pitfall]
+Tauri State<'_, T> cannot be cloned into spawn_blocking - use AppHandle.state::<T>() instead for 'static ownership
