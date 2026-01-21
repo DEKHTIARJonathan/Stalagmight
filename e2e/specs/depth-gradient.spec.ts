@@ -282,9 +282,28 @@ describe('Depth Gradient Persistence', () => {
     await browser.refresh();
     await waitForAppReady();
 
-    // Need to reopen project after refresh (project state needs recreation)
-    await createNewProject('Persistence Test After Refresh');
-    await waitForMapReady();
+    // Wait for the app to restore from persisted state
+    // The project may need to be reopened, but display settings should persist globally
+    await browser.waitUntil(
+      async () => {
+        // Check if store has loaded the persisted setting
+        const state = await getDepthGradientState();
+        return state === true;
+      },
+      {
+        timeout: 5000,
+        timeoutMsg: 'Display setting did not persist after refresh',
+        interval: 200,
+      }
+    );
+
+    // If we're back at global view, create a project to verify legend renders
+    const canvas = await $('canvas');
+    const hasCanvas = await canvas.isExisting();
+    if (!hasCanvas) {
+      await createNewProject('Persistence Verify');
+      await waitForMapReady();
+    }
 
     // Verify setting persisted - legend should be visible
     const legend = await $('[data-testid="depth-legend"]');
