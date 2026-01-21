@@ -1,7 +1,7 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-21T17:04:45.040371Z",
   "created_at": "2026-01-21T03:39:53.709972Z",
   "depends_on": [
     "fn-12-szd.3"
@@ -10,7 +10,7 @@
   "id": "fn-12-szd.7",
   "priority": null,
   "spec_path": ".flow/tasks/fn-12-szd.7.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Add tooltip hint to section items",
-  "updated_at": "2026-01-21T03:40:48.353171Z"
+  "updated_at": "2026-01-21T17:04:45.040384Z"
 }
