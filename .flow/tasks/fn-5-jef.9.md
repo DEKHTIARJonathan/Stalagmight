@@ -4,7 +4,7 @@
 Add Playwright E2E tests for depth gradient functionality.
 
 ## Playwright Test File
-`e2e-playwright/tests/depth-gradient.spec.ts`
+`e2e-playwright/depth-gradient.spec.ts`
 
 ### Test Cases
 ```typescript
@@ -20,17 +20,17 @@ test.describe('Depth Gradient', () => {
     await page.click('[data-testid="display-menu-button"]');
     
     // Click Depth Gradient toggle
-    await page.click('[data-testid="toggle-showDepthGradient"]');
+    await page.click('[data-testid="display-toggle-showDepthGradient"]');
     
     // Verify toggle is checked
-    await expect(page.locator('[data-testid="toggle-showDepthGradient"]'))
+    await expect(page.locator('[data-testid="display-toggle-showDepthGradient"]'))
       .toHaveAttribute('data-checked', 'true');
   });
 
   test('toggle shows depth legend', async ({ page }) => {
     // Enable depth gradient
     await page.click('[data-testid="display-menu-button"]');
-    await page.click('[data-testid="toggle-showDepthGradient"]');
+    await page.click('[data-testid="display-toggle-showDepthGradient"]');
     
     // Verify legend visible
     await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
@@ -39,8 +39,8 @@ test.describe('Depth Gradient', () => {
   test('toggle hides depth legend when disabled', async ({ page }) => {
     // Enable then disable
     await page.click('[data-testid="display-menu-button"]');
-    await page.click('[data-testid="toggle-showDepthGradient"]');
-    await page.click('[data-testid="toggle-showDepthGradient"]');
+    await page.click('[data-testid="display-toggle-showDepthGradient"]');
+    await page.click('[data-testid="display-toggle-showDepthGradient"]');
     
     // Verify legend hidden
     await expect(page.locator('[data-testid="depth-legend"]')).not.toBeVisible();
@@ -49,7 +49,7 @@ test.describe('Depth Gradient', () => {
   test('legend shows correct depth range', async ({ page }) => {
     // Enable depth gradient
     await page.click('[data-testid="display-menu-button"]');
-    await page.click('[data-testid="toggle-showDepthGradient"]');
+    await page.click('[data-testid="display-toggle-showDepthGradient"]');
     
     // Check legend labels (values depend on test fixture)
     const legend = page.locator('[data-testid="depth-legend"]');
@@ -59,7 +59,7 @@ test.describe('Depth Gradient', () => {
   test('depth gradient persists across page reload', async ({ page }) => {
     // Enable depth gradient
     await page.click('[data-testid="display-menu-button"]');
-    await page.click('[data-testid="toggle-showDepthGradient"]');
+    await page.click('[data-testid="display-toggle-showDepthGradient"]');
     
     // Reload page
     await page.reload();
@@ -75,9 +75,9 @@ Update `e2e-playwright/mocks/tauri-ipc.ts` to include `showDepthGradient` in dis
 
 ## Test IDs to Add
 - `data-testid="depth-legend"` on DepthLegend component
-- `data-testid="toggle-showDepthGradient"` on DisplayMenu toggle button
+- `data-testid="display-toggle-showDepthGradient"` on DisplayMenu toggle button
 ## Playwright Tests
-Location: `e2e-playwright/tests/depth-gradient.spec.ts`
+Location: `e2e-playwright/depth-gradient.spec.ts`
 
 ### Test Cases
 ```typescript
@@ -114,7 +114,7 @@ test.describe('Depth Gradient', () => {
 ```
 
 ## WebdriverIO Tests
-Location: `e2e-wdio/specs/depth-gradient.spec.ts`
+Location: `e2e/specs/depth-gradient.spec.ts`
 
 ### Test Cases
 - Same scenarios as Playwright for cross-browser coverage
@@ -128,19 +128,18 @@ May need to add mock project with depth data in `e2e-playwright/mocks/`.
 - Test on different project sizes (small, large)
 - Verify performance doesn't degrade significantly with depth gradient on
 ## Acceptance
-- [ ] Playwright test file at `e2e-playwright/tests/depth-gradient.spec.ts`
-- [ ] Test: toggle enables depth coloring
-- [ ] Test: legend shows when enabled
-- [ ] Test: legend hides when disabled
-- [ ] Test: legend shows depth values
-- [ ] Test: setting persists on reload
-- [ ] Mock data updated with showDepthGradient
-- [ ] Test IDs added to components
-- [ ] `pnpm test:ui` passes
+- [x] Playwright test file at `e2e-playwright/depth-gradient.spec.ts`
+- [x] Test: toggle enables depth coloring
+- [x] Test: legend shows when enabled
+- [x] Test: legend hides when disabled
+- [x] Test: legend shows depth values
+- [x] Test: setting persists on reload
+- [x] Mock data updated with showDepthGradient
+- [x] Test IDs added to components
+- [x] `pnpm test:ui` passes
 ## Done summary
-TBD
-
+Verified that Playwright and WebdriverIO tests for depth gradient functionality are already complete and passing. All acceptance criteria met: test files exist at e2e-playwright/depth-gradient.spec.ts and e2e/specs/depth-gradient.spec.ts with comprehensive coverage for toggle behavior, legend visibility, depth value display, and persistence. Mock data includes showDepthGradient, and all required test IDs (depth-legend, display-toggle-showDepthGradient) are present on components.
 ## Evidence
 - Commits:
-- Tests:
+- Tests: pnpm tsc --noEmit, pnpm test:ui --grep 'Depth Gradient', pnpm test:ui
 - PRs:
