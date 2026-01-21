@@ -2021,6 +2021,8 @@ cavechef/
 | Toggle Detail Panel | Ctrl+2 |
 | Toggle Data Table | Ctrl+3 |
 
+**Note**: When Pan (P) or Zoom (Z) tools are active, selection-related shortcuts (Ctrl+A, Delete/Backspace) are disabled to prevent accidental modifications while navigating the map. Hover effects and click selection are also disabled.
+
 ---
 
 ## Appendix B: Validation Rules

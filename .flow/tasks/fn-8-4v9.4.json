@@ -5,10 +5,23 @@
   "created_at": "2026-01-20T14:45:25.544322Z",
   "depends_on": [],
   "epic": "fn-8-4v9",
+  "evidence": {
+    "commits": [
+      "d5a709fd3c1de3df2ffdd14f67ec35ad3b0e3a15",
+      "bb2b57f1d95611e57ac2fccfc1e9a1f7b28e2df9",
+      "ced2d169e94a2a17b7cf4b50cc8ddcb98c11eaab",
+      "9350870936141d78297c9051b736009f96b0fe2c"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm vitest run src/utils/__tests__/toolUtils.test.ts",
+      "pnpm test:ui --grep non-interactive-tools"
+    ]
+  },
   "id": "fn-8-4v9.4",
   "priority": null,
   "spec_path": ".flow/tasks/fn-8-4v9.4.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add unit and E2E tests for non-interactive tool behavior",
-  "updated_at": "2026-01-21T05:17:46.234029Z"
+  "updated_at": "2026-01-21T05:39:31.041022Z"
 }
