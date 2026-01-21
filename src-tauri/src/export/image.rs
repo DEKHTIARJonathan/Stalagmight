@@ -7,6 +7,9 @@ use usvg::{Options, Tree};
 use super::depth_colors::{get_depth_color, DepthPreset};
 use crate::models::Project;
 
+/// Meters to feet conversion factor.
+const METERS_TO_FEET: f64 = 3.28084;
+
 /// Color mode for export visualization.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -342,6 +345,21 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
                 stroke_color,
                 stroke_style
             ));
+
+            // Add shot depth label if enabled
+            if options.include_shot_data {
+                let avg_depth = (from.coordinates.z + to.coordinates.z) / 2.0;
+                let depth_label =
+                    format_depth_label(avg_depth, &options.depth_unit, options.decimal_precision);
+                // Position label at midpoint of shot
+                let mid_x = (from.coordinates.x + to.coordinates.x) / 2.0;
+                let mid_y = -(from.coordinates.y + to.coordinates.y) / 2.0;
+                svg.push_str(&format!(
+                    r##"<text class="shot-label" x="{:.2}" y="{:.2}" dx="2" dy="-2" font-size="8" fill="#aaa">{}</text>
+"##,
+                    mid_x, mid_y, depth_label
+                ));
+            }
         }
 
         svg.push_str("</g>\n");
@@ -438,6 +456,25 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
         svg.push_str("</g>\n");
     }
 
+    // Draw depth legend if enabled and in depth mode
+    if options.include_legend && options.color_mode == ColorMode::Depth {
+        let bounds = Bounds {
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+        };
+        let legend = generate_depth_legend(
+            min_depth,
+            max_depth,
+            options.depth_preset,
+            &options.depth_unit,
+            options.decimal_precision,
+            &bounds,
+        );
+        svg.push_str(&legend);
+    }
+
     svg.push_str("</svg>\n");
 
     Ok(svg)
@@ -450,6 +487,121 @@ fn escape_xml(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+/// Bounds of the survey data in world coordinates.
+struct Bounds {
+    min_x: f64,
+    max_x: f64,
+    min_y: f64,
+    max_y: f64,
+}
+
+impl Bounds {
+    /// Width of the bounding box.
+    fn width(&self) -> f64 {
+        self.max_x - self.min_x
+    }
+
+    /// Height of the bounding box.
+    fn height(&self) -> f64 {
+        self.max_y - self.min_y
+    }
+}
+
+/// Format a depth label with unit conversion.
+///
+/// Converts meters to feet when unit is "ft". Applies decimal precision formatting.
+///
+/// # Arguments
+/// * `depth_meters` - Depth value in meters
+/// * `unit` - Unit string ("m" or "ft")
+/// * `precision` - Decimal places for formatting
+fn format_depth_label(depth_meters: f64, unit: &str, precision: u8) -> String {
+    let value = if unit == "ft" {
+        depth_meters * METERS_TO_FEET
+    } else {
+        depth_meters
+    };
+    format!("{:.prec$}{}", value, unit, prec = precision as usize)
+}
+
+/// Generate depth legend SVG element using viewBox-relative units.
+///
+/// Legend is positioned in the top-right corner with dimensions relative to project bounds.
+/// Uses multi-stop gradients matching the backend interpolation for all presets.
+///
+/// # Arguments
+/// * `min_depth` - Minimum depth in meters
+/// * `max_depth` - Maximum depth in meters
+/// * `preset` - Depth color preset
+/// * `depth_unit` - Unit string for labels ("m" or "ft")
+/// * `precision` - Decimal precision for labels
+/// * `bounds` - Project bounds for relative positioning
+fn generate_depth_legend(
+    min_depth: f64,
+    max_depth: f64,
+    preset: DepthPreset,
+    depth_unit: &str,
+    precision: u8,
+    bounds: &Bounds,
+) -> String {
+    // Size relative to project extent (in meters/user units)
+    let legend_width = (bounds.width() * 0.02).max(1.0); // 2% of width, min 1m
+    let legend_height = (bounds.height() * 0.15).max(5.0); // 15% of height, min 5m
+    let font_size = (bounds.height() * 0.02).max(0.8); // Relative font size
+
+    // Position: top-right corner with padding
+    let padding = bounds.width() * 0.02;
+    let x = bounds.max_x - legend_width - padding;
+    let y = -(bounds.max_y - padding); // Note: Y is flipped in SVG
+
+    // Multi-stop gradient for all presets (matches backend interpolation)
+    let colors = preset.colors();
+    let gradient_stops: String = colors
+        .stops
+        .iter()
+        .map(|stop| {
+            format!(
+                r#"<stop offset="{}%" stop-color="{}"/>"#,
+                stop.position * 100.0,
+                stop.color
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n    ");
+
+    let is_flat = (max_depth - min_depth).abs() < 0.1;
+    let flat_suffix = if is_flat { " (Flat)" } else { "" };
+
+    // Use format_depth_label for unit conversion
+    let min_label = format_depth_label(min_depth, depth_unit, precision);
+    let max_label = format_depth_label(max_depth, depth_unit, precision);
+
+    format!(
+        r##"
+<defs>
+  <linearGradient id="depth-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+    {gradient_stops}
+  </linearGradient>
+</defs>
+<g class="depth-legend" transform="translate({x:.2}, {y:.2})">
+  <rect width="{legend_width:.2}" height="{legend_height:.2}" fill="url(#depth-gradient)" stroke="#333" stroke-width="0.1"/>
+  <text x="{text_x:.2}" y="-0.3" text-anchor="middle" font-size="{font_size:.2}" fill="#fff">{min_label}{flat_suffix}</text>
+  <text x="{text_x:.2}" y="{max_y:.2}" text-anchor="middle" font-size="{font_size:.2}" fill="#fff">{max_label}</text>
+</g>"##,
+        gradient_stops = gradient_stops,
+        x = x,
+        y = y,
+        legend_width = legend_width,
+        legend_height = legend_height,
+        text_x = legend_width / 2.0,
+        font_size = font_size,
+        min_label = min_label,
+        flat_suffix = flat_suffix,
+        max_y = legend_height + font_size + 0.2,
+        max_label = max_label
+    )
 }
 
 #[cfg(test)]
@@ -782,5 +934,185 @@ mod tests {
             "Shot strokes should not use section color in depth mode");
         // Verify shots have strokes (grayscale colors will be #NNNNNN format)
         assert!(svg.contains("stroke=\"#"), "Shots should have stroke colors");
+    }
+
+    // === Depth legend tests ===
+
+    #[test]
+    fn test_format_depth_label_meters() {
+        let label = format_depth_label(10.0, "m", 1);
+        assert_eq!(label, "10.0m");
+    }
+
+    #[test]
+    fn test_format_depth_label_feet_conversion() {
+        // 10 meters = 32.8084 feet
+        let label = format_depth_label(10.0, "ft", 1);
+        assert_eq!(label, "32.8ft");
+    }
+
+    #[test]
+    fn test_format_depth_label_precision() {
+        let label = format_depth_label(10.123, "m", 2);
+        assert_eq!(label, "10.12m");
+
+        let label = format_depth_label(10.123, "m", 0);
+        assert_eq!(label, "10m");
+    }
+
+    #[test]
+    fn test_format_depth_label_feet_with_precision() {
+        // 3 meters = 9.84252 feet
+        let label = format_depth_label(3.0, "ft", 2);
+        assert_eq!(label, "9.84ft");
+    }
+
+    #[test]
+    fn test_depth_legend_contains_gradient() {
+        let bounds = Bounds {
+            min_x: 0.0,
+            max_x: 100.0,
+            min_y: 0.0,
+            max_y: 100.0,
+        };
+        let legend = generate_depth_legend(
+            0.0,
+            10.0,
+            super::super::depth_colors::DepthPreset::Thermal,
+            "m",
+            1,
+            &bounds,
+        );
+
+        assert!(legend.contains("linearGradient"), "Legend should contain gradient definition");
+        assert!(legend.contains("id=\"depth-gradient\""), "Gradient should have correct id");
+    }
+
+    #[test]
+    fn test_depth_legend_multi_stop_gradient() {
+        let bounds = Bounds {
+            min_x: 0.0,
+            max_x: 100.0,
+            min_y: 0.0,
+            max_y: 100.0,
+        };
+        let legend = generate_depth_legend(
+            0.0,
+            10.0,
+            super::super::depth_colors::DepthPreset::Thermal,
+            "m",
+            1,
+            &bounds,
+        );
+
+        // Thermal has 5 stops
+        assert!(legend.contains("offset=\"0%\""), "Should have 0% stop");
+        assert!(legend.contains("offset=\"25%\""), "Should have 25% stop");
+        assert!(legend.contains("offset=\"50%\""), "Should have 50% stop");
+        assert!(legend.contains("offset=\"75%\""), "Should have 75% stop");
+        assert!(legend.contains("offset=\"100%\""), "Should have 100% stop");
+    }
+
+    #[test]
+    fn test_depth_legend_labels_with_unit_conversion() {
+        let bounds = Bounds {
+            min_x: 0.0,
+            max_x: 100.0,
+            min_y: 0.0,
+            max_y: 100.0,
+        };
+        let legend = generate_depth_legend(0.0, 10.0, super::super::depth_colors::DepthPreset::Ocean, "ft", 1, &bounds);
+
+        // 0m = 0ft, 10m = 32.8ft
+        assert!(legend.contains("0.0ft"), "Legend should show min depth in feet");
+        assert!(legend.contains("32.8ft"), "Legend should show max depth converted to feet");
+    }
+
+    #[test]
+    fn test_depth_legend_flat_indicator() {
+        let bounds = Bounds {
+            min_x: 0.0,
+            max_x: 100.0,
+            min_y: 0.0,
+            max_y: 100.0,
+        };
+        let legend = generate_depth_legend(5.0, 5.0, super::super::depth_colors::DepthPreset::Ocean, "m", 1, &bounds);
+
+        assert!(legend.contains("(Flat)"), "Legend should show flat indicator when min ≈ max");
+    }
+
+    #[test]
+    fn test_svg_legend_only_in_depth_mode() {
+        let project = create_test_project_with_depths();
+
+        // Section mode - no legend
+        let options_section = ExportImageOptions {
+            color_mode: ColorMode::Section,
+            include_legend: true,
+            ..Default::default()
+        };
+        let svg_section = generate_svg_string(&project, &options_section).unwrap();
+        assert!(!svg_section.contains("depth-legend"), "Section mode should not have depth legend");
+
+        // Depth mode - has legend
+        let options_depth = ExportImageOptions {
+            color_mode: ColorMode::Depth,
+            include_legend: true,
+            ..Default::default()
+        };
+        let svg_depth = generate_svg_string(&project, &options_depth).unwrap();
+        assert!(svg_depth.contains("depth-legend"), "Depth mode with include_legend should have legend");
+    }
+
+    #[test]
+    fn test_svg_legend_can_be_disabled() {
+        let project = create_test_project_with_depths();
+        let options = ExportImageOptions {
+            color_mode: ColorMode::Depth,
+            include_legend: false,
+            ..Default::default()
+        };
+        let svg = generate_svg_string(&project, &options).unwrap();
+        assert!(!svg.contains("depth-legend"), "Legend should not appear when include_legend=false");
+    }
+
+    #[test]
+    fn test_shot_depth_labels_with_include_shot_data() {
+        let project = create_test_project_with_depths();
+        let options = ExportImageOptions {
+            include_shot_data: true,
+            depth_unit: "m".to_string(),
+            decimal_precision: 1,
+            ..Default::default()
+        };
+        let svg = generate_svg_string(&project, &options).unwrap();
+
+        // Should contain shot-label elements
+        assert!(svg.contains("shot-label"), "SVG should contain shot labels when include_shot_data=true");
+    }
+
+    #[test]
+    fn test_shot_depth_labels_unit_conversion() {
+        let project = create_test_project_with_depths();
+        let options = ExportImageOptions {
+            include_shot_data: true,
+            depth_unit: "ft".to_string(),
+            decimal_precision: 1,
+            ..Default::default()
+        };
+        let svg = generate_svg_string(&project, &options).unwrap();
+
+        // Shot labels should contain "ft" suffix
+        assert!(svg.contains("ft</text>"), "Shot labels should show feet when depth_unit=ft");
+    }
+
+    #[test]
+    fn test_no_shot_depth_labels_by_default() {
+        let project = create_test_project_with_depths();
+        let options = ExportImageOptions::default();
+        let svg = generate_svg_string(&project, &options).unwrap();
+
+        // Should NOT contain shot-label elements by default
+        assert!(!svg.contains("shot-label"), "SVG should not contain shot labels by default");
     }
 }
