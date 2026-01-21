@@ -155,18 +155,41 @@ impl Default for LoggingConfig {
 impl Default for ShortcutsConfig {
     fn default() -> Self {
         Self {
-            select: "S".to_string(),
-            pan: "P".to_string(),
-            zoom: "Z".to_string(),
-            draw: "D".to_string(),
-            delete: "X".to_string(),
-            merge: "M".to_string(),
-            measure: "R".to_string(),
-            move_section: "V".to_string(),
-            move_station: "T".to_string(),
-            undo: "Ctrl+Z".to_string(),
-            redo: "Ctrl+Y".to_string(),
-            save: "Ctrl+S".to_string(),
+            // Tools
+            select: vec!["S".to_string()],
+            pan: vec!["P".to_string()],
+            zoom: vec!["Z".to_string()],
+            quick_zoom: vec!["Q".to_string()],
+            draw: vec!["D".to_string()],
+            delete_tool: vec!["X".to_string()],
+            merge: vec!["M".to_string()],
+            measure: vec!["R".to_string()],
+            move_section: vec!["V".to_string()],
+            move_station: vec!["T".to_string()],
+
+            // Edit
+            undo: vec!["Ctrl+Z".to_string()],
+            redo: vec!["Ctrl+Y".to_string(), "Ctrl+Shift+Z".to_string()],
+            save: vec!["Ctrl+S".to_string()],
+
+            // View
+            toggle_depth_gradient: vec!["G".to_string()],
+            toggle_grid: vec!["Shift+G".to_string()],
+            toggle_satellite: vec!["B".to_string()],
+            toggle_station_labels: vec!["L".to_string()],
+            toggle_shot_labels: vec!["Shift+L".to_string()],
+            toggle_section_labels: vec!["Ctrl+L".to_string()],
+            fit_to_bounds: vec!["F".to_string()],
+            zoom_in: vec!["Equal".to_string(), "Plus".to_string()],
+            zoom_out: vec!["Minus".to_string()],
+
+            // Panels
+            toggle_sections_panel: vec!["1".to_string()],
+            toggle_detail_panel: vec!["2".to_string()],
+            toggle_data_table: vec!["3".to_string()],
+
+            // Legacy field (always None for new configs)
+            legacy_delete: None,
         }
     }
 }

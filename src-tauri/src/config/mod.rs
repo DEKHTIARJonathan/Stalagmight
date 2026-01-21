@@ -1,7 +1,7 @@
 pub mod defaults;
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::path::PathBuf;
 
 /// Application configuration
@@ -437,20 +437,363 @@ pub struct LoggingConfig {
     pub max_directory_size_mb: u32,
 }
 
+/// Maximum number of bindings per action
+const MAX_BINDINGS_PER_ACTION: usize = 2;
+
+/// Keyboard shortcuts configuration
+/// Supports multiple bindings per action (max 2) with backward-compatible deserialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ShortcutsConfig {
-    pub select: String,
-    pub pan: String,
-    pub zoom: String,
-    pub draw: String,
-    pub delete: String,
-    pub merge: String,
-    pub measure: String,
-    pub move_section: String,
-    pub move_station: String,
-    pub undo: String,
-    pub redo: String,
-    pub save: String,
+    // Tools
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub select: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub pan: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub zoom: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub quick_zoom: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub draw: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub delete_tool: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub merge: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub measure: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub move_section: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub move_station: Vec<String>,
+
+    // Edit
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub undo: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub redo: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub save: Vec<String>,
+
+    // View
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub toggle_depth_gradient: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub toggle_grid: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub toggle_satellite: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub toggle_station_labels: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub toggle_shot_labels: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub toggle_section_labels: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub fit_to_bounds: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub zoom_in: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub zoom_out: Vec<String>,
+
+    // Panels
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub toggle_sections_panel: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub toggle_detail_panel: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub toggle_data_table: Vec<String>,
+
+    // Legacy field for migration (accepts old "delete" key, maps to delete_tool)
+    #[serde(default, skip_serializing, rename = "delete")]
+    legacy_delete: Option<LegacyShortcut>,
+}
+
+/// Helper enum to deserialize legacy single-string shortcut for migration
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum LegacyShortcut {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ShortcutsConfig {
+    /// Normalize all shortcuts to canonical form
+    /// - Sorts modifiers: Ctrl -> Alt -> Shift -> Key
+    /// - Maps special keys to canonical names
+    /// - Truncates to max 2 bindings per action
+    /// - Fills missing fields from defaults
+    /// - Logs warnings for invalid shortcuts
+    pub fn normalize(&mut self) {
+        let defaults = ShortcutsConfig::default();
+
+        // Migrate legacy "delete" field to delete_tool
+        // Only migrate if delete_tool still has its default value (wasn't explicitly set)
+        if let Some(legacy) = self.legacy_delete.take() {
+            let delete_tool_is_default = self.delete_tool == defaults.delete_tool;
+            if delete_tool_is_default {
+                self.delete_tool = match legacy {
+                    LegacyShortcut::Single(s) => vec![s],
+                    LegacyShortcut::Multiple(v) => v,
+                };
+                tracing::info!("Migrated legacy 'delete' shortcut to 'delete_tool'");
+            }
+        }
+
+        // Normalize each field
+        normalize_shortcut_field(&mut self.select, &defaults.select, "select");
+        normalize_shortcut_field(&mut self.pan, &defaults.pan, "pan");
+        normalize_shortcut_field(&mut self.zoom, &defaults.zoom, "zoom");
+        normalize_shortcut_field(&mut self.quick_zoom, &defaults.quick_zoom, "quick_zoom");
+        normalize_shortcut_field(&mut self.draw, &defaults.draw, "draw");
+        normalize_shortcut_field(&mut self.delete_tool, &defaults.delete_tool, "delete_tool");
+        normalize_shortcut_field(&mut self.merge, &defaults.merge, "merge");
+        normalize_shortcut_field(&mut self.measure, &defaults.measure, "measure");
+        normalize_shortcut_field(&mut self.move_section, &defaults.move_section, "move_section");
+        normalize_shortcut_field(&mut self.move_station, &defaults.move_station, "move_station");
+        normalize_shortcut_field(&mut self.undo, &defaults.undo, "undo");
+        normalize_shortcut_field(&mut self.redo, &defaults.redo, "redo");
+        normalize_shortcut_field(&mut self.save, &defaults.save, "save");
+        normalize_shortcut_field(
+            &mut self.toggle_depth_gradient,
+            &defaults.toggle_depth_gradient,
+            "toggle_depth_gradient",
+        );
+        normalize_shortcut_field(&mut self.toggle_grid, &defaults.toggle_grid, "toggle_grid");
+        normalize_shortcut_field(
+            &mut self.toggle_satellite,
+            &defaults.toggle_satellite,
+            "toggle_satellite",
+        );
+        normalize_shortcut_field(
+            &mut self.toggle_station_labels,
+            &defaults.toggle_station_labels,
+            "toggle_station_labels",
+        );
+        normalize_shortcut_field(
+            &mut self.toggle_shot_labels,
+            &defaults.toggle_shot_labels,
+            "toggle_shot_labels",
+        );
+        normalize_shortcut_field(
+            &mut self.toggle_section_labels,
+            &defaults.toggle_section_labels,
+            "toggle_section_labels",
+        );
+        normalize_shortcut_field(
+            &mut self.fit_to_bounds,
+            &defaults.fit_to_bounds,
+            "fit_to_bounds",
+        );
+        normalize_shortcut_field(&mut self.zoom_in, &defaults.zoom_in, "zoom_in");
+        normalize_shortcut_field(&mut self.zoom_out, &defaults.zoom_out, "zoom_out");
+        normalize_shortcut_field(
+            &mut self.toggle_sections_panel,
+            &defaults.toggle_sections_panel,
+            "toggle_sections_panel",
+        );
+        normalize_shortcut_field(
+            &mut self.toggle_detail_panel,
+            &defaults.toggle_detail_panel,
+            "toggle_detail_panel",
+        );
+        normalize_shortcut_field(
+            &mut self.toggle_data_table,
+            &defaults.toggle_data_table,
+            "toggle_data_table",
+        );
+    }
+}
+
+/// Normalize a shortcut field:
+/// - If empty, use defaults
+/// - Remove empty strings
+/// - Truncate to MAX_BINDINGS_PER_ACTION
+/// - Normalize each shortcut string
+fn normalize_shortcut_field(field: &mut Vec<String>, defaults: &[String], field_name: &str) {
+    // Remove empty strings
+    field.retain(|s| !s.trim().is_empty());
+
+    // If empty after cleanup, use defaults
+    if field.is_empty() {
+        *field = defaults.to_vec();
+        return;
+    }
+
+    // Truncate to max bindings
+    if field.len() > MAX_BINDINGS_PER_ACTION {
+        tracing::warn!(
+            "Shortcut '{}' has {} bindings, truncating to {}",
+            field_name,
+            field.len(),
+            MAX_BINDINGS_PER_ACTION
+        );
+        field.truncate(MAX_BINDINGS_PER_ACTION);
+    }
+
+    // Normalize each shortcut
+    let mut normalized: Vec<String> = Vec::with_capacity(field.len());
+    for shortcut in field.iter() {
+        match normalize_shortcut(shortcut) {
+            Some(n) => normalized.push(n),
+            None => {
+                tracing::warn!(
+                    "Invalid shortcut '{}' for '{}', falling back to default",
+                    shortcut,
+                    field_name
+                );
+                *field = defaults.to_vec();
+                return;
+            }
+        }
+    }
+    *field = normalized;
+}
+
+/// Normalize a single shortcut string to canonical form
+/// Returns None if the shortcut is invalid
+fn normalize_shortcut(shortcut: &str) -> Option<String> {
+    let shortcut = shortcut.trim();
+    if shortcut.is_empty() {
+        return None;
+    }
+
+    // Special case: single "+" key
+    if shortcut == "+" {
+        return Some("Plus".to_string());
+    }
+
+    // Special case: single "-" key
+    if shortcut == "-" {
+        return Some("Minus".to_string());
+    }
+
+    // Special case: single "=" key
+    if shortcut == "=" {
+        return Some("Equal".to_string());
+    }
+
+    // Split by + to get modifiers and key
+    let parts: Vec<&str> = shortcut.split('+').map(|s| s.trim()).collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    // Check for empty parts (e.g., "Ctrl++S" has empty part)
+    // But allow trailing empty part for "Ctrl++" meaning Ctrl+Plus
+    let has_empty_in_middle = parts.iter().enumerate().any(|(i, p)| {
+        p.is_empty() && i < parts.len() - 1
+    });
+    if has_empty_in_middle {
+        return None;
+    }
+
+    let mut ctrl = false;
+    let mut alt = false;
+    let mut shift = false;
+    let mut key: Option<String> = None;
+
+    for (i, part) in parts.iter().enumerate() {
+        // Handle empty trailing part as "+" key (e.g., "Ctrl+")
+        if part.is_empty() {
+            if i == parts.len() - 1 && i > 0 {
+                // Trailing empty means "+" key after modifiers
+                if key.is_some() {
+                    return None;
+                }
+                key = Some("Plus".to_string());
+                continue;
+            }
+            return None;
+        }
+
+        let lower = part.to_lowercase();
+        match lower.as_str() {
+            "ctrl" | "control" | "meta" | "cmd" | "command" => ctrl = true,
+            "alt" | "option" => alt = true,
+            "shift" => shift = true,
+            _ => {
+                // This is the key (should be only one non-modifier)
+                if key.is_some() {
+                    // Multiple non-modifier keys is invalid
+                    return None;
+                }
+                key = Some(normalize_key_name(part));
+            }
+        }
+    }
+
+    // Must have exactly one key
+    let key = key?;
+
+    // Build canonical form: Ctrl+Alt+Shift+Key
+    let mut result = String::new();
+    if ctrl {
+        result.push_str("Ctrl+");
+    }
+    if alt {
+        result.push_str("Alt+");
+    }
+    if shift {
+        result.push_str("Shift+");
+    }
+    result.push_str(&key);
+
+    Some(result)
+}
+
+/// Map key names to canonical form
+fn normalize_key_name(key: &str) -> String {
+    let lower = key.to_lowercase();
+    match lower.as_str() {
+        // Special keys - canonical names
+        " " | "space" | "spacebar" => "Space".to_string(),
+        "enter" | "return" => "Enter".to_string(),
+        "esc" | "escape" => "Escape".to_string(),
+        "up" | "arrowup" => "ArrowUp".to_string(),
+        "down" | "arrowdown" => "ArrowDown".to_string(),
+        "left" | "arrowleft" => "ArrowLeft".to_string(),
+        "right" | "arrowright" => "ArrowRight".to_string(),
+        "+" | "plus" => "Plus".to_string(),
+        "-" | "minus" => "Minus".to_string(),
+        "=" | "equal" | "equals" => "Equal".to_string(),
+        "backspace" | "back" => "Backspace".to_string(),
+        "delete" | "del" => "Delete".to_string(),
+        "tab" => "Tab".to_string(),
+        "home" => "Home".to_string(),
+        "end" => "End".to_string(),
+        "pageup" | "pgup" => "PageUp".to_string(),
+        "pagedown" | "pgdn" => "PageDown".to_string(),
+        "insert" | "ins" => "Insert".to_string(),
+        // Function keys
+        k if k.starts_with('f') && k.len() > 1 && k[1..].parse::<u8>().is_ok() => {
+            format!("F{}", &k[1..])
+        }
+        // Single letter keys - uppercase
+        k if k.len() == 1 && k.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) => {
+            k.to_uppercase()
+        }
+        // Numbers and other keys - as-is
+        _ => key.to_string(),
+    }
+}
+
+/// Custom deserializer that accepts both single String and Vec<String>
+/// for backward compatibility with legacy config format
+fn deserialize_shortcut_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        Single(String),
+        Multiple(Vec<String>),
+    }
+
+    match StringOrVec::deserialize(deserializer)? {
+        StringOrVec::Single(s) => Ok(vec![s]),
+        StringOrVec::Multiple(v) => Ok(v),
+    }
 }
 
 impl Config {
@@ -513,6 +856,7 @@ impl Config {
     /// Handles NaN/inf by falling back to defaults
     pub fn normalize(&mut self) {
         self.map.normalize();
+        self.shortcuts.normalize();
     }
 
     /// Migrate legacy config fields to new structure
@@ -1404,5 +1748,268 @@ threshold_pixels = 25
         assert!(config.map.snap.enabled_draw);
         assert!(!config.map.snap.enabled_merge);
         assert!(config.map.snap.enabled_measure);
+    }
+
+    // ========================================================================
+    // Shortcut Deserializer Tests
+    // ========================================================================
+
+    #[test]
+    fn test_shortcut_deserialize_legacy_string() {
+        // Test deserializing old format (single string)
+        let toml_str = r#"
+select = "S"
+pan = "P"
+"#;
+        let config: ShortcutsConfig = toml::from_str(toml_str).expect("Legacy string should parse");
+        assert_eq!(config.select, vec!["S".to_string()]);
+        assert_eq!(config.pan, vec!["P".to_string()]);
+    }
+
+    #[test]
+    fn test_shortcut_deserialize_new_array() {
+        // Test deserializing new format (array)
+        let toml_str = r#"
+select = ["S", "Shift+S"]
+pan = ["P"]
+"#;
+        let config: ShortcutsConfig = toml::from_str(toml_str).expect("Array format should parse");
+        assert_eq!(config.select, vec!["S".to_string(), "Shift+S".to_string()]);
+        assert_eq!(config.pan, vec!["P".to_string()]);
+    }
+
+    #[test]
+    fn test_shortcut_deserialize_mixed_formats() {
+        // Test deserializing mix of old and new formats
+        let toml_str = r#"
+select = "S"
+pan = ["P", "Shift+P"]
+zoom = "Z"
+"#;
+        let config: ShortcutsConfig = toml::from_str(toml_str).expect("Mixed format should parse");
+        assert_eq!(config.select, vec!["S".to_string()]);
+        assert_eq!(config.pan, vec!["P".to_string(), "Shift+P".to_string()]);
+        assert_eq!(config.zoom, vec!["Z".to_string()]);
+    }
+
+    #[test]
+    fn test_shortcut_missing_fields_use_defaults() {
+        // Test that missing fields get defaults via #[serde(default)]
+        let toml_str = r#"
+select = "S"
+"#;
+        let mut config: ShortcutsConfig = toml::from_str(toml_str).expect("Partial config should parse");
+        config.normalize();
+
+        // Explicit value
+        assert_eq!(config.select, vec!["S".to_string()]);
+        // Missing fields should have defaults after normalize
+        assert_eq!(config.pan, vec!["P".to_string()]);
+        assert_eq!(config.undo, vec!["Ctrl+Z".to_string()]);
+        assert_eq!(config.zoom_in, vec!["Equal".to_string(), "Plus".to_string()]);
+    }
+
+    // ========================================================================
+    // Shortcut Normalization Tests
+    // ========================================================================
+
+    #[test]
+    fn test_normalize_shortcut_simple_key() {
+        assert_eq!(normalize_shortcut("S"), Some("S".to_string()));
+        assert_eq!(normalize_shortcut("s"), Some("S".to_string()));
+        assert_eq!(normalize_shortcut("1"), Some("1".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_shortcut_with_modifiers() {
+        assert_eq!(normalize_shortcut("Ctrl+S"), Some("Ctrl+S".to_string()));
+        assert_eq!(normalize_shortcut("ctrl+s"), Some("Ctrl+S".to_string()));
+        assert_eq!(normalize_shortcut("CTRL+S"), Some("Ctrl+S".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_shortcut_modifier_order() {
+        // Modifiers should always be Ctrl+Alt+Shift+Key
+        assert_eq!(normalize_shortcut("Shift+Ctrl+S"), Some("Ctrl+Shift+S".to_string()));
+        assert_eq!(normalize_shortcut("Alt+Ctrl+S"), Some("Ctrl+Alt+S".to_string()));
+        assert_eq!(normalize_shortcut("Shift+Alt+Ctrl+S"), Some("Ctrl+Alt+Shift+S".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_shortcut_platform_aliases() {
+        // Meta/Cmd/Command should normalize to Ctrl
+        assert_eq!(normalize_shortcut("Meta+S"), Some("Ctrl+S".to_string()));
+        assert_eq!(normalize_shortcut("Cmd+S"), Some("Ctrl+S".to_string()));
+        assert_eq!(normalize_shortcut("Command+S"), Some("Ctrl+S".to_string()));
+        assert_eq!(normalize_shortcut("Option+S"), Some("Alt+S".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_shortcut_special_keys() {
+        assert_eq!(normalize_shortcut("Space"), Some("Space".to_string()));
+        assert_eq!(normalize_shortcut("space"), Some("Space".to_string()));
+        assert_eq!(normalize_shortcut("Enter"), Some("Enter".to_string()));
+        assert_eq!(normalize_shortcut("Return"), Some("Enter".to_string()));
+        assert_eq!(normalize_shortcut("Escape"), Some("Escape".to_string()));
+        assert_eq!(normalize_shortcut("Esc"), Some("Escape".to_string()));
+        assert_eq!(normalize_shortcut("ArrowUp"), Some("ArrowUp".to_string()));
+        assert_eq!(normalize_shortcut("Up"), Some("ArrowUp".to_string()));
+        assert_eq!(normalize_shortcut("ArrowDown"), Some("ArrowDown".to_string()));
+        assert_eq!(normalize_shortcut("Down"), Some("ArrowDown".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_shortcut_plus_minus_equal() {
+        assert_eq!(normalize_shortcut("+"), Some("Plus".to_string()));
+        assert_eq!(normalize_shortcut("Plus"), Some("Plus".to_string()));
+        assert_eq!(normalize_shortcut("-"), Some("Minus".to_string()));
+        assert_eq!(normalize_shortcut("Minus"), Some("Minus".to_string()));
+        assert_eq!(normalize_shortcut("="), Some("Equal".to_string()));
+        assert_eq!(normalize_shortcut("Equal"), Some("Equal".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_shortcut_function_keys() {
+        assert_eq!(normalize_shortcut("F1"), Some("F1".to_string()));
+        assert_eq!(normalize_shortcut("f1"), Some("F1".to_string()));
+        assert_eq!(normalize_shortcut("F12"), Some("F12".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_shortcut_invalid() {
+        // Empty string
+        assert_eq!(normalize_shortcut(""), None);
+        // Only whitespace
+        assert_eq!(normalize_shortcut("   "), None);
+        // Multiple non-modifier keys
+        assert_eq!(normalize_shortcut("A+B"), None);
+        // Empty parts in middle
+        assert_eq!(normalize_shortcut("Ctrl++S"), None);
+    }
+
+    #[test]
+    fn test_normalize_shortcut_trailing_plus() {
+        // "Ctrl+" is valid and means Ctrl+Plus
+        assert_eq!(normalize_shortcut("Ctrl+"), Some("Ctrl+Plus".to_string()));
+        assert_eq!(normalize_shortcut("Shift+"), Some("Shift+Plus".to_string()));
+    }
+
+    #[test]
+    fn test_shortcut_config_normalize_truncates() {
+        let mut config = ShortcutsConfig::default();
+        config.select = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        config.normalize();
+        // Should truncate to 2
+        assert_eq!(config.select.len(), 2);
+        assert_eq!(config.select, vec!["A".to_string(), "B".to_string()]);
+    }
+
+    #[test]
+    fn test_shortcut_config_normalize_removes_empty() {
+        let mut config = ShortcutsConfig::default();
+        config.select = vec!["".to_string(), "S".to_string(), "  ".to_string()];
+        config.normalize();
+        // Should remove empty and only keep "S"
+        assert_eq!(config.select, vec!["S".to_string()]);
+    }
+
+    #[test]
+    fn test_shortcut_config_normalize_empty_uses_default() {
+        let mut config = ShortcutsConfig::default();
+        config.select = vec![];
+        config.normalize();
+        // Should use default
+        assert_eq!(config.select, vec!["S".to_string()]);
+    }
+
+    #[test]
+    fn test_shortcut_config_normalize_invalid_falls_back() {
+        let mut config = ShortcutsConfig::default();
+        config.select = vec!["A+B".to_string()]; // Invalid (two non-modifier keys)
+        config.normalize();
+        // Should fall back to default
+        assert_eq!(config.select, vec!["S".to_string()]);
+    }
+
+    // ========================================================================
+    // Legacy Delete Migration Tests
+    // ========================================================================
+
+    #[test]
+    fn test_shortcut_legacy_delete_migration() {
+        // Old config with "delete" field should migrate to "delete_tool"
+        let toml_str = r#"
+select = "S"
+delete = "X"
+"#;
+        let mut config: ShortcutsConfig = toml::from_str(toml_str).expect("Legacy delete should parse");
+        config.normalize();
+
+        // delete_tool should have the migrated value
+        assert_eq!(config.delete_tool, vec!["X".to_string()]);
+    }
+
+    #[test]
+    fn test_shortcut_legacy_delete_array_migration() {
+        // Legacy delete as array
+        let toml_str = r#"
+select = "S"
+delete = ["X", "Shift+X"]
+"#;
+        let mut config: ShortcutsConfig = toml::from_str(toml_str).expect("Legacy delete array should parse");
+        config.normalize();
+
+        assert_eq!(config.delete_tool, vec!["X".to_string(), "Shift+X".to_string()]);
+    }
+
+    #[test]
+    fn test_shortcut_new_delete_tool_takes_precedence() {
+        // If both delete and delete_tool present, delete_tool wins
+        let toml_str = r#"
+delete_tool = ["Y"]
+delete = "X"
+"#;
+        let mut config: ShortcutsConfig = toml::from_str(toml_str).expect("Config should parse");
+        config.normalize();
+
+        // delete_tool should keep its value, not be overwritten by legacy delete
+        assert_eq!(config.delete_tool, vec!["Y".to_string()]);
+    }
+
+    // ========================================================================
+    // New Actions Tests
+    // ========================================================================
+
+    #[test]
+    fn test_shortcut_new_actions_defaults() {
+        let config = ShortcutsConfig::default();
+
+        // Verify new actions have defaults
+        assert_eq!(config.delete_tool, vec!["X".to_string()]);
+        assert_eq!(config.quick_zoom, vec!["Q".to_string()]);
+        assert_eq!(config.toggle_station_labels, vec!["L".to_string()]);
+        assert_eq!(config.toggle_shot_labels, vec!["Shift+L".to_string()]);
+        assert_eq!(config.toggle_section_labels, vec!["Ctrl+L".to_string()]);
+        assert_eq!(config.zoom_in, vec!["Equal".to_string(), "Plus".to_string()]);
+        assert_eq!(config.zoom_out, vec!["Minus".to_string()]);
+        assert_eq!(config.toggle_depth_gradient, vec!["G".to_string()]);
+        assert_eq!(config.toggle_grid, vec!["Shift+G".to_string()]);
+        assert_eq!(config.toggle_satellite, vec!["B".to_string()]);
+        assert_eq!(config.fit_to_bounds, vec!["F".to_string()]);
+        assert_eq!(config.toggle_sections_panel, vec!["1".to_string()]);
+        assert_eq!(config.toggle_detail_panel, vec!["2".to_string()]);
+        assert_eq!(config.toggle_data_table, vec!["3".to_string()]);
+    }
+
+    #[test]
+    fn test_shortcut_config_serialization_roundtrip() {
+        let original = ShortcutsConfig::default();
+        let serialized = toml::to_string_pretty(&original).expect("Should serialize");
+        let deserialized: ShortcutsConfig = toml::from_str(&serialized).expect("Should deserialize");
+
+        assert_eq!(deserialized.select, original.select);
+        assert_eq!(deserialized.delete_tool, original.delete_tool);
+        assert_eq!(deserialized.zoom_in, original.zoom_in);
+        assert_eq!(deserialized.toggle_station_labels, original.toggle_station_labels);
     }
 }
