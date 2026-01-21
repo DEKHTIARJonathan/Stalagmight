@@ -180,9 +180,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 date: now.split('T')[0],
                 color: '#4ECDC4',
                 shots: [
-                  { id: 1, azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: 0, depth_out: -2 },
-                  { id: 2, azimuth_in: 90, azimuth_out: 270, length: 15, depth_in: -2, depth_out: -5 },
-                  { id: 3, azimuth_in: 120, azimuth_out: 300, length: 8, depth_in: -5, depth_out: -3 },
+                  { id: 1, azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: 0, depth_out: -2, is_virtual: false },
+                  { id: 2, azimuth_in: 90, azimuth_out: 270, length: 15, depth_in: -2, depth_out: -5, is_virtual: false },
+                  { id: 3, azimuth_in: 120, azimuth_out: 300, length: 8, depth_in: -5, depth_out: -3, is_virtual: true }, // Virtual shot for testing
                 ],
               },
               {
@@ -192,9 +192,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 date: now.split('T')[0],
                 color: '#FF6B6B',
                 shots: [
-                  { id: 1, azimuth_in: 180, azimuth_out: 0, length: 12, depth_in: -5, depth_out: -8 },
-                  { id: 2, azimuth_in: 210, azimuth_out: 30, length: 9, depth_in: -8, depth_out: -6 },
+                  { id: 1, azimuth_in: 180, azimuth_out: 0, length: 12, depth_in: -5, depth_out: -8, is_virtual: false },
+                  { id: 2, azimuth_in: 210, azimuth_out: 30, length: 9, depth_in: -8, depth_out: -6, is_virtual: false },
                 ],
+              },
+              {
+                id: ++sectionCounter,
+                name: 'Empty Section',
+                surveyor: 'Test Surveyor',
+                date: now.split('T')[0],
+                color: '#9B59B6',
+                shots: [], // Empty section for edge case testing
               },
             ];
 
@@ -1089,9 +1097,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] create_shot called with:', args);
             return { success: true, shot_id: Date.now() };
 
-          case 'set_shot_virtual':
+          case 'set_shot_virtual': {
             console.log('[Mock IPC] set_shot_virtual called with:', args);
+            const sectionId = args?.section_id as number;
+            const shotId = args?.shot_id as number;
+            const isVirtual = args?.is_virtual as boolean;
+            if (currentProject && sectionId && shotId !== undefined) {
+              const section = currentProject.sections.find(s => s.id === sectionId);
+              if (section) {
+                const shot = section.shots.find((s: { id: number }) => s.id === shotId);
+                if (shot) {
+                  (shot as { is_virtual?: boolean }).is_virtual = isVirtual;
+                }
+              }
+            }
             return { success: true };
+          }
 
           // Cache commands
           case 'get_cache_stats':
