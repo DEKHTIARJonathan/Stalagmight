@@ -1294,29 +1294,59 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] export_json called with:', args);
             return { success: true, path: args?.path };
 
-          case 'export_image':
+          case 'export_image': {
             console.log('[Mock IPC] export_image called with:', args);
-            // Emit export-progress events to test progress UI
+            // Generate a unique loadingId for this export (matches ProgressEmitter behavior)
+            const exportLoadingId = Date.now();
+            // Emit loading-progress events using shared infrastructure format
             setTimeout(() => {
               window.__TAURI_INTERNALS__?.invoke('plugin:event|emit', {
-                event: 'export-progress',
-                payload: { stage: 'Generating SVG', percent: 30, message: null },
+                event: 'loading-progress',
+                payload: {
+                  loadingId: exportLoadingId,
+                  phase: 'export_generating',
+                  phaseIndex: 1,
+                  phaseCount: 4,
+                  current: null,
+                  total: null,
+                  overallPercent: 30,
+                  isIndeterminate: true,
+                },
               }).catch(() => {});
             }, 50);
             setTimeout(() => {
               window.__TAURI_INTERNALS__?.invoke('plugin:event|emit', {
-                event: 'export-progress',
-                payload: { stage: 'Writing file', percent: 90, message: null },
+                event: 'loading-progress',
+                payload: {
+                  loadingId: exportLoadingId,
+                  phase: 'export_writing',
+                  phaseIndex: 2,
+                  phaseCount: 4,
+                  current: 1,
+                  total: 1,
+                  overallPercent: 90,
+                  isIndeterminate: false,
+                },
               }).catch(() => {});
             }, 100);
             setTimeout(() => {
               window.__TAURI_INTERNALS__?.invoke('plugin:event|emit', {
-                event: 'export-progress',
-                payload: { stage: 'Export complete', percent: 100, message: null },
+                event: 'loading-progress',
+                payload: {
+                  loadingId: exportLoadingId,
+                  phase: 'export_complete',
+                  phaseIndex: 3,
+                  phaseCount: 4,
+                  current: 1,
+                  total: 1,
+                  overallPercent: 100,
+                  isIndeterminate: false,
+                },
               }).catch(() => {});
             }, 150);
             // Return after a small delay to allow progress events to be received
             return new Promise(resolve => setTimeout(() => resolve({ success: true, path: args?.path }), 200));
+          }
 
           // Section and shot editing commands
           case 'update_shot': {
