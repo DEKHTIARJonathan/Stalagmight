@@ -5,7 +5,16 @@ use crate::core::{AppState, Command, CommandResult};
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
 use crate::models::{Project, ProjectMetadata, ProjectStats, Station};
 
-/// Create a new project
+/// Create a new in-memory project (no database file created).
+///
+/// This is the legacy/quick-create path for creating an unsaved project.
+/// The project exists only in memory until explicitly saved with `save_project`.
+///
+/// # Arguments
+/// * `name` - Project name
+/// * `location` - Optional cave location metadata (e.g., "Blue Spring Cave System")
+///
+/// For creating a persisted project with progress events, use `create_project_full` instead.
 #[tauri::command]
 pub fn create_project(
     state: State<AppState>,
@@ -129,17 +138,25 @@ pub fn cancel_loading(state: State<AppState>) {
     state.cancel_loading();
 }
 
-/// Create project with full progress reporting.
-/// Uses spawn_blocking for UI responsiveness during creation phases.
+/// Create a persisted project with full progress reporting.
 ///
-/// Returns CreateProjectFullResult containing project and display settings.
-/// Emits "loading-progress" events during creation for progress UI.
+/// This creates a new project database file immediately, emitting progress events
+/// during creation phases (CreatingDatabase, InitializingProject, SavingSettings).
+///
+/// Unlike `create_project` which creates an in-memory project, this command:
+/// - Creates and persists the database file immediately
+/// - Emits "loading-progress" events for UI feedback
+/// - Returns the project with display settings
 ///
 /// # Arguments
-/// * `name` - Project name (used for filename and project metadata)
-/// * `location` - Optional directory to save the project in. If None, uses user's documents directory.
+/// * `name` - Project name (used for both filename and project metadata)
+/// * `location` - Optional directory path to save the project in.
+///   If None, uses user's documents directory.
+///   NOTE: This is a FILE SYSTEM directory path, not cave location metadata.
+///   Cave location metadata can be set later via project settings.
 ///
-/// Note: Uses AppHandle instead of State<'_, AppState> because Tauri's State<'_, T>
+/// # Technical Note
+/// Uses AppHandle instead of State<'_, AppState> because Tauri's State<'_, T>
 /// wraps a reference (&'r Arc<T>) that cannot outlive the function body. For spawn_blocking,
 /// we need 'static ownership, which AppHandle provides via app_handle.state::<T>().
 #[tauri::command]
