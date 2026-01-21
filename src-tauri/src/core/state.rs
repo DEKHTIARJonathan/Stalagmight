@@ -2038,7 +2038,8 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{ShotData, SurveyDirection};
+    use crate::core::undo::{UndoData, UndoEntry};
+    use crate::models::{SectionUpdates, ShotData, ShotUpdates, SurveyDirection};
     use tempfile::TempDir;
 
     /// Helper to create a basic shot data for testing
@@ -2144,6 +2145,109 @@ mod tests {
 
         assert!(!archived_entries.is_empty());
         assert!(temp_dir.path().join("b.cvproj.archived").exists());
+    }
+
+    #[test]
+    fn test_undo_fails_with_invalid_previous_values_shot() {
+        let state = AppState::new().unwrap();
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_with_data(
+            Command::UpdateShot {
+                section_id: 1,
+                shot_id: 1,
+                updates: ShotUpdates::default(),
+            },
+            UndoData::PreviousValues {
+                section_id: 1,
+                shot_id: Some(1),
+                values_json: "not-json".to_string(),
+            },
+        );
+        drop(stack);
+
+        let result = state.undo();
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Failed to parse undo data"));
+    }
+
+    #[test]
+    fn test_undo_fails_with_invalid_previous_values_section() {
+        let state = AppState::new().unwrap();
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_with_data(
+            Command::UpdateSectionMetadata {
+                section_id: 1,
+                updates: SectionUpdates::default(),
+            },
+            UndoData::PreviousValues {
+                section_id: 1,
+                shot_id: None,
+                values_json: "not-json".to_string(),
+            },
+        );
+        drop(stack);
+
+        let result = state.undo();
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Failed to parse undo data"));
+    }
+
+    #[test]
+    fn test_undo_fails_with_invalid_project_snapshot() {
+        let state = AppState::new().unwrap();
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_with_data(
+            Command::Batch { commands: Vec::new() },
+            UndoData::ProjectSnapshot("not-json".to_string()),
+        );
+        drop(stack);
+
+        let result = state.undo();
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Failed to parse project snapshot"));
+    }
+
+    #[test]
+    fn test_redo_fails_with_invalid_project_snapshot_pair() {
+        let state = AppState::new().unwrap();
+        let mut stack = state.undo_stack.lock().unwrap();
+        let entry = UndoEntry {
+            command: Command::CloseProject,
+            undo_data: UndoData::ProjectSnapshotPair {
+                before: "{}".to_string(),
+                after: "not-json".to_string(),
+            },
+        };
+        stack.push_redo(entry);
+        drop(stack);
+
+        let result = state.redo();
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Failed to parse project snapshot"));
+    }
+
+    #[test]
+    fn test_redo_fails_for_command_not_allowed_in_undo_context() {
+        let state = AppState::new().unwrap();
+        let mut stack = state.undo_stack.lock().unwrap();
+        let entry = UndoEntry {
+            command: Command::MergeProjects {
+                source_paths: Vec::new(),
+                output_path: PathBuf::from("out.cvproj"),
+                output_name: "Merged".to_string(),
+                archive_originals: false,
+            },
+            undo_data: UndoData::None,
+        };
+        stack.push_redo(entry);
+        drop(stack);
+
+        let result = state.redo();
+        assert!(!result.success);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Command cannot be executed in undo context")
+        );
     }
 
     #[test]

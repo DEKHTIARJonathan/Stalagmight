@@ -558,6 +558,10 @@ mod tests {
             .unwrap()
     }
 
+    fn drop_tiles_table(cache: &TileCache) {
+        cache.conn.execute("DROP TABLE tiles", []).unwrap();
+    }
+
     // === Test 1: put and get roundtrip ===
     #[test]
     fn test_put_get_roundtrip() {
@@ -733,6 +737,58 @@ mod tests {
         assert_eq!(stats.tile_count, 3);
         assert_eq!(stats.total_bytes, 450);
         assert_eq!(stats.provider_count, 2);
+    }
+
+    #[test]
+    fn test_get_returns_none_on_db_error() {
+        let mut cache = TileCache::in_memory(100, 30).unwrap();
+        drop_tiles_table(&cache);
+
+        let entry = cache.get("esri", 1, 2, 3);
+        assert!(entry.is_none());
+    }
+
+    #[test]
+    fn test_get_stale_returns_none_on_db_error() {
+        let cache = TileCache::in_memory(100, 30).unwrap();
+        drop_tiles_table(&cache);
+
+        let entry = cache.get_stale("esri", 1, 2, 3);
+        assert!(entry.is_none());
+    }
+
+    #[test]
+    fn test_has_fresh_tile_returns_false_on_db_error() {
+        let cache = TileCache::in_memory(100, 30).unwrap();
+        drop_tiles_table(&cache);
+
+        assert!(!cache.has_fresh_tile("esri", 1, 2, 3));
+    }
+
+    #[test]
+    fn test_has_stale_tile_returns_false_on_db_error() {
+        let cache = TileCache::in_memory(100, 30).unwrap();
+        drop_tiles_table(&cache);
+
+        assert!(!cache.has_stale_tile("esri", 1, 2, 3));
+    }
+
+    #[test]
+    fn test_get_provider_stats_returns_empty_on_db_error() {
+        let cache = TileCache::in_memory(100, 30).unwrap();
+        drop_tiles_table(&cache);
+
+        let stats = cache.get_provider_stats();
+        assert!(stats.is_empty());
+    }
+
+    #[test]
+    fn test_evict_lru_returns_error_when_table_missing() {
+        let mut cache = TileCache::in_memory(100, 30).unwrap();
+        drop_tiles_table(&cache);
+
+        let result = cache.evict_lru();
+        assert!(result.is_err());
     }
 
     // === Test 8: concurrent access (multi-threaded) ===

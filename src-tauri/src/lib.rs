@@ -965,11 +965,24 @@ mod tests {
         Arc::new(Mutex::new(Some(cache)))
     }
 
+    fn assert_cors_header(response: &http::Response<Vec<u8>>) {
+        assert_eq!(
+            response
+                .headers()
+                .get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "*"
+        );
+    }
+
     #[test]
     fn test_handle_tile_request_unknown_provider_returns_400() {
         let cache = make_test_cache();
         let response = handle_tile_request("unknown_provider", 10, 500, 250, &cache);
         assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers().get("content-type").unwrap(), "text/plain");
+        assert!(std::str::from_utf8(response.body()).unwrap().contains("Unknown provider"));
+        assert_cors_header(&response);
     }
 
     #[test]
@@ -987,6 +1000,8 @@ mod tests {
         let response = handle_tile_request("esri", 10, 500, 250, &cache);
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"fake_tile_data");
+        assert_eq!(response.headers().get("content-type").unwrap(), "image/jpeg");
+        assert_cors_header(&response);
     }
 
     #[test]
@@ -1006,6 +1021,7 @@ mod tests {
             response.headers().get("content-type").unwrap(),
             "image/png"
         );
+        assert_cors_header(&response);
     }
 
     #[test]
@@ -1021,6 +1037,9 @@ mod tests {
         let response =
             handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, mock_fetch);
         assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+        assert_eq!(response.headers().get("content-type").unwrap(), "text/plain");
+        assert!(std::str::from_utf8(response.body()).unwrap().contains("Tile not available"));
+        assert_cors_header(&response);
     }
 
     #[test]
@@ -1037,6 +1056,8 @@ mod tests {
             handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, mock_fetch);
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"fetched_tile_data");
+        assert_eq!(response.headers().get("content-type").unwrap(), "image/jpeg");
+        assert_cors_header(&response);
     }
 
     #[test]
@@ -1073,6 +1094,8 @@ mod tests {
             handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, mock_fetch);
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"tile_data");
+        assert_eq!(response.headers().get("content-type").unwrap(), "image/jpeg");
+        assert_cors_header(&response);
     }
 
     #[test]
@@ -1087,6 +1110,9 @@ mod tests {
         let response =
             handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, mock_fetch);
         assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+        assert_eq!(response.headers().get("content-type").unwrap(), "text/plain");
+        assert!(std::str::from_utf8(response.body()).unwrap().contains("Tile not available"));
+        assert_cors_header(&response);
     }
 
     #[test]
@@ -1109,6 +1135,8 @@ mod tests {
         let response = handle_tile_request_with_fetcher("esri", 1, 2, 3, &cache, mock_fetch);
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"stale_tile");
+        assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+        assert_cors_header(&response);
     }
 
     // === tile_fetch_impl tests ===
