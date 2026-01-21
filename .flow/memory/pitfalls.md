@@ -39,3 +39,6 @@ When clearing hover state for one feature type (stations/shots), only fire onFea
 
 ## 2026-01-20 manual [pitfall]
 MapLibre hitbox layers should use opaque colors with tiny opacity (0.001) - using rgba(0,0,0,0) can cause queryRenderedFeatures to fail due to render optimization
+
+## 2026-01-21 manual [pitfall]
+useEffect syncing state to a ref-based object (e.g. SurveyLayer) should include mapLoaded in deps to re-run after ref becomes valid

@@ -99,7 +99,7 @@ export default function MapCanvas() {
     setHoveredStation,
     setHoveredShot,
     hoveredSectionId,
-    setHoveredSectionId: _setHoveredSectionId, // Used in fn-9-d6v.8 for bidirectional map-to-panel sync
+    setHoveredSectionId,
     placementMode,
     updatePlacementCursor,
     updatePlacementSnap,
@@ -107,6 +107,9 @@ export default function MapCanvas() {
     confirmPlacement,
     showToast,
   } = useUIStore();
+
+  // Extracted per spec acceptance criteria; wired in fn-9-d6v.8 for bidirectional map-to-panel sync
+  void setHoveredSectionId;
 
   // Snap-to-station detection
   // Note: Snap detection works even when stations are hidden - the highlight layer
