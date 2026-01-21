@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 import type { PanelsConfig } from '../types/config';
+import type { DisplaySettings } from '../types/loading';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 
 // Import tool utilities for internal use and re-export for convenience
@@ -186,6 +187,8 @@ interface UIStore {
   loadDisplaySettings: () => Promise<void>;
   saveDisplaySetting: (key: DisplayToggleKey, value: boolean) => Promise<void>;
   resetDisplaySettings: () => void;
+  /** Apply display settings from backend (merges with existing state using ??) */
+  applyDisplaySettings: (settings: DisplaySettings) => void;
 
   // Hover state
   hoveredStation: StationRef | null;
@@ -507,6 +510,25 @@ export const useUIStore = create<UIStore>((set) => ({
       showDepthGradient: DISPLAY_DEFAULTS.showDepthGradient,
       gridSpacing: DISPLAY_DEFAULTS.gridSpacing,
     });
+  },
+
+  applyDisplaySettings: (settings: DisplaySettings) => {
+    // Apply display settings from backend, merging with existing state.
+    // Uses ?? to only apply fields that are defined, preserving current state for undefined fields.
+    // EXACT 11 fields matching uiStore - NO showShots, NO colorBy (those aren't persisted).
+    set((state) => ({
+      showStations: settings.showStations ?? state.showStations,
+      showSectionNames: settings.showSectionNames ?? state.showSectionNames,
+      showStationLabels: settings.showStationLabels ?? state.showStationLabels,
+      showShotData: settings.showShotData ?? state.showShotData,
+      showVirtualShots: settings.showVirtualShots ?? state.showVirtualShots,
+      showZeroDatum: settings.showZeroDatum ?? state.showZeroDatum,
+      showGrid: settings.showGrid ?? state.showGrid,
+      showScaleBar: settings.showScaleBar ?? state.showScaleBar,
+      showSatellite: settings.showSatellite ?? state.showSatellite,
+      showDepthGradient: settings.showDepthGradient ?? state.showDepthGradient,
+      gridSpacing: settings.gridSpacing ?? state.gridSpacing,
+    }));
   },
 
   // Hover state
