@@ -209,23 +209,33 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
         max_y = max_y.max(station.coordinates.y);
     }
 
-    // Calculate depth range for gradient (only needed for Depth mode)
-    let (min_depth, max_depth) = if options.color_mode == ColorMode::Depth {
-        let depths: Vec<f64> = stations.iter().map(|s| s.coordinates.z).collect();
-        let min = depths.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max = depths.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        (min, max)
-    } else {
-        (0.0, 0.0) // Not used for section mode
-    };
-
-    // Handle empty project
+    // Handle empty project (MUST be before depth range calculation)
     if min_x == f64::MAX {
         min_x = 0.0;
         max_x = 100.0;
         min_y = 0.0;
         max_y = 100.0;
     }
+
+    // Calculate depth range for gradient (only needed for Depth mode)
+    // Done after empty check to avoid infinity values
+    let (min_depth, max_depth) = if options.color_mode == ColorMode::Depth && !stations.is_empty() {
+        // Single-pass min/max without allocation
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
+        for station in &stations {
+            let z = station.coordinates.z;
+            if z < min {
+                min = z;
+            }
+            if z > max {
+                max = z;
+            }
+        }
+        (min, max)
+    } else {
+        (0.0, 0.0) // Empty project or section mode - treat as flat
+    };
 
     // Add padding
     let padding = 20.0;
@@ -509,21 +519,29 @@ impl Bounds {
     }
 }
 
-/// Format a depth label with unit conversion.
+/// Maximum allowed decimal precision to prevent DoS via huge strings.
+const MAX_DECIMAL_PRECISION: u8 = 6;
+
+/// Format a depth label with unit conversion and XML escaping.
 ///
 /// Converts meters to feet when unit is "ft". Applies decimal precision formatting.
+/// The result is XML-escaped to prevent markup injection in SVG output.
 ///
 /// # Arguments
 /// * `depth_meters` - Depth value in meters
 /// * `unit` - Unit string ("m" or "ft")
-/// * `precision` - Decimal places for formatting
+/// * `precision` - Decimal places for formatting (clamped to 0-6)
 fn format_depth_label(depth_meters: f64, unit: &str, precision: u8) -> String {
     let value = if unit == "ft" {
         depth_meters * METERS_TO_FEET
     } else {
         depth_meters
     };
-    format!("{:.prec$}{}", value, unit, prec = precision as usize)
+    // Clamp precision to prevent DoS via huge strings
+    let clamped_precision = precision.min(MAX_DECIMAL_PRECISION) as usize;
+    // XML-escape the unit to prevent markup injection
+    let safe_unit = escape_xml(unit);
+    format!("{:.prec$}{}", value, safe_unit, prec = clamped_precision)
 }
 
 /// Generate depth legend SVG element using viewBox-relative units.
@@ -1102,8 +1120,12 @@ mod tests {
         };
         let svg = generate_svg_string(&project, &options).unwrap();
 
-        // Shot labels should contain "ft" suffix
+        // Shot labels should contain "ft" suffix AND converted numeric values
+        // The test project has shots with depths: 0->5m (avg 2.5m) and 5->10m (avg 7.5m)
+        // 2.5m * 3.28084 = 8.2ft, 7.5m * 3.28084 = 24.6ft
         assert!(svg.contains("ft</text>"), "Shot labels should show feet when depth_unit=ft");
+        assert!(svg.contains("8.2ft"), "Shot label should show 2.5m converted to 8.2ft: {}", svg);
+        assert!(svg.contains("24.6ft"), "Shot label should show 7.5m converted to 24.6ft: {}", svg);
     }
 
     #[test]
@@ -1114,5 +1136,51 @@ mod tests {
 
         // Should NOT contain shot-label elements by default
         assert!(!svg.contains("shot-label"), "SVG should not contain shot labels by default");
+    }
+
+    // === Safety tests ===
+
+    #[test]
+    fn test_format_depth_label_precision_clamped() {
+        // Large precision should be clamped to MAX_DECIMAL_PRECISION (6)
+        let label = format_depth_label(1.123456789, "m", 255);
+        assert_eq!(label, "1.123457m", "Precision should be clamped to 6");
+    }
+
+    #[test]
+    fn test_format_depth_label_xml_escaping() {
+        // Malicious unit string should be escaped
+        let label = format_depth_label(10.0, "</text><script>alert('xss')</script>", 1);
+        assert!(!label.contains("<script>"), "Script tag should be escaped");
+        assert!(label.contains("&lt;"), "< should be escaped to &lt;");
+        assert!(label.contains("&gt;"), "> should be escaped to &gt;");
+    }
+
+    #[test]
+    fn test_empty_project_depth_mode_no_infinity() {
+        let project = Project::new("Empty".to_string(), None);
+        let options = ExportImageOptions {
+            color_mode: ColorMode::Depth,
+            include_legend: true,
+            ..Default::default()
+        };
+        let svg = generate_svg_string(&project, &options).unwrap();
+
+        // Should not contain infinity or NaN in legend
+        assert!(!svg.contains("inf"), "Empty project should not have infinity in legend: {}", svg);
+        assert!(!svg.contains("NaN"), "Empty project should not have NaN in legend");
+        // Should show flat (0.0m to 0.0m)
+        assert!(svg.contains("(Flat)"), "Empty project should show flat indicator");
+    }
+
+    #[test]
+    fn test_empty_project_section_mode_valid() {
+        let project = Project::new("Empty".to_string(), None);
+        let options = ExportImageOptions {
+            color_mode: ColorMode::Section,
+            ..Default::default()
+        };
+        let result = generate_svg_string(&project, &options);
+        assert!(result.is_ok(), "Empty project in section mode should generate valid SVG");
     }
 }
