@@ -668,7 +668,7 @@ mod tests {
 
         // At 12.5% (between stop 0 and 1), should be in cyan range
         let color_12 = get_depth_color(12.5, 0.0, 100.0, DepthPreset::Thermal);
-        let (r12, g12, b12) = hex_to_rgb(&color_12);
+        let (_r12, g12, b12) = hex_to_rgb(&color_12);
         // Should be cyan-ish (high green and blue, low red)
         assert!(g12 > 200, "At 12.5%, green should be high (cyan area): g={}", g12);
         assert!(b12 > 100, "At 12.5%, blue should be present: b={}", b12);
@@ -682,14 +682,14 @@ mod tests {
 
         // At 62.5% (between stop 2 and 3), should be in yellow-green range
         let color_62 = get_depth_color(62.5, 0.0, 100.0, DepthPreset::Thermal);
-        let (r62, g62, b62) = hex_to_rgb(&color_62);
+        let (_r62, g62, b62) = hex_to_rgb(&color_62);
         // Should be moving toward yellow (high green, increasing red, low blue)
         assert!(g62 > 200, "At 62.5%, green should still be high: g={}", g62);
         assert!(b62 < 50, "At 62.5%, blue should be low: b={}", b62);
 
         // At 87.5% (between stop 3 and 4), should be in orange-red range
         let color_87 = get_depth_color(87.5, 0.0, 100.0, DepthPreset::Thermal);
-        let (r87, g87, b87) = hex_to_rgb(&color_87);
+        let (r87, _g87, b87) = hex_to_rgb(&color_87);
         // Should be orange/red-ish
         assert!(r87 > 200, "At 87.5%, red should be high: r={}", r87);
         assert!(b87 < 100, "At 87.5%, blue should be low (not purple): b={}", b87);
