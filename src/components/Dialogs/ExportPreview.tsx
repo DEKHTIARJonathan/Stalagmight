@@ -7,11 +7,24 @@ import type { ExportImageOptions } from '../../types/commands';
 /** Theme mode for the export preview */
 export type ExportTheme = 'dark' | 'light';
 
+/** Color stop for depth gradient */
+interface ColorStop {
+  position: number;
+  color: string;
+}
+
+/** Preset colors for depth gradient */
+export interface DepthPresetColors {
+  stops: ColorStop[];
+}
+
 interface ExportPreviewProps {
   /** Export options that affect preview appearance */
   options: ExportImageOptions;
   /** Theme for the preview (dark or light) */
   theme: ExportTheme;
+  /** Preset colors for depth gradient (fetched from backend) */
+  presetColors?: DepthPresetColors | null;
 }
 
 /** Debounce delay in milliseconds */
@@ -21,7 +34,7 @@ const DEBOUNCE_DELAY = 300;
  * Export preview component that shows a 300x300 preview of what the
  * exported map image will look like. Updates are debounced for performance.
  */
-export default function ExportPreview({ options, theme }: ExportPreviewProps) {
+export default function ExportPreview({ options, theme, presetColors: _presetColors }: ExportPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const updateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);

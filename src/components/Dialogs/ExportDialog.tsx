@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { save } from '@tauri-apps/plugin-dialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -6,7 +7,18 @@ import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import ExportPreview, { type ExportTheme } from './ExportPreview';
-import type { ExportImageOptions, ImageFormat } from '../../types/commands';
+import type { ExportImageOptions, ImageFormat, DepthPreset } from '../../types/commands';
+
+/** Color stop returned from backend */
+interface ColorStop {
+  position: number;
+  color: string;
+}
+
+/** Preset colors response from get_depth_preset_colors command */
+interface DepthPresetColors {
+  stops: ColorStop[];
+}
 
 export default function ExportDialog() {
   const { closeDialog } = useUIStore();
@@ -33,6 +45,22 @@ export default function ExportDialog() {
     depth_unit: 'm',
     decimal_precision: 1,
   });
+
+  // Preset colors fetched from backend for preview
+  const [presetColors, setPresetColors] = useState<DepthPresetColors | null>(null);
+
+  // Fetch preset colors when depth mode is active and preset changes
+  useEffect(() => {
+    if (imageOptions.color_mode === 'depth') {
+      invoke<DepthPresetColors>('get_depth_preset_colors', {
+        preset: imageOptions.depth_preset,
+      })
+        .then(setPresetColors)
+        .catch((err) => console.error('Failed to fetch preset colors:', err));
+    } else {
+      setPresetColors(null);
+    }
+  }, [imageOptions.color_mode, imageOptions.depth_preset]);
 
   const handleExport = async () => {
     try {
@@ -180,6 +208,72 @@ export default function ExportDialog() {
                 </div>
               </div>
 
+              {/* Color Mode with proper radiogroup accessibility */}
+              <div role="radiogroup" aria-labelledby="color-mode-label">
+                <span id="color-mode-label" className="block text-sm text-text-secondary mb-2">
+                  Color Mode
+                </span>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="colorMode"
+                      value="section"
+                      checked={imageOptions.color_mode === 'section'}
+                      onChange={() => setImageOptions({ ...imageOptions, color_mode: 'section' })}
+                      data-testid="color-mode-section"
+                    />
+                    <span>Section Colors</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="colorMode"
+                      value="depth"
+                      checked={imageOptions.color_mode === 'depth'}
+                      onChange={() => setImageOptions({ ...imageOptions, color_mode: 'depth' })}
+                      data-testid="color-mode-depth"
+                    />
+                    <span>Depth Gradient</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Depth Options (only when depth mode is active) */}
+              {imageOptions.color_mode === 'depth' && (
+                <>
+                  <div>
+                    <label id="depth-preset-label" className="block text-sm text-text-secondary mb-2">
+                      Color Preset
+                    </label>
+                    <Select
+                      aria-label="Depth color preset"
+                      aria-labelledby="depth-preset-label"
+                      value={imageOptions.depth_preset}
+                      onChange={(v) => setImageOptions({ ...imageOptions, depth_preset: v as DepthPreset })}
+                      options={[
+                        { value: 'thermal', label: 'Thermal (Blue to Red)' },
+                        { value: 'ocean', label: 'Ocean (Cyan to Blue)' },
+                        { value: 'terrain', label: 'Terrain (Green to Brown)' },
+                        { value: 'grayscale', label: 'Grayscale' },
+                        { value: 'accessible', label: 'Accessible (Yellow to Purple)' },
+                      ]}
+                      data-testid="depth-preset-select"
+                    />
+                  </div>
+
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={imageOptions.include_legend}
+                      onChange={(e) => setImageOptions({ ...imageOptions, include_legend: e.target.checked })}
+                      data-testid="option-include-legend"
+                    />
+                    <span>Include depth legend</span>
+                  </label>
+                </>
+              )}
+
               {imageFormat === 'png' && (
                 <div>
                   <label className="block text-sm text-text-secondary mb-2">Resolution</label>
@@ -190,6 +284,7 @@ export default function ExportDialog() {
                       { value: '72', label: 'Low (72 DPI)' },
                       { value: '150', label: 'Medium (150 DPI)' },
                       { value: '300', label: 'High (300 DPI)' },
+                      { value: '600', label: 'Print (600 DPI)' },
                     ]}
                     data-testid="resolution-select"
                   />
@@ -228,7 +323,11 @@ export default function ExportDialog() {
                 )}
               </button>
             </div>
-            <ExportPreview options={imageOptions} theme={previewTheme} />
+            <ExportPreview
+              options={imageOptions}
+              theme={previewTheme}
+              presetColors={presetColors}
+            />
           </div>
         )}
       </div>

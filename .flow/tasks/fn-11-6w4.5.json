@@ -7,10 +7,21 @@
     "fn-11-6w4.4"
   ],
   "epic": "fn-11-6w4",
+  "evidence": {
+    "commits": [
+      "6550261",
+      "f353e8f",
+      "cd90d11"
+    ],
+    "prs": [],
+    "tests": [
+      "cargo test --manifest-path src-tauri/Cargo.toml -- export::image"
+    ]
+  },
   "id": "fn-11-6w4.5",
   "priority": null,
   "spec_path": ".flow/tasks/fn-11-6w4.5.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Generate depth legend SVG element with unit support",
-  "updated_at": "2026-01-21T12:29:35.770108Z"
+  "updated_at": "2026-01-21T12:55:43.669477Z"
 }
