@@ -1,0 +1,5 @@
+{
+  "commits": ["9b3d531"],
+  "tests": ["pnpm tsc --noEmit"],
+  "prs": []
+}

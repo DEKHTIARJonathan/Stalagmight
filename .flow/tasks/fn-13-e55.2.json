@@ -7,10 +7,19 @@
     "fn-13-e55.1"
   ],
   "epic": "fn-13-e55",
+  "evidence": {
+    "commits": [
+      "9b3d531"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-13-e55.2",
   "priority": null,
   "spec_path": ".flow/tasks/fn-13-e55.2.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Update TypeScript ShortcutsConfig type and defaultConfig",
-  "updated_at": "2026-01-21T17:28:28.692184Z"
+  "updated_at": "2026-01-21T17:33:45.351367Z"
 }
