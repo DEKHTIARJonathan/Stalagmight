@@ -7,10 +7,32 @@
     "fn-10-i64.6"
   ],
   "epic": "fn-10-i64",
+  "evidence": {
+    "commits": [
+      "9f9b4bd"
+    ],
+    "tests": {
+      "cargo_test": "266 tests pass",
+      "tsc": "pass"
+    },
+    "verification": {
+      "cancel_button_works": true,
+      "cards_disabled_during_loading": true,
+      "error_state_in_loadingprogress": true,
+      "globalview_uses_store_loadProject": true,
+      "loadingprogress_in_globalview": true,
+      "mergedialog_uses_store_loadProject": true,
+      "modal_backdrop": true,
+      "newprojectdialog_uses_store_createProject": true,
+      "no_direct_invoke_calls": true,
+      "retry_button_works": true,
+      "systemcard_uses_store_loadProject": true
+    }
+  },
   "id": "fn-10-i64.7",
   "priority": null,
   "spec_path": ".flow/tasks/fn-10-i64.7.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Integrate LoadingProgress into GlobalView",
-  "updated_at": "2026-01-21T10:05:03.425287Z"
+  "updated_at": "2026-01-21T10:35:56.360713Z"
 }

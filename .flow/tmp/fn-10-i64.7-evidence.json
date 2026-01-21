@@ -1,0 +1,20 @@
+{
+  "commits": ["9f9b4bd"],
+  "tests": {
+    "tsc": "pass",
+    "cargo_test": "266 tests pass"
+  },
+  "verification": {
+    "globalview_uses_store_loadProject": true,
+    "systemcard_uses_store_loadProject": true,
+    "mergedialog_uses_store_loadProject": true,
+    "newprojectdialog_uses_store_createProject": true,
+    "no_direct_invoke_calls": true,
+    "loadingprogress_in_globalview": true,
+    "modal_backdrop": true,
+    "cancel_button_works": true,
+    "retry_button_works": true,
+    "error_state_in_loadingprogress": true,
+    "cards_disabled_during_loading": true
+  }
+}

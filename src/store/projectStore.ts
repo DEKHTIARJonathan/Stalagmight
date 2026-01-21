@@ -147,7 +147,10 @@ interface ProjectStore {
   loadProject: (path: string) => Promise<{ success: boolean }>;
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, location?: string) => Promise<CommandResult>;
-  /** Open a project using the legacy open_project command */
+  /**
+   * Open a project using the legacy open_project command (no progress events).
+   * @deprecated Use loadProject() instead for progress UI support.
+   */
   openProject: (path: string) => Promise<CommandResult>;
   saveProject: (path?: string) => Promise<CommandResult>;
   closeProject: () => Promise<CommandResult>;

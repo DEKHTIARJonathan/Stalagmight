@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent } fr
 import { useProject } from '../../hooks/useProject';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
-import { useLoadingProgress } from '../../hooks/useLoadingProgress';
 import { Button } from '../common/Button';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
@@ -15,18 +14,21 @@ function formatPhaseLabel(phase: string | undefined, phaseIndex?: number, phaseC
   if (!phase) return 'Initializing...';
 
   const labels: Record<string, string> = {
+    // Project opening phases
     opening_database: 'Opening database',
-    loading_project: 'Loading project data',
+    loading_project_data: 'Loading project data',
     loading_sections: 'Loading sections',
     computing_stations: 'Computing stations',
     computing_statistics: 'Computing statistics',
     validating_data: 'Validating data',
     loading_settings: 'Loading settings',
     finalizing: 'Finalizing',
+    // Timeout message
     loading_taking_long: 'Taking longer than expected...',
     // Create project phases
     creating_database: 'Creating database',
     initializing_project: 'Initializing project',
+    saving_settings: 'Saving settings',
   };
 
   const label = labels[phase] ?? phase;
@@ -57,8 +59,7 @@ export default function GlobalView() {
 
   const { loading, loadRecentProjects, loadProject, resetLoading, cancelLoading, removeFromRecentProjects } = useProjectStore();
 
-  // Set up Tauri event listener for loading progress
-  useLoadingProgress();
+  // Note: useLoadingProgress() is called in App.tsx (always mounted) to avoid duplicate listeners
   const { openDialog } = useUIStore();
   const [activeTab, setActiveTab] = useState<ViewTab>('list');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -266,7 +267,8 @@ export default function GlobalView() {
             {...(loading.phaseProgress !== undefined && { phaseProgress: loading.phaseProgress })}
             {...(loading.phaseCurrent !== undefined && { phaseCurrent: loading.phaseCurrent })}
             {...(loading.phaseTotal !== undefined && { phaseTotal: loading.phaseTotal })}
-            {...(loading.error ? { onRetry: handleRetryLoading, error: loading.error } : {})}
+            {...(loading.error ? { error: loading.error } : {})}
+            {...(loading.error && loading.projectPath ? { onRetry: handleRetryLoading } : {})}
           />
         </div>
       )}
