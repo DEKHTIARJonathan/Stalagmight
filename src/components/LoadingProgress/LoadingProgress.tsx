@@ -37,10 +37,90 @@ export function LoadingProgress({
   const titleId = React.useId();
   const phaseId = React.useId();
 
+  /** Copy error message and details to clipboard */
+  const handleCopyError = React.useCallback(() => {
+    if (error) {
+      const errorText = error.details
+        ? `${error.message}\n\n${error.details}`
+        : error.message;
+      navigator.clipboard.writeText(errorText);
+    }
+  }, [error]);
+
   // Clamp progress values
   const clampedOverall = clampProgress(overallProgress);
   const clampedPhase = phaseProgress !== undefined ? clampProgress(phaseProgress) : undefined;
 
+  // Error state renders a different UI
+  if (error) {
+    return (
+      <div
+        className="w-80 bg-panel rounded-lg shadow-lg p-6"
+        role="alert"
+        aria-live="assertive"
+      >
+        {/* Error Title */}
+        <h2 className="text-lg font-medium text-error mb-2">
+          Failed to Load Project
+        </h2>
+
+        {/* Error Message */}
+        <p className="text-text-secondary mb-3">
+          {error.message}
+        </p>
+
+        {/* Show/Hide Details Toggle */}
+        {error.details && (
+          <div className="mb-4">
+            <button
+              type="button"
+              onClick={() => setDetailsExpanded(v => !v)}
+              className="text-sm text-text-tertiary hover:text-text-secondary"
+            >
+              {detailsExpanded ? '▼ Hide details' : '▶ Show details'}
+            </button>
+            {detailsExpanded && (
+              <pre className="mt-2 p-2 bg-surface-alt rounded text-xs text-text-tertiary overflow-auto max-h-32">
+                {error.details}
+              </pre>
+            )}
+          </div>
+        )}
+
+        {/* Action Buttons */}
+        <div className="flex gap-2">
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="px-3 py-1.5 bg-accent text-white rounded hover:bg-accent/90 transition-colors"
+            >
+              Retry
+            </button>
+          )}
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="px-3 py-1.5 bg-surface-alt text-text-primary rounded hover:bg-border transition-colors"
+            >
+              Dismiss
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleCopyError}
+            className="px-3 py-1.5 text-text-secondary hover:text-text-primary transition-colors"
+            title="Copy error to clipboard"
+          >
+            Copy
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Normal progress UI
   return (
     <div
       className="w-80 bg-panel rounded-lg shadow-lg p-6"
@@ -108,7 +188,7 @@ export function LoadingProgress({
       </div>
 
       {/* Cancel Button */}
-      {onCancel && !error && (
+      {onCancel && (
         <button
           type="button"
           onClick={onCancel}
@@ -116,50 +196,6 @@ export function LoadingProgress({
         >
           Cancel
         </button>
-      )}
-
-      {/* Error State */}
-      {error && (
-        <div className="mt-4 p-3 bg-error/10 border border-error/30 rounded">
-          <p className="text-error text-sm font-medium">{error.message}</p>
-          {error.details && (
-            <>
-              <button
-                type="button"
-                onClick={() => setDetailsExpanded(v => !v)}
-                className="text-xs text-text-secondary hover:text-text-primary mt-1"
-              >
-                {detailsExpanded ? 'Hide details' : 'Show details'}
-              </button>
-              {detailsExpanded && (
-                <pre className="text-xs text-text-secondary mt-2 whitespace-pre-wrap">
-                  {error.details}
-                </pre>
-              )}
-            </>
-          )}
-          {/* Error Action Buttons */}
-          <div className="mt-3 flex gap-2">
-            {onRetry && (
-              <button
-                type="button"
-                onClick={onRetry}
-                className="px-3 py-1 text-sm bg-accent text-white rounded hover:bg-accent/90 transition-colors"
-              >
-                Retry
-              </button>
-            )}
-            {onCancel && (
-              <button
-                type="button"
-                onClick={onCancel}
-                className="px-3 py-1 text-sm text-text-secondary hover:text-text-primary transition-colors"
-              >
-                Dismiss
-              </button>
-            )}
-          </div>
-        </div>
       )}
     </div>
   );
