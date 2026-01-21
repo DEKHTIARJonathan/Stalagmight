@@ -2,11 +2,41 @@ import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent } fr
 import { useProject } from '../../hooks/useProject';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { useLoadingProgress } from '../../hooks/useLoadingProgress';
 import { Button } from '../common/Button';
+import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
 import GlobalViewMap from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
 import type { ProjectMetadata } from '../../types/project';
+
+/** Map phase enum values to human-readable labels */
+function formatPhaseLabel(phase: string | undefined, phaseIndex?: number, phaseCount?: number): string {
+  if (!phase) return 'Initializing...';
+
+  const labels: Record<string, string> = {
+    opening_database: 'Opening database',
+    loading_project: 'Loading project data',
+    loading_sections: 'Loading sections',
+    computing_stations: 'Computing stations',
+    computing_statistics: 'Computing statistics',
+    validating_data: 'Validating data',
+    loading_settings: 'Loading settings',
+    finalizing: 'Finalizing',
+    loading_taking_long: 'Taking longer than expected...',
+    // Create project phases
+    creating_database: 'Creating database',
+    initializing_project: 'Initializing project',
+  };
+
+  const label = labels[phase] ?? phase;
+
+  if (phaseIndex !== undefined && phaseCount !== undefined && phaseCount > 0) {
+    return `Step ${phaseIndex + 1}/${phaseCount}: ${label}`;
+  }
+
+  return label;
+}
 
 type ViewTab = 'map' | 'list';
 
@@ -20,14 +50,16 @@ interface ContextMenuState {
 export default function GlobalView() {
   const {
     recentProjects,
-    isLoading,
     handleNewProject,
     handleOpenProject,
     handleImportDmp,
   } = useProject();
 
-  const { loadRecentProjects, openProject, removeFromRecentProjects } = useProjectStore();
-  const { setView, openDialog } = useUIStore();
+  const { loading, loadRecentProjects, loadProject, resetLoading, cancelLoading, removeFromRecentProjects } = useProjectStore();
+
+  // Set up Tauri event listener for loading progress
+  useLoadingProgress();
+  const { openDialog } = useUIStore();
   const [activeTab, setActiveTab] = useState<ViewTab>('list');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
@@ -114,11 +146,26 @@ export default function GlobalView() {
 
   // Handle project open (double-click on map or from metadata panel)
   const handleProjectOpen = useCallback(async (filePath: string) => {
-    const result = await openProject(filePath);
-    if (result.success) {
-      setView('single');
+    // loadProject handles view switching internally
+    await loadProject(filePath);
+  }, [loadProject]);
+
+  // Handle cancel during loading
+  const handleCancelLoading = useCallback(async () => {
+    await cancelLoading();
+  }, [cancelLoading]);
+
+  // Handle retry after error
+  const handleRetryLoading = useCallback(async () => {
+    if (loading.projectPath) {
+      await loadProject(loading.projectPath);
     }
-  }, [openProject, setView]);
+  }, [loading.projectPath, loadProject]);
+
+  // Handle dismiss error (reset loading state)
+  const handleDismissError = useCallback(() => {
+    resetLoading();
+  }, [resetLoading]);
 
   // Handle remove from recent (from metadata panel)
   const handleRemoveFromRecent = useCallback(async (filePath: string) => {
@@ -204,15 +251,31 @@ export default function GlobalView() {
         </div>
       )}
 
+      {/* Loading Modal Overlay */}
+      {loading.isLoading && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <LoadingProgress
+            title={
+              loading.error
+                ? 'Failed to Load Project'
+                : `Loading ${loading.projectName ?? 'project'}...`
+            }
+            phase={formatPhaseLabel(loading.phase, loading.phaseIndex, loading.phaseCount)}
+            overallProgress={loading.overallProgress}
+            onCancel={loading.error ? handleDismissError : handleCancelLoading}
+            {...(loading.phaseProgress !== undefined && { phaseProgress: loading.phaseProgress })}
+            {...(loading.phaseCurrent !== undefined && { phaseCurrent: loading.phaseCurrent })}
+            {...(loading.phaseTotal !== undefined && { phaseTotal: loading.phaseTotal })}
+            {...(loading.error ? { onRetry: handleRetryLoading, error: loading.error } : {})}
+          />
+        </div>
+      )}
+
       {/* Content */}
       <main className="flex-1 overflow-hidden flex">
-        {/* Main content area */}
-        <div className="flex-1 overflow-hidden">
-          {isLoading ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-text-secondary">Loading...</div>
-            </div>
-          ) : recentProjects.length === 0 ? (
+        {/* Main content area - disabled during loading */}
+        <div className={`flex-1 overflow-hidden ${loading.isLoading ? 'pointer-events-none opacity-50' : ''}`}>
+          {recentProjects.length === 0 ? (
             <div className="h-full overflow-auto p-6">
               <EmptyState
                 onImport={handleImportDmp}

@@ -1,6 +1,5 @@
 import { type MouseEvent } from 'react';
 import { useProjectStore } from '../../store/projectStore';
-import { useUIStore } from '../../store/uiStore';
 
 interface SystemCardProps {
   name: string;
@@ -27,8 +26,7 @@ export default function SystemCard({
   onSelect,
   onContextMenu,
 }: SystemCardProps) {
-  const { openProject } = useProjectStore();
-  const { setView } = useUIStore();
+  const { loadProject } = useProjectStore();
 
   const handleClick = (e: MouseEvent) => {
     // Single click selects the card
@@ -39,11 +37,9 @@ export default function SystemCard({
   };
 
   const handleDoubleClick = async () => {
-    // Double click opens the project
-    const result = await openProject(filePath);
-    if (result.success) {
-      setView('single');
-    }
+    // Double click opens the project via store.loadProject
+    // loadProject handles view switching internally
+    await loadProject(filePath);
   };
 
   const handleContextMenu = (e: MouseEvent) => {
