@@ -31,14 +31,115 @@ interface ExportPreviewProps {
 const DEBOUNCE_DELAY = 300;
 
 /**
+ * Parse hex color to RGB components.
+ */
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const cleanHex = hex.replace('#', '');
+  if (cleanHex.length < 6) {
+    return { r: 0, g: 0, b: 0 };
+  }
+  return {
+    r: parseInt(cleanHex.slice(0, 2), 16) || 0,
+    g: parseInt(cleanHex.slice(2, 4), 16) || 0,
+    b: parseInt(cleanHex.slice(4, 6), 16) || 0,
+  };
+}
+
+/**
+ * Convert RGB to hex color string.
+ */
+function rgbToHex(r: number, g: number, b: number): string {
+  const toHex = (n: number) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+/**
+ * Interpolate between two hex colors.
+ */
+function interpolateRgb(color1: string, color2: string, t: number): string {
+  const c1 = hexToRgb(color1);
+  const c2 = hexToRgb(color2);
+  return rgbToHex(
+    c1.r + (c2.r - c1.r) * t,
+    c1.g + (c2.g - c1.g) * t,
+    c1.b + (c2.b - c1.b) * t
+  );
+}
+
+/**
+ * Multi-stop color interpolation matching Rust backend.
+ * CRITICAL: Same safety guards as Rust implementation.
+ */
+function interpolateStops(t: number, stops: ColorStop[]): string {
+  // Guard for empty array
+  if (stops.length === 0) {
+    return '#000000';
+  }
+  // Guard for single stop
+  const firstStop = stops[0];
+  if (stops.length === 1 || !firstStop) {
+    return firstStop?.color ?? '#000000';
+  }
+
+  // Clamp t to valid range
+  const clampedT = Math.max(0, Math.min(1, t));
+
+  // Find bracketing stops
+  for (let i = 0; i < stops.length - 1; i++) {
+    const currentStop = stops[i];
+    const nextStop = stops[i + 1];
+    if (!currentStop || !nextStop) continue;
+
+    if (clampedT >= currentStop.position && clampedT <= nextStop.position) {
+      const denominator = nextStop.position - currentStop.position;
+      // Handle equal positions (avoid divide by zero)
+      if (Math.abs(denominator) < Number.EPSILON) {
+        return currentStop.color;
+      }
+      const localT = (clampedT - currentStop.position) / denominator;
+      return interpolateRgb(currentStop.color, nextStop.color, localT);
+    }
+  }
+
+  // Fallback to last stop
+  const lastStop = stops[stops.length - 1];
+  return lastStop?.color ?? '#000000';
+}
+
+/**
+ * Get depth color for a given depth value using preset color stops.
+ */
+function getDepthColor(depth: number, minDepth: number, maxDepth: number, stops: ColorStop[]): string {
+  const firstColor = stops[0]?.color ?? '#000000';
+  // Handle NaN/infinite values
+  if (!Number.isFinite(depth) || !Number.isFinite(minDepth) || !Number.isFinite(maxDepth)) {
+    return firstColor;
+  }
+  // Handle flat depth range
+  if (Math.abs(maxDepth - minDepth) < Number.EPSILON) {
+    return firstColor;
+  }
+  // Normalize and clamp
+  const t = Math.max(0, Math.min(1, (depth - minDepth) / (maxDepth - minDepth)));
+  return interpolateStops(t, stops);
+}
+
+/**
+ * Format depth value with unit conversion and precision.
+ */
+function formatDepth(depth: number, unit: string, precision: number): string {
+  const value = unit === 'ft' ? depth * 3.28084 : depth;
+  return `${value.toFixed(precision)}${unit}`;
+}
+
+/**
  * Export preview component that shows a 300x300 preview of what the
  * exported map image will look like. Updates are debounced for performance.
  *
- * NOTE: Depth color mode rendering (using presetColors and options.color_mode)
- * is implemented in task fn-11-6w4.7. The presetColors prop is accepted here
- * but not yet used for coloring - currently shows section colors only.
+ * Supports both section color mode and depth gradient mode. When depth mode
+ * is active, colors are derived from station/shot depths using preset stops.
  */
-export default function ExportPreview({ options, theme, presetColors: _presetColors }: ExportPreviewProps) {
+export default function ExportPreview({ options, theme, presetColors }: ExportPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const updateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -297,10 +398,34 @@ export default function ExportPreview({ options, theme, presetColors: _presetCol
 
     setIsLoading(true);
 
+    const sections = project.sections;
+    const useDepthColors = options.color_mode === 'depth' && presetColors?.stops && presetColors.stops.length > 0;
+
+    // Compute depth range for depth color mode
+    let minDepth = Infinity;
+    let maxDepth = -Infinity;
+    if (useDepthColors) {
+      for (const station of stations) {
+        const z = station.coordinates.z;
+        if (Number.isFinite(z)) {
+          minDepth = Math.min(minDepth, z);
+          maxDepth = Math.max(maxDepth, z);
+        }
+      }
+      // Handle case where no valid depths found
+      if (!Number.isFinite(minDepth) || !Number.isFinite(maxDepth)) {
+        minDepth = 0;
+        maxDepth = 0;
+      }
+    }
+
+    // Get unit and precision for labels
+    const depthUnit = options.depth_unit || 'm';
+    const decimalPrecision = options.decimal_precision ?? 1;
+
     // Build shot features
     const shotFeatures: GeoJSON.Feature[] = [];
     const shotLabelFeatures: GeoJSON.Feature[] = [];
-    const sections = project.sections;
 
     for (const section of sections) {
       const sectionStations = stations
@@ -313,6 +438,13 @@ export default function ExportPreview({ options, theme, presetColors: _presetCol
         const toStation = sectionStations[i + 1];
 
         if (fromStation && toStation && shot) {
+          // Compute shot color based on mode
+          let shotColor = section.color;
+          if (useDepthColors && presetColors) {
+            const avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
+            shotColor = getDepthColor(avgDepth, minDepth, maxDepth, presetColors.stops);
+          }
+
           shotFeatures.push({
             type: 'Feature',
             geometry: {
@@ -325,7 +457,7 @@ export default function ExportPreview({ options, theme, presetColors: _presetCol
             properties: {
               sectionId: section.id,
               shotId: shot.id,
-              color: section.color,
+              color: shotColor,
               isVirtual: shot.is_virtual,
             },
           });
@@ -335,7 +467,10 @@ export default function ExportPreview({ options, theme, presetColors: _presetCol
             const midX = (fromStation.coordinates.x + toStation.coordinates.x) / 2;
             const midY = (fromStation.coordinates.y + toStation.coordinates.y) / 2;
             const avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
-            const label = `${shot.azimuth_in.toFixed(0)}° ${shot.length.toFixed(1)}m ${avgDepth.toFixed(1)}m`;
+            // Format with proper units and precision
+            const depthLabel = formatDepth(avgDepth, depthUnit, decimalPrecision);
+            const lengthLabel = `${shot.length.toFixed(decimalPrecision)}m`;
+            const label = `${shot.azimuth_in.toFixed(0)}° ${lengthLabel} ${depthLabel}`;
 
             shotLabelFeatures.push({
               type: 'Feature',
@@ -353,7 +488,12 @@ export default function ExportPreview({ options, theme, presetColors: _presetCol
     // Build station features
     const stationFeatures: GeoJSON.Feature[] = stations.map((station) => {
       const section = sections.find((s) => s.id === station.station_ref.section_id);
-      const color = section?.color ?? '#ffffff';
+
+      // Compute station color based on mode
+      let stationColor = section?.color ?? '#ffffff';
+      if (useDepthColors && presetColors) {
+        stationColor = getDepthColor(station.coordinates.z, minDepth, maxDepth, presetColors.stops);
+      }
 
       return {
         type: 'Feature',
@@ -365,7 +505,7 @@ export default function ExportPreview({ options, theme, presetColors: _presetCol
           sectionId: station.station_ref.section_id,
           stationIndex: station.station_ref.station_index,
           isZeroDatum: station.is_zero_datum,
-          color,
+          color: stationColor,
         },
       };
     });
@@ -549,7 +689,7 @@ export default function ExportPreview({ options, theme, presetColors: _presetCol
     }
 
     setIsLoading(false);
-  }, [project, stations, options, mapReady]);
+  }, [project, stations, options, mapReady, presetColors]);
 
   // Debounced effect for options changes
   useEffect(() => {
