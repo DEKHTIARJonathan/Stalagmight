@@ -1,4 +1,4 @@
-import { type Section } from '../../types/project';
+import { type Section, type SectionId } from '../../types/project';
 import { useUIStore } from '../../store/uiStore';
 
 interface SectionsPanelProps {
@@ -6,13 +6,21 @@ interface SectionsPanelProps {
 }
 
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
-  const { selection, setSelection, openDialog } = useUIStore();
+  const { selection, setSelection, hoveredSectionId, setHoveredSectionId, openDialog } = useUIStore();
 
   const handleSectionClick = (section: Section) => {
     setSelection({
       type: 'section',
       sectionId: section.id,
     });
+  };
+
+  const handleSectionMouseEnter = (sectionId: SectionId) => {
+    setHoveredSectionId(sectionId);
+  };
+
+  const handleSectionMouseLeave = () => {
+    setHoveredSectionId(null);
   };
 
   const handleAddSection = () => {
@@ -75,13 +83,14 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
               return (
                 <li
                   key={section.id}
-                  className={`
-                    px-3 py-2 cursor-pointer group
-                    hover:bg-background/50
-                    ${isSelected ? 'bg-accent/20' : ''}
-                  `}
-                  onClick={() => handleSectionClick(section)}
+                  data-testid={`section-row-${section.id}`}
+                  className={`px-3 py-2 cursor-pointer group hover:bg-background/50 ${
+                    isSelected || hoveredSectionId === section.id ? 'bg-accent/20' : ''
+                  }`}
+                  onMouseDown={() => handleSectionClick(section)}
                   onContextMenu={(e) => handleSectionContextMenu(e, section.id)}
+                  onMouseEnter={() => handleSectionMouseEnter(section.id)}
+                  onMouseLeave={handleSectionMouseLeave}
                 >
                   <div className="flex items-center gap-2">
                     <span
