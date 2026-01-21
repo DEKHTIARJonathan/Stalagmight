@@ -62,9 +62,8 @@ useEffect(() => {
 - [ ] Both effects have null checks for surveyLayerRef.current
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Wired MapCanvas to sync section hover/selection between uiStore and SurveyLayer: extracted hoveredSectionId and setHoveredSectionId from useUIStore, extended the selection sync effect to handle section type (clearing station/shot selection when section is selected), and added a new effect to sync hoveredSectionId to SurveyLayer.setHoveredSection() with mapLoaded dependency for proper initialization.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: a6c37981f8c5a7f02ef7c6cf36a0b60a3af8b5fb, 97a4f5fae1a3c96d8b3fa0e4cbf95f3e1d0f2a4e, ade76d4c97a6eab6e74b6ca9f287fe1d0ac0d439
+- Tests: pnpm tsc --noEmit
 - PRs:
