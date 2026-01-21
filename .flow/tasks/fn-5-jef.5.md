@@ -275,9 +275,8 @@ Add DepthLegend as sibling to existing overlays, conditionally rendered when sho
 - [ ] Integrated in MapCanvas
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Created DepthLegend component showing depth color gradient with min/max labels, positioned bottom-left above scale bar. Integrated into MapCanvas, visible when showDepthGradient toggle is enabled.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 16da9bc7c2b60453a5d28ef2b8bb910e5750d95d
+- Tests: pnpm tsc --noEmit
 - PRs:

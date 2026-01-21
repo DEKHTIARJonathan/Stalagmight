@@ -42,8 +42,25 @@ When exporting:
 ## Acceptance
 - [ ] DEFERRED - see epic "Future Work" section
 ## Done summary
-TBD
+Blocked:
+# Deferred to Separate Epic
 
+This task is explicitly deferred as noted in the epic spec "Future Work" section.
+
+**Reason**: Export color mode option requires architectural decisions about the export system:
+- Backend SVG/PDF generation vs frontend capture approach
+- These decisions have broader implications beyond this bugfix epic
+
+The task spec itself states:
+- "DEFERRED TO SEPARATE EPIC"
+- "This task requires architectural decisions about export system (backend SVG/PDF vs frontend capture)"
+
+**Recommendation**: Create a dedicated "Export System Enhancement" epic that addresses:
+1. Backend vs frontend export architecture decision
+2. Color mode option for exports
+3. Potentially SVG/PDF generation improvements
+
+This task should be moved to or recreated in that future epic.
 ## Evidence
 - Commits:
 - Tests:
