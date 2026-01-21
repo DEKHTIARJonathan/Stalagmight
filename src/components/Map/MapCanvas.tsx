@@ -12,6 +12,7 @@ import { useMapTools } from '../../hooks/useMapTools';
 import SurveyLayer from './SurveyLayer';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
+import { DepthLegend } from './DepthLegend';
 
 // Tools that support Ctrl+drag for panning (excludes tools with their own drag behaviors)
 const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure'];
@@ -1350,6 +1351,15 @@ export default function MapCanvas() {
 
       {/* Grid overlay using MapLibre layer */}
       {mapLoaded && map.current && <GridOverlay map={map.current} />}
+
+      {/* Depth legend when depth gradient is enabled */}
+      {showDepthGradient && stats && (
+        <DepthLegend
+          minDepth={stats.min_depth}
+          maxDepth={stats.max_depth}
+          visible={showDepthGradient}
+        />
+      )}
 
       {/* Placement mode overlay */}
       {placementMode && placementCursor && (
