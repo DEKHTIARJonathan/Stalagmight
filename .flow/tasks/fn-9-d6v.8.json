@@ -5,10 +5,20 @@
   "created_at": "2026-01-20T15:43:21.670848Z",
   "depends_on": [],
   "epic": "fn-9-d6v",
+  "evidence": {
+    "commits": [
+      "310ced7aa0d1a0d94fb2afca4ba68f1b04a23b37",
+      "235578a8eea17272f1fb2626f2785b3dd99504c5"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-9-d6v.8",
   "priority": null,
   "spec_path": ".flow/tasks/fn-9-d6v.8.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add bidirectional map-to-panel hover sync",
-  "updated_at": "2026-01-21T06:56:34.335322Z"
+  "updated_at": "2026-01-21T07:09:13.924617Z"
 }
