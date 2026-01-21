@@ -58,6 +58,134 @@ log_hit_detection = false           # Log hit detection events to browser consol
 
 Default config is defined in `src-tauri/src/config/defaults.rs`. See [SPEC.md](SPEC.md) Section 9 for full config schema.
 
+## Keyboard Shortcuts
+
+Shortcuts are configurable via the `[shortcuts]` section. Each action supports up to two key bindings (primary and secondary) as an array of strings.
+
+### Shortcut Format
+
+Shortcuts use the format `Modifier+Modifier+Key`, where:
+
+- **Modifiers** (in order): `Ctrl`, `Alt`, `Shift`
+- **Keys**: Single letters (uppercase), numbers, or special key names
+- **Platform note**: On macOS, `Ctrl` in config maps to the Command key; on Windows/Linux it maps to Control
+
+**Special key names:**
+- `Space`, `Enter`, `Tab`
+- `ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`
+- `Plus`, `Minus`, `Equal`
+- `Backquote`, `BracketLeft`, `BracketRight`
+
+### Configuration Example
+
+```toml
+[shortcuts]
+# Tools - single letter keys for quick access
+select = ["S"]
+pan = ["P"]
+zoom = ["Z"]                        # Toggle zoom mode
+quick_zoom = ["Q"]                  # Spring-loaded zoom (hold to zoom, release to restore)
+draw = ["D"]
+delete_tool = ["X"]
+merge = ["M"]
+measure = ["R"]
+move_section = ["V"]
+move_station = ["T"]
+
+# Edit - standard modifier combinations
+undo = ["Ctrl+Z"]
+redo = ["Ctrl+Y", "Ctrl+Shift+Z"]   # Two bindings for redo
+save = ["Ctrl+S"]
+
+# View toggles
+toggle_depth_gradient = ["G"]
+toggle_grid = ["Shift+G"]
+toggle_satellite = ["B"]
+toggle_station_labels = ["L"]
+toggle_shot_labels = ["Shift+L"]
+toggle_section_labels = ["Ctrl+L"]
+fit_to_bounds = ["F"]
+zoom_in = ["Equal", "Plus"]         # = or + key
+zoom_out = ["Minus"]                # - key
+
+# Panel toggles
+toggle_sections_panel = ["1"]
+toggle_detail_panel = ["2"]
+toggle_data_table = ["3"]
+```
+
+### All Configurable Actions
+
+| Category | Action | Default | Description |
+|----------|--------|---------|-------------|
+| **Tools** | `select` | `S` | Select tool |
+| | `pan` | `P` | Pan/hand tool |
+| | `zoom` | `Z` | Zoom tool (toggle) |
+| | `quick_zoom` | `Q` | Spring-loaded zoom (hold key) |
+| | `draw` | `D` | Draw tool |
+| | `delete_tool` | `X` | Delete tool |
+| | `merge` | `M` | Merge tool |
+| | `measure` | `R` | Measure tool |
+| | `move_section` | `V` | Move section tool |
+| | `move_station` | `T` | Move station tool |
+| **Edit** | `undo` | `Ctrl+Z` | Undo last action |
+| | `redo` | `Ctrl+Y`, `Ctrl+Shift+Z` | Redo last undone action |
+| | `save` | `Ctrl+S` | Save project |
+| **View** | `toggle_depth_gradient` | `G` | Toggle depth gradient coloring |
+| | `toggle_grid` | `Shift+G` | Toggle grid overlay |
+| | `toggle_satellite` | `B` | Toggle satellite imagery |
+| | `toggle_station_labels` | `L` | Toggle station name labels |
+| | `toggle_shot_labels` | `Shift+L` | Toggle shot distance labels |
+| | `toggle_section_labels` | `Ctrl+L` | Toggle section name labels |
+| | `fit_to_bounds` | `F` | Fit map to survey bounds |
+| | `zoom_in` | `=`, `+` | Zoom in on map |
+| | `zoom_out` | `-` | Zoom out on map |
+| **Panels** | `toggle_sections_panel` | `1` | Toggle sections panel |
+| | `toggle_detail_panel` | `2` | Toggle detail panel |
+| | `toggle_data_table` | `3` | Toggle data table |
+
+### Reserved Shortcuts
+
+The following shortcuts are reserved and cannot be reassigned:
+
+| Shortcut | Action |
+|----------|--------|
+| `Escape` | Close dialogs, clear selection, cancel operations |
+| `Delete` / `Backspace` | Delete selected item (with confirmation) |
+| `Ctrl+I` | Import DMP file |
+| `Ctrl+E` | Export project |
+| `Ctrl+A` | Select all stations |
+
+### Shortcut Feedback
+
+Control when toast notifications appear for shortcut actions via `general.shortcut_feedback`:
+
+```toml
+[general]
+shortcut_feedback = "non_obvious"   # "none", "non_obvious", or "all"
+```
+
+| Value | Behavior |
+|-------|----------|
+| `"none"` | No toast notifications for any shortcuts |
+| `"non_obvious"` | Toast for view/panel toggles only (default) |
+| `"all"` | Toast for all shortcut actions |
+
+### Backward Compatibility
+
+The shortcut system accepts both the legacy single-string format and the new array format:
+
+```toml
+# Legacy format (still supported)
+select = "S"
+
+# New format (preferred)
+select = ["S"]
+select = ["S", "Shift+S"]  # Primary + secondary binding
+```
+
+Missing shortcut fields are filled with defaults during config loading.
+
 ## Deprecated Settings
 
 The following settings have been removed and migrated to new locations:
@@ -74,6 +202,19 @@ The following settings have been removed and migrated to new locations:
 ## Settings Dialog
 
 The Settings dialog (`Ctrl+,` / `Cmd+,`) provides a UI for common configuration changes. After modifying `config.toml` manually, use the **Reload Config** button in the Settings dialog to apply changes without restarting the application.
+
+### Configuring Shortcuts via UI
+
+1. Open Settings (`Ctrl+,` or `Cmd+,` on macOS)
+2. Select the **Shortcuts** tab
+3. Use the search box to filter actions by name
+4. Click on a shortcut field to record a new key combination
+5. Press the desired keys to set the binding
+6. Press `Escape` to cancel recording, or `Backspace` to clear the binding
+7. Click **Reset** next to an action to restore its default binding
+8. Click **Reset All** at the top to restore all shortcuts to defaults
+
+**Conflict detection**: The UI warns when a shortcut conflicts with another action or reserved shortcut. Conflicting bindings are highlighted and must be resolved before saving.
 
 ## Logging
 
