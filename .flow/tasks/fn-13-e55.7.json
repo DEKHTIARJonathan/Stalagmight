@@ -7,10 +7,20 @@
     "fn-13-e55.5"
   ],
   "epic": "fn-13-e55",
+  "evidence": {
+    "commits": [
+      "19cce82808e5e8019cbac68dc4dbb81c30c4f11f"
+    ],
+    "prs": [],
+    "tests": [
+      "cargo test --manifest-path src-tauri/Cargo.toml -- shortcut_feedback",
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-13-e55.7",
   "priority": null,
   "spec_path": ".flow/tasks/fn-13-e55.7.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add shortcut feedback preference to General settings",
-  "updated_at": "2026-01-21T18:48:38.809307Z"
+  "updated_at": "2026-01-21T19:00:22.474609Z"
 }
