@@ -125,10 +125,16 @@ impl AppState {
         token
     }
 
-    /// Clear the active loading token (called when load completes or fails)
-    pub fn clear_active_load(&self) {
+    /// Clear the active loading token (called when load completes or fails).
+    /// Identity-safe: only clears if the provided token matches the current active token.
+    /// This prevents a stale load from clearing a newer load's token.
+    pub fn clear_active_load(&self, expected_token: &Arc<AtomicBool>) {
         if let Ok(mut guard) = self.active_loading.lock() {
-            *guard = None;
+            if let Some(ref current) = *guard {
+                if Arc::ptr_eq(current, expected_token) {
+                    *guard = None;
+                }
+            }
         }
     }
 
@@ -144,15 +150,30 @@ impl AppState {
 
     /// Compute project warnings from the given project.
     /// Used by both get_project_warnings command and load_project_full for validation phase.
-    /// Needs &self for access to config and DB (resolved warnings).
-    pub fn compute_project_warnings(&self, project: &Project) -> Vec<ProjectWarning> {
+    ///
+    /// If `db` is provided, uses it for resolved warnings lookup (for pre-finalization loading).
+    /// Otherwise falls back to self.database (normal operation after project is loaded).
+    pub fn compute_project_warnings(
+        &self,
+        project: &Project,
+        db: Option<&Database>,
+    ) -> Vec<ProjectWarning> {
         // Load resolved warnings from database
-        let resolved_set: HashSet<String> = self
-            .load_resolved_warnings()
-            .unwrap_or_default()
-            .iter()
-            .map(|r| format!("{}:{}:{}", r.section_id, r.shot_id, r.warning_code))
-            .collect();
+        let resolved_set: HashSet<String> = if let Some(db) = db {
+            // Use provided database reference (pre-finalization)
+            db.load_resolved_warnings()
+                .unwrap_or_default()
+                .iter()
+                .map(|r| format!("{}:{}:{}", r.section_id, r.shot_id, r.warning_code))
+                .collect()
+        } else {
+            // Fall back to self.database (post-finalization)
+            self.load_resolved_warnings()
+                .unwrap_or_default()
+                .iter()
+                .map(|r| format!("{}:{}:{}", r.section_id, r.shot_id, r.warning_code))
+                .collect()
+        };
 
         let config = self.get_config();
         let mut all_warnings = Vec::new();
@@ -2185,27 +2206,40 @@ impl AppState {
             .ok_or_else(|| LoadError::internal("AppHandle not initialized"))?;
 
         // Start new load - cancels any existing load
+        // Store the token for identity-safe clearing later
         let cancel_token = self.start_new_load();
-        let mut progress = ProgressEmitter::new_for_open(handle, cancel_token);
+        let mut progress = ProgressEmitter::new_for_open(handle, Arc::clone(&cancel_token));
+
+        // Helper macro for early return with identity-safe token clearing
+        macro_rules! check_cancelled {
+            () => {
+                if progress.is_cancelled() {
+                    self.clear_active_load(&cancel_token);
+                    return Err(LoadError::cancelled());
+                }
+            };
+        }
+
+        macro_rules! early_return_err {
+            ($err:expr) => {{
+                self.clear_active_load(&cancel_token);
+                return Err($err);
+            }};
+        }
 
         // === PHASE 0: Opening database (5%) ===
         progress.start_phase(LoadingPhase::OpeningDatabase);
         if !path.exists() {
-            self.clear_active_load();
-            return Err(LoadError::not_found(&path.display().to_string()));
+            early_return_err!(LoadError::not_found(&path.display().to_string()));
         }
         // Local variable only - NO state mutation until Finalizing
         let db = match Database::open_existing(&path) {
             Ok(db) => db,
             Err(e) => {
-                self.clear_active_load();
-                return Err(LoadError::new("DATABASE", e.to_string()));
+                early_return_err!(LoadError::new("DATABASE", e.to_string()));
             }
         };
-        if progress.is_cancelled() {
-            self.clear_active_load();
-            return Err(LoadError::cancelled());
-        }
+        check_cancelled!();
         progress.complete_phase(LoadingPhase::OpeningDatabase);
 
         // === PHASE 1: Loading project data (20%) ===
@@ -2213,26 +2247,19 @@ impl AppState {
         let mut project = match db.load_project() {
             Ok(p) => p,
             Err(e) => {
-                self.clear_active_load();
-                return Err(LoadError::new("DATABASE", e.to_string()));
+                early_return_err!(LoadError::new("DATABASE", e.to_string()));
             }
         };
         project.file_path = Some(path.clone());
         progress.update_phase(LoadingPhase::LoadingProjectData, 1, 1);
-        if progress.is_cancelled() {
-            self.clear_active_load();
-            return Err(LoadError::cancelled());
-        }
+        check_cancelled!();
         progress.complete_phase(LoadingPhase::LoadingProjectData);
 
         // === PHASE 2: Loading sections (15%) ===
         progress.start_phase(LoadingPhase::LoadingSections);
         let total_sections = project.sections.len() as u32;
         for (i, _section) in project.sections.iter().enumerate() {
-            if progress.is_cancelled() {
-                self.clear_active_load();
-                return Err(LoadError::cancelled());
-            }
+            check_cancelled!();
             progress.update_phase(LoadingPhase::LoadingSections, i as u32 + 1, total_sections);
         }
         progress.complete_phase(LoadingPhase::LoadingSections);
@@ -2244,45 +2271,32 @@ impl AppState {
                 progress.update_phase(LoadingPhase::ComputingStations, current, total);
             }
         }));
-        if progress.is_cancelled() {
-            self.clear_active_load();
-            return Err(LoadError::cancelled());
-        }
+        check_cancelled!();
         progress.complete_phase(LoadingPhase::ComputingStations);
 
         // === PHASE 4: Computing statistics (15%) - INDETERMINATE ===
         progress.start_phase(LoadingPhase::ComputingStatistics);
-        // Stats computation is coarse-grained, emit indeterminate
-        progress.heartbeat(LoadingPhase::ComputingStatistics);
         let mut stats = project.stats();
         // Calculate penetration distance with computed stations
         stats.penetration_distance = project.calculate_penetration(&stations);
-        if progress.is_cancelled() {
-            self.clear_active_load();
-            return Err(LoadError::cancelled());
-        }
+        // Heartbeat AFTER computation to indicate work completed
+        progress.heartbeat(LoadingPhase::ComputingStatistics);
+        check_cancelled!();
         progress.complete_phase(LoadingPhase::ComputingStatistics);
 
         // === PHASE 5: Validating data (10%) ===
-        // NOTE: We cannot validate with resolved warnings yet because db is not stored in self.
-        // Instead, we compute warnings after storing the db in Finalizing.
-        // For now, just emit progress and defer actual validation to after state mutation.
+        // Compute warnings using the local db reference (before finalization)
         progress.start_phase(LoadingPhase::ValidatingData);
+        let warnings = self.compute_project_warnings(&project, Some(&db));
         progress.heartbeat(LoadingPhase::ValidatingData);
-        if progress.is_cancelled() {
-            self.clear_active_load();
-            return Err(LoadError::cancelled());
-        }
+        check_cancelled!();
         progress.complete_phase(LoadingPhase::ValidatingData);
 
         // === PHASE 6: Loading settings (5%) ===
         progress.start_phase(LoadingPhase::LoadingSettings);
         let stored_settings = db.load_display_settings().unwrap_or_default();
         let display_settings = DisplaySettings::from_stored(&stored_settings);
-        if progress.is_cancelled() {
-            self.clear_active_load();
-            return Err(LoadError::cancelled());
-        }
+        check_cancelled!();
         progress.complete_phase(LoadingPhase::LoadingSettings);
 
         // === PHASE 7: Finalizing (10%) - ALL STATE MUTATIONS GUARDED ===
@@ -2296,31 +2310,19 @@ impl AppState {
             .collect();
 
         // Guard 1: Project state mutation
-        if progress.is_cancelled() {
-            self.clear_active_load();
-            return Err(LoadError::cancelled());
-        }
+        check_cancelled!();
         *self.project.lock().unwrap() = Some(project.clone());
 
         // Guard 2: Database handle mutation
-        if progress.is_cancelled() {
-            self.clear_active_load();
-            return Err(LoadError::cancelled());
-        }
+        check_cancelled!();
         *self.database.lock().unwrap() = Some(db);
 
         // Guard 3: Display settings cache clear
-        if progress.is_cancelled() {
-            self.clear_active_load();
-            return Err(LoadError::cancelled());
-        }
+        check_cancelled!();
         self.clear_display_settings_cache();
 
         // Guard 4: Undo stack restore
-        if progress.is_cancelled() {
-            self.clear_active_load();
-            return Err(LoadError::cancelled());
-        }
+        check_cancelled!();
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
             if undo_entries.is_empty() {
                 undo_stack.clear();
@@ -2331,10 +2333,7 @@ impl AppState {
         }
 
         // Guard 5: Recent projects update
-        if progress.is_cancelled() {
-            self.clear_active_load();
-            return Err(LoadError::cancelled());
-        }
+        check_cancelled!();
         if let Ok(mut recent) = self.recent_projects.lock() {
             recent.retain(|p| p != &path);
             recent.insert(0, path.clone());
@@ -2349,13 +2348,11 @@ impl AppState {
 
         progress.complete_phase(LoadingPhase::Finalizing);
 
-        // Clear active load AFTER all mutations complete
-        self.clear_active_load();
-
-        // Now we can compute warnings with access to the stored database
-        let warnings = self.compute_project_warnings(&project);
-
+        // Get loading_id before clearing token
         let loading_id = progress.loading_id();
+
+        // Clear active load AFTER all mutations and computations complete
+        self.clear_active_load(&cancel_token);
 
         tracing::info!(path = ?path, "Project loaded via load_project_full");
 
