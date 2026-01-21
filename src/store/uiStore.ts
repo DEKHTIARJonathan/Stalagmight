@@ -4,8 +4,9 @@ import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '..
 import type { PanelsConfig } from '../types/config';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 
-// Re-export tool utilities for convenience
-export { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
+// Import tool utilities for internal use and re-export for convenience
+import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
+export { NON_INTERACTIVE_TOOLS, isNonInteractiveTool };
 
 export type ViewType = 'global' | 'single';
 
@@ -274,7 +275,15 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Tool state
   activeTool: 'select',
-  setActiveTool: (activeTool) => set({ activeTool }),
+  setActiveTool: (activeTool) =>
+    set((state) => {
+      // Clear hover state when switching to non-interactive tools (pan/zoom)
+      // This ensures store consistency regardless of how hover was set
+      if (isNonInteractiveTool(activeTool) && (state.hoveredStation || state.hoveredShot)) {
+        return { activeTool, hoveredStation: null, hoveredShot: null };
+      }
+      return { activeTool };
+    }),
 
   // Selection state
   selection: null,
