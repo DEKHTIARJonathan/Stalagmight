@@ -570,6 +570,8 @@ export default function MapCanvas() {
     map.current.on('load', () => {
       if (!map.current) return;
       surveyLayerRef.current = new SurveyLayer(map.current, toolCallbacks);
+      // Set initial tool immediately after creating SurveyLayer
+      surveyLayerRef.current.setActiveTool(useUIStore.getState().activeTool);
       setMapLoaded(true);
       // Initialize pixels per meter
       const center = map.current.getCenter();
@@ -830,6 +832,13 @@ export default function MapCanvas() {
       map.current.doubleClickZoom.enable();
     }
   }, [activeTool]);
+
+  // Wire up setActiveTool - depend on mapLoaded to ensure it runs after layer creation
+  useEffect(() => {
+    if (surveyLayerRef.current) {
+      surveyLayerRef.current.setActiveTool(activeTool);
+    }
+  }, [activeTool, mapLoaded]);
 
   // Set map zoom limits from config
   useEffect(() => {
