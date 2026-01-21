@@ -10,13 +10,15 @@ import { DialogWrapper } from './DialogWrapper';
 import { LoadingProgress } from '../LoadingProgress/LoadingProgress';
 import ExportPreview, { type ExportTheme, type DepthPresetColors } from './ExportPreview';
 import type { ExportImageOptions, ImageFormat, DepthPreset } from '../../types/commands';
+import type { LoadingProgressPayload } from '../../types/loading';
 
-/** Export progress event payload from backend */
-interface ExportProgress {
-  stage: string;
-  percent: number;
-  message: string | null;
-}
+/** Phase label mapping for export phases (matches backend LoadingPhase) */
+const EXPORT_PHASE_LABELS: Record<string, string> = {
+  export_preparing: 'Preparing export...',
+  export_generating: 'Generating...',
+  export_writing: 'Writing file...',
+  export_complete: 'Export complete',
+};
 
 export default function ExportDialog() {
   const { closeDialog } = useUIStore();
@@ -47,9 +49,11 @@ export default function ExportDialog() {
   // Preset colors fetched from backend for preview
   const [presetColors, setPresetColors] = useState<DepthPresetColors | null>(null);
 
-  // Export progress state
+  // Export progress state - uses shared LoadingProgressPayload from loading infrastructure
   const [isExporting, setIsExporting] = useState(false);
-  const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
+  const [exportProgress, setExportProgress] = useState<LoadingProgressPayload | null>(null);
+  // Track the loadingId we're expecting (to filter out events from other operations)
+  const exportLoadingIdRef = useRef<number | null>(null);
 
   // Track if component is mounted to prevent setState on unmounted component
   const isMountedRef = useRef(true);
@@ -130,14 +134,31 @@ export default function ExportDialog() {
 
         if (selected) {
           // Register listener BEFORE starting export to avoid race condition with early events
-          const unlisten = await listen<ExportProgress>('export-progress', (event) => {
+          // Uses shared loading-progress events for consistency with LoadingProgress infrastructure
+          const unlisten = await listen<LoadingProgressPayload>('loading-progress', (event) => {
             if (isMountedRef.current) {
-              setExportProgress(event.payload);
+              // Only process export-related events (filter by loadingId once we know it,
+              // or accept all export_* phase events if loadingId not yet known)
+              const phase = event.payload.phase;
+              const isExportPhase = phase.startsWith('export_');
+
+              if (isExportPhase) {
+                // Accept this event and track its loadingId for future filtering
+                if (exportLoadingIdRef.current === null) {
+                  exportLoadingIdRef.current = event.payload.loadingId;
+                }
+
+                // Only process events matching our export's loadingId
+                if (event.payload.loadingId === exportLoadingIdRef.current) {
+                  setExportProgress(event.payload);
+                }
+              }
             }
           });
 
           setIsExporting(true);
           setExportProgress(null);
+          exportLoadingIdRef.current = null;
 
           try {
             // Override depth_unit and decimal_precision with current config values at export time
@@ -153,6 +174,7 @@ export default function ExportDialog() {
           } finally {
             // Clean up listener and reset state only if still mounted
             unlisten();
+            exportLoadingIdRef.current = null;
             if (isMountedRef.current) {
               setIsExporting(false);
               setExportProgress(null);
@@ -403,16 +425,29 @@ export default function ExportDialog() {
       </div>
 
       {/* Export Progress - uses shared LoadingProgress component for consistent UI */}
-      {isExporting && (
-        <div className="mt-4 flex justify-center" data-testid="export-progress-container">
-          <LoadingProgress
-            title="Exporting..."
-            phase={exportProgress?.stage ?? 'Preparing...'}
-            {...(exportProgress?.percent !== undefined && { phaseProgress: exportProgress.percent })}
-            overallProgress={exportProgress?.percent ?? 0}
-          />
-        </div>
-      )}
+      {isExporting && (() => {
+        const phase = EXPORT_PHASE_LABELS[exportProgress?.phase ?? ''] ?? 'Preparing...';
+        const overall = exportProgress?.overallPercent ?? 0;
+        const isIndeterminate = exportProgress?.isIndeterminate ?? true;
+        return (
+          <div className="mt-4 flex justify-center" data-testid="export-progress-container">
+            {isIndeterminate ? (
+              <LoadingProgress
+                title="Exporting..."
+                phase={phase}
+                overallProgress={overall}
+              />
+            ) : (
+              <LoadingProgress
+                title="Exporting..."
+                phase={phase}
+                phaseProgress={overall}
+                overallProgress={overall}
+              />
+            )}
+          </div>
+        );
+      })()}
 
       {/* Actions */}
       <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-border">

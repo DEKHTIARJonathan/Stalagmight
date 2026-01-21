@@ -209,6 +209,11 @@ pub enum LoadingPhase {
     CreatingDatabase,
     InitializingProject,
     SavingSettings,
+    // Export phases (4 total)
+    ExportPreparing,
+    ExportGenerating,
+    ExportWriting,
+    ExportComplete,
 }
 
 impl LoadingPhase {
@@ -226,12 +231,16 @@ impl LoadingPhase {
             Self::CreatingDatabase => "Creating database...",
             Self::InitializingProject => "Initializing project...",
             Self::SavingSettings => "Saving settings...",
+            Self::ExportPreparing => "Preparing export...",
+            Self::ExportGenerating => "Generating...",
+            Self::ExportWriting => "Writing file...",
+            Self::ExportComplete => "Export complete",
         }
     }
 
     /// Reference weight for this phase (out of 100 within its flow).
     /// NOTE: ProgressEmitter uses its own phase_weights vec for actual calculations,
-    /// which allows different weight distributions per flow type (open vs create).
+    /// which allows different weight distributions per flow type (open vs create vs export).
     pub fn weight(&self) -> f32 {
         match self {
             // Open phases sum to 100
@@ -247,6 +256,11 @@ impl LoadingPhase {
             Self::CreatingDatabase => 40.0,
             Self::InitializingProject => 40.0,
             Self::SavingSettings => 20.0,
+            // Export phases sum to 100
+            Self::ExportPreparing => 10.0,
+            Self::ExportGenerating => 60.0,
+            Self::ExportWriting => 20.0,
+            Self::ExportComplete => 10.0,
         }
     }
 }
@@ -369,6 +383,25 @@ impl ProgressEmitter {
             "Create phase weights must sum to 100"
         );
         Self::new(handle, weights, cancelled)
+    }
+
+    /// Create a new emitter for export operations (4 phases summing to 100%).
+    ///
+    /// Export operations don't support cancellation, so this uses a dummy token.
+    pub fn new_for_export(handle: AppHandle) -> Self {
+        let weights = vec![
+            (LoadingPhase::ExportPreparing, 10.0),
+            (LoadingPhase::ExportGenerating, 60.0),
+            (LoadingPhase::ExportWriting, 20.0),
+            (LoadingPhase::ExportComplete, 10.0),
+        ];
+        debug_assert!(
+            (weights.iter().map(|(_, w)| w).sum::<f32>() - 100.0).abs() < 0.01,
+            "Export phase weights must sum to 100"
+        );
+        // Export doesn't support cancellation - use a dummy token that's never cancelled
+        let dummy_cancelled = Arc::new(AtomicBool::new(false));
+        Self::new(handle, weights, dummy_cancelled)
     }
 
     fn new(handle: AppHandle, phase_weights: Vec<(LoadingPhase, f32)>, cancelled: Arc<AtomicBool>) -> Self {
