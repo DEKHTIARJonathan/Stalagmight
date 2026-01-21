@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use usvg::{Options, Tree};
 
-use super::depth_colors::DepthPreset;
+use super::depth_colors::{get_depth_color, DepthPreset};
 use crate::models::Project;
 
 /// Color mode for export visualization.
@@ -206,6 +206,16 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
         max_y = max_y.max(station.coordinates.y);
     }
 
+    // Calculate depth range for gradient (only needed for Depth mode)
+    let (min_depth, max_depth) = if options.color_mode == ColorMode::Depth {
+        let depths: Vec<f64> = stations.iter().map(|s| s.coordinates.z).collect();
+        let min = depths.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = depths.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        (min, max)
+    } else {
+        (0.0, 0.0) // Not used for section mode
+    };
+
     // Handle empty project
     if min_x == f64::MAX {
         min_x = 0.0;
@@ -227,13 +237,14 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
     let svg_height = (height * scale).max(1.0);
 
     let mut svg = String::new();
+    // CSS: station and zero-datum classes only define stroke (fill is inline)
     svg.push_str(&format!(
         r##"<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="{:.2}" height="{:.2}" viewBox="{:.1} {:.1} {:.1} {:.1}">
 <style>
   .shot {{ stroke-width: 2; fill: none; }}
-  .station {{ fill: #ffffff; stroke: #000000; stroke-width: 1; }}
-  .zero-datum {{ fill: #ffd700; stroke: #000000; stroke-width: 1; }}
+  .station {{ stroke: #000000; stroke-width: 1; }}
+  .zero-datum {{ stroke: #000000; stroke-width: 1; }}
   .label {{ font-family: sans-serif; font-size: 10px; fill: #333333; }}
   .section-name {{ font-family: sans-serif; font-size: 12px; font-weight: bold; fill: #333333; }}
 </style>
@@ -312,6 +323,15 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
                 ""
             };
 
+            // Shot stroke color: section color or depth-based (average of endpoints)
+            let stroke_color = match options.color_mode {
+                ColorMode::Section => section.color.clone(),
+                ColorMode::Depth => {
+                    let avg_depth = (from.coordinates.z + to.coordinates.z) / 2.0;
+                    get_depth_color(avg_depth, min_depth, max_depth, options.depth_preset)
+                }
+            };
+
             svg.push_str(&format!(
                 r#"<line class="shot" x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" {}/>
 "#,
@@ -319,7 +339,7 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
                 -from.coordinates.y, // Flip Y
                 to.coordinates.x,
                 -to.coordinates.y,
-                section.color,
+                stroke_color,
                 stroke_style
             ));
         }
@@ -327,7 +347,7 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
         svg.push_str("</g>\n");
     }
 
-    // Draw stations
+    // Draw stations with inline fill color
     svg.push_str("<g class=\"stations\">\n");
     for station in &stations {
         let class = if station.is_zero_datum {
@@ -337,13 +357,40 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
         };
         let radius = if station.is_zero_datum { 6.0 } else { 4.0 };
 
+        // Fill color: gold for zero-datum, otherwise section or depth color
+        let fill_color = if station.is_zero_datum {
+            "#ffd700".to_string() // Gold for zero datum, always
+        } else {
+            match options.color_mode {
+                ColorMode::Section => {
+                    // Find the section color for this station
+                    project
+                        .sections
+                        .iter()
+                        .find(|s| s.id == station.station_ref.section_id)
+                        .map(|s| s.color.clone())
+                        .unwrap_or_else(|| "#ffffff".to_string())
+                }
+                ColorMode::Depth => {
+                    get_depth_color(
+                        station.coordinates.z,
+                        min_depth,
+                        max_depth,
+                        options.depth_preset,
+                    )
+                }
+            }
+        };
+
+        // All stations use inline style="fill:..." for consistency
         svg.push_str(&format!(
-            r#"<circle class="{}" cx="{:.2}" cy="{:.2}" r="{}"/>
+            r#"<circle class="{}" cx="{:.2}" cy="{:.2}" r="{}" style="fill:{}"/>
 "#,
             class,
             station.coordinates.x,
             -station.coordinates.y,
-            radius
+            radius,
+            fill_color
         ));
     }
     svg.push_str("</g>\n");
@@ -408,7 +455,7 @@ fn escape_xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{SectionData, ShotData};
+    use crate::models::{GpsCoordinates, SectionData, ShotData, StationRef};
     use tempfile::NamedTempFile;
 
     fn create_test_project() -> Project {
@@ -594,5 +641,146 @@ mod tests {
         assert!(result.is_err(), "PNG export should fail for DPI=0");
         let err = result.unwrap_err().to_string();
         assert!(err.contains("DPI must be at least 1"), "Error should mention DPI requirement: {}", err);
+    }
+
+    // === Depth coloring tests ===
+
+    fn create_test_project_with_depths() -> Project {
+        let mut project = Project::new("DepthTest".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Section1".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![
+                ShotData {
+                    azimuth_in: 0.0,
+                    azimuth_out: 180.0,
+                    length: 10.0,
+                    depth_in: 0.0,
+                    depth_out: 5.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    azimuth_in: 0.0,
+                    azimuth_out: 180.0,
+                    length: 10.0,
+                    depth_in: 5.0,
+                    depth_out: 10.0,
+                    ..Default::default()
+                },
+            ],
+        });
+        project
+    }
+
+    #[test]
+    fn test_svg_section_mode_uses_section_color() {
+        let project = create_test_project();
+        let options = ExportImageOptions {
+            color_mode: ColorMode::Section,
+            ..Default::default()
+        };
+
+        let svg = generate_svg_string(&project, &options).unwrap();
+
+        // Stations should have inline style with section color
+        assert!(svg.contains("style=\"fill:#4ecdc4\""), "Station should have section color: {}", svg);
+        // Shots should use section color
+        assert!(svg.contains("stroke=\"#4ecdc4\""), "Shot should have section color stroke: {}", svg);
+    }
+
+    #[test]
+    fn test_svg_depth_mode_uses_depth_colors() {
+        let project = create_test_project_with_depths();
+        let options = ExportImageOptions {
+            color_mode: ColorMode::Depth,
+            depth_preset: super::super::depth_colors::DepthPreset::Grayscale,
+            ..Default::default()
+        };
+
+        let svg = generate_svg_string(&project, &options).unwrap();
+
+        // Should not contain the section color as fill or stroke
+        assert!(!svg.contains("stroke=\"#ff0000\""), "Should not use section color for shots in depth mode");
+        // Stations should have inline style="fill:..." (not CSS class fill)
+        assert!(svg.contains("style=\"fill:#"), "Stations should have inline fill style: {}", svg);
+    }
+
+    #[test]
+    fn test_svg_css_station_class_no_fill() {
+        let project = create_test_project();
+        let options = ExportImageOptions::default();
+
+        let svg = generate_svg_string(&project, &options).unwrap();
+
+        // CSS .station class should NOT have fill property
+        assert!(svg.contains(".station { stroke: #000000; stroke-width: 1; }"),
+            "CSS .station should only have stroke properties: {}", svg);
+        // CSS .zero-datum class should NOT have fill property
+        assert!(svg.contains(".zero-datum { stroke: #000000; stroke-width: 1; }"),
+            "CSS .zero-datum should only have stroke properties: {}", svg);
+    }
+
+    #[test]
+    fn test_svg_all_stations_have_inline_fill() {
+        let project = create_test_project();
+        let options = ExportImageOptions::default();
+
+        let svg = generate_svg_string(&project, &options).unwrap();
+
+        // Count circles - all should have style="fill:..."
+        let circle_count = svg.matches("<circle").count();
+        let inline_fill_count = svg.matches("style=\"fill:").count();
+        assert_eq!(circle_count, inline_fill_count,
+            "All {} circles should have inline fill style, but only {} have it",
+            circle_count, inline_fill_count);
+    }
+
+    #[test]
+    fn test_svg_zero_datum_always_gold() {
+        let mut project = create_test_project();
+        // Set a zero datum
+        let section_id = project.sections[0].id;
+        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
+        project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
+
+        // Test in section mode
+        let options_section = ExportImageOptions {
+            color_mode: ColorMode::Section,
+            ..Default::default()
+        };
+        let svg_section = generate_svg_string(&project, &options_section).unwrap();
+        assert!(svg_section.contains("style=\"fill:#ffd700\""),
+            "Zero datum should be gold in section mode: {}", svg_section);
+
+        // Test in depth mode
+        let options_depth = ExportImageOptions {
+            color_mode: ColorMode::Depth,
+            ..Default::default()
+        };
+        let svg_depth = generate_svg_string(&project, &options_depth).unwrap();
+        assert!(svg_depth.contains("style=\"fill:#ffd700\""),
+            "Zero datum should be gold in depth mode: {}", svg_depth);
+    }
+
+    #[test]
+    fn test_svg_depth_mode_shot_uses_avg_depth() {
+        let project = create_test_project_with_depths();
+        let options = ExportImageOptions {
+            color_mode: ColorMode::Depth,
+            depth_preset: super::super::depth_colors::DepthPreset::Grayscale,
+            ..Default::default()
+        };
+
+        let svg = generate_svg_string(&project, &options).unwrap();
+
+        // The project has shots with varying depths, so we should have different stroke colors
+        // Just verify that we don't use the section color
+        assert!(!svg.contains("stroke=\"#ff0000\""),
+            "Shot strokes should not use section color in depth mode");
+        // Verify shots have strokes (grayscale colors will be #NNNNNN format)
+        assert!(svg.contains("stroke=\"#"), "Shots should have stroke colors");
     }
 }
