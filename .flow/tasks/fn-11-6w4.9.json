@@ -17,15 +17,27 @@
       "nan_depth_tested": true,
       "preset_colors_tested": true,
       "same_min_max_tested": true,
-      "shortest_hue_path_tested": true
+      "shortest_hue_path_tested": true,
+      "thermal_avoids_purple": true
     },
+    "files_changed": [
+      "src-tauri/src/export/depth_colors.rs"
+    ],
     "files_verified": [
       "src-tauri/src/export/depth_colors.rs",
       "src-tauri/src/export/image.rs"
     ],
-    "notes": "Tests already existed in the module. 36 tests in depth_colors.rs + 1 integration test in image.rs (test_svg_depth_mode_uses_depth_colors). The spec mentions hex_to_hsl/hsl_to_hex but the module uses hex_to_rgb + rgb_to_hsl + hsl_to_rgb + format to hex chain, which is fully tested.",
+    "new_tests_added": [
+      "test_all_presets_produce_valid_hex_colors",
+      "test_preset_first_last_stop_colors",
+      "test_thermal_multi_stop_avoids_purple",
+      "test_thermal_min_max_clamp",
+      "test_thermal_nan_returns_shallow",
+      "test_thermal_same_min_max_returns_shallow"
+    ],
+    "notes": "Added 6 new spec-required tests. Total: 42 tests in depth_colors.rs + 1 integration test in image.rs. The spec mentions hex_to_hsl/hsl_to_hex but the module uses hex_to_rgb + rgb_to_hsl + hsl_to_rgb + format to hex chain, which is fully tested.",
     "test_command": "cargo test --manifest-path src-tauri/Cargo.toml depth_colors",
-    "test_output": "37 passed; 0 failed; 0 ignored (36 in depth_colors.rs + 1 in image.rs)",
+    "test_output": "43 passed; 0 failed; 0 ignored (42 in depth_colors.rs + 1 in image.rs)",
     "tests_passed": true
   },
   "id": "fn-11-6w4.9",
