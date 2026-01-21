@@ -519,8 +519,6 @@ impl TileCache {
 mod tests {
     use super::*;
     use std::thread;
-    use std::time::Duration;
-
     // Helper to create test tile data
     fn make_tile_data(size: usize) -> Vec<u8> {
         vec![0xFFu8; size]
@@ -533,6 +531,17 @@ mod tests {
             .execute(
                 "UPDATE tiles SET accessed_at = ?1 WHERE provider = ?2 AND z = ?3 AND y = ?4 AND x = ?5",
                 params![accessed_at, provider, z, y, x],
+            )
+            .unwrap();
+    }
+
+    // Helper to set fetched_at directly in DB for deterministic TTL testing
+    fn set_fetched_at(cache: &TileCache, provider: &str, z: u32, y: u32, x: u32, fetched_at: i64) {
+        cache
+            .conn
+            .execute(
+                "UPDATE tiles SET fetched_at = ?1 WHERE provider = ?2 AND z = ?3 AND y = ?4 AND x = ?5",
+                params![fetched_at, provider, z, y, x],
             )
             .unwrap();
     }
@@ -642,8 +651,9 @@ mod tests {
         let result = cache.get("esri", 10, 500, 250);
         assert!(result.is_some(), "Tile should be fresh right after put");
 
-        // Wait for TTL to expire (wait 2.5 seconds to be safe)
-        thread::sleep(Duration::from_millis(2500));
+        // Force the tile to be stale without sleeping
+        let stale_time = TileCache::now() - cache.ttl_seconds - 1;
+        set_fetched_at(&cache, "esri", 10, 500, 250, stale_time);
 
         // Should return None because TTL has expired
         let result = cache.get("esri", 10, 500, 250);
@@ -844,11 +854,10 @@ mod tests {
             .put("esri", 10, 500, 250, b"tile data", "image/jpeg")
             .unwrap();
 
-        // Get initial accessed_at from DB
+        // Force accessed_at to an older value without sleeping
+        let base_time = TileCache::now();
+        set_accessed_at(&cache, "esri", 10, 500, 250, base_time - 10);
         let first_accessed_at = get_accessed_at_from_db(&cache, "esri", 10, 500, 250);
-
-        // Wait for time to advance (at least 1 second since timestamps are in seconds)
-        thread::sleep(Duration::from_millis(1100));
 
         // Access the tile - this should update accessed_at
         let entry = cache.get("esri", 10, 500, 250).unwrap();
@@ -918,8 +927,10 @@ mod tests {
         let stats_before = cache.get_stats();
         assert_eq!(stats_before.tile_count, 2);
 
-        // Wait for TTL to expire (2.5 seconds to be safe)
-        thread::sleep(Duration::from_millis(2500));
+        // Force tiles to be stale without sleeping
+        let stale_time = TileCache::now() - cache.ttl_seconds - 1;
+        set_fetched_at(&cache, "esri", 10, 0, 0, stale_time);
+        set_fetched_at(&cache, "esri", 10, 0, 1, stale_time);
 
         // Eviction should remove expired tiles
         let freed = cache.evict_lru().unwrap();

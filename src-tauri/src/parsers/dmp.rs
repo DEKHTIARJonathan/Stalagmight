@@ -718,13 +718,15 @@ mod tests {
     // Integration tests with real DMP files
     #[test]
     fn test_parse_v2_dmp() {
-        let test_file = Path::new("/home/user/src/cave/pytool_mnemo_lib/tests/artifacts/test_v2.dmp");
-        if !test_file.exists() {
-            println!("Skipping test: test file not found");
-            return;
-        }
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../e2e/fixtures/test_v2.dmp");
+        assert!(
+            test_file.exists(),
+            "Fixture missing: {}",
+            test_file.display()
+        );
 
-        let result = parse_dmp(test_file);
+        let result = parse_dmp(&test_file);
         assert!(result.is_ok(), "Failed to parse v2 DMP: {:?}", result.err());
 
         let dmp = result.unwrap();
@@ -752,13 +754,15 @@ mod tests {
 
     #[test]
     fn test_parse_v5_dmp() {
-        let test_file = Path::new("/home/user/src/cave/pytool_mnemo_lib/tests/artifacts/test_v5.dmp");
-        if !test_file.exists() {
-            println!("Skipping test: test file not found");
-            return;
-        }
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../e2e/fixtures/test_v5.dmp");
+        assert!(
+            test_file.exists(),
+            "Fixture missing: {}",
+            test_file.display()
+        );
 
-        let result = parse_dmp(test_file);
+        let result = parse_dmp(&test_file);
         assert!(result.is_ok(), "Failed to parse v5 DMP: {:?}", result.err());
 
         let dmp = result.unwrap();

@@ -1,90 +1,53 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import {
+  setupMockedPage,
+  createProject,
+  seedProjectWithSections,
+  waitForMapReady,
+  waitForActiveTool,
+  waitForMapIdle,
+  waitForNoDialogs,
+  type SectionSeed,
+} from './helpers/app';
+
+const sectionSeeds: SectionSeed[] = [
+  {
+    name: 'Main Passage',
+    direction: 'in',
+    shots: [
+      { azimuth_in: 45, azimuth_out: 225, length: 10.5, depth_in: -2, depth_out: -2.5, left: 1.5, right: 2.3, up: 3.0, down: 0.8 },
+      { azimuth_in: 90, azimuth_out: 270, length: 15.2, depth_in: -2.5, depth_out: -5.0, left: 0.5, right: 0.7, up: 1.2, down: 1.5 },
+    ],
+  },
+  {
+    name: 'Side Tunnel',
+    direction: 'out',
+    shots: [
+      { azimuth_in: 270, azimuth_out: 90, length: 5.0, depth_in: -3.0, depth_out: -4.0, left: 0, right: 0, up: 0, down: 0 },
+    ],
+  },
+];
 
 /**
  * Helper to create a project with sections for map tools testing.
  * Returns when the project is loaded with sections containing shots.
  *
- * Uses the new two-step import flow:
- * - Step 1 (DmpSelectionDialog): Section selection
- * - Step 2 (DmpSectionConfigDialog): Per-section configuration and import
+ * Uses store seeding to avoid dialog overlays during tests.
  */
 async function createProjectWithSections(page: Page): Promise<void> {
-  // Create a new project
-  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill('Map Tools Test Project');
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
-
-  // Import a DMP file to create sections with shots
-  // New flow: Ctrl+I opens file picker, parses DMP, then opens Step 1 directly
-  await page.keyboard.press('Control+i');
-
-  // Wait for Step 1 dialog (DmpSelectionDialog) to appear with parsed data
-  await page.waitForSelector('[data-testid="dmp-selection-dialog"]', { timeout: 5000 });
-
-  const step1Dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-  await expect(step1Dialog).toBeVisible();
-
-  // Wait for sections to load
-  await page.waitForSelector('text=Main Passage', { timeout: 5000 });
-
-  // Deselect sections with validation issues in Step 1
-  const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
-  const checkbox = validationSection.locator('input[type="checkbox"]');
-  if (await checkbox.isVisible()) {
-    await checkbox.click();
-  }
-
-  // Also deselect Mixed LRUD section (has warning for long shot)
-  const mixedLrudSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
-  const mixedCheckbox = mixedLrudSection.locator('input[type="checkbox"]');
-  if (await mixedCheckbox.isVisible()) {
-    await mixedCheckbox.click();
-  }
-
-  // Proceed to Step 2
-  const continueButton = page.locator('[data-testid="continue-button"]');
-  await expect(continueButton).toBeEnabled();
-  await continueButton.click();
-
-  // Wait for Step 2 dialog (DmpSectionConfigDialog) to appear
-  await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
-
-  // Place all sections - "Place section" places current and auto-advances
-  // When on the last unplaced section, it shows "Place and finish"
-  let attempts = 0;
-  const maxAttempts = 10;
-  while (attempts < maxAttempts) {
-    const placeAndFinishButton = page.locator('[data-testid="place-and-finish-button"]');
-    const placeSectionButton = page.locator('[data-testid="place-section-button"]');
-
-    if (await placeAndFinishButton.isVisible()) {
-      await placeAndFinishButton.click();
-      break;
-    } else if (await placeSectionButton.isVisible()) {
-      await placeSectionButton.click();
-      await page.waitForTimeout(200);
-    }
-    attempts++;
-  }
-
-  // Wait for dialog to close
-  await expect(page.locator('[data-testid="dmp-section-config-dialog"]')).not.toBeVisible({ timeout: 5000 });
+  await createProject(page, 'Map Tools Test Project');
+  await seedProjectWithSections(page, sectionSeeds);
+  await waitForMapReady(page);
+  await waitForNoDialogs(page);
+  await waitForMapIdle(page);
 }
 
 /**
- * These tests are skipped because the createProjectWithSections helper needs
- * to be updated to handle the new two-step import flow with section placement.
- * Will be fixed in task fn-51-ctu.22.
+ * Map tool tests use the two-step import flow and auto-placement helpers.
  */
-test.describe.skip('Map Tools', () => {
+test.describe('Map Tools', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
   test('should switch between tools with keyboard shortcuts', async ({ page }) => {
@@ -92,7 +55,7 @@ test.describe.skip('Map Tools', () => {
     await createProjectWithSections(page);
 
     // Verify canvas is visible (we're in SingleSystemView)
-    const canvas = page.locator('canvas').first();
+    const canvas = page.getByTestId('map-canvas');
     await expect(canvas).toBeVisible();
 
     // Test each tool shortcut as defined in DEFAULT_SHORTCUTS:
@@ -108,23 +71,19 @@ test.describe.skip('Map Tools', () => {
       { key: 'v', tool: 'move_section' },
       { key: 't', tool: 'move_station' },
     ];
+    const toolbarTools = new Set(['select', 'pan', 'zoom', 'draw', 'delete', 'merge', 'measure']);
 
     for (const { key, tool } of toolShortcuts) {
       await page.keyboard.press(key);
-      await page.waitForTimeout(100);
+      await waitForActiveTool(page, tool);
 
       // App should remain functional after each keypress
       await expect(canvas).toBeVisible();
 
-      // Try to verify the tool is active through the toolbar
-      // The toolbar buttons have tooltips showing the tool name
-      // The active tool has an 'active' state shown with different styling
-      const toolButtons = page.locator('.bg-background.rounded button');
-      const activeButton = toolButtons.filter({ has: page.locator('[class*="bg-accent"]') });
-
-      // At least verify the UI didn't crash
-      const toolButtonCount = await toolButtons.count();
-      expect(toolButtonCount).toBeGreaterThan(0);
+      if (toolbarTools.has(tool)) {
+        const activeButton = page.getByTestId(`tool-${tool}`);
+        await expect(activeButton).toBeVisible();
+      }
     }
   });
 
@@ -133,12 +92,12 @@ test.describe.skip('Map Tools', () => {
     await createProjectWithSections(page);
 
     // Verify canvas is visible
-    const canvas = page.locator('canvas').first();
+    const canvas = page.getByTestId('map-canvas');
     await expect(canvas).toBeVisible();
 
     // Switch to select tool
     await page.keyboard.press('s');
-    await page.waitForTimeout(100);
+    await waitForActiveTool(page, 'select');
 
     // Click on the canvas to attempt selection
     const canvasBox = await canvas.boundingBox();
@@ -150,21 +109,21 @@ test.describe.skip('Map Tools', () => {
 
       // Single click for single selection
       await page.mouse.click(centerX, centerY);
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // The app should remain functional
       await expect(canvas).toBeVisible();
 
       // Test Ctrl+click for multi-select
       await page.mouse.click(centerX + 50, centerY, { modifiers: ['Control'] });
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // The app should remain functional
       await expect(canvas).toBeVisible();
 
       // Test Ctrl+A for select all
       await page.keyboard.press('Control+a');
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // The app should remain functional
       await expect(canvas).toBeVisible();
@@ -176,7 +135,7 @@ test.describe.skip('Map Tools', () => {
     await createProjectWithSections(page);
 
     // Verify canvas is visible
-    const canvas = page.locator('canvas').first();
+    const canvas = page.getByTestId('map-canvas');
     await expect(canvas).toBeVisible();
 
     const canvasBox = await canvas.boundingBox();
@@ -186,30 +145,30 @@ test.describe.skip('Map Tools', () => {
       const centerX = canvasBox.x + canvasBox.width / 2;
       const centerY = canvasBox.y + canvasBox.height / 2;
 
-      // Switch to pan tool
-      await page.keyboard.press('p');
-      await page.waitForTimeout(100);
+    // Switch to pan tool
+    await page.keyboard.press('p');
+    await waitForActiveTool(page, 'pan');
 
       // Perform drag with pan tool active
       await page.mouse.move(centerX, centerY);
       await page.mouse.down();
-      await page.mouse.move(centerX + 100, centerY + 100);
+      await page.mouse.move(centerX + 100, centerY + 100, { steps: 8 });
       await page.mouse.up();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // The app should remain functional after panning
       await expect(canvas).toBeVisible();
 
       // Test middle mouse button for panning (should work regardless of tool)
       await page.keyboard.press('s'); // Switch back to select
-      await page.waitForTimeout(100);
+      await waitForActiveTool(page, 'select');
 
       // Middle mouse button pan (button: 1)
       await page.mouse.move(centerX, centerY);
       await page.mouse.down({ button: 'middle' });
-      await page.mouse.move(centerX - 50, centerY - 50);
+      await page.mouse.move(centerX - 50, centerY - 50, { steps: 6 });
       await page.mouse.up({ button: 'middle' });
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // The app should remain functional
       await expect(canvas).toBeVisible();
@@ -221,12 +180,12 @@ test.describe.skip('Map Tools', () => {
     await createProjectWithSections(page);
 
     // Verify canvas is visible
-    const canvas = page.locator('canvas').first();
+    const canvas = page.getByTestId('map-canvas');
     await expect(canvas).toBeVisible();
 
     // Switch to measure tool
     await page.keyboard.press('r');
-    await page.waitForTimeout(100);
+    await waitForActiveTool(page, 'measure');
 
     const canvasBox = await canvas.boundingBox();
     expect(canvasBox).not.toBeNull();
@@ -237,11 +196,11 @@ test.describe.skip('Map Tools', () => {
 
       // Click to start measurement
       await page.mouse.click(centerX - 100, centerY);
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Click to end measurement
       await page.mouse.click(centerX + 100, centerY);
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // The app should remain functional
       await expect(canvas).toBeVisible();
@@ -252,7 +211,7 @@ test.describe.skip('Map Tools', () => {
 
       // Clear the measurement with Escape
       await page.keyboard.press('Escape');
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // The app should remain functional
       await expect(canvas).toBeVisible();
@@ -264,7 +223,7 @@ test.describe.skip('Map Tools', () => {
     await createProjectWithSections(page);
 
     // Verify canvas is visible
-    const canvas = page.locator('canvas').first();
+    const canvas = page.getByTestId('map-canvas');
     await expect(canvas).toBeVisible();
 
     // First, pan or zoom away from the default view
@@ -278,20 +237,21 @@ test.describe.skip('Map Tools', () => {
 
       await page.mouse.move(centerX, centerY);
       await page.mouse.wheel(0, 200); // Zoom out
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // Pan away from center
       await page.keyboard.press('p');
+      await waitForActiveTool(page, 'pan');
       await page.mouse.move(centerX, centerY);
       await page.mouse.down();
-      await page.mouse.move(centerX + 200, centerY + 200);
+      await page.mouse.move(centerX + 200, centerY + 200, { steps: 10 });
       await page.mouse.up();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
     }
 
     // Use Ctrl+0 to fit view to all data
     await page.keyboard.press('Control+0');
-    await page.waitForTimeout(300);
+    await waitForMapIdle(page);
 
     // The app should remain functional and the map should have adjusted
     await expect(canvas).toBeVisible();
@@ -306,24 +266,24 @@ test.describe.skip('Map Tools', () => {
     await createProjectWithSections(page);
 
     // Verify canvas is visible
-    const canvas = page.locator('canvas').first();
+    const canvas = page.getByTestId('map-canvas');
     await expect(canvas).toBeVisible();
 
     // First, select something - let's select a section from the sections panel
-    const sectionItem = page.locator('li').filter({ hasText: 'Side Tunnel' });
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: 'Side Tunnel' });
     if (await sectionItem.isVisible()) {
       await sectionItem.click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Verify section is selected (has highlight)
       await expect(sectionItem).toHaveClass(/bg-accent/);
 
       // Press Delete key to trigger deletion
       await page.keyboard.press('Delete');
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // A confirmation dialog should appear
-      const confirmDialog = page.locator('[role="dialog"]');
+      const confirmDialog = page.getByTestId('confirm-dialog');
       if (await confirmDialog.isVisible()) {
         // The dialog should mention delete or confirm
         const dialogText = await confirmDialog.textContent();
@@ -338,7 +298,7 @@ test.describe.skip('Map Tools', () => {
 
         // Click Cancel to abort deletion
         await cancelButton.click();
-        await page.waitForTimeout(200);
+        await waitForMapIdle(page);
 
         // Dialog should close
         await expect(confirmDialog).not.toBeVisible({ timeout: 2000 });
@@ -348,25 +308,25 @@ test.describe.skip('Map Tools', () => {
     // Also test with a shot selected in the data table
     // First, open the data table
     await page.keyboard.press('Control+3');
-    await page.waitForTimeout(300);
+    await expect(page.getByTestId('data-table')).toBeVisible();
 
     // Select a shot from the data table
     const tableRow = page.locator('tbody tr').first();
     if (await tableRow.isVisible()) {
       await tableRow.click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Press Delete key
       await page.keyboard.press('Delete');
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // If a confirmation dialog appears, cancel it
-      const confirmDialog = page.locator('[role="dialog"]');
+      const confirmDialog = page.getByTestId('confirm-dialog');
       if (await confirmDialog.isVisible()) {
         const cancelButton = confirmDialog.locator('button:has-text("Cancel")');
         if (await cancelButton.isVisible()) {
           await cancelButton.click();
-          await page.waitForTimeout(200);
+          await waitForMapIdle(page);
         }
       }
     }

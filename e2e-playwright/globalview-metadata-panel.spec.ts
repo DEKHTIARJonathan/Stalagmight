@@ -1,13 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import { setupMockedPage } from './helpers/app';
 
 test.describe('GlobalView Metadata Panel', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
-    // Wait for the GlobalView to render with recent projects
-    await page.waitForSelector('[data-testid="global-view"]', { timeout: 10000 });
+    await setupMockedPage(page);
+    await expect(page.getByTestId('global-view')).toBeVisible({ timeout: 10000 });
   });
 
   test.describe('Panel Visibility', () => {
@@ -77,8 +74,8 @@ test.describe('GlobalView Metadata Panel', () => {
       // Switch to Map tab
       const mapTab = page.locator('[data-testid="globalview-map-tab"]');
       await mapTab.click();
-      await page.waitForSelector('[data-testid="globalview-map"]', { timeout: 5000 });
-      await page.waitForTimeout(1000); // Wait for markers
+      await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
+      await expect(page.locator('.globalview-system-marker')).toHaveCount(3, { timeout: 5000 });
     });
 
     test('should show project details when map marker is clicked', async ({ page }) => {
@@ -124,7 +121,7 @@ test.describe('GlobalView Metadata Panel', () => {
       await openButton.click();
 
       // Should transition to SingleSystemView (indicated by canvas being visible)
-      await expect(page.locator('canvas').first()).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
     });
 
     test('should have correct aria-label on action buttons', async ({ page }) => {

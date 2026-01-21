@@ -19,6 +19,7 @@ import {
   importDmpFile,
   getProjectSections,
   getProjectStats,
+  waitForUiIdle,
 } from '../helpers/app';
 
 // Get absolute path to fixtures directory
@@ -100,7 +101,7 @@ describe('Project Persistence', () => {
     );
 
     // Verify file was created
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
     expect(fs.existsSync(projectPath)).toBe(true);
 
     // Close the project
@@ -136,7 +137,7 @@ describe('Project Persistence', () => {
     expect(openResult.success).toBe(true);
 
     // Wait for project to load
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
 
     // Verify sections were preserved
     const sectionsAfterLoad = await getProjectSections();
@@ -251,7 +252,7 @@ describe('Project Persistence', () => {
       },
       projectPath
     );
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
 
     // Close and reopen
     await resetAppState();
@@ -278,7 +279,7 @@ describe('Project Persistence', () => {
       },
       projectPath
     );
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
 
     // Verify merges were preserved
     const mergesAfterLoad = await browser.execute(() => {
@@ -410,7 +411,7 @@ describe('Project Persistence', () => {
       },
       projectPath
     );
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
 
     // Close and reopen
     await resetAppState();
@@ -437,7 +438,7 @@ describe('Project Persistence', () => {
       },
       projectPath
     );
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
 
     // Verify zero datums were preserved with full precision
     const datumsAfterLoad = await browser.execute(() => {
@@ -533,7 +534,7 @@ describe('Project Persistence', () => {
     expect(saveResult.error).toBeDefined();
 
     // Application should still be functional
-    const mapCanvas = await $('canvas, [class*="MapCanvas"]');
+    const mapCanvas = await $('[data-testid="map-canvas"]');
     await expect(mapCanvas).toBeExisting();
 
     // Can still save to a valid location
@@ -602,7 +603,7 @@ describe('Project Persistence', () => {
       },
       projectPath
     );
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
 
     // Close project
     await resetAppState();
@@ -623,7 +624,7 @@ describe('Project Persistence', () => {
         e2e.projectStore.getState().loadRecentProjects();
       }
     });
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Get recent projects
     const recentProjects = await browser.execute(() => {
@@ -682,7 +683,7 @@ describe('Project Persistence', () => {
     // Import DMP file to make changes
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
     await importDmpFile(dmpPath);
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // After import, project should be dirty (createSection sets isDirty)
     isDirty = await browser.execute(() => {
@@ -725,7 +726,7 @@ describe('Project Persistence', () => {
       },
       projectPath
     );
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // After save, project should not be dirty
     isDirty = await browser.execute(() => {
@@ -777,7 +778,7 @@ describe('Project Persistence', () => {
       }
     );
     expect(updateResult.success).toBe(true);
-    await browser.pause(300);
+    await waitForUiIdle(300);
 
     // After modification, isDirty should be true again
     isDirty = await browser.execute(() => {
@@ -839,7 +840,7 @@ describe('Project Persistence', () => {
       },
       projectPath
     );
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
 
     // Close project
     await resetAppState();
@@ -891,7 +892,7 @@ describe('Project Persistence', () => {
     expect(openResult.success).toBe(true);
 
     // Wait a moment for the state to update
-    await browser.pause(200);
+    await waitForUiIdle(200);
 
     // Verify triggerFitToBounds was called (requestFitToBounds should be true)
     const fitToBoundsTriggered = await browser.execute(() => {

@@ -5,6 +5,7 @@ import {
   saveProject,
   undo,
   redo,
+  waitForUiIdle,
 } from '../helpers/app';
 
 describe('Project Lifecycle', () => {
@@ -23,7 +24,7 @@ describe('Project Lifecycle', () => {
 
       if (!hasGlobalView) {
         // Fallback: check for New Project button which indicates we're on GlobalView
-        const newProjectBtn = await $('button*=New Project');
+        const newProjectBtn = await $('[data-testid="new-project-button"]');
         await expect(newProjectBtn).toBeExisting();
       } else {
         await expect(startPage).toBeExisting();
@@ -31,13 +32,13 @@ describe('Project Lifecycle', () => {
     });
 
     it('should have a New Project button', async () => {
-      const newProjectBtn = await $('button*=New Project');
+      const newProjectBtn = await $('[data-testid="new-project-button"]');
       await expect(newProjectBtn).toBeExisting();
       await expect(newProjectBtn).toBeClickable();
     });
 
     it('should open new project dialog when clicking New Project', async () => {
-      const newProjectBtn = await $('button*=New Project');
+      const newProjectBtn = await $('[data-testid="new-project-button"]');
       await newProjectBtn.waitForDisplayed({ timeout: 5000 });
 
       // Use JavaScript click for WebKit reliability
@@ -49,14 +50,14 @@ describe('Project Lifecycle', () => {
       }
 
       // Wait for React state update
-      await browser.pause(1000);
+      await waitForUiIdle(1000);
 
       // Wait for dialog
-      const dialog = await $('[role="dialog"]');
+      const dialog = await $('[data-testid="new-project-dialog"]');
       await dialog.waitForDisplayed({ timeout: 10000 });
 
       // Should have a project name input
-      const nameInput = await dialog.$('input');
+      const nameInput = await dialog.$('[data-testid="new-project-name-input"]');
       await expect(nameInput).toBeExisting();
     });
 
@@ -65,9 +66,7 @@ describe('Project Lifecycle', () => {
 
       // Verify we're now in the SingleSystemView
       // Look for map canvas or toolbar
-      const mainView = await $(
-        'canvas, [class*="MapCanvas"], [class*="SingleSystemView"], [class*="toolbar"]'
-      );
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
   });
@@ -82,10 +81,10 @@ describe('Project Lifecycle', () => {
       // After save, the window title should not have a dirty indicator (*)
       // Note: This depends on implementation - checking title might not be possible via WebDriver
       // Alternative: check for any save confirmation message
-      await browser.pause(500);
+      await waitForUiIdle(500);
 
       // Project should still be in editable state
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
   });
@@ -98,7 +97,7 @@ describe('Project Lifecycle', () => {
       await undo();
 
       // The app should still be functional
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
 
@@ -109,7 +108,7 @@ describe('Project Lifecycle', () => {
       await redo();
 
       // App should still be functional
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
   });

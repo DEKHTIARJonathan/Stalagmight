@@ -78,6 +78,7 @@ export default function NewProjectDialog() {
             className="w-full"
             placeholder="e.g., Lechuguilla Cave"
             autoFocus
+            data-testid="new-project-name-input"
           />
         </div>
 
@@ -91,6 +92,7 @@ export default function NewProjectDialog() {
             onChange={(e) => setLocation(e.target.value)}
             className="w-full"
             placeholder="e.g., Carlsbad Caverns National Park, NM"
+            data-testid="new-project-location-input"
           />
         </div>
 
@@ -101,6 +103,7 @@ export default function NewProjectDialog() {
             checked={saveImmediately}
             onChange={(e) => setSaveImmediately(e.target.checked)}
             className="rounded"
+            data-testid="new-project-save-immediately"
           />
           <label htmlFor="saveImmediately" className="text-sm">
             Save project file immediately
@@ -108,13 +111,14 @@ export default function NewProjectDialog() {
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} disabled={isCreating}>
+          <Button onClick={closeDialog} disabled={isCreating} data-testid="new-project-cancel-button">
             Cancel
           </Button>
           <Button
             variant="primary"
             onClick={handleCreate}
             disabled={isCreating || !name.trim()}
+            data-testid="new-project-create-button"
           >
             {isCreating ? 'Creating...' : 'Create Project'}
           </Button>

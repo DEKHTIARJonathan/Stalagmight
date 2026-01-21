@@ -117,6 +117,8 @@ export default function DisplayMenu() {
           }
         `}
         title="Display Options"
+        data-testid="display-menu-button"
+        aria-expanded={isOpen}
       >
         <span className="flex items-center gap-1">
           <span>👁</span>
@@ -129,6 +131,7 @@ export default function DisplayMenu() {
         <div
           ref={menuRef}
           className="absolute right-0 top-full mt-1 w-64 bg-panel border border-border rounded-lg shadow-lg z-50"
+          data-testid="display-menu"
         >
           {displayOptions.map((group, groupIndex) => (
             <div key={group.group}>
