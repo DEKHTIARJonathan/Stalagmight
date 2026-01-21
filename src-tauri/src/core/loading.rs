@@ -63,15 +63,52 @@ impl LoadError {
     }
 }
 
+/// Escape a string for JSON, handling quotes, backslashes, and control characters.
+fn escape_json_string(s: &str) -> String {
+    let mut escaped = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            c if c.is_control() => {
+                // Escape other control characters as \uXXXX
+                escaped.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => escaped.push(c),
+        }
+    }
+    escaped
+}
+
 impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // ALWAYS produce valid JSON - use serde_json with fallback
         match serde_json::to_string(self) {
             Ok(json) => write!(f, "{}", json),
             Err(_) => {
-                // Fallback: manually construct valid JSON with escaped message
-                let escaped_msg = self.message.replace('\\', "\\\\").replace('"', "\\\"");
-                write!(f, r#"{{"code":"{}","message":"{}"}}"#, self.code, escaped_msg)
+                // Fallback: manually construct valid JSON with fully escaped strings
+                let escaped_code = escape_json_string(&self.code);
+                let escaped_msg = escape_json_string(&self.message);
+                match &self.details {
+                    Some(details) => {
+                        let escaped_details = escape_json_string(details);
+                        write!(
+                            f,
+                            r#"{{"code":"{}","message":"{}","details":"{}"}}"#,
+                            escaped_code, escaped_msg, escaped_details
+                        )
+                    }
+                    None => {
+                        write!(
+                            f,
+                            r#"{{"code":"{}","message":"{}","details":null}}"#,
+                            escaped_code, escaped_msg
+                        )
+                    }
+                }
             }
         }
     }
@@ -83,11 +120,15 @@ impl std::error::Error for LoadError {}
 // DisplaySettings
 // ============================================================================
 
-/// Display settings for API payloads.
+/// Display settings for API payloads (used in load_project_full response).
 ///
-/// MUST match uiStore EXACTLY (11 fields).
-/// NOTE: NO showShots, NO colorBy - these are not persisted per-project.
-#[derive(Serialize, Deserialize, Default, Clone, Debug)]
+/// This struct contains the 11 display settings that are persisted per-project.
+/// It is used ONLY for the consolidated load API response, not for storage.
+///
+/// NOTE: showShots is intentionally excluded per spec - the frontend's showShots
+/// toggle exists but this API struct matches the 11 persisted settings only.
+/// Frontend showShots state is managed separately (session-based, always defaults true).
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplaySettings {
     pub show_stations: bool,
@@ -101,6 +142,25 @@ pub struct DisplaySettings {
     pub show_satellite: bool,
     pub show_depth_gradient: bool,
     pub grid_spacing: f64,
+}
+
+impl Default for DisplaySettings {
+    /// Default values matching uiStore/DISPLAY_DEFAULTS exactly.
+    fn default() -> Self {
+        Self {
+            show_stations: true,
+            show_section_names: true,
+            show_station_labels: false,
+            show_shot_data: false,
+            show_virtual_shots: true,
+            show_zero_datum: true,
+            show_grid: false,
+            show_scale_bar: true,
+            show_satellite: false,
+            show_depth_gradient: false,
+            grid_spacing: 10.0,
+        }
+    }
 }
 
 impl DisplaySettings {
@@ -129,6 +189,10 @@ impl DisplaySettings {
 // ============================================================================
 
 /// Loading phases for project open/create operations.
+///
+/// The `weight()` method on this enum is provided for convenience/reference.
+/// The authoritative weights used for progress calculation are in ProgressEmitter's
+/// phase_weights vec, which allows different weight distributions per flow type.
 #[derive(Clone, Copy, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum LoadingPhase {
@@ -165,7 +229,9 @@ impl LoadingPhase {
         }
     }
 
-    /// Weight for overall progress calculation (out of 100).
+    /// Reference weight for this phase (out of 100 within its flow).
+    /// NOTE: ProgressEmitter uses its own phase_weights vec for actual calculations,
+    /// which allows different weight distributions per flow type (open vs create).
     pub fn weight(&self) -> f32 {
         match self {
             // Open phases sum to 100
@@ -327,45 +393,59 @@ impl ProgressEmitter {
     }
 
     /// Start a new phase - emits progress immediately.
+    ///
+    /// If the phase is not found in the emitter's phase list, logs a warning
+    /// and keeps the current phase index to avoid misreporting progress.
     pub fn start_phase(&mut self, phase: LoadingPhase) {
-        self.current_phase_idx = self
-            .phase_weights
-            .iter()
-            .position(|(p, _)| *p == phase)
-            .unwrap_or(0);
+        if let Some(idx) = self.phase_weights.iter().position(|(p, _)| *p == phase) {
+            self.current_phase_idx = idx;
+        } else {
+            // Phase not in this emitter's flow - log warning but don't change index
+            tracing::warn!(
+                "start_phase called with phase {:?} not in emitter's phase_weights",
+                phase
+            );
+        }
         self.last_item = 0;
-        self.emit(phase, None, None, true);
+        // Emit with indeterminate=true derived from having no current/total
+        self.emit_progress(phase, None, None);
     }
 
     /// Update progress within a phase with throttling.
+    /// Use 0-indexed current (0..total-1) or 1-indexed (1..total) - both work.
     pub fn update_phase(&mut self, phase: LoadingPhase, current: u32, total: u32) {
-        let should_emit = current == 1
+        let should_emit = current == 0
+            || current == 1
             || current == total
             || current >= self.last_item + THROTTLE_ITEMS
             || self.last_emit.elapsed() >= Duration::from_millis(THROTTLE_MS);
 
         if should_emit {
             self.last_item = current;
-            self.emit(phase, Some(current), Some(total), false);
+            self.emit_progress(phase, Some(current), Some(total));
         }
     }
 
-    /// Complete a phase - emits progress at 100%.
+    /// Complete a phase - emits progress at 100% for this phase.
     pub fn complete_phase(&mut self, phase: LoadingPhase) {
-        self.emit(phase, None, None, false);
+        // Emit 100% completion for this phase (current=1, total=1 means 100%)
+        self.emit_progress(phase, Some(1), Some(1));
     }
 
     /// Emit heartbeat for long-running indeterminate phases.
     pub fn heartbeat(&mut self, phase: LoadingPhase) {
         if self.last_emit.elapsed() >= Duration::from_millis(HEARTBEAT_MS) {
-            self.emit(phase, None, None, true);
+            self.emit_progress(phase, None, None);
         }
     }
 
-    fn emit(&mut self, phase: LoadingPhase, current: Option<u32>, total: Option<u32>, is_indeterminate: bool) {
+    /// Emit a progress event. Derives is_indeterminate from current/total.
+    fn emit_progress(&mut self, phase: LoadingPhase, current: Option<u32>, total: Option<u32>) {
         self.last_emit = Instant::now();
 
         let overall_percent = self.calculate_overall_percent(current, total);
+        // Indeterminate when we don't have valid progress values
+        let is_indeterminate = current.is_none() || total.is_none() || total == Some(0);
 
         let progress = LoadingProgress {
             loading_id: self.loading_id,
@@ -436,11 +516,48 @@ mod tests {
     }
 
     #[test]
+    fn test_load_error_display_escapes_control_chars() {
+        let error = LoadError::new("TEST", "Line1\nLine2\tTabbed");
+        let display = error.to_string();
+
+        // Should be valid JSON even with control characters
+        let parsed: serde_json::Value = serde_json::from_str(&display).expect("Display should produce valid JSON");
+        assert_eq!(parsed["message"], "Line1\nLine2\tTabbed");
+    }
+
+    #[test]
     fn test_load_error_constructors() {
         assert_eq!(LoadError::already_open().code, "ALREADY_OPEN");
         assert_eq!(LoadError::cancelled().code, "CANCELLED");
         assert_eq!(LoadError::not_found("/path/to/file").code, "NOT_FOUND");
         assert_eq!(LoadError::internal("error").code, "INTERNAL");
+    }
+
+    #[test]
+    fn test_escape_json_string() {
+        assert_eq!(escape_json_string("hello"), "hello");
+        assert_eq!(escape_json_string(r#"say "hi""#), r#"say \"hi\""#);
+        assert_eq!(escape_json_string("back\\slash"), "back\\\\slash");
+        assert_eq!(escape_json_string("line\nbreak"), "line\\nbreak");
+        assert_eq!(escape_json_string("tab\there"), "tab\\there");
+    }
+
+    #[test]
+    fn test_display_settings_default_matches_ui_store() {
+        let defaults = DisplaySettings::default();
+
+        // Verify defaults match DISPLAY_DEFAULTS in uiStore
+        assert!(defaults.show_stations);           // true
+        assert!(defaults.show_section_names);      // true
+        assert!(!defaults.show_station_labels);    // false
+        assert!(!defaults.show_shot_data);         // false
+        assert!(defaults.show_virtual_shots);      // true
+        assert!(defaults.show_zero_datum);         // true
+        assert!(!defaults.show_grid);              // false
+        assert!(defaults.show_scale_bar);          // true
+        assert!(!defaults.show_satellite);         // false
+        assert!(!defaults.show_depth_gradient);    // false
+        assert!((defaults.grid_spacing - 10.0).abs() < 0.001);  // 10.0
     }
 
     #[test]
