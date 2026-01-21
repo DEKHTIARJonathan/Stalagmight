@@ -441,9 +441,8 @@ const handleKeyDown = (e: React.KeyboardEvent) => {
 - [ ] Moving between rows does NOT briefly clear hover
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added keyboard accessibility to SectionsPanel with roving tabindex pattern, container-level blur handling, and proper ARIA attributes for listbox/option semantics.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: f436d59, c261cb0, f2e3a60
+- Tests: pnpm tsc --noEmit
 - PRs:
