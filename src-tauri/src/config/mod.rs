@@ -651,6 +651,11 @@ fn normalize_shortcut_field(field: &mut Vec<String>, defaults: &[String], field_
 
 /// Normalize a single shortcut string to canonical form
 /// Returns None if the shortcut is invalid
+///
+/// Key normalization rules:
+/// - Single letter keys are UPPERCASE (matches JavaScript KeyboardEvent.key)
+/// - Special keys use PascalCase canonical names (Space, ArrowUp, etc.)
+/// - Modifiers are sorted: Ctrl -> Alt -> Shift -> Key
 fn normalize_shortcut(shortcut: &str) -> Option<String> {
     let shortcut = shortcut.trim();
     if shortcut.is_empty() {
@@ -673,17 +678,20 @@ fn normalize_shortcut(shortcut: &str) -> Option<String> {
     }
 
     // Split by + to get modifiers and key
+    // Handle "Ctrl++" (Ctrl+Plus) by counting consecutive + at end
     let parts: Vec<&str> = shortcut.split('+').map(|s| s.trim()).collect();
     if parts.is_empty() {
         return None;
     }
 
-    // Check for empty parts (e.g., "Ctrl++S" has empty part)
-    // But allow trailing empty part for "Ctrl++" meaning Ctrl+Plus
-    let has_empty_in_middle = parts.iter().enumerate().any(|(i, p)| {
-        p.is_empty() && i < parts.len() - 1
-    });
-    if has_empty_in_middle {
+    // Count trailing empty parts (consecutive + at end means Plus key)
+    let trailing_empty_count = parts.iter().rev().take_while(|p| p.is_empty()).count();
+
+    // Check for empty parts in the middle (not trailing)
+    // e.g., "Ctrl++S" has empty in middle -> invalid
+    // e.g., "Ctrl++" has trailing empties -> valid (means Ctrl+Plus)
+    let non_trailing_parts = &parts[..parts.len().saturating_sub(trailing_empty_count)];
+    if non_trailing_parts.iter().any(|p| p.is_empty()) {
         return None;
     }
 
@@ -692,20 +700,8 @@ fn normalize_shortcut(shortcut: &str) -> Option<String> {
     let mut shift = false;
     let mut key: Option<String> = None;
 
-    for (i, part) in parts.iter().enumerate() {
-        // Handle empty trailing part as "+" key (e.g., "Ctrl+")
-        if part.is_empty() {
-            if i == parts.len() - 1 && i > 0 {
-                // Trailing empty means "+" key after modifiers
-                if key.is_some() {
-                    return None;
-                }
-                key = Some("Plus".to_string());
-                continue;
-            }
-            return None;
-        }
-
+    // Process non-empty parts
+    for part in non_trailing_parts {
         let lower = part.to_lowercase();
         match lower.as_str() {
             "ctrl" | "control" | "meta" | "cmd" | "command" => ctrl = true,
@@ -720,6 +716,17 @@ fn normalize_shortcut(shortcut: &str) -> Option<String> {
                 key = Some(normalize_key_name(part));
             }
         }
+    }
+
+    // Handle trailing empty parts as Plus key
+    // "Ctrl++" -> trailing_empty_count=2, but we only need one Plus
+    // "Ctrl+" -> trailing_empty_count=1
+    if trailing_empty_count > 0 {
+        if key.is_some() {
+            // Already have a key, can't have Plus too
+            return None;
+        }
+        key = Some("Plus".to_string());
     }
 
     // Must have exactly one key
@@ -741,12 +748,15 @@ fn normalize_shortcut(shortcut: &str) -> Option<String> {
     Some(result)
 }
 
-/// Map key names to canonical form
+/// Map key names to canonical form (PascalCase for special keys, UPPERCASE for letters)
+///
+/// Canonical names match JavaScript KeyboardEvent.key values where possible.
+/// Single letter keys are uppercase to match KeyboardEvent.key (e.g., "S" not "s").
 fn normalize_key_name(key: &str) -> String {
     let lower = key.to_lowercase();
     match lower.as_str() {
-        // Special keys - canonical names
-        " " | "space" | "spacebar" => "Space".to_string(),
+        // Special keys - canonical names (PascalCase, matching KeyboardEvent.key)
+        "space" | "spacebar" => "Space".to_string(),
         "enter" | "return" => "Enter".to_string(),
         "esc" | "escape" => "Escape".to_string(),
         "up" | "arrowup" => "ArrowUp".to_string(),
@@ -764,15 +774,15 @@ fn normalize_key_name(key: &str) -> String {
         "pageup" | "pgup" => "PageUp".to_string(),
         "pagedown" | "pgdn" => "PageDown".to_string(),
         "insert" | "ins" => "Insert".to_string(),
-        // Function keys
+        // Function keys (F1-F12)
         k if k.starts_with('f') && k.len() > 1 && k[1..].parse::<u8>().is_ok() => {
             format!("F{}", &k[1..])
         }
-        // Single letter keys - uppercase
+        // Single letter keys - UPPERCASE (matches KeyboardEvent.key)
         k if k.len() == 1 && k.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) => {
             k.to_uppercase()
         }
-        // Numbers and other keys - as-is
+        // Numbers and other keys - preserve as-is
         _ => key.to_string(),
     }
 }
@@ -1892,6 +1902,61 @@ select = "S"
         // "Ctrl+" is valid and means Ctrl+Plus
         assert_eq!(normalize_shortcut("Ctrl+"), Some("Ctrl+Plus".to_string()));
         assert_eq!(normalize_shortcut("Shift+"), Some("Shift+Plus".to_string()));
+        // "Ctrl++" is also valid and means Ctrl+Plus (common representation)
+        assert_eq!(normalize_shortcut("Ctrl++"), Some("Ctrl+Plus".to_string()));
+        assert_eq!(normalize_shortcut("Shift++"), Some("Shift+Plus".to_string()));
+        // Multiple modifiers with trailing +
+        assert_eq!(normalize_shortcut("Ctrl+Shift+"), Some("Ctrl+Shift+Plus".to_string()));
+        assert_eq!(normalize_shortcut("Ctrl+Shift++"), Some("Ctrl+Shift+Plus".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_shortcut_remaining_special_keys() {
+        // Arrow keys (all directions)
+        assert_eq!(normalize_shortcut("ArrowLeft"), Some("ArrowLeft".to_string()));
+        assert_eq!(normalize_shortcut("arrowleft"), Some("ArrowLeft".to_string()));
+        assert_eq!(normalize_shortcut("Left"), Some("ArrowLeft".to_string()));
+        assert_eq!(normalize_shortcut("ArrowRight"), Some("ArrowRight".to_string()));
+        assert_eq!(normalize_shortcut("arrowright"), Some("ArrowRight".to_string()));
+        assert_eq!(normalize_shortcut("Right"), Some("ArrowRight".to_string()));
+
+        // Backspace
+        assert_eq!(normalize_shortcut("Backspace"), Some("Backspace".to_string()));
+        assert_eq!(normalize_shortcut("backspace"), Some("Backspace".to_string()));
+        assert_eq!(normalize_shortcut("Back"), Some("Backspace".to_string()));
+
+        // Delete
+        assert_eq!(normalize_shortcut("Delete"), Some("Delete".to_string()));
+        assert_eq!(normalize_shortcut("delete"), Some("Delete".to_string()));
+        assert_eq!(normalize_shortcut("Del"), Some("Delete".to_string()));
+
+        // Tab
+        assert_eq!(normalize_shortcut("Tab"), Some("Tab".to_string()));
+        assert_eq!(normalize_shortcut("tab"), Some("Tab".to_string()));
+
+        // Home/End
+        assert_eq!(normalize_shortcut("Home"), Some("Home".to_string()));
+        assert_eq!(normalize_shortcut("End"), Some("End".to_string()));
+
+        // Page Up/Down
+        assert_eq!(normalize_shortcut("PageUp"), Some("PageUp".to_string()));
+        assert_eq!(normalize_shortcut("pgup"), Some("PageUp".to_string()));
+        assert_eq!(normalize_shortcut("PageDown"), Some("PageDown".to_string()));
+        assert_eq!(normalize_shortcut("pgdn"), Some("PageDown".to_string()));
+
+        // Insert
+        assert_eq!(normalize_shortcut("Insert"), Some("Insert".to_string()));
+        assert_eq!(normalize_shortcut("Ins"), Some("Insert".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_shortcut_special_keys_with_modifiers() {
+        assert_eq!(normalize_shortcut("Ctrl+ArrowLeft"), Some("Ctrl+ArrowLeft".to_string()));
+        assert_eq!(normalize_shortcut("Shift+Delete"), Some("Shift+Delete".to_string()));
+        assert_eq!(normalize_shortcut("Ctrl+Backspace"), Some("Ctrl+Backspace".to_string()));
+        assert_eq!(normalize_shortcut("Alt+Tab"), Some("Alt+Tab".to_string()));
+        assert_eq!(normalize_shortcut("Ctrl+Home"), Some("Ctrl+Home".to_string()));
+        assert_eq!(normalize_shortcut("Ctrl+End"), Some("Ctrl+End".to_string()));
     }
 
     #[test]
