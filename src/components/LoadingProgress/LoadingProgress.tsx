@@ -14,6 +14,12 @@ export interface LoadingProgressProps {
   };
 }
 
+/** Clamp a number to [0, 100], treating NaN/Infinity as 0 */
+function clampProgress(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
+
 export function LoadingProgress({
   title,
   phase,
@@ -26,16 +32,22 @@ export function LoadingProgress({
 }: LoadingProgressProps) {
   const [detailsExpanded, setDetailsExpanded] = React.useState(false);
   const isIndeterminate = phaseProgress === undefined;
+  const titleId = React.useId();
+  const phaseId = React.useId();
+
+  // Clamp progress values
+  const clampedOverall = clampProgress(overallProgress);
+  const clampedPhase = phaseProgress !== undefined ? clampProgress(phaseProgress) : undefined;
 
   return (
     <div
       className="w-80 bg-panel rounded-lg shadow-lg p-6"
       role="dialog"
-      aria-labelledby="loading-title"
-      aria-describedby="loading-phase"
+      aria-labelledby={titleId}
+      aria-describedby={phaseId}
     >
       {/* Title */}
-      <h2 id="loading-title" className="text-lg font-medium text-text-primary mb-4">
+      <h2 id={titleId} className="text-lg font-medium text-text-primary mb-4">
         {title}
       </h2>
 
@@ -43,14 +55,15 @@ export function LoadingProgress({
       <div className="mb-4">
         <div className="flex justify-between text-sm text-text-secondary mb-1">
           <span>Overall</span>
-          <span>{Math.round(overallProgress)}%</span>
+          <span>{Math.round(clampedOverall)}%</span>
         </div>
         <div className="h-1.5 bg-border rounded-full overflow-hidden">
           <div
             className="h-full bg-accent transition-all duration-300"
-            style={{ width: `${overallProgress}%` }}
+            style={{ width: `${clampedOverall}%` }}
             role="progressbar"
-            aria-valuenow={Math.round(overallProgress)}
+            aria-label="Overall progress"
+            aria-valuenow={Math.round(clampedOverall)}
             aria-valuemin={0}
             aria-valuemax={100}
           />
@@ -59,7 +72,7 @@ export function LoadingProgress({
 
       {/* Current Phase */}
       <div
-        id="loading-phase"
+        id={phaseId}
         className="mb-4"
         role="status"
         aria-live="polite"
@@ -72,13 +85,19 @@ export function LoadingProgress({
         </div>
         <div className="h-1 bg-border rounded-full overflow-hidden">
           {isIndeterminate ? (
-            <div className="h-full bg-accent/70 animate-pulse-shimmer" />
+            <div
+              className="h-full bg-accent/70 animate-pulse-shimmer"
+              role="progressbar"
+              aria-label="Phase progress"
+              aria-valuetext="Loading"
+            />
           ) : (
             <div
               className="h-full bg-accent/70 transition-all duration-150"
-              style={{ width: `${phaseProgress}%` }}
+              style={{ width: `${clampedPhase}%` }}
               role="progressbar"
-              aria-valuenow={Math.round(phaseProgress)}
+              aria-label="Phase progress"
+              aria-valuenow={Math.round(clampedPhase!)}
               aria-valuemin={0}
               aria-valuemax={100}
             />
@@ -89,6 +108,7 @@ export function LoadingProgress({
       {/* Cancel Button */}
       {onCancel && !error && (
         <button
+          type="button"
           onClick={onCancel}
           className="text-sm text-text-secondary hover:text-text-primary transition-colors"
         >
@@ -103,7 +123,8 @@ export function LoadingProgress({
           {error.details && (
             <>
               <button
-                onClick={() => setDetailsExpanded(!detailsExpanded)}
+                type="button"
+                onClick={() => setDetailsExpanded(v => !v)}
                 className="text-xs text-text-secondary hover:text-text-primary mt-1"
               >
                 {detailsExpanded ? 'Hide details' : 'Show details'}
