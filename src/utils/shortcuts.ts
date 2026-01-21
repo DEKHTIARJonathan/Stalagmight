@@ -105,10 +105,12 @@ function normalizeKeyName(key: string): string {
     return 'Space';
   }
 
-  // Function keys (F1-F12)
+  // Function keys (F1, F2, ... - match Rust: accepts any numeric suffix that parses)
   if (lower.startsWith('f') && lower.length > 1) {
-    const num = parseInt(lower.slice(1), 10);
-    if (!isNaN(num) && num >= 1 && num <= 12) {
+    const numStr = lower.slice(1);
+    const num = parseInt(numStr, 10);
+    // Rust accepts any F<n> where n parses as a number (no upper bound)
+    if (!isNaN(num) && numStr === String(num)) {
       return `F${num}`;
     }
   }
@@ -167,11 +169,10 @@ export function normalizeShortcut(shortcut: string): string | null {
     return null;
   }
 
-  // Count trailing empty parts (consecutive + at end means Plus key)
-  // "Ctrl++" has 1 trailing empty (split gives ["Ctrl", "", ""])
-  // "Ctrl+++" has 2 trailing empties
-  // "Ctrl+" has 1 trailing empty but this is INVALID (not same as Ctrl++)
-  // We need at least 2 parts ending with empty for it to be Plus
+  // Count trailing empty parts (any trailing + means Plus key, matching Rust)
+  // "Ctrl+" -> ["Ctrl", ""] -> 1 trailing empty -> Ctrl+Plus
+  // "Ctrl++" -> ["Ctrl", "", ""] -> 2 trailing empties -> Ctrl+Plus
+  // "Shift+" -> ["Shift", ""] -> 1 trailing empty -> Shift+Plus
   let trailingEmptyCount = 0;
   for (let i = parts.length - 1; i >= 0; i--) {
     if (parts[i] === '') {
@@ -179,18 +180,6 @@ export function normalizeShortcut(shortcut: string): string | null {
     } else {
       break;
     }
-  }
-
-  // "Ctrl+" -> ["Ctrl", ""] -> 1 trailing empty, parts.length=2, BUT "Ctrl++" -> ["Ctrl", "", ""]
-  // The difference: "Ctrl++" has the pattern modifier + 2 empties (consecutive +)
-  // For trailing + to mean Plus, we need the original string to end with "++"
-  // Simple check: trailingEmptyCount must be >= 2 to be Plus, or exactly 1 but total parts > 1 + non-empty
-  // Actually the correct check: does the string end with "++"?
-  const endsWithDoublePlus = trimmed.endsWith('++');
-
-  // If single trailing empty and NOT double-plus, it's invalid (e.g., "Ctrl+")
-  if (trailingEmptyCount === 1 && !endsWithDoublePlus) {
-    return null;
   }
 
   // Check for empty parts in the middle (not trailing)
@@ -233,8 +222,9 @@ export function normalizeShortcut(shortcut: string): string | null {
     }
   }
 
-  // Handle trailing empty parts as Plus key (only if we detected double-plus pattern)
-  if (trailingEmptyCount > 0 && endsWithDoublePlus) {
+  // Handle trailing empty parts as Plus key (matching Rust behavior)
+  // Any trailing + is treated as Plus: "Ctrl+" -> "Ctrl+Plus", "Ctrl++" -> "Ctrl+Plus"
+  if (trailingEmptyCount > 0) {
     if (key !== null) {
       // Already have a key, can't have Plus too
       return null;
@@ -266,6 +256,10 @@ export function normalizeShortcut(shortcut: string): string | null {
 /**
  * Parse a KeyboardEvent into a normalized shortcut string.
  * Useful for capturing user key presses in shortcut recorder.
+ *
+ * Note: This function does not filter `event.repeat`. Callers should check
+ * `event.repeat` themselves if they need to prevent repeated key events
+ * from triggering multiple actions.
  *
  * @param event - The keyboard event
  * @returns Normalized shortcut string (e.g., "Ctrl+Shift+S")

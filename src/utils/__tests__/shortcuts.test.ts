@@ -266,12 +266,29 @@ describe('normalizeShortcut', () => {
       expect(normalizeShortcut('Ctrl++S')).toBeNull();
     });
 
-    it('returns null for modifier only', () => {
-      expect(normalizeShortcut('Ctrl+')).toBeNull();
-    });
-
     it('returns null for Ctrl+Plus+Key (already has Plus as key)', () => {
       expect(normalizeShortcut('Ctrl+S++')).toBeNull();
+    });
+  });
+
+  describe('trailing plus (matching Rust behavior)', () => {
+    it('normalizes single trailing + as Plus', () => {
+      // "Ctrl+" is valid and means Ctrl+Plus (matching Rust)
+      expect(normalizeShortcut('Ctrl+')).toBe('Ctrl+Plus');
+      expect(normalizeShortcut('Shift+')).toBe('Shift+Plus');
+      expect(normalizeShortcut('Alt+')).toBe('Alt+Plus');
+    });
+
+    it('normalizes double trailing ++ as Plus', () => {
+      // "Ctrl++" is also valid and means Ctrl+Plus
+      expect(normalizeShortcut('Ctrl++')).toBe('Ctrl+Plus');
+      expect(normalizeShortcut('Shift++')).toBe('Shift+Plus');
+    });
+
+    it('handles multiple modifiers with trailing +', () => {
+      expect(normalizeShortcut('Ctrl+Shift+')).toBe('Ctrl+Shift+Plus');
+      expect(normalizeShortcut('Ctrl+Shift++')).toBe('Ctrl+Shift+Plus');
+      expect(normalizeShortcut('Ctrl+Alt+Shift+')).toBe('Ctrl+Alt+Shift+Plus');
     });
   });
 });
@@ -586,5 +603,21 @@ describe('Rust canonicalization compatibility', () => {
     expect(normalizeShortcut('F1')).toBe('F1');
     expect(normalizeShortcut('f12')).toBe('F12');
     expect(normalizeShortcut('Ctrl+F5')).toBe('Ctrl+F5');
+    // Rust accepts any F<n> that parses (no upper bound)
+    expect(normalizeShortcut('F13')).toBe('F13');
+    expect(normalizeShortcut('f24')).toBe('F24');
+  });
+
+  it('test_normalize_shortcut_trailing_plus', () => {
+    // Matching Rust's test_normalize_shortcut_trailing_plus
+    // "Ctrl+" is valid and means Ctrl+Plus
+    expect(normalizeShortcut('Ctrl+')).toBe('Ctrl+Plus');
+    expect(normalizeShortcut('Shift+')).toBe('Shift+Plus');
+    // "Ctrl++" is also valid and means Ctrl+Plus (common representation)
+    expect(normalizeShortcut('Ctrl++')).toBe('Ctrl+Plus');
+    expect(normalizeShortcut('Shift++')).toBe('Shift+Plus');
+    // Multiple modifiers with trailing +
+    expect(normalizeShortcut('Ctrl+Shift+')).toBe('Ctrl+Shift+Plus');
+    expect(normalizeShortcut('Ctrl+Shift++')).toBe('Ctrl+Shift+Plus');
   });
 });
