@@ -1,14 +1,14 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-21T17:08:59.188259Z",
   "created_at": "2026-01-21T03:47:11.127217Z",
   "depends_on": [],
   "epic": "fn-13-e55",
   "id": "fn-13-e55.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-13-e55.1.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Update Rust ShortcutsConfig schema with Vec<String> and new actions",
-  "updated_at": "2026-01-21T03:55:00.228556Z"
+  "updated_at": "2026-01-21T17:08:59.188272Z"
 }
