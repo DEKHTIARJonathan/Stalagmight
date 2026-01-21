@@ -1,4 +1,3 @@
-import { useRef } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
@@ -8,19 +7,14 @@ export default function UnsavedChangesDialog() {
   const { closeDialog, setView } = useUIStore();
   const { closeProject } = useProjectStore();
 
-  // Ref-based guard to prevent double-click on Discard button
-  // Using useRef instead of useState to avoid unmount warnings
-  const isDiscardingRef = useRef(false);
-
   const handleDiscard = async () => {
-    // Prevent double-click
-    if (isDiscardingRef.current) return;
-    isDiscardingRef.current = true;
-
+    // Concurrency guard is handled at store level (store.isClosing)
+    // This prevents double-click and race conditions with Back button
     closeDialog();
-    await closeProject();
-    setView('global');
-    // Note: no need to reset isDiscardingRef since component unmounts
+    const result = await closeProject();
+    if (result.success) {
+      setView('global');
+    }
   };
 
   const handleCancel = () => {
