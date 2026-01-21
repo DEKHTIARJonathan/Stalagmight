@@ -417,4 +417,32 @@ mod tests {
 
         std::fs::remove_file(&svg_path).ok();
     }
+
+    #[test]
+    fn test_export_image_pdf_writes_file() {
+        let project = simple_project();
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("pdf");
+
+        let mut options = ExportImageOptions::default();
+        options.format = ImageFormat::Pdf;
+
+        let result = export_image(&project, &path, &options);
+        assert!(result.is_ok());
+
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert!(metadata.len() > 0);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_generate_svg_string_empty_project_defaults_bounds() {
+        let project = Project::new("Empty".to_string(), None);
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("<rect"));
+        assert!(svg.contains("viewBox"));
+    }
 }

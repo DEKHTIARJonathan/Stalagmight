@@ -6,6 +6,7 @@ use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
     ShotUpdates, StationRef, SurveyDirection,
 };
+use crate::test_helpers::TestDb;
 use chrono::NaiveDate;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -1427,4 +1428,132 @@ fn test_create_section_with_date_roundtrip() {
     let section = section::get_section(state(&app), result.section_id.unwrap()).unwrap();
     assert_eq!(section.date, Some(date));
     assert_eq!(section.direction, SurveyDirection::Out);
+}
+
+#[test]
+fn test_create_section_and_merge_fails_without_project() {
+    let app = app_with_state();
+    let result = section::create_section_and_merge(
+        state(&app),
+        Some("Imported".to_string()),
+        None,
+        None,
+        "#4ecdc4".to_string(),
+        Some(SurveyDirection::In),
+        vec![shot_data(1.0)],
+        0,
+        StationRef::new(0, 0),
+        ClosureStrategy::ProportionalByLength,
+    );
+    assert_failure_contains(&result, "No project open");
+}
+
+#[test]
+fn test_create_section_and_merge_success() {
+    let app = app_with_state();
+    create_project(&app);
+    let existing_section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+
+    let result = section::create_section_and_merge(
+        state(&app),
+        Some("Imported".to_string()),
+        None,
+        None,
+        "#4ecdc4".to_string(),
+        Some(SurveyDirection::In),
+        vec![shot_data(2.0)],
+        0,
+        StationRef::new(existing_section_id, 0),
+        ClosureStrategy::EqualDistribution,
+    );
+
+    assert_success(&result);
+    let new_section_id = result.section_id.expect("new section id");
+    let project_state = project::get_project_state(state(&app)).expect("project state");
+    assert_eq!(project_state.project.sections.len(), 2);
+    assert_eq!(project_state.project.station_merges.len(), 1);
+
+    let merge = &project_state.project.station_merges[0];
+    let merged_sections = [merge.station_a.section_id, merge.station_b.section_id];
+    assert!(merged_sections.contains(&existing_section_id));
+    assert!(merged_sections.contains(&new_section_id));
+}
+
+#[test]
+fn test_merge_projects_requires_sources() {
+    let app = app_with_state();
+    let output_dir = TempDir::new().unwrap();
+    let output_path = output_dir.path().join("merged.cvproj");
+
+    let result = project::merge_projects(
+        state(&app),
+        Vec::new(),
+        output_path,
+        "Merged".to_string(),
+        false,
+    );
+
+    assert_failure_contains(&result, "No source projects provided");
+}
+
+#[test]
+fn test_merge_projects_requires_two_sources() {
+    let app = app_with_state();
+    let project = project_with_section(vec![shot_data(1.0)]);
+    let (db, _database) = TestDb::with_project(&project).unwrap();
+    let output_dir = TempDir::new().unwrap();
+    let output_path = output_dir.path().join("merged.cvproj");
+
+    let result = project::merge_projects(
+        state(&app),
+        vec![db.path().to_path_buf()],
+        output_path,
+        "Merged".to_string(),
+        false,
+    );
+
+    assert_failure_contains(&result, "At least two projects are required");
+}
+
+#[test]
+fn test_merge_projects_fails_when_output_exists() {
+    let app = app_with_state();
+    let project = project_with_section(vec![shot_data(1.0)]);
+    let (db_a, _database_a) = TestDb::with_project(&project).unwrap();
+    let (db_b, _database_b) = TestDb::with_project(&project).unwrap();
+    let output_dir = TempDir::new().unwrap();
+    let output_path = output_dir.path().join("merged.cvproj");
+    std::fs::write(&output_path, b"exists").unwrap();
+
+    let result = project::merge_projects(
+        state(&app),
+        vec![db_a.path().to_path_buf(), db_b.path().to_path_buf()],
+        output_path,
+        "Merged".to_string(),
+        false,
+    );
+
+    assert_failure_contains(&result, "Output file already exists");
+}
+
+#[test]
+fn test_merge_projects_success_creates_output() {
+    let app = app_with_state();
+    let project_a = project_with_section(vec![shot_data(1.0)]);
+    let project_b = project_with_section(vec![shot_data(2.0)]);
+    let (db_a, _database_a) = TestDb::with_project(&project_a).unwrap();
+    let (db_b, _database_b) = TestDb::with_project(&project_b).unwrap();
+    let output_dir = TempDir::new().unwrap();
+    let output_path = output_dir.path().join("merged.cvproj");
+
+    let result = project::merge_projects(
+        state(&app),
+        vec![db_a.path().to_path_buf(), db_b.path().to_path_buf()],
+        output_path.clone(),
+        "Merged".to_string(),
+        false,
+    );
+
+    assert_success(&result);
+    assert!(output_path.exists());
 }
