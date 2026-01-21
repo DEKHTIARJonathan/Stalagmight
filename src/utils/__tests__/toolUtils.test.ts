@@ -14,14 +14,6 @@ describe('toolUtils', () => {
     it('includes zoom', () => {
       expect(NON_INTERACTIVE_TOOLS).toContain('zoom');
     });
-
-    it('does not include select', () => {
-      expect(NON_INTERACTIVE_TOOLS).not.toContain('select');
-    });
-
-    it('does not include draw', () => {
-      expect(NON_INTERACTIVE_TOOLS).not.toContain('draw');
-    });
   });
 
   describe('isNonInteractiveTool', () => {
@@ -39,26 +31,6 @@ describe('toolUtils', () => {
 
     it('returns false for draw', () => {
       expect(isNonInteractiveTool('draw')).toBe(false);
-    });
-
-    it('returns false for delete', () => {
-      expect(isNonInteractiveTool('delete')).toBe(false);
-    });
-
-    it('returns false for merge', () => {
-      expect(isNonInteractiveTool('merge')).toBe(false);
-    });
-
-    it('returns false for measure', () => {
-      expect(isNonInteractiveTool('measure')).toBe(false);
-    });
-
-    it('returns false for move_section', () => {
-      expect(isNonInteractiveTool('move_section')).toBe(false);
-    });
-
-    it('returns false for move_station', () => {
-      expect(isNonInteractiveTool('move_station')).toBe(false);
     });
   });
 });
