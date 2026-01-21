@@ -119,6 +119,7 @@ test.describe('Depth Gradient', () => {
 
     // Poll for station colors to change after enabling depth gradient
     // Use expect.poll instead of fixed timeout
+    // Wait for features to be available AND colors to change
     if (colorsBefore.length > 0) {
       await expect.poll(async () => {
         const colorsAfter = await page.evaluate(() => {
@@ -138,11 +139,12 @@ test.describe('Depth Gradient', () => {
           }
         });
 
+        // Keep polling if features not yet available (map still loading)
+        if (colorsAfter.length === 0) return 'waiting';
         // Check if colors changed from before
-        if (colorsAfter.length === 0) return 'no-features';
         const colorsChanged = !colorsBefore.every((c, i) => c === colorsAfter[i]);
-        return colorsChanged ? 'changed' : 'same';
-      }, { timeout: 2000 }).toBe('changed');
+        return colorsChanged ? 'changed' : 'waiting';
+      }, { timeout: 3000 }).toBe('changed');
     }
   });
 
