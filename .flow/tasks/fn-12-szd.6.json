@@ -7,10 +7,19 @@
     "fn-12-szd.3"
   ],
   "epic": "fn-12-szd",
+  "evidence": {
+    "commits": [
+      "1baaa9e3dd8a3c23c5f9150dcb8a0b5a586f7317"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-12-szd.6",
   "priority": null,
   "spec_path": ".flow/tasks/fn-12-szd.6.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add Zoom to Section context menu item",
-  "updated_at": "2026-01-21T16:58:38.228235Z"
+  "updated_at": "2026-01-21T17:02:55.263493Z"
 }
