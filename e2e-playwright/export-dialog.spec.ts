@@ -196,4 +196,122 @@ test.describe('Export Dialog', () => {
     // Dialog should be closed
     await expect(exportDialog).not.toBeVisible({ timeout: 3000 });
   });
+
+  test('should show color mode options for image export', async ({ page }) => {
+    await createProject(page);
+
+    // Open export dialog
+    await page.keyboard.press('Control+e');
+    const exportDialog = page.locator('[data-testid="export-dialog"]');
+    await expect(exportDialog).toBeVisible({ timeout: 5000 });
+
+    // Switch to image export
+    await page.click('[data-testid="export-type-image"]');
+
+    // Color mode radio buttons should be visible
+    const sectionModeRadio = page.locator('[data-testid="color-mode-section"]');
+    const depthModeRadio = page.locator('[data-testid="color-mode-depth"]');
+    await expect(sectionModeRadio).toBeVisible();
+    await expect(depthModeRadio).toBeVisible();
+
+    // Section mode should be selected by default
+    await expect(sectionModeRadio).toBeChecked();
+    await expect(depthModeRadio).not.toBeChecked();
+  });
+
+  test('should show depth preset dropdown when depth mode selected', async ({ page }) => {
+    await createProject(page);
+
+    // Open export dialog
+    await page.keyboard.press('Control+e');
+    const exportDialog = page.locator('[data-testid="export-dialog"]');
+    await expect(exportDialog).toBeVisible({ timeout: 5000 });
+
+    // Switch to image export
+    await page.click('[data-testid="export-type-image"]');
+
+    // Depth preset should NOT be visible initially (section mode is default)
+    const depthPresetSelect = page.locator('[data-testid="depth-preset-select"]');
+    await expect(depthPresetSelect).not.toBeVisible();
+
+    // Switch to depth mode
+    await page.click('[data-testid="color-mode-depth"]');
+
+    // Depth preset dropdown should now be visible
+    await expect(depthPresetSelect).toBeVisible();
+  });
+
+  test('should show include legend checkbox when depth mode selected', async ({ page }) => {
+    await createProject(page);
+
+    // Open export dialog
+    await page.keyboard.press('Control+e');
+    const exportDialog = page.locator('[data-testid="export-dialog"]');
+    await expect(exportDialog).toBeVisible({ timeout: 5000 });
+
+    // Switch to image export
+    await page.click('[data-testid="export-type-image"]');
+
+    // Include legend should NOT be visible initially (section mode is default)
+    const includeLegendCheckbox = page.locator('[data-testid="option-include-legend"]');
+    await expect(includeLegendCheckbox).not.toBeVisible();
+
+    // Switch to depth mode
+    await page.click('[data-testid="color-mode-depth"]');
+
+    // Include legend checkbox should now be visible and checked by default
+    await expect(includeLegendCheckbox).toBeVisible();
+    await expect(includeLegendCheckbox).toBeChecked();
+  });
+
+  test('should include 600 DPI option in resolution selector', async ({ page }) => {
+    await createProject(page);
+
+    // Open export dialog
+    await page.keyboard.press('Control+e');
+    const exportDialog = page.locator('[data-testid="export-dialog"]');
+    await expect(exportDialog).toBeVisible({ timeout: 5000 });
+
+    // Switch to image export (PNG is default, which shows resolution selector)
+    await page.click('[data-testid="export-type-image"]');
+
+    // Resolution select should be visible
+    const resolutionSelect = page.locator('[data-testid="resolution-select"]');
+    await expect(resolutionSelect).toBeVisible();
+
+    // Open the dropdown
+    await resolutionSelect.locator('button').first().click();
+
+    // Verify 600 DPI option is available
+    const dropdown = resolutionSelect.locator('.absolute');
+    await expect(dropdown.locator('button:has-text("600")')).toBeVisible();
+  });
+
+  test('should hide depth options when switching from depth to section mode', async ({ page }) => {
+    await createProject(page);
+
+    // Open export dialog
+    await page.keyboard.press('Control+e');
+    const exportDialog = page.locator('[data-testid="export-dialog"]');
+    await expect(exportDialog).toBeVisible({ timeout: 5000 });
+
+    // Switch to image export
+    await page.click('[data-testid="export-type-image"]');
+
+    // Switch to depth mode
+    await page.click('[data-testid="color-mode-depth"]');
+
+    // Depth options should be visible
+    const depthPresetSelect = page.locator('[data-testid="depth-preset-select"]');
+    const includeLegendCheckbox = page.locator('[data-testid="option-include-legend"]');
+    await expect(depthPresetSelect).toBeVisible();
+    await expect(includeLegendCheckbox).toBeVisible();
+
+    // Switch back to section mode
+    await page.click('[data-testid="color-mode-section"]');
+
+    // Depth options should be hidden
+    await expect(depthPresetSelect).not.toBeVisible();
+    await expect(includeLegendCheckbox).not.toBeVisible();
+  });
 });
