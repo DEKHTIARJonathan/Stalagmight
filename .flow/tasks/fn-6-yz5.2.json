@@ -1,16 +1,60 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-21T03:14:16.436214Z",
   "created_at": "2026-01-20T14:10:18.554327Z",
   "depends_on": [
     "fn-6-yz5.1"
   ],
   "epic": "fn-6-yz5",
+  "evidence": {
+    "changes": [
+      {
+        "file": "EditSectionDialog.tsx:155",
+        "from": "if (!sectionId)",
+        "to": "if (sectionId === undefined)"
+      },
+      {
+        "file": "EditShotDialog.tsx:82",
+        "from": "if (!sectionId || !shotId)",
+        "to": "if (sectionId === undefined || shotId === undefined)"
+      },
+      {
+        "file": "SectionAdjustDialog.tsx:30",
+        "from": "if (!sectionId)",
+        "to": "if (sectionId === undefined)"
+      },
+      {
+        "file": "SectionAdjustDialog.tsx:82",
+        "from": "if (!sectionId)",
+        "to": "if (sectionId === undefined)"
+      },
+      {
+        "file": "SectionAdjustDialog.tsx:118",
+        "from": "if (previewApplied && sectionId)",
+        "to": "if (previewApplied && sectionId !== undefined)"
+      },
+      {
+        "file": "DataTable.tsx:78",
+        "from": "if (!selectedSectionId)",
+        "to": "if (selectedSectionId === null)"
+      }
+    ],
+    "files_changed": [
+      "src/components/Dialogs/EditSectionDialog.tsx",
+      "src/components/Dialogs/EditShotDialog.tsx",
+      "src/components/Dialogs/SectionAdjustDialog.tsx",
+      "src/components/SingleSystemView/DataTable.tsx"
+    ],
+    "tests": {
+      "playwright": "298 passed, 121 skipped",
+      "tsc": "pass"
+    }
+  },
   "id": "fn-6-yz5.2",
   "priority": null,
   "spec_path": ".flow/tasks/fn-6-yz5.2.md",
-  "status": "todo",
+  "status": "done",
   "title": "Fix Edit Section/Shot dialog Save button",
-  "updated_at": "2026-01-20T14:23:21.599343Z"
+  "updated_at": "2026-01-21T03:16:44.516957Z"
 }

@@ -27,7 +27,7 @@ export default function SectionAdjustDialog() {
 
   // Apply preview offset when values change
   const applyPreview = useCallback(async (newDx: number, newDy: number) => {
-    if (!sectionId) return;
+    if (sectionId === undefined) return;
 
     // Calculate delta from last preview
     const deltaDx = newDx - lastPreviewOffset.current.dx;
@@ -79,7 +79,7 @@ export default function SectionAdjustDialog() {
   }, []);
 
   const handleApply = async () => {
-    if (!sectionId) return;
+    if (sectionId === undefined) return;
 
     setIsLoading(true);
     setError(null);
@@ -115,7 +115,7 @@ export default function SectionAdjustDialog() {
 
   const handleCancel = async () => {
     // If preview was applied, we need to revert it
-    if (previewApplied && sectionId) {
+    if (previewApplied && sectionId !== undefined) {
       // Apply inverse offset to revert
       await moveSection(sectionId, {
         x: -lastPreviewOffset.current.dx,

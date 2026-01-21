@@ -75,7 +75,7 @@ export default function DataTable({ sections }: DataTableProps) {
       width: '30px',
       align: 'center' as const,
       render: (shot: Shot) => {
-        if (!selectedSectionId) return null;
+        if (selectedSectionId === null) return null;
         const shotWarnings = getShotWarnings(selectedSectionId, shot.id);
         if (shotWarnings.length === 0) return null;
         const hasError = shotWarnings.some((w) => w.severity === 'error');
