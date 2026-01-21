@@ -11,30 +11,54 @@ pub fn create_project(
     name: String,
     location: Option<String>,
 ) -> CommandResult {
+    create_project_impl(state.inner(), name, location)
+}
+
+pub(crate) fn create_project_impl(
+    state: &AppState,
+    name: String,
+    location: Option<String>,
+) -> CommandResult {
     state.execute(Command::CreateProject { name, location })
 }
 
 /// Open an existing project
 #[tauri::command]
 pub fn open_project(state: State<AppState>, path: PathBuf) -> CommandResult {
+    open_project_impl(state.inner(), path)
+}
+
+pub(crate) fn open_project_impl(state: &AppState, path: PathBuf) -> CommandResult {
     state.execute(Command::OpenProject { path })
 }
 
 /// Save the current project
 #[tauri::command]
 pub fn save_project(state: State<AppState>, path: Option<PathBuf>) -> CommandResult {
+    save_project_impl(state.inner(), path)
+}
+
+pub(crate) fn save_project_impl(state: &AppState, path: Option<PathBuf>) -> CommandResult {
     state.execute(Command::SaveProject { path })
 }
 
 /// Close the current project
 #[tauri::command]
 pub fn close_project(state: State<AppState>) -> CommandResult {
+    close_project_impl(state.inner())
+}
+
+pub(crate) fn close_project_impl(state: &AppState) -> CommandResult {
     state.execute(Command::CloseProject)
 }
 
 /// Get the full project state for the frontend
 #[tauri::command]
 pub fn get_project_state(state: State<AppState>) -> Option<ProjectState> {
+    get_project_state_impl(state.inner())
+}
+
+pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
     let project = state.get_project_state()?;
     let stations = project.compute_station_coordinates();
     let mut stats = project.stats();
@@ -52,12 +76,23 @@ pub fn get_project_state(state: State<AppState>) -> Option<ProjectState> {
 /// Get list of recent projects
 #[tauri::command]
 pub fn list_recent_projects(state: State<AppState>) -> Vec<ProjectMetadata> {
+    list_recent_projects_impl(state.inner())
+}
+
+pub(crate) fn list_recent_projects_impl(state: &AppState) -> Vec<ProjectMetadata> {
     state.get_recent_projects()
 }
 
 /// Remove a project from the recent projects list
 #[tauri::command]
 pub fn remove_from_recent_projects(state: State<AppState>, path: PathBuf) -> CommandResult {
+    remove_from_recent_projects_impl(state.inner(), path)
+}
+
+pub(crate) fn remove_from_recent_projects_impl(
+    state: &AppState,
+    path: PathBuf,
+) -> CommandResult {
     state.remove_from_recent_projects(path)
 }
 
@@ -67,6 +102,16 @@ pub fn remove_from_recent_projects(state: State<AppState>, path: PathBuf) -> Com
 #[tauri::command]
 pub fn merge_projects(
     state: State<AppState>,
+    source_paths: Vec<PathBuf>,
+    output_path: PathBuf,
+    output_name: String,
+    archive_originals: bool,
+) -> CommandResult {
+    merge_projects_impl(state.inner(), source_paths, output_path, output_name, archive_originals)
+}
+
+pub(crate) fn merge_projects_impl(
+    state: &AppState,
     source_paths: Vec<PathBuf>,
     output_path: PathBuf,
     output_name: String,

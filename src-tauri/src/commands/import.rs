@@ -29,11 +29,19 @@ pub fn calculate_file_hash(path: PathBuf) -> Result<String, String> {
 /// Check if a file hash has already been imported to the project
 #[tauri::command]
 pub fn check_duplicate_import(state: State<'_, AppState>, hash: String) -> Result<bool, String> {
+    check_duplicate_import_impl(state.inner(), hash)
+}
+
+pub(crate) fn check_duplicate_import_impl(state: &AppState, hash: String) -> Result<bool, String> {
     state.check_duplicate_import(&hash).map_err(|e| e.to_string())
 }
 
 /// Track an imported file hash in the project
 #[tauri::command]
 pub fn track_imported_file(state: State<'_, AppState>, hash: String) -> CommandResult {
+    track_imported_file_impl(state.inner(), hash)
+}
+
+pub(crate) fn track_imported_file_impl(state: &AppState, hash: String) -> CommandResult {
     state.track_imported_file(hash)
 }
