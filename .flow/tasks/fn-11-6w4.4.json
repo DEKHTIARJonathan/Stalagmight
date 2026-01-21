@@ -1,16 +1,31 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-21T12:17:30.270046Z",
   "created_at": "2026-01-21T01:34:57.773918Z",
   "depends_on": [
     "fn-11-6w4.1"
   ],
   "epic": "fn-11-6w4",
+  "evidence": {
+    "files_modified": [
+      "src-tauri/src/export/image.rs"
+    ],
+    "integration_tests_passed": 80,
+    "new_tests_added": [
+      "test_svg_section_mode_uses_section_color",
+      "test_svg_depth_mode_uses_depth_colors",
+      "test_svg_css_station_class_no_fill",
+      "test_svg_all_stations_have_inline_fill",
+      "test_svg_zero_datum_always_gold",
+      "test_svg_depth_mode_shot_uses_avg_depth"
+    ],
+    "tests_passed": 315
+  },
   "id": "fn-11-6w4.4",
   "priority": null,
   "spec_path": ".flow/tasks/fn-11-6w4.4.md",
-  "status": "todo",
+  "status": "done",
   "title": "Modify SVG generation to use depth colors",
-  "updated_at": "2026-01-21T02:48:27.768646Z"
+  "updated_at": "2026-01-21T12:21:24.104080Z"
 }
