@@ -7,10 +7,21 @@
     "fn-13-e55.2"
   ],
   "epic": "fn-13-e55",
+  "evidence": {
+    "commits": [
+      "21e454e",
+      "501bb8d"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm vitest run src/utils/__tests__/shortcuts.test.ts (86 tests)",
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-13-e55.3",
   "priority": null,
   "spec_path": ".flow/tasks/fn-13-e55.3.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Create shortcut utilities module (platform, normalize, conflicts)",
-  "updated_at": "2026-01-21T17:34:10.486987Z"
+  "updated_at": "2026-01-21T17:46:21.680297Z"
 }
