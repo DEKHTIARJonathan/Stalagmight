@@ -135,6 +135,11 @@ pub fn cancel_loading(state: State<AppState>) {
 /// Returns CreateProjectFullResult containing project and display settings.
 /// Emits "loading-progress" events during creation for progress UI.
 ///
+/// # Arguments
+/// * `name` - Project name (used for filename and project metadata)
+/// * `location` - Optional location metadata (cave location description, not file path)
+/// * `directory` - Optional directory to save the project in. If None, uses default.
+///
 /// Note: Uses AppHandle instead of State<'_, AppState> because Tauri's State<'_, T>
 /// wraps a reference (&'r Arc<T>) that cannot outlive the function body. For spawn_blocking,
 /// we need 'static ownership, which AppHandle provides via app_handle.state::<T>().
@@ -143,14 +148,14 @@ pub async fn create_project_full(
     app_handle: tauri::AppHandle,
     name: String,
     location: Option<String>,
-    path: PathBuf,
+    directory: Option<PathBuf>,
 ) -> Result<CreateProjectFullResult, LoadError> {
     // Use AppHandle to access state inside spawn_blocking
     // (State<'_, T> cannot be moved due to lifetime constraints)
     let result: Result<Result<CreateProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
-            state.do_create_project_full(name, location, path)
+            state.do_create_project_full(name, location, directory)
         })
         .await;
 
