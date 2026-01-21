@@ -2205,6 +2205,15 @@ impl AppState {
         let handle = self.get_app_handle()
             .ok_or_else(|| LoadError::internal("AppHandle not initialized"))?;
 
+        // Check if the same project is already open (avoid unnecessary reload)
+        if let Ok(proj_guard) = self.project.lock() {
+            if let Some(ref project) = *proj_guard {
+                if project.file_path.as_ref() == Some(&path) {
+                    return Err(LoadError::already_open());
+                }
+            }
+        }
+
         // Start new load - cancels any existing load
         // Store the token for identity-safe clearing later
         let cancel_token = self.start_new_load();
@@ -2276,10 +2285,12 @@ impl AppState {
 
         // === PHASE 4: Computing statistics (15%) - INDETERMINATE ===
         progress.start_phase(LoadingPhase::ComputingStatistics);
+        // Heartbeat at start to indicate phase is active
+        progress.heartbeat(LoadingPhase::ComputingStatistics);
         let mut stats = project.stats();
         // Calculate penetration distance with computed stations
         stats.penetration_distance = project.calculate_penetration(&stations);
-        // Heartbeat AFTER computation to indicate work completed
+        // Heartbeat after computation to indicate work completed
         progress.heartbeat(LoadingPhase::ComputingStatistics);
         check_cancelled!();
         progress.complete_phase(LoadingPhase::ComputingStatistics);
