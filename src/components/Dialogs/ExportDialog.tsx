@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { save } from '@tauri-apps/plugin-dialog';
 import { useUIStore } from '../../store/uiStore';
@@ -76,6 +76,18 @@ export default function ExportDialog() {
       active = false;
     };
   }, [imageOptions.color_mode, imageOptions.depth_preset]);
+
+  // Compute resolved preview options with config values for depth_unit and decimal_precision
+  // This ensures preview matches the actual export output
+  const previewOptions = useMemo<ExportImageOptions>(() => {
+    const resolvedDepthUnit = config?.units?.depth === 'feet' ? 'ft' : 'm';
+    const resolvedDecimalPrecision = config?.units?.decimal_precision ?? 1;
+    return {
+      ...imageOptions,
+      depth_unit: resolvedDepthUnit,
+      decimal_precision: resolvedDecimalPrecision,
+    };
+  }, [imageOptions, config?.units?.depth, config?.units?.decimal_precision]);
 
   const handleExport = async () => {
     try {
@@ -339,7 +351,7 @@ export default function ExportDialog() {
               </button>
             </div>
             <ExportPreview
-              options={imageOptions}
+              options={previewOptions}
               theme={previewTheme}
               presetColors={presetColors}
             />
