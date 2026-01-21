@@ -394,6 +394,10 @@ pub fn run() {
             let app_state = core::state::AppState::new()?;
             app.manage(app_state);
 
+            // Set app handle on state for event emission
+            let state = app.state::<core::state::AppState>();
+            state.set_app_handle(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -411,6 +415,8 @@ pub fn run() {
             commands::project::list_recent_projects,
             commands::project::remove_from_recent_projects,
             commands::project::merge_projects,
+            commands::project::load_project_full,
+            commands::project::cancel_loading,
             // Section commands
             commands::section::create_section,
             commands::section::update_section,
