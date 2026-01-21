@@ -2,7 +2,7 @@ pub mod defaults;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -243,30 +243,37 @@ impl Config {
     /// Load config from file, falling back to defaults
     pub fn load() -> Result<Self> {
         let config_path = Self::config_path()?;
-
-        if config_path.exists() {
-            let contents =
-                std::fs::read_to_string(&config_path).context("Failed to read config file")?;
-            let config: Config = toml::from_str(&contents).context("Failed to parse config file")?;
-            tracing::info!(?config_path, "Loaded config from file");
-            Ok(config)
-        } else {
-            tracing::info!("Using default config");
-            Ok(Self::default())
-        }
+        Self::load_from_path(&config_path)
     }
 
     /// Save config to file
     pub fn save(&self) -> Result<()> {
         let config_path = Self::config_path()?;
+        self.save_to_path(&config_path)
+    }
 
-        if let Some(parent) = config_path.parent() {
+    /// Load config from a specific path, falling back to defaults
+    pub fn load_from_path(path: &Path) -> Result<Self> {
+        if path.exists() {
+            let contents = std::fs::read_to_string(path).context("Failed to read config file")?;
+            let config: Config = toml::from_str(&contents).context("Failed to parse config file")?;
+            tracing::info!(config_path = ?path, "Loaded config from file");
+            Ok(config)
+        } else {
+            tracing::info!(config_path = ?path, "Using default config");
+            Ok(Self::default())
+        }
+    }
+
+    /// Save config to a specific path
+    pub fn save_to_path(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).context("Failed to create config directory")?;
         }
 
         let contents = toml::to_string_pretty(self).context("Failed to serialize config")?;
-        std::fs::write(&config_path, contents).context("Failed to write config file")?;
-        tracing::info!(?config_path, "Saved config to file");
+        std::fs::write(path, contents).context("Failed to write config file")?;
+        tracing::info!(config_path = ?path, "Saved config to file");
         Ok(())
     }
 
@@ -290,5 +297,46 @@ impl Config {
             .first()
             .cloned()
             .unwrap_or_else(|| "#4ecdc4".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_load_from_path_missing_returns_default() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config::load_from_path(&path).unwrap();
+        assert_eq!(config.general.auto_save_interval_seconds, 30);
+        assert_eq!(config.validation.warn_shot_length_max, 50.0);
+    }
+
+    #[test]
+    fn test_save_to_path_and_load_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let mut config = Config::default();
+        config.general.auto_save = false;
+        config.general.undo_history_limit = 42;
+        config.display.grid_spacing = 7.5;
+
+        config.save_to_path(&path).unwrap();
+        let loaded = Config::load_from_path(&path).unwrap();
+
+        assert!(!loaded.general.auto_save);
+        assert_eq!(loaded.general.undo_history_limit, 42);
+        assert_eq!(loaded.display.grid_spacing, 7.5);
+    }
+
+    #[test]
+    fn test_load_from_path_invalid_toml_errors() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "not = [valid").unwrap();
+        assert!(Config::load_from_path(&path).is_err());
     }
 }
