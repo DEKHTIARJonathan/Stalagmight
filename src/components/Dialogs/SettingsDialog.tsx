@@ -15,7 +15,7 @@ import {
   RESERVED_SHORTCUTS,
 } from '../../utils/shortcuts';
 import type { CacheStats } from '../../types/cache';
-import type { Config, ShortcutsConfig } from '../../types/config';
+import type { Config, ShortcutsConfig, ShortcutFeedback } from '../../types/config';
 import { defaultConfig } from '../../types/config';
 
 interface ConfigChange {
@@ -131,6 +131,15 @@ function computeConfigDiff(oldConfig: Config, newConfig: Config): ConfigChange[]
       path: 'map.zoom_step',
       oldValue: String(oldConfig.map.zoom_step),
       newValue: String(newConfig.map.zoom_step),
+    });
+  }
+
+  // Check general.shortcut_feedback
+  if (oldConfig.general.shortcut_feedback !== newConfig.general.shortcut_feedback) {
+    changes.push({
+      path: 'general.shortcut_feedback',
+      oldValue: String(oldConfig.general.shortcut_feedback),
+      newValue: String(newConfig.general.shortcut_feedback),
     });
   }
 
@@ -856,8 +865,47 @@ export default function SettingsDialog() {
           {/* Tab content */}
           <div className="min-h-[300px]">
             {activeTab === 'general' && (
-              <div className="space-y-4">
-                <p className="text-text-secondary">General settings will be available here.</p>
+              <div className="space-y-6">
+                {!configLoaded ? (
+                  <p className="text-text-secondary">Loading configuration...</p>
+                ) : (
+                  <>
+                    {/* Shortcut Feedback Section */}
+                    <div>
+                      <h3 className="text-sm font-medium mb-3">Feedback</h3>
+                      <div className="space-y-4">
+                        <div>
+                          <label htmlFor="shortcut-feedback" className="block text-sm mb-1">
+                            Shortcut feedback
+                          </label>
+                          <select
+                            id="shortcut-feedback"
+                            value={localConfig.general.shortcut_feedback}
+                            onChange={(e) => {
+                              setLocalConfig({
+                                ...localConfig,
+                                general: {
+                                  ...localConfig.general,
+                                  shortcut_feedback: e.target.value as ShortcutFeedback,
+                                },
+                              });
+                              setIsDirty(true);
+                            }}
+                            className="w-full max-w-xs px-3 py-2 bg-background border border-border rounded text-sm"
+                            data-testid="shortcut-feedback-select"
+                          >
+                            <option value="none">None</option>
+                            <option value="non_obvious">Non-obvious only</option>
+                            <option value="all">All</option>
+                          </select>
+                          <p className="text-xs text-text-secondary mt-1">
+                            Show toast notifications when keyboard shortcuts are activated
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 

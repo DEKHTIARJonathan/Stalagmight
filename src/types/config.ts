@@ -3,6 +3,14 @@
 export type LengthUnit = 'meters' | 'feet';
 export type AngleUnit = 'degrees' | 'gradians';
 
+/**
+ * Shortcut feedback preference for toast notifications.
+ * - 'none': No toasts for any shortcuts
+ * - 'non_obvious': Toast for view/panel toggles only (default)
+ * - 'all': Toast for all shortcut actions
+ */
+export type ShortcutFeedback = 'none' | 'non_obvious' | 'all';
+
 export interface Config {
   general: GeneralConfig;
   units: UnitsConfig;
@@ -24,6 +32,8 @@ export interface GeneralConfig {
   recent_projects_max: number;
   undo_history_limit: number;
   undo_persist_limit: number;
+  /** Shortcut feedback preference: none, non_obvious (default), or all */
+  shortcut_feedback: ShortcutFeedback;
 }
 
 export interface UnitsConfig {
@@ -219,6 +229,7 @@ export const defaultConfig: Config = {
     recent_projects_max: 20,
     undo_history_limit: 100,
     undo_persist_limit: 20,
+    shortcut_feedback: 'non_obvious',
   },
   units: {
     length: 'meters',
