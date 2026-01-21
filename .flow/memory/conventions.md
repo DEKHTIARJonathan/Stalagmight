@@ -21,3 +21,6 @@ Frontend color gradient interpolation should match backend algorithm (HSL vs RGB
 
 ## 2026-01-21 manual [convention]
 WebdriverIO: use closest('[data-testid]') to detect focus on elements inside containers with data-testid when the focused element itself lacks the attribute
+
+## 2026-01-21 manual [convention]
+Only call event.preventDefault() when actually handling the event; no-op shortcuts should allow default browser behavior

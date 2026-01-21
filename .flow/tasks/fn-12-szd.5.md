@@ -25,9 +25,14 @@ Add Ctrl+G keyboard shortcut to focus the currently selected section on the map.
 - [ ] Does not interfere with text input (existing guards)
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added Ctrl+G keyboard shortcut to focus on the currently selected section:
+- Added `triggerZoomToSection` to the destructured imports from uiStore
+- Added case for Ctrl+G in the handleKeyDown switch statement
+- When Ctrl+G is pressed and a section is selected, calls `triggerZoomToSection(selection.sectionId)`
+- No-op when no section is selected (silently does nothing)
+- Follows existing pattern from Ctrl+0 (fitToBounds)
+- Added `triggerZoomToSection` to useCallback dependency array
 ## Evidence
 - Commits:
-- Tests:
+- Tests: pnpm tsc --noEmit passed, cargo test --manifest-path src-tauri/Cargo.toml passed (338 tests)
 - PRs:

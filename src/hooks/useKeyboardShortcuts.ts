@@ -35,6 +35,7 @@ export function useKeyboardShortcuts() {
     clearSelection,
     selectAll,
     triggerFitToBounds,
+    triggerZoomToSection,
     selection,
     openDialog,
     clearMergeStations,
@@ -137,6 +138,13 @@ export function useKeyboardShortcuts() {
           case '0':
             event.preventDefault();
             triggerFitToBounds();
+            return;
+          case 'g':
+            // Zoom to currently selected section (no-op if no section selected)
+            if (selection?.type === 'section' && selection.sectionId !== undefined) {
+              event.preventDefault();
+              triggerZoomToSection(selection.sectionId);
+            }
             return;
           case 'i':
             event.preventDefault();
@@ -281,7 +289,7 @@ export function useKeyboardShortcuts() {
         setActiveTool(toolShortcut as ToolType);
       }
     },
-    [setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection, selectAll, triggerFitToBounds, clearMergeStations, clearMeasure, setDrawFromStation, selection, openDialog, undo, redo, saveProject, project, stations, importDmp, setImportContext, hasImportedDmpPath, addImportedDmpPath, activateSpringLoaded, showStations, showToast]
+    [setActiveTool, toggleSectionsPanel, toggleDetailPanel, toggleDataTable, clearSelection, selectAll, triggerFitToBounds, triggerZoomToSection, clearMergeStations, clearMeasure, setDrawFromStation, selection, openDialog, undo, redo, saveProject, project, stations, importDmp, setImportContext, hasImportedDmpPath, addImportedDmpPath, activateSpringLoaded, showStations, showToast]
   );
 
   useEffect(() => {
