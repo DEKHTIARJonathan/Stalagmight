@@ -1,5 +1,11 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import {
+  setupMockedPage,
+  createProject,
+  waitForMapReady,
+  waitForActiveTool,
+  waitForMapIdle,
+} from './helpers/app';
 
 /**
  * Comprehensive Ctrl+Drag Pan Movement Verification Tests
@@ -29,14 +35,8 @@ interface StationPosition {
  * Uses mock project which is pre-populated with sections/stations.
  */
 async function createProjectWithMap(page: Page): Promise<void> {
-  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill('Pan Movement Test');
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
-  // Wait for map to initialize and render stations
-  await page.waitForTimeout(1000);
+  await createProject(page, 'Pan Movement Test');
+  await waitForMapReady(page);
 }
 
 /**
@@ -151,7 +151,7 @@ async function ctrlDragWithWarmup(
 ): Promise<void> {
   // Press Ctrl and keep it held throughout
   await page.keyboard.down('Control');
-  await page.waitForTimeout(150);
+  await waitForMapIdle(page);
 
   // Warmup: trigger large panBy to fully initialize drag handlers
   // Using animate: false to ensure synchronous completion
@@ -167,7 +167,7 @@ async function ctrlDragWithWarmup(
       map.panBy([-50, 0], { animate: false });
     }
   });
-  await page.waitForTimeout(150);
+  await waitForMapIdle(page);
 
   // Perform the actual drag
   await page.mouse.move(startX, startY);
@@ -177,7 +177,7 @@ async function ctrlDragWithWarmup(
 
   // Release Ctrl
   await page.keyboard.up('Control');
-  await page.waitForTimeout(300);
+  await waitForMapIdle(page);
 }
 
 /**
@@ -187,19 +187,18 @@ async function ctrlDragWithWarmup(
 async function warmupMapDragHandlers(page: Page): Promise<void> {
   // Switch to pan mode and do a quick programmatic pan
   await page.keyboard.press('p');
-  await page.waitForTimeout(50);
+  await waitForActiveTool(page, 'pan');
+  await waitForMapIdle(page);
   await page.evaluate(() => {
     const map = (window as unknown as { __cavechef_map__?: { panBy: (o: [number, number]) => void } }).__cavechef_map__;
     if (map) { map.panBy([100, 0]); map.panBy([-100, 0]); }
   });
-  await page.waitForTimeout(100);
+  await waitForMapIdle(page);
 }
 
 test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
     await createProjectWithMap(page);
     await waitForMap(page);
     // Warmup the map drag handlers to work around MapLibre timing quirk
@@ -210,9 +209,10 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
     test('drag right moves map center left (lng decreases)', async ({ page }) => {
       // Switch to Pan mode
       await page.keyboard.press('p');
-      await page.waitForTimeout(100);
+      await waitForActiveTool(page, 'pan');
+      await waitForMapIdle(page);
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
 
@@ -229,7 +229,7 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       await page.mouse.down();
       await page.mouse.move(centerX + 100, centerY, { steps: 5 });
       await page.mouse.up();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // Get final map center
       const centerAfter = await getMapCenter(page);
@@ -249,9 +249,10 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
 
     test('drag down moves map center up (lat increases)', async ({ page }) => {
       await page.keyboard.press('p');
-      await page.waitForTimeout(100);
+      await waitForActiveTool(page, 'pan');
+      await waitForMapIdle(page);
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
 
@@ -267,7 +268,7 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       await page.mouse.down();
       await page.mouse.move(centerX, centerY + 100, { steps: 5 });
       await page.mouse.up();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       const centerAfter = await getMapCenter(page);
       expect(centerAfter).not.toBeNull();
@@ -284,9 +285,10 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
 
     test('zoom level unchanged during pan', async ({ page }) => {
       await page.keyboard.press('p');
-      await page.waitForTimeout(100);
+      await waitForActiveTool(page, 'pan');
+      await waitForMapIdle(page);
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
 
@@ -300,7 +302,7 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       await page.mouse.down();
       await page.mouse.move(centerX + 100, centerY + 100, { steps: 5 });
       await page.mouse.up();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       const zoomAfter = await getMapZoom(page);
       expect(zoomAfter).not.toBeNull();
@@ -321,9 +323,10 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
     test('Ctrl+drag right moves map center left', async ({ page }) => {
       // Switch to Select mode
       await page.keyboard.press('s');
-      await page.waitForTimeout(100);
+      await waitForActiveTool(page, 'select');
+      await waitForMapIdle(page);
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
 
@@ -351,7 +354,7 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
           break; // Success
         }
         // Wait a bit before retry
-        await page.waitForTimeout(200);
+        await waitForMapIdle(page);
       }
 
       // Same direction check as Pan mode
@@ -364,9 +367,10 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
 
     test('zoom level unchanged during Ctrl+drag', async ({ page }) => {
       await page.keyboard.press('s');
-      await page.waitForTimeout(100);
+      await waitForActiveTool(page, 'select');
+      await waitForMapIdle(page);
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
 
@@ -382,7 +386,7 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       await page.mouse.move(centerX + 100, centerY + 100, { steps: 5 });
       await page.mouse.up();
       await page.keyboard.up('Control');
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       const zoomAfter = await getMapZoom(page);
       expect(zoomAfter).not.toBeNull();
@@ -392,9 +396,10 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
 
     test('no box select overlay during Ctrl+drag', async ({ page }) => {
       await page.keyboard.press('s');
-      await page.waitForTimeout(100);
+      await waitForActiveTool(page, 'select');
+      await waitForMapIdle(page);
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
 
@@ -419,9 +424,10 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
   test.describe('Movement Proportionality', () => {
     test('larger drag produces proportionally larger movement', async ({ page }) => {
       await page.keyboard.press('p');
-      await page.waitForTimeout(100);
+      await waitForActiveTool(page, 'pan');
+      await waitForMapIdle(page);
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
 
@@ -434,7 +440,7 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       await page.mouse.down();
       await page.mouse.move(centerX + 50, centerY, { steps: 5 });
       await page.mouse.up();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
       const centerAfter1 = await getMapCenter(page);
 
       const movement1 = Math.abs(centerAfter1!.lng - centerBefore1!.lng);
@@ -445,7 +451,7 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       await page.mouse.down();
       await page.mouse.move(centerX + 100, centerY, { steps: 5 });
       await page.mouse.up();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
       const centerAfter2 = await getMapCenter(page);
 
       const movement2 = Math.abs(centerAfter2!.lng - centerBefore2!.lng);
@@ -476,9 +482,10 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
     for (const tool of ctrlPanTools) {
       test(`Ctrl+drag works in ${tool.name} mode`, async ({ page }) => {
         await page.keyboard.press(tool.key);
-        await page.waitForTimeout(100);
+        await waitForActiveTool(page, tool.name);
+        await waitForMapIdle(page);
 
-        const canvas = page.locator('canvas').first();
+        const canvas = page.getByTestId('map-canvas');
         const box = await canvas.boundingBox();
         expect(box).not.toBeNull();
 
@@ -503,7 +510,7 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
           if (Math.abs(lngChange) > 0.00001 && lngChange < 0) {
             break; // Success
           }
-          await page.waitForTimeout(200);
+          await waitForMapIdle(page);
         }
 
         // Should move same direction as Pan mode

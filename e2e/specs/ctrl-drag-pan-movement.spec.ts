@@ -10,7 +10,7 @@
 
 import { fileURLToPath } from 'url';
 import * as path from 'path';
-import { waitForAppReady, resetAppState, selectTool } from '../helpers/app';
+import { waitForAppReady, resetAppState, selectTool, waitForUiIdle, waitForMapIdle } from '../helpers/app';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -131,21 +131,6 @@ async function getStationScreenPositions(): Promise<StationPosition[]> {
 }
 
 /**
- * Wait for map instance to be available.
- */
-async function waitForMap(): Promise<void> {
-  await browser.waitUntil(
-    async () => {
-      const hasMap = await browser.execute(() => {
-        return !!(window as unknown as { __cavechef_map__?: unknown }).__cavechef_map__;
-      });
-      return hasMap;
-    },
-    { timeout: 15000, timeoutMsg: 'Map instance not available' }
-  );
-}
-
-/**
  * Perform warmup panBy to initialize MapLibre drag handlers.
  * This is needed due to a timing quirk where dragPan handlers
  * don't respond until after a programmatic pan.
@@ -160,7 +145,7 @@ async function warmupMapDragHandlers(): Promise<void> {
       map.panBy([-100, 0], { animate: false });
     }
   });
-  await browser.pause(100);
+  await waitForMapIdle(100);
 }
 
 /**
@@ -186,7 +171,7 @@ async function ctrlDragWithWarmup(
     });
     window.dispatchEvent(event);
   });
-  await browser.pause(200);
+  await waitForUiIdle(200);
 
   // Warmup: trigger panBy to initialize drag handlers
   await browser.execute(() => {
@@ -198,7 +183,7 @@ async function ctrlDragWithWarmup(
       map.panBy([-50, 0], { animate: false });
     }
   });
-  await browser.pause(100);
+  await waitForMapIdle(100);
 
   // Perform the actual drag with mouse
   await browser.performActions([
@@ -216,7 +201,7 @@ async function ctrlDragWithWarmup(
     },
   ]);
   await browser.releaseActions();
-  await browser.pause(200);
+  await waitForMapIdle(200);
 
   // Dispatch keyup event to release Ctrl
   await browser.execute(() => {
@@ -229,7 +214,7 @@ async function ctrlDragWithWarmup(
     });
     window.dispatchEvent(event);
   });
-  await browser.pause(100);
+  await waitForUiIdle(100);
 }
 
 describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
@@ -244,8 +229,7 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
     }
 
     // Wait for map to be ready
-    await browser.pause(1000);
-    await waitForMap();
+    await waitForMapIdle(1000);
 
     // Initial warmup in Pan mode
     await selectTool('pan');
@@ -255,9 +239,9 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
   describe('Pan Mode Baseline (known working)', () => {
     it('drag right moves map center left (lng decreases)', async () => {
       await selectTool('pan');
-      await browser.pause(100);
+      await waitForUiIdle(100);
 
-      const canvas = await $('canvas');
+      const canvas = await $('[data-testid="map-canvas"]');
       const location = await canvas.getLocation();
       const size = await canvas.getSize();
 
@@ -283,7 +267,7 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
         },
       ]);
       await browser.releaseActions();
-      await browser.pause(300);
+      await waitForUiIdle(300);
 
       const centerAfter = await getMapCenter();
       expect(centerAfter).not.toBeNull();
@@ -299,9 +283,9 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
 
     it('drag down moves map center up (lat increases)', async () => {
       await selectTool('pan');
-      await browser.pause(100);
+      await waitForUiIdle(100);
 
-      const canvas = await $('canvas');
+      const canvas = await $('[data-testid="map-canvas"]');
       const location = await canvas.getLocation();
       const size = await canvas.getSize();
 
@@ -326,7 +310,7 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
         },
       ]);
       await browser.releaseActions();
-      await browser.pause(300);
+      await waitForUiIdle(300);
 
       const centerAfter = await getMapCenter();
       expect(centerAfter).not.toBeNull();
@@ -341,9 +325,9 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
 
     it('zoom level unchanged during pan', async () => {
       await selectTool('pan');
-      await browser.pause(100);
+      await waitForUiIdle(100);
 
-      const canvas = await $('canvas');
+      const canvas = await $('[data-testid="map-canvas"]');
       const location = await canvas.getLocation();
       const size = await canvas.getSize();
 
@@ -367,7 +351,7 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
         },
       ]);
       await browser.releaseActions();
-      await browser.pause(300);
+      await waitForUiIdle(300);
 
       const zoomAfter = await getMapZoom();
       expect(zoomAfter).not.toBeNull();
@@ -378,9 +362,9 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
   describe('Ctrl+Drag in Select Mode', () => {
     it('Ctrl+drag right moves map center left', async () => {
       await selectTool('select');
-      await browser.pause(100);
+      await waitForUiIdle(100);
 
-      const canvas = await $('canvas');
+      const canvas = await $('[data-testid="map-canvas"]');
       const location = await canvas.getLocation();
       const size = await canvas.getSize();
 
@@ -406,7 +390,7 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
         if (Math.abs(lngChange) > 0.00001 && lngChange < 0) {
           break;
         }
-        await browser.pause(200);
+        await waitForUiIdle(200);
       }
 
       expect(lngChange).toBeLessThan(0);
@@ -415,9 +399,9 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
 
     it('zoom level unchanged during Ctrl+drag', async () => {
       await selectTool('select');
-      await browser.pause(100);
+      await waitForUiIdle(100);
 
-      const canvas = await $('canvas');
+      const canvas = await $('[data-testid="map-canvas"]');
       const location = await canvas.getLocation();
       const size = await canvas.getSize();
 
@@ -436,9 +420,9 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
 
     it('no box select overlay during Ctrl+drag', async () => {
       await selectTool('select');
-      await browser.pause(100);
+      await waitForUiIdle(100);
 
-      const canvas = await $('canvas');
+      const canvas = await $('[data-testid="map-canvas"]');
       const location = await canvas.getLocation();
       const size = await canvas.getSize();
 
@@ -453,7 +437,7 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
           actions: [{ type: 'keyDown', value: '\uE009' }],
         },
       ]);
-      await browser.pause(100);
+      await waitForUiIdle(100);
 
       await warmupMapDragHandlers();
 
@@ -502,9 +486,9 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
   describe('Station Position Verification', () => {
     it('stations move opposite to drag direction', async () => {
       await selectTool('pan');
-      await browser.pause(100);
+      await waitForUiIdle(100);
 
-      const canvas = await $('canvas');
+      const canvas = await $('[data-testid="map-canvas"]');
       const location = await canvas.getLocation();
       const size = await canvas.getSize();
 
@@ -534,7 +518,7 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
         },
       ]);
       await browser.releaseActions();
-      await browser.pause(300);
+      await waitForUiIdle(300);
 
       const stationsAfter = await getStationScreenPositions();
 
@@ -571,9 +555,9 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
     for (const tool of ctrlPanTools) {
       it(`Ctrl+drag works in ${tool.name} mode`, async () => {
         await browser.keys([tool.key]);
-        await browser.pause(100);
+        await waitForUiIdle(100);
 
-        const canvas = await $('canvas');
+        const canvas = await $('[data-testid="map-canvas"]');
         const location = await canvas.getLocation();
         const size = await canvas.getSize();
 
@@ -597,7 +581,7 @@ describe('Ctrl+Drag Pan - Movement Verification (WebdriverIO)', () => {
           if (Math.abs(lngChange) > 0.00001 && lngChange < 0) {
             break;
           }
-          await browser.pause(200);
+          await waitForUiIdle(200);
         }
 
         expect(lngChange).toBeLessThan(0);

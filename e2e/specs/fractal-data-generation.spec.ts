@@ -19,6 +19,7 @@ import {
   createSectionViaStore,
   mergeStationsViaStore,
   saveProjectToPath,
+  waitForUiIdle,
 } from '../helpers/app';
 import {
   generateLSystem,
@@ -90,7 +91,7 @@ describe('Fractal Data Generation', function () {
     }
 
     // Wait for filesystem sync, then verify file exists
-    await browser.pause(500);
+    await waitForUiIdle(500);
     if (!fs.existsSync(fixturePath)) {
       throw new Error(`Fixture file not created: ${fixturePath}`);
     }

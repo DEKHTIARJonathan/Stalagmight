@@ -130,6 +130,8 @@ export default function DataTable({ sections }: DataTableProps) {
         height: dataTableOpen ? `${dataTableHeight}px` : '40px',
         minHeight: '40px',
       }}
+      data-testid="data-table"
+      data-open={dataTableOpen ? 'true' : 'false'}
     >
       {/* Header with section selector and collapse toggle */}
       <div className="flex items-center gap-4 px-4 py-2 border-b border-border shrink-0">
@@ -138,6 +140,7 @@ export default function DataTable({ sections }: DataTableProps) {
           className="text-text-secondary hover:text-text transition-transform duration-200"
           style={{ transform: dataTableOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
           title={dataTableOpen ? 'Collapse (Ctrl+3)' : 'Expand (Ctrl+3)'}
+          data-testid="data-table-toggle"
         >
           ▲
         </button>
@@ -150,6 +153,7 @@ export default function DataTable({ sections }: DataTableProps) {
               value={selectedSectionId ?? ''}
               onChange={(e) => setSelectedSectionId(Number(e.target.value))}
               className="bg-background border border-border rounded px-2 py-1 text-sm"
+              data-testid="data-table-section-select"
             >
               {sections.map((section) => (
                 <option key={section.id} value={section.id}>

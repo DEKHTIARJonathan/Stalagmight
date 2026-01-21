@@ -13,13 +13,13 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
  */
 async function createProject(page: Page, name: string): Promise<void> {
   const newProjectBtn = page
-    .locator('button:has-text("New Project"), h3:has-text("New Project")')
+    .locator('[data-testid="new-project-button"], [data-testid="empty-state-new-project"]')
     .first();
   await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill(name);
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
+  await page.getByTestId('new-project-dialog').waitFor({ state: 'visible', timeout: 5000 });
+  await page.getByTestId('new-project-name-input').fill(name);
+  await page.getByTestId('new-project-create-button').click();
+  await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
 }
 
 /**
@@ -455,15 +455,7 @@ test.describe('Error Handling', () => {
       await page.goto('/');
       await page.waitForLoadState('networkidle');
 
-      // Create a project
-      const newProjectBtn = page
-        .locator('button:has-text("New Project"), h3:has-text("New Project")')
-        .first();
-      await newProjectBtn.click();
-      await page.waitForSelector('.fixed.inset-0');
-      await page.locator('.fixed.inset-0 input').first().fill('Error Test Project');
-      await page.click('.fixed.inset-0 button:has-text("Create")');
-      await page.waitForSelector('canvas', { timeout: 10000 });
+      await createProject(page, 'Error Test Project');
 
       // Enable save error mode
       await page.evaluate(() => {
@@ -483,13 +475,13 @@ test.describe('Error Handling', () => {
       // If no explicit error message found, verify app is still functional
       if (!errorVisible) {
         // App should remain functional even after error
-        await expect(page.locator('canvas').first()).toBeVisible();
+        await expect(page.getByTestId('map-canvas')).toBeVisible();
       } else {
         await expect(errorVisible).toBeVisible();
       }
 
       // Verify app remains functional after error
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
 
       // Test disk full error as well
       await page.evaluate(() => {
@@ -499,7 +491,7 @@ test.describe('Error Handling', () => {
       await page.keyboard.press('Control+s');
 
       // App should still be functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
   });
 
@@ -521,14 +513,14 @@ test.describe('Error Handling', () => {
       });
 
       // Try to open a file via Open button
-      const openBtn = page.locator('button:has-text("Open"), h3:has-text("Open")').first();
+      const openBtn = page.locator('[data-testid="global-open-project-button"], button:has-text("Open"), h3:has-text("Open")').first();
       await openBtn.click();
 
-      // Wait a moment for error processing
-      await page.waitForTimeout(1000);
+      // Wait for error processing or dialog appearance
+      const anyDialog = page.locator('[data-testid="error-dialog"]');
+      await anyDialog.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       // Check if any modal/dialog appeared and close it if visible
-      const anyDialog = page.locator('.fixed.inset-0');
       if (await anyDialog.isVisible().catch(() => false)) {
         // Try to close any error dialog or overlay
         const closeButton = anyDialog.locator('button:has-text("OK"), button:has-text("Close"), button:has-text("Cancel")').first();
@@ -550,8 +542,8 @@ test.describe('Error Handling', () => {
       // Try open again
       await openBtn.click();
 
-      // Wait a moment for error processing
-      await page.waitForTimeout(1000);
+      // Wait for error processing or dialog appearance
+      await anyDialog.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       // Close any dialog that appeared
       if (await anyDialog.isVisible().catch(() => false)) {
@@ -567,78 +559,53 @@ test.describe('Error Handling', () => {
     });
   });
 
-  /**
-   * DMP Parse Errors tests are skipped because the new import flow
-   * parses DMP before opening the dialog (in keyboard shortcut handler).
-   * Errors would be shown via ErrorDialog before Step 1 opens.
-   * This needs rework in task fn-51-ctu.22.
-   */
-  test.describe.skip('DMP Parse Errors', () => {
-    /**
-     * Test 9.3: should display DMP parse errors
-     *
-     * Verifies that DMP parsing errors (invalid header, truncated file)
-     * are clearly shown in the import dialog.
-     */
-    test('should display DMP parse errors', async ({ page }) => {
+  test.describe('DMP Parse Errors', () => {
+    test('shows error dialog for invalid DMP header', async ({ page }) => {
       await setupTauriMocksWithErrorSimulation(page);
       await page.goto('/');
       await page.waitForLoadState('networkidle');
 
-      // Create a project first
-      const newProjectBtn = page
-        .locator('button:has-text("New Project"), h3:has-text("New Project")')
-        .first();
-      await newProjectBtn.click();
-      await page.waitForSelector('.fixed.inset-0');
-      await page.locator('.fixed.inset-0 input').first().fill('DMP Error Test');
-      await page.click('.fixed.inset-0 button:has-text("Create")');
-      await page.waitForSelector('canvas', { timeout: 10000 });
+      await createProject(page, 'DMP Error Test');
 
-      // Enable DMP parse error mode
       await page.evaluate(() => {
         (window as unknown as { __TAURI_ERROR_MODE__: string }).__TAURI_ERROR_MODE__ = 'dmp_parse_error';
       });
 
-      // Open import dialog
       await page.keyboard.press('Control+i');
-      await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
 
-      // Click Browse to trigger file load
-      const dialog = page.locator('[role="dialog"]');
-      const browseButton = dialog.locator('button:has-text("Browse...")');
-      await browseButton.click();
+      const errorDialog = page.getByTestId('error-dialog');
+      await expect(errorDialog).toBeVisible({ timeout: 5000 });
+      await expect(errorDialog).toContainText('Import Failed');
+      await expect(errorDialog).toContainText('Invalid DMP header');
 
-      // Wait for error to be displayed in dialog - use locator pattern
-      const errorLocator = dialog.locator('text=/Invalid.*header|parse.*error|DMP.*error|Error/i');
-      const hasError = await errorLocator.first().isVisible({ timeout: 5000 }).catch(() => false);
+      await errorDialog.locator('button:has-text("OK")').click();
+      await expect(errorDialog).toBeHidden({ timeout: 3000 });
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
+      await expect(page.locator('[data-testid="dmp-selection-dialog"]')).toHaveCount(0);
+    });
 
-      // If error shown, that's expected behavior
-      if (hasError) {
-        // Error is visible, which is correct
-        await expect(errorLocator.first()).toBeVisible();
-      }
+    test('shows error dialog for truncated DMP file', async ({ page }) => {
+      await setupTauriMocksWithErrorSimulation(page);
+      await page.goto('/');
+      await page.waitForLoadState('networkidle');
 
-      // Dialog should still be open and functional
-      await expect(dialog).toBeVisible();
+      await createProject(page, 'DMP Truncated Test');
 
-      // Close dialog
-      await dialog.locator('button:has-text("Cancel")').click();
-      await expect(dialog).not.toBeVisible({ timeout: 3000 });
-
-      // Test truncated file error
       await page.evaluate(() => {
         (window as unknown as { __TAURI_ERROR_MODE__: string }).__TAURI_ERROR_MODE__ = 'dmp_truncated';
       });
 
       await page.keyboard.press('Control+i');
-      await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
 
-      const dialog2 = page.locator('[role="dialog"]');
-      await dialog2.locator('button:has-text("Browse...")').click();
+      const errorDialog = page.getByTestId('error-dialog');
+      await expect(errorDialog).toBeVisible({ timeout: 5000 });
+      await expect(errorDialog).toContainText('Import Failed');
+      await expect(errorDialog).toContainText('Truncated DMP file');
 
-      // Dialog should remain open after error
-      await expect(dialog2).toBeVisible();
+      await errorDialog.locator('button:has-text("OK")').click();
+      await expect(errorDialog).toBeHidden({ timeout: 3000 });
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
+      await expect(page.locator('[data-testid="dmp-selection-dialog"]')).toHaveCount(0);
     });
   });
 
@@ -655,15 +622,7 @@ test.describe('Error Handling', () => {
       await page.goto('/');
       await page.waitForLoadState('networkidle');
 
-      // Create a project
-      const newProjectBtn = page
-        .locator('button:has-text("New Project"), h3:has-text("New Project")')
-        .first();
-      await newProjectBtn.click();
-      await page.waitForSelector('.fixed.inset-0');
-      await page.locator('.fixed.inset-0 input').first().fill('Timeout Test');
-      await page.click('.fixed.inset-0 button:has-text("Create")');
-      await page.waitForSelector('canvas', { timeout: 10000 });
+      await createProject(page, 'Timeout Test');
 
       // The mocked IPC returns immediately, but we can verify the app
       // handles rapid operations without blocking
@@ -672,7 +631,7 @@ test.describe('Error Handling', () => {
       }
 
       // App should remain responsive
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
 
       // Try multiple rapid keyboard shortcuts
       await page.keyboard.press('Control+z');
@@ -680,7 +639,7 @@ test.describe('Error Handling', () => {
       await page.keyboard.press('Control+z');
 
       // App should still be functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
   });
 
@@ -698,13 +657,13 @@ test.describe('Error Handling', () => {
 
       // Test New Project dialog validation
       const newProjectBtn = page
-        .locator('button:has-text("New Project"), h3:has-text("New Project")')
+        .locator('[data-testid="new-project-button"], [data-testid="empty-state-new-project"]')
         .first();
       await newProjectBtn.click();
-      await page.waitForSelector('.fixed.inset-0');
+      await page.getByTestId('new-project-dialog').waitFor({ state: 'visible', timeout: 5000 });
 
       // Try to create without name
-      const createBtn = page.locator('.fixed.inset-0 button:has-text("Create")');
+      const createBtn = page.getByTestId('new-project-create-button');
 
       // Button should be disabled when name is empty
       const isDisabled = await createBtn.isDisabled();
@@ -714,26 +673,23 @@ test.describe('Error Handling', () => {
         await createBtn.click();
 
         // Check for error message
-        const errorMsg = await page.waitForSelector(
-          '.fixed.inset-0 >> text=/required|name.*empty|enter.*name/i',
-          { timeout: 3000 }
-        ).catch(() => null);
-
-        if (errorMsg) {
+        const errorMsg = page
+          .locator('[data-testid="new-project-dialog"] >> text=/required|name.*empty|enter.*name/i')
+          .first();
+        if (await errorMsg.isVisible()) {
           await expect(errorMsg).toBeVisible();
         }
       }
 
       // Dialog should still be open
-      await expect(page.locator('.fixed.inset-0')).toBeVisible();
+      await expect(page.getByTestId('new-project-dialog')).toBeVisible();
 
       // Now enter a valid name and create
-      await page.locator('.fixed.inset-0 input').first().fill('Valid Project');
+      await page.getByTestId('new-project-name-input').fill('Valid Project');
       await createBtn.click();
 
       // Should successfully create and show canvas
-      await page.waitForSelector('canvas', { timeout: 10000 });
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
     });
   });
 
@@ -749,15 +705,7 @@ test.describe('Error Handling', () => {
       await page.goto('/');
       await page.waitForLoadState('networkidle');
 
-      // Create a project
-      const newProjectBtn = page
-        .locator('button:has-text("New Project"), h3:has-text("New Project")')
-        .first();
-      await newProjectBtn.click();
-      await page.waitForSelector('.fixed.inset-0');
-      await page.locator('.fixed.inset-0 input').first().fill('Undo Error Test');
-      await page.click('.fixed.inset-0 button:has-text("Create")');
-      await page.waitForSelector('canvas', { timeout: 10000 });
+      await createProject(page, 'Undo Error Test');
 
       // Enable undo error mode
       await page.evaluate(() => {
@@ -768,7 +716,7 @@ test.describe('Error Handling', () => {
       await page.keyboard.press('Control+z');
 
       // App should remain functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
 
       // Enable redo error mode
       await page.evaluate(() => {
@@ -779,7 +727,7 @@ test.describe('Error Handling', () => {
       await page.keyboard.press('Control+y');
 
       // App should still be functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
 
       // Disable error mode and verify normal operations work
       await page.evaluate(() => {
@@ -791,7 +739,7 @@ test.describe('Error Handling', () => {
       await page.keyboard.press('Control+y');
 
       // App should remain functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
   });
 });

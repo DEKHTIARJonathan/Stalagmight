@@ -53,18 +53,19 @@ export function DatePicker({
   };
 
   return (
-    <ReactDatePicker
-      selected={selectedDate}
-      onChange={handleChange}
-      dateFormat="yyyy-MM-dd"
-      placeholderText={placeholder}
-      disabled={disabled}
-      className="w-full px-3 py-2 bg-background border border-border rounded text-foreground disabled:opacity-50"
-      calendarClassName="dark-calendar"
-      wrapperClassName="w-full"
-      data-testid={testId}
-      popperClassName="dark-popper"
-      showPopperArrow={false}
-    />
+    <div className="w-full" data-testid={testId}>
+      <ReactDatePicker
+        selected={selectedDate}
+        onChange={handleChange}
+        dateFormat="yyyy-MM-dd"
+        placeholderText={placeholder}
+        disabled={disabled}
+        className="w-full px-3 py-2 bg-background border border-border rounded text-foreground disabled:opacity-50"
+        calendarClassName="dark-calendar"
+        wrapperClassName="w-full"
+        popperClassName="dark-popper"
+        showPopperArrow={false}
+      />
+    </div>
   );
 }

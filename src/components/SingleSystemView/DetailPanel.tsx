@@ -14,12 +14,13 @@ export default function DetailPanel() {
   const totalWarnings = warnings.length;
 
   return (
-    <div className="h-full bg-panel flex flex-col">
+    <div className="h-full bg-panel flex flex-col" data-testid="detail-panel">
       {/* Tab bar */}
       <div className="flex border-b border-border shrink-0">
         <TabButton
           active={detailPanelTab === 'details'}
           onClick={() => setDetailPanelTab('details')}
+          testId="detail-tab-details"
         >
           Details
         </TabButton>
@@ -28,6 +29,7 @@ export default function DetailPanel() {
           onClick={() => setDetailPanelTab('warnings')}
           badge={totalWarnings > 0 ? totalWarnings : undefined}
           badgeType={errorCount > 0 ? 'error' : 'warning'}
+          testId="detail-tab-warnings"
         >
           Warnings
         </TabButton>
@@ -66,9 +68,10 @@ interface TabButtonProps {
   children: React.ReactNode;
   badge?: number | undefined;
   badgeType?: 'warning' | 'error' | undefined;
+  testId?: string;
 }
 
-function TabButton({ active, onClick, children, badge, badgeType }: TabButtonProps) {
+function TabButton({ active, onClick, children, badge, badgeType, testId }: TabButtonProps) {
   return (
     <button
       onClick={onClick}
@@ -79,6 +82,7 @@ function TabButton({ active, onClick, children, badge, badgeType }: TabButtonPro
           : 'border-transparent text-text-secondary hover:text-text-primary'
         }
       `}
+      data-testid={testId}
     >
       {children}
       {badge !== undefined && badge > 0 && (

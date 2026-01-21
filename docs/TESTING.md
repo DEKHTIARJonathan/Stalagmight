@@ -77,14 +77,12 @@ See `playwright.config.ts` for settings:
 
 ```typescript
 import { test, expect } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import { setupMockedPage } from './helpers/app';
 
 test.describe('Feature Name', () => {
   test.beforeEach(async ({ page }) => {
-    // Setup mocks before each test
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    // Setup mocks + app bootstrap before each test
+    await setupMockedPage(page);
   });
 
   test('should do something', async ({ page }) => {
@@ -99,21 +97,22 @@ test.describe('Feature Name', () => {
 
 **Creating a project (required for most tests):**
 ```typescript
-async function createProject(page: Page, name: string) {
-  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill(name);
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
-}
+import { setupMockedPage, createProject, waitForMapReady } from './helpers/app';
+
+test.beforeEach(async ({ page }) => {
+  await setupMockedPage(page);
+});
+
+// In test:
+await createProject(page, 'Test Project');
+await waitForMapReady(page);
 ```
 
 **Opening dialogs:**
 ```typescript
-// Via keyboard shortcut (opens DmpImportDialog for DMP file import)
+// Via keyboard shortcut (opens DmpSelectionDialog, Step 1 of DMP import flow)
 await page.keyboard.press('Control+i');
-await page.waitForSelector('[data-testid="import-dmp-dialog"]');
+await page.waitForSelector('[data-testid="dmp-selection-dialog"]');
 
 // Via store (opens ImportDialog for section creation)
 await page.evaluate(() => {
@@ -122,29 +121,34 @@ await page.evaluate(() => {
 await page.waitForSelector('[data-testid="import-section-dialog"]');
 ```
 
-> **Note**: `Ctrl+I` opens `DmpImportDialog` (for DMP file import), NOT `ImportDialog` (for manual section creation). See [Dialog Reference](#dialog-reference) for details.
+> **Note**: `Ctrl+I` opens `DmpSelectionDialog` (Step 1 of DMP import), NOT `ImportDialog` (manual section creation). Step 2 is `DmpSectionConfigDialog`. See [Dialog Reference](#dialog-reference) for details.
 
 **Closing dialogs:**
 ```typescript
 // Via Cancel button (dialogs don't close on Escape)
-await page.click('.fixed.inset-0 button:has-text("Cancel")');
+const dialog = page.locator('[data-testid="new-project-dialog"]');
+await dialog.locator('[data-testid="new-project-cancel-button"]').click();
 ```
 
 **Interacting with canvas:**
 ```typescript
-const canvas = page.locator('canvas').first();
-await expect(canvas).toBeVisible();
+import { waitForMapReady, waitForMapIdle } from './helpers/app';
+
+await waitForMapReady(page);
+const mapCanvas = page.locator('[data-testid="map-canvas"]');
+await expect(mapCanvas).toBeVisible();
 
 // Click on canvas
-await canvas.click();
+await mapCanvas.click();
 
 // Drag on canvas
-const box = await canvas.boundingBox();
+const box = await mapCanvas.boundingBox();
 if (box) {
   await page.mouse.move(box.x + 100, box.y + 100);
   await page.mouse.down();
   await page.mouse.move(box.x + 200, box.y + 200);
   await page.mouse.up();
+  await waitForMapIdle(page);
 }
 ```
 
@@ -234,7 +238,7 @@ Located in `e2e/`. These tests run against the full Tauri application.
 ```
 e2e/
 ├── specs/
-│   ├── import-dmp-dialog.spec.ts      # DmpImportDialog tests (Ctrl+I)
+│   ├── import-dmp-dialog.spec.ts      # DMP import flow (Selection + Config)
 │   ├── import-section-dialog.spec.ts  # ImportDialog tests (section creation)
 │   ├── project-lifecycle.spec.ts
 │   ├── keyboard-shortcuts.spec.ts
@@ -249,14 +253,15 @@ e2e/
 
 ### Dialog Reference
 
-CaveChef has two different import dialogs that serve different purposes:
+CaveChef has two different import flows that serve different purposes:
 
 | Dialog Component | `activeDialog` Value | Opened By | Test File |
 |------------------|---------------------|-----------|-----------|
-| `DmpImportDialog` | `'import-dmp'` | `Ctrl+I` keyboard shortcut | `import-dmp-dialog.spec.ts` |
+| `DmpSelectionDialog` | `'dmp-selection'` | `Ctrl+I` keyboard shortcut | `import-dmp-dialog.spec.ts` |
+| `DmpSectionConfigDialog` | `'dmp-section-config'` | Continue from selection | `import-dmp-dialog.spec.ts` |
 | `ImportDialog` | `'import'` | SectionsPanel "+" button, E2E store | `import-section-dialog.spec.ts` |
 
-**Important**: The `Ctrl+I` shortcut specifically opens `DmpImportDialog`, not `ImportDialog`. Tests that need to verify section name input should use `ImportDialog` via the store.
+**Important**: The `Ctrl+I` shortcut opens `DmpSelectionDialog` (Step 1), not `ImportDialog`. Tests that need to verify section name input should use `ImportDialog` via the store.
 
 ### Dialog Close Behaviors
 
@@ -278,7 +283,7 @@ await browser.execute(() => {
 });
 ```
 
-**Note**: `Ctrl+I` opens `DmpImportDialog` (for .dmp file import), NOT the generic `ImportDialog` (for manual section creation).
+**Note**: `Ctrl+I` opens `DmpSelectionDialog` (Step 1 of .dmp import), NOT the generic `ImportDialog` (manual section creation).
 
 ### Configuration
 
@@ -470,11 +475,12 @@ expect(true).toBeTruthy();
 Prefer explicit waits over timeouts:
 
 ```typescript
-// Good - wait for specific element
-await page.waitForSelector('canvas', { timeout: 10000 });
+// Good - wait for map readiness
+await waitForMapReady(page);
+await waitForMapIdle(page);
 
 // Avoid - arbitrary timeout
-await page.waitForTimeout(1000);
+// await page.waitForTimeout(1000);
 ```
 
 ### Error Messages
@@ -497,12 +503,13 @@ All UI components must include proper attributes for tests to locate elements re
   role="dialog"
   aria-modal="true"
   aria-labelledby="dialog-title-id"
+  data-testid="example-dialog"
 >
   <h2 id="dialog-title-id">Dialog Title</h2>
 </div>
 ```
 
-**Why**: E2E tests use `[role="dialog"]` to locate dialogs. Without this attribute, tests cannot find the dialog even when visually present.
+**Why**: E2E tests target stable `data-testid` attributes, while `role="dialog"` and ARIA attributes are required for accessibility.
 
 ### Test Identifiers (`data-testid`)
 
@@ -510,7 +517,7 @@ All UI components must include proper attributes for tests to locate elements re
 |--------------|------------|---------|
 | Main views | `<view>-view` | `data-testid="global-view"` |
 | Buttons | `<action>-button` | `data-testid="new-project-button"` |
-| Dialogs | `<name>-dialog` | `data-testid="import-dialog"` |
+| Dialogs | `<name>-dialog` | `data-testid="new-project-dialog"` |
 | Form inputs | `<field>-input` | `data-testid="project-name-input"` |
 | Statistics | `stats-<metric>` | `data-testid="stats-total-length"` |
 

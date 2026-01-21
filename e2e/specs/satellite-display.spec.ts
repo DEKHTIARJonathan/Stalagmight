@@ -388,7 +388,7 @@ describe('Satellite Display and Cache Verification', () => {
       const initialCenter = initialMapInfo.center;
 
       // Pan the map significantly to trigger loading new tiles
-      const mapCanvas = await $('canvas');
+      const mapCanvas = await $('[data-testid="map-canvas"]');
       const location = await mapCanvas.getLocation();
       const size = await mapCanvas.getSize();
       const centerX = location.x + size.width / 2;

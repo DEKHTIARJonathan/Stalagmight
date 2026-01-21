@@ -17,6 +17,7 @@ import {
   undo,
   redo,
   getProjectSections,
+  waitForUiIdle,
 } from '../helpers/app';
 
 // Get absolute path to fixtures directory
@@ -229,7 +230,7 @@ describe('Undo/Redo Integration', () => {
     expect(createResult.success).toBe(true);
 
     // Wait for state to update
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify section was created
     const sectionsAfterCreate = await getProjectSections();
@@ -243,7 +244,7 @@ describe('Undo/Redo Integration', () => {
     await undo();
 
     // Wait for undo to complete
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify section was removed
     const sectionsAfterUndo = await getProjectSections();
@@ -268,7 +269,7 @@ describe('Undo/Redo Integration', () => {
     // Create a section
     const createResult = await createTestSection('Redo Test Section');
     expect(createResult.success).toBe(true);
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify section exists
     const sectionsAfterCreate = await getProjectSections();
@@ -281,7 +282,7 @@ describe('Undo/Redo Integration', () => {
 
     // Undo the creation
     await undo();
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify section was removed
     const sectionsAfterUndo = await getProjectSections();
@@ -289,7 +290,7 @@ describe('Undo/Redo Integration', () => {
 
     // Redo with Ctrl+Y
     await redo();
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify section was restored
     const sectionsAfterRedo = await getProjectSections();
@@ -303,7 +304,7 @@ describe('Undo/Redo Integration', () => {
     expect(stateBeforeSecondUndo.canUndo).toBe(true);
 
     await undo();
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
 
     // Verify section was removed again
     const sectionsAfterSecondUndo = await getProjectSections();
@@ -312,7 +313,7 @@ describe('Undo/Redo Integration', () => {
     if (sectionsAfterSecondUndo.length === countAfterCreate - 1) {
       // Now test Ctrl+Shift+Z redo shortcut
       await browser.keys(['Control', 'Shift', 'z']);
-      await browser.pause(500);
+      await waitForUiIdle(500);
 
       const sectionsAfterShiftRedo = await getProjectSections();
       expect(sectionsAfterShiftRedo.length).toBe(countAfterCreate);
@@ -341,12 +342,12 @@ describe('Undo/Redo Integration', () => {
     // Create section A
     const createA = await createTestSection('Section A');
     expect(createA.success).toBe(true);
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Create section B
     const createB = await createTestSection('Section B');
     expect(createB.success).toBe(true);
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify both sections exist
     const sectionsAfterCreates = await getProjectSections();
@@ -360,7 +361,7 @@ describe('Undo/Redo Integration', () => {
 
     // Undo first time - should remove Section B (LIFO)
     await undo();
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     const sectionsAfterFirstUndo = await getProjectSections();
     expect(sectionsAfterFirstUndo.length).toBe(initialCount + 1);
@@ -373,7 +374,7 @@ describe('Undo/Redo Integration', () => {
 
     // Undo second time - should remove Section A
     await undo();
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     const sectionsAfterSecondUndo = await getProjectSections();
     expect(sectionsAfterSecondUndo.length).toBe(initialCount);
@@ -399,11 +400,11 @@ describe('Undo/Redo Integration', () => {
     // Create section A
     const createA = await createTestSection('Section A');
     expect(createA.success).toBe(true);
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Undo the creation
     await undo();
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify redo is available
     const stateAfterUndo = await getUndoRedoState();
@@ -412,7 +413,7 @@ describe('Undo/Redo Integration', () => {
     // Make a new command (create Section B)
     const createB = await createTestSection('Section B');
     expect(createB.success).toBe(true);
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Redo should no longer be available
     const stateAfterNewCommand = await getUndoRedoState();
@@ -437,7 +438,7 @@ describe('Undo/Redo Integration', () => {
     if (!redoFailed) {
       // Even if it didn't throw, Section A should still not exist
     }
-    await browser.pause(300);
+    await waitForUiIdle(300);
 
     // Verify Section A is still not restored (redo did nothing useful)
     const sectionsAfterRedo = await getProjectSections();

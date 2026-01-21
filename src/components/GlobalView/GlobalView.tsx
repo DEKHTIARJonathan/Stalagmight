@@ -160,9 +160,9 @@ export default function GlobalView() {
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-3">
-          <Button onClick={() => handleImportDmp()}>Import DMP</Button>
+          <Button onClick={() => handleImportDmp()} data-testid="global-import-dmp-button">Import DMP</Button>
           <Button data-testid="new-project-button" onClick={() => handleNewProject()}>New Project</Button>
-          <Button onClick={() => handleOpenProject()}>Open Project</Button>
+          <Button onClick={() => handleOpenProject()} data-testid="global-open-project-button">Open Project</Button>
         </div>
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold">CaveChef</h1>
@@ -362,18 +362,21 @@ function EmptyState({ onImport, onNew, onOpen }: EmptyStateProps) {
           description="Import survey data from mNemo's .dmp file format"
           onClick={() => onImport()}
           primary
+          testId="empty-state-import-dmp"
         />
         <EmptyStateCard
           icon="📝"
           title="New Project"
           description="Create a blank project and enter data manually"
           onClick={() => onNew()}
+          testId="empty-state-new-project"
         />
         <EmptyStateCard
           icon="📂"
           title="Open Existing"
           description="Open a previously saved .cvchef project file"
           onClick={() => onOpen()}
+          testId="empty-state-open-project"
         />
       </div>
     </div>
@@ -386,9 +389,10 @@ interface EmptyStateCardProps {
   description: string;
   onClick: () => void;
   primary?: boolean;
+  testId?: string;
 }
 
-function EmptyStateCard({ icon, title, description, onClick, primary }: EmptyStateCardProps) {
+function EmptyStateCard({ icon, title, description, onClick, primary, testId }: EmptyStateCardProps) {
   return (
     <button
       onClick={onClick}
@@ -400,6 +404,7 @@ function EmptyStateCard({ icon, title, description, onClick, primary }: EmptySta
           : 'bg-panel border-border hover:bg-background/50'
         }
       `}
+      data-testid={testId}
     >
       <div className="text-4xl mb-3">{icon}</div>
       <h3 className="font-semibold mb-1">{title}</h3>

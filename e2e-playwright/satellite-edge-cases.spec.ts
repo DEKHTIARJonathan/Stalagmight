@@ -1,23 +1,11 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
-
-/**
- * Helper to create a new project
- */
-async function createProject(page: Page, name: string): Promise<void> {
-  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill(name);
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
-}
+import { setupMockedPage, createProject, waitForMapReady } from './helpers/app';
 
 /**
  * Helper to open the Display menu
  */
 async function openDisplayMenu(page: Page): Promise<void> {
-  await page.click('button:has-text("Display")');
+  await page.getByTestId('display-menu-button').click();
   await expect(page.locator('[data-testid="display-toggle-showSatellite"]')).toBeVisible({ timeout: 2000 });
 }
 
@@ -63,15 +51,14 @@ async function waitForNoMapLayer(page: Page, layerId: string): Promise<boolean> 
 
 test.describe('Satellite Edge Cases', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
     await createProject(page, 'Satellite Edge Cases Test');
+    await waitForMapReady(page);
   });
 
   test.describe('Animation Interactions', () => {
     test('should toggle satellite during map pan animation', async ({ page }) => {
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       if (!box) throw new Error('Canvas not found');
 
@@ -94,7 +81,7 @@ test.describe('Satellite Edge Cases', () => {
     });
 
     test('should toggle satellite during zoom animation', async ({ page }) => {
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       await canvas.hover();
 
       // Start zoom animation
@@ -129,7 +116,7 @@ test.describe('Satellite Edge Cases', () => {
       });
 
       // Trigger more tile loads by zooming
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       await canvas.hover();
       await page.mouse.wheel(0, -300);
 
@@ -146,7 +133,7 @@ test.describe('Satellite Edge Cases', () => {
       await waitForMapLayer(page, 'satellite-tiles');
 
       // App should remain functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
 
       // Satellite layer should exist
       const hasLayer = await waitForMapLayer(page, 'satellite-tiles');
@@ -162,7 +149,7 @@ test.describe('Satellite Edge Cases', () => {
       await waitForMapLayer(page, 'satellite-tiles');
 
       // Pan and zoom to load multiple tiles
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       await canvas.hover();
       for (let i = 0; i < 5; i++) {
         await page.mouse.wheel(0, -100);
@@ -184,7 +171,7 @@ test.describe('Satellite Edge Cases', () => {
       // Wait for layer to be added
       await waitForMapLayer(page, 'satellite-tiles');
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       await canvas.hover();
 
       // Rapid zoom in and out, verifying canvas remains visible
@@ -215,7 +202,7 @@ test.describe('Satellite Edge Cases', () => {
       }
 
       // App should remain functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
   });
 
@@ -265,7 +252,7 @@ test.describe('Satellite Edge Cases', () => {
       await expect.poll(() => isSatelliteEnabled(page)).toBe(true);
 
       // Map should be functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
 
     /**
@@ -294,7 +281,7 @@ test.describe('Satellite Edge Cases', () => {
 
       // Should work without errors
       await expect.poll(() => isSatelliteEnabled(page)).toBe(true);
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
   });
 
@@ -309,7 +296,7 @@ test.describe('Satellite Edge Cases', () => {
       await waitForMapLayer(page, 'satellite-tiles');
 
       // Zoom in to max
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       await canvas.hover();
       for (let i = 0; i < 15; i++) {
         await page.mouse.wheel(0, -300);
@@ -330,7 +317,7 @@ test.describe('Satellite Edge Cases', () => {
       await waitForMapLayer(page, 'satellite-tiles');
 
       // Zoom out to min
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       await canvas.hover();
       for (let i = 0; i < 15; i++) {
         await page.mouse.wheel(0, 300);
@@ -358,7 +345,7 @@ test.describe('Satellite Edge Cases', () => {
       await expect(gridCheckbox).toHaveClass(/bg-accent/);
 
       // App should remain functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
 
     test('should work with depth gradient combination', async ({ page }) => {
@@ -376,7 +363,7 @@ test.describe('Satellite Edge Cases', () => {
       await expect(depthCheckbox).toHaveClass(/bg-accent/);
 
       // App should remain functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
   });
 
@@ -422,7 +409,7 @@ test.describe('Satellite Edge Cases', () => {
 
       // Go back to project to verify app remains functional
       await createProject(page, 'Settings Test Project');
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
 
     test('should handle clear cache confirmation flow', async ({ page }) => {
@@ -534,7 +521,7 @@ test.describe('Satellite Edge Cases', () => {
       await page.setViewportSize({ width: 800, height: 600 });
 
       // App should remain functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
 
       // Satellite layer should still be present
       const hasLayer = await waitForMapLayer(page, 'satellite-tiles');
@@ -542,7 +529,7 @@ test.describe('Satellite Edge Cases', () => {
 
       // Resize back
       await page.setViewportSize({ width: 1280, height: 800 });
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
 
     test('should handle full-screen toggle with satellite enabled', async ({ page }) => {
@@ -558,7 +545,7 @@ test.describe('Satellite Edge Cases', () => {
       await page.setViewportSize({ width: 1920, height: 1080 });
 
       // App should remain functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
 
       // Satellite layer should still work
       const hasLayer = await waitForMapLayer(page, 'satellite-tiles');
@@ -566,7 +553,7 @@ test.describe('Satellite Edge Cases', () => {
 
       // Resize back to normal
       await page.setViewportSize({ width: 1280, height: 800 });
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
   });
 });

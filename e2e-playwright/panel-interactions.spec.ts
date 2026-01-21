@@ -1,90 +1,50 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import {
+  setupMockedPage,
+  createProject,
+  seedProjectWithSections,
+  waitForMapIdle,
+  waitForNoDialogs,
+  type SectionSeed,
+} from './helpers/app';
+
+const sectionSeeds: SectionSeed[] = [
+  {
+    name: 'Main Passage',
+    direction: 'in',
+    shots: [
+      { azimuth_in: 45, azimuth_out: 225, length: 10.5, depth_in: -2, depth_out: -2.5, left: 1.5, right: 2.3, up: 3.0, down: 0.8 },
+      { azimuth_in: 90, azimuth_out: 270, length: 15.2, depth_in: -2.5, depth_out: -5.0, left: 0.5, right: 0.7, up: 1.2, down: 1.5 },
+    ],
+  },
+  {
+    name: 'Side Tunnel',
+    direction: 'out',
+    shots: [
+      { azimuth_in: 270, azimuth_out: 90, length: 5.0, depth_in: -3.0, depth_out: -4.0, left: 0, right: 0, up: 0, down: 0 },
+    ],
+  },
+];
 
 /**
  * Helper to create a project with sections for panel testing.
  * Returns when the project is loaded with sections containing shots.
  *
- * Uses the new two-step import flow:
- * - Step 1 (DmpSelectionDialog): Section selection
- * - Step 2 (DmpSectionConfigDialog): Per-section configuration and import
+ * Uses store seeding to avoid dialog overlays during tests.
  */
 async function createProjectWithSections(page: Page): Promise<void> {
-  // Create a new project
-  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill('Panel Test Project');
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
-
-  // Import a DMP file to create sections with shots
-  // New flow: Ctrl+I opens file picker, parses DMP, then opens Step 1 directly
-  await page.keyboard.press('Control+i');
-
-  // Wait for Step 1 dialog (DmpSelectionDialog) to appear with parsed data
-  await page.waitForSelector('[data-testid="dmp-selection-dialog"]', { timeout: 5000 });
-
-  const step1Dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-  await expect(step1Dialog).toBeVisible();
-
-  // Wait for sections to load
-  await page.waitForSelector('text=Main Passage', { timeout: 5000 });
-
-  // Deselect sections with validation issues in Step 1
-  const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
-  const checkbox = validationSection.locator('input[type="checkbox"]');
-  if (await checkbox.isVisible()) {
-    await checkbox.click();
-  }
-
-  // Also deselect Mixed LRUD section (has warning for long shot)
-  const mixedLrudSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
-  const mixedCheckbox = mixedLrudSection.locator('input[type="checkbox"]');
-  if (await mixedCheckbox.isVisible()) {
-    await mixedCheckbox.click();
-  }
-
-  // Proceed to Step 2
-  const continueButton = page.locator('[data-testid="continue-button"]');
-  await expect(continueButton).toBeEnabled();
-  await continueButton.click();
-
-  // Wait for Step 2 dialog (DmpSectionConfigDialog) to appear
-  await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
-
-  // Place all sections - "Place section" places current and auto-advances
-  // When on the last unplaced section, it shows "Place and finish"
-  let attempts = 0;
-  const maxAttempts = 10;
-  while (attempts < maxAttempts) {
-    const placeAndFinishButton = page.locator('[data-testid="place-and-finish-button"]');
-    const placeSectionButton = page.locator('[data-testid="place-section-button"]');
-
-    if (await placeAndFinishButton.isVisible()) {
-      await placeAndFinishButton.click();
-      break;
-    } else if (await placeSectionButton.isVisible()) {
-      await placeSectionButton.click();
-      await page.waitForTimeout(200);
-    }
-    attempts++;
-  }
-
-  // Wait for dialog to close
-  await expect(page.locator('[data-testid="dmp-section-config-dialog"]')).not.toBeVisible({ timeout: 5000 });
+  await createProject(page, 'Panel Test Project');
+  await seedProjectWithSections(page, sectionSeeds);
+  await waitForNoDialogs(page);
+  await waitForMapIdle(page);
 }
 
 /**
- * These tests are skipped because the createProjectWithSections helper needs
- * to be updated to handle the new two-step import flow with section placement.
- * Will be fixed in task fn-51-ctu.22.
+ * Panel interaction tests use the two-step import flow and auto-placement helpers.
  */
-test.describe.skip('Panel Interactions', () => {
+test.describe('Panel Interactions', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
   test('should toggle sections panel with Ctrl+1', async ({ page }) => {
@@ -93,25 +53,25 @@ test.describe.skip('Panel Interactions', () => {
 
     // The sections panel should be visible by default (sectionsPanelOpen: true in uiStore)
     // Look for the "Sections" header or panel content
-    const sectionsHeader = page.locator('h2:has-text("Sections")');
-    await expect(sectionsHeader).toBeVisible({ timeout: 3000 });
+    const sectionsPanel = page.getByTestId('sections-panel');
+    await expect(sectionsPanel).toBeVisible({ timeout: 3000 });
 
     // Toggle off with Ctrl+1
     await page.keyboard.press('Control+1');
-    await page.waitForTimeout(300);
+    await waitForMapIdle(page);
 
     // Sections panel header should no longer be visible
-    await expect(sectionsHeader).not.toBeVisible({ timeout: 2000 });
+    await expect(sectionsPanel).toBeHidden({ timeout: 2000 });
 
     // Toggle back on with Ctrl+1
     await page.keyboard.press('Control+1');
-    await page.waitForTimeout(300);
+    await waitForMapIdle(page);
 
     // Sections panel should be visible again
-    await expect(sectionsHeader).toBeVisible({ timeout: 2000 });
+    await expect(sectionsPanel).toBeVisible({ timeout: 2000 });
 
     // App should remain functional
-    await expect(page.locator('canvas').first()).toBeVisible();
+    await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
 
   test('should toggle detail panel with Ctrl+2', async ({ page }) => {
@@ -120,27 +80,25 @@ test.describe.skip('Panel Interactions', () => {
 
     // The detail panel should be visible by default (detailPanelOpen: true in uiStore)
     // Look for the "Details" tab button
-    const detailsTab = page.getByRole('button', { name: 'Details' });
-
-    // The Details tab should be visible
-    await expect(detailsTab).toBeVisible({ timeout: 3000 });
+    const detailPanel = page.getByTestId('detail-panel');
+    await expect(detailPanel).toBeVisible({ timeout: 3000 });
 
     // Toggle off with Ctrl+2
     await page.keyboard.press('Control+2');
-    await page.waitForTimeout(300);
+    await waitForMapIdle(page);
 
     // Detail panel tabs should no longer be visible
-    await expect(detailsTab).not.toBeVisible({ timeout: 2000 });
+    await expect(detailPanel).toBeHidden({ timeout: 2000 });
 
     // Toggle back on with Ctrl+2
     await page.keyboard.press('Control+2');
-    await page.waitForTimeout(300);
+    await waitForMapIdle(page);
 
     // Detail panel should be visible again
-    await expect(detailsTab).toBeVisible({ timeout: 2000 });
+    await expect(detailPanel).toBeVisible({ timeout: 2000 });
 
     // App should remain functional
-    await expect(page.locator('canvas').first()).toBeVisible();
+    await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
 
   test('should toggle data table panel with Ctrl+3', async ({ page }) => {
@@ -149,34 +107,34 @@ test.describe.skip('Panel Interactions', () => {
 
     // The data table is closed by default (dataTableOpen: false in uiStore)
     // Verify the data table is NOT visible initially
-    const dataTableText = page.locator('text=Data Table');
-    await expect(dataTableText).not.toBeVisible({ timeout: 2000 });
+    const dataTable = page.getByTestId('data-table');
+    await expect(dataTable).toBeHidden({ timeout: 2000 });
 
     // Toggle open with Ctrl+3
     await page.keyboard.press('Control+3');
-    await page.waitForTimeout(300);
+    await waitForMapIdle(page);
 
     // Data table should now be visible
     // Look for "Data Table" text and section selector dropdown
-    await expect(dataTableText).toBeVisible({ timeout: 3000 });
+    await expect(dataTable).toBeVisible({ timeout: 3000 });
 
     // Section selector should be visible when data table is open
-    const sectionSelector = page.locator('select').filter({ hasText: /Main Passage|Section/ });
+    const sectionSelector = page.getByTestId('data-table-section-select');
     await expect(sectionSelector).toBeVisible({ timeout: 2000 });
 
     // Table rows should be visible
-    const tableBody = page.locator('tbody');
+    const tableBody = dataTable.locator('tbody');
     await expect(tableBody).toBeVisible({ timeout: 2000 });
 
     // Toggle closed with Ctrl+3
     await page.keyboard.press('Control+3');
-    await page.waitForTimeout(300);
+    await waitForMapIdle(page);
 
     // Data table text should no longer be visible when closed
-    await expect(dataTableText).not.toBeVisible({ timeout: 2000 });
+    await expect(dataTable).toBeHidden({ timeout: 2000 });
 
     // App should remain functional
-    await expect(page.locator('canvas').first()).toBeVisible();
+    await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
 
   test('should resize panels by dragging', async ({ page }) => {
@@ -185,9 +143,7 @@ test.describe.skip('Panel Interactions', () => {
 
     // Get the sections panel (left side)
     // The ResizablePanel has a resize handle on the right edge
-    const sectionsPanel = page.locator('.flex-shrink-0').filter({
-      has: page.locator('h2:has-text("Sections")')
-    }).first();
+    const sectionsPanel = page.getByTestId('sections-panel');
 
     // Get initial width
     const initialBox = await sectionsPanel.boundingBox();
@@ -212,7 +168,7 @@ test.describe.skip('Panel Interactions', () => {
       await page.mouse.move(handleCenterX + 50, handleCenterY);
       await page.mouse.up();
 
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Check that the panel width changed
       const newBox = await sectionsPanel.boundingBox();
@@ -234,7 +190,7 @@ test.describe.skip('Panel Interactions', () => {
         await page.mouse.move(newHandleCenterX - 100, newHandleCenterY);
         await page.mouse.up();
 
-        await page.waitForTimeout(200);
+        await waitForMapIdle(page);
 
         // Verify panel respects min size constraint
         const finalBox = await sectionsPanel.boundingBox();
@@ -244,7 +200,7 @@ test.describe.skip('Panel Interactions', () => {
     }
 
     // App should remain functional
-    await expect(page.locator('canvas').first()).toBeVisible();
+    await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
 
   test('should expand/collapse section in sections panel', async ({ page }) => {
@@ -253,14 +209,11 @@ test.describe.skip('Panel Interactions', () => {
 
     // The sections panel shows a list of sections
     // Each section item has a name and stats (e.g., "3 shots - 33.7m")
-    const sectionsPanel = page.locator('.flex.flex-col.bg-panel').filter({
-      has: page.locator('h2:has-text("Sections")')
-    });
-
+    const sectionsPanel = page.getByTestId('sections-panel');
     await expect(sectionsPanel).toBeVisible({ timeout: 3000 });
 
     // Find a section item to select/expand
-    const sectionItem = page.locator('li').filter({ hasText: 'Main Passage' });
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: 'Main Passage' });
     await expect(sectionItem).toBeVisible({ timeout: 2000 });
 
     // Initially the section shows basic info (name and stats)
@@ -269,13 +222,13 @@ test.describe.skip('Panel Interactions', () => {
 
     // Click on the section to select it
     await sectionItem.click();
-    await page.waitForTimeout(200);
+    await waitForMapIdle(page);
 
     // When a section is selected, it should have a highlight (bg-accent/20)
     await expect(sectionItem).toHaveClass(/bg-accent/);
 
     // The detail panel should now show section details
-    const detailPanel = page.locator('button:has-text("Details")').locator('..');
+    const detailPanel = page.getByTestId('detail-panel');
     if (await detailPanel.isVisible()) {
       // Look for section-specific details like "Survey Statistics"
       const surveyStats = page.locator('h4:has-text("Survey Statistics")');
@@ -283,10 +236,10 @@ test.describe.skip('Panel Interactions', () => {
     }
 
     // Click on a different section to verify selection changes
-    const anotherSection = page.locator('li').filter({ hasText: 'Side Tunnel' });
+    const anotherSection = page.locator('[data-testid^="section-item-"]').filter({ hasText: 'Side Tunnel' });
     if (await anotherSection.isVisible()) {
       await anotherSection.click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // The new section should be selected
       await expect(anotherSection).toHaveClass(/bg-accent/);
@@ -296,7 +249,7 @@ test.describe.skip('Panel Interactions', () => {
     }
 
     // App should remain functional
-    await expect(page.locator('canvas').first()).toBeVisible();
+    await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
 
   test('should handle panel overflow with scrolling', async ({ page }) => {
@@ -304,9 +257,7 @@ test.describe.skip('Panel Interactions', () => {
     await createProjectWithSections(page);
 
     // The sections panel has overflow-auto set for scrolling
-    const sectionsList = page.locator('.overflow-auto').filter({
-      has: page.locator('li').filter({ hasText: /Section|Passage|Tunnel/ })
-    }).first();
+    const sectionsList = page.getByTestId('sections-panel').locator('.overflow-auto').first();
 
     // Check that the overflow container is present
     await expect(sectionsList).toBeVisible({ timeout: 3000 });
@@ -316,8 +267,8 @@ test.describe.skip('Panel Interactions', () => {
     // With normal viewport, all sections should be visible without scrolling
     // Let's check that all imported sections are in the list
 
-    const mainPassage = page.locator('li').filter({ hasText: 'Main Passage' });
-    const sideTunnel = page.locator('li').filter({ hasText: 'Side Tunnel' });
+    const mainPassage = page.locator('[data-testid^="section-item-"]').filter({ hasText: 'Main Passage' });
+    const sideTunnel = page.locator('[data-testid^="section-item-"]').filter({ hasText: 'Side Tunnel' });
 
     await expect(mainPassage).toBeVisible({ timeout: 2000 });
     await expect(sideTunnel).toBeVisible({ timeout: 2000 });
@@ -325,19 +276,17 @@ test.describe.skip('Panel Interactions', () => {
     // Test the data table panel for scrolling behavior
     // First, expand the data table
     await page.keyboard.press('Control+3');
-    await page.waitForTimeout(300);
+    await waitForMapIdle(page);
 
     // Select a section with shots in the data table
-    const sectionSelector = page.locator('select').filter({ hasText: /Main Passage/ });
+    const sectionSelector = page.getByTestId('data-table-section-select');
     if (await sectionSelector.isVisible()) {
       await sectionSelector.selectOption({ label: 'Main Passage' });
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
     }
 
     // The data table should show shots with scrollable content if there are many
-    const tableContainer = page.locator('.flex-1.overflow-auto').filter({
-      has: page.locator('table, [class*="table"]')
-    });
+    const tableContainer = page.getByTestId('data-table');
 
     if (await tableContainer.isVisible()) {
       // Check that the table has rows
@@ -352,7 +301,7 @@ test.describe.skip('Panel Interactions', () => {
 
         // Scroll down
         await tableContainer.evaluate((el) => el.scrollBy(0, 100));
-        await page.waitForTimeout(100);
+        await waitForMapIdle(page);
 
         // Check that scroll position changed
         const newScrollTop = await tableContainer.evaluate((el) => el.scrollTop);
@@ -361,9 +310,7 @@ test.describe.skip('Panel Interactions', () => {
     }
 
     // Test the detail panel scroll area
-    const detailPanelContent = page.locator('.overflow-auto').filter({
-      has: page.locator('text=/Project Statistics|Survey Overview|Section/i')
-    }).first();
+    const detailPanelContent = page.getByTestId('detail-panel').locator('.overflow-auto').first();
 
     if (await detailPanelContent.isVisible()) {
       // The detail panel should have an overflow container for long content
@@ -375,6 +322,6 @@ test.describe.skip('Panel Interactions', () => {
     }
 
     // App should remain functional
-    await expect(page.locator('canvas').first()).toBeVisible();
+    await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
 });
