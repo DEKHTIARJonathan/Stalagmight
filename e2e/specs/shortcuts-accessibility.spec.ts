@@ -541,7 +541,7 @@ describe('Shortcuts Settings Accessibility', () => {
       expect(announcement.toLowerCase()).toMatch(/cancel/);
     });
 
-    it('conflict error is shown visually', async () => {
+    it('conflict error is announced to screen readers via alert role', async () => {
       // Find a shortcut that's already bound (select = S)
       // Try to assign the same shortcut to pan
       const panRecorder = await $('[data-testid="shortcut-primary-pan"]');
@@ -562,7 +562,7 @@ describe('Shortcuts Settings Accessibility', () => {
       // Wait for key capture and release to complete recording attempt
       await browser.pause(200);
 
-      // Check for error message in the shortcuts tab (visual feedback)
+      // Check for error message with proper accessibility attributes
       const errorElement = await $('[data-testid="shortcut-error"]');
 
       // Wait for error to appear
@@ -576,6 +576,16 @@ describe('Shortcuts Settings Accessibility', () => {
         { timeout: 3000, timeoutMsg: 'Conflict error did not appear' }
       );
 
+      // Verify error element has role="alert" for screen reader announcement
+      // role="alert" automatically announces content to screen readers when it appears
+      const role = await errorElement.getAttribute('role');
+      expect(role).toBe('alert');
+
+      // Verify aria-live="assertive" for immediate announcement
+      const ariaLive = await errorElement.getAttribute('aria-live');
+      expect(ariaLive).toBe('assertive');
+
+      // Verify error message content describes the conflict
       const errorText = await errorElement.getText();
       expect(errorText.toLowerCase()).toMatch(/already|conflict|used/);
     });
