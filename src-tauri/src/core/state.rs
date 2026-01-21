@@ -2376,6 +2376,163 @@ impl AppState {
             display_settings,
         })
     }
+
+    /// Create a new project with full progress reporting.
+    /// This is the main implementation used by create_project_full command.
+    ///
+    /// Phases:
+    /// 1. CreatingDatabase (40%) - Create SQLite file
+    /// 2. InitializingProject (40%) - Create project record
+    /// 3. SavingSettings (20%) - Save default display settings
+    ///
+    /// All phases are indeterminate since creation is typically fast.
+    pub fn do_create_project_full(
+        &self,
+        name: String,
+        location: Option<String>,
+        path: PathBuf,
+    ) -> Result<super::loading::CreateProjectFullResult, super::loading::LoadError> {
+        use super::loading::{CreateProjectFullResult, DisplaySettings, LoadError, LoadingPhase, ProgressEmitter};
+
+        let handle = self.get_app_handle()
+            .ok_or_else(|| LoadError::internal("AppHandle not initialized"))?;
+
+        // Start new load - cancels any existing load
+        let cancel_token = self.start_new_load();
+        let mut progress = ProgressEmitter::new_for_create(handle, Arc::clone(&cancel_token));
+
+        // Helper macro for early return with identity-safe token clearing
+        macro_rules! check_cancelled {
+            () => {
+                if progress.is_cancelled() {
+                    self.clear_active_load(&cancel_token);
+                    return Err(LoadError::cancelled());
+                }
+            };
+        }
+
+        macro_rules! early_return_err {
+            ($err:expr) => {{
+                self.clear_active_load(&cancel_token);
+                return Err($err);
+            }};
+        }
+
+        // === PHASE 0: Creating database (40%) ===
+        progress.start_phase(LoadingPhase::CreatingDatabase);
+
+        // Ensure .cvproj extension
+        let db_path = if path.extension().map_or(true, |ext| ext != "cvproj") {
+            path.with_extension("cvproj")
+        } else {
+            path.clone()
+        };
+
+        // Create parent directories if they don't exist
+        if let Some(parent) = db_path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    LoadError::new("IO", format!("Failed to create directory: {}", e))
+                })?;
+            }
+        }
+
+        // Create the database - local variable only until Finalizing
+        let mut db = match Database::open(&db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                early_return_err!(LoadError::new("DATABASE", format!("Failed to create database: {}", e)));
+            }
+        };
+        check_cancelled!();
+        progress.complete_phase(LoadingPhase::CreatingDatabase);
+
+        // === PHASE 1: Initializing project (40%) ===
+        progress.start_phase(LoadingPhase::InitializingProject);
+        let mut project = Project::new(name.clone(), location);
+        project.file_path = Some(db_path.clone());
+
+        if let Err(e) = db.save_project(&project) {
+            early_return_err!(LoadError::new("DATABASE", format!("Failed to save project: {}", e)));
+        }
+        check_cancelled!();
+        progress.complete_phase(LoadingPhase::InitializingProject);
+
+        // === PHASE 2: Saving settings (20%) ===
+        progress.start_phase(LoadingPhase::SavingSettings);
+        let display_settings = DisplaySettings::default();
+
+        // Save default display settings to database
+        // Convert display_settings to HashMap for storage
+        let settings_map = vec![
+            ("showStations", display_settings.show_stations.to_string()),
+            ("showSectionNames", display_settings.show_section_names.to_string()),
+            ("showStationLabels", display_settings.show_station_labels.to_string()),
+            ("showShotData", display_settings.show_shot_data.to_string()),
+            ("showVirtualShots", display_settings.show_virtual_shots.to_string()),
+            ("showZeroDatum", display_settings.show_zero_datum.to_string()),
+            ("showGrid", display_settings.show_grid.to_string()),
+            ("showScaleBar", display_settings.show_scale_bar.to_string()),
+            ("showSatellite", display_settings.show_satellite.to_string()),
+            ("showDepthGradient", display_settings.show_depth_gradient.to_string()),
+            ("gridSpacing", display_settings.grid_spacing.to_string()),
+        ];
+
+        for (key, value) in settings_map {
+            if let Err(e) = db.save_display_setting(key, &value) {
+                tracing::warn!("Failed to save display setting {}: {}", key, e);
+            }
+        }
+        check_cancelled!();
+        progress.complete_phase(LoadingPhase::SavingSettings);
+
+        // === FINALIZE: Store in AppState ===
+        // Guard 1: Project state mutation
+        check_cancelled!();
+        *self.project.lock().unwrap() = Some(project.clone());
+
+        // Guard 2: Database handle mutation
+        check_cancelled!();
+        *self.database.lock().unwrap() = Some(db);
+
+        // Guard 3: Clear undo stack (new project)
+        check_cancelled!();
+        if let Ok(mut undo_stack) = self.undo_stack.lock() {
+            undo_stack.clear();
+        }
+
+        // Guard 4: Display settings cache clear
+        check_cancelled!();
+        self.clear_display_settings_cache();
+
+        // Guard 5: Add to recent projects
+        check_cancelled!();
+        if let Ok(mut recent) = self.recent_projects.lock() {
+            recent.retain(|p| p != &db_path);
+            recent.insert(0, db_path.clone());
+            if let Ok(mut config) = self.config.lock() {
+                recent.truncate(config.general.recent_projects_max);
+                config.general.recent_projects = recent.clone();
+                if let Err(e) = config.save() {
+                    tracing::warn!("Failed to save config with recent projects: {}", e);
+                }
+            }
+        }
+
+        // Get loading_id before clearing token
+        let loading_id = progress.loading_id();
+
+        // Clear active load AFTER all mutations complete
+        self.clear_active_load(&cancel_token);
+
+        tracing::info!(path = ?db_path, name = %name, "Project created via create_project_full");
+
+        Ok(CreateProjectFullResult {
+            loading_id,
+            project,
+            display_settings,
+        })
+    }
 }
 
 #[cfg(test)]

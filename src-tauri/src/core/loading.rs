@@ -510,6 +510,23 @@ pub struct LoadProjectFullResult {
 }
 
 // ============================================================================
+// CreateProjectFullResult
+// ============================================================================
+
+/// Result of a successful create_project_full operation.
+/// Contains all data needed to initialize the frontend state for a new project.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProjectFullResult {
+    /// Unique ID for this load operation (for filtering stale events)
+    pub loading_id: u64,
+    /// The created project
+    pub project: crate::models::Project,
+    /// Display settings (defaults for new project)
+    pub display_settings: DisplaySettings,
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

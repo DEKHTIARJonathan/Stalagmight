@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use tauri::{Manager, State};
 
 use crate::core::{AppState, Command, CommandResult};
-use crate::core::loading::{LoadError, LoadProjectFullResult};
+use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
 use crate::models::{Project, ProjectMetadata, ProjectStats, Station};
 
 /// Create a new project
@@ -127,4 +127,39 @@ pub async fn load_project_full(
 #[tauri::command]
 pub fn cancel_loading(state: State<AppState>) {
     state.cancel_loading();
+}
+
+/// Create project with full progress reporting.
+/// Uses spawn_blocking for UI responsiveness during creation phases.
+///
+/// Returns CreateProjectFullResult containing project and display settings.
+/// Emits "loading-progress" events during creation for progress UI.
+///
+/// Note: Uses AppHandle instead of State<'_, AppState> because Tauri's State<'_, T>
+/// wraps a reference (&'r Arc<T>) that cannot outlive the function body. For spawn_blocking,
+/// we need 'static ownership, which AppHandle provides via app_handle.state::<T>().
+#[tauri::command]
+pub async fn create_project_full(
+    app_handle: tauri::AppHandle,
+    name: String,
+    location: Option<String>,
+    path: PathBuf,
+) -> Result<CreateProjectFullResult, LoadError> {
+    // Use AppHandle to access state inside spawn_blocking
+    // (State<'_, T> cannot be moved due to lifetime constraints)
+    let result: Result<Result<CreateProjectFullResult, LoadError>, _> =
+        tauri::async_runtime::spawn_blocking(move || {
+            let state = app_handle.state::<AppState>();
+            state.do_create_project_full(name, location, path)
+        })
+        .await;
+
+    match result {
+        Ok(Ok(create_result)) => Ok(create_result),
+        Ok(Err(load_error)) => Err(load_error),
+        Err(join_error) => {
+            // Task panicked or was cancelled
+            Err(LoadError::internal(join_error.to_string()))
+        }
+    }
 }
