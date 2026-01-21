@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use resvg::tiny_skia;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use usvg::{Options, Tree};
@@ -101,12 +102,7 @@ impl Default for ExportImageOptions {
 pub fn export_image(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
     match options.format {
         ImageFormat::Svg => export_svg(project, path, options),
-        ImageFormat::Png => {
-            // For PNG, we generate SVG and note that frontend should handle rasterization
-            tracing::warn!("PNG export should be handled by frontend for proper map rendering");
-            export_svg(project, &path.with_extension("svg"), options)?;
-            anyhow::bail!("PNG export requires frontend rendering. SVG exported instead.")
-        }
+        ImageFormat::Png => export_png(project, path, options),
         ImageFormat::Pdf => export_pdf(project, path, options),
     }
 }
@@ -132,6 +128,49 @@ fn export_pdf(project: &Project, path: &Path, options: &ExportImageOptions) -> R
     std::fs::write(path, pdf).context("Failed to write PDF file")?;
 
     tracing::info!(path = ?path, "Exported PDF");
+    Ok(())
+}
+
+/// Maximum dimension for PNG export to prevent out-of-memory errors.
+const MAX_PNG_DIMENSION: u32 = 16384;
+
+/// Export project as PNG using resvg rasterization
+fn export_png(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
+    // Generate SVG content first
+    let svg_content = generate_svg_string(project, options)?;
+
+    // Parse SVG using usvg
+    let opt = Options::default();
+    let tree = Tree::from_str(&svg_content, &opt).context("Failed to parse SVG for PNG conversion")?;
+
+    // Calculate size with DPI scaling
+    let size = tree.size();
+    let scale = options.dpi as f32 / 72.0;
+    let width = (size.width() * scale) as u32;
+    let height = (size.height() * scale) as u32;
+
+    // Validate size to prevent OOM
+    if width > MAX_PNG_DIMENSION || height > MAX_PNG_DIMENSION {
+        anyhow::bail!(
+            "Export size {}x{} exceeds maximum {}px. Reduce DPI or use SVG/PDF format.",
+            width,
+            height,
+            MAX_PNG_DIMENSION
+        );
+    }
+
+    // Create pixmap using resvg's re-exported tiny_skia
+    let mut pixmap = tiny_skia::Pixmap::new(width, height)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap for {}x{} image", width, height))?;
+
+    // Render SVG to pixmap with scaling transform
+    let transform = tiny_skia::Transform::from_scale(scale, scale);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    // Save PNG
+    pixmap.save_png(path).context("Failed to save PNG file")?;
+
+    tracing::info!(path = ?path, dpi = options.dpi, width = width, height = height, "Exported PNG");
     Ok(())
 }
 
@@ -173,8 +212,9 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
     let width = (max_x - min_x) + padding * 2.0;
     let height = (max_y - min_y) + padding * 2.0;
 
-    // Scale to reasonable size (min 400px)
-    let scale = (400.0 / width.min(height)).max(1.0);
+    // Scale to target size (allows both scale-up and scale-down)
+    const TARGET_SIZE: f64 = 800.0;
+    let scale = TARGET_SIZE / width.max(height);
     let svg_width = width * scale;
     let svg_height = height * scale;
 
@@ -363,8 +403,7 @@ mod tests {
     use crate::models::{SectionData, ShotData};
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn test_export_svg() {
+    fn create_test_project() -> Project {
         let mut project = Project::new("Test".to_string(), None);
         project.add_section(SectionData {
             name: Some("Main".to_string()),
@@ -391,7 +430,12 @@ mod tests {
                 },
             ],
         });
+        project
+    }
 
+    #[test]
+    fn test_export_svg() {
+        let project = create_test_project();
         let file = NamedTempFile::new().unwrap();
         let path = file.path().with_extension("svg");
 
@@ -401,6 +445,127 @@ mod tests {
         let contents = std::fs::read_to_string(&path).unwrap();
         assert!(contents.contains("<svg"));
         assert!(contents.contains("Main"));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_export_png_72_dpi() {
+        let project = create_test_project();
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("png");
+
+        let options = ExportImageOptions {
+            format: ImageFormat::Png,
+            dpi: 72,
+            ..Default::default()
+        };
+
+        let result = export_png(&project, &path, &options);
+        assert!(result.is_ok(), "PNG export at 72 DPI failed: {:?}", result.err());
+        assert!(path.exists(), "PNG file should exist");
+
+        // Verify it's a valid PNG by checking magic bytes
+        let contents = std::fs::read(&path).unwrap();
+        assert!(contents.len() > 8, "PNG file too small");
+        assert_eq!(&contents[0..8], &[137, 80, 78, 71, 13, 10, 26, 10], "Invalid PNG magic bytes");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_export_png_150_dpi() {
+        let project = create_test_project();
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("png");
+
+        let options = ExportImageOptions {
+            format: ImageFormat::Png,
+            dpi: 150,
+            ..Default::default()
+        };
+
+        let result = export_png(&project, &path, &options);
+        assert!(result.is_ok(), "PNG export at 150 DPI failed: {:?}", result.err());
+        assert!(path.exists());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_export_png_300_dpi() {
+        let project = create_test_project();
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("png");
+
+        let options = ExportImageOptions {
+            format: ImageFormat::Png,
+            dpi: 300,
+            ..Default::default()
+        };
+
+        let result = export_png(&project, &path, &options);
+        assert!(result.is_ok(), "PNG export at 300 DPI failed: {:?}", result.err());
+        assert!(path.exists());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_export_png_600_dpi() {
+        let project = create_test_project();
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("png");
+
+        let options = ExportImageOptions {
+            format: ImageFormat::Png,
+            dpi: 600,
+            ..Default::default()
+        };
+
+        let result = export_png(&project, &path, &options);
+        assert!(result.is_ok(), "PNG export at 600 DPI failed: {:?}", result.err());
+        assert!(path.exists());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_export_png_size_limit_error() {
+        let project = create_test_project();
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("png");
+
+        // Use an extremely high DPI to exceed the 16384px limit
+        // With our 800px target SVG size, DPI of 2000 would give ~22,222px
+        let options = ExportImageOptions {
+            format: ImageFormat::Png,
+            dpi: 2000,
+            ..Default::default()
+        };
+
+        let result = export_png(&project, &path, &options);
+        assert!(result.is_err(), "PNG export should fail for oversized image");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("16384"), "Error should mention size limit: {}", err);
+        assert!(err.contains("Reduce DPI"), "Error should suggest reducing DPI: {}", err);
+    }
+
+    #[test]
+    fn test_export_image_dispatches_to_png() {
+        let project = create_test_project();
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("png");
+
+        let options = ExportImageOptions {
+            format: ImageFormat::Png,
+            dpi: 72,
+            ..Default::default()
+        };
+
+        let result = export_image(&project, &path, &options);
+        assert!(result.is_ok(), "export_image should dispatch to PNG: {:?}", result.err());
+        assert!(path.exists());
 
         std::fs::remove_file(&path).ok();
     }
