@@ -34,6 +34,8 @@ interface ProjectStore {
   canUndo: boolean;
   canRedo: boolean;
   isDirty: boolean;
+  /** Guard to prevent concurrent close operations (rapid Back clicks) */
+  isClosing: boolean;
 
   // Actions
   loadConfig: () => Promise<void>;
@@ -104,6 +106,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   canUndo: false,
   canRedo: false,
   isDirty: false,
+  isClosing: false,
 
   // Config
   loadConfig: async () => {
@@ -197,11 +200,22 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   closeProject: async () => {
-    const result = await invoke<CommandResult>('close_project');
-    if (result.success) {
-      set({ project: null, stations: [], stats: null, isDirty: false });
+    // Guard against concurrent close operations (rapid Back clicks or double Discard)
+    if (get().isClosing) {
+      console.log('[projectStore] closeProject ignored - already closing');
+      return { success: false, error: 'Already closing', warnings: [] };
     }
-    return result;
+
+    set({ isClosing: true });
+    try {
+      const result = await invoke<CommandResult>('close_project');
+      if (result.success) {
+        set({ project: null, stations: [], stats: null, isDirty: false });
+      }
+      return result;
+    } finally {
+      set({ isClosing: false });
+    }
   },
 
   refreshProjectState: async () => {

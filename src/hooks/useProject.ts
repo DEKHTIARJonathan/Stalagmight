@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { exists } from '@tauri-apps/plugin-fs';
 import { useProjectStore } from '../store/projectStore';
@@ -7,11 +7,6 @@ import { useUIStore } from '../store/uiStore';
 export function useProject() {
   const store = useProjectStore();
   const { setView, openDialog, setImportContext } = useUIStore();
-
-  // Ref-based guard to prevent concurrent close operations
-  // Using useRef instead of useState to avoid "state update on unmounted component" warnings
-  // (the component unmounts during close, which would trigger the warning with useState)
-  const isClosingRef = useRef(false);
 
   const handleNewProject = useCallback(() => {
     // Show the new project dialog which handles name input
@@ -94,12 +89,6 @@ export function useProject() {
   }, [store, handleSaveProjectAs, openDialog]);
 
   const handleCloseProject = useCallback(async () => {
-    // Prevent concurrent close operations using ref (survives unmount)
-    if (isClosingRef.current) {
-      console.log('[useProject] handleCloseProject ignored - already closing');
-      return { success: false, error: 'Already closing' };
-    }
-
     // Check for unsaved changes - use getState() to get current value, not stale closure
     const currentIsDirty = useProjectStore.getState().isDirty;
     console.log('[useProject] handleCloseProject called, isDirty:', currentIsDirty);
@@ -109,16 +98,12 @@ export function useProject() {
       return { success: false, error: 'Showing dialog' };
     }
 
-    isClosingRef.current = true;
-    try {
-      const result = await store.closeProject();
-      if (result.success) {
-        setView('global');
-      }
-      return result;
-    } finally {
-      isClosingRef.current = false;
+    // Concurrency guard is handled at store level (store.isClosing)
+    const result = await store.closeProject();
+    if (result.success) {
+      setView('global');
     }
+    return result;
   }, [store, setView, openDialog]);
 
   /**
