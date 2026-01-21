@@ -7,10 +7,23 @@
     "fn-10-i64.8"
   ],
   "epic": "fn-10-i64",
+  "evidence": {
+    "commits": [
+      "70616ceea49e5b1849224758573151b432fbfa2e",
+      "ea0d48a",
+      "f0f96a5"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit",
+      "pnpm test:ui --grep 'Loading Progress'",
+      "cargo test --manifest-path src-tauri/Cargo.toml"
+    ]
+  },
   "id": "fn-10-i64.9",
   "priority": null,
   "spec_path": ".flow/tasks/fn-10-i64.9.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add unit and E2E tests for loading progress",
-  "updated_at": "2026-01-21T11:05:53.254781Z"
+  "updated_at": "2026-01-21T11:37:18.193836Z"
 }
