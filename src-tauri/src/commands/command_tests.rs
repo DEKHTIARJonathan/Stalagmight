@@ -1310,8 +1310,8 @@ fn test_unresolve_warning_fails_without_db() {
 #[test]
 fn test_resolve_warning_marks_resolved_in_list() {
     let project = project_with_section(vec![shot_data(0.0)]);
-    let (state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
-    let app = app_with_custom_state(state);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
 
     let warnings = validation::get_project_warnings(state(&app));
     let warning = warnings
@@ -1340,8 +1340,8 @@ fn test_resolve_warning_marks_resolved_in_list() {
 #[test]
 fn test_unresolve_warning_clears_resolved_flag() {
     let project = project_with_section(vec![shot_data(0.0)]);
-    let (state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
-    let app = app_with_custom_state(state);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
 
     let warning = validation::get_project_warnings(state(&app))
         .into_iter()
