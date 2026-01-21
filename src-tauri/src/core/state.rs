@@ -2054,6 +2054,13 @@ mod tests {
         }
     }
 
+    fn poison_mutex<T>(mutex: &Mutex<T>) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = mutex.lock().unwrap();
+            panic!("poison mutex for lock failure coverage");
+        }));
+    }
+
     // === Project Operations Tests ===
 
     #[test]
@@ -2740,6 +2747,7 @@ mod tests {
 
         let result = state.undo();
         assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Nothing to undo"));
     }
 
     #[test]
@@ -2755,6 +2763,7 @@ mod tests {
 
         let result = state.redo();
         assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Nothing to redo"));
     }
 
     #[test]
@@ -2789,6 +2798,193 @@ mod tests {
         });
 
         assert!(!state.can_redo());
+    }
+
+    #[test]
+    fn test_undo_fails_when_undo_stack_poisoned() {
+        let state = AppState::new().unwrap();
+        poison_mutex(&state.undo_stack);
+
+        let result = state.undo();
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Failed to lock undo stack"));
+    }
+
+    #[test]
+    fn test_redo_fails_when_undo_stack_poisoned() {
+        let state = AppState::new().unwrap();
+        poison_mutex(&state.undo_stack);
+
+        let result = state.redo();
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Failed to lock undo stack"));
+    }
+
+    #[test]
+    fn test_undo_fails_for_non_undoable_entry() {
+        let state = AppState::new().unwrap();
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_with_data(Command::CloseProject, UndoData::None);
+        drop(stack);
+
+        let result = state.undo();
+        assert!(!result.success);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("This command cannot be undone")
+        );
+        assert!(!state.can_redo());
+    }
+
+    #[test]
+    fn test_project_snapshot_pair_undo_redo_roundtrip() {
+        let state = AppState::new().unwrap();
+
+        let mut before = Project::new("Before".to_string(), None);
+        before.add_section(SectionData {
+            name: Some("Before Section".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(1.0)],
+        });
+
+        let mut after = Project::new("After".to_string(), None);
+        after.add_section(SectionData {
+            name: Some("After Section".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: Some(SurveyDirection::Out),
+            shots: vec![test_shot_data(2.0), test_shot_data(3.0)],
+        });
+
+        let before_json = serde_json::to_string(&before).unwrap();
+        let after_json = serde_json::to_string(&after).unwrap();
+
+        state.set_project_for_tests(after.clone());
+
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_with_data(
+            Command::MergeProjects {
+                source_paths: Vec::new(),
+                output_path: PathBuf::from("out.cvproj"),
+                output_name: "Merged".to_string(),
+                archive_originals: false,
+            },
+            UndoData::ProjectSnapshotPair {
+                before: before_json,
+                after: after_json,
+            },
+        );
+        drop(stack);
+
+        assert!(state.can_undo());
+
+        let undo_result = state.undo();
+        assert!(undo_result.success);
+
+        let project_after_undo = state.get_project_state().unwrap();
+        assert_eq!(project_after_undo.name, "Before");
+        assert_eq!(project_after_undo.sections[0].shots.len(), 1);
+        assert!(state.can_redo());
+
+        let redo_result = state.redo();
+        assert!(redo_result.success);
+
+        let project_after_redo = state.get_project_state().unwrap();
+        assert_eq!(project_after_redo.name, "After");
+        assert_eq!(project_after_redo.sections[0].shots.len(), 2);
+        assert!(state.can_undo());
+        assert!(!state.can_redo());
+    }
+
+    #[test]
+    fn test_undo_project_snapshot_fails_when_project_lock_poisoned() {
+        let state = AppState::new().unwrap();
+        let snapshot = serde_json::to_string(&Project::new("Test".to_string(), None)).unwrap();
+
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_with_data(
+            Command::Batch { commands: Vec::new() },
+            UndoData::ProjectSnapshot(snapshot),
+        );
+        drop(stack);
+
+        poison_mutex(&state.project);
+
+        let result = state.undo();
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
+    }
+
+    #[test]
+    fn test_undo_project_snapshot_pair_fails_when_project_lock_poisoned() {
+        let state = AppState::new().unwrap();
+        let before = serde_json::to_string(&Project::new("Before".to_string(), None)).unwrap();
+        let after = serde_json::to_string(&Project::new("After".to_string(), None)).unwrap();
+
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_with_data(
+            Command::Batch { commands: Vec::new() },
+            UndoData::ProjectSnapshotPair { before, after },
+        );
+        drop(stack);
+
+        poison_mutex(&state.project);
+
+        let result = state.undo();
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
+    }
+
+    #[test]
+    fn test_redo_project_snapshot_pair_fails_when_project_lock_poisoned() {
+        let state = AppState::new().unwrap();
+        let before = serde_json::to_string(&Project::new("Before".to_string(), None)).unwrap();
+        let after = serde_json::to_string(&Project::new("After".to_string(), None)).unwrap();
+
+        let entry = UndoEntry {
+            command: Command::CloseProject,
+            undo_data: UndoData::ProjectSnapshotPair { before, after },
+        };
+
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_redo(entry);
+        drop(stack);
+
+        poison_mutex(&state.project);
+
+        let result = state.redo();
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
+    }
+
+    #[test]
+    fn test_undo_merge_info_fails_when_project_lock_poisoned() {
+        let state = AppState::new().unwrap();
+
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_with_data(
+            Command::MergeStations {
+                station_a: StationRef::new(1, 0),
+                station_b: StationRef::new(1, 1),
+                closure_strategy: ClosureStrategy::ProportionalByLength,
+            },
+            UndoData::MergeInfo {
+                station_a: StationRef::new(1, 0),
+                station_b: StationRef::new(1, 1),
+                strategy: ClosureStrategy::ProportionalByLength,
+            },
+        );
+        drop(stack);
+
+        poison_mutex(&state.project);
+
+        let result = state.undo();
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
     }
 
     // === State Transition Tests ===
@@ -2907,6 +3103,88 @@ mod tests {
         // Load all settings
         let settings = state.load_display_settings().unwrap();
         assert_eq!(settings.get("test_key"), Some(&"test_value".to_string()));
+    }
+
+    #[test]
+    fn test_display_settings_fail_when_cache_lock_poisoned() {
+        let state = AppState::new().unwrap();
+
+        poison_mutex(&state.display_settings_cache);
+
+        let err = state.load_display_settings().unwrap_err();
+        assert_eq!(err.to_string(), "Failed to lock display settings cache");
+
+        let err = state.save_display_setting("key", "value").unwrap_err();
+        assert_eq!(err.to_string(), "Failed to lock display settings cache");
+
+        let err = state.get_display_setting("key").unwrap_err();
+        assert_eq!(err.to_string(), "Failed to lock display settings cache");
+    }
+
+    #[test]
+    fn test_display_settings_fail_when_database_lock_poisoned() {
+        let state = AppState::new().unwrap();
+
+        poison_mutex(&state.database);
+
+        let err = state.load_display_settings().unwrap_err();
+        assert_eq!(err.to_string(), "Failed to lock database");
+
+        let err = state.save_display_setting("key", "value").unwrap_err();
+        assert_eq!(err.to_string(), "Failed to lock database");
+
+        let err = state.get_display_setting("key").unwrap_err();
+        assert_eq!(err.to_string(), "Failed to lock database");
+    }
+
+    #[test]
+    fn test_resolved_warning_methods_fail_when_database_lock_poisoned() {
+        let state = AppState::new().unwrap();
+
+        poison_mutex(&state.database);
+
+        let err = state.load_resolved_warnings().unwrap_err();
+        assert_eq!(err.to_string(), "Failed to lock database");
+
+        let warning = crate::persistence::ResolvedWarning {
+            section_id: 1,
+            shot_id: 2,
+            warning_code: "TEST".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+        };
+
+        let err = state.save_resolved_warning(&warning).unwrap_err();
+        assert_eq!(err.to_string(), "Failed to lock database");
+
+        let err = state.delete_resolved_warning(1, 2, "TEST").unwrap_err();
+        assert_eq!(err.to_string(), "Failed to lock database");
+    }
+
+    #[test]
+    fn test_remove_recent_projects_fails_when_lock_poisoned() {
+        let state = AppState::new().unwrap();
+        poison_mutex(&state.recent_projects);
+
+        let result = state.remove_from_recent_projects(PathBuf::from("missing.cvproj"));
+        assert!(!result.success);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Failed to lock recent projects")
+        );
+    }
+
+    #[test]
+    fn test_import_tracking_fails_when_project_lock_poisoned() {
+        let state = AppState::new().unwrap();
+        poison_mutex(&state.project);
+
+        let err = state.check_duplicate_import("hash").unwrap_err();
+        assert_eq!(err.to_string(), "Failed to lock project");
+
+        let result = state.track_imported_file("hash".to_string());
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
     }
 
     // === Batch Command Tests ===
