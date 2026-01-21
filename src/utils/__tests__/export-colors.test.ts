@@ -429,4 +429,32 @@ describe('formatDepth', () => {
   it('handles negative depths', () => {
     expect(formatDepth(-10, 'm', 1)).toBe('-10.0m');
   });
+
+  describe('precision clamping (matches Rust MAX_DECIMAL_PRECISION=6)', () => {
+    it('clamps negative precision to 0', () => {
+      expect(formatDepth(25.123456789, 'm', -1)).toBe('25m');
+      expect(formatDepth(25.123456789, 'm', -100)).toBe('25m');
+    });
+
+    it('clamps precision above 6 to 6', () => {
+      expect(formatDepth(25.123456789, 'm', 7)).toBe('25.123457m');
+      expect(formatDepth(25.123456789, 'm', 100)).toBe('25.123457m');
+    });
+
+    it('handles NaN precision by using 0', () => {
+      expect(formatDepth(25.123, 'm', NaN)).toBe('25m');
+    });
+
+    it('handles non-integer precision by flooring', () => {
+      expect(formatDepth(25.123, 'm', 1.9)).toBe('25.1m');
+      expect(formatDepth(25.123, 'm', 2.5)).toBe('25.12m');
+    });
+
+    it('does not throw RangeError for edge case precisions', () => {
+      // These would throw RangeError without clamping
+      expect(() => formatDepth(25.123, 'm', Infinity)).not.toThrow();
+      expect(() => formatDepth(25.123, 'm', -Infinity)).not.toThrow();
+      expect(() => formatDepth(25.123, 'm', 1e10)).not.toThrow();
+    });
+  });
 });

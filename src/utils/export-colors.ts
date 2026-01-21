@@ -22,10 +22,11 @@ export interface DepthPresetColors {
 
 /**
  * Parse hex color to RGB components.
- * Mirrors Rust backend's trim_start_matches('#') behavior.
+ * NOTE: Adds `.trim()` for robustness (Rust's trim_start_matches('#') doesn't strip whitespace).
+ * This is intentional as frontend may receive user-edited values with trailing spaces.
  */
 export function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  // Strip all leading # characters to match Rust's trim_start_matches('#')
+  // Strip whitespace (for robustness) and all leading # characters
   const cleanHex = hex.trim().replace(/^#+/, '');
   if (cleanHex.length < 6) {
     return { r: 0, g: 0, b: 0 };
@@ -254,6 +255,11 @@ export function computeShotColor(
 
 /**
  * Calculate depth range from stations.
+ *
+ * NOTE: This filters out non-finite z values for robustness (preview still shows gradient for valid stations).
+ * The Rust backend does NOT filter, so if any z is ±Infinity, the backend's range becomes non-finite and
+ * get_depth_color() returns first stop for all stations. This means preview can diverge from export in
+ * corrupted-data scenarios. This is an intentional tradeoff: preview remains useful even with bad data.
  */
 export function calculateDepthRange(stations: Array<{ coordinates: { z: number } }>): DepthRange {
   if (stations.length === 0) {
@@ -279,10 +285,16 @@ export function calculateDepthRange(stations: Array<{ coordinates: { z: number }
   return { min, max };
 }
 
+/** Maximum allowed decimal precision to match Rust backend's MAX_DECIMAL_PRECISION */
+const MAX_DECIMAL_PRECISION = 6;
+
 /**
  * Format depth value with unit conversion and precision.
+ * Clamps precision to [0, MAX_DECIMAL_PRECISION] to match Rust backend and prevent toFixed() RangeError.
  */
 export function formatDepth(depth: number, unit: string, precision: number): string {
+  // Clamp precision to valid range to prevent toFixed() RangeError and match Rust backend
+  const clampedPrecision = Math.max(0, Math.min(MAX_DECIMAL_PRECISION, Math.floor(precision) || 0));
   const value = unit === 'ft' ? depth * 3.28084 : depth;
-  return `${value.toFixed(precision)}${unit}`;
+  return `${value.toFixed(clampedPrecision)}${unit}`;
 }

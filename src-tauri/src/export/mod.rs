@@ -10,6 +10,19 @@ pub use json::*;
 
 use serde::{Deserialize, Serialize};
 
+/// Progress event payload for export operations.
+/// Emitted via Tauri events during image export.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportProgress {
+    /// Current stage label (e.g., "Preparing export", "Generating SVG")
+    pub stage: String,
+    /// Progress percentage (0-100)
+    pub percent: u32,
+    /// Optional message with additional details
+    pub message: Option<String>,
+}
+
 /// Common export options
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportOptions {

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { save } from '@tauri-apps/plugin-dialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -8,6 +9,13 @@ import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import ExportPreview, { type ExportTheme, type DepthPresetColors } from './ExportPreview';
 import type { ExportImageOptions, ImageFormat, DepthPreset } from '../../types/commands';
+
+/** Export progress event payload from backend */
+interface ExportProgress {
+  stage: string;
+  percent: number;
+  message: string | null;
+}
 
 export default function ExportDialog() {
   const { closeDialog } = useUIStore();
@@ -37,6 +45,44 @@ export default function ExportDialog() {
 
   // Preset colors fetched from backend for preview
   const [presetColors, setPresetColors] = useState<DepthPresetColors | null>(null);
+
+  // Export progress state
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
+
+  // Listen for export progress events
+  useEffect(() => {
+    if (!isExporting) {
+      setExportProgress(null);
+      return;
+    }
+
+    let unlisten: UnlistenFn | null = null;
+    let disposed = false;
+
+    const setupListener = async () => {
+      const listener = await listen<ExportProgress>('export-progress', (event) => {
+        if (!disposed) {
+          setExportProgress(event.payload);
+        }
+      });
+
+      if (disposed) {
+        listener();
+      } else {
+        unlisten = listener;
+      }
+    };
+
+    setupListener();
+
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [isExporting]);
 
   // Fetch preset colors when depth mode is active and preset changes
   // Uses active flag to prevent stale responses from setting state after unmount or dependency change
@@ -100,22 +146,28 @@ export default function ExportDialog() {
         });
 
         if (selected) {
-          // Override depth_unit and decimal_precision with current config values at export time
-          // to ensure they reflect the latest config, even if config loaded after dialog opened
-          const currentDepthUnit = config?.units?.depth === 'feet' ? 'ft' : 'm';
-          const currentDecimalPrecision = config?.units?.decimal_precision ?? 1;
-          await exportImage(selected, {
-            ...imageOptions,
-            format: imageFormat,
-            depth_unit: currentDepthUnit,
-            decimal_precision: currentDecimalPrecision,
-          });
+          setIsExporting(true);
+          try {
+            // Override depth_unit and decimal_precision with current config values at export time
+            // to ensure they reflect the latest config, even if config loaded after dialog opened
+            const currentDepthUnit = config?.units?.depth === 'feet' ? 'ft' : 'm';
+            const currentDecimalPrecision = config?.units?.decimal_precision ?? 1;
+            await exportImage(selected, {
+              ...imageOptions,
+              format: imageFormat,
+              depth_unit: currentDepthUnit,
+              decimal_precision: currentDecimalPrecision,
+            });
+          } finally {
+            setIsExporting(false);
+          }
         }
       }
 
       closeDialog();
     } catch (e) {
       console.error('Export failed:', e);
+      setIsExporting(false);
     }
   };
 
@@ -348,11 +400,47 @@ export default function ExportDialog() {
         )}
       </div>
 
+      {/* Export Progress */}
+      {isExporting && exportProgress && (
+        <div className="mt-4 p-3 bg-surface-alt rounded" data-testid="export-progress">
+          <div className="flex justify-between text-sm text-text-secondary mb-1">
+            <span>{exportProgress.stage}</span>
+            <span>{exportProgress.percent}%</span>
+          </div>
+          <div className="h-1.5 bg-border rounded-full overflow-hidden">
+            <div
+              className="h-full bg-accent transition-all duration-300"
+              style={{ width: `${exportProgress.percent}%` }}
+              role="progressbar"
+              aria-label="Export progress"
+              aria-valuenow={exportProgress.percent}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            />
+          </div>
+          {exportProgress.message && (
+            <div className="text-xs text-text-tertiary mt-1">{exportProgress.message}</div>
+          )}
+        </div>
+      )}
+
+      {/* Simple exporting indicator (fallback if no progress events received yet) */}
+      {isExporting && !exportProgress && (
+        <div className="mt-4 text-text-secondary text-sm" data-testid="export-loading">
+          Exporting...
+        </div>
+      )}
+
       {/* Actions */}
       <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-border">
-        <Button onClick={closeDialog}>Cancel</Button>
-        <Button variant="primary" onClick={handleExport} data-testid="export-button">
-          Export
+        <Button onClick={closeDialog} disabled={isExporting}>Cancel</Button>
+        <Button
+          variant="primary"
+          onClick={handleExport}
+          disabled={isExporting}
+          data-testid="export-button"
+        >
+          {isExporting ? 'Exporting...' : 'Export'}
         </Button>
       </div>
     </DialogWrapper>
