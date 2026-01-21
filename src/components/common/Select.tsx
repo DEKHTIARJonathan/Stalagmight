@@ -30,6 +30,10 @@ interface SelectProps {
   className?: string;
   /** Test ID for E2E tests */
   'data-testid'?: string;
+  /** Accessible label for screen readers */
+  'aria-label'?: string;
+  /** ID of element that labels this select */
+  'aria-labelledby'?: string;
 }
 
 /**
@@ -65,6 +69,8 @@ export function Select({
   disabled = false,
   className = '',
   'data-testid': testId,
+  'aria-label': ariaLabel,
+  'aria-labelledby': ariaLabelledBy,
 }: SelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -138,6 +144,10 @@ export function Select({
         }`}
         onClick={() => !disabled && setIsOpen(!isOpen)}
         disabled={disabled}
+        aria-label={ariaLabel}
+        aria-labelledby={ariaLabelledBy}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
       >
         <span className={selectedLabel ? 'text-foreground' : 'text-text-secondary'}>
           {selectedLabel || placeholder}
