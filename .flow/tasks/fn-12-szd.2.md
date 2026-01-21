@@ -24,9 +24,8 @@ Add section zoom request state to UIStore following the existing `requestFitToBo
 - [ ] Type exports updated if needed
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Added requestZoomToSection state (SectionId | null) and triggerZoomToSection/clearZoomToSectionRequest actions to UIStore, following the existing requestFitToBounds pattern for map focus requests.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: d61c9218ca920f8dadf11b8db149589c3bdedea3
+- Tests: pnpm tsc --noEmit
 - PRs:

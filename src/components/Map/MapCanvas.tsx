@@ -56,6 +56,8 @@ export default function MapCanvas() {
   const [placementCursor, setPlacementCursor] = useState<{ x: number; y: number } | null>(null);
   // Current map scale in pixels per meter (for to-scale placement preview)
   const [pixelsPerMeter, setPixelsPerMeter] = useState(1);
+  // Pending section zoom request (stored when map not loaded, processed when it loads)
+  const pendingZoomToSectionRef = useRef<number | null>(null);
 
   const { project, stations, stats, config, moveSection, moveStation } = useProjectStore();
 
@@ -105,6 +107,12 @@ export default function MapCanvas() {
     cancelPlacementMode,
     confirmPlacement,
     showToast,
+    sectionsPanelOpen,
+    sectionsPanelWidth,
+    detailPanelOpen,
+    detailPanelWidth,
+    requestZoomToSection,
+    clearZoomToSectionRequest,
   } = useUIStore();
 
   // Snap-to-station detection
@@ -1174,6 +1182,85 @@ export default function MapCanvas() {
     });
   }, [stations]);
 
+  // Fit to a specific section's bounds
+  const fitToSection = useCallback(
+    (sectionId: number) => {
+      if (!map.current || !config) return;
+
+      // Filter stations belonging to this section
+      const sectionStations = stations.filter((s) => s.station_ref.section_id === sectionId);
+
+      // Empty section: nothing to zoom to
+      if (sectionStations.length === 0) {
+        return;
+      }
+
+      // Stop any running animation before starting a new one
+      map.current.stop();
+
+      // Reset padding to avoid MapLibre accumulation bug
+      map.current.setPadding({ top: 0, right: 0, bottom: 0, left: 0 });
+
+      // Get animation config
+      const animationConfig = config.map.animation;
+      const animationDuration = animationConfig.enabled ? animationConfig.duration : 0;
+
+      // Calculate padding from UIStore panel state as per spec:
+      // - Left: sectionsPanelWidth if open, else 0
+      // - Right: detailPanelWidth if open, else 0
+      // - Top/Bottom: 10% of container height
+      const container = map.current.getContainer();
+      const containerHeight = container.clientHeight;
+      const topPadding = Math.round(containerHeight * 0.1);
+      const bottomPadding = Math.round(containerHeight * 0.1);
+      const leftPadding = sectionsPanelOpen ? sectionsPanelWidth : 0;
+      const rightPadding = detailPanelOpen ? detailPanelWidth : 0;
+      const padding = { top: topPadding, bottom: bottomPadding, left: leftPadding, right: rightPadding };
+
+      // Single station: center at point_zoom level
+      if (sectionStations.length === 1) {
+        const station = sectionStations[0]!;
+        const mapCoords = metersToMapCoords(station.coordinates.x, station.coordinates.y, gpsOrigin);
+
+        map.current.easeTo({
+          center: mapCoords as [number, number],
+          zoom: animationConfig.point_zoom,
+          duration: animationDuration,
+          padding,
+        });
+        return;
+      }
+
+      // Multiple stations: calculate bounds and fit
+      const coords = sectionStations.map((s) => s.coordinates);
+      const bounds = getBounds(coords);
+
+      // Handle zero-area bounds (all stations at same XY) like single-station case
+      if (bounds.minX === bounds.maxX && bounds.minY === bounds.maxY) {
+        const mapCoords = metersToMapCoords(bounds.minX, bounds.minY, gpsOrigin);
+        map.current.easeTo({
+          center: mapCoords as [number, number],
+          zoom: animationConfig.point_zoom,
+          duration: animationDuration,
+          padding,
+        });
+        return;
+      }
+
+      // Transform bounds to map coordinates (pass gpsOrigin for satellite alignment)
+      const sw = metersToMapCoords(bounds.minX, bounds.minY, gpsOrigin);
+      const ne = metersToMapCoords(bounds.maxX, bounds.maxY, gpsOrigin);
+
+      map.current.fitBounds([sw, ne], {
+        padding,
+        linear: true,
+        duration: animationDuration,
+        maxZoom: config.map.zoom_max ?? 22,
+      });
+    },
+    [stations, config, gpsOrigin, sectionsPanelOpen, sectionsPanelWidth, detailPanelOpen, detailPanelWidth]
+  );
+
   // Fit to bounds when requested (e.g., after import)
   useEffect(() => {
     if (requestFitToBounds && mapLoaded && stations.length > 0) {
@@ -1184,6 +1271,30 @@ export default function MapCanvas() {
       }, 100);
     }
   }, [requestFitToBounds, mapLoaded, stations.length, clearFitToBoundsRequest]);
+
+  // Fit to section when requested (e.g., from sections panel double-click)
+  useEffect(() => {
+    // CRITICAL: Clear request immediately (before any early returns) to prevent stuck requests
+    if (requestZoomToSection !== null) {
+      const sectionId = requestZoomToSection;
+      clearZoomToSectionRequest();
+      // If map is loaded, process immediately; otherwise store for later
+      if (mapLoaded) {
+        fitToSection(sectionId);
+      } else {
+        pendingZoomToSectionRef.current = sectionId;
+      }
+    }
+  }, [requestZoomToSection, mapLoaded, clearZoomToSectionRequest, fitToSection]);
+
+  // Process pending section zoom request when map loads
+  useEffect(() => {
+    if (mapLoaded && pendingZoomToSectionRef.current !== null) {
+      const sectionId = pendingZoomToSectionRef.current;
+      pendingZoomToSectionRef.current = null;
+      fitToSection(sectionId);
+    }
+  }, [mapLoaded, fitToSection]);
 
   // Handle Escape key for placement mode
   useEffect(() => {

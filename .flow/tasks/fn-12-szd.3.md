@@ -63,8 +63,21 @@ Implement the core `fitToSection()` method in MapCanvas that zooms the map to sh
 - [ ] Animation respects config.map.animation settings
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
+Implemented `fitToSection()` method in MapCanvas.tsx that zooms the map to show a specific section at ~80% of visible area, accounting for open side panels.
 
+Key changes:
+1. Added UIStore imports for panel state and zoom request (`sectionsPanelOpen`, `sectionsPanelWidth`, `detailPanelOpen`, `detailPanelWidth`, `requestZoomToSection`, `clearZoomToSectionRequest`)
+2. Implemented `fitToSection(sectionId)` callback with:
+   - Station filtering by section_id
+   - MapLibre padding accumulation bug workaround (`map.setPadding({...0s})`)
+   - Animation config support (`enabled`, `duration`, `point_zoom`)
+   - Panel-aware padding calculation
+   - Single-station sections center at `point_zoom` level via `map.easeTo()`
+   - Multi-station sections use `map.fitBounds()` with `linear: true`
+   - Empty section handling (return early)
+   - `map.stop()` called before starting new animation
+   - gpsOrigin passed to `metersToMapCoords` for satellite alignment
+3. Added useEffect that watches `requestZoomToSection` and clears the request immediately before calling `fitToSection`
 ## Evidence
 - Commits:
 - Tests:
