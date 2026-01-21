@@ -6,19 +6,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
-import ExportPreview, { type ExportTheme } from './ExportPreview';
+import ExportPreview, { type ExportTheme, type DepthPresetColors } from './ExportPreview';
 import type { ExportImageOptions, ImageFormat, DepthPreset } from '../../types/commands';
-
-/** Color stop returned from backend */
-interface ColorStop {
-  position: number;
-  color: string;
-}
-
-/** Preset colors response from get_depth_preset_colors command */
-interface DepthPresetColors {
-  stops: ColorStop[];
-}
 
 export default function ExportDialog() {
   const { closeDialog } = useUIStore();
