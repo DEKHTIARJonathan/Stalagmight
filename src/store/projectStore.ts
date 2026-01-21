@@ -20,6 +20,80 @@ import type {
 } from '../types/project';
 import type { Config } from '../types/config';
 import type { CommandResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand } from '../types/commands';
+import type { LoadProjectFullResult } from '../types/loading';
+
+/**
+ * Structured loading state for project load/create operations.
+ * Tracks progress phases, current/total counts, and error states.
+ */
+export interface LoadingState {
+  /** Unique ID for this load operation (increments on each load to detect stale events) */
+  loadingId: number;
+  /** Whether a load operation is currently in progress */
+  isLoading: boolean;
+  /** Name of the project being loaded */
+  projectName?: string | undefined;
+  /** Path to the project file (for retry functionality) */
+  projectPath?: string | undefined;
+  /** Current phase enum value (snake_case from backend) */
+  phase?: string | undefined;
+  /** Index of current phase (0-based) */
+  phaseIndex?: number | undefined;
+  /** Total number of phases */
+  phaseCount?: number | undefined;
+  /** Current phase progress percentage (0-100), undefined for indeterminate */
+  phaseProgress?: number | undefined;
+  /** Current item count in phase */
+  phaseCurrent?: number | undefined;
+  /** Total items in phase */
+  phaseTotal?: number | undefined;
+  /** Overall loading progress percentage (0-100) */
+  overallProgress: number;
+  /** Error information if load failed */
+  error?: { message: string; details?: string | undefined } | undefined;
+  /** Timestamp of last event (for timeout detection) */
+  lastEventTime?: number | undefined;
+}
+
+const initialLoadingState: LoadingState = {
+  loadingId: 0,
+  isLoading: false,
+  overallProgress: 0,
+};
+
+/**
+ * Parsed error from Tauri backend.
+ */
+interface LoadError {
+  code: string;
+  message: string;
+  details?: string | undefined;
+}
+
+/**
+ * Parse error from Tauri backend.
+ * Tauri may serialize errors as strings or objects.
+ */
+function parseLoadError(e: unknown): LoadError {
+  // Tauri serializes errors as strings - try parsing as JSON
+  if (typeof e === 'string') {
+    try {
+      return JSON.parse(e) as LoadError;
+    } catch {
+      return { code: 'UNKNOWN', message: e };
+    }
+  }
+  // Already an object
+  if (typeof e === 'object' && e !== null) {
+    const obj = e as Record<string, unknown>;
+    return {
+      code: (obj.code as string) || 'UNKNOWN',
+      message: (obj.message as string) || String(e),
+      details: obj.details as string | undefined,
+    };
+  }
+  return { code: 'UNKNOWN', message: String(e) };
+}
 
 interface ProjectStore {
   // State
@@ -29,7 +103,8 @@ interface ProjectStore {
   warnings: ProjectWarning[];
   recentProjects: ProjectMetadata[];
   config: Config | null;
-  isLoading: boolean;
+  /** Structured loading state with progress tracking */
+  loading: LoadingState;
   error: string | null;
   canUndo: boolean;
   canRedo: boolean;
@@ -43,7 +118,23 @@ interface ProjectStore {
   /** Update config state without persisting to disk */
   setConfig: (config: Config) => void;
 
+  // Loading state actions
+  /** Start a new loading operation, returns the loadingId */
+  startLoading: (projectName: string, projectPath: string) => number;
+  /** Update loading progress state */
+  setLoadingProgress: (progress: Partial<LoadingState>) => void;
+  /** Reset loading state to initial */
+  resetLoading: () => void;
+  /** Set loading error (keeps modal open) */
+  setLoadingError: (message: string, details?: string) => void;
+  /** Cancel any in-progress loading operation */
+  cancelLoading: () => Promise<void>;
+
+  /** Load a project using the consolidated load_project_full command */
+  loadProject: (path: string) => Promise<{ success: boolean }>;
+  /** Create a new project (legacy, still supported) */
   createProject: (name: string, location?: string) => Promise<CommandResult>;
+  /** Open a project using the legacy open_project command */
   openProject: (path: string) => Promise<CommandResult>;
   saveProject: (path?: string) => Promise<CommandResult>;
   closeProject: () => Promise<CommandResult>;
@@ -101,7 +192,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   warnings: [],
   recentProjects: [],
   config: null,
-  isLoading: false,
+  loading: { ...initialLoadingState },
   error: null,
   canUndo: false,
   canRedo: false,
@@ -131,36 +222,176 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     set({ config });
   },
 
+  // Loading state actions
+  startLoading: (projectName: string, projectPath: string) => {
+    const newId = get().loading.loadingId + 1;
+    set({
+      loading: {
+        ...initialLoadingState,
+        loadingId: newId,
+        isLoading: true,
+        projectName,
+        projectPath,
+        phase: 'opening_database',
+        lastEventTime: Date.now(),
+      },
+    });
+    return newId;
+  },
+
+  setLoadingProgress: (progress: Partial<LoadingState>) =>
+    set((state) => ({
+      loading: {
+        ...state.loading,
+        ...progress,
+        lastEventTime: Date.now(),
+      },
+    })),
+
+  resetLoading: () =>
+    set((state) => ({
+      loading: { ...initialLoadingState, loadingId: state.loading.loadingId },
+    })),
+
+  setLoadingError: (message: string, details?: string) =>
+    set((state) => ({
+      loading: {
+        ...state.loading,
+        isLoading: true, // Keep modal open for error display
+        error: { message, details },
+      },
+    })),
+
+  cancelLoading: async () => {
+    // Safe to call even when no load is active - backend is idempotent
+    try {
+      await invoke('cancel_loading');
+    } catch {
+      // Ignore errors - might be called when no load active
+    }
+    // Always reset loading state
+    get().resetLoading();
+  },
+
+  // Load project using the consolidated load_project_full command
+  loadProject: async (path: string) => {
+    // ALWAYS cancel first - NO isLoading guard
+    // cancel_loading is idempotent on backend
+    await get().cancelLoading();
+
+    const initialName = path.split('/').pop()?.replace(/\.(cvproj|cvchef)$/, '') ?? 'Project';
+    const loadingId = get().startLoading(initialName, path);
+
+    try {
+      const result = await invoke<LoadProjectFullResult>('load_project_full', { path });
+
+      // Check loadingId hasn't changed (cancelled/new load started)
+      if (get().loading.loadingId !== loadingId) {
+        return { success: false };
+      }
+
+      // Update loading title with actual project name from result
+      if (result.project.name !== initialName) {
+        get().setLoadingProgress({ projectName: result.project.name });
+      }
+
+      // Apply ALL state from single response
+      set({
+        project: result.project,
+        stations: result.stations,
+        stats: result.stats,
+        warnings: result.warnings,
+        isDirty: false,
+      });
+
+      // Apply display settings to UI store (merge, don't overwrite)
+      useUIStore.getState().applyDisplaySettings(result.displaySettings);
+      useUIStore.getState().triggerFitToBounds();
+      useUIStore.getState().setView('single');
+
+      // Update recent projects list
+      await get().loadRecentProjects();
+
+      get().resetLoading();
+      return { success: true };
+    } catch (e) {
+      const error = parseLoadError(e);
+
+      // Handle ALREADY_OPEN specially - not an error, just switch view
+      if (error.code === 'ALREADY_OPEN') {
+        useUIStore.getState().setView('single');
+        get().resetLoading();
+        return { success: true };
+      }
+
+      // Only set error if this is still the current load operation
+      if (get().loading.loadingId === loadingId) {
+        get().setLoadingError(error.message, error.details);
+      }
+      return { success: false };
+    }
+  },
+
   // Project operations
   createProject: async (name: string, location?: string) => {
     console.log('[projectStore] createProject called:', name);
-    set({ isLoading: true, error: null });
+    // ALWAYS cancel first - NO isLoading guard
+    await get().cancelLoading();
+
+    const loadingId = get().startLoading(name, '');
+    set({ error: null });
+
     try {
       console.log('[projectStore] Invoking create_project...');
       const result = await invoke<CommandResult>('create_project', { name, location });
       console.log('[projectStore] create_project result:', result);
+
+      // Check loadingId hasn't changed
+      if (get().loading.loadingId !== loadingId) {
+        return { success: false, error: 'Cancelled', warnings: [] };
+      }
+
       if (result.success) {
         console.log('[projectStore] Calling refreshProjectState...');
         await get().refreshProjectState();
         console.log('[projectStore] refreshProjectState done');
         // Reset display settings to defaults for new project
         useUIStore.getState().resetDisplaySettings();
+        useUIStore.getState().setView('single');
+        await get().loadRecentProjects();
         set({ isDirty: false });
+        get().resetLoading();
       } else {
-        set({ error: result.error ?? 'Failed to create project' });
+        get().setLoadingError(result.error ?? 'Failed to create project');
       }
       return result;
-    } finally {
-      set({ isLoading: false });
+    } catch (e) {
+      const error = parseLoadError(e);
+      if (get().loading.loadingId === loadingId) {
+        get().setLoadingError(error.message, error.details);
+      }
+      return { success: false, error: error.message, warnings: [] };
     }
   },
 
   openProject: async (path: string) => {
     console.log('[projectStore] openProject called with path:', path);
-    set({ isLoading: true, error: null });
+    // ALWAYS cancel first - NO isLoading guard
+    await get().cancelLoading();
+
+    const initialName = path.split('/').pop()?.replace(/\.(cvproj|cvchef)$/, '') ?? 'Project';
+    const loadingId = get().startLoading(initialName, path);
+    set({ error: null });
+
     try {
       const result = await invoke<CommandResult>('open_project', { path });
       console.log('[projectStore] open_project result:', result);
+
+      // Check loadingId hasn't changed
+      if (get().loading.loadingId !== loadingId) {
+        return { success: false, error: 'Cancelled', warnings: [] };
+      }
+
       if (result.success) {
         console.log('[projectStore] Calling refreshProjectState');
         await get().refreshProjectState();
@@ -170,14 +401,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         await useUIStore.getState().loadDisplaySettings();
         // Fit map to show all stations
         useUIStore.getState().triggerFitToBounds();
+        useUIStore.getState().setView('single');
         set({ isDirty: false });
+        get().resetLoading();
       } else {
         console.error('[projectStore] open_project failed:', result.error);
-        set({ error: result.error ?? 'Failed to open project' });
+        get().setLoadingError(result.error ?? 'Failed to open project');
       }
       return result;
-    } finally {
-      set({ isLoading: false });
+    } catch (e) {
+      const error = parseLoadError(e);
+      if (get().loading.loadingId === loadingId) {
+        get().setLoadingError(error.message, error.details);
+      }
+      return { success: false, error: error.message, warnings: [] };
     }
   },
 
