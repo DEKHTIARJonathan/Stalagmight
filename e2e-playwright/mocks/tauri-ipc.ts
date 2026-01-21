@@ -177,12 +177,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         mockConfigOverrides = {};
       };
 
+      // Track last export_image call for test assertions
+      let lastExportImageArgs: Record<string, unknown> | null = null;
+
       // Expose currentProject setter for E2E tests (allows injecting test fixtures)
       (window as unknown as Record<string, unknown>).__E2E_MOCKS__ = {
         setCurrentProject: (project: typeof currentProject) => {
           currentProject = project;
         },
         getCurrentProject: () => currentProject,
+        getLastExportImageArgs: () => lastExportImageArgs,
+        clearLastExportImageArgs: () => { lastExportImageArgs = null; },
       };
 
       // Display settings persistence - in-memory storage for testing reload behavior
@@ -1311,20 +1316,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'export_image': {
             console.log('[Mock IPC] export_image called with:', args);
-            // Validate new color mode options are present
-            const options = args?.options as Record<string, unknown> | undefined;
-            if (options) {
-              console.log('[Mock IPC] export_image options:', {
-                color_mode: options.color_mode,
-                depth_preset: options.depth_preset,
-                include_legend: options.include_legend,
-                format: options.format,
-                dpi: options.dpi,
-              });
-            }
+            // Store args for test assertions via __E2E_MOCKS__.getLastExportImageArgs()
+            const exportOptions = args?.options as Record<string, unknown> | undefined;
+            lastExportImageArgs = {
+              path: args?.path,
+              options: exportOptions ? { ...exportOptions } : null,
+            };
+            console.log('[Mock IPC] export_image options:', JSON.stringify(exportOptions));
             // Generate a unique loadingId for this export (matches ProgressEmitter behavior)
             const exportLoadingId = Date.now();
             // Emit loading-progress events using shared infrastructure format
+            // Use longer delays to allow tests to observe progress states
             setTimeout(() => {
               window.__TAURI_INTERNALS__?.invoke('plugin:event|emit', {
                 event: 'loading-progress',
@@ -1339,7 +1341,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   isIndeterminate: true,
                 },
               }).catch(() => {});
-            }, 50);
+            }, 100);
             setTimeout(() => {
               window.__TAURI_INTERNALS__?.invoke('plugin:event|emit', {
                 event: 'loading-progress',
@@ -1354,7 +1356,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   isIndeterminate: false,
                 },
               }).catch(() => {});
-            }, 100);
+            }, 300);
             setTimeout(() => {
               window.__TAURI_INTERNALS__?.invoke('plugin:event|emit', {
                 event: 'loading-progress',
@@ -1369,9 +1371,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   isIndeterminate: false,
                 },
               }).catch(() => {});
-            }, 150);
-            // Return after a small delay to allow progress events to be received
-            return new Promise(resolve => setTimeout(() => resolve({ success: true, path: args?.path }), 200));
+            }, 400);
+            // Return after delay to allow progress events to be received and observed
+            return new Promise(resolve => setTimeout(() => resolve({ success: true, path: args?.path }), 500));
           }
 
           // Section and shot editing commands

@@ -5,7 +5,27 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
  * E2E tests for export color modes functionality.
  * Tests color mode radio buttons, depth preset dropdown, legend checkbox,
  * PNG export success (not SVG fallback), and 600 DPI option.
+ *
+ * Note: Basic color mode UI tests (radio visibility, default states) are covered
+ * in export-dialog.spec.ts. This file focuses on:
+ * - IPC mock validation for depth preset colors
+ * - Export options verification via mock capture
+ * - Progress/disabled state during export
+ * - Keyboard accessibility for color modes
  */
+
+// Type for captured export args from mock
+interface ExportImageArgs {
+  path: string | null;
+  options: {
+    format: string;
+    color_mode: string;
+    depth_preset: string;
+    include_legend: boolean;
+    dpi: number;
+    [key: string]: unknown;
+  } | null;
+}
 
 /**
  * Helper to create a new project with mock sections/stations
@@ -35,7 +55,27 @@ async function selectImageExport(page: Page): Promise<void> {
   await expect(page.locator('[data-testid="export-type-image"]')).toBeChecked();
 }
 
-test.describe('Export Color Modes', () => {
+/**
+ * Helper to clear last export args before a test
+ */
+async function clearLastExportArgs(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const mocks = (window as unknown as { __E2E_MOCKS__?: { clearLastExportImageArgs?: () => void } }).__E2E_MOCKS__;
+    mocks?.clearLastExportImageArgs?.();
+  });
+}
+
+/**
+ * Helper to get the last export_image args from the mock
+ */
+async function getLastExportArgs(page: Page): Promise<ExportImageArgs | null> {
+  return await page.evaluate(() => {
+    const mocks = (window as unknown as { __E2E_MOCKS__?: { getLastExportImageArgs?: () => ExportImageArgs | null } }).__E2E_MOCKS__;
+    return mocks?.getLastExportImageArgs?.() ?? null;
+  });
+}
+
+test.describe('Export Color Modes - Export Verification', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
@@ -43,247 +83,63 @@ test.describe('Export Color Modes', () => {
     await createProject(page, 'Export Color Modes Test');
   });
 
-  test('shows color mode options for image export', async ({ page }) => {
+  test('PNG export with section colors passes correct options to backend', async ({ page }) => {
     await openExportDialog(page);
     await selectImageExport(page);
+    await clearLastExportArgs(page);
 
-    // Color mode radio buttons should be visible
-    await expect(page.locator('[data-testid="color-mode-section"]')).toBeVisible();
-    await expect(page.locator('[data-testid="color-mode-depth"]')).toBeVisible();
-  });
-
-  test('section mode is default for image export', async ({ page }) => {
-    await openExportDialog(page);
-    await selectImageExport(page);
-
-    // Section mode should be checked by default
+    // Section mode is default, PNG is default format
     await expect(page.locator('[data-testid="color-mode-section"]')).toBeChecked();
-    await expect(page.locator('[data-testid="color-mode-depth"]')).not.toBeChecked();
+
+    // Click export
+    await page.locator('[data-testid="export-button"]').click();
+
+    // Wait for export to complete (dialog closes)
+    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 10000 });
+
+    // Verify the captured export args
+    const exportArgs = await getLastExportArgs(page);
+    expect(exportArgs).not.toBeNull();
+    expect(exportArgs?.options).not.toBeNull();
+    expect(exportArgs?.options?.format).toBe('png');
+    expect(exportArgs?.options?.color_mode).toBe('section');
   });
 
-  test('depth mode shows preset dropdown when selected', async ({ page }) => {
+  test('PNG export with depth colors passes correct options to backend', async ({ page }) => {
     await openExportDialog(page);
     await selectImageExport(page);
-
-    // Depth preset should NOT be visible initially (section mode is default)
-    const depthPresetSelect = page.locator('[data-testid="depth-preset-select"]');
-    await expect(depthPresetSelect).not.toBeVisible();
+    await clearLastExportArgs(page);
 
     // Switch to depth mode
     await page.click('[data-testid="color-mode-depth"]');
     await expect(page.locator('[data-testid="color-mode-depth"]')).toBeChecked();
 
-    // Depth preset dropdown should now be visible
-    await expect(depthPresetSelect).toBeVisible();
-  });
-
-  test('depth mode shows include legend checkbox when selected', async ({ page }) => {
-    await openExportDialog(page);
-    await selectImageExport(page);
-
-    // Include legend should NOT be visible initially (section mode is default)
-    const includeLegendCheckbox = page.locator('[data-testid="option-include-legend"]');
-    await expect(includeLegendCheckbox).not.toBeVisible();
-
-    // Switch to depth mode
-    await page.click('[data-testid="color-mode-depth"]');
-
-    // Include legend checkbox should now be visible and checked by default
-    await expect(includeLegendCheckbox).toBeVisible();
-    await expect(includeLegendCheckbox).toBeChecked();
-  });
-
-  test('can toggle include legend checkbox off and on', async ({ page }) => {
-    await openExportDialog(page);
-    await selectImageExport(page);
-    await page.click('[data-testid="color-mode-depth"]');
-
-    const includeLegendCheckbox = page.locator('[data-testid="option-include-legend"]');
-
-    // Legend enabled by default
-    await expect(includeLegendCheckbox).toBeChecked();
-
-    // Can toggle off
-    await includeLegendCheckbox.click();
-    await expect(includeLegendCheckbox).not.toBeChecked();
-
-    // Can toggle back on
-    await includeLegendCheckbox.click();
-    await expect(includeLegendCheckbox).toBeChecked();
-  });
-
-  test('can select each depth preset', async ({ page }) => {
-    await openExportDialog(page);
-    await selectImageExport(page);
-    await page.click('[data-testid="color-mode-depth"]');
-
+    // Select thermal preset (verify dropdown works)
     const presetSelect = page.locator('[data-testid="depth-preset-select"]');
     await expect(presetSelect).toBeVisible();
-
-    // Verify all presets are available
-    const presets = ['Thermal', 'Ocean', 'Terrain', 'Grayscale', 'Accessible'];
-
-    for (const preset of presets) {
-      // Click to open dropdown
-      await presetSelect.locator('button').first().click();
-      const dropdown = presetSelect.locator('.absolute');
-
-      // Select the preset
-      await dropdown.locator(`button:has-text("${preset}")`).click();
-
-      // Wait for dropdown to close and verify selection
-      // Button text may include description like "Thermal (Blue to Red)"
-      await page.waitForTimeout(100);
-      await expect(presetSelect.locator('button').first()).toContainText(preset);
-    }
-  });
-
-  test('preview updates when color mode changes', async ({ page }) => {
-    await openExportDialog(page);
-    await selectImageExport(page);
-
-    // Wait for initial preview
-    const preview = page.locator('[data-testid="export-preview"]');
-    await expect(preview).toBeVisible({ timeout: 5000 });
-    await page.waitForTimeout(500); // Debounce
-
-    // Switch to depth mode
-    await page.click('[data-testid="color-mode-depth"]');
-
-    // Wait for preset colors to be fetched and preview to update
-    await page.waitForTimeout(600);
-
-    // Preview should still be visible
-    await expect(preview).toBeVisible();
-  });
-
-  test('preview updates when depth preset changes', async ({ page }) => {
-    await openExportDialog(page);
-    await selectImageExport(page);
-
-    const preview = page.locator('[data-testid="export-preview"]');
-    await expect(preview).toBeVisible({ timeout: 5000 });
-
-    // Switch to depth mode
-    await page.click('[data-testid="color-mode-depth"]');
-    await page.waitForTimeout(600);
-
-    // Change depth preset
-    const presetSelect = page.locator('[data-testid="depth-preset-select"]');
-    await presetSelect.locator('button').first().click();
-    await presetSelect.locator('.absolute button:has-text("Ocean")').click();
-
-    // Wait for preset colors to be fetched and preview to update
-    await page.waitForTimeout(600);
-
-    // Preview should still be visible
-    await expect(preview).toBeVisible();
-  });
-
-  test('depth options hide when switching back to section mode', async ({ page }) => {
-    await openExportDialog(page);
-    await selectImageExport(page);
-
-    // Switch to depth mode
-    await page.click('[data-testid="color-mode-depth"]');
-
-    // Depth options should be visible
-    const depthPresetSelect = page.locator('[data-testid="depth-preset-select"]');
-    const includeLegendCheckbox = page.locator('[data-testid="option-include-legend"]');
-    await expect(depthPresetSelect).toBeVisible();
-    await expect(includeLegendCheckbox).toBeVisible();
-
-    // Switch back to section mode
-    await page.click('[data-testid="color-mode-section"]');
-
-    // Depth options should be hidden
-    await expect(depthPresetSelect).not.toBeVisible();
-    await expect(includeLegendCheckbox).not.toBeVisible();
-  });
-
-  test('600 DPI option available for PNG format', async ({ page }) => {
-    await openExportDialog(page);
-    await selectImageExport(page);
-
-    // PNG is the default format, resolution selector should be visible
-    const resolutionSelect = page.locator('[data-testid="resolution-select"]');
-    await expect(resolutionSelect).toBeVisible();
-
-    // Open dropdown and verify 600 DPI option
-    await resolutionSelect.locator('button').first().click();
-    const dropdown = resolutionSelect.locator('.absolute');
-    await expect(dropdown.locator('button:has-text("600")')).toBeVisible();
-
-    // Select 600 DPI
-    await dropdown.locator('button:has-text("600")').click();
-    // Button text may include description like "Print (600 DPI)"
-    await expect(resolutionSelect.locator('button').first()).toContainText('600');
-  });
-
-  test('PNG export succeeds (not SVG fallback)', async ({ page }) => {
-    await openExportDialog(page);
-    await selectImageExport(page);
-
-    // Ensure PNG is selected (it's the default)
-    const imageFormatSelect = page.locator('[data-testid="image-format-select"]');
-    await expect(imageFormatSelect.locator('button').first()).toHaveText('PNG');
-
-    // Track IPC calls to verify export_image is called with PNG format
-    const ipcCalls: string[] = [];
-    page.on('console', (msg) => {
-      const text = msg.text();
-      if (text.includes('[Mock IPC] export_image')) {
-        ipcCalls.push(text);
-      }
-    });
-
-    // Click export button
-    const exportButton = page.locator('[data-testid="export-button"]');
-    await exportButton.click();
-
-    // Wait for export to complete and dialog to close
-    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 5000 });
-
-    // Verify export_image was called with PNG format
-    await expect.poll(() => ipcCalls.length, { timeout: 2000 }).toBeGreaterThan(0);
-    const exportCall = ipcCalls.find((call) => call.includes('format') && call.includes('png'));
-    expect(exportCall).toBeDefined();
-  });
-
-  test('can export PNG with depth colors', async ({ page }) => {
-    await openExportDialog(page);
-    await selectImageExport(page);
-    await page.click('[data-testid="color-mode-depth"]');
-
-    // Select thermal preset
-    const presetSelect = page.locator('[data-testid="depth-preset-select"]');
     await presetSelect.locator('button').first().click();
     await presetSelect.locator('.absolute button:has-text("Thermal")').click();
-
-    // Track IPC calls
-    const ipcCalls: string[] = [];
-    page.on('console', (msg) => {
-      const text = msg.text();
-      if (text.includes('[Mock IPC] export_image options:')) {
-        ipcCalls.push(text);
-      }
-    });
 
     // Click export
     await page.locator('[data-testid="export-button"]').click();
 
     // Wait for export to complete
-    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 10000 });
 
-    // Verify export_image was called with depth color mode
-    await expect.poll(() => ipcCalls.length, { timeout: 2000 }).toBeGreaterThan(0);
-    const optionsCall = ipcCalls.find((call) => call.includes('color_mode') && call.includes('depth'));
-    expect(optionsCall).toBeDefined();
+    // Verify the captured export args
+    const exportArgs = await getLastExportArgs(page);
+    expect(exportArgs).not.toBeNull();
+    expect(exportArgs?.options).not.toBeNull();
+    expect(exportArgs?.options?.format).toBe('png');
+    expect(exportArgs?.options?.color_mode).toBe('depth');
+    expect(exportArgs?.options?.depth_preset).toBe('thermal');
+    expect(exportArgs?.options?.include_legend).toBe(true); // default
   });
 
-  test('can export SVG with depth colors', async ({ page }) => {
+  test('SVG export with depth colors passes correct options to backend', async ({ page }) => {
     await openExportDialog(page);
     await selectImageExport(page);
+    await clearLastExportArgs(page);
 
     // Switch to SVG format
     const imageFormatSelect = page.locator('[data-testid="image-format-select"]');
@@ -296,88 +152,120 @@ test.describe('Export Color Modes', () => {
     await presetSelect.locator('button').first().click();
     await presetSelect.locator('.absolute button:has-text("Ocean")').click();
 
-    // Track IPC calls
-    const ipcCalls: string[] = [];
-    page.on('console', (msg) => {
-      const text = msg.text();
-      if (text.includes('[Mock IPC] export_image options:')) {
-        ipcCalls.push(text);
-      }
-    });
-
     // Click export
     await page.locator('[data-testid="export-button"]').click();
 
     // Wait for export to complete
-    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 10000 });
 
-    // Verify export was called with SVG format and depth color mode
-    await expect.poll(() => ipcCalls.length, { timeout: 2000 }).toBeGreaterThan(0);
+    // Verify the captured export args
+    const exportArgs = await getLastExportArgs(page);
+    expect(exportArgs).not.toBeNull();
+    expect(exportArgs?.options?.format).toBe('svg');
+    expect(exportArgs?.options?.color_mode).toBe('depth');
+    expect(exportArgs?.options?.depth_preset).toBe('ocean');
   });
 
-  test('can export PDF with depth colors', async ({ page }) => {
+  test('PDF export with depth colors passes correct options to backend', async ({ page }) => {
     await openExportDialog(page);
     await selectImageExport(page);
+    await clearLastExportArgs(page);
 
     // Switch to PDF format
     const imageFormatSelect = page.locator('[data-testid="image-format-select"]');
     await imageFormatSelect.locator('button').first().click();
     await imageFormatSelect.locator('.absolute button:has-text("PDF")').click();
 
-    // Switch to depth mode
+    // Switch to depth mode with terrain preset
     await page.click('[data-testid="color-mode-depth"]');
+    const presetSelect = page.locator('[data-testid="depth-preset-select"]');
+    await presetSelect.locator('button').first().click();
+    await presetSelect.locator('.absolute button:has-text("Terrain")').click();
 
-    // Track IPC calls
-    const ipcCalls: string[] = [];
-    page.on('console', (msg) => {
-      const text = msg.text();
-      if (text.includes('[Mock IPC] export_image')) {
-        ipcCalls.push(text);
-      }
-    });
+    // Disable legend
+    const legendCheckbox = page.locator('[data-testid="option-include-legend"]');
+    await legendCheckbox.click();
+    await expect(legendCheckbox).not.toBeChecked();
 
     // Click export
     await page.locator('[data-testid="export-button"]').click();
 
     // Wait for export to complete
-    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 10000 });
 
-    // Verify export was called
-    await expect.poll(() => ipcCalls.length, { timeout: 2000 }).toBeGreaterThan(0);
+    // Verify the captured export args
+    const exportArgs = await getLastExportArgs(page);
+    expect(exportArgs).not.toBeNull();
+    expect(exportArgs?.options?.format).toBe('pdf');
+    expect(exportArgs?.options?.color_mode).toBe('depth');
+    expect(exportArgs?.options?.depth_preset).toBe('terrain');
+    expect(exportArgs?.options?.include_legend).toBe(false);
   });
 
-  test('export button disabled during export', async ({ page }) => {
+  test('600 DPI option is passed correctly to backend', async ({ page }) => {
+    await openExportDialog(page);
+    await selectImageExport(page);
+    await clearLastExportArgs(page);
+
+    // Select 600 DPI
+    const resolutionSelect = page.locator('[data-testid="resolution-select"]');
+    await resolutionSelect.locator('button').first().click();
+    await resolutionSelect.locator('.absolute button:has-text("600")').click();
+
+    // Click export
+    await page.locator('[data-testid="export-button"]').click();
+
+    // Wait for export to complete
+    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 10000 });
+
+    // Verify the captured export args
+    const exportArgs = await getLastExportArgs(page);
+    expect(exportArgs).not.toBeNull();
+    expect(exportArgs?.options?.dpi).toBe(600);
+  });
+});
+
+test.describe('Export Color Modes - Progress and Button States', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await createProject(page, 'Export Progress Test');
+  });
+
+  test('export button becomes disabled during export', async ({ page }) => {
     await openExportDialog(page);
     await selectImageExport(page);
 
     const exportButton = page.locator('[data-testid="export-button"]');
     await expect(exportButton).toBeEnabled();
 
-    // Click export
+    // Click export - button should become disabled
     await exportButton.click();
 
-    // Button should be disabled during export
-    // Note: This may be very brief due to mocked fast response
-    // The dialog closes after successful export, so we verify it's not visible
-    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 5000 });
+    // Poll for disabled state (button should be disabled during export)
+    await expect(exportButton).toBeDisabled({ timeout: 2000 });
+
+    // Wait for export to complete
+    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 10000 });
   });
 
-  test('shows progress during export', async ({ page }) => {
+  test('progress indicator appears during export', async ({ page }) => {
     await openExportDialog(page);
     await selectImageExport(page);
-    await page.click('[data-testid="color-mode-depth"]');
 
     // Click export
     await page.locator('[data-testid="export-button"]').click();
 
-    // Progress should appear briefly during export
-    // Due to mocked fast response, we may or may not catch it
-    // The key is that export completes successfully
-    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 5000 });
+    // Progress should appear during export (mock delays give us time to observe)
+    await expect(page.locator('[data-testid="loading-progress"]')).toBeVisible({ timeout: 2000 });
+
+    // Wait for export to complete and progress to disappear
+    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 10000 });
   });
 });
 
-test.describe('Export Color Modes - IPC Mocks', () => {
+test.describe('Export Color Modes - IPC Mock Verification', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
@@ -385,7 +273,7 @@ test.describe('Export Color Modes - IPC Mocks', () => {
     await createProject(page, 'Export IPC Mock Test');
   });
 
-  test('get_depth_preset_colors mock returns correct format', async ({ page }) => {
+  test('get_depth_preset_colors mock returns correct format with stops array', async ({ page }) => {
     // Invoke the mock directly to verify it returns the correct format
     const result = await page.evaluate(async () => {
       const tauriInternals = (window as unknown as {
@@ -400,14 +288,17 @@ test.describe('Export Color Modes - IPC Mocks', () => {
     expect(result).toHaveProperty('stops');
     const resultWithStops = result as { stops: Array<{ position: number; color: string }> };
     expect(Array.isArray(resultWithStops.stops)).toBe(true);
-    expect(resultWithStops.stops.length).toBeGreaterThan(0);
+    expect(resultWithStops.stops.length).toBe(2);
     expect(resultWithStops.stops[0]).toHaveProperty('position');
     expect(resultWithStops.stops[0]).toHaveProperty('color');
+    expect(resultWithStops.stops[0].position).toBe(0.0);
+    expect(resultWithStops.stops[1].position).toBe(1.0);
   });
 
-  test('get_depth_preset_colors returns different colors for each preset', async ({ page }) => {
+  test('get_depth_preset_colors returns unique colors for each preset', async ({ page }) => {
     const presets = ['thermal', 'ocean', 'terrain', 'grayscale', 'accessible'];
-    const colors: string[] = [];
+    const shallowColors: string[] = [];
+    const deepColors: string[] = [];
 
     for (const preset of presets) {
       const result = await page.evaluate(async (p) => {
@@ -419,40 +310,92 @@ test.describe('Export Color Modes - IPC Mocks', () => {
       }, preset);
 
       const resultWithStops = result as { stops: Array<{ position: number; color: string }> };
-      const color = resultWithStops.stops[0]?.color ?? '';
-      colors.push(color);
+      shallowColors.push(resultWithStops.stops[0]?.color ?? '');
+      deepColors.push(resultWithStops.stops[1]?.color ?? '');
     }
 
-    // Each preset should have a unique shallow color
-    const uniqueColors = new Set(colors);
-    expect(uniqueColors.size).toBe(presets.length);
+    // Each preset should have unique shallow and deep colors
+    const uniqueShallow = new Set(shallowColors);
+    const uniqueDeep = new Set(deepColors);
+    expect(uniqueShallow.size).toBe(presets.length);
+    expect(uniqueDeep.size).toBe(presets.length);
   });
 
-  test('export_image mock logs color mode options', async ({ page }) => {
+  test('__E2E_MOCKS__.getLastExportImageArgs captures export calls', async ({ page }) => {
+    await openExportDialog(page);
+    await selectImageExport(page);
+    await clearLastExportArgs(page);
+
+    // Verify args are null before export
+    let args = await getLastExportArgs(page);
+    expect(args).toBeNull();
+
+    // Perform export
+    await page.click('[data-testid="color-mode-depth"]');
+    await page.locator('[data-testid="export-button"]').click();
+    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 10000 });
+
+    // Verify args were captured
+    args = await getLastExportArgs(page);
+    expect(args).not.toBeNull();
+    expect(args?.options).not.toBeNull();
+    expect(args?.options?.color_mode).toBe('depth');
+  });
+});
+
+test.describe('Export Color Modes - Preset Selection', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await createProject(page, 'Preset Selection Test');
+  });
+
+  test('can select each depth preset and verify selection', async ({ page }) => {
     await openExportDialog(page);
     await selectImageExport(page);
     await page.click('[data-testid="color-mode-depth"]');
 
-    // Track console logs for the options output
-    const optionsLogs: string[] = [];
-    page.on('console', (msg) => {
-      const text = msg.text();
-      if (text.includes('[Mock IPC] export_image options:')) {
-        optionsLogs.push(text);
-      }
-    });
+    const presetSelect = page.locator('[data-testid="depth-preset-select"]');
+    await expect(presetSelect).toBeVisible();
 
-    // Click export
-    await page.locator('[data-testid="export-button"]').click();
+    // Verify all presets are selectable
+    const presets = ['Thermal', 'Ocean', 'Terrain', 'Grayscale', 'Accessible'];
 
-    // Wait for export to complete
-    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 5000 });
+    for (const preset of presets) {
+      // Click to open dropdown
+      await presetSelect.locator('button').first().click();
+      const dropdown = presetSelect.locator('.absolute');
 
-    // Verify options were logged
-    await expect.poll(() => optionsLogs.length, { timeout: 2000 }).toBeGreaterThan(0);
-    expect(optionsLogs[0]).toContain('color_mode');
-    expect(optionsLogs[0]).toContain('depth_preset');
-    expect(optionsLogs[0]).toContain('include_legend');
+      // Select the preset
+      await dropdown.locator(`button:has-text("${preset}")`).click();
+
+      // Verify selection (button text contains preset name)
+      await expect(presetSelect.locator('button').first()).toContainText(preset);
+    }
+  });
+
+  test('preview updates when depth preset changes', async ({ page }) => {
+    await openExportDialog(page);
+    await selectImageExport(page);
+
+    // Wait for initial preview
+    const preview = page.locator('[data-testid="export-preview"]');
+    await expect(preview).toBeVisible({ timeout: 5000 });
+
+    // Switch to depth mode
+    await page.click('[data-testid="color-mode-depth"]');
+
+    // Wait for preview to update (poll for visibility rather than fixed timeout)
+    await expect(preview).toBeVisible();
+
+    // Change depth preset
+    const presetSelect = page.locator('[data-testid="depth-preset-select"]');
+    await presetSelect.locator('button').first().click();
+    await presetSelect.locator('.absolute button:has-text("Ocean")').click();
+
+    // Preview should still be visible after preset change
+    await expect(preview).toBeVisible();
   });
 });
 
@@ -480,7 +423,7 @@ test.describe('Export Color Modes - Accessibility', () => {
     }
   });
 
-  test('color mode radio inputs are accessible', async ({ page }) => {
+  test('color mode radio inputs are proper radio elements', async ({ page }) => {
     await openExportDialog(page);
     await selectImageExport(page);
 
@@ -495,16 +438,16 @@ test.describe('Export Color Modes - Accessibility', () => {
     await expect(depthRadio).toHaveAttribute('type', 'radio');
   });
 
-  test('keyboard navigation works for color mode selection', async ({ page }) => {
+  test('keyboard navigation changes color mode selection', async ({ page }) => {
     await openExportDialog(page);
     await selectImageExport(page);
 
-    // Focus the section radio (should be focused after clicking image export)
+    // Focus the section radio
     const sectionRadio = page.locator('[data-testid="color-mode-section"]');
     await sectionRadio.focus();
     await expect(sectionRadio).toBeChecked();
 
-    // Press arrow down/right to move to depth mode
+    // Press arrow key to move to depth mode (browsers use arrow keys for radio navigation)
     await page.keyboard.press('ArrowDown');
 
     // Depth mode should now be checked
