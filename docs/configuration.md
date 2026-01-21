@@ -71,10 +71,11 @@ Shortcuts use the format `Modifier+Modifier+Key`, where:
 - **Platform note**: On macOS, `Ctrl` in config maps to the Command key; on Windows/Linux it maps to Control
 
 **Special key names:**
-- `Space`, `Enter`, `Tab`
+- `Space`, `Enter`, `Tab`, `Escape`
 - `ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`
 - `Plus`, `Minus`, `Equal`
-- `Backquote`, `BracketLeft`, `BracketRight`
+- `Backspace`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `Insert`
+- `F1` through `F12` (function keys)
 
 ### Configuration Example
 
@@ -201,20 +202,20 @@ The following settings have been removed and migrated to new locations:
 
 ## Settings Dialog
 
-The Settings dialog (`Ctrl+,` / `Cmd+,`) provides a UI for common configuration changes. After modifying `config.toml` manually, use the **Reload Config** button in the Settings dialog to apply changes without restarting the application.
+The Settings dialog provides a UI for common configuration changes. Access it by clicking the **Settings** button in the application header. After modifying `config.toml` manually, use the **Reload Config** button in the Settings dialog to apply changes without restarting the application.
 
 ### Configuring Shortcuts via UI
 
-1. Open Settings (`Ctrl+,` or `Cmd+,` on macOS)
+1. Click the **Settings** button in the application header
 2. Select the **Shortcuts** tab
 3. Use the search box to filter actions by name
 4. Click on a shortcut field to record a new key combination
 5. Press the desired keys to set the binding
-6. Press `Escape` to cancel recording, or `Backspace` to clear the binding
+6. Press `Escape` to cancel recording, or click the clear (x) button to remove the binding
 7. Click **Reset** next to an action to restore its default binding
-8. Click **Reset All** at the top to restore all shortcuts to defaults
+8. Click **Reset All Shortcuts** at the bottom to restore all shortcuts to defaults
 
-**Conflict detection**: The UI warns when a shortcut conflicts with another action or reserved shortcut. Conflicting bindings are highlighted and must be resolved before saving.
+**Conflict detection**: The UI warns when a shortcut conflicts with another action or reserved shortcut. Conflicting bindings are highlighted in the UI.
 
 ## Logging
 
