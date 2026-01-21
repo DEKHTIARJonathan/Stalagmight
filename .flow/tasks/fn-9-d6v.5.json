@@ -5,10 +5,21 @@
   "created_at": "2026-01-20T15:43:17.665051Z",
   "depends_on": [],
   "epic": "fn-9-d6v",
+  "evidence": {
+    "commits": [
+      "a6c37981f8c5a7f02ef7c6cf36a0b60a3af8b5fb",
+      "97a4f5fae1a3c96d8b3fa0e4cbf95f3e1d0f2a4e",
+      "ade76d4c97a6eab6e74b6ca9f287fe1d0ac0d439"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-9-d6v.5",
   "priority": null,
   "spec_path": ".flow/tasks/fn-9-d6v.5.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Wire MapCanvas to sync section hover/selection",
-  "updated_at": "2026-01-21T06:26:51.922560Z"
+  "updated_at": "2026-01-21T06:36:19.149890Z"
 }
