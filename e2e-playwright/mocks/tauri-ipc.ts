@@ -177,6 +177,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         mockConfigOverrides = {};
       };
 
+      // Store saved config for persistence testing
+      let savedConfig: Record<string, unknown> | null = null;
+      (window as unknown as Record<string, unknown>).__MOCK_GET_SAVED_CONFIG__ = () => savedConfig;
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_SAVED_CONFIG__ = () => {
+        savedConfig = null;
+      };
+
       // Track last export_image call for test assertions
       let lastExportImageArgs: Record<string, unknown> | null = null;
 
@@ -938,6 +945,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { can_undo: false, can_redo: false };
 
           case 'get_config':
+            // Return saved config if available (for testing persistence)
+            if (savedConfig) {
+              return savedConfig;
+            }
             return {
               general: {
                 auto_save: true,
@@ -1068,7 +1079,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               },
             };
 
+          case 'update_config':
+            // Mock update_config - store config and return success
+            console.log('[Mock IPC] update_config called with:', args);
+            savedConfig = args?.config as Record<string, unknown> | undefined ?? null;
+            return { success: true };
+
           case 'reload_config': {
+            // Return saved config if available (for testing persistence)
+            if (savedConfig) {
+              return savedConfig;
+            }
             // Return mock config with any test overrides applied
             // This allows tests to modify config values via __MOCK_SET_CONFIG_OVERRIDES__
             const baseConfig = {
