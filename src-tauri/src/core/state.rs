@@ -2445,14 +2445,12 @@ impl AppState {
     /// All phases are indeterminate since creation is typically fast.
     ///
     /// # Arguments
-    /// * `name` - Project name
-    /// * `location` - Optional location metadata (cave location, not file path)
-    /// * `directory` - Optional directory to save the project in. If None, uses default projects directory.
+    /// * `name` - Project name (used for filename and project metadata)
+    /// * `location` - Optional directory to save the project in. If None, uses user's documents directory.
     pub fn do_create_project_full(
         &self,
         name: String,
-        location: Option<String>,
-        directory: Option<PathBuf>,
+        location: Option<PathBuf>,
     ) -> Result<super::loading::CreateProjectFullResult, super::loading::LoadError> {
         use super::loading::{CreateProjectFullResult, DisplaySettings, LoadError, LoadingPhase, ProgressEmitter};
 
@@ -2483,9 +2481,13 @@ impl AppState {
         // === PHASE 0: Creating database (40%) ===
         progress.start_phase(LoadingPhase::CreatingDatabase);
 
-        // Resolve the database path from name and optional directory
-        let db_path = self.resolve_project_path(&name, directory.as_ref())
-            .map_err(|e| LoadError::new("IO", e))?;
+        // Resolve the database path from name and optional location (directory)
+        let db_path = match self.resolve_project_path(&name, location.as_ref()) {
+            Ok(path) => path,
+            Err(e) => {
+                early_return_err!(LoadError::new("IO", e));
+            }
+        };
 
         // CRITICAL: Fail if file already exists to prevent data corruption
         if db_path.exists() {
@@ -2498,9 +2500,12 @@ impl AppState {
         // Create parent directories if they don't exist
         if let Some(parent) = db_path.parent() {
             if !parent.exists() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    LoadError::new("IO", format!("Failed to create directory: {}", e))
-                })?;
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    early_return_err!(LoadError::new(
+                        "IO",
+                        format!("Failed to create directory: {}", e)
+                    ));
+                }
             }
         }
 
@@ -2516,7 +2521,9 @@ impl AppState {
 
         // === PHASE 1: Initializing project (40%) ===
         progress.start_phase(LoadingPhase::InitializingProject);
-        let mut project = Project::new(name.clone(), location);
+        // Note: location parameter is the save directory, not cave location metadata.
+        // Pass None for cave location - it can be set later via project settings.
+        let mut project = Project::new(name.clone(), None);
         project.file_path = Some(db_path.clone());
 
         if let Err(e) = db.save_project(&project) {
