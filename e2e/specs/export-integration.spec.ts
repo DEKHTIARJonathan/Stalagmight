@@ -372,6 +372,11 @@ describe('Export Integration', () => {
                     include_labels: boolean;
                     include_section_names: boolean;
                     include_shot_data: boolean;
+                    color_mode: string;
+                    depth_preset: string;
+                    include_legend: boolean;
+                    depth_unit: string;
+                    decimal_precision: number;
                   }
                 ) => Promise<void>;
               };
@@ -393,6 +398,11 @@ describe('Export Integration', () => {
             include_labels: true,
             include_section_names: true,
             include_shot_data: false,
+            color_mode: 'section',
+            depth_preset: 'thermal',
+            include_legend: false,
+            depth_unit: 'm',
+            decimal_precision: 1,
           });
           done({ success: true });
         } catch (err) {
@@ -473,6 +483,11 @@ describe('Export Integration', () => {
                     include_labels: boolean;
                     include_section_names: boolean;
                     include_shot_data: boolean;
+                    color_mode: string;
+                    depth_preset: string;
+                    include_legend: boolean;
+                    depth_unit: string;
+                    decimal_precision: number;
                   }
                 ) => Promise<void>;
               };
@@ -495,6 +510,11 @@ describe('Export Integration', () => {
             include_labels: false,
             include_section_names: false,
             include_shot_data: false,
+            color_mode: 'section',
+            depth_preset: 'thermal',
+            include_legend: false,
+            depth_unit: 'm',
+            decimal_precision: 1,
           });
           done({ success: true });
         } catch (err) {
@@ -543,6 +563,11 @@ describe('Export Integration', () => {
                     include_labels: boolean;
                     include_section_names: boolean;
                     include_shot_data: boolean;
+                    color_mode: string;
+                    depth_preset: string;
+                    include_legend: boolean;
+                    depth_unit: string;
+                    decimal_precision: number;
                   }
                 ) => Promise<void>;
               };
@@ -565,6 +590,11 @@ describe('Export Integration', () => {
             include_labels: true,
             include_section_names: true,
             include_shot_data: false,
+            color_mode: 'section',
+            depth_preset: 'thermal',
+            include_legend: false,
+            depth_unit: 'm',
+            decimal_precision: 1,
           });
           done({ success: true });
         } catch (err) {

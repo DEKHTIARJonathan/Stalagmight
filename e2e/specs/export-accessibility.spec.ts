@@ -333,24 +333,36 @@ describe('Export Dialog Accessibility', () => {
       const initialState = await checkbox.isSelected();
 
       // Use Tab to navigate to the checkbox (keyboard focus)
-      // First, focus on something in the dialog, then tab to checkbox
+      // First, focus on the depth radio (which is already selected from beforeEach)
       const depthRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-depth"]');
       await depthRadio.click();
 
-      // Tab to get to the checkbox
+      // Tab to get to the checkbox - use closest() to detect testid on parent containers
       await browser.keys(['Tab']);
       await browser.waitUntil(
         async () => {
-          const activeTestId = await browser.execute(() => document.activeElement?.getAttribute('data-testid'));
-          // May land on preset select first, keep tabbing
-          return activeTestId === 'option-include-legend' || activeTestId === 'depth-preset-select';
+          const testId = await browser.execute(() => {
+            const el = document.activeElement;
+            // Check direct testid or closest parent with testid
+            return el?.getAttribute('data-testid') ||
+                   el?.closest('[data-testid]')?.getAttribute('data-testid') ||
+                   '';
+          });
+          // May land on preset select (button inside) or checkbox
+          return testId === 'option-include-legend' || testId === 'depth-preset-select';
         },
         { timeout: 2000 }
       );
 
-      // If we're on the preset select, tab once more
-      const currentFocus = await browser.execute(() => document.activeElement?.getAttribute('data-testid'));
-      if (currentFocus !== 'option-include-legend') {
+      // Check if we're on the checkbox or need to tab once more
+      const currentTestId = await browser.execute(() => {
+        const el = document.activeElement;
+        return el?.getAttribute('data-testid') ||
+               el?.closest('[data-testid]')?.getAttribute('data-testid') ||
+               '';
+      });
+
+      if (currentTestId !== 'option-include-legend') {
         await browser.keys(['Tab']);
         await browser.waitUntil(
           async () => {
