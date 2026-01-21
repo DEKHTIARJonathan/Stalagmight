@@ -18,11 +18,6 @@ export default function ExportDialog() {
   const [previewTheme, setPreviewTheme] = useState<ExportTheme>('dark');
   const config = useProjectStore(state => state.config);
 
-  // Get depth unit and precision from config with fallbacks
-  // depth unit: 'meters' or 'feet' -> export uses 'm' or 'ft'
-  const depthUnit = config?.units?.depth === 'feet' ? 'ft' : 'm';
-  const decimalPrecision = config?.units?.decimal_precision ?? 1;
-
   const [imageOptions, setImageOptions] = useState<ExportImageOptions>({
     format: 'png',
     dpi: 300,
@@ -34,8 +29,9 @@ export default function ExportDialog() {
     color_mode: 'section',
     depth_preset: 'thermal',
     include_legend: true,
-    depth_unit: depthUnit,
-    decimal_precision: decimalPrecision,
+    // These will be overridden at export time with current config values
+    depth_unit: 'm',
+    decimal_precision: 1,
   });
 
   const handleExport = async () => {
@@ -60,7 +56,16 @@ export default function ExportDialog() {
         });
 
         if (selected) {
-          await exportImage(selected, { ...imageOptions, format: imageFormat });
+          // Override depth_unit and decimal_precision with current config values at export time
+          // to ensure they reflect the latest config, even if config loaded after dialog opened
+          const currentDepthUnit = config?.units?.depth === 'feet' ? 'ft' : 'm';
+          const currentDecimalPrecision = config?.units?.decimal_precision ?? 1;
+          await exportImage(selected, {
+            ...imageOptions,
+            format: imageFormat,
+            depth_unit: currentDepthUnit,
+            decimal_precision: currentDecimalPrecision,
+          });
         }
       }
 

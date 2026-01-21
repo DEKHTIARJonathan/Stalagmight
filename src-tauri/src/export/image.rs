@@ -27,6 +27,11 @@ fn default_precision() -> u8 {
     1
 }
 
+/// Default value for include_legend (true).
+fn default_true() -> bool {
+    true
+}
+
 /// Options for image export
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportImageOptions {
@@ -51,7 +56,7 @@ pub struct ExportImageOptions {
     #[serde(default)]
     pub depth_preset: DepthPreset,
     /// Include depth legend (only used when color_mode is Depth)
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub include_legend: bool,
     /// Depth unit from frontend config ("m" or "ft")
     #[serde(default = "default_depth_unit")]
