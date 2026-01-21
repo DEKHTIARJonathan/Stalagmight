@@ -1,12 +1,23 @@
 # fn-5-jef.6 Add color mode dropdown to export dialog
 
 ## Description
-**DEFERRED TO SEPARATE EPIC**
+**MOVED TO fn-11-6w4 (Export System Enhancement)**
 
-This task requires architectural decisions about export system (backend SVG/PDF vs frontend capture).
-See epic spec "Future Work" section.
+This task has been migrated to a dedicated export epic. See:
+- Epic: fn-11-6w4
+- Task: fn-11-6w4.6 (Add color mode and preset selectors to ExportDialog)
 
-Original requirement: Add color mode dropdown to export dialog
+The original requirement "Add color mode dropdown to export dialog" is now part of a comprehensive export enhancement that includes:
+- Backend SVG/PDF/PNG generation with depth colors
+- HSL interpolation with 5 color presets
+- Depth legend support
+- resvg PNG rasterization
+- Progress indicator during export
+
+## Original Note
+This task was deferred because it required architectural decisions about the export system (backend SVG/PDF vs frontend capture). Those decisions have been made in fn-11-6w4:
+- Backend generates all formats (PNG via resvg rasterization)
+- Frontend preview uses TypeScript getDepthColor with preset colors from backend
 ## Export Dialog Location
 Find the existing export dialog/modal component and add a color mode selector.
 
@@ -40,7 +51,7 @@ When exporting:
 - PDF/SVG export should also respect this if applicable
 - Don't persist the export color mode preference - always reset to 'section'
 ## Acceptance
-- [ ] DEFERRED - see epic "Future Work" section
+- [x] MOVED - See fn-11-6w4.6 for implementation
 ## Done summary
 Blocked:
 # Deferred to Separate Epic

@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-21T01:34:58.097052Z",
+  "depends_on": [
+    "fn-11-6w4.11"
+  ],
+  "epic": "fn-11-6w4",
+  "id": "fn-11-6w4.12",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-11-6w4.12.md",
+  "status": "todo",
+  "title": "Write WebdriverIO accessibility tests for export dialog",
+  "updated_at": "2026-01-21T01:56:46.092488Z"
+}
