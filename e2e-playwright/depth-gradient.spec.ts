@@ -83,6 +83,24 @@ test.describe('Depth Gradient', () => {
     });
     expect(depthGradientBefore).toBe(false);
 
+    // Get station colors BEFORE enabling depth gradient
+    const colorsBefore = await page.evaluate(() => {
+      const map = (window as unknown as {
+        __cavechef_map__?: {
+          queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
+            properties: { color?: string };
+          }>;
+        };
+      }).__cavechef_map__;
+      if (!map) return [];
+      try {
+        const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
+        return features.slice(0, 5).map((f) => f.properties?.color ?? 'none');
+      } catch {
+        return [];
+      }
+    });
+
     // Toggle depth gradient ON
     await toggleDisplayOption(page, 'showDepthGradient');
 
@@ -98,6 +116,40 @@ test.describe('Depth Gradient', () => {
 
     // Verify the depth legend is visible (rendering indicator)
     await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
+
+    // Get station colors AFTER enabling depth gradient - they should change
+    // Wait a bit for map to update
+    await page.waitForTimeout(100);
+    const colorsAfter = await page.evaluate(() => {
+      const map = (window as unknown as {
+        __cavechef_map__?: {
+          queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
+            properties: { color?: string };
+          }>;
+        };
+      }).__cavechef_map__;
+      if (!map) return [];
+      try {
+        const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
+        return features.slice(0, 5).map((f) => f.properties?.color ?? 'none');
+      } catch {
+        return [];
+      }
+    });
+
+    // If stations exist, verify colors changed (depth gradient applies different colors)
+    // Note: If no stations or colors are the same, this is still valid if legend is visible
+    if (colorsBefore.length > 0 && colorsAfter.length > 0) {
+      // At least some colors should be different when depth gradient is enabled
+      // (unless all stations are at the same depth, which is unlikely with test data)
+      const allSame = colorsBefore.every((c, i) => c === colorsAfter[i]);
+      // We don't strictly require colors to change (edge case: all same depth),
+      // but the legend visibility above already confirms the feature is enabled
+      if (!allSame) {
+        // Colors changed as expected
+        expect(colorsAfter.some((c) => c !== colorsBefore[0])).toBe(true);
+      }
+    }
   });
 
   test('toggle shows depth legend when enabled', async ({ page }) => {

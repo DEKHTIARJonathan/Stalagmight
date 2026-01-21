@@ -255,8 +255,7 @@ describe('Depth Gradient Display', () => {
 });
 
 describe('Depth Gradient Persistence', () => {
-  // This test verifies that the setting persists via the backend
-  it('should save setting to backend when toggled', async () => {
+  it('should persist setting across page refresh', async () => {
     await waitForAppReady();
     await resetAppState();
     await createNewProject('Persistence Test');
@@ -266,13 +265,34 @@ describe('Depth Gradient Persistence', () => {
     await toggleDepthGradient();
     expect(await getDepthGradientState()).toBe(true);
 
-    // Give time for async save
-    await browser.pause(200);
+    // Wait for setting to be saved to backend (poll instead of fixed pause)
+    await browser.waitUntil(
+      async () => {
+        const settings = await invokeIPC<Record<string, string>>('load_display_settings');
+        return settings.showDepthGradient === 'true';
+      },
+      {
+        timeout: 3000,
+        timeoutMsg: 'Setting was not saved to backend',
+        interval: 100,
+      }
+    );
 
-    // Verify setting was saved by checking via IPC
-    // The setting should have been persisted to backend
-    const settings = await invokeIPC<Record<string, string>>('load_display_settings');
-    expect(settings.showDepthGradient).toBe('true');
+    // Refresh the page to test persistence
+    await browser.refresh();
+    await waitForAppReady();
+
+    // Need to reopen project after refresh (project state needs recreation)
+    await createNewProject('Persistence Test After Refresh');
+    await waitForMapReady();
+
+    // Verify setting persisted - legend should be visible
+    const legend = await $('[data-testid="depth-legend"]');
+    await legend.waitForDisplayed({ timeout: 5000 });
+    expect(await legend.isDisplayed()).toBe(true);
+
+    // Verify store state is true
+    expect(await getDepthGradientState()).toBe(true);
 
     await resetAppState();
   });
