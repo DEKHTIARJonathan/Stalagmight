@@ -7,10 +7,21 @@
     "fn-11-6w4.2"
   ],
   "epic": "fn-11-6w4",
+  "evidence": {
+    "commits": [
+      "353fe03b3c2ea9a24ba3b39ca47e0412f95dabe8",
+      "b35714e08baaa26d4591bb38b32b58923923b748"
+    ],
+    "prs": [],
+    "tests": [
+      "cargo test --manifest-path src-tauri/Cargo.toml",
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-11-6w4.3",
   "priority": null,
   "spec_path": ".flow/tasks/fn-11-6w4.3.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add resvg dependency and implement PNG rasterization",
-  "updated_at": "2026-01-21T12:01:32.749138Z"
+  "updated_at": "2026-01-21T12:15:05.336705Z"
 }
