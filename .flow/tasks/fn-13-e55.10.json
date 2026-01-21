@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-21T03:47:20.376545Z",
+  "depends_on": [
+    "fn-13-e55.6"
+  ],
+  "epic": "fn-13-e55",
+  "id": "fn-13-e55.10",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-13-e55.10.md",
+  "status": "todo",
+  "title": "WebdriverIO accessibility tests for shortcuts UI",
+  "updated_at": "2026-01-21T03:48:49.998969Z"
+}

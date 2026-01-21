@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-21T03:47:20.040821Z",
+  "depends_on": [
+    "fn-13-e55.2"
+  ],
+  "epic": "fn-13-e55",
+  "id": "fn-13-e55.3",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-13-e55.3.md",
+  "status": "todo",
+  "title": "Create shortcut utilities module (platform, normalize, conflicts)",
+  "updated_at": "2026-01-21T03:55:32.803609Z"
+}

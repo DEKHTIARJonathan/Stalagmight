@@ -124,9 +124,8 @@ Add Playwright E2E tests that verify the Save button works correctly in both Edi
 - [ ] All new tests pass
 - [ ] All existing tests still pass
 ## Done summary
-TBD
-
+Added E2E tests verifying all id=0 scenarios work correctly: Edit Section dialog (5 tests), Edit Shot dialog (1 test), Section Adjust apply/cancel (2 tests), and DataTable warnings (1 test). All 9 tests pass, confirming the fix in fn-6-yz5.2.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 0f67cb658029ed216e720778a542268b51e8f28c, 58b6709150e60785b0770d960b83c484d03b8aba
+- Tests: pnpm test:ui --project=chromium (308 passed), cargo test --manifest-path src-tauri/Cargo.toml (80 passed)
 - PRs:
