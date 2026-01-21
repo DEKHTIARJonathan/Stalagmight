@@ -12,25 +12,17 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
  */
 
 /**
- * Known mock-related errors that are not from the Back button bug.
- * These are filtered out to focus on the actual Back button crash errors.
- */
-const KNOWN_MOCK_ERRORS = [
-  'unregisterListener', // Tauri mock cleanup issue
-  'this.style.getLayer', // THE BUG - this should NOT be filtered
-];
-
-/**
  * Filter out known mock errors that are unrelated to the Back button bug.
  * The Back button crash produces "this.style.getLayer" error - we DO want to catch that.
+ * Only 'unregisterListener' (Tauri mock cleanup) is filtered out.
  */
 function filterMockErrors(errors: string[]): string[] {
   return errors.filter((error) => {
-    // Allow the actual Back button crash error through
+    // Keep the actual Back button crash error - this is what we're testing for
     if (error.includes('this.style.getLayer')) {
       return true;
     }
-    // Filter out known mock-environment errors
+    // Filter out Tauri mock-environment errors (unrelated to Back button bug)
     if (error.includes('unregisterListener')) {
       return false;
     }

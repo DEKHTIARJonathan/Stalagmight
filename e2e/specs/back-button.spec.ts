@@ -42,7 +42,7 @@ describe('Back Button Navigation', () => {
     await browser.execute(() => {
       (window as unknown as { __testErrors: string[] }).__testErrors = [];
 
-      // Capture sync errors
+      // Capture sync errors - chain to original handler
       const origOnError = window.onerror;
       window.onerror = (msg, src, line, col, error) => {
         (window as unknown as { __testErrors: string[] }).__testErrors.push(String(msg));
@@ -50,11 +50,13 @@ describe('Back Button Navigation', () => {
         return false;
       };
 
-      // Capture async/promise errors (critical for React/MapLibre teardown)
+      // Capture async/promise errors - chain to original handler
+      const origOnUnhandledRejection = window.onunhandledrejection;
       window.onunhandledrejection = (e) => {
         (window as unknown as { __testErrors: string[] }).__testErrors.push(
           e.reason?.message || String(e.reason)
         );
+        if (origOnUnhandledRejection) origOnUnhandledRejection.call(window, e);
       };
     });
   });
@@ -165,6 +167,7 @@ describe('Back Button Navigation', () => {
 
     // Click Back button
     const backButton = await $('[data-testid="back-button"]');
+    await backButton.waitForDisplayed({ timeout: 5000 });
     await backButton.click();
 
     // Verify dialog appears
@@ -175,11 +178,8 @@ describe('Back Button Navigation', () => {
     const cancelBtn = await $('button*=Cancel');
     await cancelBtn.click();
 
-    // Verify dialog closes
-    await browser.waitUntil(
-      async () => !(await dialog.isDisplayed()),
-      { timeout: 5000, timeoutMsg: 'Dialog did not close' }
-    );
+    // Verify dialog closes - use reverse: true for robustness with detached elements
+    await dialog.waitForDisplayed({ reverse: true, timeout: 5000 });
 
     // Verify we're still in SingleSystemView (canvas visible)
     await expect(canvas).toBeDisplayed();
@@ -200,11 +200,21 @@ describe('Back Button Navigation', () => {
     const canvas = await $('canvas');
     await canvas.waitForExist({ timeout: 15000 });
 
-    // Rapidly click Back button multiple times
+    // Wait for Back button to be displayed before rapid clicks
     const backButton = await $('[data-testid="back-button"]');
-    await backButton.click();
-    await backButton.click();
-    await backButton.click();
+    await backButton.waitForDisplayed({ timeout: 5000 });
+
+    // Fire multiple click events rapidly using browser.execute to avoid stale element issues
+    // This simulates true rapid clicks without waiting for navigation between each
+    await browser.execute(() => {
+      const btn = document.querySelector('[data-testid="back-button"]');
+      if (btn) {
+        // Fire 3 click events in quick succession
+        for (let i = 0; i < 3; i++) {
+          btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        }
+      }
+    });
 
     // Should still end up at Global View with no errors
     const globalView = await $('[data-testid="global-view"]');
