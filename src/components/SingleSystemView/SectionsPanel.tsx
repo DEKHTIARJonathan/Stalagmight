@@ -113,8 +113,12 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   };
 
   const handleSectionMouseLeave = () => {
-    lastHoveredIdRef.current = null;
-    setHoveredSectionId(null);
+    // Only clear hover on mouse leave if no row has keyboard focus
+    // This preserves the "focus highlights map" behavior
+    if (focusedIndex === -1) {
+      lastHoveredIdRef.current = null;
+      setHoveredSectionId(null);
+    }
   };
 
   const handleDeleteMouseDown = (e: React.MouseEvent) => {
