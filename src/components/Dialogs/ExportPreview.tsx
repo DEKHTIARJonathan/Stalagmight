@@ -2,21 +2,20 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import maplibregl from 'maplibre-gl';
 import { useProjectStore } from '../../store/projectStore';
 import { metersToMapCoords, getBounds } from '../../utils/coordinates';
+import {
+  calculateDepthRange,
+  computeStationColor,
+  computeShotColor,
+  formatDepth,
+  type DepthPresetColors,
+} from '../../utils/export-colors';
 import type { ExportImageOptions } from '../../types/commands';
 
 /** Theme mode for the export preview */
 export type ExportTheme = 'dark' | 'light';
 
-/** Color stop for depth gradient */
-interface ColorStop {
-  position: number;
-  color: string;
-}
-
-/** Preset colors for depth gradient */
-export interface DepthPresetColors {
-  stops: ColorStop[];
-}
+// Re-export DepthPresetColors for consumers that import from this file
+export type { DepthPresetColors };
 
 interface ExportPreviewProps {
   /** Export options that affect preview appearance */
@@ -29,193 +28,6 @@ interface ExportPreviewProps {
 
 /** Debounce delay in milliseconds */
 const DEBOUNCE_DELAY = 300;
-
-/**
- * Parse hex color to RGB components.
- */
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const cleanHex = hex.replace('#', '');
-  if (cleanHex.length < 6) {
-    return { r: 0, g: 0, b: 0 };
-  }
-  return {
-    r: parseInt(cleanHex.slice(0, 2), 16) || 0,
-    g: parseInt(cleanHex.slice(2, 4), 16) || 0,
-    b: parseInt(cleanHex.slice(4, 6), 16) || 0,
-  };
-}
-
-/**
- * Convert RGB to hex color string.
- */
-function rgbToHex(r: number, g: number, b: number): string {
-  const toHex = (n: number) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, '0');
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-}
-
-/**
- * Convert RGB to HSL color space.
- * Returns [hue: 0-360, saturation: 0-1, lightness: 0-1]
- */
-function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
-  const rNorm = r / 255;
-  const gNorm = g / 255;
-  const bNorm = b / 255;
-
-  const max = Math.max(rNorm, gNorm, bNorm);
-  const min = Math.min(rNorm, gNorm, bNorm);
-  const l = (max + min) / 2;
-
-  if (Math.abs(max - min) < Number.EPSILON) {
-    // Achromatic (gray)
-    return [0, 0, l];
-  }
-
-  const d = max - min;
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-
-  let h: number;
-  if (Math.abs(max - rNorm) < Number.EPSILON) {
-    h = (gNorm - bNorm) / d;
-    if (gNorm < bNorm) h += 6;
-    h /= 6;
-  } else if (Math.abs(max - gNorm) < Number.EPSILON) {
-    h = ((bNorm - rNorm) / d + 2) / 6;
-  } else {
-    h = ((rNorm - gNorm) / d + 4) / 6;
-  }
-
-  return [h * 360, s, l];
-}
-
-/**
- * Helper for HSL to RGB conversion.
- */
-function hueToRgb(p: number, q: number, t: number): number {
-  let tNorm = t;
-  if (tNorm < 0) tNorm += 1;
-  if (tNorm > 1) tNorm -= 1;
-
-  if (tNorm < 1 / 6) return p + (q - p) * 6 * tNorm;
-  if (tNorm < 1 / 2) return q;
-  if (tNorm < 2 / 3) return p + (q - p) * (2 / 3 - tNorm) * 6;
-  return p;
-}
-
-/**
- * Convert HSL to RGB color space.
- */
-function hslToRgb(h: number, s: number, l: number): [number, number, number] {
-  if (Math.abs(s) < Number.EPSILON) {
-    // Achromatic (gray)
-    const v = Math.round(l * 255);
-    return [v, v, v];
-  }
-
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-  const p = 2 * l - q;
-  const hNorm = h / 360;
-
-  return [
-    Math.round(hueToRgb(p, q, hNorm + 1 / 3) * 255),
-    Math.round(hueToRgb(p, q, hNorm) * 255),
-    Math.round(hueToRgb(p, q, hNorm - 1 / 3) * 255),
-  ];
-}
-
-/**
- * Interpolate between two hex colors using HSL with shortest hue path.
- * Matches Rust backend's interpolate_hsl implementation.
- */
-function interpolateHsl(color1: string, color2: string, t: number): string {
-  const rgb1 = hexToRgb(color1);
-  const rgb2 = hexToRgb(color2);
-
-  const [h1, s1, l1] = rgbToHsl(rgb1.r, rgb1.g, rgb1.b);
-  const [h2, s2, l2] = rgbToHsl(rgb2.r, rgb2.g, rgb2.b);
-
-  // Shortest hue path interpolation
-  let dh = h2 - h1;
-  if (dh > 180) {
-    dh -= 360;
-  } else if (dh < -180) {
-    dh += 360;
-  }
-
-  // Use modulo to keep hue in valid range
-  const h = ((h1 + dh * t) % 360 + 360) % 360;
-  const s = s1 + (s2 - s1) * t;
-  const l = l1 + (l2 - l1) * t;
-
-  const [r, g, b] = hslToRgb(h, s, l);
-  return rgbToHex(r, g, b);
-}
-
-/**
- * Multi-stop color interpolation matching Rust backend.
- * CRITICAL: Same safety guards as Rust implementation.
- */
-function interpolateStops(t: number, stops: ColorStop[]): string {
-  // Guard for empty array
-  if (stops.length === 0) {
-    return '#000000';
-  }
-  // Guard for single stop
-  const firstStop = stops[0];
-  if (stops.length === 1 || !firstStop) {
-    return firstStop?.color ?? '#000000';
-  }
-
-  // Clamp t to valid range
-  const clampedT = Math.max(0, Math.min(1, t));
-
-  // Find bracketing stops
-  for (let i = 0; i < stops.length - 1; i++) {
-    const currentStop = stops[i];
-    const nextStop = stops[i + 1];
-    if (!currentStop || !nextStop) continue;
-
-    if (clampedT >= currentStop.position && clampedT <= nextStop.position) {
-      const denominator = nextStop.position - currentStop.position;
-      // Handle equal positions (avoid divide by zero)
-      if (Math.abs(denominator) < Number.EPSILON) {
-        return currentStop.color;
-      }
-      const localT = (clampedT - currentStop.position) / denominator;
-      return interpolateHsl(currentStop.color, nextStop.color, localT);
-    }
-  }
-
-  // Fallback to last stop
-  const lastStop = stops[stops.length - 1];
-  return lastStop?.color ?? '#000000';
-}
-
-/**
- * Get depth color for a given depth value using preset color stops.
- */
-function getDepthColor(depth: number, minDepth: number, maxDepth: number, stops: ColorStop[]): string {
-  const firstColor = stops[0]?.color ?? '#000000';
-  // Handle NaN/infinite values
-  if (!Number.isFinite(depth) || !Number.isFinite(minDepth) || !Number.isFinite(maxDepth)) {
-    return firstColor;
-  }
-  // Handle flat depth range
-  if (Math.abs(maxDepth - minDepth) < Number.EPSILON) {
-    return firstColor;
-  }
-  // Normalize and clamp
-  const t = Math.max(0, Math.min(1, (depth - minDepth) / (maxDepth - minDepth)));
-  return interpolateStops(t, stops);
-}
-
-/**
- * Format depth value with unit conversion and precision.
- */
-function formatDepth(depth: number, unit: string, precision: number): string {
-  const value = unit === 'ft' ? depth * 3.28084 : depth;
-  return `${value.toFixed(precision)}${unit}`;
-}
 
 /**
  * Export preview component that shows a 300x300 preview of what the
@@ -484,25 +296,11 @@ export default function ExportPreview({ options, theme, presetColors }: ExportPr
     setIsLoading(true);
 
     const sections = project.sections;
-    const useDepthColors = options.color_mode === 'depth' && presetColors?.stops && presetColors.stops.length > 0;
+    const colorMode = options.color_mode ?? 'section';
+    const presetStops = presetColors?.stops ?? null;
 
-    // Compute depth range for depth color mode
-    let minDepth = Infinity;
-    let maxDepth = -Infinity;
-    if (useDepthColors) {
-      for (const station of stations) {
-        const z = station.coordinates.z;
-        if (Number.isFinite(z)) {
-          minDepth = Math.min(minDepth, z);
-          maxDepth = Math.max(maxDepth, z);
-        }
-      }
-      // Handle case where no valid depths found
-      if (!Number.isFinite(minDepth) || !Number.isFinite(maxDepth)) {
-        minDepth = 0;
-        maxDepth = 0;
-      }
-    }
+    // Compute depth range using pure function
+    const depthRange = calculateDepthRange(stations);
 
     // Get unit and precision for labels
     const depthUnit = options.depth_unit || 'm';
@@ -523,12 +321,15 @@ export default function ExportPreview({ options, theme, presetColors }: ExportPr
         const toStation = sectionStations[i + 1];
 
         if (fromStation && toStation && shot) {
-          // Compute shot color based on mode
-          let shotColor = section.color;
-          if (useDepthColors && presetColors) {
-            const avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
-            shotColor = getDepthColor(avgDepth, minDepth, maxDepth, presetColors.stops);
-          }
+          // Compute shot color using pure function
+          const shotColor = computeShotColor(
+            fromStation.coordinates.z,
+            toStation.coordinates.z,
+            section.color,
+            colorMode,
+            depthRange,
+            presetStops,
+          );
 
           shotFeatures.push({
             type: 'Feature',
@@ -570,15 +371,18 @@ export default function ExportPreview({ options, theme, presetColors }: ExportPr
       }
     }
 
-    // Build station features
+    // Build station features using pure function
     const stationFeatures: GeoJSON.Feature[] = stations.map((station) => {
       const section = sections.find((s) => s.id === station.station_ref.section_id);
 
-      // Compute station color based on mode
-      let stationColor = section?.color ?? '#ffffff';
-      if (useDepthColors && presetColors) {
-        stationColor = getDepthColor(station.coordinates.z, minDepth, maxDepth, presetColors.stops);
-      }
+      // Compute station color using pure function (handles zero datum gold color)
+      const stationColor = computeStationColor(
+        station,
+        section?.color ?? '#ffffff',
+        colorMode,
+        depthRange,
+        presetStops,
+      );
 
       return {
         type: 'Feature',
