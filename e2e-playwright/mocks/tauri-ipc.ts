@@ -1409,9 +1409,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'plugin:event|unlisten': {
-            const listenerId = args?.event as number; // unlisten passes event as the listener ID
-            console.log('[Mock IPC] plugin:event|unlisten', listenerId);
-            eventListeners.delete(listenerId);
+            // Real Tauri API passes { event: eventName, eventId: listenerId }
+            const eventId = args?.eventId as number;
+            console.log('[Mock IPC] plugin:event|unlisten', 'eventId:', eventId);
+            eventListeners.delete(eventId);
             return undefined;
           }
 
@@ -1496,12 +1497,44 @@ export async function setupTauriMocks(page: Page): Promise<void> {
     // Store the mock module for potential interception
     (window as unknown as Record<string, unknown>).__TAURI_DIALOG_MOCK__ = mockDialogModule;
 
+    // Mock __TAURI_EVENT_PLUGIN_INTERNALS__ for @tauri-apps/api/event cleanup
+    // The real Tauri event API calls unregisterListener on unlisten
+    interface TauriEventPluginInternals {
+      unregisterListener: (eventId: number) => void;
+    }
+    const tauriEventPluginInternals: TauriEventPluginInternals = {
+      unregisterListener: (eventId: number) => {
+        console.log('[Mock Event] unregisterListener:', eventId);
+        eventListeners.delete(eventId);
+      },
+    };
+    (window as unknown as Record<string, unknown>).__TAURI_EVENT_PLUGIN_INTERNALS__ = tauriEventPluginInternals;
+
     // Mock event system for E2E tests (loading progress events, etc.)
     // This is wired to the plugin:event system so @tauri-apps/api/event.listen() works
     interface TauriEventMock {
+      listen: (event: string, handler: (e: { payload: unknown }) => void) => Promise<() => void>;
+      unlisten: (eventId: number) => void;
       emit: (event: string, payload: unknown) => void;
     }
     const tauriEventMock: TauriEventMock = {
+      // Listen for events - returns an unlisten function
+      listen: async (event: string, handler: (e: { payload: unknown }) => void) => {
+        const listenerId = ++eventListenerId;
+        const callbackId = `mock_cb_${listenerId}`;
+        (window as unknown as Record<string, unknown>)[`_${callbackId}`] = handler;
+        eventListeners.set(listenerId, { handler: callbackId as unknown as number, event });
+        console.log('[Mock Event] listen:', event, 'listenerId:', listenerId);
+        return () => {
+          eventListeners.delete(listenerId);
+          delete (window as unknown as Record<string, unknown>)[`_${callbackId}`];
+        };
+      },
+      // Unlisten by eventId
+      unlisten: (eventId: number) => {
+        console.log('[Mock Event] unlisten:', eventId);
+        eventListeners.delete(eventId);
+      },
       // Emit events through the same system that @tauri-apps/api/event.listen uses
       emit: (event: string, payload: unknown) => {
         console.log('[Mock Event] emitEvent:', event, payload);

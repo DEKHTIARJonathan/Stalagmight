@@ -10,6 +10,79 @@ test.describe('Loading Progress', () => {
     await page.waitForSelector('[data-testid="global-view"]', { timeout: 10000 });
   });
 
+  test.describe('User Flow Tests (open project via double-click)', () => {
+    test('double-clicking project card triggers load_project_full', async ({ page }) => {
+      // Wait for project list to be visible first
+      await page.waitForSelector('h3:has-text("Cave System Alpha")', { timeout: 5000 });
+
+      // Track IPC calls - must be set up before the action
+      const ipcCalls: string[] = [];
+      page.on('console', (msg) => {
+        const text = msg.text();
+        if (text.includes('load_project_full')) {
+          ipcCalls.push(text);
+        }
+      });
+
+      // Double-click on a project card
+      await page.locator('h3:has-text("Cave System Alpha")').dblclick();
+
+      // Wait for command to be invoked
+      await page.waitForTimeout(500);
+
+      // Verify load_project_full was called
+      expect(ipcCalls.length).toBeGreaterThan(0);
+    });
+
+    test('load_project_full emits progress events', async ({ page }) => {
+      // Wait for project list
+      await page.waitForSelector('h3:has-text("Cave System Alpha")', { timeout: 5000 });
+
+      // Track event emissions - look for any loading-progress related log
+      const eventLogs: string[] = [];
+      page.on('console', (msg) => {
+        const text = msg.text();
+        // Capture any console log mentioning loading-progress (from emitEvent calls)
+        if (text.includes('loading-progress')) {
+          eventLogs.push(text);
+        }
+      });
+
+      // Double-click to start loading
+      await page.locator('h3:has-text("Cave System Alpha")').dblclick();
+
+      // Wait for events
+      await page.waitForTimeout(500);
+
+      // Verify loading-progress events were emitted during load_project_full
+      expect(eventLogs.length).toBeGreaterThan(0);
+    });
+
+    test('clientOpId increments on each project open', async ({ page }) => {
+      // Wait for project list
+      await page.waitForSelector('h3:has-text("Cave System Alpha")', { timeout: 5000 });
+
+      // Get initial clientOpId
+      const idBefore = await page.evaluate(() => {
+        const e2e = (window as unknown as { __E2E_TEST__?: { getLoadingId?: () => number } }).__E2E_TEST__;
+        return e2e?.getLoadingId?.() ?? 0;
+      });
+
+      // Open a project
+      await page.locator('h3:has-text("Cave System Alpha")').dblclick();
+      await page.waitForTimeout(500);
+
+      // Get clientOpId after first open
+      const idAfterFirst = await page.evaluate(() => {
+        const e2e = (window as unknown as { __E2E_TEST__?: { getLoadingId?: () => number } }).__E2E_TEST__;
+        return e2e?.getLoadingId?.() ?? 0;
+      });
+
+      // clientOpId should have incremented from the load
+      expect(idAfterFirst).toBeGreaterThan(idBefore);
+    });
+  });
+
   test.describe('Event System Tests', () => {
     test('plugin:event|listen is called when app starts listening', async ({ page }) => {
       // Verify plugin:event|listen is called when useLoadingProgress registers
@@ -268,7 +341,8 @@ test.describe('Loading Progress', () => {
   });
 
   test.describe('E2E Hook Availability', () => {
-    test('E2E hooks are exposed globally', async ({ page }) => {
+    test('loading E2E hooks are exposed globally (always, not DEV-gated)', async ({ page }) => {
+      // These hooks are exposed for E2E tests even in production builds
       const hooks = await page.evaluate(() => {
         const e2e = (window as unknown as { __E2E_TEST__?: Record<string, unknown> }).__E2E_TEST__;
         return {
@@ -277,8 +351,6 @@ test.describe('Loading Progress', () => {
           hasSimulateLoadingProgress: typeof e2e?.simulateLoadingProgress === 'function',
           hasSimulateLoadingError: typeof e2e?.simulateLoadingError === 'function',
           hasResetLoading: typeof e2e?.resetLoading === 'function',
-          hasUiStore: typeof e2e?.uiStore !== 'undefined',
-          hasProjectStore: typeof e2e?.projectStore !== 'undefined',
         };
       });
 
@@ -287,35 +359,48 @@ test.describe('Loading Progress', () => {
       expect(hooks.hasSimulateLoadingProgress).toBe(true);
       expect(hooks.hasSimulateLoadingError).toBe(true);
       expect(hooks.hasResetLoading).toBe(true);
-      expect(hooks.hasUiStore).toBe(true);
-      expect(hooks.hasProjectStore).toBe(true);
     });
 
-    test('event mock emit function is available', async ({ page }) => {
+    test('event mock listen/unlisten/emit functions are available', async ({ page }) => {
       const hasEventMock = await page.evaluate(() => {
-        const mock = (window as unknown as { __tauriEventMock?: { emit?: unknown } }).__tauriEventMock;
+        const mock = (window as unknown as { __tauriEventMock?: { listen?: unknown; unlisten?: unknown; emit?: unknown } }).__tauriEventMock;
         return {
+          hasListen: typeof mock?.listen === 'function',
+          hasUnlisten: typeof mock?.unlisten === 'function',
           hasEmit: typeof mock?.emit === 'function',
         };
       });
 
+      expect(hasEventMock.hasListen).toBe(true);
+      expect(hasEventMock.hasUnlisten).toBe(true);
       expect(hasEventMock.hasEmit).toBe(true);
     });
 
-    test('plugin:event|listen/emit/unlisten commands are handled', async ({ page }) => {
+    test('__TAURI_EVENT_PLUGIN_INTERNALS__ is available for cleanup', async ({ page }) => {
+      const hasInternals = await page.evaluate(() => {
+        const internals = (window as unknown as { __TAURI_EVENT_PLUGIN_INTERNALS__?: { unregisterListener?: unknown } }).__TAURI_EVENT_PLUGIN_INTERNALS__;
+        return {
+          hasUnregisterListener: typeof internals?.unregisterListener === 'function',
+        };
+      });
+
+      expect(hasInternals.hasUnregisterListener).toBe(true);
+    });
+
+    test('plugin:event|listen/emit/unlisten commands are handled with correct API shape', async ({ page }) => {
       const result = await page.evaluate(async () => {
         const tauriInternals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__;
 
-        // Test listen returns a listener ID
-        const listenerId = await tauriInternals.invoke('plugin:event|listen', { event: 'test', handler: 'cb1' });
+        // Test listen returns a listener ID (eventId)
+        const eventId = await tauriInternals.invoke('plugin:event|listen', { event: 'test', handler: 'cb1' });
 
-        // Test unlisten doesn't throw
-        await tauriInternals.invoke('plugin:event|unlisten', { event: listenerId });
+        // Test unlisten with correct API shape: { event: eventName, eventId: listenerId }
+        await tauriInternals.invoke('plugin:event|unlisten', { event: 'test', eventId });
 
-        return { listenerId: typeof listenerId === 'number' };
+        return { eventIdIsNumber: typeof eventId === 'number' };
       });
 
-      expect(result.listenerId).toBe(true);
+      expect(result.eventIdIsNumber).toBe(true);
     });
   });
 });
