@@ -51,3 +51,6 @@ Tauri State<'_, T> cannot be cloned into spawn_blocking - use AppHandle.state::<
 
 ## 2026-01-21 manual [pitfall]
 AtomicU64::new(0) with fetch_add returns 0 for first call; reserve 0 for sentinel by starting at 1
+
+## 2026-01-21 manual [pitfall]
+When clearing async requests in useEffect, always clear immediately before any early returns AND store in ref if target state not ready, then process in separate effect when ready
