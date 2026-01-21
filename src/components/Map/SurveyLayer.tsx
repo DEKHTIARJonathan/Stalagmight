@@ -80,6 +80,8 @@ export default class SurveyLayer {
   private hoveredStationId: string | null = null;
   private hoveredShotId: string | null = null;
   private snappedStationId: string | null = null;
+  private hoveredSectionId: string | null = null;
+  private selectedSectionId: string | null = null;
 
   // Active tool state (for disabling interactions when non-interactive tools are active)
   private activeTool: ToolType = 'select';
@@ -135,9 +137,10 @@ export default class SurveyLayer {
     // Clear hover when in non-interactive tool AND there's stale hover state
     // This is self-healing: handles both transitions (interactive→non-interactive)
     // and missed initial syncs or future refactors
-    if (isNonInteractive && (this.hoveredStationId || this.hoveredShotId)) {
+    if (isNonInteractive && (this.hoveredStationId || this.hoveredShotId || this.hoveredSectionId)) {
       this.hoveredStationId = null;
       this.hoveredShotId = null;
+      this.hoveredSectionId = null;
       this.updateVisualState();
       this.map.getCanvas().style.cursor = '';
 
@@ -1131,6 +1134,34 @@ export default class SurveyLayer {
     this.updateVisualState();
   }
 
+  /**
+   * Set the hovered section for visual highlighting.
+   * Stores the section ID for use by updateVisualState() to apply hover styling
+   * to all shots and stations in this section.
+   * @param sectionId - The SectionId (number) to hover, or null to clear
+   */
+  setHoveredSection(sectionId: SectionId | null): void {
+    // Convert numeric SectionId to string for consistent comparison
+    const stringId = sectionId !== null ? String(sectionId) : null;
+    if (this.hoveredSectionId === stringId) return;
+    this.hoveredSectionId = stringId;
+    this.updateVisualState();
+  }
+
+  /**
+   * Set the selected section for visual highlighting.
+   * Stores the section ID for use by updateVisualState() to apply selected styling
+   * to all shots and stations in this section.
+   * @param sectionId - The SectionId (number) to select, or null to clear
+   */
+  setSelectedSection(sectionId: SectionId | null): void {
+    // Convert numeric SectionId to string for consistent comparison
+    const stringId = sectionId !== null ? String(sectionId) : null;
+    if (this.selectedSectionId === stringId) return;
+    this.selectedSectionId = stringId;
+    this.updateVisualState();
+  }
+
   // Depth gradient accessors - return current depth mode state
   getShowDepthGradient(): boolean {
     return this.showDepthGradient;
@@ -1263,9 +1294,11 @@ export default class SurveyLayer {
   clearAllInteractionState(): void {
     this.hoveredStationId = null;
     this.hoveredShotId = null;
+    this.hoveredSectionId = null;
     this.snappedStationId = null;
     this.selectedStationId = null;
     this.selectedShotId = null;
+    this.selectedSectionId = null;
     this.setHighlightedStations([]);
     this.callbacks.onStationHover?.(null);
     this.callbacks.onShotHover?.(null);
