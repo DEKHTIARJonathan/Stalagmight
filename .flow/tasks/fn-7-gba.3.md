@@ -564,9 +564,8 @@ describe('Back Button Navigation', () => {
 - [ ] `pnpm test:ui` passes
 - [ ] `pnpm test:e2e` passes
 ## Done summary
-TBD
-
+Added comprehensive E2E tests for Back button navigation covering clean state, unsaved changes dialog, rapid clicks, grid overlay states (visible/hidden), and immediate back after project creation. Tests capture pageerror and console errors to detect the app freeze bug (this.style.getLayer).
 ## Evidence
-- Commits:
-- Tests:
+- Commits: b302636, a612463, 309dc4b5c9c8e21d30468a013c1e8f3a42698f22
+- Tests: pnpm test:ui --grep 'Back Button' (7 passed), pnpm tsc --noEmit
 - PRs:
