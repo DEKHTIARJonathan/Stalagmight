@@ -143,6 +143,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         mockConfigOverrides = {};
       };
 
+      // Display settings persistence - in-memory storage for testing reload behavior
+      const mockDisplaySettings: Record<string, string> = {
+        showStations: 'true',
+        showShots: 'true',
+        showSectionNames: 'true',
+        showDepthGradient: 'false',
+      };
+
       return function mockCommand(
         cmd: string,
         args?: Record<string, unknown>
@@ -952,24 +960,27 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] remove_from_recent_projects called with:', args);
             return { success: true };
 
-          // Display settings (per-project)
+          // Display settings (per-project) - uses in-memory storage for persistence testing
           case 'load_display_settings':
-            // Return display settings for mocked tests
-            // Note: showShots is included for forward compatibility with display toggle features
-            return {
-              showStations: 'true',
-              showShots: 'true',
-              showSectionNames: 'true',
-              showDepthGradient: 'false',
-            };
+            // Return current display settings from in-memory storage
+            return { ...mockDisplaySettings };
 
-          case 'save_display_setting':
-            // No-op for mocked tests
+          case 'save_display_setting': {
+            // Persist setting to in-memory storage
+            const key = args?.key as string;
+            const value = args?.value as string;
+            if (key && value !== undefined) {
+              mockDisplaySettings[key] = value;
+              console.log(`[Mock IPC] save_display_setting: ${key}=${value}`);
+            }
             return undefined;
+          }
 
-          case 'get_display_setting':
-            // Return undefined for mocked tests
-            return null;
+          case 'get_display_setting': {
+            // Return specific setting from in-memory storage
+            const settingKey = args?.key as string;
+            return settingKey ? mockDisplaySettings[settingKey] ?? null : null;
+          }
 
           // Window plugin commands
           case 'plugin:window|set_title':

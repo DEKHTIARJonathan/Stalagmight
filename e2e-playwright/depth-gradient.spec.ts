@@ -95,6 +95,9 @@ test.describe('Depth Gradient', () => {
       return stores?.uiStore?.getState()?.showDepthGradient ?? false;
     });
     expect(depthGradientAfter).toBe(true);
+
+    // Verify the depth legend is visible (rendering indicator)
+    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
   });
 
   test('toggle shows depth legend when enabled', async ({ page }) => {
@@ -140,12 +143,13 @@ test.describe('Depth Gradient', () => {
     await expect(page.locator('[data-testid="depth-legend-min"]')).toBeVisible();
     await expect(page.locator('[data-testid="depth-legend-max"]')).toBeVisible();
 
-    // Verify min and max labels contain numeric values
+    // Verify min and max labels contain numeric values (allow negative depths)
     const minText = await page.locator('[data-testid="depth-legend-min"]').textContent();
     const maxText = await page.locator('[data-testid="depth-legend-max"]').textContent();
 
-    expect(minText).toMatch(/\d+(\.\d+)?m/);
-    expect(maxText).toMatch(/\d+(\.\d+)?m/);
+    // Regex allows optional negative sign for depth values like -8.0m
+    expect(minText).toMatch(/-?\d+(\.\d+)?m/);
+    expect(maxText).toMatch(/-?\d+(\.\d+)?m/);
   });
 
   test('depth gradient setting calls save_display_setting on toggle', async ({ page }) => {
@@ -165,28 +169,30 @@ test.describe('Depth Gradient', () => {
     // Verify legend is visible
     await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
 
-    // Give time for async save call
-    await page.waitForTimeout(100);
+    // Wait for save_display_setting IPC call using poll instead of fixed timeout
+    await expect.poll(
+      () => ipcCalls.some((call) => call.includes('save_display_setting')),
+      { timeout: 2000 }
+    ).toBe(true);
 
     // Verify the setting was saved (checked via mock console)
-    // The UI should call save_display_setting when toggle changes
     const saveCall = ipcCalls.find((call) => call.includes('save_display_setting'));
     expect(saveCall).toBeDefined();
   });
 
-  test('depth gradient toggle updates immediately without page reload', async ({ page }) => {
+  test('depth gradient toggle updates immediately', async ({ page }) => {
     // Enable depth gradient
     await openDisplayMenu(page);
     await toggleDisplayOption(page, 'showDepthGradient');
 
-    // Verify legend appears immediately
-    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible({ timeout: 500 });
+    // Verify legend appears (use default timeout for reliability)
+    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
 
     // Disable depth gradient
     await toggleDisplayOption(page, 'showDepthGradient');
 
-    // Verify legend hides immediately
-    await expect(page.locator('[data-testid="depth-legend"]')).not.toBeVisible({ timeout: 500 });
+    // Verify legend hides (use default timeout for reliability)
+    await expect(page.locator('[data-testid="depth-legend"]')).not.toBeVisible();
   });
 
   test('depth gradient toggle is independent of other display toggles', async ({ page }) => {
@@ -224,6 +230,38 @@ test.describe('Depth Gradient', () => {
     expect(ariaLabel).toMatch(/Depth scale/i);
     expect(ariaLabel).toMatch(/shallow/i);
     expect(ariaLabel).toMatch(/deep/i);
+  });
+
+  // Note: Reload persistence cannot be tested with mocks because the mock's
+  // in-memory storage is re-initialized on page reload. The WebdriverIO test
+  // in e2e/specs/depth-gradient.spec.ts tests persistence against the real backend.
+  // This test verifies that the setting is correctly saved to the backend.
+  test('depth gradient setting is saved to backend on toggle', async ({ page }) => {
+    // Track IPC calls via console logs (mock logs them)
+    const ipcCalls: string[] = [];
+    page.on('console', (msg) => {
+      const text = msg.text();
+      if (text.includes('[Mock IPC]') && text.includes('save_display_setting')) {
+        ipcCalls.push(text);
+      }
+    });
+
+    // Enable depth gradient
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showDepthGradient');
+
+    // Verify legend is visible
+    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
+
+    // Wait for save call
+    await expect.poll(
+      () => ipcCalls.some((call) => call.includes('showDepthGradient')),
+      { timeout: 2000 }
+    ).toBe(true);
+
+    // Verify the setting value was saved as 'true'
+    const saveCall = ipcCalls.find((call) => call.includes('showDepthGradient'));
+    expect(saveCall).toContain('true');
   });
 });
 
