@@ -468,9 +468,11 @@ function ShortcutsTabContent({
         </svg>
       </div>
 
-      {/* Error message */}
+      {/* Error message - role="alert" ensures screen readers announce conflicts */}
       {shortcutError && (
         <div
+          role="alert"
+          aria-live="assertive"
           className="p-2 bg-error/10 border border-error/30 rounded text-error text-sm"
           data-testid="shortcut-error"
         >
