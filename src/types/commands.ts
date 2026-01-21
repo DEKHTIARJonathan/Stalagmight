@@ -73,6 +73,8 @@ export type BatchCommand =
 
 // Export types
 export type ImageFormat = 'png' | 'svg' | 'pdf';
+export type ColorMode = 'section' | 'depth';
+export type DepthPreset = 'thermal' | 'ocean' | 'terrain' | 'grayscale' | 'accessible';
 
 export interface ExportImageOptions {
   format: ImageFormat;
@@ -82,4 +84,9 @@ export interface ExportImageOptions {
   include_labels: boolean;
   include_section_names: boolean;
   include_shot_data: boolean;
+  color_mode: ColorMode;
+  depth_preset: DepthPreset;
+  include_legend: boolean;
+  depth_unit: string;
+  decimal_precision: number;
 }

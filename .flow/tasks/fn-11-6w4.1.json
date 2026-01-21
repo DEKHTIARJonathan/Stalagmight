@@ -5,10 +5,21 @@
   "created_at": "2026-01-21T01:34:57.651188Z",
   "depends_on": [],
   "epic": "fn-11-6w4",
+  "evidence": {
+    "commits": [
+      "c6aa452",
+      "72117fb"
+    ],
+    "prs": [],
+    "tests": [
+      "cargo test --manifest-path src-tauri/Cargo.toml depth_colors",
+      "cargo test --manifest-path src-tauri/Cargo.toml"
+    ]
+  },
   "id": "fn-11-6w4.1",
   "priority": null,
   "spec_path": ".flow/tasks/fn-11-6w4.1.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Create Rust depth color module with presets and HSL interpolation",
-  "updated_at": "2026-01-21T11:41:18.086467Z"
+  "updated_at": "2026-01-21T11:50:46.512157Z"
 }
