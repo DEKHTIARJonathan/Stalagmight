@@ -3,6 +3,7 @@ import maplibregl from 'maplibre-gl';
 import { metersToMapCoords } from '../../utils/coordinates';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { hasLiveStyle } from './mapUtils';
 
 interface GridOverlayProps {
   map: maplibregl.Map;
@@ -148,12 +149,21 @@ export default function GridOverlay({ map }: GridOverlayProps) {
     }
 
     return () => {
-      // Cleanup on unmount
-      if (map.getLayer(layerId)) {
-        map.removeLayer(layerId);
+      // Guard against map being destroyed (race condition on unmount)
+      if (!hasLiveStyle(map)) {
+        layerAdded.current = false;
+        return;
       }
-      if (map.getSource(sourceId)) {
-        map.removeSource(sourceId);
+
+      try {
+        if (map.getLayer(layerId)) {
+          map.removeLayer(layerId);
+        }
+        if (map.getSource(sourceId)) {
+          map.removeSource(sourceId);
+        }
+      } catch {
+        // Map already destroyed during unmount, cleanup not needed
       }
       layerAdded.current = false;
     };
