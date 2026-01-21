@@ -7,10 +7,19 @@
     "fn-10-i64.5"
   ],
   "epic": "fn-10-i64",
+  "evidence": {
+    "commits": [
+      "8ea872fdd3a97c49bb5100b9acb6f906a0688062"
+    ],
+    "prs": [],
+    "tests": [
+      "pnpm tsc --noEmit"
+    ]
+  },
   "id": "fn-10-i64.6",
   "priority": null,
   "spec_path": ".flow/tasks/fn-10-i64.6.md",
-  "status": "in_progress",
+  "status": "done",
   "title": "Add loading state to store and event listener hook",
-  "updated_at": "2026-01-21T09:30:44.750873Z"
+  "updated_at": "2026-01-21T10:02:18.865611Z"
 }
