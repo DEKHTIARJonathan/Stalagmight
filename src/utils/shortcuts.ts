@@ -1,0 +1,408 @@
+/**
+ * Keyboard shortcut utilities for platform detection, normalization, conflict detection,
+ * and display formatting.
+ *
+ * IMPORTANT: Canonicalization rules MUST match Rust (src-tauri/src/config/mod.rs)
+ * for consistent conflict detection between frontend and backend.
+ */
+
+/**
+ * Detect if running on macOS/iOS platform.
+ * Used for platform-specific shortcut display (symbols vs text).
+ */
+export function isMac(): boolean {
+  return /Mac|iPhone|iPad/.test(navigator.platform);
+}
+
+/**
+ * Reserved shortcuts that cannot be reassigned.
+ * These are system-level or critical app shortcuts.
+ * Stored in canonical form.
+ */
+export const RESERVED_SHORTCUTS: ReadonlySet<string> = new Set([
+  'Escape',
+  'Delete',
+  'Backspace',
+  'Ctrl+I', // Import DMP
+  'Ctrl+E', // Export
+  'Ctrl+A', // Select all
+]);
+
+/**
+ * Special key canonical names mapping.
+ * Maps various input forms to consistent canonical names.
+ * Keys are lowercase for lookup, values are PascalCase canonical names.
+ *
+ * Must match Rust normalize_key_name() function.
+ */
+const SPECIAL_KEYS: Record<string, string> = {
+  // Space
+  ' ': 'Space',
+  space: 'Space',
+  spacebar: 'Space',
+
+  // Enter
+  enter: 'Enter',
+  return: 'Enter',
+
+  // Escape
+  esc: 'Escape',
+  escape: 'Escape',
+
+  // Arrow keys
+  up: 'ArrowUp',
+  arrowup: 'ArrowUp',
+  down: 'ArrowDown',
+  arrowdown: 'ArrowDown',
+  left: 'ArrowLeft',
+  arrowleft: 'ArrowLeft',
+  right: 'ArrowRight',
+  arrowright: 'ArrowRight',
+
+  // Math symbols
+  '+': 'Plus',
+  plus: 'Plus',
+  '-': 'Minus',
+  minus: 'Minus',
+  '=': 'Equal',
+  equal: 'Equal',
+  equals: 'Equal',
+
+  // Navigation
+  backspace: 'Backspace',
+  back: 'Backspace',
+  delete: 'Delete',
+  del: 'Delete',
+  tab: 'Tab',
+  home: 'Home',
+  end: 'End',
+  pageup: 'PageUp',
+  pgup: 'PageUp',
+  pagedown: 'PageDown',
+  pgdn: 'PageDown',
+  insert: 'Insert',
+  ins: 'Insert',
+};
+
+/**
+ * Normalize a key name to canonical form.
+ * - Special keys: PascalCase (Space, ArrowUp, etc.)
+ * - Single letters: UPPERCASE (matches KeyboardEvent.key)
+ * - Numbers and other keys: preserved as-is
+ *
+ * Must match Rust normalize_key_name() function.
+ */
+function normalizeKeyName(key: string): string {
+  const lower = key.toLowerCase();
+
+  // Check special keys first
+  if (SPECIAL_KEYS[lower]) {
+    return SPECIAL_KEYS[lower];
+  }
+
+  // Handle space character directly (KeyboardEvent.key returns ' ' for space)
+  if (key === ' ') {
+    return 'Space';
+  }
+
+  // Function keys (F1-F12)
+  if (lower.startsWith('f') && lower.length > 1) {
+    const num = parseInt(lower.slice(1), 10);
+    if (!isNaN(num) && num >= 1 && num <= 12) {
+      return `F${num}`;
+    }
+  }
+
+  // Single letter keys - UPPERCASE (matches KeyboardEvent.key)
+  if (key.length === 1 && /^[a-zA-Z]$/.test(key)) {
+    return key.toUpperCase();
+  }
+
+  // Numbers and other keys - preserve as-is
+  return key;
+}
+
+/**
+ * Normalize a shortcut string to canonical form.
+ * Returns null if the shortcut is invalid.
+ *
+ * Canonical form rules (MUST match Rust):
+ * 1. Modifiers sorted: Ctrl -> Alt -> Shift -> Key
+ * 2. Single letter keys: UPPERCASE
+ * 3. Special keys: PascalCase canonical names
+ * 4. Platform aliases: Meta/Cmd/Command -> Ctrl
+ *
+ * @param shortcut - Raw shortcut string (e.g., "ctrl+s", "Shift+Ctrl+A")
+ * @returns Normalized shortcut string or null if invalid
+ */
+export function normalizeShortcut(shortcut: string): string | null {
+  // Handle single space character before trimming
+  if (shortcut === ' ') {
+    return 'Space';
+  }
+
+  const trimmed = shortcut.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  // Special case: single "+" key
+  if (trimmed === '+') {
+    return 'Plus';
+  }
+
+  // Special case: single "-" key
+  if (trimmed === '-') {
+    return 'Minus';
+  }
+
+  // Special case: single "=" key
+  if (trimmed === '=') {
+    return 'Equal';
+  }
+
+  // Split by + to get modifiers and key
+  const parts = trimmed.split('+').map((s) => s.trim());
+  if (parts.length === 0) {
+    return null;
+  }
+
+  // Count trailing empty parts (consecutive + at end means Plus key)
+  // "Ctrl++" has 1 trailing empty (split gives ["Ctrl", "", ""])
+  // "Ctrl+++" has 2 trailing empties
+  // "Ctrl+" has 1 trailing empty but this is INVALID (not same as Ctrl++)
+  // We need at least 2 parts ending with empty for it to be Plus
+  let trailingEmptyCount = 0;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i] === '') {
+      trailingEmptyCount++;
+    } else {
+      break;
+    }
+  }
+
+  // "Ctrl+" -> ["Ctrl", ""] -> 1 trailing empty, parts.length=2, BUT "Ctrl++" -> ["Ctrl", "", ""]
+  // The difference: "Ctrl++" has the pattern modifier + 2 empties (consecutive +)
+  // For trailing + to mean Plus, we need the original string to end with "++"
+  // Simple check: trailingEmptyCount must be >= 2 to be Plus, or exactly 1 but total parts > 1 + non-empty
+  // Actually the correct check: does the string end with "++"?
+  const endsWithDoublePlus = trimmed.endsWith('++');
+
+  // If single trailing empty and NOT double-plus, it's invalid (e.g., "Ctrl+")
+  if (trailingEmptyCount === 1 && !endsWithDoublePlus) {
+    return null;
+  }
+
+  // Check for empty parts in the middle (not trailing)
+  // e.g., "Ctrl++S" has empty in middle -> invalid
+  const nonTrailingParts = parts.slice(0, parts.length - trailingEmptyCount);
+  if (nonTrailingParts.some((p) => p === '')) {
+    return null;
+  }
+
+  let ctrl = false;
+  let alt = false;
+  let shift = false;
+  let key: string | null = null;
+
+  // Process non-empty parts
+  for (const part of nonTrailingParts) {
+    const lower = part.toLowerCase();
+    switch (lower) {
+      case 'ctrl':
+      case 'control':
+      case 'meta':
+      case 'cmd':
+      case 'command':
+        ctrl = true;
+        break;
+      case 'alt':
+      case 'option':
+        alt = true;
+        break;
+      case 'shift':
+        shift = true;
+        break;
+      default:
+        // This is the key (should be only one non-modifier)
+        if (key !== null) {
+          // Multiple non-modifier keys is invalid
+          return null;
+        }
+        key = normalizeKeyName(part);
+    }
+  }
+
+  // Handle trailing empty parts as Plus key (only if we detected double-plus pattern)
+  if (trailingEmptyCount > 0 && endsWithDoublePlus) {
+    if (key !== null) {
+      // Already have a key, can't have Plus too
+      return null;
+    }
+    key = 'Plus';
+  }
+
+  // Must have exactly one key
+  if (key === null) {
+    return null;
+  }
+
+  // Build canonical form: Ctrl+Alt+Shift+Key
+  let result = '';
+  if (ctrl) {
+    result += 'Ctrl+';
+  }
+  if (alt) {
+    result += 'Alt+';
+  }
+  if (shift) {
+    result += 'Shift+';
+  }
+  result += key;
+
+  return result;
+}
+
+/**
+ * Parse a KeyboardEvent into a normalized shortcut string.
+ * Useful for capturing user key presses in shortcut recorder.
+ *
+ * @param event - The keyboard event
+ * @returns Normalized shortcut string (e.g., "Ctrl+Shift+S")
+ */
+export function parseKeyEvent(event: KeyboardEvent): string {
+  const parts: string[] = [];
+
+  // Add modifiers in canonical order: Ctrl -> Alt -> Shift
+  // Note: On Mac, metaKey is Cmd, on Windows/Linux it's the Windows/Super key
+  // We normalize both ctrlKey and metaKey to Ctrl for cross-platform consistency
+  if (event.ctrlKey || event.metaKey) {
+    parts.push('Ctrl');
+  }
+  if (event.altKey) {
+    parts.push('Alt');
+  }
+  if (event.shiftKey) {
+    parts.push('Shift');
+  }
+
+  // Get the key and normalize it
+  // Skip if the key is a modifier itself
+  const key = event.key;
+  if (!['Control', 'Alt', 'Shift', 'Meta'].includes(key)) {
+    parts.push(normalizeKeyName(key));
+  }
+
+  return parts.join('+');
+}
+
+/**
+ * Check if a shortcut is reserved and cannot be reassigned.
+ *
+ * @param shortcut - Shortcut string (will be normalized before checking)
+ * @returns true if the shortcut is reserved
+ */
+export function isReservedShortcut(shortcut: string): boolean {
+  const normalized = normalizeShortcut(shortcut);
+  if (normalized === null) {
+    return false;
+  }
+  return RESERVED_SHORTCUTS.has(normalized);
+}
+
+/**
+ * Find a conflict for a shortcut in the registry.
+ * Returns the action name if the shortcut is already assigned, or null if no conflict.
+ *
+ * @param shortcut - Shortcut string to check (will be normalized)
+ * @param registry - Map of action names to their assigned shortcuts (already normalized)
+ * @param excludeAction - Optional action to exclude from conflict check (for editing existing binding)
+ * @returns The conflicting action name, or null if no conflict
+ */
+export function findConflict(
+  shortcut: string,
+  registry: Map<string, string[]>,
+  excludeAction?: string
+): string | null {
+  const normalized = normalizeShortcut(shortcut);
+  if (normalized === null) {
+    return null;
+  }
+
+  for (const [action, shortcuts] of registry) {
+    if (excludeAction && action === excludeAction) {
+      continue;
+    }
+    if (shortcuts.some((s) => normalizeShortcut(s) === normalized)) {
+      return action;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Platform-specific display symbols for Mac.
+ */
+const MAC_SYMBOLS: Record<string, string> = {
+  Ctrl: '\u2318', // Command (Cmd maps to Ctrl in canonical form)
+  Alt: '\u2325', // Option
+  Shift: '\u21E7', // Shift
+  Enter: '\u21A9', // Return
+  Backspace: '\u232B', // Delete backward
+  Delete: '\u2326', // Delete forward
+  Escape: '\u238B', // Escape
+  Tab: '\u21E5', // Tab
+  ArrowUp: '\u2191', // Up arrow
+  ArrowDown: '\u2193', // Down arrow
+  ArrowLeft: '\u2190', // Left arrow
+  ArrowRight: '\u2192', // Right arrow
+  Space: 'Space', // Keep as text for clarity
+};
+
+/**
+ * Format a shortcut for display using platform-appropriate symbols.
+ * - Mac: Uses symbols (e.g., "Cmd+Shift+S")
+ * - Windows/Linux: Uses text (e.g., "Ctrl+Shift+S")
+ *
+ * @param shortcut - Shortcut string (will be normalized first)
+ * @param forceMac - Force Mac-style display (for testing or cross-platform preview)
+ * @returns Formatted display string
+ */
+export function formatShortcut(shortcut: string, forceMac?: boolean): string {
+  const normalized = normalizeShortcut(shortcut);
+  if (normalized === null) {
+    return shortcut; // Return original if can't normalize
+  }
+
+  const useMacSymbols = forceMac ?? isMac();
+
+  if (!useMacSymbols) {
+    // Windows/Linux: just return the normalized form
+    return normalized;
+  }
+
+  // Mac: replace modifiers and special keys with symbols
+  const parts = normalized.split('+');
+  const formatted = parts.map((part) => {
+    return MAC_SYMBOLS[part] ?? part;
+  });
+
+  // Mac style: symbols without separators for modifiers, then key
+  // e.g., Ctrl+Shift+S -> Cmd+Shift+S
+  return formatted.join('');
+}
+
+/**
+ * Get the action name to display in human-readable format.
+ * Converts snake_case action names to Title Case.
+ *
+ * @param action - Action name (e.g., "toggle_sections_panel")
+ * @returns Formatted action name (e.g., "Toggle Sections Panel")
+ */
+export function formatActionName(action: string): string {
+  return action
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
