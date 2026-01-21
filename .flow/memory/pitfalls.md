@@ -48,3 +48,6 @@ When combining mouse hover and keyboard focus for highlight state, mouse leave h
 
 ## 2026-01-21 manual [pitfall]
 Tauri State<'_, T> cannot be cloned into spawn_blocking - use AppHandle.state::<T>() instead for 'static ownership
+
+## 2026-01-21 manual [pitfall]
+AtomicU64::new(0) with fetch_add returns 0 for first call; reserve 0 for sentinel by starting at 1

@@ -12,3 +12,6 @@ Use dependency injection (accept fetch function as parameter) for testable netwo
 
 ## 2026-01-21 manual [convention]
 Place concurrency guards at store level (not hook level) when multiple UI paths can trigger the same action
+
+## 2026-01-21 manual [convention]
+Use single event listener at app root level to avoid duplicate subscriptions when components mount/unmount
