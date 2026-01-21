@@ -105,8 +105,34 @@ Use existing wdio config. Tests focus on:
 - [ ] Tests verify computed styles for highlight states
 - [ ] All tests pass with WebdriverIO test runner
 ## Done summary
-TBD
+## WebdriverIO accessibility and visual tests for section highlighting
 
+Created comprehensive WebdriverIO test file for section highlighting accessibility and visual behavior at `e2e/specs/section-highlighting-a11y.spec.ts`.
+
+### Tests implemented:
+
+**ARIA Structure tests:**
+- Panel has correct listbox role with aria-label
+- Section rows have option role and aria-selected attribute
+
+**Keyboard Navigation tests:**
+- Tab moves focus into section panel
+- Arrow keys move focus between options  
+- Focus visible indicator on keyboard navigation
+
+**Screen Reader Support tests:**
+- Section row announces selection state via aria-selected
+- Panel announces as navigation landmark via aria-label
+
+**Visual Highlight States tests:**
+- Hover state appears on mouse enter
+- Selection state appears on click
+- Map hover triggers panel row highlight (bidirectional sync)
+- Highlight colors use theme accent color
+- Transition styles applied for smooth highlighting
+
+### File location:
+`e2e/specs/section-highlighting-a11y.spec.ts` (matching existing WebdriverIO pattern in `e2e/specs/`)
 ## Evidence
 - Commits:
 - Tests:
