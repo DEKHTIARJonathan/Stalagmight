@@ -318,7 +318,8 @@ impl std::error::Error for CancelledError {}
 // ============================================================================
 
 /// Global loading ID counter.
-static LOADING_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// Starts at 1 because 0 is reserved as "unknown/awaiting handshake" on the frontend.
+static LOADING_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Throttling constants.
 const THROTTLE_ITEMS: u32 = 10;
