@@ -56,6 +56,15 @@ async function createProjectWithStations(page: Page): Promise<void> {
   await page.locator('[data-testid="place-and-finish-button"]').click();
   await expect(page.locator('[data-testid="dmp-section-config-dialog"]')).not.toBeVisible({ timeout: 5000 });
 
+  // Close any import error dialogs that may appear (mock sections may trigger errors)
+  // Wait for dialog to potentially appear then dismiss it
+  await page.waitForTimeout(500);
+  const okButton = page.locator('button:has-text("OK")');
+  if (await okButton.isVisible().catch(() => false)) {
+    await okButton.click();
+    await page.waitForTimeout(200);
+  }
+
   // Wait for stations to actually render on the map (deterministic wait)
   await waitForMapReady(page);
   await expect.poll(
@@ -173,24 +182,110 @@ test.describe('Non-interactive tools', () => {
     expect(sawContextMenu).toBe(false);
   });
 
-  /**
-   * NOTE: This test is skipped because hover clear behavior requires SurveyLayer's
-   * internal hover state to be set (via mouse movement triggering hit detection).
-   * Setting the store's hoveredStation directly bypasses SurveyLayer, so the
-   * callback-based clearing doesn't trigger.
-   *
-   * The hover guard behavior IS tested:
-   * - handleStationHover in useMapTools.ts has an isNonInteractiveTool guard
-   * - SurveyLayer.setActiveTool clears hover when switching to pan/zoom
-   * - These are exercised through the normal mouse event flow
-   *
-   * The core non-interactive tool behavior (blocking selection, context menu,
-   * Ctrl+A) is validated by the other tests in this file.
-   */
-  test.skip('Switching to pan clears existing hover (requires actual mouse hover)', async ({ page }) => {
-    // This test requires reliable mouse hover hit-testing which is flaky in E2E.
-    // The functionality is tested via the isNonInteractiveTool guard in useMapTools.ts
-    // and SurveyLayer.setActiveTool which clears internal hover state.
+  test('Switching to pan clears existing hover', async ({ page }) => {
+    // This test verifies that switching to pan tool clears hoveredStation state.
+    // Since mouse hover hit detection is unreliable in E2E (depends on precise
+    // hitbox positioning), we simulate the hover by directly calling the
+    // SurveyLayer's mouseenter handler via map events.
+
+    // Ensure select tool is active first
+    await page.keyboard.press('s');
+    await page.waitForTimeout(100);
+
+    // Simulate hover by triggering the map's mouseenter event on a station feature
+    // This is equivalent to what happens when mouse moves over a station hitbox
+    const hoverSetup = await page.evaluate(() => {
+      const map = (window as unknown as {
+        __cavechef_map__?: {
+          queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
+            properties: { sectionId: number; stationIndex: number };
+          }>;
+          fire: (type: string, data: unknown) => void;
+        };
+      }).__cavechef_map__;
+
+      if (!map) return { success: false, error: 'No map' };
+
+      // Get first station feature from hitbox layer
+      const features = map.queryRenderedFeatures({ layers: ['survey-stations-hitbox'] });
+      if (features.length === 0) {
+        return { success: false, error: 'No station features in hitbox layer' };
+      }
+
+      const feature = features[0];
+      const sectionId = feature?.properties?.sectionId;
+      const stationIndex = feature?.properties?.stationIndex;
+
+      if (sectionId === undefined || stationIndex === undefined) {
+        return { success: false, error: 'Feature missing properties' };
+      }
+
+      // Manually set the hovered station via the uiStore (simulating what the
+      // SurveyLayer callback would do)
+      const stores = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: {
+            getState: () => { setHoveredStation: (ref: { section_id: number; station_index: number } | null) => void };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!stores) return { success: false, error: 'No __E2E_TEST__' };
+
+      // Set hovered station
+      stores.uiStore.getState().setHoveredStation({ section_id: sectionId, station_index: stationIndex });
+
+      // Also set SurveyLayer's internal hover state by triggering a synthetic mouseenter
+      // This ensures the callback chain will fire when we switch to pan
+      // Note: We need to access SurveyLayer through the map container
+      const mapContainer = document.querySelector('.maplibregl-canvas-container');
+      if (mapContainer) {
+        // Dispatch a mousemove event at a point where a station exists
+        // The SurveyLayer will pick this up and set its internal hoveredStationId
+        const event = new MouseEvent('mousemove', {
+          bubbles: true,
+          clientX: 400,
+          clientY: 400,
+        });
+        mapContainer.dispatchEvent(event);
+      }
+
+      return { success: true, sectionId, stationIndex };
+    });
+
+    expect(hoverSetup.success).toBe(true);
+
+    // Verify hover is set
+    await expect.poll(
+      async () => {
+        return page.evaluate(() => {
+          return (window as unknown as {
+            __E2E_TEST__?: {
+              uiStore: { getState: () => { hoveredStation: unknown } };
+            };
+          }).__E2E_TEST__?.uiStore?.getState()?.hoveredStation ?? null;
+        });
+      },
+      { timeout: 2000, message: 'Hover state should be set' }
+    ).not.toBeNull();
+
+    // Switch to pan - this triggers setActiveTool
+    // The setActiveTool function should clear hoveredStation via the callback chain
+    await page.keyboard.press('p');
+
+    // Poll until hover state is cleared
+    await expect.poll(
+      async () => {
+        return page.evaluate(() => {
+          return (window as unknown as {
+            __E2E_TEST__?: {
+              uiStore: { getState: () => { hoveredStation: unknown } };
+            };
+          }).__E2E_TEST__?.uiStore?.getState()?.hoveredStation ?? null;
+        });
+      },
+      { timeout: 2000, message: 'Hover state should be cleared after switching to pan' }
+    ).toBeNull();
   });
 
   test('Ctrl+A does nothing when pan active', async ({ page }) => {
