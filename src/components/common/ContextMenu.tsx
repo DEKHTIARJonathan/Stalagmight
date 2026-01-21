@@ -12,7 +12,7 @@ interface ContextMenuItem {
 }
 
 export default function ContextMenu() {
-  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA } = useUIStore();
+  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToSection } = useUIStore();
   const { project, setShotVirtual } = useProjectStore();
 
   const menuRef = useRef<HTMLDivElement>(null);
@@ -175,6 +175,13 @@ export default function ContextMenu() {
           label: 'Adjust Position...',
           action: () => {
             openDialog('section-adjust', { sectionId: target.sectionId });
+          },
+        },
+        {
+          label: 'Zoom to Section',
+          action: () => {
+            triggerZoomToSection(target.sectionId);
+            closeDialog();
           },
         },
         { label: '', action: () => {}, separator: true },
