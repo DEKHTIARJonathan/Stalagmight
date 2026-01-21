@@ -39,6 +39,18 @@ export function LoadingProgress({
   const phaseId = React.useId();
   const detailsId = React.useId();
 
+  // Ref for cleanup of feedback timeout
+  const feedbackTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cleanup timeout on unmount
+  React.useEffect(() => {
+    return () => {
+      if (feedbackTimeoutRef.current) {
+        clearTimeout(feedbackTimeoutRef.current);
+      }
+    };
+  }, []);
+
   /** Copy error message and details to clipboard with error handling */
   const handleCopyError = React.useCallback(async () => {
     if (!error) return;
@@ -47,14 +59,22 @@ export function LoadingProgress({
       ? `${error.message}\n\n${error.details}`
       : error.message;
 
+    // Clear any pending timeout
+    if (feedbackTimeoutRef.current) {
+      clearTimeout(feedbackTimeoutRef.current);
+    }
+
     try {
-      await navigator.clipboard?.writeText(errorText);
+      // Explicitly check clipboard API availability
+      if (!navigator.clipboard?.writeText) {
+        throw new Error('Clipboard API not available');
+      }
+      await navigator.clipboard.writeText(errorText);
       setCopyFeedback('copied');
-      setTimeout(() => setCopyFeedback('idle'), 2000);
     } catch {
       setCopyFeedback('failed');
-      setTimeout(() => setCopyFeedback('idle'), 2000);
     }
+    feedbackTimeoutRef.current = setTimeout(() => setCopyFeedback('idle'), 2000);
   }, [error]);
 
   // Clamp progress values
