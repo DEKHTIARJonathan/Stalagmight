@@ -1,14 +1,14 @@
 {
-  "assignee": null,
+  "assignee": "cavechef@example.com",
   "claim_note": "",
-  "claimed_at": null,
+  "claimed_at": "2026-01-21T06:45:39.947434Z",
   "created_at": "2026-01-20T15:43:20.290686Z",
   "depends_on": [],
   "epic": "fn-9-d6v",
   "id": "fn-9-d6v.7",
   "priority": null,
   "spec_path": ".flow/tasks/fn-9-d6v.7.md",
-  "status": "todo",
+  "status": "in_progress",
   "title": "Add keyboard accessibility to SectionsPanel",
-  "updated_at": "2026-01-20T16:06:33.169972Z"
+  "updated_at": "2026-01-21T06:45:39.947447Z"
 }

@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { type Section, type SectionId } from '../../types/project';
 import { useUIStore } from '../../store/uiStore';
 
@@ -7,10 +7,14 @@ interface SectionsPanelProps {
 }
 
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
-  const { selection, setSelection, hoveredSectionId, setHoveredSectionId, openDialog } = useUIStore();
+  const { selection, setSelection, clearSelection, hoveredSectionId, setHoveredSectionId, openDialog } = useUIStore();
 
   // Track the last hovered section ID set by this panel (for cleanup on unmount)
   const lastHoveredIdRef = useRef<SectionId | null>(null);
+
+  // Keyboard accessibility: track focused index and refs for roving tabindex
+  const [focusedIndex, setFocusedIndex] = useState<number>(-1);
+  const optionRefs = useRef<(HTMLLIElement | null)[]>([]);
 
   // Clear hoveredSectionId on unmount if it was set by this panel
   useEffect(() => {
@@ -25,13 +29,76 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     };
   }, []);
 
-  const handleSectionClick = (section: Section, e: React.MouseEvent) => {
-    // Only handle left mouse button
-    if (e.button !== 0) return;
+  const handleSectionClick = (section: Section, e?: React.MouseEvent) => {
+    // Only handle left mouse button for mouse events
+    if (e && e.button !== 0) return;
     setSelection({
       type: 'section',
       sectionId: section.id,
     });
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent, currentIndex: number) => {
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        e.stopPropagation();
+        if (currentIndex < sections.length - 1) {
+          const nextIndex = currentIndex + 1;
+          setFocusedIndex(nextIndex);
+          optionRefs.current[nextIndex]?.focus();
+        }
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        e.stopPropagation();
+        if (currentIndex > 0) {
+          const prevIndex = currentIndex - 1;
+          setFocusedIndex(prevIndex);
+          optionRefs.current[prevIndex]?.focus();
+        }
+        break;
+      case 'Home':
+        e.preventDefault();
+        e.stopPropagation();
+        setFocusedIndex(0);
+        optionRefs.current[0]?.focus();
+        break;
+      case 'End':
+        e.preventDefault();
+        e.stopPropagation();
+        setFocusedIndex(sections.length - 1);
+        optionRefs.current[sections.length - 1]?.focus();
+        break;
+      case 'Enter':
+        e.preventDefault();
+        e.stopPropagation();
+        if (sections[currentIndex]) {
+          handleSectionClick(sections[currentIndex]);
+        }
+        break;
+      case ' ':
+        e.preventDefault();
+        e.stopPropagation();
+        if (sections[currentIndex]) {
+          handleSectionClick(sections[currentIndex]);
+        }
+        break;
+      case 'Escape':
+        e.preventDefault();
+        e.stopPropagation();
+        clearSelection();
+        break;
+    }
+  };
+
+  const handleContainerBlur = (e: React.FocusEvent<HTMLUListElement>) => {
+    // CRITICAL: Only clear when focus leaves the listbox ENTIRELY
+    // Using relatedTarget to check if new focus target is within container
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setFocusedIndex(-1);
+      setHoveredSectionId(null);
+    }
   };
 
   const handleSectionMouseEnter = (sectionId: SectionId) => {
@@ -99,8 +166,13 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
             </button>
           </div>
         ) : (
-          <ul className="py-1">
-            {sections.map((section) => {
+          <ul
+            role="listbox"
+            aria-label="Cave survey sections"
+            className="py-1"
+            onBlur={handleContainerBlur}
+          >
+            {sections.map((section, index) => {
               const isSelected =
                 selection?.type === 'section' &&
                 selection.sectionId === section.id;
@@ -109,14 +181,23 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
               return (
                 <li
                   key={section.id}
+                  ref={(el) => { optionRefs.current[index] = el; }}
+                  role="option"
+                  aria-selected={isSelected}
+                  tabIndex={focusedIndex === index ? 0 : (focusedIndex === -1 && index === 0 ? 0 : -1)}
                   data-testid={`section-row-${section.id}`}
-                  className={`px-3 py-2 cursor-pointer group transition-colors ${
+                  className={`px-3 py-2 cursor-pointer group transition-colors outline-none focus:ring-2 focus:ring-accent focus:ring-inset ${
                     isSelected || hoveredSectionId === section.id ? 'bg-accent/20' : 'hover:bg-accent/20'
                   }`}
                   onMouseDown={(e) => handleSectionClick(section, e)}
                   onContextMenu={(e) => handleSectionContextMenu(e, section.id)}
                   onMouseEnter={() => handleSectionMouseEnter(section.id)}
                   onMouseLeave={handleSectionMouseLeave}
+                  onFocus={() => {
+                    setFocusedIndex(index);
+                    setHoveredSectionId(section.id);
+                  }}
+                  onKeyDown={(e) => handleKeyDown(e, index)}
                 >
                   <div className="flex items-center gap-2">
                     <span
