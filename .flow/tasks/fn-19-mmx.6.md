@@ -18,13 +18,14 @@ Follow existing pattern from import placement at `App.tsx:236-244`.
 
 `triggerFitToBounds()` is in `useUIStore`. It triggers the map to zoom/pan to fit all visible content. After datum repositioning, sections may have moved significantly.
 ## Acceptance
-- [ ] Map fits to bounds after successful datum set
-- [ ] Fit-to-bounds called only on success (not on error)
-- [ ] Works for both setting new datum and modifying existing
-- [ ] TypeScript types pass (pnpm tsc --noEmit)
+- [x] Map fits to bounds after successful datum set
+- [x] Fit-to-bounds called only on success (not on error)
+- [x] Works for both setting new datum and modifying existing
+- [x] TypeScript types pass (pnpm tsc --noEmit)
 ## Done summary
-Added triggerFitToBounds() call after successful setZeroDatum in projectStore.ts:688. Map now automatically fits to bounds when zero datum is set, matching existing patterns used in project load/open operations.
+Added triggerFitToBounds() call after successful setZeroDatum in projectStore.ts:688 with optional fitToBounds parameter (defaults to true). Import flow in App.tsx passes fitToBounds: false to avoid redundant fits during batch operations - import already does a single fit at the end.
 ## Evidence
-- Commits:
+- Commits: 9657906 feat(ui): trigger fit-to-bounds after setting zero datum
 - Tests: TypeScript passes (pnpm tsc --noEmit), Playwright tests pass (464/464), Rust tests pass (678 + 80 integration)
+- Review: Codex impl-review SHIP
 - PRs:
