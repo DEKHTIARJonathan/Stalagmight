@@ -38,9 +38,8 @@ Add undo_to and redo_to commands that execute multiple undo/redo operations to r
 - [ ] cargo test passes
 
 ## Done summary
-TBD
-
+Added undo_to(index) and redo_to(index) Tauri commands that execute multiple undo/redo operations to reach a specific history point, with bounds validation and proper error handling.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 0386b4dbd1811b6c4b965209fd4c80fdc5e3ac9b
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:

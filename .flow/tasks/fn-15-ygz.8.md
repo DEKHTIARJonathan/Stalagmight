@@ -1,30 +1,27 @@
 # fn-15-ygz.8 Implement soft bounds with rubber-band panning
 
 ## Description
-Implement soft bounds with rubber-band panning. Users can pan outside system bounds but experience gentle resistance that pulls back to valid area.
+
+Implement soft bounds with rubber-band panning effect. MapLibre GL JS 4.7.1 doesn't expose `transformConstrain`, so use alternative approach.
 
 **Size:** S
-**Files:** 
-- `src/components/GlobalView/GlobalViewMap.tsx` (transformConstrain callback)
+**Files:**
+- `src/components/GlobalView/GlobalViewMap.tsx` (bounds handling)
 
 ## Approach
 
-- Use MapLibre's `transformConstrain` option
-- Calculate combined bounds of all systems + 20% padding
-- When panning outside bounds, apply progressive resistance
-- Gentle snap-back when released (not instant)
-- Fit All button zooms to all systems with GPS
+- Use `maxBounds` for hard outer limit (combined system bounds + 50% padding)
+- Add `moveend` listener that detects when outside soft bounds (20% padding zone)
+- If outside soft zone on moveend, animate back using `easeTo` with gentle easing
+- This creates a "rubber band" feel without requiring internal MapLibre APIs
+- Fit All button still zooms to all systems
 
-## Key context
-
-- Pattern from MapLibre docs: `transformConstrain: (lngLat, zoom) => constrainedResult`
-- 20% padding means: if systems span 10 degrees, allow 12 degrees total
 ## Acceptance
-- [ ] Can pan slightly outside system bounds
-- [ ] Panning outside feels resistance (progressive)
-- [ ] Released pan smoothly returns toward bounds
-- [ ] Fit All button works and zooms to all systems
-- [ ] 20% padding around combined system bounds
+
+- [ ] Can pan within hard bounds (50% padding)
+- [ ] Released pan outside soft zone (20%) smoothly returns via easeTo
+- [ ] Fit All button works
+
 ## Done summary
 TBD
 

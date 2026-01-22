@@ -2,104 +2,78 @@
 
 ## Overview
 
-Transform the global view from showing markers to rendering actual survey geometry (shots and stations) for all GPS-positioned projects. This provides better visualization of cave system layouts and their geographic relationships.
+Transform the global view from showing markers to rendering actual survey geometry (shots and stations) for all GPS-positioned projects.
 
 ## Scope
 
-**In scope:**
-- Survey geometry rendering (shots as lines, stations as circles)
-- System-level selection (click any shot/station → select entire system)
-- Lazy loading with marker placeholders
-- Auto-throttle for performance
-- Search/filter in toolbar
-- Keyboard navigation (arrow keys, Ctrl+A, Enter, Delete, Escape)
-- View mode toggle (survey ↔ markers)
-- Soft bounds with rubber-band pan limiting
-- Context menu with system actions
-- Error states with popup details
-- Persisted map position/zoom
+**In scope:** Survey geometry rendering, system-level selection, lazy loading, auto-throttle, search/filter, keyboard navigation, view mode toggle, soft bounds
 
-**Out of scope:**
-- Individual shot/station selection in global view
-- Editing operations in global view
-- Loop closures and merge connection visualization
-- Station name labels (only system name shown)
+**Out of scope:** Individual shot/station selection, editing, loop closures, station name labels
 
 ## Approach
 
 ### Backend Changes
 
-1. **Extend ProjectMetadata** to include `station_count` (Rust model + TS type)
+1. **Fix coordinate order**: Standardize on `[lng, lat]` for MapLibre compatibility. Update `gps_center` in Rust to store `(longitude, latitude)` instead of current `(latitude, longitude)`.
 
-2. New Tauri command `get_survey_geometry` returns lightweight GPS-transformed data with metadata:
+2. **Extend ProjectMetadata** to include `station_count`
+
+3. New Tauri command `get_survey_geometry` (async to avoid UI blocking):
    ```rust
+   #[derive(Serialize)]
+   struct Shot {
+     from: [f64; 2],  // [lng, lat]
+     to: [f64; 2],    // [lng, lat]
+     is_virtual: bool,
+   }
+   
+   #[derive(Serialize)]
    struct SurveyGeometry {
      file_path: String,
      name: String,
      total_length: f64,
      station_count: usize,
-     gps_origin: [f64; 2],  // [lng, lat]
-     shots: Vec<ShotLine>,
-     stations: Vec<[f64; 2]>,
-     is_virtual: Vec<bool>,
+     gps_origin: [f64; 2],  // [lng, lat] - the zero datum GPS position
+     shots: Vec<Shot>,
+     stations: Vec<[f64; 2]>,  // [lng, lat] positions
    }
    ```
 
-3. **GPS coordinate transformation (Rust)** - use latitude-adjusted formula matching frontend:
+4. **GPS coordinate transformation (Rust)** - compute relative to zero-datum station:
    ```rust
-   fn meters_to_map_coords(x: f64, y: f64, origin: [f64; 2]) -> [f64; 2] {
-     let origin_lng = origin[0];
-     let origin_lat = origin[1];
-     // Match frontend formula exactly
-     let meters_per_degree_lat = 111320.0;
-     let meters_per_degree_lng = 111320.0 * origin_lat.to_radians().cos();
-     let lng = origin_lng + (x / meters_per_degree_lng);
-     let lat = origin_lat + (y / meters_per_degree_lat);
-     [lng, lat]
-   }
+   // 1. Find zero-datum station and its raw coords (x0, y0)
+   // 2. For each station at (x, y): compute delta dx = x - x0, dy = y - y0
+   // 3. Transform: 
+   //    lng = origin_lng + (dx / meters_per_degree_lng)
+   //    lat = origin_lat + (dy / meters_per_degree_lat)
+   //    where meters_per_degree_lng = 111320.0 * cos(origin_lat_rad)
    ```
-   Add unit tests comparing against frontend `metersToMapCoords` with same inputs.
 
-4. **Add config options** to Rust config (`src-tauri/src/config/`):
-   - `global_view.fps_threshold` (default 30)
-   - `global_view.tolerance` (default 0.5)
-   - `global_view.throttle_tolerance` (default 1.0)
+5. **Register command** in `src-tauri/src/lib.rs` `generate_handler![]` list
 
-5. **GPS filter**: Only fetch geometry for projects where `gps_center != null`
+6. **Add config options** to Rust config for fps_threshold, tolerance, throttle_tolerance
+
+7. **GPS filter**: Only process projects where `gps_center != null` (not `(0,0)` sentinel)
 
 ### Frontend Changes
 
+**GPS filter cleanup** - Remove sentinel checks throughout the frontend:
+- `GlobalView.tsx:107` - gpsProjects filter: remove `gps_center[0] !== 0 && gps_center[1] !== 0`
+- `GlobalView.tsx:239` - Map tab count: same fix
+- `GlobalViewMap.tsx:29` - gpsProjects filter: same fix
+- `MetadataPanel.tsx:88` - formatGps guard: remove `(center[0] === 0 && center[1] === 0)`
+
 1. Create `GlobalSurveyLayer` class for read-only multi-system rendering
-2. Use GeoJSON sources with `tolerance: 0.5` for MapLibre simplification
-3. Feature properties: `systemId`, `name`, `totalLength`, `stationCount`
-4. Use filter-based highlighting (not `setFeatureState`)
-5. Implement FPS monitoring with `requestAnimationFrame` timing
-6. Add search filter using `index-of` + `downcase` expression
-7. Context menu: Open, Zoom to System, Remove from Recent, Show in Folder, Merge Selected
-8. Error popup on red marker click showing error message
-9. Persist map position/zoom in local storage, restore on return
+2. GeoJSON sources with `tolerance: 0.5`, feature properties for filtering/tooltips
+3. Filter-based highlighting (not setFeatureState)
+4. FPS monitoring with `requestAnimationFrame`
+5. Search filter using `index-of` + `downcase` expression
+6. **Soft bounds**: Use `maxBounds` for hard limits + custom move listener with `easeTo` for rubber-band effect (MapLibre doesn't expose `transformConstrain`)
+7. Context menu, error popups, position persistence
 
-### Key Patterns to Reuse
-- `metersToMapCoords()` from `src/utils/coordinates.ts:16-31`
-- Expression building from `src/utils/maplibre-expressions.ts`
-- Layer styling patterns from `SurveyLayer.tsx:276-596`
-- Color palette from `src/utils/colors.ts:246-255`
-- Context menu pattern from `GlobalView.tsx`
+### Test Vectors
 
-### Memory Pitfalls (from .flow/memory)
-- Use opaque colors with tiny opacity for hitbox layers
-- Disable MapLibre's built-in keyboard handler
-- Only fire hover(false) if no other feature type is hovered
-- Use refs for values in keydown handlers
-
-## Risks & Mitigations
-
-| Risk | Mitigation |
-|------|------------|
-| Performance | Auto-throttle + markers fallback |
-| Memory pressure | Clear cache on single-system view |
-| Coordinate drift | Same formula in Rust/TS with unit tests |
-| Race conditions | Cancel loads on project open |
+Create `tests/fixtures/coordinate_transform_vectors.json` with input/output pairs generated from frontend `metersToMapCoords`. Test same vectors in both Rust and TS.
 
 ## Quick commands
 ```bash
@@ -117,39 +91,24 @@ cargo test --manifest-path src-tauri/Cargo.toml
 | `global_view.tolerance` | 0.5 | MapLibre GeoJSON simplification tolerance |
 | `global_view.throttle_tolerance` | 1.0 | Higher tolerance when throttled |
 
-## Open Questions
-
-1. **Color assignment**: Use deterministic hash from file_path?
-2. **Cache eviction**: Clear on any edit or only edited project?
-
 ## Acceptance
 
 - [ ] Global view renders shots and stations for GPS-positioned projects
 - [ ] Each system has distinct auto-assigned color (stable across sessions)
-- [ ] Clicking shot/station selects entire system
-- [ ] Hovering shows system highlight with tooltip
-- [ ] Multi-select with Ctrl+click
-- [ ] Double-click opens project
-- [ ] Context menu: Open, Zoom to System, Remove, Show in Folder, Merge
-- [ ] Search filter dims non-matching (25% opacity) using index-of
+- [ ] System-level selection and hover with tooltip
+- [ ] Multi-select with Ctrl+click, double-click opens
+- [ ] Context menu with correct options
+- [ ] Search filter dims non-matching (25% opacity)
 - [ ] Keyboard shortcuts work
-- [ ] Lazy loading with markers and spinners
-- [ ] Fade transition (150ms)
-- [ ] Error states: red marker with click-to-see popup
-- [ ] View mode toggle persisted in local storage
+- [ ] Lazy loading with markers and spinners, fade transition
+- [ ] Error states: red marker with popup
+- [ ] View mode toggle persisted
 - [ ] Auto-throttle when FPS drops
-- [ ] Soft bounds with rubber-band
-- [ ] **Map position/zoom persisted and restored**
-- [ ] MetadataPanel shows aggregate stats (including station count)
-- [ ] Projects without GPS not shown/fetched
-- [ ] Rust transform matches frontend (unit tests)
-- [ ] Rust config options added
+- [ ] Soft bounds with rubber-band effect
+- [ ] Map position/zoom persisted
+- [ ] MetadataPanel shows aggregate stats
+- [ ] Projects without GPS not shown
+- [ ] **Coordinate order standardized to [lng, lat]**
+- [ ] **Transform accounts for zero-datum station offset**
+- [ ] **Test vectors verify Rust/TS transform parity**
 - [ ] Documentation updated
-
-## References
-
-- `src/components/GlobalView/GlobalViewMap.tsx`
-- `src/components/Map/SurveyLayer.tsx`
-- `src/utils/coordinates.ts:16-31`
-- `src/utils/maplibre-expressions.ts`
-- [MapLibre Large Data Guide](https://maplibre.org/maplibre-gl-js/docs/guides/large-data/)
