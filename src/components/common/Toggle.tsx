@@ -1,4 +1,4 @@
-import { type KeyboardEvent } from 'react';
+import { type KeyboardEvent, useId } from 'react';
 
 interface ToggleProps {
   checked: boolean;
@@ -26,6 +26,9 @@ export function Toggle({
   'aria-labelledby': ariaLabelledBy,
   'data-testid': dataTestId,
 }: ToggleProps) {
+  // Generate unique id for label association
+  const generatedLabelId = useId();
+
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // Only Space key toggles the switch (not Enter)
     if (event.key === ' ') {
@@ -42,12 +45,15 @@ export function Toggle({
     }
   };
 
+  // Determine aria-labelledby: explicit prop > generated from label > undefined
+  const effectiveLabelledBy = ariaLabelledBy ?? (label && !ariaLabel ? generatedLabelId : undefined);
+
   const toggleElement = (
     <div
       role="switch"
       aria-checked={checked}
       aria-label={ariaLabel}
-      aria-labelledby={ariaLabelledBy}
+      aria-labelledby={effectiveLabelledBy}
       aria-disabled={disabled}
       tabIndex={disabled ? -1 : 0}
       data-testid={dataTestId}
@@ -73,15 +79,19 @@ export function Toggle({
     </div>
   );
 
-  // If label is provided, wrap in a label element
+  // If label is provided, wrap with visible label text and associate via aria-labelledby
   if (label) {
     return (
-      <label className="inline-flex items-center gap-2 cursor-pointer">
+      <div className="inline-flex items-center gap-2">
         {toggleElement}
-        <span className={`text-text-primary ${disabled ? 'opacity-50' : ''}`}>
+        <span
+          id={generatedLabelId}
+          className={`text-text-primary cursor-pointer ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+          onClick={handleClick}
+        >
           {label}
         </span>
-      </label>
+      </div>
     );
   }
 
