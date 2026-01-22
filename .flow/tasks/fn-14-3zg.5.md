@@ -33,9 +33,33 @@ Add keyboard navigation to the undo/redo dropdown: Arrow Down to open, arrow key
 - [ ] Works with screen readers (test with accessibility tools)
 - [ ] pnpm tsc --noEmit passes
 ## Done summary
-TBD
+## Summary
 
+Added full keyboard navigation to the UndoHistoryDropdown component with proper ARIA attributes for accessibility.
+
+### Changes Made
+
+**src/components/SingleSystemView/UndoHistoryDropdown.tsx:**
+
+1. **Keyboard navigation state**: Added `activeIndex` state to track currently focused menu item (-1 when none).
+
+2. **New refs**: Added `buttonRef` for focus management, `scrollContainerRef` for auto-scrolling, and `menuId` (via useId) for ARIA IDs.
+
+3. **Keyboard handlers**:
+   - `handleButtonKeyDown`: Arrow Down opens dropdown and focuses first item
+   - `handleDropdownKeyDown`: Arrow Up/Down navigates items (wrapping), Enter executes action, Escape closes and returns focus, Home/End jump to first/last item
+
+4. **Auto-scroll**: `scrollActiveItemIntoView` function scrolls selected item into viewport using `scrollIntoView({ block: 'nearest', behavior: 'smooth' })`.
+
+5. **ARIA attributes**:
+   - Button: `aria-controls` pointing to menu ID
+   - Dropdown: `aria-activedescendant` for virtual focus, `id` for menu
+   - Menu items: `id` for aria-activedescendant reference, `aria-selected` for selected state, `tabIndex={-1}`
+
+6. **Visual feedback**: Active item shows highlight via conditional `bg-background/50` class. Mouse hover also updates active index for consistent visual feedback.
+
+7. **Focus management**: When opened via keyboard (Arrow Down), dropdown gets focus and first item is highlighted. Escape returns focus to trigger button.
 ## Evidence
 - Commits:
-- Tests:
+- Tests: typescript, playwright, rust
 - PRs:
