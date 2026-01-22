@@ -18,9 +18,11 @@ Update documentation to reflect the fixed export scaling behavior.
 
 ## Key context
 
-- Document formula: `viewBox_size = pixel_size / scale`
-- Element sizes: station 3px (6px ZD), shot stroke 2px, grid 0.5px, labels 8-12px
+- fn-17-ygu.1 implemented the scaling formula: `viewBox_size = pixel_size / scale`
+- All elements already use this formula via px() helper (line 263)
+- Actual implemented sizes: station 3px (6px ZD), shot stroke 2px, grid 0.5px, labels 8px/10px/12px
 - DPI options: 72, 150, 300, 600
+- Code comments already present at lines 261-263, 628-629
 
 ## Acceptance
 

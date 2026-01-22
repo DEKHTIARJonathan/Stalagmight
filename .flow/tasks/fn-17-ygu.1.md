@@ -53,9 +53,8 @@ The scale factor is at line 254: `scale = TARGET_SIZE / width.max(height)` where
 - [ ] Existing Rust tests pass
 
 ## Done summary
-TBD
-
+Fixed SVG export element scaling by applying pixel-to-viewBox conversion to all sizes (stations, shots, labels, legend). Added color sanitization to prevent SVG injection from user-controlled colors.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 402f170, 07a66e0
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml -- image::
 - PRs:

@@ -72,3 +72,6 @@ Wrapping non-labelable elements (div with role=switch) in <label> does not assoc
 
 ## 2026-01-22 manual [pitfall]
 Replace waitForTimeout() with deterministic assertions (e.g., toHaveAttribute, toContainText) after UI state changes to prevent flaky E2E tests
+
+## 2026-01-22 manual [pitfall]
+User-controlled color strings in SVG/HTML must be validated (#RGB/#RRGGBB only) to prevent markup injection attacks

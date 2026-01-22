@@ -31,6 +31,8 @@ Add regression tests to prevent future scaling bugs in SVG/PNG export.
 - WebdriverIO tests run with real Tauri backend
 - Existing `export-integration.spec.ts` already exports files to disk
 - Rust tests can use regex or quick XML parsing to extract attributes
+- fn-17-ygu.1 implemented the px() scaling helper (line 263) and applied it to all elements
+- Basic DPI tests (72, 150, 300, 600) already added to image.rs but without detailed attribute verification
 
 ## Acceptance
 
