@@ -792,17 +792,17 @@ describe('Satellite Display and Cache Verification', () => {
       const initialStats = await getCacheStats();
       expect(initialStats.total_tiles).toBeGreaterThan(0);
 
-      // Clear cache via IPC
-      await clearTileCache();
-      const clearedStats = await getCacheStats();
-      expect(clearedStats.total_tiles).toBe(0);
-
-      // Disable satellite first
+      // Disable satellite BEFORE clearing cache to prevent new tiles from being fetched
       await setSatellite(false);
       await browser.waitUntil(
         async () => !(await isSatelliteEnabled()),
         { timeout: 3000 }
       );
+
+      // Clear cache via IPC
+      await clearTileCache();
+      const clearedStats = await getCacheStats();
+      expect(clearedStats.total_tiles).toBe(0);
 
       // Re-enable satellite to force fresh fetch
       await setSatellite(true);
