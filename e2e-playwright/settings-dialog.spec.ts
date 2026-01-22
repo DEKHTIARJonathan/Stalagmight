@@ -78,40 +78,33 @@ test.describe('Settings Dialog - Keyboard Shortcuts to Open', () => {
     await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
   });
 
-  test('Cmd/Ctrl+, works when focused in search input', async ({ page }) => {
+  test('Cmd/Ctrl+, works when focused in section name input', async ({ page }) => {
     // We're in project view (SingleSystemView) where keyboard shortcuts are active
-    // Wait for the map UI to be fully ready
-    await page.waitForTimeout(300);
-
-    // First open Settings using the keyboard shortcut
-    await page.keyboard.down('Control');
-    await page.keyboard.press(',');
-    await page.keyboard.up('Control');
-    await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
-
-    // Navigate to Shortcuts panel which has a search input
-    await page.locator('[data-testid="settings-tab-shortcuts"]').click();
-    await expect(page.locator('[data-testid="settings-panel-shortcuts"]')).toBeVisible();
-
-    // Focus the search input
-    const searchInput = page.locator('[data-testid="shortcuts-search"]');
-    await searchInput.click();
-    await searchInput.fill('test query');
-    await expect(searchInput).toBeFocused();
-
-    // Close Settings
-    await page.locator('[data-testid="settings-cancel-button"]').click();
-    await expect(page.locator('[data-testid="settings-dialog"]')).not.toBeVisible({ timeout: 5000 });
-
-    // Now click on canvas to ensure we're in project view (not in dialog)
+    // Wait for canvas to be visible and ready (deterministic check)
     const canvas = page.locator('canvas');
-    await expect(canvas).toBeVisible();
-    await canvas.click();
+    await expect(canvas).toBeVisible({ timeout: 5000 });
 
-    // The shortcut should work again from project view after closing
+    // Add a section to get an editable input in the project view
+    const addSectionButton = page.locator('[data-testid="sections-add-button"]');
+    await expect(addSectionButton).toBeVisible({ timeout: 5000 });
+    await addSectionButton.click();
+
+    // Wait for section to be created and section name input to appear
+    const sectionNameInput = page.locator('[data-testid="section-name-input"]');
+    await expect(sectionNameInput).toBeVisible({ timeout: 5000 });
+
+    // Focus the section name input and type something
+    await sectionNameInput.click();
+    await sectionNameInput.fill('Test Section');
+    await expect(sectionNameInput).toBeFocused();
+
+    // CRITICAL: Press Ctrl+, while the input is focused
+    // The shortcut should open Settings even when focus is in an input field
     await page.keyboard.down('Control');
     await page.keyboard.press(',');
     await page.keyboard.up('Control');
+
+    // Settings dialog should open even though an input was focused
     await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
   });
 });

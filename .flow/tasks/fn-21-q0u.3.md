@@ -14,6 +14,10 @@ Add bordered section after LRUD section (after L360) with:
 - **End Station**: Link to station at index = shot array index + 1 (1-indexed display)
 - **Section**: Link to section using format `sectionId: sectionName` or `sectionId: Unnamed`
 
+### Shot-to-Station Mapping (verify with these examples)
+- Shot index 0 (display "1") → Start Station index 0 (display "1"), End Station index 1 (display "2")
+- Shot index 2 (display "3") → Start Station index 2 (display "3"), End Station index 3 (display "4")
+
 ### Target Validation
 Before rendering each link, validate the target exists:
 - **Station links**: Check if station exists in `stations` array matching `section_id` and `station_index`
@@ -30,8 +34,8 @@ Pass `isMissing={!exists}` to DetailLink for missing station targets.
 - Section link: `section-{sectionId}-link`
 
 ### Center Button
-Add crosshairs button to Panel header using `headerActions` prop:
-- Icon: Crosshairs from lucide-react
+Add inline SVG crosshairs button to Panel header using `headerActions` prop:
+- Icon: Inline SVG crosshairs (follow pattern at ShortcutRecorder.tsx:309-320)
 - onClick: Call `triggerCenterOnShot(section.id, shot.id)`
 - aria-label: `Center map on shot {sectionId}:{shotPosition}`
 - data-testid: `center-shot-button`
@@ -47,7 +51,7 @@ Add crosshairs button to Panel header using `headerActions` prop:
 - [ ] Station link targets validated - `isMissing` passed to DetailLink when not found
 - [ ] Section link shows `sectionId: name` format and navigates to section
 - [ ] Section link uses `data-testid="section-{sectionId}-link"`
-- [ ] Crosshairs button in header calls `triggerCenterOnShot`
+- [ ] Inline SVG crosshairs button in header calls `triggerCenterOnShot`
 - [ ] All links use DetailLink component with appropriate data-testid
 - [ ] All links have proper aria-labels
 - [ ] Clicking links updates selection correctly
