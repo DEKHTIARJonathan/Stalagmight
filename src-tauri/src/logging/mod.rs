@@ -91,3 +91,54 @@ pub fn cleanup_logs(max_size_mb: u32) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_temp_data_home<T>(f: impl FnOnce(&TempDir) -> T) -> T {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let dir = TempDir::new().expect("temp dir");
+        let key = "XDG_DATA_HOME";
+        let original = env::var_os(key);
+        env::set_var(key, dir.path());
+        let result = f(&dir);
+        match original {
+            Some(value) => env::set_var(key, value),
+            None => env::remove_var(key),
+        }
+        result
+    }
+
+    #[test]
+    fn log_directory_uses_xdg_data_home() {
+        with_temp_data_home(|temp| {
+            let log_dir = log_directory().expect("log dir");
+            assert!(log_dir.starts_with(temp.path()));
+            assert_eq!(log_dir.file_name().and_then(|s| s.to_str()), Some("logs"));
+        });
+    }
+
+    #[test]
+    fn cleanup_logs_removes_all_when_limit_zero() {
+        with_temp_data_home(|_temp| {
+            let log_dir = log_directory().expect("log dir");
+            std::fs::create_dir_all(&log_dir).expect("create log dir");
+
+            let first = log_dir.join("first.log");
+            let second = log_dir.join("second.log");
+            std::fs::write(&first, b"abc").expect("write log");
+            std::fs::write(&second, b"defg").expect("write log");
+
+            cleanup_logs(0).expect("cleanup logs");
+
+            assert!(!first.exists());
+            assert!(!second.exists());
+        });
+    }
+}

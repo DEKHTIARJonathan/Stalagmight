@@ -17,6 +17,7 @@ import {
   importDmpFile,
   selectTool,
   getProjectSections,
+  waitForUiIdle,
 } from '../helpers/app';
 
 // Get absolute path to fixtures directory
@@ -46,10 +47,10 @@ describe('Map Integration', () => {
     expect(result.sectionCount).toBeGreaterThan(0);
 
     // Wait for map to render the survey
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
 
     // Verify map canvas is displayed
-    const mapCanvas = await $('canvas');
+    const mapCanvas = await $('[data-testid="map-canvas"]');
     await expect(mapCanvas).toBeDisplayed();
 
     // Verify the sections were imported and should be rendered
@@ -57,7 +58,7 @@ describe('Map Integration', () => {
     expect(sections.length).toBeGreaterThan(0);
 
     // Verify map container exists
-    const mapContainer = await $('[class*="map"], [class*="Map"], .maplibregl-map');
+    const mapContainer = await $('[data-testid="maplibre-container"]');
     await expect(mapContainer).toBeExisting();
 
     // Check that stations were created (implies survey is rendered)
@@ -85,10 +86,10 @@ describe('Map Integration', () => {
     await selectTool('select');
 
     // Wait for map to render
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Get the canvas and its dimensions
-    const mapCanvas = await $('canvas');
+    const mapCanvas = await $('[data-testid="map-canvas"]');
     await expect(mapCanvas).toBeDisplayed();
     const location = await mapCanvas.getLocation();
     const size = await mapCanvas.getSize();
@@ -110,14 +111,14 @@ describe('Map Integration', () => {
       },
     ]);
     await browser.releaseActions();
-    await browser.pause(300);
+    await waitForUiIdle(300);
 
     // Verify map is still functional after click
     await expect(mapCanvas).toBeDisplayed();
 
     // Test Ctrl+A to select all stations (validates selection system works)
     await browser.keys(['Control', 'a']);
-    await browser.pause(200);
+    await waitForUiIdle(200);
 
     // Check selection state via store (multiSelection holds selected items)
     const selectionResult = await browser.execute(() => {
@@ -166,10 +167,10 @@ describe('Map Integration', () => {
     await selectTool('merge');
 
     // Wait for tool to activate
-    await browser.pause(300);
+    await waitForUiIdle(300);
 
     // Verify map canvas is still displayed
-    const mapCanvas = await $('canvas');
+    const mapCanvas = await $('[data-testid="map-canvas"]');
     await expect(mapCanvas).toBeDisplayed();
 
     // Verify tool state is set to merge
@@ -210,14 +211,14 @@ describe('Map Integration', () => {
       },
     ]);
     await browser.releaseActions();
-    await browser.pause(200);
+    await waitForUiIdle(200);
 
     // Map should remain functional
     await expect(mapCanvas).toBeDisplayed();
 
     // Press Escape to exit merge mode cleanly
     await browser.keys(['Escape']);
-    await browser.pause(200);
+    await waitForUiIdle(200);
   });
 
   /**
@@ -238,7 +239,7 @@ describe('Map Integration', () => {
 
     // Switch to move section tool (V key)
     await selectTool('moveSection');
-    await browser.pause(300);
+    await waitForUiIdle(300);
 
     // Verify tool is active
     const toolState = await browser.execute(() => {
@@ -259,7 +260,7 @@ describe('Map Integration', () => {
     expect(toolState).toBe('move_section');
 
     // Get the canvas for drag operation
-    const mapCanvas = await $('canvas');
+    const mapCanvas = await $('[data-testid="map-canvas"]');
     await expect(mapCanvas).toBeDisplayed();
     const location = await mapCanvas.getLocation();
     const size = await mapCanvas.getSize();
@@ -285,7 +286,7 @@ describe('Map Integration', () => {
       },
     ]);
     await browser.releaseActions();
-    await browser.pause(300);
+    await waitForUiIdle(300);
 
     // Map should still be displayed after drag
     await expect(mapCanvas).toBeDisplayed();
@@ -311,12 +312,12 @@ describe('Map Integration', () => {
     const result = await importDmpFile(dmpPath);
     expect(result.success).toBe(true);
 
-    const mapCanvas = await $('canvas');
+    const mapCanvas = await $('[data-testid="map-canvas"]');
     await expect(mapCanvas).toBeDisplayed();
 
     // Test zoom via mouse wheel
     await browser.execute(() => {
-      const canvas = document.querySelector('canvas');
+      const canvas = document.querySelector('[data-testid="maplibre-container"] canvas');
       if (canvas) {
         // Zoom in
         const zoomInEvent = new WheelEvent('wheel', {
@@ -326,14 +327,14 @@ describe('Map Integration', () => {
         canvas.dispatchEvent(zoomInEvent);
       }
     });
-    await browser.pause(300);
+    await waitForUiIdle(300);
 
     // Map should still be displayed after zoom
     await expect(mapCanvas).toBeDisplayed();
 
     // Test zoom out
     await browser.execute(() => {
-      const canvas = document.querySelector('canvas');
+      const canvas = document.querySelector('[data-testid="maplibre-container"] canvas');
       if (canvas) {
         const zoomOutEvent = new WheelEvent('wheel', {
           deltaY: 100,
@@ -342,11 +343,11 @@ describe('Map Integration', () => {
         canvas.dispatchEvent(zoomOutEvent);
       }
     });
-    await browser.pause(300);
+    await waitForUiIdle(300);
 
     // Switch to pan tool
     await selectTool('pan');
-    await browser.pause(200);
+    await waitForUiIdle(200);
 
     // Verify pan tool is active
     const toolState = await browser.execute(() => {
@@ -386,14 +387,14 @@ describe('Map Integration', () => {
       },
     ]);
     await browser.releaseActions();
-    await browser.pause(300);
+    await waitForUiIdle(300);
 
     // Map should still be functional after pan
     await expect(mapCanvas).toBeDisplayed();
 
     // Test fit to view (Ctrl+0)
     await browser.keys(['Control', '0']);
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Map should remain displayed
     await expect(mapCanvas).toBeDisplayed();
@@ -416,10 +417,10 @@ describe('Map Integration', () => {
     expect(result.success).toBe(true);
 
     // Wait for map to render
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
 
     // Verify map is displayed
-    const mapCanvas = await $('canvas');
+    const mapCanvas = await $('[data-testid="map-canvas"]');
     await expect(mapCanvas).toBeDisplayed();
 
     // Verify sections with shots exist (prerequisite for labels)
@@ -434,25 +435,25 @@ describe('Map Integration', () => {
     if (await labelToggle.isExisting()) {
       // Toggle labels on
       await labelToggle.click();
-      await browser.pause(300);
+      await waitForUiIdle(300);
 
       // Map should still be functional
       await expect(mapCanvas).toBeDisplayed();
     }
 
     // Verify MapLibre map container is present
-    const maplibreContainer = await $('.maplibregl-map, [class*="maplibre"], [class*="MapCanvas"]');
+    const maplibreContainer = await $('[data-testid="maplibre-container"]');
     await expect(maplibreContainer).toBeExisting();
 
     // Check that survey layer or elements are rendered
-    // MapLibre renders to canvas, so we verify the canvas is properly sized
+    // Verify the map container is properly sized
     const canvasSize = await mapCanvas.getSize();
     expect(canvasSize.width).toBeGreaterThan(0);
     expect(canvasSize.height).toBeGreaterThan(0);
 
     // Verify we can still interact with the map (labels don't break rendering)
     await selectTool('select');
-    await browser.pause(200);
+    await waitForUiIdle(200);
 
     await expect(mapCanvas).toBeDisplayed();
   });

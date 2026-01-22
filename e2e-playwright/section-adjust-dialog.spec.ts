@@ -1,123 +1,53 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import {
+  setupMockedPage,
+  createProject,
+  seedProjectWithSections,
+  waitForMapReady,
+  waitForNoDialogs,
+} from './helpers/app';
 
-/**
- * Helper to create a new project
- */
-async function createProject(page: Page, name: string) {
-  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill(name);
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
-}
-
-/**
- * Helper to import a section using the DMP import dialog.
- * Uses the new two-step import flow:
- * - Step 1 (DmpSelectionDialog): Section selection
- * - Step 2 (DmpSectionConfigDialog): Per-section configuration and import
- */
-async function importSectionViaDialog(page: Page) {
-  // Open import dialog with Ctrl+I
-  // New flow: Ctrl+I opens file picker, parses DMP, then opens Step 1 directly
-  await page.keyboard.press('Control+i');
-
-  // Wait for Step 1 dialog (DmpSelectionDialog) to appear with parsed data
-  await page.waitForSelector('[data-testid="dmp-selection-dialog"]', { timeout: 5000 });
-
-  const step1Dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-  await expect(step1Dialog).toBeVisible();
-
-  // Wait for sections to load from mock DMP
-  await page.waitForSelector('text=Main Passage', { timeout: 5000 });
-
-  // Deselect problematic sections that have validation errors/warnings
-  const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
-  if (await validationSection.count() > 0) {
-    await validationSection.locator('input[type="checkbox"]').click();
-  }
-  const mixedSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
-  if (await mixedSection.count() > 0) {
-    await mixedSection.locator('input[type="checkbox"]').click();
-  }
-  // Also deselect empty sections
-  const emptySection = page.locator('tr').filter({ hasText: 'Empty Section' });
-  if (await emptySection.count() > 0) {
-    await emptySection.locator('input[type="checkbox"]').click();
-  }
-  // Deselect sections that cause issues - only keep Main Passage and Side Tunnel
-  const undefinedSection = page.locator('tr').filter({ hasText: 'Undefined LRUD Section' });
-  if (await undefinedSection.count() > 0) {
-    await undefinedSection.locator('input[type="checkbox"]').click();
-  }
-
-  // Proceed to Step 2
-  const continueButton = page.locator('[data-testid="continue-button"]');
-  await expect(continueButton).toBeEnabled();
-  await continueButton.click();
-
-  // Wait for Step 2 dialog (DmpSectionConfigDialog) to appear
-  await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
-
-  // Place all sections - "Place section" places current and auto-advances
-  // When on the last unplaced section, it shows "Place and finish"
-  let attempts = 0;
-  const maxAttempts = 10;
-  while (attempts < maxAttempts) {
-    const placeAndFinishButton = page.locator('[data-testid="place-and-finish-button"]');
-    const placeSectionButton = page.locator('[data-testid="place-section-button"]');
-
-    if (await placeAndFinishButton.isVisible()) {
-      await placeAndFinishButton.click();
-      break;
-    } else if (await placeSectionButton.isVisible()) {
-      await placeSectionButton.click();
-      await page.waitForTimeout(200);
-    }
-    attempts++;
-  }
-
-  // Wait for dialog to close
-  await expect(page.locator('[data-testid="dmp-section-config-dialog"]')).not.toBeVisible({ timeout: 5000 });
-
-  // Wait for sections to appear in the panel
-  await page.waitForTimeout(500);
-}
-
-/**
- * These tests are skipped because the importSectionViaDialog helper needs
- * to be updated to handle the new two-step import flow with section placement.
- * Will be fixed in task fn-51-ctu.22.
- */
-test.describe.skip('Section Adjust Dialog', () => {
+test.describe('Section Adjust Dialog', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
 
     // Create a project
     await createProject(page, 'Section Adjust Test');
 
-    // Import sections using the dialog
-    await importSectionViaDialog(page);
+    await seedProjectWithSections(page, [
+      {
+        name: 'Main Passage',
+        direction: 'in',
+        shots: [
+          { azimuth_in: 45, azimuth_out: 225, length: 10.5, depth_in: -2, depth_out: -2.5, left: 1.5, right: 2.3, up: 3.0, down: 0.8 },
+          { azimuth_in: 90, azimuth_out: 270, length: 15.2, depth_in: -2.5, depth_out: -5.0, left: 0.5, right: 0.7, up: 1.2, down: 1.5 },
+        ],
+      },
+      {
+        name: 'Side Tunnel',
+        direction: 'out',
+        shots: [
+          { azimuth_in: 270, azimuth_out: 90, length: 5.0, depth_in: -3.0, depth_out: -4.0, left: 0, right: 0, up: 0, down: 0 },
+        ],
+      },
+    ]);
+
+    await waitForMapReady(page);
+    await waitForNoDialogs(page);
+
+    await expect(page.getByTestId('sections-panel')).toBeVisible({ timeout: 5000 });
   });
 
   test('should open section adjust dialog from context menu', async ({ page }) => {
     // Wait for the sections panel to be visible
-    const sectionsPanel = page.locator('text=Sections').first();
-    await expect(sectionsPanel).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('sections-panel')).toBeVisible({ timeout: 5000 });
 
     // Find a section item in the sections panel
-    const sectionItem = page.locator('li').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
     await expect(sectionItem).toBeVisible({ timeout: 5000 });
 
     // Right-click on section to open context menu
     await sectionItem.click({ button: 'right' });
-
-    // Wait for context menu to appear
-    await page.waitForTimeout(300);
 
     // Check that "Adjust Position..." menu item is visible
     const adjustMenuItem = page.locator('button:has-text("Adjust Position...")');
@@ -133,7 +63,7 @@ test.describe.skip('Section Adjust Dialog', () => {
 
   test('should have dx and dy input fields', async ({ page }) => {
     // Open the dialog via context menu
-    const sectionItem = page.locator('li').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
     await sectionItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -155,7 +85,7 @@ test.describe.skip('Section Adjust Dialog', () => {
 
   test('should accept numeric input for dx and dy', async ({ page }) => {
     // Open the dialog
-    const sectionItem = page.locator('li').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
     await sectionItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -176,7 +106,7 @@ test.describe.skip('Section Adjust Dialog', () => {
 
   test('should close dialog on Cancel', async ({ page }) => {
     // Open the dialog
-    const sectionItem = page.locator('li').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
     await sectionItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -192,7 +122,7 @@ test.describe.skip('Section Adjust Dialog', () => {
 
   test('should close dialog on Apply', async ({ page }) => {
     // Open the dialog
-    const sectionItem = page.locator('li').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
     await sectionItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -212,7 +142,7 @@ test.describe.skip('Section Adjust Dialog', () => {
 
   test('should display section name in dialog', async ({ page }) => {
     // Open the dialog
-    const sectionItem = page.locator('li').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
     await sectionItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -226,7 +156,7 @@ test.describe.skip('Section Adjust Dialog', () => {
 
   test('should close dialog on Escape key', async ({ page }) => {
     // Open the dialog
-    const sectionItem = page.locator('li').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
     await sectionItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 
@@ -242,7 +172,7 @@ test.describe.skip('Section Adjust Dialog', () => {
 
   test('should have Apply and Cancel buttons', async ({ page }) => {
     // Open the dialog
-    const sectionItem = page.locator('li').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
     await sectionItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
 

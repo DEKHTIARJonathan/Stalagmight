@@ -1,5 +1,10 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import {
+  setupMockedPage,
+  createProject,
+  openDmpSelectionDialog,
+  proceedToDmpSectionConfig,
+} from './helpers/app';
 
 /**
  * DMP Import Dialog E2E Tests
@@ -19,66 +24,25 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
  * Returns when the DMP file is loaded and sections are visible in Step 1.
  */
 async function createProjectAndOpenImportDialog(page: Page): Promise<void> {
-  // Create a new project
-  const newProjectBtn = page
-    .locator('button:has-text("New Project"), h3:has-text("New Project")')
-    .first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill('DMP Import Test');
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
+  await createProject(page, 'DMP Import Test');
+  await openDmpSelectionDialog(page);
 
-  // Open import dialog with Ctrl+I
-  // New flow: Ctrl+I from existing project opens file picker, parses DMP,
-  // then opens DmpSelectionDialog (Step 1) with the parsed data
-  await page.keyboard.press('Control+i');
-
-  // Wait for Step 1 dialog to appear with parsed DMP data
-  await page.waitForSelector('[data-testid="dmp-selection-dialog"]', { timeout: 5000 });
-
-  const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
+  const dialog = page.getByTestId('dmp-selection-dialog');
   await expect(dialog).toBeVisible();
-
-  // Wait for sections to be visible - the mock file picker returns a path
-  // and the DMP is parsed automatically before the dialog opens
-  await page.waitForSelector('text=Main Passage', { timeout: 5000 });
-
-  // Verify file info is shown (confirms data is loaded)
-  await expect(dialog.locator('[data-testid="dmp-metadata"]')).toContainText('Version: 5');
-}
-
-/**
- * Helper to create a project without opening the import dialog.
- */
-async function createProject(page: Page, name: string): Promise<void> {
-  const newProjectBtn = page
-    .locator('button:has-text("New Project"), h3:has-text("New Project")')
-    .first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill(name);
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
+  await expect(page.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+  await expect(dialog.getByTestId('dmp-metadata')).toContainText('Version: 5');
 }
 
 /**
  * Helper to proceed from Step 1 (selection) to Step 2 (config).
  */
 async function proceedToStep2(page: Page): Promise<void> {
-  const continueButton = page.locator('[data-testid="continue-button"]');
-  await expect(continueButton).toBeEnabled();
-  await continueButton.click();
-
-  // Wait for Step 2 dialog to appear
-  await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
+  await proceedToDmpSectionConfig(page);
 }
 
 test.describe('DMP Import Dialog', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
   /**
@@ -373,18 +337,19 @@ test.describe('DMP Import Dialog', () => {
    *
    * Verifies that Ctrl+I from home screen (no project) shows the
    * NewProjectForImportDialog before proceeding to import.
-   *
-   * Note: This test is skipped because it requires more complex mocking
-   * of the Tauri file dialog API in the context of no existing project.
-   * The functionality is implemented and works in the real app.
    */
-  test.skip('should prompt for project name when importing from home screen', async ({
+  test('should prompt for project name when importing from home screen', async ({
     page,
   }) => {
     // We're on the home screen (GlobalView) with no project open
+    await expect(page.getByTestId('global-view')).toBeVisible();
 
-    // Press Ctrl+I to start import
-    await page.keyboard.press('Control+i');
+    // Start import from GlobalView
+    const importButton = page
+      .locator('[data-testid="global-import-dmp-button"], [data-testid="empty-state-import-dmp"]')
+      .first();
+    await expect(importButton).toBeVisible();
+    await importButton.click();
 
     // Should show NewProjectForImportDialog
     await page.waitForSelector('[data-testid="new-project-for-import-dialog"]', { timeout: 5000 });
@@ -416,9 +381,7 @@ test.describe('DMP Import Dialog', () => {
 
 test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
   /**
@@ -427,8 +390,7 @@ test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
   test('should show error count badges in section list', async ({ page }) => {
     // Create project and open import dialog
     await createProject(page, 'Error Blocking Test');
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[data-testid="dmp-selection-dialog"]');
+    await openDmpSelectionDialog(page);
 
     // Select only the Validation Test Section which has errors
     const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
@@ -454,8 +416,7 @@ test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
    */
   test('should disable Import button when section has errors', async ({ page }) => {
     await createProject(page, 'Error Blocking Test 2');
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[data-testid="dmp-selection-dialog"]');
+    await openDmpSelectionDialog(page);
 
     // Select only the Validation Test Section which has an invalid azimuth
     const dialog = page.locator('[data-testid="dmp-selection-dialog"]');

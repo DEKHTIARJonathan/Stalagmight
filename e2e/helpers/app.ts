@@ -271,7 +271,7 @@ export async function resetAppState(): Promise<void> {
   );
 
   // Wait for GlobalView - give extra time for React to re-render after state change
-  await browser.pause(500);
+  await waitForUiIdle(200);
 
   // Check if React is still mounted (root div has content)
   const isReactMounted = await browser.execute(() => {
@@ -282,11 +282,185 @@ export async function resetAppState(): Promise<void> {
   if (!isReactMounted) {
     console.log('[resetAppState] React unmounted, refreshing page...');
     await browser.refresh();
-    await browser.pause(2000);
+    await waitForAppReady();
   }
 
   const globalView = await $('[data-testid="global-view"]');
   await globalView.waitForExist({ timeout: 10000 });
+  await waitForUiIdle(200);
+}
+
+/**
+ * Wait for the map to be loaded and ready for interaction.
+ */
+export async function waitForMapReady(): Promise<void> {
+  const mapCanvas = await $('[data-testid="map-canvas"]');
+  await mapCanvas.waitForExist({ timeout: 15000 });
+
+  await browser.waitUntil(
+    async () => {
+      const attrLoaded = await mapCanvas.getAttribute('data-map-loaded');
+      if (attrLoaded === 'true') {
+        return true;
+      }
+
+      const loaded = await browser.execute(() => {
+        const map = (window as unknown as { __cavechef_map__?: { loaded?: () => boolean } }).__cavechef_map__;
+        return map?.loaded?.() ?? false;
+      });
+
+      return loaded;
+    },
+    {
+      timeout: 15000,
+      timeoutMsg: 'Map did not load within 15 seconds',
+    }
+  );
+}
+
+/**
+ * Wait for the map to finish moving/animating.
+ */
+export async function waitForMapIdle(minDelayMs = 0): Promise<void> {
+  await waitForMapReady();
+  const start = Date.now();
+
+  await browser.waitUntil(
+    async () => {
+      const mapIdle = await browser.execute(() => {
+        const map = (window as unknown as {
+          __cavechef_map__?: {
+            loaded?: () => boolean;
+            isMoving?: () => boolean;
+            isZooming?: () => boolean;
+            isRotating?: () => boolean;
+            isPitching?: () => boolean;
+          };
+        }).__cavechef_map__;
+
+        if (!map) return true;
+        const loaded = map.loaded?.() ?? true;
+        const moving = map.isMoving?.() ?? false;
+        const zooming = map.isZooming?.() ?? false;
+        const rotating = map.isRotating?.() ?? false;
+        const pitching = map.isPitching?.() ?? false;
+        return loaded && !moving && !zooming && !rotating && !pitching;
+      });
+
+      if (!mapIdle) {
+        return false;
+      }
+
+      return Date.now() - start >= minDelayMs;
+    },
+    {
+      timeout: 10000,
+      timeoutMsg: 'Map did not reach idle state',
+    }
+  );
+}
+
+/**
+ * Wait for the UI to be fully idle (document ready + map idle if present).
+ */
+export async function waitForUiIdle(minDelayMs = 0): Promise<void> {
+  const start = Date.now();
+
+  await browser.waitUntil(
+    async () => {
+      const docReady = await browser.execute(() => document.readyState === 'complete');
+      if (!docReady) return false;
+
+      const viewReady = await browser.execute(() => {
+        return !!document.querySelector('[data-testid="global-view"], [data-testid="single-system-view"]');
+      });
+      if (!viewReady) return false;
+
+      const mapExists = await $('[data-testid="map-canvas"]').isExisting();
+      if (mapExists) {
+        const mapIdle = await browser.execute(() => {
+          const map = (window as unknown as {
+            __cavechef_map__?: {
+              loaded?: () => boolean;
+              isMoving?: () => boolean;
+              isZooming?: () => boolean;
+              isRotating?: () => boolean;
+              isPitching?: () => boolean;
+            };
+          }).__cavechef_map__;
+
+          if (!map) return false;
+          const loaded = map.loaded?.() ?? false;
+          const moving = map.isMoving?.() ?? false;
+          const zooming = map.isZooming?.() ?? false;
+          const rotating = map.isRotating?.() ?? false;
+          const pitching = map.isPitching?.() ?? false;
+          return loaded && !moving && !zooming && !rotating && !pitching;
+        });
+
+        if (!mapIdle) {
+          return false;
+        }
+      }
+
+      return Date.now() - start >= minDelayMs;
+    },
+    {
+      timeout: 15000,
+      timeoutMsg: 'UI did not reach idle state',
+    }
+  );
+}
+
+/**
+ * Wait for a specific map tool to be active.
+ */
+export async function waitForActiveTool(tool: string): Promise<void> {
+  const mapCanvas = await $('[data-testid="map-canvas"]');
+  await mapCanvas.waitForExist({ timeout: 15000 });
+
+  await browser.waitUntil(
+    async () => {
+      const activeTool = await mapCanvas.getAttribute('data-active-tool');
+      return activeTool === tool;
+    },
+    {
+      timeout: 5000,
+      timeoutMsg: `Active tool did not switch to ${tool}`,
+    }
+  );
+}
+
+/**
+ * Wait for a panel to be open/closed via UI store state.
+ */
+export async function waitForPanelState(
+  panel: 'sections' | 'detail' | 'dataTable',
+  open: boolean
+): Promise<void> {
+  await browser.waitUntil(
+    async () => {
+      const isOpen = await browser.execute((panelName: 'sections' | 'detail' | 'dataTable') => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            uiStore: { getState: () => { sectionsPanelOpen: boolean; detailPanelOpen: boolean; dataTableOpen: boolean } };
+          };
+        }).__E2E_TEST__;
+
+        if (!e2e) return null;
+        const ui = e2e.uiStore.getState();
+        if (panelName === 'sections') return ui.sectionsPanelOpen;
+        if (panelName === 'detail') return ui.detailPanelOpen;
+        return ui.dataTableOpen;
+      }, panel);
+
+      return isOpen === open;
+    },
+    {
+      timeout: 5000,
+      timeoutMsg: `Panel ${panel} did not ${open ? 'open' : 'close'}`,
+    }
+  );
 }
 
 /**
@@ -294,9 +468,6 @@ export async function resetAppState(): Promise<void> {
  * Checks for the main app container to be present.
  */
 export async function waitForAppReady(): Promise<void> {
-  // Wait for the React app to mount - give it extra time to initialize
-  await browser.pause(1000);
-
   await browser.waitUntil(
     async () => {
       // Check for GlobalView (start page) or SingleSystemView (project open)
@@ -310,8 +481,8 @@ export async function waitForAppReady(): Promise<void> {
         return true;
       }
       // Fallback: check for canvas (SingleSystemView)
-      const canvas = await $('canvas');
-      return await canvas.isExisting();
+      const mapCanvas = await $('[data-testid="map-canvas"]');
+      return await mapCanvas.isExisting();
     },
     {
       timeout: 30000,
@@ -319,8 +490,8 @@ export async function waitForAppReady(): Promise<void> {
     }
   );
 
-  // Extra pause for React to finish rendering
-  await browser.pause(500);
+  // Extra idle check for React to finish rendering
+  await waitForUiIdle(200);
 }
 
 /**
@@ -400,19 +571,16 @@ export async function createNewProject(projectName: string): Promise<void> {
   console.log('[createNewProject] Store result:', storeResult);
 
   // Wait for React to process the click and open dialog
-  await browser.pause(2000);
-
-  // Wait for the new project dialog
-  const dialog = await $('[role="dialog"]');
+  const dialog = await $('[data-testid="new-project-dialog"]');
   await dialog.waitForDisplayed({ timeout: 15000 });
 
   // Fill in the project name - look for the first text input in the dialog
-  const nameInput = await dialog.$('input[type="text"]');
+  const nameInput = await dialog.$('[data-testid="new-project-name-input"]');
   await nameInput.waitForEnabled({ timeout: 5000 });
   await nameInput.setValue(projectName);
 
   // Click Create button - use JS click for reliability
-  const createBtn = await dialog.$('button*=Create');
+  const createBtn = await dialog.$('[data-testid="new-project-create-button"]');
   await createBtn.waitForDisplayed({ timeout: 5000 });
   try {
     await createBtn.waitForClickable({ timeout: 3000 });
@@ -421,17 +589,18 @@ export async function createNewProject(projectName: string): Promise<void> {
     await jsClick(createBtn);
   }
 
-  // Wait for SingleSystemView to appear (indicates project was created)
   await browser.waitUntil(
-    async () => {
-      const map = await $('canvas, [class*="map"], [class*="SingleSystemView"]');
-      return await map.isExisting();
-    },
+    async () => !(await $('[data-testid="new-project-dialog"]').isExisting()),
     {
-      timeout: 15000,
-      timeoutMsg: 'SingleSystemView did not appear after creating project',
+      timeout: 10000,
+      timeoutMsg: 'New project dialog did not close after create',
     }
   );
+
+  // Wait for SingleSystemView and map to be ready (indicates project was created)
+  const singleView = await $('[data-testid="single-system-view"]');
+  await singleView.waitForExist({ timeout: 15000 });
+  await waitForMapReady();
 }
 
 /**
@@ -524,7 +693,7 @@ export async function ensureSectionsPanelOpen(): Promise<void> {
       e2e.uiStore.getState().setSectionsPanelOpen(true);
     }
   });
-  await browser.pause(100); // Let React render
+  await waitForPanelState('sections', true);
 }
 
 /**
@@ -564,7 +733,7 @@ export async function openImportSectionDialog(): Promise<void> {
 export async function pressEscape(): Promise<void> {
   await browser.keys(['Escape']);
   // Wait for state to update
-  await browser.pause(500);
+  await waitForUiIdle(150);
 }
 
 /**
@@ -573,7 +742,7 @@ export async function pressEscape(): Promise<void> {
 export async function saveProject(): Promise<void> {
   await browser.keys(['Control', 's']);
   // Wait a moment for save to complete
-  await browser.pause(1000);
+  await waitForUiIdle(500);
 }
 
 /**
@@ -581,7 +750,7 @@ export async function saveProject(): Promise<void> {
  */
 export async function undo(): Promise<void> {
   await browser.keys(['Control', 'z']);
-  await browser.pause(300);
+  await waitForUiIdle(200);
 }
 
 /**
@@ -589,7 +758,7 @@ export async function undo(): Promise<void> {
  */
 export async function redo(): Promise<void> {
   await browser.keys(['Control', 'y']);
-  await browser.pause(300);
+  await waitForUiIdle(200);
 }
 
 /**
@@ -611,7 +780,7 @@ export async function selectTool(
   };
 
   await browser.keys([toolKeys[tool] ?? 's']);
-  await browser.pause(200);
+  await waitForActiveTool(tool);
 }
 
 /**
@@ -624,8 +793,23 @@ export async function togglePanel(panel: 'sections' | 'detail' | 'dataTable'): P
     dataTable: '3',
   };
 
+  const wasOpen = await browser.execute((panelName: 'sections' | 'detail' | 'dataTable') => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__?: { uiStore: { getState: () => { sectionsPanelOpen: boolean; detailPanelOpen: boolean; dataTableOpen: boolean } } };
+    }).__E2E_TEST__;
+    if (!e2e) return null;
+    const ui = e2e.uiStore.getState();
+    if (panelName === 'sections') return ui.sectionsPanelOpen;
+    if (panelName === 'detail') return ui.detailPanelOpen;
+    return ui.dataTableOpen;
+  }, panel);
+
   await browser.keys(['Control', panelKeys[panel] ?? '1']);
-  await browser.pause(300);
+  if (wasOpen !== null) {
+    await waitForPanelState(panel, !wasOpen);
+  } else {
+    await waitForUiIdle(200);
+  }
 }
 
 /**
@@ -911,7 +1095,7 @@ export async function openDmpImportWithFile(filePath: string): Promise<void> {
       e2e.uiStore.getState().closeDialog();
     }
   });
-  await browser.pause(100);
+  await waitForUiIdle(100);
 
   // Parse DMP file via store (uses IPC internally)
   const parseResult = await browser.executeAsync(
@@ -993,7 +1177,7 @@ export async function openDmpImportWithFile(filePath: string): Promise<void> {
   );
 
   // Extra pause for React to finish rendering
-  await browser.pause(300);
+  await waitForUiIdle(200);
 }
 
 /**

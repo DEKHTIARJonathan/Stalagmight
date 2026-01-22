@@ -915,6 +915,101 @@ impl Project {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shot(azimuth_in: f64, azimuth_out: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
+        ShotData {
+            azimuth_in,
+            azimuth_out,
+            length,
+            depth_in,
+            depth_out,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn get_connected_section_ids_traverses_merges() {
+        let mut project = Project::new("Merged".to_string(), None);
+        let a = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+        let b = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+        let c = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(a, 0),
+            station_b: StationRef::new(b, 0),
+            merged_at: Utc::now(),
+        });
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(b, 0),
+            station_b: StationRef::new(c, 0),
+            merged_at: Utc::now(),
+        });
+
+        let connected = project.get_connected_section_ids(a);
+        assert!(connected.contains(&a));
+        assert!(connected.contains(&b));
+        assert!(connected.contains(&c));
+        assert_eq!(connected.len(), 3);
+    }
+
+    #[test]
+    fn section_has_zero_datum_with_connected_merges() {
+        let mut project = Project::new("Zero".to_string(), None);
+        let a = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+        let b = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+        let c = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+        let d = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(a, 0),
+            station_b: StationRef::new(b, 0),
+            merged_at: Utc::now(),
+        });
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(b, 0),
+            station_b: StationRef::new(c, 0),
+            merged_at: Utc::now(),
+        });
+
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef::new(c, 0),
+            gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+        });
+
+        assert!(project.section_has_zero_datum(a));
+        assert!(!project.section_has_zero_datum(d));
+    }
+
+    #[test]
+    fn compute_station_raw_coords_applies_offsets_and_bounds() {
+        let mut project = Project::new("Coords".to_string(), None);
+        let section_id = project
+            .add_section(SectionData {
+                shots: vec![
+                    shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                    shot(90.0, 90.0, 5.0, 0.0, 2.0),
+                ],
+                ..Default::default()
+            })
+            .id;
+
+        project.section_offsets.insert(section_id, (2.0, -3.0));
+
+        let coords = project
+            .compute_station_raw_coords(StationRef::new(section_id, 2))
+            .expect("coords");
+        assert!((coords.x - 7.0).abs() < 1e-6);
+        assert!((coords.y - 7.0).abs() < 1e-6);
+        assert!((coords.z - 2.0).abs() < 1e-6);
+
+        let invalid = project.compute_station_raw_coords(StationRef::new(section_id, 5));
+        assert!(invalid.is_none());
+    }
+}
+
 impl Default for Project {
     fn default() -> Self {
         Self::new("Untitled".to_string(), None)

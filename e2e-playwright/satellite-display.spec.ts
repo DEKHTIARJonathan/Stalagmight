@@ -1,23 +1,11 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
-
-/**
- * Helper to create a new project
- */
-async function createProject(page: Page, name: string): Promise<void> {
-  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill(name);
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
-}
+import { setupMockedPage, createProject, waitForMapReady } from './helpers/app';
 
 /**
  * Helper to open the Display menu
  */
 async function openDisplayMenu(page: Page): Promise<void> {
-  await page.click('button:has-text("Display")');
+  await page.getByTestId('display-menu-button').click();
   await expect(page.locator('[data-testid="display-toggle-showSatellite"]')).toBeVisible({ timeout: 2000 });
 }
 
@@ -56,10 +44,9 @@ async function waitForNoMapLayer(page: Page, layerId: string): Promise<boolean> 
 
 test.describe('Satellite Display', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
     await createProject(page, 'Satellite Test Project');
+    await waitForMapReady(page);
   });
 
   test.describe('Toggle Behavior', () => {
@@ -129,7 +116,7 @@ test.describe('Satellite Display', () => {
       }
 
       // App should remain functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
 
       // Display menu should still work
       await expect(button).toBeVisible();
@@ -422,10 +409,10 @@ test.describe('Satellite Display', () => {
       });
 
       // App should remain functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
 
       // Map should still be interactive
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       await canvas.hover();
       await page.mouse.wheel(0, -100);
       await expect(canvas).toBeVisible();
@@ -473,14 +460,14 @@ test.describe('Satellite Display', () => {
       await expect(checkbox).toHaveClass(/bg-accent/);
 
       // App should remain functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
 
       // Toggle off while offline
       await button.click();
       await expect(checkbox).not.toHaveClass(/bg-accent/);
 
       // App should still be functional
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
   });
 });

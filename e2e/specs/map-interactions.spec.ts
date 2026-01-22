@@ -1,4 +1,4 @@
-import { waitForAppReady, resetAppState, createNewProject, selectTool } from '../helpers/app';
+import { waitForAppReady, resetAppState, createNewProject, selectTool, waitForUiIdle } from '../helpers/app';
 
 describe('Map Interactions', () => {
   beforeEach(async () => {
@@ -9,14 +9,14 @@ describe('Map Interactions', () => {
 
   describe('Map Display', () => {
     it('should render the map canvas', async () => {
-      const mapCanvas = await $('canvas');
+      const mapCanvas = await $('[data-testid="map-canvas"]');
       await expect(mapCanvas).toBeExisting();
       await expect(mapCanvas).toBeDisplayed();
     });
 
     it('should have map controls visible', async () => {
       // Look for zoom controls or other map UI elements
-      const mapContainer = await $('[class*="map"], [class*="Map"]');
+      const mapContainer = await $('[data-testid="maplibre-container"]');
       await expect(mapContainer).toBeExisting();
     });
   });
@@ -26,33 +26,33 @@ describe('Map Interactions', () => {
       await selectTool('pan');
 
       // Cursor or UI should reflect pan mode
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
 
     it('should switch to select tool', async () => {
       await selectTool('select');
 
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
 
     it('should switch to measure tool', async () => {
       await selectTool('measure');
 
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
   });
 
   describe('Map Navigation', () => {
     it('should handle mouse wheel for zoom', async () => {
-      const mapCanvas = await $('canvas');
+      const mapCanvas = await $('[data-testid="map-canvas"]');
       await mapCanvas.scrollIntoView();
 
       // Simulate scroll
       await browser.execute(() => {
-        const canvas = document.querySelector('canvas');
+        const canvas = document.querySelector('[data-testid="maplibre-container"] canvas');
         if (canvas) {
           const event = new WheelEvent('wheel', {
             deltaY: -100,
@@ -62,7 +62,7 @@ describe('Map Interactions', () => {
         }
       });
 
-      await browser.pause(300);
+      await waitForUiIdle(300);
 
       // Map should still be displayed
       await expect(mapCanvas).toBeDisplayed();
@@ -71,7 +71,7 @@ describe('Map Interactions', () => {
     it('should handle pan by dragging in pan mode', async () => {
       await selectTool('pan');
 
-      const mapCanvas = await $('canvas');
+      const mapCanvas = await $('[data-testid="map-canvas"]');
       const location = await mapCanvas.getLocation();
       const size = await mapCanvas.getSize();
 
@@ -95,7 +95,7 @@ describe('Map Interactions', () => {
       ]);
 
       await browser.releaseActions();
-      await browser.pause(200);
+      await waitForUiIdle(200);
 
       // Map should still be displayed after pan
       await expect(mapCanvas).toBeDisplayed();
@@ -108,10 +108,10 @@ describe('Map Interactions', () => {
 
       // Press Escape to clear any selection
       await browser.keys(['Escape']);
-      await browser.pause(200);
+      await waitForUiIdle(200);
 
       // App should remain functional
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
 
@@ -119,10 +119,10 @@ describe('Map Interactions', () => {
       await selectTool('select');
 
       await browser.keys(['Control', 'a']);
-      await browser.pause(200);
+      await waitForUiIdle(200);
 
       // App should remain functional
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
   });

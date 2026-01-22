@@ -11,6 +11,10 @@ pub use crate::models::warning::ProjectWarning;
 /// Get all validation warnings for the current project
 #[tauri::command]
 pub fn get_project_warnings(state: State<AppState>) -> Vec<ProjectWarning> {
+    get_project_warnings_impl(state.inner())
+}
+
+pub(crate) fn get_project_warnings_impl(state: &AppState) -> Vec<ProjectWarning> {
     let project = match state.get_project_state() {
         Some(p) => p,
         None => return Vec::new(),
@@ -24,6 +28,16 @@ pub fn get_project_warnings(state: State<AppState>) -> Vec<ProjectWarning> {
 #[tauri::command]
 pub fn resolve_warning(
     state: State<AppState>,
+    section_id: SectionId,
+    shot_id: ShotId,
+    warning_code: String,
+    comment: Option<String>,
+) -> Result<(), String> {
+    resolve_warning_impl(state.inner(), section_id, shot_id, warning_code, comment)
+}
+
+pub(crate) fn resolve_warning_impl(
+    state: &AppState,
     section_id: SectionId,
     shot_id: ShotId,
     warning_code: String,
@@ -43,6 +57,15 @@ pub fn resolve_warning(
 #[tauri::command]
 pub fn unresolve_warning(
     state: State<AppState>,
+    section_id: SectionId,
+    shot_id: ShotId,
+    warning_code: String,
+) -> Result<(), String> {
+    unresolve_warning_impl(state.inner(), section_id, shot_id, warning_code)
+}
+
+pub(crate) fn unresolve_warning_impl(
+    state: &AppState,
     section_id: SectionId,
     shot_id: ShotId,
     warning_code: String,

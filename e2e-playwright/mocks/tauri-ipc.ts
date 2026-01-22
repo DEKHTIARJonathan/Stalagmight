@@ -216,42 +216,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const name = (args?.name as string) ?? 'Untitled Project';
             const now = new Date().toISOString();
             sectionCounter = 0;
-
-            // Pre-populate with sections for testing (provides mock stations)
-            const defaultSections = [
-              {
-                id: ++sectionCounter,
-                name: 'Mock Tunnel A',
-                surveyor: 'Test Surveyor',
-                date: now.split('T')[0],
-                color: '#4ECDC4',
-                shots: [
-                  { id: 1, azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: 0, depth_out: -2, is_virtual: false },
-                  { id: 2, azimuth_in: 90, azimuth_out: 270, length: 15, depth_in: -2, depth_out: -5, is_virtual: false },
-                  { id: 3, azimuth_in: 120, azimuth_out: 300, length: 8, depth_in: -5, depth_out: -3, is_virtual: true }, // Virtual shot for testing
-                ],
-              },
-              {
-                id: ++sectionCounter,
-                name: 'Mock Tunnel B',
-                surveyor: 'Test Surveyor',
-                date: now.split('T')[0],
-                color: '#FF6B6B',
-                shots: [
-                  { id: 1, azimuth_in: 180, azimuth_out: 0, length: 12, depth_in: -5, depth_out: -8, is_virtual: false },
-                  { id: 2, azimuth_in: 210, azimuth_out: 30, length: 9, depth_in: -8, depth_out: -6, is_virtual: false },
-                ],
-              },
-              {
-                id: ++sectionCounter,
-                name: 'Empty Section',
-                surveyor: 'Test Surveyor',
-                date: now.split('T')[0],
-                color: '#9B59B6',
-                shots: [], // Empty section for edge case testing
-              },
-            ];
-
             currentProject = {
               id: 1,
               name,
@@ -259,7 +223,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               created_at: now,
               modified_at: now,
               file_path: null,
-              sections: defaultSections,
+              sections: [],
               station_merges: [],
               zero_datums: [],
               loop_closures: [],
@@ -570,13 +534,32 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'create_section': {
             sectionCounter++;
+            const rawShots = Array.isArray(args?.shots) ? (args?.shots as Array<Record<string, unknown>>) : [];
+            const shots = rawShots.map((shot, index) => ({
+              id: index + 1,
+              azimuth_in: (shot.azimuth_in as number) ?? 0,
+              azimuth_out: (shot.azimuth_out as number) ?? 0,
+              length: (shot.length as number) ?? 0,
+              depth_in: (shot.depth_in as number) ?? 0,
+              depth_out: (shot.depth_out as number) ?? 0,
+              pitch_in: (shot.pitch_in as number | null | undefined) ?? null,
+              pitch_out: (shot.pitch_out as number | null | undefined) ?? null,
+              left: (shot.left as number | null | undefined) ?? null,
+              right: (shot.right as number | null | undefined) ?? null,
+              up: (shot.up as number | null | undefined) ?? null,
+              down: (shot.down as number | null | undefined) ?? null,
+              comment: (shot.comment as string | null | undefined) ?? null,
+              is_virtual: (shot.is_virtual as boolean | undefined) ?? false,
+              marker_index: (shot.marker_index as number | null | undefined) ?? null,
+              temperature: (shot.temperature as number | null | undefined) ?? null,
+            }));
             const section = {
               id: sectionCounter,
               name: (args?.name as string) ?? `Section ${sectionCounter}`,
               surveyor: 'Test Surveyor',
               date: new Date().toISOString().split('T')[0],
               color: '#3b82f6',
-              shots: args?.shots ?? [],
+              shots,
             };
             currentProject?.sections.push(section);
             return { success: true, section };

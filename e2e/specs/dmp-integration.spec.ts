@@ -21,6 +21,7 @@ import {
   importDmpFile,
   getProjectSections,
   getProjectStats,
+  waitForUiIdle,
 } from '../helpers/app';
 
 // Get absolute path to fixtures directory
@@ -76,7 +77,7 @@ describe('DMP Integration', () => {
     const configDialog = await $('[data-testid="dmp-section-config-dialog"]');
     await configDialog.waitForDisplayed({ timeout: 5000 });
     // Wait for dialog to fully render
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
 
     // Complete the import by placing all sections
     // "Place section" places current and auto-advances to next unplaced
@@ -100,7 +101,7 @@ describe('DMP Integration', () => {
           if (await placeBtn.isExisting()) {
             await placeBtn.waitForClickable({ timeout: 3000 });
             await placeBtn.click();
-            await browser.pause(500);
+            await waitForUiIdle(500);
           }
         }
       } else {
@@ -109,10 +110,10 @@ describe('DMP Integration', () => {
         if (await placeBtn.isExisting()) {
           await placeBtn.waitForClickable({ timeout: 3000 });
           await placeBtn.click();
-          await browser.pause(500);
+          await waitForUiIdle(500);
         } else {
           // Neither button found, wait a bit and retry
-          await browser.pause(500);
+          await waitForUiIdle(500);
         }
       }
     }
@@ -124,7 +125,7 @@ describe('DMP Integration', () => {
     await configDialog.waitForDisplayed({ reverse: true, timeout: 10000 });
 
     // Verify sections were imported
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
     const sections = await getProjectSections();
     expect(sections.length).toBeGreaterThan(0);
   });
@@ -172,7 +173,7 @@ describe('DMP Integration', () => {
 
     // Complete the import by clicking through all sections
     // For each section: ensure it's placed at origin, then navigate or import
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
     let importComplete = false;
     let iterationCount = 0;
     const maxIterations = 30;
@@ -190,7 +191,7 @@ describe('DMP Integration', () => {
           if (await placeBtn.isExisting()) {
             await placeBtn.waitForClickable({ timeout: 3000 });
             await placeBtn.click();
-            await browser.pause(500);
+            await waitForUiIdle(500);
           }
         }
       } else {
@@ -198,9 +199,9 @@ describe('DMP Integration', () => {
         if (await placeBtn.isExisting()) {
           await placeBtn.waitForClickable({ timeout: 3000 });
           await placeBtn.click();
-          await browser.pause(500);
+          await waitForUiIdle(500);
         } else {
-          await browser.pause(500);
+          await waitForUiIdle(500);
         }
       }
     }
@@ -210,7 +211,7 @@ describe('DMP Integration', () => {
     await configDialog.waitForDisplayed({ reverse: true, timeout: 10000 });
 
     // Verify sections were imported with shot data
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
     const sections = await getProjectSections();
     expect(sections.length).toBeGreaterThan(0);
 
@@ -241,7 +242,7 @@ describe('DMP Integration', () => {
     expect(result.error).not.toBe('');
 
     // Application should still be functional
-    const mainView = await $('canvas, [class*="MapCanvas"]');
+    const mainView = await $('[data-testid="map-canvas"]');
     await expect(mainView).toBeExisting();
 
     // Can still open import dialog with a valid file
@@ -289,9 +290,9 @@ describe('DMP Integration', () => {
 
     // Test selection: click None then All
     await noneBtn.click();
-    await browser.pause(500);
+    await waitForUiIdle(500);
     await allBtn.click();
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Click Continue to proceed to Step 2
     const continueBtn = await selectionDialog.$('[data-testid="continue-button"]');
@@ -303,7 +304,7 @@ describe('DMP Integration', () => {
     await configDialog.waitForDisplayed({ timeout: 5000 });
 
     // Place all sections via "Place section" (auto-advances) and "Place and finish"
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
     let importComplete = false;
     let iterationCount = 0;
     const maxIterations = 30;
@@ -321,7 +322,7 @@ describe('DMP Integration', () => {
           if (await placeBtn.isExisting()) {
             await placeBtn.waitForClickable({ timeout: 3000 });
             await placeBtn.click();
-            await browser.pause(500);
+            await waitForUiIdle(500);
           }
         }
       } else {
@@ -329,9 +330,9 @@ describe('DMP Integration', () => {
         if (await placeBtn.isExisting()) {
           await placeBtn.waitForClickable({ timeout: 3000 });
           await placeBtn.click();
-          await browser.pause(500);
+          await waitForUiIdle(500);
         } else {
-          await browser.pause(500);
+          await waitForUiIdle(500);
         }
       }
     }
@@ -341,7 +342,7 @@ describe('DMP Integration', () => {
     await configDialog.waitForDisplayed({ reverse: true, timeout: 10000 });
 
     // Verify multiple sections were imported (all that were selected)
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
     const sections = await getProjectSections();
     expect(sections.length).toBeGreaterThan(1); // Multi-section DMP should result in multiple sections
   });
@@ -388,7 +389,7 @@ describe('DMP Integration', () => {
 
     // Complete the import by clicking through all sections
     // Place all sections via "Place section" (auto-advances) and "Place and finish"
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
     let importComplete = false;
     let iterationCount = 0;
     const maxIterations = 30;
@@ -406,7 +407,7 @@ describe('DMP Integration', () => {
           if (await placeBtn.isExisting()) {
             await placeBtn.waitForClickable({ timeout: 3000 });
             await placeBtn.click();
-            await browser.pause(500);
+            await waitForUiIdle(500);
           }
         }
       } else {
@@ -414,9 +415,9 @@ describe('DMP Integration', () => {
         if (await placeBtn.isExisting()) {
           await placeBtn.waitForClickable({ timeout: 3000 });
           await placeBtn.click();
-          await browser.pause(500);
+          await waitForUiIdle(500);
         } else {
-          await browser.pause(500);
+          await waitForUiIdle(500);
         }
       }
     }
@@ -426,7 +427,7 @@ describe('DMP Integration', () => {
     await configDialog.waitForDisplayed({ reverse: true, timeout: 10000 });
 
     // Verify sections have names
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
     const sections = await getProjectSections();
     expect(sections.length).toBeGreaterThan(0);
 
@@ -484,7 +485,7 @@ describe('DMP Integration', () => {
     await configDialog.waitForDisplayed({ timeout: 5000 });
 
     // Place all sections via "Place section" (auto-advances) and "Place and finish"
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
     let importComplete = false;
     let iterationCount = 0;
     const maxIterations = 30;
@@ -502,7 +503,7 @@ describe('DMP Integration', () => {
           if (await placeBtn.isExisting()) {
             await placeBtn.waitForClickable({ timeout: 3000 });
             await placeBtn.click();
-            await browser.pause(500);
+            await waitForUiIdle(500);
           }
         }
       } else {
@@ -510,9 +511,9 @@ describe('DMP Integration', () => {
         if (await placeBtn.isExisting()) {
           await placeBtn.waitForClickable({ timeout: 3000 });
           await placeBtn.click();
-          await browser.pause(500);
+          await waitForUiIdle(500);
         } else {
-          await browser.pause(500);
+          await waitForUiIdle(500);
         }
       }
     }
@@ -522,7 +523,7 @@ describe('DMP Integration', () => {
     await configDialog.waitForDisplayed({ reverse: true, timeout: 10000 });
 
     // Verify sections were imported
-    await browser.pause(1000);
+    await waitForUiIdle(1000);
     const sections = await getProjectSections();
     expect(sections.length).toBeGreaterThan(0);
 

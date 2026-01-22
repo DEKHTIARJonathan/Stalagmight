@@ -36,32 +36,32 @@ export default function Toolbar({
   ];
 
   return (
-    <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-panel">
+    <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
       {/* Left section */}
       <div className="flex items-center gap-2">
         <Button onClick={onBack} size="sm" data-testid="back-button">
           ← Back
         </Button>
-        <Button onClick={onSave} size="sm">
+        <Button onClick={onSave} size="sm" data-testid="toolbar-save-button">
           Save
         </Button>
-        <Button onClick={() => onImport()} size="sm">
+        <Button onClick={() => onImport()} size="sm" data-testid="toolbar-import-button">
           Import
         </Button>
-        <Button onClick={() => openDialog('export')} size="sm">
+        <Button onClick={() => openDialog('export')} size="sm" data-testid="toolbar-export-button">
           Export
         </Button>
         <div className="w-px h-6 bg-border mx-2" />
-        <Button onClick={onUndo} size="sm" disabled={!canUndo}>
+        <Button onClick={onUndo} size="sm" disabled={!canUndo} data-testid="toolbar-undo-button">
           Undo
         </Button>
-        <Button onClick={onRedo} size="sm" disabled={!canRedo}>
+        <Button onClick={onRedo} size="sm" disabled={!canRedo} data-testid="toolbar-redo-button">
           Redo
         </Button>
       </div>
 
       {/* Center - project name */}
-      <h1 className="font-medium">{projectName}</h1>
+      <h1 className="font-medium" data-testid="toolbar-project-name">{projectName}</h1>
 
       {/* Right section - tools and display menu */}
       <div className="flex items-center gap-2">
@@ -74,6 +74,7 @@ export default function Toolbar({
               onClick={() => setActiveTool(tool.id)}
               tooltip={`${tool.label} (${tool.shortcut})`}
               size="sm"
+              aria-pressed={activeTool === tool.id}
               data-testid={`tool-${tool.id}`}
             />
           ))}

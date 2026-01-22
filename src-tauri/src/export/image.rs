@@ -654,24 +654,14 @@ mod tests {
             date: None,
             color: "#4ecdc4".to_string(),
             direction: None,
-            shots: vec![
-                ShotData {
-                    azimuth_in: 0.0,
-                    azimuth_out: 180.0,
-                    length: 10.0,
-                    depth_in: 5.0,
-                    depth_out: 5.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    azimuth_in: 90.0,
-                    azimuth_out: 270.0,
-                    length: 10.0,
-                    depth_in: 5.0,
-                    depth_out: 6.0,
-                    ..Default::default()
-                },
-            ],
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 180.0,
+                length: 10.0,
+                depth_in: 5.0,
+                depth_out: 5.0,
+                ..Default::default()
+            }],
         });
         project
     }
@@ -690,6 +680,60 @@ mod tests {
         assert!(contents.contains("Main"));
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_escape_xml_replaces_special_chars() {
+        let escaped = escape_xml(r#"<tag attr="a&b">'quote'</tag>"#);
+        assert_eq!(
+            escaped,
+            "&lt;tag attr=&quot;a&amp;b&quot;&gt;&apos;quote&apos;&lt;/tag&gt;"
+        );
+    }
+
+    #[test]
+    fn test_generate_svg_string_includes_grid_and_labels() {
+        let project = create_test_project();
+        let mut options = ExportImageOptions::default();
+        options.include_grid = true;
+        options.include_labels = true;
+        options.include_section_names = true;
+
+        let svg = generate_svg_string(&project, &options).unwrap();
+        assert!(svg.contains("class=\"grid\""));
+        assert!(svg.contains("class=\"labels\""));
+        assert!(svg.contains("class=\"section-names\""));
+    }
+
+    #[test]
+    fn test_generate_svg_string_excludes_labels_when_disabled() {
+        let project = create_test_project();
+        let mut options = ExportImageOptions::default();
+        options.include_labels = false;
+        options.include_section_names = false;
+
+        let svg = generate_svg_string(&project, &options).unwrap();
+        assert!(!svg.contains("class=\"labels\""));
+        assert!(!svg.contains("class=\"section-names\""));
+    }
+
+    #[test]
+    fn test_export_image_png_returns_error_and_writes_svg() {
+        let project = create_test_project();
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("png");
+
+        let mut options = ExportImageOptions::default();
+        options.format = ImageFormat::Png;
+
+        let result = export_image(&project, &path, &options);
+        assert!(result.is_err());
+
+        let svg_path = path.with_extension("svg");
+        let contents = std::fs::read_to_string(&svg_path).unwrap();
+        assert!(contents.contains("<svg"));
+
+        std::fs::remove_file(&svg_path).ok();
     }
 
     #[test]
@@ -1202,5 +1246,33 @@ mod tests {
         };
         let result = generate_svg_string(&project, &options);
         assert!(result.is_ok(), "Empty project in section mode should generate valid SVG");
+    }
+
+    #[test]
+    fn test_export_image_pdf_writes_file() {
+        let project = create_test_project();
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("pdf");
+
+        let mut options = ExportImageOptions::default();
+        options.format = ImageFormat::Pdf;
+
+        let result = export_image(&project, &path, &options);
+        assert!(result.is_ok());
+
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert!(metadata.len() > 0);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_generate_svg_string_empty_project_defaults_bounds() {
+        let project = Project::new("Empty".to_string(), None);
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("<rect"));
+        assert!(svg.contains("viewBox"));
     }
 }

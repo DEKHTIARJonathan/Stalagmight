@@ -1,13 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import { setupMockedPage } from './helpers/app';
 
 test.describe('GlobalView Map', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
-    // Wait for the GlobalView to render with recent projects
-    await page.waitForSelector('[data-testid="global-view"]', { timeout: 10000 });
+    await setupMockedPage(page);
+    await expect(page.getByTestId('global-view')).toBeVisible({ timeout: 10000 });
   });
 
   test.describe('Tab Navigation', () => {
@@ -81,7 +78,7 @@ test.describe('GlobalView Map', () => {
       // Switch to Map tab for map-specific tests
       const mapTab = page.locator('[data-testid="globalview-map-tab"]');
       await mapTab.click();
-      await page.waitForSelector('[data-testid="globalview-map"]', { timeout: 5000 });
+      await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
     });
 
     test('should display the map container', async ({ page }) => {
@@ -90,20 +87,15 @@ test.describe('GlobalView Map', () => {
     });
 
     test('should show system markers on the map', async ({ page }) => {
-      // Wait for markers to load (they are added after map loads)
-      await page.waitForTimeout(1000);
-
       // Check for marker elements
       const markers = page.locator('.globalview-system-marker');
-      await expect(markers).toHaveCount(3); // 3 GPS projects in mock data
+      await expect(markers).toHaveCount(3, { timeout: 5000 }); // 3 GPS projects in mock data
     });
 
     test('should have data-testid on system markers', async ({ page }) => {
-      await page.waitForTimeout(1000);
-
       // Check for specific project marker
-      const alphaMarker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
-      await expect(alphaMarker).toBeVisible();
+      const alphaMarker = page.locator('[data-testid=\"system-marker-/projects/cave-alpha.cvproj\"]');
+      await expect(alphaMarker).toBeVisible({ timeout: 5000 });
     });
 
     test('should display project count indicator', async ({ page }) => {
@@ -121,14 +113,13 @@ test.describe('GlobalView Map', () => {
     test.beforeEach(async ({ page }) => {
       const mapTab = page.locator('[data-testid="globalview-map-tab"]');
       await mapTab.click();
-      await page.waitForSelector('[data-testid="globalview-map"]', { timeout: 5000 });
-      await page.waitForTimeout(1000); // Wait for markers
+      await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
+      await expect(page.locator('.globalview-system-marker')).toHaveCount(3, { timeout: 5000 });
 
       // Click "Fit All" to ensure markers are in viewport
       const fitAllBtn = page.locator('button:has-text("Fit All")');
       if (await fitAllBtn.isVisible()) {
         await fitAllBtn.click();
-        await page.waitForTimeout(500); // Wait for map to adjust
       }
     });
 
@@ -166,7 +157,7 @@ test.describe('GlobalView Map', () => {
       await marker.dispatchEvent('dblclick');
 
       // Should transition to SingleSystemView (map canvas)
-      await expect(page.locator('canvas').first()).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
     });
   });
 
@@ -184,7 +175,7 @@ test.describe('GlobalView Map', () => {
       await page.locator('h3:has-text("Cave System Alpha")').dblclick();
 
       // Should transition to SingleSystemView
-      await expect(page.locator('canvas').first()).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
     });
 
     test('should select project on single click (for metadata panel)', async ({ page }) => {
