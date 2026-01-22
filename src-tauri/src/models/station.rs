@@ -198,6 +198,59 @@ pub enum ClosureStrategy {
     ManualAdjustment,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn station_ref_display_formats_as_section_and_index() {
+        let station = StationRef::new(2, 3);
+        assert_eq!(station.to_string(), "2:3");
+    }
+
+    #[test]
+    fn gps_coordinates_normalizes_longitude() {
+        let gps = GpsCoordinates::new(10.0, 180.0, 5.0).unwrap();
+        assert!((gps.longitude + 180.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gps_coordinates_validation_rejects_invalid_values() {
+        assert!(GpsCoordinates::new(91.0, 0.0, 0.0).is_err());
+        assert!(GpsCoordinates::new(-91.0, 0.0, 0.0).is_err());
+        assert!(GpsCoordinates::new(0.0, 181.0, 0.0).is_err());
+        assert!(GpsCoordinates::new(0.0, -181.0, 0.0).is_err());
+        assert!(GpsCoordinates::new(f64::NAN, 0.0, 0.0).is_err());
+        assert!(GpsCoordinates::new(0.0, f64::NAN, 0.0).is_err());
+        assert!(GpsCoordinates::new(0.0, 0.0, f64::NAN).is_err());
+    }
+
+    #[test]
+    fn gps_coordinates_is_valid_checks_ranges() {
+        let gps = GpsCoordinates::new(10.0, 20.0, 5.0).unwrap();
+        assert!(gps.is_valid());
+
+        let invalid = GpsCoordinates {
+            latitude: 120.0,
+            longitude: 0.0,
+            depth_reference: 0.0,
+        };
+        assert!(!invalid.is_valid());
+    }
+
+    #[test]
+    fn coordinates_distance_calculations() {
+        let a = Coordinates::new(0.0, 0.0, 0.0);
+        let b = Coordinates::new(3.0, 4.0, 12.0);
+
+        let distance = a.distance_to(&b);
+        assert!((distance - 13.0).abs() < 1e-6);
+
+        let horizontal = a.horizontal_distance_to(&b);
+        assert!((horizontal - 5.0).abs() < 1e-6);
+    }
+}
+
 /// A detected loop closure in the survey
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopClosure {

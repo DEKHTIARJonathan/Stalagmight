@@ -1,4 +1,12 @@
-import { waitForAppReady, resetAppState, createNewProject, selectTool, togglePanel, openDmpImportDialog } from '../helpers/app';
+import {
+  waitForAppReady,
+  resetAppState,
+  createNewProject,
+  selectTool,
+  togglePanel,
+  openDmpImportDialog,
+  waitForUiIdle,
+} from '../helpers/app';
 
 describe('Keyboard Shortcuts', () => {
   beforeEach(async () => {
@@ -25,10 +33,10 @@ describe('Keyboard Shortcuts', () => {
       it(`should activate ${tool.name} tool with '${tool.key}' key`, async () => {
         // Press the tool shortcut key
         await browser.keys([tool.key]);
-        await browser.pause(200);
+        await waitForUiIdle(200);
 
         // The app should remain functional regardless of tool selection
-        const mainView = await $('canvas');
+        const mainView = await $('[data-testid="map-canvas"]');
         await expect(mainView).toBeExisting();
       });
     }
@@ -40,26 +48,26 @@ describe('Keyboard Shortcuts', () => {
 
       // The panel state should have changed
       // Look for sections panel visibility change
-      await browser.pause(300);
+      await waitForUiIdle(300);
 
       // App should still be functional
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
 
     it('should toggle detail panel with Ctrl+2', async () => {
       await togglePanel('detail');
-      await browser.pause(300);
+      await waitForUiIdle(300);
 
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
 
     it('should toggle data table panel with Ctrl+3', async () => {
       await togglePanel('dataTable');
-      await browser.pause(300);
+      await waitForUiIdle(300);
 
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
   });
@@ -83,29 +91,29 @@ describe('Keyboard Shortcuts', () => {
 
     it('should attempt save with Ctrl+S', async () => {
       await browser.keys(['Control', 's']);
-      await browser.pause(500);
+      await waitForUiIdle(500);
 
       // App should still be functional after save attempt
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
 
     it('should clear selection with Escape', async () => {
       // Press Escape
       await browser.keys(['Escape']);
-      await browser.pause(200);
+      await waitForUiIdle(200);
 
       // App should still be functional
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
 
     it('should fit map to view with Ctrl+0', async () => {
       await browser.keys(['Control', '0']);
-      await browser.pause(300);
+      await waitForUiIdle(300);
 
       // Map should still be displayed
-      const mapCanvas = await $('canvas, [class*="MapCanvas"]');
+      const mapCanvas = await $('[data-testid="map-canvas"]');
       await expect(mapCanvas).toBeExisting();
     });
   });
@@ -113,25 +121,25 @@ describe('Keyboard Shortcuts', () => {
   describe('Undo/Redo Shortcuts', () => {
     it('should handle Ctrl+Z for undo', async () => {
       await browser.keys(['Control', 'z']);
-      await browser.pause(200);
+      await waitForUiIdle(200);
 
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
 
     it('should handle Ctrl+Y for redo', async () => {
       await browser.keys(['Control', 'y']);
-      await browser.pause(200);
+      await waitForUiIdle(200);
 
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
 
     it('should handle Ctrl+Shift+Z for redo', async () => {
       await browser.keys(['Control', 'Shift', 'z']);
-      await browser.pause(200);
+      await waitForUiIdle(200);
 
-      const mainView = await $('canvas, [class*="MapCanvas"]');
+      const mainView = await $('[data-testid="map-canvas"]');
       await expect(mainView).toBeExisting();
     });
   });

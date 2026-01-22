@@ -1,34 +1,14 @@
-import { test, expect, Page } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
-
-/**
- * Helper to create a project so export dialog can be accessed.
- * Export requires an open project.
- */
-async function createProject(page: Page): Promise<void> {
-  // Click New Project
-  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-
-  // Fill in project name and create
-  await page.locator('.fixed.inset-0 input').first().fill('Export Dialog Test Project');
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-
-  // Wait for project view to load
-  await page.waitForSelector('canvas', { timeout: 10000 });
-}
+import { test, expect } from '@playwright/test';
+import { setupMockedPage, createProject } from './helpers/app';
 
 test.describe('Export Dialog', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
   test('should open export dialog with Ctrl+E', async ({ page }) => {
     // Create a project first (export requires open project)
-    await createProject(page);
+    await createProject(page, 'Export Dialog Test Project');
 
     // Open export dialog with keyboard shortcut
     await page.keyboard.press('Control+e');
@@ -48,7 +28,7 @@ test.describe('Export Dialog', () => {
   });
 
   test('should show CSV format options and preview', async ({ page }) => {
-    await createProject(page);
+    await createProject(page, 'Export Dialog Test Project');
 
     // Open export dialog
     await page.keyboard.press('Control+e');
@@ -80,7 +60,7 @@ test.describe('Export Dialog', () => {
   });
 
   test('should show JSON format options and preview', async ({ page }) => {
-    await createProject(page);
+    await createProject(page, 'Export Dialog Test Project');
 
     // Open export dialog
     await page.keyboard.press('Control+e');
@@ -107,7 +87,7 @@ test.describe('Export Dialog', () => {
   });
 
   test('should show image export options', async ({ page }) => {
-    await createProject(page);
+    await createProject(page, 'Export Dialog Test Project');
 
     // Open export dialog
     await page.keyboard.press('Control+e');
@@ -161,7 +141,7 @@ test.describe('Export Dialog', () => {
   });
 
   test('should execute export and show success', async ({ page }) => {
-    await createProject(page);
+    await createProject(page, 'Export Dialog Test Project');
 
     // Open export dialog
     await page.keyboard.press('Control+e');
@@ -182,7 +162,7 @@ test.describe('Export Dialog', () => {
   });
 
   test('should close dialog on Cancel', async ({ page }) => {
-    await createProject(page);
+    await createProject(page, 'Export Dialog Test Project');
 
     // Open export dialog
     await page.keyboard.press('Control+e');

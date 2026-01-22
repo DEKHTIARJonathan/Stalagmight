@@ -1455,13 +1455,17 @@ export default function MapCanvas() {
   return (
     <div
       className="relative w-full h-full"
+      data-testid="map-canvas"
+      data-map-loaded={mapLoaded ? 'true' : 'false'}
+      data-active-tool={activeTool}
+      data-placement-mode={placementMode ? 'true' : 'false'}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
       onContextMenu={handleContextMenu}
     >
-      <div ref={mapContainer} className="w-full h-full" />
+      <div ref={mapContainer} className="w-full h-full" data-testid="maplibre-container" />
 
       {/* Box select overlay */}
       {boxSelectStyle && (
@@ -1513,6 +1517,7 @@ export default function MapCanvas() {
         onClick={fitToBounds}
         className="absolute top-2 left-2 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
         title="Fit to view (Ctrl+0)"
+        data-testid="fit-to-view-button"
       >
         ⊞
       </button>

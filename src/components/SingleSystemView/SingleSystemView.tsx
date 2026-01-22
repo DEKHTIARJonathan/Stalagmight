@@ -46,7 +46,7 @@ export default function SingleSystemView() {
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col" data-testid="single-system-view">
       {/* Toolbar */}
       <Toolbar
         projectName={project.name}

@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import { setupMockedPage, createProject, waitForMapReady } from './helpers/app';
 
 /**
  * Regression tests for satellite imagery bugs that were fixed.
@@ -12,22 +12,10 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
  */
 
 /**
- * Helper to create a new project
- */
-async function createProject(page: Page, name: string): Promise<void> {
-  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill(name);
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
-}
-
-/**
  * Helper to open the Display menu
  */
 async function openDisplayMenu(page: Page): Promise<void> {
-  await page.click('button:has-text("Display")');
+  await page.getByTestId('display-menu-button').click();
   await expect(page.locator('[data-testid="display-toggle-showSatellite"]')).toBeVisible({ timeout: 2000 });
 }
 
@@ -53,9 +41,7 @@ async function waitForMapLayer(page: Page, layerId: string): Promise<boolean> {
 
 test.describe('Satellite Bug Regressions', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
   test.describe('Config GPS Origin (Bug: Rust config missing satellite_gps_origin)', () => {
@@ -64,6 +50,7 @@ test.describe('Satellite Bug Regressions', () => {
       // causing tiles to be fetched at wrong coordinates (near 0,0 instead of Florida Keys)
 
       await createProject(page, 'GPS Origin Test');
+      await waitForMapReady(page);
 
       // Get config and verify GPS origin exists with expected Florida Keys coordinates
       const gpsOrigin = await page.evaluate(() => {
@@ -188,17 +175,16 @@ test.describe('Satellite Bug Regressions', () => {
       // Try to interact before map is fully loaded
 
       // Create project (this starts map initialization)
-      const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
+      const newProjectBtn = page.locator('[data-testid="new-project-button"], [data-testid="empty-state-new-project"]').first();
       await newProjectBtn.click();
-      await page.waitForSelector('.fixed.inset-0');
-      await page.locator('.fixed.inset-0 input').first().fill('Early Toggle Test');
+      await page.getByTestId('new-project-name-input').fill('Early Toggle Test');
 
       // Click create - map starts loading
-      await page.click('.fixed.inset-0 button:has-text("Create")');
+      await page.getByTestId('new-project-create-button').click();
 
       // Immediately try to open Display menu (map may not be loaded yet)
       // Wait for canvas to appear but the map 'load' event may not have fired
-      await page.waitForSelector('canvas', { timeout: 10000 });
+      await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
 
       // Try to toggle satellite immediately - this should not crash
       // even if the map isn't fully loaded
@@ -211,10 +197,10 @@ test.describe('Satellite Bug Regressions', () => {
 
         // If we get here without crash, the guard is working
         // The satellite may or may not be visible, but app should be stable
-        await expect(page.locator('canvas').first()).toBeVisible();
+        await expect(page.getByTestId('map-canvas')).toBeVisible();
       } catch {
         // If menu can't open, that's fine - but the app should still be stable
-        await expect(page.locator('canvas').first()).toBeVisible();
+        await expect(page.getByTestId('map-canvas')).toBeVisible();
       }
 
       // App should remain functional after this
@@ -360,7 +346,7 @@ test.describe('Satellite Bug Regressions', () => {
       expect(protocolCheck).toBe(true);
 
       // App should be stable
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
 
     test('should toggle satellite on and off without issues', async ({ page }) => {
@@ -388,7 +374,7 @@ test.describe('Satellite Bug Regressions', () => {
       expect(hasLayer).toBe(true);
 
       // App should still be stable
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
   });
 });

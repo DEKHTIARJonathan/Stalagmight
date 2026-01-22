@@ -1,5 +1,10 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import {
+  setupMockedPage,
+  createProject,
+  openDmpSelectionDialog,
+  waitForMapIdle,
+} from './helpers/app';
 
 /**
  * Import Placement Flow E2E Tests
@@ -26,18 +31,9 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
  * Helper to create a project and open import dialog.
  */
 async function createProjectAndOpenImportDialog(page: Page): Promise<void> {
-  const newProjectBtn = page
-    .locator('button:has-text("New Project"), h3:has-text("New Project")')
-    .first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill('Placement Test');
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
-
-  await page.keyboard.press('Control+i');
-  await page.waitForSelector('[data-testid="dmp-selection-dialog"]', { timeout: 5000 });
-  await page.waitForSelector('text=Main Passage', { timeout: 5000 });
+  await createProject(page, 'Placement Test');
+  await openDmpSelectionDialog(page);
+  await expect(page.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
 }
 
 /**
@@ -57,7 +53,7 @@ async function selectSectionsAndProceed(page: Page, sectionIndices: number[]): P
 
   // Proceed to Step 2
   await page.locator('[data-testid="continue-button"]').click();
-  await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
+  await expect(page.getByTestId('dmp-section-config-dialog')).toBeVisible({ timeout: 5000 });
 }
 
 /**
@@ -70,9 +66,7 @@ async function getCurrentSectionStatus(page: Page, arrayIndex: number): Promise<
 
 test.describe('Import Placement Flow', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
   test.describe('No Auto-Placement', () => {
@@ -145,7 +139,7 @@ test.describe('Import Placement Flow', () => {
 
       // Click "Place section"
       await page.locator('[data-testid="place-section-button"]').click();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // First section should now show placed status (checkmark)
       await expect(status0).toContainText('✓');
@@ -165,7 +159,7 @@ test.describe('Import Placement Flow', () => {
 
       // Click "Place section"
       await page.locator('[data-testid="place-section-button"]').click();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // Should have auto-advanced to second section (now active)
       const item1 = page.locator('[data-testid="section-list-item-1"]');
@@ -194,7 +188,7 @@ test.describe('Import Placement Flow', () => {
       });
 
       // Canvas should still be visible (app functional)
-      await expect(page.locator('canvas').first()).toBeVisible();
+      await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
 
     /**
@@ -206,7 +200,7 @@ test.describe('Import Placement Flow', () => {
 
       // Navigate to second section via left panel
       await page.locator('[data-testid="section-list-item-1"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // First section should still be "not placed"
       const status0 = page.locator('[data-testid="section-status-0"]');
@@ -214,7 +208,7 @@ test.describe('Import Placement Flow', () => {
 
       // Navigate to third section
       await page.locator('[data-testid="section-list-item-2"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Both first and second should still be "not placed"
       await expect(status0).toContainText('○');
@@ -223,7 +217,7 @@ test.describe('Import Placement Flow', () => {
 
       // Navigate back to first and all should still be unplaced
       await page.locator('[data-testid="section-list-item-0"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
       await expect(status0).toContainText('○');
     });
 
@@ -236,11 +230,11 @@ test.describe('Import Placement Flow', () => {
 
       // Place first section
       await page.locator('[data-testid="place-section-button"]').click();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // Navigate back to first section
       await page.locator('[data-testid="section-list-item-0"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Should show "Next section" button instead of disabled "Place section"
       const nextBtn = page.locator('[data-testid="next-section-button"]');
@@ -249,7 +243,7 @@ test.describe('Import Placement Flow', () => {
 
       // Clicking it should navigate to the next unplaced section
       await nextBtn.click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Should now be on section 1 (Side Tunnel) and can place it
       const placeBtn = page.locator('[data-testid="place-and-finish-button"]');
@@ -269,7 +263,7 @@ test.describe('Import Placement Flow', () => {
       const excludeBtn = page.locator('[data-testid="exclude-button"]');
       await expect(excludeBtn).toBeVisible();
       await excludeBtn.click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // First section should show excluded status (red X)
       const status0 = page.locator('[data-testid="section-status-0"]');
@@ -288,11 +282,11 @@ test.describe('Import Placement Flow', () => {
       const excludeBtn = page.locator('[data-testid="exclude-button"]');
       await expect(excludeBtn).toBeVisible();
       await excludeBtn.click();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // Auto-advance happens after excluding, so navigate back to excluded section
       await page.locator('[data-testid="section-list-item-0"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Button should now say "Include"
       const includeBtn = page.locator('[data-testid="include-button"]');
@@ -308,17 +302,17 @@ test.describe('Import Placement Flow', () => {
 
       // Exclude first section
       await page.locator('[data-testid="exclude-button"]').click();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // Navigate back to excluded section
       await page.locator('[data-testid="section-list-item-0"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Click Include to toggle back
       const includeBtn = page.locator('[data-testid="include-button"]');
       await expect(includeBtn).toBeVisible();
       await includeBtn.click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Should show "not placed" status again
       const status0 = page.locator('[data-testid="section-status-0"]');
@@ -338,7 +332,7 @@ test.describe('Import Placement Flow', () => {
 
       // Navigate to second section and exclude it
       await page.locator('[data-testid="section-list-item-1"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
       await page.locator('[data-testid="exclude-button"]').click();
 
       // Wait for excluded status to appear
@@ -352,7 +346,7 @@ test.describe('Import Placement Flow', () => {
 
       // Go back to first section
       await page.locator('[data-testid="section-list-item-0"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Verify first section is active
       const item0 = page.locator('[data-testid="section-list-item-0"]');
@@ -379,11 +373,11 @@ test.describe('Import Placement Flow', () => {
 
       // Place first section
       await page.locator('[data-testid="place-section-button"]').click();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // Navigate back to placed section
       await page.locator('[data-testid="section-list-item-0"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Exclude button should be disabled
       const excludeBtn = page.locator('[data-testid="exclude-button"]');
@@ -399,13 +393,13 @@ test.describe('Import Placement Flow', () => {
 
       // Exclude first section
       await page.locator('[data-testid="exclude-button"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Navigate to second section and exclude it too
       await page.locator('[data-testid="section-list-item-1"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
       await page.locator('[data-testid="exclude-button"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Should show "Cancel (all sections excluded)" button
       const cancelAllBtn = page.locator('[data-testid="cancel-all-excluded-button"]');
@@ -422,13 +416,13 @@ test.describe('Import Placement Flow', () => {
 
       // Exclude second section
       await page.locator('[data-testid="section-list-item-1"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
       await page.locator('[data-testid="exclude-button"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Navigate to first section
       await page.locator('[data-testid="section-list-item-0"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Should show "Place and finish" since other section is excluded
       const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
@@ -446,11 +440,11 @@ test.describe('Import Placement Flow', () => {
 
       // Place first section
       await page.locator('[data-testid="place-section-button"]').click();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // Navigate back to placed section
       await page.locator('[data-testid="section-list-item-0"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Placement radio buttons should be disabled
       const placementRadios = page.locator('[data-testid="placement-radio-origin"]');
@@ -468,11 +462,11 @@ test.describe('Import Placement Flow', () => {
 
       // Place first section
       await page.locator('[data-testid="place-section-button"]').click();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // Navigate back to placed section
       await page.locator('[data-testid="section-list-item-0"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Should show some read-only indicator (check for disabled state or text)
       // The shot table inputs should be disabled
@@ -505,7 +499,7 @@ test.describe('Import Placement Flow', () => {
 
       // Place first section
       await page.locator('[data-testid="place-section-button"]').click();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // First section should show checkmark
       const status0 = page.locator('[data-testid="section-status-0"]');
@@ -522,7 +516,7 @@ test.describe('Import Placement Flow', () => {
 
       // Exclude first section
       await page.locator('[data-testid="exclude-button"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       const status0 = page.locator('[data-testid="section-status-0"]');
       await expect(status0).toContainText('✕');
@@ -589,7 +583,7 @@ test.describe('Import Placement Flow', () => {
       const excludeBtn = page.locator('[data-testid="exclude-button"]');
       await expect(excludeBtn).toBeEnabled();
       await excludeBtn.click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Should be excluded
       const status1 = page.locator('[data-testid="section-status-1"]');
@@ -607,11 +601,11 @@ test.describe('Import Placement Flow', () => {
       await page.locator('[data-testid="section-list-item-1"]').click();
       await expect(page.locator('h3:has-text("Section: Validation Test Section")')).toBeVisible({ timeout: 3000 });
       await page.locator('[data-testid="exclude-button"]').click();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // Navigate to valid section
       await page.locator('[data-testid="section-list-item-0"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Should show "Place and finish"
       const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
@@ -638,11 +632,11 @@ test.describe('Import Placement Flow', () => {
 
       // Place first section
       await page.locator('[data-testid="place-section-button"]').click();
-      await page.waitForTimeout(400);
+      await waitForMapIdle(page);
 
       // Should auto-advance to second section, place it
       await page.locator('[data-testid="place-section-button"]').click();
-      await page.waitForTimeout(400);
+      await waitForMapIdle(page);
 
       // Should auto-advance to third section and show "Place and finish"
       const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
@@ -658,24 +652,24 @@ test.describe('Import Placement Flow', () => {
 
       // Exclude first section
       await page.locator('[data-testid="exclude-button"]').click();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // Auto-advance to second section, exclude it too
       await page.locator('[data-testid="exclude-button"]').click();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // Should show cancel button (all excluded)
       await expect(page.locator('[data-testid="cancel-all-excluded-button"]')).toBeVisible();
 
       // Navigate to first section and include it
       await page.locator('[data-testid="section-list-item-0"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Verify Include button is visible
       const includeBtn = page.locator('[data-testid="include-button"]');
       await expect(includeBtn).toBeVisible();
       await includeBtn.click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Should now show "Place and finish"
       const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
@@ -692,15 +686,15 @@ test.describe('Import Placement Flow', () => {
 
       // Place first section
       await page.locator('[data-testid="place-section-button"]').click();
-      await page.waitForTimeout(300);
+      await waitForMapIdle(page);
 
       // Exclude second section (auto-advanced to it)
       await page.locator('[data-testid="exclude-button"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Navigate to first (placed) section - should be able to finish
       await page.locator('[data-testid="section-list-item-0"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // When a placed section is active and all others are excluded/placed,
       // we need to trigger finish. This may require navigating or button logic.
@@ -711,7 +705,7 @@ test.describe('Import Placement Flow', () => {
       // Since section 0 is placed and section 1 is excluded, import should be possible
       // Let's navigate to section 1 (excluded) and check for finish option
       await page.locator('[data-testid="section-list-item-1"]').click();
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // With excluded section active, the Place button should be disabled
       // but there should be a way to finish since all sections are handled
@@ -750,11 +744,11 @@ test.describe('Import Placement Flow', () => {
 
       // Place first section
       await page.locator('[data-testid="place-section-button"]').click();
-      await page.waitForTimeout(400);
+      await waitForMapIdle(page);
 
       // We're now on section 1 (auto-advanced) - exclude it
       await page.locator('[data-testid="exclude-button"]').click();
-      await page.waitForTimeout(400);
+      await waitForMapIdle(page);
 
       // Should auto-advance to section 2 (array index 2, which is section index 3)
       const item2 = page.locator('[data-testid="section-list-item-2"]');

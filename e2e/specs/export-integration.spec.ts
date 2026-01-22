@@ -17,6 +17,7 @@ import {
   createNewProject,
   importDmpFile,
   getProjectSections,
+  waitForUiIdle,
 } from '../helpers/app';
 
 // Get absolute path to fixtures directory
@@ -101,7 +102,7 @@ describe('Export Integration', () => {
     expect(exportResult.error).toBeUndefined();
 
     // Wait for file to be written
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify file exists
     expect(fs.existsSync(csvPath)).toBe(true);
@@ -181,7 +182,7 @@ describe('Export Integration', () => {
     expect(exportResult.error).toBeUndefined();
 
     // Wait for file to be written
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify file exists
     expect(fs.existsSync(jsonPath)).toBe(true);
@@ -417,7 +418,7 @@ describe('Export Integration', () => {
     expect(exportResult.error).toBeUndefined();
 
     // Wait for file to be written
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify file exists
     expect(fs.existsSync(svgPath)).toBe(true);
@@ -528,7 +529,7 @@ describe('Export Integration', () => {
     expect(gridExportResult.success).toBe(true);
 
     // Wait for file to be written
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify file exists
     expect(fs.existsSync(svgWithGridPath)).toBe(true);
@@ -608,7 +609,7 @@ describe('Export Integration', () => {
     expect(noGridExportResult.success).toBe(true);
 
     // Wait for file to be written
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify file exists
     expect(fs.existsSync(svgNoGridPath)).toBe(true);

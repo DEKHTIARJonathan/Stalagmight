@@ -295,3 +295,237 @@ impl Command {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{
+        ClosureStrategy, Coordinates, GpsCoordinates, SectionUpdates, ShotData, ShotUpdates,
+        StationRef, SurveyDirection,
+    };
+    use chrono::NaiveDate;
+    use std::path::PathBuf;
+
+    #[test]
+    fn command_result_constructors_set_fields() {
+        let warning = ValidationWarning {
+            code: "test".to_string(),
+            message: "warn".to_string(),
+            severity: WarningSeverity::Warning,
+        };
+
+        let success = CommandResult::success();
+        assert!(success.success);
+        assert!(success.warnings.is_empty());
+        assert!(success.error.is_none());
+        assert!(success.section_id.is_none());
+        assert!(success.section_ids.is_empty());
+
+        let success_with_warnings = CommandResult::success_with_warnings(vec![warning.clone()]);
+        assert!(success_with_warnings.success);
+        assert_eq!(success_with_warnings.warnings.len(), 1);
+        assert!(success_with_warnings.error.is_none());
+        assert!(success_with_warnings.section_id.is_none());
+        assert!(success_with_warnings.section_ids.is_empty());
+
+        let success_with_section = CommandResult::success_with_section_id(7);
+        assert!(success_with_section.success);
+        assert_eq!(success_with_section.section_id, Some(7));
+        assert!(success_with_section.section_ids.is_empty());
+
+        let success_with_section_and_warnings =
+            CommandResult::success_with_section_id_and_warnings(8, vec![warning.clone()]);
+        assert!(success_with_section_and_warnings.success);
+        assert_eq!(success_with_section_and_warnings.section_id, Some(8));
+        assert_eq!(success_with_section_and_warnings.warnings.len(), 1);
+
+        let success_with_sections = CommandResult::success_with_section_ids(vec![1, 2, 3]);
+        assert!(success_with_sections.success);
+        assert!(success_with_sections.section_id.is_none());
+        assert_eq!(success_with_sections.section_ids, vec![1, 2, 3]);
+
+        let success_with_sections_and_warnings =
+            CommandResult::success_with_section_ids_and_warnings(vec![4, 5], vec![warning]);
+        assert!(success_with_sections_and_warnings.success);
+        assert_eq!(success_with_sections_and_warnings.section_ids, vec![4, 5]);
+        assert_eq!(success_with_sections_and_warnings.warnings.len(), 1);
+
+        let failure = CommandResult::failure("boom".to_string());
+        assert!(!failure.success);
+        assert!(failure.warnings.is_empty());
+        assert_eq!(failure.error.as_deref(), Some("boom"));
+        assert!(failure.section_id.is_none());
+        assert!(failure.section_ids.is_empty());
+    }
+
+    #[test]
+    fn command_description_covers_all_variants() {
+        let shot_data = ShotData {
+            azimuth_in: 10.0,
+            azimuth_out: 20.0,
+            length: 3.0,
+            depth_in: 1.0,
+            depth_out: 2.0,
+            ..Default::default()
+        };
+        let section_updates = SectionUpdates {
+            name: Some(Some("Updated".to_string())),
+            ..Default::default()
+        };
+        let shot_updates = ShotUpdates {
+            length: Some(4.0),
+            ..Default::default()
+        };
+        let station_a = StationRef::new(1, 0);
+        let station_b = StationRef::new(1, 1);
+        let gps = GpsCoordinates::new(10.0, 20.0, 5.0).unwrap();
+
+        let cases = vec![
+            (
+                Command::CreateProject {
+                    name: "Alpha".to_string(),
+                    location: None,
+                },
+                "Create project 'Alpha'",
+            ),
+            (
+                Command::OpenProject {
+                    path: PathBuf::from("alpha.cvproj"),
+                },
+                "Open project 'alpha.cvproj'",
+            ),
+            (
+                Command::SaveProject { path: None },
+                "Save project",
+            ),
+            (
+                Command::SaveProject {
+                    path: Some(PathBuf::from("alpha.cvproj")),
+                },
+                "Save project to 'alpha.cvproj'",
+            ),
+            (Command::CloseProject, "Close project"),
+            (
+                Command::CreateSection {
+                    name: Some("Main".to_string()),
+                    surveyor: None,
+                    date: Some(NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()),
+                    color: "#fff".to_string(),
+                    direction: Some(SurveyDirection::In),
+                    shots: vec![shot_data.clone()],
+                },
+                "Create section 'Main'",
+            ),
+            (
+                Command::DeleteSection { section_id: 3 },
+                "Delete section 3",
+            ),
+            (
+                Command::UpdateSectionMetadata {
+                    section_id: 3,
+                    updates: section_updates,
+                },
+                "Update section 3 metadata",
+            ),
+            (
+                Command::CreateShot {
+                    section_id: 4,
+                    shot: shot_data.clone(),
+                    after_shot_id: None,
+                },
+                "Create shot in section 4",
+            ),
+            (
+                Command::UpdateShot {
+                    section_id: 4,
+                    shot_id: 2,
+                    updates: shot_updates,
+                },
+                "Update shot 4:2",
+            ),
+            (
+                Command::DeleteShot {
+                    section_id: 4,
+                    shot_id: 2,
+                },
+                "Delete shot 4:2",
+            ),
+            (
+                Command::SetShotVirtual {
+                    section_id: 4,
+                    shot_id: 2,
+                    is_virtual: true,
+                },
+                "Mark shot 4:2 as virtual",
+            ),
+            (
+                Command::SetShotVirtual {
+                    section_id: 4,
+                    shot_id: 2,
+                    is_virtual: false,
+                },
+                "Mark shot 4:2 as real",
+            ),
+            (
+                Command::MergeStations {
+                    station_a,
+                    station_b,
+                    closure_strategy: ClosureStrategy::ProportionalByLength,
+                },
+                "Merge stations 1:0 and 1:1",
+            ),
+            (
+                Command::UnmergeStations {
+                    station_ref: station_a,
+                },
+                "Unmerge station 1:0",
+            ),
+            (
+                Command::SetZeroDatum {
+                    station_ref: station_b,
+                    coordinates: gps,
+                },
+                "Set zero datum at 1:1",
+            ),
+            (
+                Command::RemoveZeroDatum {
+                    station_ref: station_b,
+                },
+                "Remove zero datum from 1:1",
+            ),
+            (
+                Command::MoveSection {
+                    section_id: 2,
+                    offset: Coordinates::new(1.0, 2.0, 3.0),
+                },
+                "Move section 2",
+            ),
+            (
+                Command::MoveStation {
+                    station_ref: station_a,
+                    new_position: Coordinates::new(1.0, 0.0, 0.0),
+                },
+                "Move station 1:0",
+            ),
+            (
+                Command::Batch {
+                    commands: vec![Command::CloseProject],
+                },
+                "Batch of 1 commands",
+            ),
+            (
+                Command::MergeProjects {
+                    source_paths: vec![PathBuf::from("a.cvproj"), PathBuf::from("b.cvproj")],
+                    output_path: PathBuf::from("out.cvproj"),
+                    output_name: "Merged".to_string(),
+                    archive_originals: false,
+                },
+                "Merge 2 projects into 'Merged'",
+            ),
+        ];
+
+        for (command, expected) in cases {
+            assert_eq!(command.description(), expected);
+        }
+    }
+}

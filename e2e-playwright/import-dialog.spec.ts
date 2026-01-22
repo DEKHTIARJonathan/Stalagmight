@@ -1,5 +1,42 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import {
+  setupMockedPage,
+  createProject,
+  openNewProjectDialog,
+  openDmpSelectionDialog,
+  proceedToDmpSectionConfig,
+  seedProjectWithSections,
+  type SectionSeed,
+} from './helpers/app';
+
+const existingSectionSeeds: SectionSeed[] = [
+  {
+    name: 'Existing Alpha',
+    direction: 'in',
+    shots: [
+      { azimuth_in: 10, azimuth_out: 190, length: 6.5, depth_in: -1, depth_out: -1.5 },
+      { azimuth_in: 20, azimuth_out: 200, length: 8.0, depth_in: -1.5, depth_out: -2.0 },
+    ],
+  },
+  {
+    name: 'Existing Beta',
+    direction: 'out',
+    shots: [
+      { azimuth_in: 45, azimuth_out: 225, length: 4.5, depth_in: -0.5, depth_out: -1.0 },
+    ],
+  },
+];
+
+async function openPlacementConfigWithExistingStations(page: Page, projectName: string): Promise<void> {
+  await createProject(page, projectName);
+  await seedProjectWithSections(page, existingSectionSeeds);
+
+  await openDmpSelectionDialog(page);
+  await proceedToDmpSectionConfig(page);
+
+  const fromExistingRadio = page.getByTestId('placement-from-existing');
+  await fromExistingRadio.check();
+}
 
 /**
  * Helper to create a project and open the import dialog.
@@ -8,47 +45,53 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
  * Returns when the DMP file is loaded and sections are visible in Step 1.
  */
 async function createProjectAndOpenImportDialog(page: Page): Promise<void> {
-  // Create a new project
-  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill('LRUD Test Project');
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
+  await createProject(page, 'LRUD Test Project');
+  await openDmpSelectionDialog(page);
 
-  // Open import dialog with Ctrl+I
-  // New flow: Ctrl+I from existing project opens file picker, parses DMP,
-  // then opens DmpSelectionDialog (Step 1) with the parsed data
-  await page.keyboard.press('Control+i');
-
-  // Wait for Step 1 dialog to appear with parsed DMP data
-  await page.waitForSelector('[data-testid="dmp-selection-dialog"]', { timeout: 5000 });
-
-  const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
+  const dialog = page.getByTestId('dmp-selection-dialog');
   await expect(dialog).toBeVisible();
+  await expect(page.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+  await expect(dialog.getByTestId('dmp-metadata')).toContainText('Version: 5');
 
-  // Wait for sections to be visible - the mock file picker returns a path
-  // and the DMP is parsed automatically before the dialog opens
-  await page.waitForSelector('text=Main Passage', { timeout: 5000 });
+  await proceedToDmpSectionConfig(page);
+  await expect(page.getByTestId('dmp-section-config-dialog')).toBeVisible({ timeout: 10000 });
+  await expect(page.getByTestId('section-list-panel')).toBeVisible({ timeout: 10000 });
+  await expect(page.getByTestId('shot-table')).toBeVisible({ timeout: 10000 });
+}
 
-  // Verify file info is shown (confirms data is loaded)
-  await expect(dialog.locator('[data-testid="dmp-metadata"]')).toContainText('Version: 5');
+async function selectSectionInConfig(page: Page, sectionName: string): Promise<void> {
+  const sectionItem = page.locator('[data-testid^="section-list-item-"]').filter({ hasText: sectionName }).first();
+  await expect(sectionItem).toBeVisible({ timeout: 5000 });
+  await sectionItem.click();
+  await expect(page.getByTestId('shot-table')).toBeVisible({ timeout: 5000 });
+}
 
-  // Proceed to Step 2 (DmpSectionConfigDialog) where the expandable sections are
-  const continueButton = page.locator('[data-testid="continue-button"]');
-  await expect(continueButton).toBeEnabled();
-  await continueButton.click();
+async function openSelectOptions(page: Page, selectTestId: string): Promise<void> {
+  const select = page.getByTestId(selectTestId);
+  const trigger = select.locator('button').first();
+  await trigger.click();
+  await expect(select.locator('div.absolute')).toBeVisible({ timeout: 2000 });
+}
 
-  // Wait for Step 2 dialog to appear
-  await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
+async function selectOptionFromSelect(page: Page, selectTestId: string, optionText: string): Promise<void> {
+  const select = page.getByTestId(selectTestId);
+  const trigger = select.locator('button').first();
+  await trigger.click();
+  const option = select.locator('div.absolute button', { hasText: optionText }).first();
+  await expect(option).toBeVisible({ timeout: 2000 });
+  await option.click();
+}
+
+async function openGpsPlacementPanel(page: Page): Promise<void> {
+  await createProjectAndOpenImportDialog(page);
+  const zeroDatumRadio = page.getByTestId('placement-zero-datum');
+  await zeroDatumRadio.check();
+  await expect(page.getByTestId('gps-input')).toBeVisible({ timeout: 5000 });
 }
 
 test.describe('Import Dialog UI', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    // Wait for app to load
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
   test('should display the start page on load', async ({ page }) => {
@@ -58,576 +101,186 @@ test.describe('Import Dialog UI', () => {
   });
 
   test('should open new project dialog', async ({ page }) => {
-    // Click New Project card or button (could be in header or empty state)
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-
-    // Wait for dialog to appear (look for the dialog title h2)
-    const dialogTitle = page.locator('h2:has-text("New Project")');
-    await expect(dialogTitle).toBeVisible({ timeout: 5000 });
+    await openNewProjectDialog(page);
+    await expect(page.getByTestId('new-project-dialog')).toBeVisible({ timeout: 5000 });
   });
 
   test('should create a new project', async ({ page }) => {
-    // Click New Project (either button or card)
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-
-    // Wait for dialog
-    await page.waitForSelector('.fixed.inset-0');
-
-    // Fill in project name
-    const nameInput = page.locator('.fixed.inset-0 input').first();
-    await nameInput.fill('E2E Test Project');
-
-    // Click Create button
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-
-    // Wait for SingleSystemView (map/canvas should appear)
-    await expect(page.locator('canvas').first()).toBeVisible({ timeout: 10000 });
+    await createProject(page, 'E2E Test Project');
+    await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
   });
 
   test('should open import dialog with Ctrl+I', async ({ page }) => {
-    // First create a project
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Import Test Project');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-
-    // Wait for project view
-    await page.waitForSelector('canvas', { timeout: 10000 });
-
-    // Open import dialog with keyboard shortcut
-    await page.keyboard.press('Control+i');
-
-    // Verify import dialog appears
-    const importDialog = page.locator('.fixed.inset-0');
+    await createProject(page, 'Import Test Project');
+    await openDmpSelectionDialog(page);
+    const importDialog = page.getByTestId('dmp-selection-dialog');
     await expect(importDialog).toBeVisible({ timeout: 5000 });
-
-    // Check for Import-related text in dialog
-    const dialogText = await importDialog.textContent();
-    expect(dialogText?.toLowerCase()).toContain('import');
   });
 
   test('should close dialog with Cancel button', async ({ page }) => {
-    // Create project and open import dialog
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Cancel Test Project');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-    await page.waitForSelector('canvas', { timeout: 10000 });
-
-    // Open import dialog
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('.fixed.inset-0');
-
-    // Close with Cancel button
-    await page.click('.fixed.inset-0 button:has-text("Cancel")');
-
-    // Dialog should be closed
-    const dialog = page.locator('.fixed.inset-0');
-    await expect(dialog).not.toBeVisible({ timeout: 3000 });
+    await createProject(page, 'Cancel Test Project');
+    await openDmpSelectionDialog(page);
+    await page.getByTestId('cancel-button').click();
+    await expect(page.getByTestId('dmp-selection-dialog')).not.toBeVisible({ timeout: 3000 });
   });
 
   test('should have section name input in import dialog', async ({ page }) => {
-    // Setup: create project and open import dialog
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Section Name Test');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-    await page.waitForSelector('canvas', { timeout: 10000 });
-    await page.keyboard.press('Control+i');
-
-    // Find input field for section name
-    const sectionInput = page.locator(
-      '.fixed.inset-0 input'
-    );
-
-    // Should have at least one input field
-    await expect(sectionInput.first()).toBeVisible({ timeout: 5000 });
+    await createProject(page, 'Section Name Test');
+    await openDmpSelectionDialog(page);
+    await proceedToDmpSectionConfig(page);
+    await expect(page.getByTestId('section-name-input')).toBeVisible({ timeout: 5000 });
   });
 });
 
 /**
- * The following test suites test features that were in the old DmpImportDialog.
- * They need to be rewritten for the new two-step import flow (DmpSelectionDialog + DmpSectionConfigDialog).
- * The tests are skipped for now and will be updated in task fn-51-ctu.22.
+ * New flow recap:
+ * - Step 1: DmpSelectionDialog (file already parsed)
+ * - Step 2: DmpSectionConfigDialog with ShotTableEditor
+ * - New data-testid patterns: shot-row-{idx}, shot-left-{idx}, shot-comment-{idx}, etc.
  *
- * Key changes in the new flow:
- * - No Browse button in dialog (file picker opens before dialog)
- * - Section selection in Step 1 (DmpSelectionDialog)
- * - Shot editing in Step 2 (DmpSectionConfigDialog) with ShotTableEditor
- * - New data-testid patterns: shot-row-{idx}, shot-left-{idx}, etc.
+ * Note: The statistics footer remains legacy-only (DmpImportDialog) and is still skipped.
  */
-test.describe.skip('LRUD Columns', () => {
+test.describe('Shot Table Columns', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
-  test('section rows are expandable', async ({ page }) => {
+  test('shot table shows expected columns', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Find the expand button for the first section (Main Passage - index 0)
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expect(expandButton).toBeVisible();
+    const table = page.getByTestId('shot-table');
+    await expect(table).toBeVisible();
+    await expect(table.locator('th', { hasText: /^Length$/ })).toBeVisible();
+    await expect(table.locator('th', { hasText: /^Azimuth$/ })).toBeVisible();
+    await expect(table.locator('th', { hasText: /^Depth In$/ })).toBeVisible();
+    await expect(table.locator('th', { hasText: /^Depth Out$/ })).toBeVisible();
+    await expect(table.locator('th', { hasText: /^L$/ })).toBeVisible();
+    await expect(table.locator('th', { hasText: /^R$/ })).toBeVisible();
+    await expect(table.locator('th', { hasText: /^U$/ })).toBeVisible();
+    await expect(table.locator('th', { hasText: /^D$/ })).toBeVisible();
+    await expect(table.locator('th', { hasText: /^Comment$/ })).toBeVisible();
+  });
+});
 
-    // Initially collapsed (shows right arrow)
-    await expect(expandButton).toHaveText('▶');
-
-    // Click to expand
-    await expandButton.click();
-
-    // Now expanded (shows down arrow)
-    await expect(expandButton).toHaveText('▼');
-
-    // Shot rows should be visible
-    const shotRow = page.locator('[data-testid="shot-row-0-0"]');
-    await expect(shotRow).toBeVisible();
+test.describe('LRUD Inputs', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupMockedPage(page);
   });
 
-  test('LRUD columns visible in shot preview', async ({ page }) => {
+  test('LRUD inputs show values for Main Passage', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Expand first section
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
+    await selectSectionInConfig(page, 'Main Passage');
+    await expect(page.getByTestId('shot-row-0')).toBeVisible();
 
-    // Verify LRUD column headers are visible (use exact text match)
-    const dialog = page.locator('[role="dialog"]');
-    // These are in the nested table for shot details
-    await expect(dialog.locator('th', { hasText: /^L$/ })).toBeVisible();
-    await expect(dialog.locator('th', { hasText: /^R$/ })).toBeVisible();
-    await expect(dialog.locator('th', { hasText: /^U$/ })).toBeVisible();
-    await expect(dialog.locator('th', { hasText: /^D$/ })).toBeVisible();
+    await expect(page.getByTestId('shot-left-0')).toHaveValue('1.5');
+    await expect(page.getByTestId('shot-right-0')).toHaveValue('2.3');
+    await expect(page.getByTestId('shot-up-0')).toHaveValue('3');
+    await expect(page.getByTestId('shot-down-0')).toHaveValue('0.8');
 
-    // Verify LRUD cells exist with data-testid
-    await expect(page.locator('[data-testid="lrud-left-0-0"]')).toBeVisible();
-    await expect(page.locator('[data-testid="lrud-right-0-0"]')).toBeVisible();
-    await expect(page.locator('[data-testid="lrud-up-0-0"]')).toBeVisible();
-    await expect(page.locator('[data-testid="lrud-down-0-0"]')).toBeVisible();
+    await expect(page.getByTestId('shot-left-1')).toHaveValue('0.5');
+    await expect(page.getByTestId('shot-right-1')).toHaveValue('0.7');
+    await expect(page.getByTestId('shot-up-1')).toHaveValue('1.2');
+    await expect(page.getByTestId('shot-down-1')).toHaveValue('1.5');
   });
 
-  test('correct LRUD values displayed', async ({ page }) => {
+  test('zero LRUD values render as 0', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Expand first section (Main Passage)
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
+    await selectSectionInConfig(page, 'Side Tunnel');
+    await expect(page.getByTestId('shot-row-0')).toBeVisible();
 
-    // First shot has LRUD values: left=1.5, right=2.3, up=3.0, down=0.8
-    await expect(page.locator('[data-testid="lrud-left-0-0"]')).toHaveText('1.5');
-    await expect(page.locator('[data-testid="lrud-right-0-0"]')).toHaveText('2.3');
-    await expect(page.locator('[data-testid="lrud-up-0-0"]')).toHaveText('3.0');
-    await expect(page.locator('[data-testid="lrud-down-0-0"]')).toHaveText('0.8');
-
-    // Second shot has LRUD values: left=0.5, right=0.7, up=1.2, down=1.5
-    await expect(page.locator('[data-testid="lrud-left-0-1"]')).toHaveText('0.5');
-    await expect(page.locator('[data-testid="lrud-right-0-1"]')).toHaveText('0.7');
-    await expect(page.locator('[data-testid="lrud-up-0-1"]')).toHaveText('1.2');
-    await expect(page.locator('[data-testid="lrud-down-0-1"]')).toHaveText('1.5');
+    await expect(page.getByTestId('shot-left-0')).toHaveValue('0');
+    await expect(page.getByTestId('shot-right-0')).toHaveValue('0');
+    await expect(page.getByTestId('shot-up-0')).toHaveValue('0');
+    await expect(page.getByTestId('shot-down-0')).toHaveValue('0');
   });
 
-  test('zero LRUD shows as dash', async ({ page }) => {
+  test('mixed LRUD values display correctly', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Expand second section (Side Tunnel - has all zero LRUD values)
-    const expandButton = page.locator('[data-testid="section-expand-1"]');
-    await expandButton.click();
+    await selectSectionInConfig(page, 'Mixed LRUD Section');
+    await expect(page.getByTestId('shot-row-0')).toBeVisible();
 
-    // All LRUD values should show as dash for zero values
-    await expect(page.locator('[data-testid="lrud-left-1-0"]')).toHaveText('-');
-    await expect(page.locator('[data-testid="lrud-right-1-0"]')).toHaveText('-');
-    await expect(page.locator('[data-testid="lrud-up-1-0"]')).toHaveText('-');
-    await expect(page.locator('[data-testid="lrud-down-1-0"]')).toHaveText('-');
-  });
+    await expect(page.getByTestId('shot-left-0')).toHaveValue('2.5');
+    await expect(page.getByTestId('shot-right-0')).toHaveValue('0');
+    await expect(page.getByTestId('shot-up-0')).toHaveValue('4');
+    await expect(page.getByTestId('shot-down-0')).toHaveValue('0');
 
-  test('mixed LRUD values - some with data, some without', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand third section (Mixed LRUD Section)
-    const expandButton = page.locator('[data-testid="section-expand-2"]');
-    await expandButton.click();
-
-    // First shot: left=2.5, right=0, up=4.0, down=0
-    await expect(page.locator('[data-testid="lrud-left-2-0"]')).toHaveText('2.5');
-    await expect(page.locator('[data-testid="lrud-right-2-0"]')).toHaveText('-');
-    await expect(page.locator('[data-testid="lrud-up-2-0"]')).toHaveText('4.0');
-    await expect(page.locator('[data-testid="lrud-down-2-0"]')).toHaveText('-');
-
-    // Second shot: left=0, right=1.8, up=0, down=3.2
-    await expect(page.locator('[data-testid="lrud-left-2-1"]')).toHaveText('-');
-    await expect(page.locator('[data-testid="lrud-right-2-1"]')).toHaveText('1.8');
-    await expect(page.locator('[data-testid="lrud-up-2-1"]')).toHaveText('-');
-    await expect(page.locator('[data-testid="lrud-down-2-1"]')).toHaveText('3.2');
+    await expect(page.getByTestId('shot-left-1')).toHaveValue('0');
+    await expect(page.getByTestId('shot-right-1')).toHaveValue('1.8');
+    await expect(page.getByTestId('shot-up-1')).toHaveValue('0');
+    await expect(page.getByTestId('shot-down-1')).toHaveValue('3.2');
   });
 
   test('large LRUD values displayed correctly', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Expand third section (Mixed LRUD Section)
-    const expandButton = page.locator('[data-testid="section-expand-2"]');
-    await expandButton.click();
+    await selectSectionInConfig(page, 'Mixed LRUD Section');
+    await expect(page.getByTestId('shot-row-2')).toBeVisible();
 
-    // Third shot has large LRUD values: left=10.5, right=15.2, up=20.0, down=8.5
-    await expect(page.locator('[data-testid="lrud-left-2-2"]')).toHaveText('10.5');
-    await expect(page.locator('[data-testid="lrud-right-2-2"]')).toHaveText('15.2');
-    await expect(page.locator('[data-testid="lrud-up-2-2"]')).toHaveText('20.0');
-    await expect(page.locator('[data-testid="lrud-down-2-2"]')).toHaveText('8.5');
+    await expect(page.getByTestId('shot-left-2')).toHaveValue('10.5');
+    await expect(page.getByTestId('shot-right-2')).toHaveValue('15.2');
+    await expect(page.getByTestId('shot-up-2')).toHaveValue('20');
+    await expect(page.getByTestId('shot-down-2')).toHaveValue('8.5');
   });
 
-  test('multiple sections can be expanded simultaneously', async ({ page }) => {
+  test('undefined LRUD values render empty inputs', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Expand first section
-    const expandButton0 = page.locator('[data-testid="section-expand-0"]');
-    await expandButton0.click();
-    await expect(page.locator('[data-testid="shot-row-0-0"]')).toBeVisible();
+    await selectSectionInConfig(page, 'Undefined LRUD Section');
+    await expect(page.getByTestId('shot-row-0')).toBeVisible();
 
-    // Expand second section as well
-    const expandButton1 = page.locator('[data-testid="section-expand-1"]');
-    await expandButton1.click();
-    await expect(page.locator('[data-testid="shot-row-1-0"]')).toBeVisible();
+    await expect(page.getByTestId('shot-left-0')).toHaveValue('');
+    await expect(page.getByTestId('shot-right-0')).toHaveValue('');
+    await expect(page.getByTestId('shot-up-0')).toHaveValue('');
+    await expect(page.getByTestId('shot-down-0')).toHaveValue('');
 
-    // Both should still be expanded
-    await expect(expandButton0).toHaveText('▼');
-    await expect(expandButton1).toHaveText('▼');
-    await expect(page.locator('[data-testid="shot-row-0-0"]')).toBeVisible();
-    await expect(page.locator('[data-testid="shot-row-1-0"]')).toBeVisible();
+    await expect(page.getByTestId('shot-left-1')).toHaveValue('1.2');
+    await expect(page.getByTestId('shot-right-1')).toHaveValue('');
+    await expect(page.getByTestId('shot-up-1')).toHaveValue('2.5');
+    await expect(page.getByTestId('shot-down-1')).toHaveValue('');
+
+    await expect(page.getByTestId('shot-left-0')).toHaveAttribute('placeholder', '-');
   });
 
-  test('undefined LRUD shows as dash', async ({ page }) => {
-    // Per epic spec fn-4-qe3: "Show '-' for zero/null LRUD values (indicates 'not measured')"
-    // Both zero and undefined/null should render as "-" - this is intentional design
-    // to indicate the measurement was not taken, regardless of explicit 0 vs missing field
+  test('empty sections are excluded from placement config list', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Expand "Undefined LRUD Section" (index 3) which has shots with missing LRUD fields
-    const expandButton = page.locator('[data-testid="section-expand-3"]');
-    await expandButton.click();
-
-    // First shot has all LRUD fields undefined - should show "-" for all
-    await expect(page.locator('[data-testid="lrud-left-3-0"]')).toHaveText('-');
-    await expect(page.locator('[data-testid="lrud-right-3-0"]')).toHaveText('-');
-    await expect(page.locator('[data-testid="lrud-up-3-0"]')).toHaveText('-');
-    await expect(page.locator('[data-testid="lrud-down-3-0"]')).toHaveText('-');
-
-    // Second shot has partial LRUD: left=1.2, up=2.5, right and down undefined
-    await expect(page.locator('[data-testid="lrud-left-3-1"]')).toHaveText('1.2');
-    await expect(page.locator('[data-testid="lrud-right-3-1"]')).toHaveText('-');
-    await expect(page.locator('[data-testid="lrud-up-3-1"]')).toHaveText('2.5');
-    await expect(page.locator('[data-testid="lrud-down-3-1"]')).toHaveText('-');
-  });
-
-  test('empty section has no expand button', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Empty Section (index 4) should not have an expand button
-    // Use toHaveCount(0) since the element should not be rendered at all
-    const expandButton = page.locator('[data-testid="section-expand-4"]');
-    await expect(expandButton).toHaveCount(0);
-
-    // Verify the section row still shows the name
-    await expect(page.locator('text=Empty Section')).toBeVisible();
-  });
-
-  test('collapsing section hides shot rows', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand first section
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    // Shot rows visible
-    const shotRow = page.locator('[data-testid="shot-row-0-0"]');
-    await expect(shotRow).toBeVisible();
-
-    // Collapse section
-    await expandButton.click();
-
-    // Shot rows should be hidden
-    await expect(shotRow).toHaveCount(0);
-    await expect(expandButton).toHaveText('▶');
+    const emptySectionItem = page.locator('[data-testid^="section-list-item-"]').filter({ hasText: 'Empty Section' });
+    await expect(emptySectionItem).toHaveCount(0);
   });
 });
 
-test.describe.skip('Pitch Column', () => {
+test.describe('Comment Inputs', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
-  test('pitch column visible in shot preview', async ({ page }) => {
+  test('comment inputs show values for Main Passage', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Expand first section
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    // Verify Pitch column header is visible
-    const dialog = page.locator('[role="dialog"]');
-    await expect(dialog.locator('th', { hasText: /^Pitch$/ })).toBeVisible();
-
-    // Verify pitch cells exist with data-testid
-    await expect(page.locator('[data-testid="pitch-0-0"]')).toBeVisible();
+    await selectSectionInConfig(page, 'Main Passage');
+    await expect(page.getByTestId('shot-comment-0')).toHaveValue('Entrance point with good visibility');
+    await expect(page.getByTestId('shot-comment-1')).toHaveValue('');
+    await expect(page.getByTestId('shot-comment-2')).toHaveValue(
+      'Large chamber with stalactites on ceiling, white formations visible on right wall'
+    );
   });
 
-  test('pitch average calculation - both values present', async ({ page }) => {
+  test('comment inputs show values for Side Tunnel', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
+    await selectSectionInConfig(page, 'Side Tunnel');
 
-    // Expand first section (Main Passage)
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    // Second shot has pitch_in: 5, pitch_out: 5 => average = 5.0
-    await expect(page.locator('[data-testid="pitch-0-1"]')).toHaveText('5.0');
-
-    // Third shot has pitch_in: -10, pitch_out: -10 => average = -10.0
-    await expect(page.locator('[data-testid="pitch-0-2"]')).toHaveText('-10.0');
-  });
-
-  test('pitch single value shown when only one present', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand "Mixed LRUD Section" (index 2) which has varied pitch values
-    const expandButton = page.locator('[data-testid="section-expand-2"]');
-    await expandButton.click();
-
-    // First shot: pitch_in: 8.0, pitch_out: 0 => shows 8.0 (only pitch_in)
-    await expect(page.locator('[data-testid="pitch-2-0"]')).toHaveText('8.0');
-
-    // Second shot: pitch_in: 0, pitch_out: 12.0 => shows 12.0 (only pitch_out)
-    await expect(page.locator('[data-testid="pitch-2-1"]')).toHaveText('12.0');
-
-    // Third shot: pitch_in: 6.0, pitch_out: 10.0 => average = 8.0
-    await expect(page.locator('[data-testid="pitch-2-2"]')).toHaveText('8.0');
-  });
-
-  test('pitch shows dash for zero values', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand first section (Main Passage)
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    // First shot has pitch_in: 0, pitch_out: 0 => shows "-"
-    await expect(page.locator('[data-testid="pitch-0-0"]')).toHaveText('-');
-  });
-
-  test('pitch shows dash for zero/unmeasured values in different section', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand "Undefined LRUD Section" (index 3) which has zero pitch values
-    const expandButton = page.locator('[data-testid="section-expand-3"]');
-    await expandButton.click();
-
-    // Shots have pitch_in: 0, pitch_out: 0 => shows "-" (zero means "not measured" in DMP)
-    await expect(page.locator('[data-testid="pitch-3-0"]')).toHaveText('-');
-    await expect(page.locator('[data-testid="pitch-3-1"]')).toHaveText('-');
-  });
-
-  test('pitch data-testid follows expected format', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand first section
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    // Verify data-testid format: pitch-{sectionIndex}-{shotIndex}
-    await expect(page.locator('[data-testid="pitch-0-0"]')).toBeVisible();
-    await expect(page.locator('[data-testid="pitch-0-1"]')).toBeVisible();
-    await expect(page.locator('[data-testid="pitch-0-2"]')).toBeVisible();
+    await expect(page.getByTestId('shot-comment-0')).toHaveValue('Narrow restriction');
+    await expect(page.getByTestId('shot-comment-1')).toHaveValue('');
   });
 });
 
-test.describe.skip('Comment Column', () => {
-  test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
-  });
-
-  test('comment column visible in shot preview', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand first section
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    // Verify Comment column header is visible
-    const dialog = page.locator('[role="dialog"]');
-    await expect(dialog.locator('th', { hasText: /^Comment$/ })).toBeVisible();
-
-    // Verify comment cells exist with data-testid
-    await expect(page.locator('[data-testid="comment-0-0"]')).toBeVisible();
-    await expect(page.locator('[data-testid="comment-0-1"]')).toBeVisible();
-    await expect(page.locator('[data-testid="comment-0-2"]')).toBeVisible();
-  });
-
-  test('short comment displays in full', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand first section (Main Passage)
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    // First shot has short comment: "Entrance point with good visibility" (36 chars < 50)
-    const commentCell = page.locator('[data-testid="comment-0-0"]');
-    await expect(commentCell).toContainText('Entrance point with good visibility');
-
-    // No expand button should be present for short comments
-    const expandCommentBtn = page.locator('[data-testid="comment-expand-0-0"]');
-    await expect(expandCommentBtn).toHaveCount(0);
-  });
-
-  test('long comment truncated at 50 chars with expand button', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand first section (Main Passage)
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    // Third shot has long comment (81 chars): "Large chamber with stalactites on ceiling, white formations visible on right wall"
-    const commentCell = page.locator('[data-testid="comment-0-2"]');
-
-    // Should show truncated text with "..."
-    await expect(commentCell).toContainText('Large chamber with stalactites on ceiling, white');
-    await expect(commentCell).toContainText('...');
-
-    // Expand button should be visible
-    const expandCommentBtn = page.locator('[data-testid="comment-expand-0-2"]');
-    await expect(expandCommentBtn).toBeVisible();
-    await expect(expandCommentBtn).toHaveText('▶');
-  });
-
-  test('click expands and collapses long comment', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand first section (Main Passage)
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    const commentCell = page.locator('[data-testid="comment-0-2"]');
-    const expandCommentBtn = page.locator('[data-testid="comment-expand-0-2"]');
-
-    // Initially collapsed
-    await expect(expandCommentBtn).toHaveText('▶');
-    await expect(commentCell).not.toContainText('right wall');
-
-    // Click to expand
-    await expandCommentBtn.click();
-
-    // Now expanded - shows full text and down arrow
-    await expect(expandCommentBtn).toHaveText('▼');
-    await expect(commentCell).toContainText('right wall');
-
-    // Click to collapse again
-    await expandCommentBtn.click();
-
-    // Back to collapsed state
-    await expect(expandCommentBtn).toHaveText('▶');
-    await expect(commentCell).not.toContainText('right wall');
-  });
-
-  test('keyboard accessible - Enter and Space to toggle when focused', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand first section (Main Passage)
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    const expandCommentBtn = page.locator('[data-testid="comment-expand-0-2"]');
-
-    // Focus the expand button (simulating Tab navigation to the button)
-    await expandCommentBtn.focus();
-    await expect(expandCommentBtn).toBeFocused();
-
-    // Initially collapsed
-    await expect(expandCommentBtn).toHaveText('▶');
-
-    // Press Enter to expand (native button behavior)
-    await page.keyboard.press('Enter');
-    await expect(expandCommentBtn).toHaveText('▼');
-
-    // Press Space to collapse (native button behavior)
-    await page.keyboard.press('Space');
-    await expect(expandCommentBtn).toHaveText('▶');
-  });
-
-  test('aria-expanded attribute present and correct', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand first section (Main Passage)
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    const expandCommentBtn = page.locator('[data-testid="comment-expand-0-2"]');
-
-    // Initially collapsed - aria-expanded should be false
-    await expect(expandCommentBtn).toHaveAttribute('aria-expanded', 'false');
-
-    // Click to expand
-    await expandCommentBtn.click();
-
-    // Now expanded - aria-expanded should be true
-    await expect(expandCommentBtn).toHaveAttribute('aria-expanded', 'true');
-  });
-
-  test('empty cell for no comment', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand first section (Main Passage)
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    // Second shot has no comment (undefined)
-    const commentCell = page.locator('[data-testid="comment-0-1"]');
-    await expect(commentCell).toHaveText('-');
-
-    // No expand button for empty comment
-    const expandCommentBtn = page.locator('[data-testid="comment-expand-0-1"]');
-    await expect(expandCommentBtn).toHaveCount(0);
-  });
-
-  test('comment data-testid follows expected format', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand first section
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    // Verify data-testid format: comment-{sectionIndex}-{shotIndex}
-    await expect(page.locator('[data-testid="comment-0-0"]')).toBeVisible();
-    await expect(page.locator('[data-testid="comment-0-1"]')).toBeVisible();
-    await expect(page.locator('[data-testid="comment-0-2"]')).toBeVisible();
-  });
-
-  test('short comment in different section displays correctly', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand second section (Side Tunnel)
-    const expandButton = page.locator('[data-testid="section-expand-1"]');
-    await expandButton.click();
-
-    // First shot has comment: "Narrow restriction" (18 chars < 50)
-    const commentCell = page.locator('[data-testid="comment-1-0"]');
-    await expect(commentCell).toContainText('Narrow restriction');
-
-    // No expand button for short comment
-    const expandCommentBtn = page.locator('[data-testid="comment-expand-1-0"]');
-    await expect(expandCommentBtn).toHaveCount(0);
-  });
-});
-
+// Feature: show aggregate length/shot count/depth stats for selected sections in Step 2.
 test.describe.skip('Statistics Footer', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
   test('stats footer visible below section table', async ({ page }) => {
@@ -754,1098 +407,478 @@ test.describe.skip('Statistics Footer', () => {
   });
 });
 
-test.describe.skip('Section Preview', () => {
+test.describe('Section Preview', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
-  test('preview component visible after loading DMP file', async ({ page }) => {
+  test('preview panel visible in Step 2', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // The section preview component should be visible
-    const preview = page.locator('[data-testid="section-preview"]');
-    await expect(preview).toBeVisible();
+    await expect(page.getByTestId('section-preview-panel')).toBeVisible();
+    await expect(page.getByTestId('section-preview')).toBeVisible();
   });
 
-  test('preview shows section on initial load (first selected)', async ({ page }) => {
+  test('preview renders a map canvas', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // On file load, non-empty sections are auto-selected and preview shows first one
-    // The map container should be visible with a canvas
-    const mapContainer = page.locator('[data-testid="section-preview-map"]');
+    const mapContainer = page.getByTestId('section-preview-map');
     await expect(mapContainer).toBeVisible();
 
-    // MapLibre canvas should be initialized
     const canvas = mapContainer.locator('canvas.maplibregl-canvas');
     await expect(canvas).toBeVisible({ timeout: 5000 });
 
-    // Placeholder should NOT be visible since sections are auto-selected
-    const preview = page.locator('[data-testid="section-preview"]');
-    await expect(preview).not.toContainText('Select a section to preview');
-  });
-
-  test('preview shows map when section is expanded', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand the first section
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    // Now the map should be visible
-    const mapContainer = page.locator('[data-testid="section-preview-map"]');
-    await expect(mapContainer).toBeVisible();
-
-    // MapLibre canvas should be initialized
-    const canvas = mapContainer.locator('canvas.maplibregl-canvas');
-    await expect(canvas).toBeVisible({ timeout: 5000 });
-
-    // Placeholder text should be gone (overlay hidden)
-    const preview = page.locator('[data-testid="section-preview"]');
-    await expect(preview).not.toContainText('Select a section to preview');
-  });
-
-  test('preview updates when different section is expanded', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand the first section
-    const expandButton0 = page.locator('[data-testid="section-expand-0"]');
-    await expandButton0.click();
-
-    // Map should be visible
-    const mapContainer = page.locator('[data-testid="section-preview-map"]');
-    await expect(mapContainer).toBeVisible();
-
-    // Collapse first section and expand second
-    await expandButton0.click();
-    const expandButton1 = page.locator('[data-testid="section-expand-1"]');
-    await expandButton1.click();
-
-    // Map should still be visible (showing second section now)
-    await expect(mapContainer).toBeVisible();
-  });
-
-  test('preview has correct size (250x250)', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    const preview = page.locator('[data-testid="section-preview"]');
-
-    // Check the inline style for dimensions
-    const width = await preview.evaluate((el) => el.style.width);
-    const height = await preview.evaluate((el) => el.style.height);
-
-    expect(width).toBe('250px');
-    expect(height).toBe('250px');
-  });
-
-  test('preview supports zoom and pan', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand first section to show map
-    const expandButton = page.locator('[data-testid="section-expand-0"]');
-    await expandButton.click();
-
-    const mapContainer = page.locator('[data-testid="section-preview-map"]');
-    await expect(mapContainer).toBeVisible();
-
-    // Wait for MapLibre canvas to be created (indicates map is initialized)
-    const canvas = mapContainer.locator('canvas.maplibregl-canvas');
-    await expect(canvas).toBeVisible({ timeout: 5000 });
-
-    // Verify canvas has non-zero dimensions
     const canvasBox = await canvas.boundingBox();
     expect(canvasBox).toBeTruthy();
     expect(canvasBox!.width).toBeGreaterThan(0);
     expect(canvasBox!.height).toBeGreaterThan(0);
-
-    // Get the bounding box for interactions
-    const box = await mapContainer.boundingBox();
-    if (!box) throw new Error('Map container not found');
-
-    // Perform mouse wheel to zoom (just verify no errors)
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.wheel(0, -100);
-
-    // Verify canvas still exists after zoom
-    await expect(canvas).toBeVisible();
-
-    // Perform drag for pan (just verify no errors)
-    await page.mouse.down();
-    await page.mouse.move(box.x + box.width / 2 + 50, box.y + box.height / 2 + 50);
-    await page.mouse.up();
-
-    // Verify canvas still exists after pan
-    await expect(canvas).toBeVisible();
   });
 
-  test('deselecting all sections shows placeholder', async ({ page }) => {
+  test('preview size matches config (200x200)', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // On load, sections are auto-selected, preview shows first one
-    const preview = page.locator('[data-testid="section-preview"]');
-    await expect(preview).not.toContainText('Select a section to preview');
+    const preview = page.getByTestId('section-preview');
+    const width = await preview.evaluate((el) => el.style.width);
+    const height = await preview.evaluate((el) => el.style.height);
 
-    // Click "None" to deselect all sections
-    const noneButton = page.locator('button:has-text("None")');
-    await noneButton.click();
+    expect(width).toBe('200px');
+    expect(height).toBe('200px');
+  });
 
-    // Placeholder should be visible after deselecting all
-    await expect(preview).toContainText('Select a section to preview');
+  test('preview stays visible when switching sections', async ({ page }) => {
+    await createProjectAndOpenImportDialog(page);
+
+    await selectSectionInConfig(page, 'Side Tunnel');
+    await expect(page.getByRole('heading', { name: /Section: Side Tunnel/ })).toBeVisible();
+    await expect(page.getByTestId('section-preview')).toBeVisible();
   });
 });
 
-test.describe.skip('Validation Warnings', () => {
+test.describe('Validation Warnings', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
-  test('validation summary shows error and warning counts', async ({ page }) => {
+  test('error summary visible when selected sections have data errors', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // The "Validation Test Section" (index 5) contains validation issues
-    // Wait for validation summary to appear (it should show errors and warnings)
-    const validationSummary = page.locator('[data-testid="validation-summary"]');
-    await expect(validationSummary).toBeVisible({ timeout: 2000 });
-
-    // Should show error count (1 error from invalid azimuth)
-    const errorCount = page.locator('[data-testid="validation-error-count"]');
-    await expect(errorCount).toBeVisible();
-    await expect(errorCount).toContainText('1 error');
-
-    // Should show warning count (multiple warnings from length, depth, LRUD issues + Mixed LRUD section shot)
-    const warningCount = page.locator('[data-testid="validation-warning-count"]');
-    await expect(warningCount).toBeVisible();
-    // At least 4 warnings: long shot, depth change, LRUD, plus Mixed LRUD section shot
-    const warningText = await warningCount.textContent();
-    expect(warningText).toMatch(/\d+ warnings?/);
+    const errorSummary = page.getByTestId('error-summary');
+    await expect(errorSummary).toBeVisible();
+    await expect(errorSummary).toContainText('section');
+    await expect(errorSummary).toContainText('error');
   });
 
-  test('validation icons appear on shots with issues', async ({ page }) => {
+  test('section list shows error badge for invalid section', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Expand the "Validation Test Section" (index 5)
-    const expandButton = page.locator('[data-testid="section-expand-5"]');
-    await expandButton.click();
+    const validationItem = page
+      .locator('[data-testid^="section-list-item-"]')
+      .filter({ hasText: 'Validation Test Section' })
+      .first();
+    await expect(validationItem).toBeVisible();
 
-    // Check for validation icons
-    // Shot 0 has warning (length exceeds max)
-    const warningIcon0 = page.locator('[data-testid="validation-icon-5-0"]');
-    await expect(warningIcon0).toBeVisible();
-    await expect(warningIcon0).toHaveAttribute('aria-label', 'Warning');
-
-    // Shot 1 has error (azimuth out of range)
-    const errorIcon1 = page.locator('[data-testid="validation-icon-5-1"]');
-    await expect(errorIcon1).toBeVisible();
-    await expect(errorIcon1).toHaveAttribute('aria-label', 'Error');
+    const badge = validationItem.locator('[data-testid^="section-error-count-"]');
+    await expect(badge).toBeVisible();
+    await expect(badge).toHaveText(/\d+/);
   });
 
-  test('validation icon has tooltip with message', async ({ page }) => {
+  test('place button disabled for invalid section', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Expand the "Validation Test Section" (index 5)
-    const expandButton = page.locator('[data-testid="section-expand-5"]');
-    await expandButton.click();
-
-    // Check that the warning icon has a title attribute with message
-    const warningIcon = page.locator('[data-testid="validation-icon-5-0"]');
-    const title = await warningIcon.getAttribute('title');
-    expect(title).toContain('Shot length');
-    expect(title).toContain('exceeds maximum');
+    await selectSectionInConfig(page, 'Validation Test Section');
+    const placeButton = page.locator(
+      '[data-testid="place-section-button"], [data-testid="place-and-finish-button"]'
+    );
+    await expect(placeButton.first()).toBeDisabled();
   });
 
-  test('errors block import button', async ({ page }) => {
+  test('place button enabled for valid section', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Import button should be disabled when there are errors
-    const importButton = page.locator('[data-testid="import-button"]');
-    await expect(importButton).toBeDisabled();
-
-    // Error message should be shown
-    const errorMessage = page.locator('[data-testid="validation-error-message"]');
-    await expect(errorMessage).toBeVisible();
-    await expect(errorMessage).toContainText('Errors must be resolved');
+    await selectSectionInConfig(page, 'Main Passage');
+    const placeButton = page.locator(
+      '[data-testid="place-section-button"], [data-testid="place-and-finish-button"]'
+    );
+    await expect(placeButton.first()).toBeEnabled();
   });
 
-  test('deselecting section with errors enables import', async ({ page }) => {
+  test('shot table shows warning indicator for azimuth discrepancy', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Initially import is disabled due to errors
-    const importButton = page.locator('[data-testid="import-button"]');
-    await expect(importButton).toBeDisabled();
-
-    // Deselect the "Validation Test Section" (index 5) which has the error
-    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
-    await validationSection.locator('input[type="checkbox"]').click();
-
-    // Now there should only be warnings (from Mixed LRUD section shot that exceeds length)
-    // The acknowledge checkbox should appear (poll for visibility instead of timeout)
-    const acknowledgeCheckbox = page.locator('[data-testid="acknowledge-warnings-checkbox"]');
-    await expect(acknowledgeCheckbox).toBeVisible({ timeout: 2000 });
-  });
-
-  test('acknowledge checkbox enables import for warnings only', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Deselect the "Validation Test Section" to remove errors
-    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
-    await validationSection.locator('input[type="checkbox"]').click();
-
-    // Import button should still be disabled (warnings need acknowledgement)
-    const importButton = page.locator('[data-testid="import-button"]');
-
-    // Wait for the checkbox to appear
-    const acknowledgeCheckbox = page.locator('[data-testid="acknowledge-warnings-checkbox"]');
-    await expect(acknowledgeCheckbox).toBeVisible({ timeout: 2000 });
-
-    // Button disabled before checking
-    await expect(importButton).toBeDisabled();
-
-    // Check the acknowledge checkbox
-    await acknowledgeCheckbox.check();
-
-    // Now import should be enabled
-    await expect(importButton).toBeEnabled();
-  });
-
-  test('cell highlighting for LRUD issues', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Expand the "Validation Test Section" (index 5)
-    const expandButton = page.locator('[data-testid="section-expand-5"]');
-    await expandButton.click();
-
-    // Shot 3 (index 3) has LRUD issue (left=60.0 exceeds max 50.0)
-    const lrudCell = page.locator('[data-testid="lrud-left-5-3"]');
-    await expect(lrudCell).toBeVisible();
-
-    // Check that the cell has highlight class
-    await expect(lrudCell).toHaveClass(/bg-warning/);
-  });
-
-  test('no validation summary when no issues', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Deselect all sections with issues
-    const dialog = page.locator('[role="dialog"]');
-    await dialog.locator('button:has-text("None")').click();
-
-    // Select only "Main Passage" which has no validation issues
-    const mainPassageRow = page.locator('tr').filter({ hasText: 'Main Passage' });
-    await mainPassageRow.locator('input[type="checkbox"]').click();
-
-    // Import button should be enabled (poll for state change instead of timeout)
-    const importButton = page.locator('[data-testid="import-button"]');
-    await expect(importButton).toBeEnabled({ timeout: 2000 });
-
-    // Validation summary should not be visible
-    const validationSummary = page.locator('[data-testid="validation-summary"]');
-    await expect(validationSummary).not.toBeVisible();
-  });
-
-  test('validation updates when selection changes', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Initially we have errors
-    const errorCount = page.locator('[data-testid="validation-error-count"]');
-    await expect(errorCount).toBeVisible();
-
-    // Deselect the validation test section
-    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
-    await validationSection.locator('input[type="checkbox"]').click();
-
-    // Error count should disappear (only warnings remain from other sections)
-    await expect(errorCount).not.toBeVisible({ timeout: 2000 });
-  });
-
-  test('acknowledge checkbox resets when selection changes', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
-
-    // Deselect the "Validation Test Section" to remove errors (only warnings remain)
-    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
-    await validationSection.locator('input[type="checkbox"]').click();
-
-    // Wait for the acknowledge checkbox to appear
-    const acknowledgeCheckbox = page.locator('[data-testid="acknowledge-warnings-checkbox"]');
-    await expect(acknowledgeCheckbox).toBeVisible({ timeout: 2000 });
-
-    // Check the acknowledge checkbox
-    await acknowledgeCheckbox.check();
-    await expect(acknowledgeCheckbox).toBeChecked();
-
-    // Import button should be enabled
-    const importButton = page.locator('[data-testid="import-button"]');
-    await expect(importButton).toBeEnabled();
-
-    // Now re-select the validation test section (adds back errors)
-    await validationSection.locator('input[type="checkbox"]').click();
-
-    // Wait for error to appear
-    const errorCount = page.locator('[data-testid="validation-error-count"]');
-    await expect(errorCount).toBeVisible({ timeout: 2000 });
-
-    // Deselect it again to go back to warnings only
-    await validationSection.locator('input[type="checkbox"]').click();
-
-    // The acknowledge checkbox should have reset (unchecked) due to selection change
-    await expect(acknowledgeCheckbox).toBeVisible({ timeout: 2000 });
-    await expect(acknowledgeCheckbox).not.toBeChecked();
-
-    // Import button should be disabled again (need to re-acknowledge)
-    await expect(importButton).toBeDisabled();
+    await selectSectionInConfig(page, 'Main Passage');
+    await expect(page.getByTestId('shot-warning-0')).toBeVisible();
   });
 });
 
-test.describe.skip('GPS Input UI', () => {
+test.describe('GPS Input UI', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
-  test('GPS input section visible after loading DMP file', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+  test('GPS input panel visible when Zero Datum is selected', async ({ page }) => {
+    await openGpsPlacementPanel(page);
 
-    // GPS input should be visible in a panel
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    await expect(gpsInput).toBeVisible();
-
-    // Format indicator should be visible
-    const formatIndicator = page.locator('[data-testid="gps-format-indicator"]');
-    await expect(formatIndicator).toBeVisible();
-    await expect(formatIndicator).toContainText('Format:');
-
-    // Station selector should be visible
-    const stationSelector = page.locator('[data-testid="gps-station-selector"]');
-    await expect(stationSelector).toBeVisible();
+    await expect(page.getByTestId('gps-input')).toBeVisible();
+    await expect(page.getByTestId('gps-station-select')).toBeVisible();
   });
 
   test('DD format parsing and display', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+    await openGpsPlacementPanel(page);
 
-    const gpsInput = page.locator('[data-testid="gps-input"]');
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill('48.8584, 2.2945');
 
-    // Format indicator should show DD
-    const formatIndicator = page.locator('[data-testid="gps-format-indicator"]');
-    await expect(formatIndicator).toContainText('DD');
+    await expect(page.getByTestId('gps-format-indicator')).toHaveText('DD');
 
-    // Parsed coordinates should be displayed
-    const parsedCoords = page.locator('[data-testid="gps-parsed-coords"]');
+    const parsedCoords = page.getByTestId('gps-parsed');
     await expect(parsedCoords).toBeVisible();
     await expect(parsedCoords).toContainText('48.858400');
     await expect(parsedCoords).toContainText('2.294500');
-
-    // No error should be visible
-    const gpsError = page.locator('[data-testid="gps-error"]');
-    await expect(gpsError).not.toBeVisible();
+    await expect(page.locator('[data-testid="gps-error"]')).toHaveCount(0);
   });
 
   test('DMS format parsing and display', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+    await openGpsPlacementPanel(page);
 
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    // Input DMS format with direction letters
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill("48°51'30\"N 2°17'40\"E");
 
-    // Format indicator should show DMS
-    const formatIndicator = page.locator('[data-testid="gps-format-indicator"]');
-    await expect(formatIndicator).toContainText('DMS');
+    await expect(page.getByTestId('gps-format-indicator')).toHaveText('DMS');
 
-    // Parsed coordinates should be displayed (converted to DD)
-    const parsedCoords = page.locator('[data-testid="gps-parsed-coords"]');
+    const parsedCoords = page.getByTestId('gps-parsed');
     await expect(parsedCoords).toBeVisible();
-    // DMS 48°51'30"N = 48 + 51/60 + 30/3600 = 48.8583333...
     await expect(parsedCoords).toContainText('48.858');
-
-    // No error should be visible
-    const gpsError = page.locator('[data-testid="gps-error"]');
-    await expect(gpsError).not.toBeVisible();
+    await expect(page.locator('[data-testid="gps-error"]')).toHaveCount(0);
   });
 
   test('DDM format parsing and display', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+    await openGpsPlacementPanel(page);
 
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    // Input DDM format
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill("48°51.5'N 2°17.67'E");
 
-    // Format indicator should show DDM
-    const formatIndicator = page.locator('[data-testid="gps-format-indicator"]');
-    await expect(formatIndicator).toContainText('DDM');
-
-    // Parsed coordinates should be displayed
-    const parsedCoords = page.locator('[data-testid="gps-parsed-coords"]');
-    await expect(parsedCoords).toBeVisible();
+    await expect(page.getByTestId('gps-format-indicator')).toHaveText('DDM');
+    await expect(page.getByTestId('gps-parsed')).toBeVisible();
   });
 
   test('UTM format parsing and display', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+    await openGpsPlacementPanel(page);
 
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    // Input UTM format (Paris coordinates)
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill('31U 448251 5411932');
 
-    // Format indicator should show UTM
-    const formatIndicator = page.locator('[data-testid="gps-format-indicator"]');
-    await expect(formatIndicator).toContainText('UTM');
-
-    // Parsed coordinates should be displayed
-    const parsedCoords = page.locator('[data-testid="gps-parsed-coords"]');
-    await expect(parsedCoords).toBeVisible();
+    await expect(page.getByTestId('gps-format-indicator')).toHaveText('UTM');
+    await expect(page.getByTestId('gps-parsed')).toBeVisible();
   });
 
   test('Plus Codes format parsing and display', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+    await openGpsPlacementPanel(page);
 
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    // Input Plus Code format (Eiffel Tower)
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill('8FW4V75V+8Q');
 
-    // Format indicator should show PlusCodes
-    const formatIndicator = page.locator('[data-testid="gps-format-indicator"]');
-    await expect(formatIndicator).toContainText('PlusCodes');
-
-    // Parsed coordinates should be displayed (Plus Codes can be decoded offline)
-    const parsedCoords = page.locator('[data-testid="gps-parsed-coords"]');
-    await expect(parsedCoords).toBeVisible();
+    await expect(page.getByTestId('gps-format-indicator')).toHaveText('PlusCodes');
+    await expect(page.getByTestId('gps-parsed')).toBeVisible();
   });
 
-  test('MGRS format shows format but requires library', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+  test('MGRS format shows error requiring library', async ({ page }) => {
+    await openGpsPlacementPanel(page);
 
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    // Input MGRS format
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill('31UDQ4825111932');
 
-    // Format indicator should show MGRS
-    const formatIndicator = page.locator('[data-testid="gps-format-indicator"]');
-    await expect(formatIndicator).toContainText('MGRS');
-
-    // Error should indicate MGRS requires library
-    const gpsError = page.locator('[data-testid="gps-error"]');
+    await expect(page.getByTestId('gps-format-indicator')).toHaveText('MGRS');
+    const gpsError = page.getByTestId('gps-error');
     await expect(gpsError).toBeVisible();
     await expect(gpsError).toContainText('MGRS');
   });
 
-  test('What3words format shows format but requires API', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+  test('What3words format shows API error', async ({ page }) => {
+    await openGpsPlacementPanel(page);
 
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    // Input What3words format
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill('filled.count.soap');
 
-    // Format indicator should show What3words
-    const formatIndicator = page.locator('[data-testid="gps-format-indicator"]');
-    await expect(formatIndicator).toContainText('What3words');
-
-    // Error should indicate What3words requires API
-    const gpsError = page.locator('[data-testid="gps-error"]');
+    await expect(page.getByTestId('gps-format-indicator')).toHaveText('What3words');
+    const gpsError = page.getByTestId('gps-error');
     await expect(gpsError).toBeVisible();
-    await expect(gpsError).toContainText('API');
+    await expect(gpsError).toContainText('What3words');
   });
 
   test('URL paste extracts coordinates - Google Maps', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+    await openGpsPlacementPanel(page);
 
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    // Input Google Maps URL
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill('https://www.google.com/maps/@48.8584,2.2945,15z');
 
-    // Parsed coordinates should be displayed
-    const parsedCoords = page.locator('[data-testid="gps-parsed-coords"]');
+    const parsedCoords = page.getByTestId('gps-parsed');
     await expect(parsedCoords).toBeVisible();
     await expect(parsedCoords).toContainText('48.858400');
   });
 
   test('URL paste extracts coordinates - OpenStreetMap', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+    await openGpsPlacementPanel(page);
 
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    // Input OpenStreetMap URL
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill('https://www.openstreetmap.org/#map=15/48.8584/2.2945');
 
-    // Parsed coordinates should be displayed
-    const parsedCoords = page.locator('[data-testid="gps-parsed-coords"]');
+    const parsedCoords = page.getByTestId('gps-parsed');
     await expect(parsedCoords).toBeVisible();
     await expect(parsedCoords).toContainText('48.858400');
   });
 
   test('invalid coordinates show error', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+    await openGpsPlacementPanel(page);
 
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    // Input invalid coordinates (latitude out of range)
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill('100.0, 50.0');
 
-    // Error should be visible
-    const gpsError = page.locator('[data-testid="gps-error"]');
+    const gpsError = page.getByTestId('gps-error');
     await expect(gpsError).toBeVisible();
     await expect(gpsError).toContainText('Latitude');
   });
 
   test('malformed input shows error', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+    await openGpsPlacementPanel(page);
 
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    // Input malformed coordinates
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill('not valid coordinates');
 
-    // Error should be visible
-    const gpsError = page.locator('[data-testid="gps-error"]');
+    const gpsError = page.getByTestId('gps-error');
     await expect(gpsError).toBeVisible();
     await expect(gpsError).toContainText('Could not parse');
   });
 
-  test('station selector has first/last options', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+  test('station selector has station options', async ({ page }) => {
+    await openGpsPlacementPanel(page);
 
-    // Station selector should have options
-    const stationSelector = page.locator('[data-testid="gps-station-selector"]');
-    await expect(stationSelector.locator('option')).toHaveCount(2);
-
-    // Check options text
-    const firstOption = stationSelector.locator('option[value="first"]');
-    const lastOption = stationSelector.locator('option[value="last"]');
-    await expect(firstOption).toHaveText('First station');
-    await expect(lastOption).toHaveText('Last station');
+    await openSelectOptions(page, 'gps-station-select');
+    const options = page.getByTestId('gps-station-select').locator('div.absolute button');
+    await expect(options).toHaveCount(4);
+    await expect(options.filter({ hasText: 'Station 0' })).toHaveCount(1);
+    await expect(options.filter({ hasText: 'Station 3' })).toHaveCount(1);
   });
 
-  test('station selector disabled when no valid coordinates', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+  test('station selector enabled before coordinates', async ({ page }) => {
+    await openGpsPlacementPanel(page);
 
-    // Initially no coordinates entered, selector should be disabled
-    const stationSelector = page.locator('[data-testid="gps-station-selector"]');
-    await expect(stationSelector).toBeDisabled();
-
-    // Enter valid coordinates
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    await gpsInput.fill('48.8584, 2.2945');
-
-    // Wait for parsed coords to appear (validates successful parsing)
-    const parsedCoords = page.locator('[data-testid="gps-parsed-coords"]');
-    await expect(parsedCoords).toBeVisible();
-
-    // Now selector should be enabled
-    await expect(stationSelector).toBeEnabled();
+    const trigger = page.getByTestId('gps-station-select').locator('button').first();
+    await expect(trigger).toBeEnabled();
   });
 
   test('station selector can be changed', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+    await openGpsPlacementPanel(page);
 
-    // Enter valid coordinates to enable selector
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    await gpsInput.fill('48.8584, 2.2945');
-
-    // Wait for parsed coords
-    const parsedCoords = page.locator('[data-testid="gps-parsed-coords"]');
-    await expect(parsedCoords).toBeVisible();
-
-    // Change station selection
-    const stationSelector = page.locator('[data-testid="gps-station-selector"]');
-    await stationSelector.selectOption('last');
-
-    // Verify selection changed
-    await expect(stationSelector).toHaveValue('last');
+    await selectOptionFromSelect(page, 'gps-station-select', 'Station 2');
+    const trigger = page.getByTestId('gps-station-select').locator('button').first();
+    await expect(trigger).toContainText('Station 2');
   });
 
-  test('GPS input cleared when file changes', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+  test('GPS input resets after returning to selection', async ({ page }) => {
+    await openGpsPlacementPanel(page);
 
-    // Enter some GPS coordinates
-    const gpsInput = page.locator('[data-testid="gps-input"]');
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill('48.8584, 2.2945');
+    await expect(page.getByTestId('gps-parsed')).toBeVisible();
 
-    // Verify coordinates are parsed
-    const parsedCoords = page.locator('[data-testid="gps-parsed-coords"]');
-    await expect(parsedCoords).toBeVisible();
+    await page.getByTestId('back-to-selection-button').click();
+    const backConfirm = page.getByTestId('back-confirm-dialog');
+    await expect(backConfirm).toBeVisible();
+    await backConfirm.getByTestId('confirm-back-button').click();
 
-    // Close dialog and reopen (simulates loading a new file)
-    // Since we can't easily reload a file, we verify the GPS section is present
-    // The actual reset behavior is tested via the useEffect that clears on dmpFile change
-    await expect(gpsInput).toHaveValue('48.8584, 2.2945');
+    await expect(page.getByTestId('dmp-selection-dialog')).toBeVisible({ timeout: 5000 });
+    await proceedToDmpSectionConfig(page);
+
+    const zeroDatumRadio = page.getByTestId('placement-zero-datum');
+    await zeroDatumRadio.check();
+    await expect(page.getByTestId('gps-input')).toHaveValue('');
   });
 
   test('negative DD coordinates parsed correctly', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+    await openGpsPlacementPanel(page);
 
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-    // Southern and Western hemisphere coordinates
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill('-33.8688, 151.2093');
 
-    // Format indicator should show DD
-    const formatIndicator = page.locator('[data-testid="gps-format-indicator"]');
-    await expect(formatIndicator).toContainText('DD');
+    await expect(page.getByTestId('gps-format-indicator')).toHaveText('DD');
 
-    // Parsed coordinates should be displayed with negative latitude
-    const parsedCoords = page.locator('[data-testid="gps-parsed-coords"]');
+    const parsedCoords = page.getByTestId('gps-parsed');
     await expect(parsedCoords).toBeVisible();
     await expect(parsedCoords).toContainText('-33.868800');
     await expect(parsedCoords).toContainText('151.209300');
   });
 
   test('empty input clears format and coordinates', async ({ page }) => {
-    await createProjectAndOpenImportDialog(page);
+    await openGpsPlacementPanel(page);
 
-    const gpsInput = page.locator('[data-testid="gps-input"]');
-
-    // Enter valid coordinates first
+    const gpsInput = page.getByTestId('gps-input');
     await gpsInput.fill('48.8584, 2.2945');
+    await expect(page.getByTestId('gps-parsed')).toBeVisible();
 
-    // Verify coordinates are parsed
-    const parsedCoords = page.locator('[data-testid="gps-parsed-coords"]');
-    await expect(parsedCoords).toBeVisible();
-
-    // Clear the input
     await gpsInput.clear();
 
-    // Parsed coordinates should disappear
-    await expect(parsedCoords).not.toBeVisible();
-
-    // Format indicator should show no format
-    const formatIndicator = page.locator('[data-testid="gps-format-indicator"]');
-    await expect(formatIndicator).toContainText('Format: —');
+    await expect(page.locator('[data-testid="gps-parsed"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="gps-format-indicator"]')).toHaveCount(0);
   });
 });
 
-test.describe.skip('Placement Mode - From Existing Station', () => {
+test.describe('Placement Mode - From Existing Station', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
   test('placement panel visible after loading DMP file', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Placement mode radio buttons should be visible
-    const originRadio = page.locator('[data-testid="placement-mode-origin"]');
-    const existingRadio = page.locator('[data-testid="placement-mode-existing"]');
-
-    await expect(originRadio).toBeVisible();
-    await expect(existingRadio).toBeVisible();
-
-    // Origin should be selected by default
-    await expect(originRadio).toBeChecked();
-    await expect(existingRadio).not.toBeChecked();
+    await expect(page.getByTestId('placement-origin')).toBeVisible();
+    await expect(page.getByTestId('placement-from-existing')).toBeVisible();
+    await expect(page.getByTestId('placement-origin')).toBeChecked();
   });
 
-  test('origin mode is selected by default', async ({ page }) => {
+  test('origin mode hides merge selectors by default', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    const originRadio = page.locator('[data-testid="placement-mode-origin"]');
-    await expect(originRadio).toBeChecked();
-
-    // Station selectors should NOT be visible in origin mode
-    const importStationSelector = page.locator('[data-testid="import-station-selector"]');
-    const existingStationSelector = page.locator('[data-testid="existing-station-selector"]');
-
-    await expect(importStationSelector).not.toBeVisible();
-    await expect(existingStationSelector).not.toBeVisible();
+    await expect(page.getByTestId('placement-origin')).toBeChecked();
+    await expect(page.locator('[data-testid="import-station-select"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="target-section-select"]')).toHaveCount(0);
   });
 
-  test('existing mode disabled when creating new project', async ({ page }) => {
+  test('from-existing disabled when no available sections', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Select "Create new project" radio
-    const createNewProjectRadio = page.locator('input[type="radio"]').filter({ has: page.locator('xpath=..//span[contains(text(),"Create new project")]') }).first();
-    // Actually, let's find it by the sibling text
-    const createNewLabel = page.locator('label:has-text("Create new project") input[type="radio"]');
-    await createNewLabel.click();
-
-    // "From existing station" should be disabled
-    const existingRadio = page.locator('[data-testid="placement-mode-existing"]');
+    const existingRadio = page.getByTestId('placement-from-existing');
     await expect(existingRadio).toBeDisabled();
   });
 
   test('existing mode shows station selectors when selected', async ({ page }) => {
-    // First we need an existing project with sections
-    // Create project with a section first
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Existing Project');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-    await page.waitForSelector('canvas', { timeout: 10000 });
+    await openPlacementConfigWithExistingStations(page, 'Existing Project');
+    await expect(page.getByTestId('placement-from-existing')).toBeChecked();
 
-    // Import a section first to create existing stations
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
-    const dialog = page.locator('[role="dialog"]');
-    await expect(dialog).toBeVisible();
-    const browseButton = dialog.locator('button:has-text("Browse...")');
-    await browseButton.click();
-    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
-
-    // Deselect problematic sections (validation errors)
-    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
-    const checkbox = validationSection.locator('input[type="checkbox"]');
-    await checkbox.click();
-
-    // Also deselect Mixed LRUD section (has warning for long shot)
-    const mixedLrudSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
-    const mixedCheckbox = mixedLrudSection.locator('input[type="checkbox"]');
-    await mixedCheckbox.click();
-
-    // Import to create existing stations
-    const importButton = page.locator('[data-testid="import-button"]');
-    await importButton.click();
-
-    // Wait for dialog to close and stations to be created
-    await expect(dialog).not.toBeVisible({ timeout: 5000 });
-
-    // Re-open import dialog
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
-    const dialog2 = page.locator('[role="dialog"]');
-    await expect(dialog2).toBeVisible();
-    const browseButton2 = dialog2.locator('button:has-text("Browse...")');
-    await browseButton2.click();
-    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
-
-    // Make sure "Add to current project" is selected
-    const addToCurrentLabel = page.locator('label:has-text("Add to current project") input[type="radio"]');
-    await addToCurrentLabel.click();
-
-    // Now "From existing station" should be enabled
-    const existingRadio = page.locator('[data-testid="placement-mode-existing"]');
-    await expect(existingRadio).toBeEnabled();
-
-    // Click it
-    await existingRadio.click();
-    await expect(existingRadio).toBeChecked();
-
-    // Station selectors should now be visible
-    const importStationSelector = page.locator('[data-testid="import-station-selector"]');
-    const existingStationSelector = page.locator('[data-testid="existing-station-selector"]');
-
-    await expect(importStationSelector).toBeVisible();
-    await expect(existingStationSelector).toBeVisible();
+    await expect(page.getByTestId('import-station-select')).toBeVisible();
+    await expect(page.getByTestId('target-section-select')).toBeVisible();
+    await expect(page.getByTestId('target-station-select')).toBeVisible();
   });
 
-  test('import station selector has first/last options', async ({ page }) => {
-    // Setup with existing stations
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Station Options Test');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-    await page.waitForSelector('canvas', { timeout: 10000 });
+  test('import station selector lists stations', async ({ page }) => {
+    await openPlacementConfigWithExistingStations(page, 'Station Options Test');
 
-    // Import to create stations
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
-    const dialog = page.locator('[role="dialog"]');
-    const browseButton = dialog.locator('button:has-text("Browse...")');
-    await browseButton.click();
-    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
-
-    // Deselect problematic sections
-    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
-    await validationSection.locator('input[type="checkbox"]').click();
-    const mixedSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
-    await mixedSection.locator('input[type="checkbox"]').click();
-
-    const importButton = page.locator('[data-testid="import-button"]');
-    await importButton.click();
-    await expect(dialog).not.toBeVisible({ timeout: 5000 });
-
-    // Re-open
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
-    const dialog2 = page.locator('[role="dialog"]');
-    const browseButton2 = dialog2.locator('button:has-text("Browse...")');
-    await browseButton2.click();
-    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
-
-    // Make sure "Add to current project" is selected
-    const addToCurrentLabel = page.locator('label:has-text("Add to current project") input[type="radio"]');
-    await addToCurrentLabel.click();
-
-    // Select existing mode
-    const existingRadio = page.locator('[data-testid="placement-mode-existing"]');
-    await existingRadio.click();
-
-    // Check import station selector options
-    const importStationSelector = page.locator('[data-testid="import-station-selector"]');
-    await expect(importStationSelector.locator('option')).toHaveCount(2);
-
-    const firstOption = importStationSelector.locator('option[value="first"]');
-    const lastOption = importStationSelector.locator('option[value="last"]');
-    await expect(firstOption).toHaveText('First station of imported section');
-    await expect(lastOption).toHaveText('Last station of imported section');
+    await openSelectOptions(page, 'import-station-select');
+    const options = page.getByTestId('import-station-select').locator('div.absolute button');
+    await expect(options).toHaveCount(4);
+    await expect(options.filter({ hasText: 'Station 0' })).toHaveCount(1);
+    await expect(options.filter({ hasText: 'Station 3' })).toHaveCount(1);
   });
 
-  test('existing station dropdown populated from project', async ({ page }) => {
-    // Setup with existing stations
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Dropdown Test');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-    await page.waitForSelector('canvas', { timeout: 10000 });
+  test('target section dropdown populated from project', async ({ page }) => {
+    await openPlacementConfigWithExistingStations(page, 'Dropdown Test');
 
-    // Import to create stations
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
-    const dialog = page.locator('[role="dialog"]');
-    const browseButton = dialog.locator('button:has-text("Browse...")');
-    await browseButton.click();
-    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
-
-    // Deselect problematic sections
-    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
-    await validationSection.locator('input[type="checkbox"]').click();
-    const mixedSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
-    await mixedSection.locator('input[type="checkbox"]').click();
-
-    const importButton = page.locator('[data-testid="import-button"]');
-    await importButton.click();
-    await expect(dialog).not.toBeVisible({ timeout: 5000 });
-
-    // Re-open
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
-    const dialog2 = page.locator('[role="dialog"]');
-    const browseButton2 = dialog2.locator('button:has-text("Browse...")');
-    await browseButton2.click();
-    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
-
-    // Make sure "Add to current project" is selected
-    const addToCurrentLabel = page.locator('label:has-text("Add to current project") input[type="radio"]');
-    await addToCurrentLabel.click();
-
-    // Select existing mode
-    const existingRadio = page.locator('[data-testid="placement-mode-existing"]');
-    await existingRadio.click();
-
-    // Check that existing station dropdown has options (populated from project)
-    const existingStationSelector = page.locator('[data-testid="existing-station-selector"]');
-    await expect(existingStationSelector).toBeVisible();
-
-    // Should have at least the default "Select a station..." option plus some stations
-    const options = existingStationSelector.locator('option');
-    const optionCount = await options.count();
-    expect(optionCount).toBeGreaterThan(1); // At least "Select..." + 1 station
+    await openSelectOptions(page, 'target-section-select');
+    const options = page.getByTestId('target-section-select').locator('div.absolute button');
+    await expect(options.filter({ hasText: 'Existing Alpha' })).toHaveCount(1);
+    await expect(options.filter({ hasText: 'Existing Beta' })).toHaveCount(1);
   });
 
   test('switching back to origin mode hides station selectors', async ({ page }) => {
-    // Setup with existing stations
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Switch Mode Test');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-    await page.waitForSelector('canvas', { timeout: 10000 });
+    await openPlacementConfigWithExistingStations(page, 'Switch Mode Test');
 
-    // Import to create stations
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
-    const dialog = page.locator('[role="dialog"]');
-    const browseButton = dialog.locator('button:has-text("Browse...")');
-    await browseButton.click();
-    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
+    await expect(page.getByTestId('import-station-select')).toBeVisible();
 
-    // Deselect problematic sections
-    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
-    await validationSection.locator('input[type="checkbox"]').click();
-    const mixedSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
-    await mixedSection.locator('input[type="checkbox"]').click();
+    const originRadio = page.getByTestId('placement-origin');
+    await originRadio.check();
 
-    const importButton = page.locator('[data-testid="import-button"]');
-    await importButton.click();
-    await expect(dialog).not.toBeVisible({ timeout: 5000 });
-
-    // Re-open
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
-    const dialog2 = page.locator('[role="dialog"]');
-    const browseButton2 = dialog2.locator('button:has-text("Browse...")');
-    await browseButton2.click();
-    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
-
-    // Make sure "Add to current project" is selected
-    const addToCurrentLabel = page.locator('label:has-text("Add to current project") input[type="radio"]');
-    await addToCurrentLabel.click();
-
-    // Select existing mode
-    const existingRadio = page.locator('[data-testid="placement-mode-existing"]');
-    await existingRadio.click();
-
-    // Station selectors should be visible
-    const importStationSelector = page.locator('[data-testid="import-station-selector"]');
-    await expect(importStationSelector).toBeVisible();
-
-    // Switch back to origin mode
-    const originRadio = page.locator('[data-testid="placement-mode-origin"]');
-    await originRadio.click();
-
-    // Station selectors should be hidden
-    await expect(importStationSelector).not.toBeVisible();
+    await expect(page.locator('[data-testid="import-station-select"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="target-section-select"]')).toHaveCount(0);
   });
 });
 
-test.describe.skip('Placement Mode - Manual Map Placement', () => {
+test.describe('Placement Mode - Manual Map Placement', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
   test('manual mode option visible after loading DMP file', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Check manual mode radio is visible
-    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
-    await expect(manualRadio).toBeVisible();
+    await expect(page.getByTestId('placement-manual')).toBeVisible();
   });
 
-  test('manual mode shows station selector when selected', async ({ page }) => {
+  test('manual mode shows align selector and place button when selected', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Select manual mode
-    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
-    await manualRadio.click();
+    const manualRadio = page.getByTestId('placement-manual');
+    await manualRadio.check();
 
-    // Station selector should be visible
-    const manualStationSelector = page.locator('[data-testid="manual-import-station-selector"]');
-    await expect(manualStationSelector).toBeVisible();
-
-    // Should have first/last options
-    await expect(manualStationSelector.locator('option')).toHaveCount(2);
-    await expect(manualStationSelector.locator('option').first()).toHaveText('First station of imported section');
-    await expect(manualStationSelector.locator('option').last()).toHaveText('Last station of imported section');
+    await expect(page.getByTestId('manual-align-select')).toBeVisible();
+    await expect(page.getByTestId('start-placement-button')).toBeVisible();
+    await expect(page.getByTestId('start-placement-button')).toHaveText('Place on Map');
   });
 
-  test('import button changes text to "Place on Map" in manual mode', async ({ page }) => {
+  test('place button disabled until manual placement is set', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Initially should show "Import X Sections"
-    const importButton = page.locator('[data-testid="import-button"]');
-    const initialText = await importButton.textContent();
-    expect(initialText).toContain('Import');
-
-    // Select manual mode
-    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
-    await manualRadio.click();
-
-    // Button should now say "Place on Map"
-    await expect(importButton).toHaveText('Place on Map');
+    await page.getByTestId('placement-manual').check();
+    const placeButton = page.locator(
+      '[data-testid="place-section-button"], [data-testid="place-and-finish-button"]'
+    );
+    await expect(placeButton.first()).toBeDisabled();
+    await expect(placeButton.first()).toHaveAttribute('title', /Place on map/i);
   });
 
   test('clicking "Place on Map" closes dialog and shows placement indicator', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Deselect problematic sections
-    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
-    await validationSection.locator('input[type="checkbox"]').click();
-    const mixedSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
-    await mixedSection.locator('input[type="checkbox"]').click();
+    await page.getByTestId('placement-manual').check();
+    await page.getByTestId('start-placement-button').click();
 
-    // Select manual mode
-    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
-    await manualRadio.click();
-
-    // Click "Place on Map"
-    const dialog = page.locator('[role="dialog"]');
-    const importButton = page.locator('[data-testid="import-button"]');
-    await importButton.click();
-
-    // Dialog should close
-    await expect(dialog).not.toBeVisible({ timeout: 5000 });
-
-    // Placement mode indicator should be visible on map
-    const placementIndicator = page.locator('[data-testid="placement-mode-indicator"]');
+    await expect(page.getByTestId('dmp-section-config-dialog')).toBeHidden({ timeout: 5000 });
+    const placementIndicator = page.getByTestId('placement-mode-indicator');
     await expect(placementIndicator).toBeVisible();
     await expect(placementIndicator).toContainText('Placement Mode');
   });
 
-  test('Escape key cancels placement mode', async ({ page }) => {
+  test('Escape key cancels placement mode and restores dialog', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Deselect problematic sections
-    const validationSection = page.locator('tr').filter({ hasText: 'Validation Test Section' });
-    await validationSection.locator('input[type="checkbox"]').click();
-    const mixedSection = page.locator('tr').filter({ hasText: 'Mixed LRUD Section' });
-    await mixedSection.locator('input[type="checkbox"]').click();
+    await page.getByTestId('placement-manual').check();
+    await page.getByTestId('start-placement-button').click();
 
-    // Select manual mode and place
-    const dialog = page.locator('[role="dialog"]');
-    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
-    await manualRadio.click();
-    await page.locator('[data-testid="import-button"]').click();
-    await expect(dialog).not.toBeVisible({ timeout: 5000 });
-
-    // Placement indicator should be visible
-    const placementIndicator = page.locator('[data-testid="placement-mode-indicator"]');
-    await expect(placementIndicator).toBeVisible();
-
-    // Press Escape to cancel
+    await expect(page.getByTestId('placement-mode-indicator')).toBeVisible();
     await page.keyboard.press('Escape');
 
-    // Placement indicator should be gone
-    await expect(placementIndicator).not.toBeVisible();
+    await expect(page.locator('[data-testid="placement-mode-indicator"]')).toHaveCount(0);
+    await expect(page.getByTestId('dmp-section-config-dialog')).toBeVisible({ timeout: 5000 });
   });
 
-  test('manual station selector can be changed', async ({ page }) => {
+  test('manual align selector can be changed', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Select manual mode
-    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
-    await manualRadio.click();
+    await page.getByTestId('placement-manual').check();
 
-    // Station selector should default to 'first'
-    const manualStationSelector = page.locator('[data-testid="manual-import-station-selector"]');
-    await expect(manualStationSelector).toHaveValue('first');
-
-    // Change to 'last'
-    await manualStationSelector.selectOption('last');
-    await expect(manualStationSelector).toHaveValue('last');
+    await selectOptionFromSelect(page, 'manual-align-select', 'Station 2');
+    const trigger = page.getByTestId('manual-align-select').locator('button').first();
+    await expect(trigger).toContainText('Station 2');
   });
 
   test('switching from manual to origin hides manual options', async ({ page }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Select manual mode
-    const manualRadio = page.locator('[data-testid="placement-mode-manual"]');
-    await manualRadio.click();
+    await page.getByTestId('placement-manual').check();
+    await expect(page.getByTestId('manual-align-select')).toBeVisible();
 
-    // Manual station selector should be visible
-    const manualStationSelector = page.locator('[data-testid="manual-import-station-selector"]');
-    await expect(manualStationSelector).toBeVisible();
-
-    // Switch to origin mode
-    const originRadio = page.locator('[data-testid="placement-mode-origin"]');
-    await originRadio.click();
-
-    // Manual station selector should be hidden
-    await expect(manualStationSelector).not.toBeVisible();
-
-    // Import button should show normal text
-    const importButton = page.locator('[data-testid="import-button"]');
-    const buttonText = await importButton.textContent();
-    expect(buttonText).toContain('Import');
-    expect(buttonText).not.toBe('Place on Map');
+    await page.getByTestId('placement-origin').check();
+    await expect(page.locator('[data-testid="manual-align-select"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="start-placement-button"]')).toHaveCount(0);
   });
 });
 
 test.describe('App Close Confirmation', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
   test('beforeunload handler is set when import dialog is open', async ({ page }) => {
     // Create a new project
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Close Confirm Test');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-    await page.waitForSelector('canvas', { timeout: 10000 });
+    await createProject(page, 'Close Confirm Test');
 
     // Initially, no beforeunload handler should be active
     const initialHasHandler = await page.evaluate(() => {
@@ -1855,8 +888,7 @@ test.describe('App Close Confirmation', () => {
     expect(initialHasHandler).toBeFalsy();
 
     // Open import dialog with Ctrl+I (this triggers the DMP selection dialog)
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[data-testid="dmp-selection-dialog"]', { timeout: 5000 });
+    await openDmpSelectionDialog(page);
 
     // The beforeunload hook should be active when import dialog is open
     // We can verify by checking if the browser would show a confirmation
@@ -1877,21 +909,16 @@ test.describe('App Close Confirmation', () => {
 
   test('import dialog shows when Ctrl+I is pressed from project view', async ({ page }) => {
     // Create a new project
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Import Dialog Test');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-    await page.waitForSelector('canvas', { timeout: 10000 });
+    await createProject(page, 'Import Dialog Test');
 
     // Open import dialog
-    await page.keyboard.press('Control+i');
+    await openDmpSelectionDialog(page);
 
     // Verify the DMP selection dialog appears (Step 1 of import flow)
     const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 5000 });
 
     // The dialog should show the parsed DMP file data
-    await page.waitForSelector('text=Main Passage', { timeout: 5000 });
+    await expect(page.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
   });
 });

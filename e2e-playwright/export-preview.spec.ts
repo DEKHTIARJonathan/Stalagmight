@@ -1,39 +1,39 @@
 import { test, expect } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import {
+  setupMockedPage,
+  createProject,
+  openDmpSelectionDialog,
+  proceedToDmpSectionConfig,
+  placeAllSections,
+} from './helpers/app';
 
 /**
  * Helper to create a new project and import some data for testing
  */
 async function createProjectWithData(page: import('@playwright/test').Page) {
-  // Create new project
-  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill('Export Test Project');
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
+  await createProject(page, 'Export Test Project');
+  await openDmpSelectionDialog(page);
+  await expect(page.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
 
-  // Import DMP file to have some data
-  await page.keyboard.press('Control+i');
-  await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
-
-  // Wait for DMP data to load (file path is mocked)
-  await page.waitForTimeout(500);
-
-  // Select first section in the list and import
-  const importButton = page.locator('[role="dialog"] button:has-text("Import Selected")');
-  if (await importButton.isVisible()) {
-    // Select at least one section from the sections list
-    const sectionCheckbox = page.locator('[role="dialog"] input[type="checkbox"]').first();
-    if (await sectionCheckbox.isVisible()) {
-      await sectionCheckbox.check();
-    }
-    await importButton.click();
+  // Deselect problematic sections to avoid validation-blocked imports
+  const validationSection = page.locator('[data-testid^="section-row-"]').filter({
+    hasText: 'Validation Test Section',
+  });
+  const validationCheckbox = validationSection.locator('input[type="checkbox"]');
+  if (await validationCheckbox.isVisible()) {
+    await validationCheckbox.click();
   }
 
-  // Close any remaining dialogs
-  await page.keyboard.press('Escape');
-  await page.waitForTimeout(300);
+  const mixedLrudSection = page.locator('[data-testid^="section-row-"]').filter({
+    hasText: 'Mixed LRUD Section',
+  });
+  const mixedCheckbox = mixedLrudSection.locator('input[type="checkbox"]');
+  if (await mixedCheckbox.isVisible()) {
+    await mixedCheckbox.click();
+  }
+
+  await proceedToDmpSectionConfig(page);
+  await placeAllSections(page);
 }
 
 /**
@@ -41,14 +41,12 @@ async function createProjectWithData(page: import('@playwright/test').Page) {
  */
 async function openExportDialog(page: import('@playwright/test').Page) {
   await page.keyboard.press('Control+e');
-  await page.waitForSelector('[data-testid="export-dialog"]', { timeout: 5000 });
+  await expect(page.getByTestId('export-dialog')).toBeVisible({ timeout: 5000 });
 }
 
 test.describe('Export Preview', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
     await createProjectWithData(page);
   });
 
@@ -61,6 +59,7 @@ test.describe('Export Preview', () => {
 
     // Switch to image export
     await page.click('[data-testid="export-type-image"]');
+    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
 
     // Preview should now be visible
     await expect(preview).toBeVisible({ timeout: 5000 });
@@ -98,7 +97,7 @@ test.describe('Export Preview', () => {
 
     // Switch to image export
     await page.click('[data-testid="export-type-image"]');
-    await page.waitForTimeout(500); // Let initial render complete
+    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
 
     const preview = page.locator('[data-testid="export-preview"]');
     await expect(preview).toBeVisible({ timeout: 5000 });
@@ -108,8 +107,7 @@ test.describe('Export Preview', () => {
     await expect(labelsCheckbox).toBeChecked();
     await labelsCheckbox.uncheck();
 
-    // Wait for debounced update (300ms + render time)
-    await page.waitForTimeout(500);
+    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
 
     // Preview should still be visible and functional
     await expect(preview).toBeVisible();
@@ -120,7 +118,7 @@ test.describe('Export Preview', () => {
 
     // Switch to image export
     await page.click('[data-testid="export-type-image"]');
-    await page.waitForTimeout(500);
+    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
 
     const preview = page.locator('[data-testid="export-preview"]');
     await expect(preview).toBeVisible({ timeout: 5000 });
@@ -130,8 +128,7 @@ test.describe('Export Preview', () => {
     await expect(sectionNamesCheckbox).toBeChecked();
     await sectionNamesCheckbox.uncheck();
 
-    // Wait for debounced update
-    await page.waitForTimeout(500);
+    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
 
     // Preview should still be visible and functional
     await expect(preview).toBeVisible();
@@ -142,7 +139,7 @@ test.describe('Export Preview', () => {
 
     // Switch to image export
     await page.click('[data-testid="export-type-image"]');
-    await page.waitForTimeout(500);
+    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
 
     const preview = page.locator('[data-testid="export-preview"]');
     await expect(preview).toBeVisible({ timeout: 5000 });
@@ -152,8 +149,7 @@ test.describe('Export Preview', () => {
     await expect(gridCheckbox).not.toBeChecked();
     await gridCheckbox.check();
 
-    // Wait for debounced update
-    await page.waitForTimeout(500);
+    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
 
     // Preview should still be visible and functional
     await expect(preview).toBeVisible();
@@ -164,7 +160,7 @@ test.describe('Export Preview', () => {
 
     // Switch to image export
     await page.click('[data-testid="export-type-image"]');
-    await page.waitForTimeout(500);
+    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
 
     const preview = page.locator('[data-testid="export-preview"]');
     await expect(preview).toBeVisible({ timeout: 5000 });
@@ -174,8 +170,7 @@ test.describe('Export Preview', () => {
     await expect(shotDataCheckbox).not.toBeChecked();
     await shotDataCheckbox.check();
 
-    // Wait for debounced update
-    await page.waitForTimeout(500);
+    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
 
     // Preview should still be visible and functional
     await expect(preview).toBeVisible();

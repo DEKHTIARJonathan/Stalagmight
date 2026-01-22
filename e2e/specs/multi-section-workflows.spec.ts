@@ -17,6 +17,7 @@ import {
   createNewProject,
   importDmpFile,
   getProjectSections,
+  waitForUiIdle,
 } from '../helpers/app';
 
 // Get absolute path to fixtures directory
@@ -280,7 +281,7 @@ describe('Multi-Section Workflows', () => {
     expect(result.sectionCount).toBeGreaterThan(1);
 
     // Wait for state to update
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Get all sections from the project
     const sections = await getProjectSections();
@@ -309,7 +310,7 @@ describe('Multi-Section Workflows', () => {
     expect(result2.success).toBe(true);
     expect(result2.sectionCount).toBeGreaterThan(0);
 
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify sections from both imports exist
     const allSections = await getProjectSections();
@@ -317,7 +318,7 @@ describe('Multi-Section Workflows', () => {
     expect(allSections.length).toBe(expectedTotal);
 
     // Verify map is displayed with sections
-    const mapCanvas = await $('canvas');
+    const mapCanvas = await $('[data-testid="map-canvas"]');
     await expect(mapCanvas).toBeDisplayed();
   });
 
@@ -340,7 +341,7 @@ describe('Multi-Section Workflows', () => {
     expect(result.success).toBe(true);
     expect(result.sectionCount).toBeGreaterThan(1);
 
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Get sections
     const sections = await getProjectSections();
@@ -362,7 +363,7 @@ describe('Multi-Section Workflows', () => {
 
     expect(mergeResult.success).toBe(true);
 
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify merge was recorded
     const mergesAfter = await getStationMerges();
@@ -383,7 +384,7 @@ describe('Multi-Section Workflows', () => {
     expect(sectionsAfterMerge.length).toBe(sections.length);
 
     // Verify map is still displayed
-    const mapCanvas = await $('canvas');
+    const mapCanvas = await $('[data-testid="map-canvas"]');
     await expect(mapCanvas).toBeDisplayed();
   });
 
@@ -409,7 +410,7 @@ describe('Multi-Section Workflows', () => {
     const createResult3 = await createTestSection('Section Gamma');
     expect(createResult3.success).toBe(true);
 
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify all three sections exist
     const sectionsBeforeDelete = await getProjectSections();
@@ -434,7 +435,7 @@ describe('Multi-Section Workflows', () => {
     const deleteResult = await deleteSection(sectionBeta!.id);
     expect(deleteResult.success).toBe(true);
 
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify only two sections remain
     const sectionsAfterDelete = await getProjectSections();
@@ -457,7 +458,7 @@ describe('Multi-Section Workflows', () => {
     expect((gammaAfterDelete!.shots as unknown[]).length).toBe(gammaShotCount);
 
     // Verify map is still displayed
-    const mapCanvas = await $('canvas');
+    const mapCanvas = await $('[data-testid="map-canvas"]');
     await expect(mapCanvas).toBeDisplayed();
   });
 
@@ -480,7 +481,7 @@ describe('Multi-Section Workflows', () => {
     const createResult2 = await createTestSection('Target Section');
     expect(createResult2.success).toBe(true);
 
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Get section info
     const sectionsBeforeMerge = await getProjectSections();
@@ -495,7 +496,7 @@ describe('Multi-Section Workflows', () => {
     const mergeResult = await mergeStations(sourceSection!.id, 0, targetSection!.id, 0);
     expect(mergeResult.success).toBe(true);
 
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify merge exists
     const mergesBeforeEdit = await getStationMerges();
@@ -508,7 +509,7 @@ describe('Multi-Section Workflows', () => {
     });
     expect(updateResult.success).toBe(true);
 
-    await browser.pause(500);
+    await waitForUiIdle(500);
 
     // Verify the merge relationship is preserved after edit
     const mergesAfterEdit = await getStationMerges();
@@ -539,7 +540,7 @@ describe('Multi-Section Workflows', () => {
     expect((targetAfterEdit!.shots as unknown[]).length).toBe(2);
 
     // Verify map is still displayed
-    const mapCanvas = await $('canvas');
+    const mapCanvas = await $('[data-testid="map-canvas"]');
     await expect(mapCanvas).toBeDisplayed();
   });
 });

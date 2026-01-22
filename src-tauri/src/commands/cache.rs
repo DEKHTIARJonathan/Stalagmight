@@ -39,6 +39,10 @@ pub struct CacheStats {
 /// If the cache is disabled, returns zero stats (not an error).
 #[tauri::command]
 pub fn get_cache_stats(state: State<AppState>) -> Result<CacheStats, String> {
+    get_cache_stats_impl(state.inner())
+}
+
+pub(crate) fn get_cache_stats_impl(state: &AppState) -> Result<CacheStats, String> {
     let tile_cache = state.tile_cache();
 
     let guard = tile_cache
@@ -78,6 +82,13 @@ pub fn get_cache_stats(state: State<AppState>) -> Result<CacheStats, String> {
 /// If `provider` is None, clears all tiles.
 #[tauri::command]
 pub fn clear_tile_cache(state: State<AppState>, provider: Option<String>) -> Result<(), String> {
+    clear_tile_cache_impl(state.inner(), provider)
+}
+
+pub(crate) fn clear_tile_cache_impl(
+    state: &AppState,
+    provider: Option<String>,
+) -> Result<(), String> {
     let tile_cache = state.tile_cache();
 
     let mut guard = tile_cache
@@ -114,6 +125,16 @@ pub async fn fetch_tile(
     y: u32,
     x: u32,
 ) -> Result<Vec<u8>, String> {
+    fetch_tile_impl(state.inner(), provider, z, y, x).await
+}
+
+pub(crate) async fn fetch_tile_impl(
+    state: &AppState,
+    provider: String,
+    z: u32,
+    y: u32,
+    x: u32,
+) -> Result<Vec<u8>, String> {
     use crate::tile_fetch_impl;
 
     let tile_cache = state.tile_cache();
@@ -138,6 +159,10 @@ pub async fn fetch_tile(
 /// periodic status checks, not high-frequency polling.
 #[tauri::command]
 pub fn get_network_status() -> bool {
+    get_network_status_impl()
+}
+
+pub(crate) fn get_network_status_impl() -> bool {
     // Use a well-known, highly available endpoint for connectivity check.
     // We use an ESRI endpoint since that's what our tile provider uses,
     // which gives us provider-specific status rather than general internet.

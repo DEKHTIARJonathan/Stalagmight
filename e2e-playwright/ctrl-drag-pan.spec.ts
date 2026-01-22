@@ -1,23 +1,23 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import {
+  setupMockedPage,
+  createProject,
+  waitForMapReady,
+  waitForActiveTool,
+  waitForMapIdle,
+} from './helpers/app';
 
 /**
  * Helper to create a new project and get to SingleSystemView with map canvas.
  */
 async function createProjectWithMap(page: Page): Promise<void> {
-  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill('Ctrl Drag Test');
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
+  await createProject(page, 'Ctrl Drag Test');
+  await waitForMapReady(page);
 }
 
 test.describe('Ctrl+Drag Panning', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
     await createProjectWithMap(page);
   });
 
@@ -35,21 +35,23 @@ test.describe('Ctrl+Drag Panning', () => {
       test(`should show grab cursor when Ctrl held in ${tool.name} mode`, async ({ page }) => {
         // Switch to the tool
         await page.keyboard.press(tool.key);
-        await page.waitForTimeout(50);
+        await waitForActiveTool(page, tool.name);
 
-        const canvas = page.locator('canvas').first();
+        const canvas = page.getByTestId('map-canvas');
         await expect(canvas).toBeVisible();
 
         // Hold Ctrl
         await page.keyboard.down('Control');
-        await page.waitForTimeout(100);
+        await page.waitForFunction(() => {
+          const canvas = document.querySelector('canvas');
+          return canvas?.style.cursor === 'grab';
+        });
 
         // Get the cursor from the MapLibre canvas
         const cursor = await page.evaluate(() => {
           const canvas = document.querySelector('canvas');
           return canvas?.style.cursor || '';
         });
-
         expect(cursor).toBe('grab');
 
         await page.keyboard.up('Control');
@@ -62,9 +64,9 @@ test.describe('Ctrl+Drag Panning', () => {
       test(`should allow Ctrl+drag to pan in ${tool.name} mode`, async ({ page }) => {
         // Switch to the tool
         await page.keyboard.press(tool.key);
-        await page.waitForTimeout(50);
+        await waitForActiveTool(page, tool.name);
 
-        const canvas = page.locator('canvas').first();
+        const canvas = page.getByTestId('map-canvas');
         const box = await canvas.boundingBox();
         expect(box).not.toBeNull();
 
@@ -72,11 +74,11 @@ test.describe('Ctrl+Drag Panning', () => {
         await page.keyboard.down('Control');
         await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
         await page.mouse.down();
-        await page.mouse.move(box!.x + box!.width / 2 + 100, box!.y + box!.height / 2 + 100);
+        await page.mouse.move(box!.x + box!.width / 2 + 100, box!.y + box!.height / 2 + 100, { steps: 8 });
         await page.mouse.up();
         await page.keyboard.up('Control');
 
-        await page.waitForTimeout(100);
+        await waitForMapIdle(page);
 
         // Map should remain functional after pan
         await expect(canvas).toBeVisible();
@@ -97,14 +99,17 @@ test.describe('Ctrl+Drag Panning', () => {
       test(`should NOT change cursor to grab with Ctrl in ${tool.name} mode`, async ({ page }) => {
         // Switch to the tool
         await page.keyboard.press(tool.key);
-        await page.waitForTimeout(50);
+        await waitForActiveTool(page, tool.name);
 
-        const canvas = page.locator('canvas').first();
+        const canvas = page.getByTestId('map-canvas');
         await expect(canvas).toBeVisible();
 
         // Hold Ctrl
         await page.keyboard.down('Control');
-        await page.waitForTimeout(100);
+        await page.waitForFunction(() => {
+          const canvas = document.querySelector('canvas');
+          return typeof canvas?.style.cursor === 'string';
+        });
 
         // Get the cursor
         const cursor = await page.evaluate(() => {
@@ -255,9 +260,9 @@ test.describe('Ctrl+Drag Panning', () => {
     test('should not start box select when Ctrl+drag in select mode', async ({ page }) => {
       // Switch to select mode
       await page.keyboard.press('s');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'select');
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
 
@@ -278,9 +283,9 @@ test.describe('Ctrl+Drag Panning', () => {
     test('should cancel box select when Ctrl pressed mid-drag', async ({ page }) => {
       // Switch to select mode
       await page.keyboard.press('s');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'select');
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
 
@@ -288,7 +293,6 @@ test.describe('Ctrl+Drag Panning', () => {
       await page.mouse.move(box!.x + 50, box!.y + 50);
       await page.mouse.down();
       await page.mouse.move(box!.x + 100, box!.y + 100);
-      await page.waitForTimeout(100);
 
       // Box select should be visible at this point
       const boxOverlay = page.locator('.border-dashed.bg-accent\\/10');
@@ -296,10 +300,9 @@ test.describe('Ctrl+Drag Panning', () => {
 
       // NOW press Ctrl mid-drag - box select should cancel
       await page.keyboard.down('Control');
-      await page.waitForTimeout(100);
 
       // Box select should be cancelled
-      await expect(boxOverlay).not.toBeVisible();
+      await expect(boxOverlay).toBeHidden();
 
       // Continue drag and clean up
       await page.mouse.move(box!.x + 200, box!.y + 200);
@@ -315,13 +318,16 @@ test.describe('Ctrl+Drag Panning', () => {
     test('should handle window blur while Ctrl is held', async ({ page }) => {
       // Switch to select mode
       await page.keyboard.press('s');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'select');
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
 
       // Hold Ctrl
       await page.keyboard.down('Control');
-      await page.waitForTimeout(50);
+      await page.waitForFunction(() => {
+        const canvas = document.querySelector('canvas');
+        return canvas?.style.cursor === 'grab';
+      });
 
       // Verify cursor is grab
       let cursor = await page.evaluate(() => {
@@ -332,7 +338,10 @@ test.describe('Ctrl+Drag Panning', () => {
 
       // Simulate window blur
       await page.evaluate(() => window.dispatchEvent(new Event('blur')));
-      await page.waitForTimeout(100);
+      await page.waitForFunction(() => {
+        const canvas = document.querySelector('canvas');
+        return canvas?.style.cursor !== 'grab';
+      });
 
       // Cursor should no longer be grab (ctrlHeld reset)
       cursor = await page.evaluate(() => {
@@ -348,9 +357,9 @@ test.describe('Ctrl+Drag Panning', () => {
     test('should allow Ctrl+click for selection (not drag)', async ({ page }) => {
       // Switch to select mode
       await page.keyboard.press('s');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'select');
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
 
@@ -366,9 +375,9 @@ test.describe('Ctrl+Drag Panning', () => {
     test('should stop showing grab cursor when Ctrl released mid-drag', async ({ page }) => {
       // Switch to select mode
       await page.keyboard.press('s');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'select');
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
 
@@ -380,7 +389,10 @@ test.describe('Ctrl+Drag Panning', () => {
 
       // Release Ctrl mid-drag
       await page.keyboard.up('Control');
-      await page.waitForTimeout(100);
+      await page.waitForFunction(() => {
+        const canvas = document.querySelector('canvas');
+        return canvas?.style.cursor !== 'grab';
+      });
 
       // Cursor should no longer be grab
       const cursor = await page.evaluate(() => {
@@ -400,18 +412,16 @@ test.describe('Ctrl+Drag Panning', () => {
     test('should work with rapid Ctrl press/release cycles', async ({ page }) => {
       // Switch to select mode
       await page.keyboard.press('s');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'select');
 
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
 
       // Rapid Ctrl press/release cycles
       for (let i = 0; i < 5; i++) {
         await page.keyboard.down('Control');
-        await page.waitForTimeout(20);
         await page.keyboard.up('Control');
-        await page.waitForTimeout(20);
       }
 
       // Map should remain functional
@@ -428,11 +438,14 @@ test.describe('Ctrl+Drag Panning', () => {
     test('should handle tool switch while Ctrl is held', async ({ page }) => {
       // Start in select mode
       await page.keyboard.press('s');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'select');
 
       // Hold Ctrl
       await page.keyboard.down('Control');
-      await page.waitForTimeout(50);
+      await page.waitForFunction(() => {
+        const canvas = document.querySelector('canvas');
+        return canvas?.style.cursor === 'grab';
+      });
 
       // Verify cursor is grab
       let cursor = await page.evaluate(() => {
@@ -443,7 +456,7 @@ test.describe('Ctrl+Drag Panning', () => {
 
       // Switch to pan tool while Ctrl is held
       await page.keyboard.press('p');
-      await page.waitForTimeout(100);
+      await waitForActiveTool(page, 'pan');
 
       // Pan tool has 'grab' cursor naturally, so it should still show grab
       cursor = await page.evaluate(() => {
@@ -454,11 +467,10 @@ test.describe('Ctrl+Drag Panning', () => {
 
       // Release Ctrl
       await page.keyboard.up('Control');
-      await page.waitForTimeout(50);
 
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(100);
+      await waitForActiveTool(page, 'zoom');
 
       // Now cursor should be zoom-in
       cursor = await page.evaluate(() => {
@@ -468,7 +480,7 @@ test.describe('Ctrl+Drag Panning', () => {
       expect(cursor).toBe('zoom-in');
 
       // Map should remain functional after all these switches
-      const canvas = page.locator('canvas').first();
+      const canvas = page.getByTestId('map-canvas');
       await expect(canvas).toBeVisible();
     });
   });
