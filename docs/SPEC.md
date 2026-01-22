@@ -1236,86 +1236,122 @@ announce_save_status = true
 
 ### 10.1 Dialog Structure
 
-Tabbed modal dialog accessible via Edit > Settings menu only (no keyboard shortcut).
+Modal dialog with sidebar navigation, accessible via the Settings button in the Global View header or the Cmd/Ctrl+, keyboard shortcut.
 
-```typescript
-interface SettingsDialogProps {
-  isOpen: boolean;
-  onClose: () => void;
-  initialTab?: 'general' | 'cache';
-}
+**Layout:**
+- Fixed size dialog (min 600px wide × 500px tall)
+- Left sidebar (150px) with category navigation
+- Right content area with scrollable settings
+- Footer with Save/Cancel buttons
+
+### 10.2 Categories
+
+The sidebar displays 9 settings categories, with a visual separator before the Advanced category:
+
+| Category | Contents |
+|----------|----------|
+| General | Auto-save toggle/interval, recent projects limit, undo history/persist limits, shortcut feedback preference |
+| Units | Length/depth/angle units, decimal precision |
+| Display | Background/grid/font colors, grid spacing, font size, depth gradient settings, section color palette |
+| Map | Satellite provider/toggle/GPS origin, zoom settings, pan/zoom controls, station/shot appearance, snap settings, animation settings |
+| Validation | Shot length min/max warnings, depth change warnings, azimuth deviation warnings, in/out difference thresholds |
+| Export | Default image format (PNG/SVG/PDF), default DPI, default layer includes (satellite, grid, labels) |
+| Shortcuts | Searchable shortcut editor with categories (Tools, Edit, View, Panels), primary/secondary binding slots, conflict detection, reserved shortcuts display |
+| Cache | Tile cache statistics, clear cache button, cache enable toggle, max size, TTL days |
+| Advanced | Debug settings (hitboxes, hit detection logging), logging level/max size, panel dimensions, reload config from disk |
+
+### 10.3 Navigation
+
+#### Keyboard Navigation
+
+The sidebar implements the WAI-ARIA vertical tab pattern with manual activation:
+
+| Key | Action |
+|-----|--------|
+| Arrow Up/Down | Move focus between categories (does not activate) |
+| Home | Focus first category |
+| End | Focus last category |
+| Enter / Space | Activate the focused category |
+| Escape | Close dialog (or close nested confirmation dialog if open) |
+
+Focus is indicated with a ring outline. Active category has highlighted background.
+
+#### Mouse Interaction
+
+- Click any category to activate it immediately
+- Focus follows click (roving tabindex pattern)
+
+### 10.4 Behavior
+
+- **Deferred save**: Changes are stored locally until Save button is clicked
+- **Dirty state tracking**: Tracks which fields have changed from original values
+- **Save button disabled** when no changes or validation errors exist
+- **Reset to Defaults**: Per-category reset button in content header; shows confirmation dialog
+- **Modal**: Blocks background interaction; backdrop does not close dialog
+- **Unsaved changes dialog**: When closing with unsaved changes, shows confirmation with Save/Discard/Cancel options
+
+#### Validation
+
+- Each category validates its fields on change
+- Invalid fields prevent saving (Save button disabled)
+- Categories with validation errors show a red error dot in the sidebar
+
+### 10.5 Accessibility
+
+#### ARIA Attributes
+
+```html
+<!-- Sidebar -->
+<div role="tablist" aria-orientation="vertical" aria-label="Settings categories">
+  <div role="tab" aria-selected="true|false" aria-controls="panel-id" tabindex="0|-1">
+    Category Name
+  </div>
+</div>
+
+<!-- Content -->
+<div role="tabpanel" id="panel-id" aria-labelledby="tab-id">
+  <!-- Category settings -->
+</div>
 ```
 
-### 10.2 Tabs
+#### Focus Management
 
-| Tab | Contents |
-|-----|----------|
-| Display | Color palette, font family/size, station size, line thickness |
-| Validation | Threshold inputs, severity levels, revalidate button |
-| Export | Default format, DPI, include options, presets |
-| About | Version, diagnostics, bug reporter link |
+- Tab cycles within dialog (focus trap)
+- Initial focus on first category tab
+- Roving tabindex on category tabs (only focused tab has tabindex=0)
+- Return focus to trigger element on close
 
-### 10.3 Behavior
+#### Screen Reader Support
 
-- **Apply immediately**: No Save/Apply buttons, changes take effect instantly
-- **Three-level reset**:
-  - Per-setting: Reset icon (↻) next to each setting
-  - Per-tab: "Reset Tab" button at bottom of each tab
-  - Full: "Reset All Settings" button in dialog footer
-- **Modal**: Blocks background interaction
-- **Draggable**: Can be repositioned
+- Live regions announce validation errors
+- Error dots have `aria-label="Has validation errors"`
+- All form controls have appropriate labels
 
-### 10.4 Display Tab
+### 10.6 Confirmation Dialogs
 
-#### Color Palettes (Presets Only)
-- Default (current colors)
-- Ocean (blues/teals)
-- Forest (greens/browns)
-- Desert (oranges/tans)
-- Colorblind-friendly
+Two nested confirmation dialogs may appear:
 
-#### Font Settings
-- Font family: System, Monospace, Sans-serif, Serif
-- Font size: Slider 10-24px (default 12)
+#### Unsaved Changes Dialog
 
-#### Size Settings
-- Station size: Slider 2-12px (default 6)
-- Line thickness: Slider 1-6px (default 2)
+Shown when closing the settings dialog with unsaved changes:
+- Title: "Unsaved Changes"
+- Message: "You have unsaved changes. What would you like to do?"
+- Buttons: Cancel (stay), Discard Changes (close without saving), Save (save and close)
+- Role: `alertdialog` with `aria-modal="true"`
 
-### 10.5 Validation Tab
+#### Reset to Defaults Dialog
 
-#### Thresholds
-- Minimum shot length (default 0.1m)
-- Maximum shot length (default 100m)
-- Maximum depth change per shot (default 50m)
-- Closure error threshold (default 5%)
+Shown when clicking "Reset to Defaults" button:
+- Title: "Reset to Defaults"
+- Message: "Reset all [Category] settings to their default values?"
+- Note: "This will only affect the current category. Changes are not saved until you click Save."
+- Buttons: Cancel, Reset (danger variant)
+- Role: `alertdialog` with `aria-modal="true"`
 
-#### Severity per Validation Type
-- Error: Blocks save/export
-- Warning: Allows proceed with notice
-- Configurable per validation rule
-
-#### Revalidate Button
-- "Revalidate Project" runs validation with current thresholds
-- Shows summary of results
-- Does NOT auto-revalidate on threshold change
-
-### 10.6 Export Tab
-
-#### Default Options
-- Format: csv, json, png, svg
-- DPI: 72, 150, 300
-- Include checkboxes: statistics, metadata, LRUD
-
-#### Built-in Presets
-- **Print**: PNG, 300 DPI, all includes
-- **Web**: PNG, 72 DPI, no metadata
-- **Archive**: JSON, all includes
-
-#### Custom Presets
-- Save current settings as named preset
-- Load/delete custom presets
-- Stored in config file
+Both dialogs:
+- Close on Escape key (captured before main dialog)
+- Have semi-transparent backdrop
+- Are centered in viewport
 
 ---
 
@@ -2192,6 +2228,7 @@ cavechef/
 | Toggle Sections Panel | Ctrl+1 |
 | Toggle Detail Panel | Ctrl+2 |
 | Toggle Data Table | Ctrl+3 |
+| Open Settings | Ctrl+, (Cmd+, on macOS) |
 
 **Note**: When Pan (P) or Zoom (Z) tools are active, selection-related shortcuts (Ctrl+A, Delete/Backspace) are disabled to prevent accidental modifications while navigating the map. Hover effects and click selection are also disabled.
 
