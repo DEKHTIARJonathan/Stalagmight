@@ -201,24 +201,28 @@ impl Section {
     }
 
     /// Calculate statistics for this section
+    /// Note: min_depth and max_depth are computed from accumulated z-coordinates
+    /// (like station positions) not from raw shot depth_in/depth_out values.
     pub fn stats(&self) -> SectionStats {
         let mut total_length = 0.0;
-        let mut min_depth = f64::MAX;
-        let mut max_depth = f64::MIN;
         let mut virtual_count = 0;
+
+        // Compute min/max from accumulated z-coordinates (station depths)
+        // First station starts at z=0
+        let mut current_z: f64 = 0.0;
+        let mut min_depth: f64 = 0.0;
+        let mut max_depth: f64 = 0.0;
 
         for shot in &self.shots {
             total_length += shot.length;
-            min_depth = min_depth.min(shot.depth_in).min(shot.depth_out);
-            max_depth = max_depth.max(shot.depth_in).max(shot.depth_out);
             if shot.is_virtual {
                 virtual_count += 1;
             }
-        }
 
-        if self.shots.is_empty() {
-            min_depth = 0.0;
-            max_depth = 0.0;
+            // Accumulate depth change (same as station computation)
+            current_z += shot.depth_out - shot.depth_in;
+            min_depth = min_depth.min(current_z);
+            max_depth = max_depth.max(current_z);
         }
 
         SectionStats {
@@ -621,6 +625,8 @@ mod tests {
 
     #[test]
     fn test_stats_single_shot() {
+        // Shot with depth_in=5.0, depth_out=8.0 → dz=3.0
+        // Station 0: z=0, Station 1: z=3.0
         let section = Section::new(0, SectionData {
             shots: vec![test_shot_data_with_depths(10.0, 5.0, 8.0)],
             ..Default::default()
@@ -630,13 +636,16 @@ mod tests {
 
         assert_eq!(stats.shot_count, 1);
         assert_eq!(stats.total_length, 10.0);
-        assert_eq!(stats.min_depth, 5.0);
-        assert_eq!(stats.max_depth, 8.0);
+        assert_eq!(stats.min_depth, 0.0); // First station at z=0
+        assert_eq!(stats.max_depth, 3.0); // Second station at z=3 (depth_out - depth_in)
         assert_eq!(stats.virtual_shot_count, 0);
     }
 
     #[test]
     fn test_stats_multiple_shots() {
+        // Shot 1: dz = 12-10 = 2, z: 0→2
+        // Shot 2: dz = 15-12 = 3, z: 2→5
+        // Shot 3: dz = 8-15 = -7, z: 5→-2
         let section = Section::new(0, SectionData {
             shots: vec![
                 test_shot_data_with_depths(5.0, 10.0, 12.0),
@@ -650,8 +659,8 @@ mod tests {
 
         assert_eq!(stats.shot_count, 3);
         assert_eq!(stats.total_length, 15.0); // 5 + 7 + 3
-        assert_eq!(stats.min_depth, 8.0); // min of all depth_in and depth_out
-        assert_eq!(stats.max_depth, 15.0); // max of all depth_in and depth_out
+        assert_eq!(stats.min_depth, -2.0); // Station 3 at z=-2
+        assert_eq!(stats.max_depth, 5.0);  // Station 2 at z=5
     }
 
     #[test]
@@ -675,6 +684,8 @@ mod tests {
 
     #[test]
     fn test_stats_negative_depths() {
+        // Shot 1: dz = -5 - (-10) = 5, z: 0→5
+        // Shot 2: dz = 2 - (-5) = 7, z: 5→12
         let section = Section::new(0, SectionData {
             shots: vec![
                 test_shot_data_with_depths(5.0, -10.0, -5.0),
@@ -685,8 +696,8 @@ mod tests {
 
         let stats = section.stats();
 
-        assert_eq!(stats.min_depth, -10.0);
-        assert_eq!(stats.max_depth, 2.0);
+        assert_eq!(stats.min_depth, 0.0);  // First station at z=0
+        assert_eq!(stats.max_depth, 12.0); // Last station at z=12
     }
 
     // === Section Data Conversion Tests ===

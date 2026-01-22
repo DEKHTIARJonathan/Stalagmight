@@ -814,8 +814,9 @@ fn test_project_stats() {
     assert_eq!(stats.section_count, 2);
     assert_eq!(stats.shot_count, 3);
     assert!((stats.total_length - 45.0).abs() < 0.001); // 10 + 15 + 20
-    assert!((stats.min_depth - 5.0).abs() < 0.001);
-    assert!((stats.max_depth - 12.0).abs() < 0.001);
+    // Depth is accumulated z-coordinates: Section A: 0→1→3, Section B: 0→2
+    assert!((stats.min_depth - 0.0).abs() < 0.001);
+    assert!((stats.max_depth - 3.0).abs() < 0.001);
     assert_eq!(stats.station_count, 5); // 3 + 2 stations
 }
 
@@ -1489,8 +1490,9 @@ fn test_section_stats() {
 
     assert_eq!(stats.shot_count, 2);
     assert!((stats.total_length - 25.0).abs() < 0.001);
-    assert!((stats.min_depth - 5.0).abs() < 0.001);
-    assert!((stats.max_depth - 12.0).abs() < 0.001);
+    // Depth is accumulated z-coordinates: 0→3→7
+    assert!((stats.min_depth - 0.0).abs() < 0.001);
+    assert!((stats.max_depth - 7.0).abs() < 0.001);
     assert_eq!(stats.virtual_shot_count, 1);
 }
 
