@@ -3,6 +3,7 @@ import maplibregl from 'maplibre-gl';
 import type { DmpSection, DmpShot } from '../../types/commands';
 import type { Section, Station, Shot } from '../../types/project';
 import { metersToMapCoords, getBounds } from '../../utils/coordinates';
+import { circularMeanDegrees } from '../../utils/angles';
 
 /**
  * Merge preview configuration for "From Existing" placement mode.
@@ -15,24 +16,6 @@ export interface MergePreviewConfig {
   importStationIndex: number;
   /** Station index in the target section to merge */
   targetStationIndex: number;
-}
-
-/**
- * Compute circular mean of two angles in degrees.
- * Handles wrap-around correctly (e.g., 350 and 10 averages to 0, not 180).
- */
-function circularMeanDegrees(a: number, b: number): number {
-  const aRad = (a * Math.PI) / 180;
-  const bRad = (b * Math.PI) / 180;
-
-  // Average the unit vectors
-  const x = (Math.cos(aRad) + Math.cos(bRad)) / 2;
-  const y = (Math.sin(aRad) + Math.sin(bRad)) / 2;
-
-  // Convert back to angle
-  let result = Math.atan2(y, x) * (180 / Math.PI);
-  if (result < 0) result += 360;
-  return result;
 }
 
 /**
