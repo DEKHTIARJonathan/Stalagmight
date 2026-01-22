@@ -272,15 +272,12 @@ export function useKeyboardShortcuts() {
       if (event.key === 'Escape') {
         // Skip if already handled (e.g., by a dropdown closing)
         if (event.defaultPrevented) {
-          console.log('[Escape] defaultPrevented, skipping');
           return;
         }
 
         // Skip if a dropdown is open - let the dropdown handle Escape first
         const openDropdown = document.querySelector('[data-dropdown-open]');
-        console.log('[Escape] openDropdown:', openDropdown);
         if (openDropdown) {
-          console.log('[Escape] dropdown open, skipping dialog close');
           return;
         }
 
