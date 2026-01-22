@@ -195,9 +195,9 @@ describe('Export Integration', () => {
     expect(parsed).toHaveProperty('project');
     expect(parsed).toHaveProperty('sections');
 
-    // Verify project metadata
+    // Verify project metadata (name includes timestamp suffix from E2E helper)
     expect(parsed.project).toHaveProperty('name');
-    expect(parsed.project.name).toBe('JSON Export Test');
+    expect(parsed.project.name.startsWith('JSON Export Test')).toBe(true);
     expect(parsed.project).toHaveProperty('exported_at');
 
     // Verify sections array

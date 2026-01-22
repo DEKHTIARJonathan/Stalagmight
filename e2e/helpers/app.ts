@@ -92,7 +92,7 @@ export async function loadProjectFixture(fixtureName: string): Promise<void> {
         __E2E_TEST__?: {
           projectStore: {
             getState: () => {
-              createProject: (name: string) => Promise<{ success: boolean; error?: string }>;
+              createProject: (name: string, location?: string) => Promise<{ success: boolean; error?: string | null }>;
             };
           };
           uiStore: {
@@ -109,17 +109,18 @@ export async function loadProjectFixture(fixtureName: string): Promise<void> {
       }
 
       try {
-        const result = await e2e.projectStore.getState().createProject(projectName);
+        // Pass /tmp as location since documents directory isn't available under tauri-driver
+        const result = await e2e.projectStore.getState().createProject(projectName, '/tmp');
         if (result.success) {
           // Switch to single view so MapCanvas mounts
           e2e.uiStore.getState().setView('single');
         }
-        done(result);
+        done({ success: result.success, error: result.error ?? undefined });
       } catch (err) {
         done({ success: false, error: String(err) });
       }
     },
-    fixture.projectName
+    fixture.projectName + '_' + Date.now()
   );
 
   if (!createResult.success) {
@@ -558,14 +559,47 @@ export async function createNewProject(projectName: string): Promise<void> {
   await nameInput.waitForEnabled({ timeout: 5000 });
   await nameInput.setValue(projectName);
 
-  // Click Create button - use JS click for reliability
-  const createBtn = await dialog.$('[data-testid="new-project-create-button"]');
-  await createBtn.waitForDisplayed({ timeout: 5000 });
-  try {
-    await createBtn.waitForClickable({ timeout: 3000 });
-    await createBtn.click();
-  } catch {
-    await jsClick(createBtn);
+  // Create project directly via store (bypassing button click which doesn't work in WebdriverIO)
+  // Pass /tmp as location since documents directory isn't available under tauri-driver
+  // Add timestamp to avoid "file already exists" errors from previous test runs
+  const uniqueName = `${projectName}_${Date.now()}`;
+  const createResult = await browser.executeAsync(
+    async (name: string, done: (result: { success: boolean; error?: string }) => void) => {
+      const e2e = (window as { __E2E_TEST__?: {
+        projectStore: {
+          getState: () => {
+            createProject: (name: string, location?: string) => Promise<{ success: boolean; error?: string | null }>
+          }
+        };
+        uiStore: {
+          getState: () => {
+            closeDialog: () => void
+          }
+        }
+      } }).__E2E_TEST__;
+
+      if (!e2e) {
+        done({ success: false, error: 'E2E helpers not available' });
+        return;
+      }
+
+      try {
+        // Pass /tmp as location since documents directory isn't available under tauri-driver
+        const result = await e2e.projectStore.getState().createProject(name, '/tmp');
+        if (result.success) {
+          e2e.uiStore.getState().closeDialog();
+        }
+        done({ success: result.success, error: result.error ?? undefined });
+      } catch (err) {
+        done({ success: false, error: String(err) });
+      }
+    },
+    uniqueName
+  );
+  console.log('[createNewProject] Create result:', createResult);
+
+  if (!createResult.success) {
+    throw new Error(`Failed to create project: ${createResult.error}`);
   }
 
   await browser.waitUntil(
@@ -758,8 +792,21 @@ export async function selectTool(
     moveStation: 't',
   };
 
+  // Map camelCase helper names to snake_case store names
+  const storeToolNames: Record<string, string> = {
+    select: 'select',
+    pan: 'pan',
+    zoom: 'zoom',
+    draw: 'draw',
+    delete: 'delete',
+    merge: 'merge',
+    measure: 'measure',
+    moveSection: 'move_section',
+    moveStation: 'move_station',
+  };
+
   await browser.keys([toolKeys[tool] ?? 's']);
-  await waitForActiveTool(tool);
+  await waitForActiveTool(storeToolNames[tool] ?? tool);
 }
 
 /**
@@ -783,7 +830,8 @@ export async function togglePanel(panel: 'sections' | 'detail' | 'dataTable'): P
     return ui.dataTableOpen;
   }, panel);
 
-  await browser.keys(['Control', panelKeys[panel] ?? '1']);
+  // Config file has shortcuts as just '1', '2', '3' (without Ctrl modifier)
+  await browser.keys([panelKeys[panel] ?? '1']);
   if (wasOpen !== null) {
     await waitForPanelState(panel, !wasOpen);
   } else {

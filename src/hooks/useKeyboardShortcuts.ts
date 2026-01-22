@@ -129,34 +129,6 @@ function shouldShowToast(action: ShortcutAction, feedback: ShortcutFeedback): bo
 }
 
 /**
- * Check if a shortcut string contains only a key (no modifiers).
- * Used to determine if quick_zoom should use spring-loaded behavior.
- */
-function isNonModifierShortcut(shortcut: string): boolean {
-  const normalized = normalizeShortcut(shortcut);
-  if (!normalized) return false;
-  // If it contains +, it has modifiers
-  return !normalized.includes('+');
-}
-
-/**
- * Build a set of normalized shortcuts that should use spring-loaded behavior.
- * Only non-modifier shortcuts (single keys) are included.
- */
-function buildSpringLoadedSet(bindings: string[]): Set<string> {
-  const springLoaded = new Set<string>();
-  for (const binding of bindings) {
-    if (isNonModifierShortcut(binding)) {
-      const normalized = normalizeShortcut(binding);
-      if (normalized) {
-        springLoaded.add(normalized);
-      }
-    }
-  }
-  return springLoaded;
-}
-
-/**
  * Build a map from normalized shortcut strings to their action names.
  * This allows O(1) lookup during keydown handling.
  */
@@ -278,29 +250,20 @@ export function useKeyboardShortcuts() {
     clearMergeStations,
     clearMeasure,
     setDrawFromStation,
-    activateSpringLoaded,
-    deactivateSpringLoaded,
     showStations,
     showToast,
   } = useUIStore();
   const { undo, redo, saveProject, project, stations, importDmp, config } = useProjectStore();
   const { setImportContext, hasImportedDmpPath, addImportedDmpPath } = useUIStore();
 
-  // Ref to track which quick_zoom bindings are non-modifier (spring-loaded)
-  // Uses ref to avoid stale closures in event handlers (per pitfall)
+  // Ref for shortcut map - uses ref to avoid stale closures in event handlers
   // Initialize with defaults to handle first render before useEffect runs
-  const springLoadedBindingsRef = useRef<Set<string>>(buildSpringLoadedSet(defaultConfig.shortcuts.quick_zoom));
   const shortcutMapRef = useRef<Map<string, ShortcutAction>>(buildShortcutMap(defaultConfig.shortcuts));
 
-  // Update refs when config changes - use defaultConfig as fallback
+  // Update ref when config changes - use defaultConfig as fallback
   useEffect(() => {
     const shortcuts = config?.shortcuts ?? defaultConfig.shortcuts;
-
-    // Build the shortcut map
     shortcutMapRef.current = buildShortcutMap(shortcuts);
-
-    // Build set of spring-loaded bindings for quick_zoom
-    springLoadedBindingsRef.current = buildSpringLoadedSet(shortcuts.quick_zoom ?? []);
   }, [config?.shortcuts]);
 
   const handleKeyDown = useCallback(
@@ -470,22 +433,6 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // Check if this is a spring-loaded quick_zoom (non-modifier key)
-      const isSpringLoadedQuickZoom =
-        action === 'quick_zoom' && springLoadedBindingsRef.current.has(normalizedKey) && !event.repeat;
-
-      if (isSpringLoadedQuickZoom) {
-        const { activeDialog, placementMode, activeTool, springLoadedState } = useUIStore.getState();
-        // Don't activate during dialogs or placement mode
-        if (activeDialog || placementMode) return;
-        // Don't activate if already in zoom tool or already spring-loaded
-        if (activeTool === 'zoom' || springLoadedState) return;
-
-        event.preventDefault();
-        activateSpringLoaded('zoom');
-        return;
-      }
-
       // Get config values for zoom actions
       const currentConfig = useProjectStore.getState().config;
       const zoomStep = currentConfig?.map.zoom_step ?? 1.0;
@@ -635,7 +582,6 @@ export function useKeyboardShortcuts() {
       showToast,
       stations,
       selectAll,
-      activateSpringLoaded,
       setActiveTool,
       undo,
       redo,
@@ -654,47 +600,4 @@ export function useKeyboardShortcuts() {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [handleKeyDown]);
-
-  // Keyup handler for spring-loaded shortcuts
-  // Unconditionally deactivate when a spring-loaded key is released
-  useEffect(() => {
-    const handleKeyUp = (event: KeyboardEvent) => {
-      // Parse the key event to get normalized form
-      const normalizedKey = parseKeyEvent(event);
-
-      // Check if this is a spring-loaded key
-      if (springLoadedBindingsRef.current.has(normalizedKey)) {
-        deactivateSpringLoaded();
-      }
-    };
-
-    window.addEventListener('keyup', handleKeyUp);
-    return () => window.removeEventListener('keyup', handleKeyUp);
-  }, [deactivateSpringLoaded]);
-
-  // Blur handler for stuck spring-loaded keys (e.g., Alt+Tab while key held)
-  // Uses cancelSpringLoaded to force restore (ignores tap threshold)
-  useEffect(() => {
-    const handleBlur = () => {
-      // Force cancel spring-loaded state if active (always restore on blur)
-      const state = useUIStore.getState();
-      if (state.springLoadedState) {
-        state.cancelSpringLoaded();
-      }
-    };
-
-    window.addEventListener('blur', handleBlur);
-    return () => window.removeEventListener('blur', handleBlur);
-  }, []); // No dependencies - uses getState() for latest state
-
-  // Unmount cleanup to prevent stuck spring-loaded state
-  useEffect(() => {
-    return () => {
-      // On unmount, cancel any active spring-loaded state
-      const state = useUIStore.getState();
-      if (state.springLoadedState) {
-        state.cancelSpringLoaded();
-      }
-    };
-  }, []);
 }

@@ -244,6 +244,8 @@ cleanup_ports() {
 }
 
 # ===== Build freshness check =====
+E2E_BUILD_MARKER="$PROJECT_ROOT/.e2e-build-marker"
+
 check_build_freshness() {
     if $SKIP_BUILD; then
         warn "Skipping build freshness check (--skip-build)"
@@ -262,6 +264,22 @@ check_build_freshness() {
     # Check if dist exists
     if [[ ! -f "$DIST_PATH/index.html" ]]; then
         warn "Frontend dist not found at $DIST_PATH"
+        return 1
+    fi
+
+    # Check if the asset hashes match what was built into the binary
+    # This catches the case where frontend was rebuilt (new hashes) but binary wasn't
+    CURRENT_ASSET_HASH=$(md5sum "$DIST_PATH/index.html" 2>/dev/null | cut -d' ' -f1 || echo "none")
+    if [[ -f "$E2E_BUILD_MARKER" ]]; then
+        BUILT_ASSET_HASH=$(cat "$E2E_BUILD_MARKER" 2>/dev/null || echo "")
+        if [[ "$CURRENT_ASSET_HASH" != "$BUILT_ASSET_HASH" ]]; then
+            warn "Frontend assets changed since last E2E build (hash mismatch)"
+            warn "  Built with: $BUILT_ASSET_HASH"
+            warn "  Current:    $CURRENT_ASSET_HASH"
+            return 1
+        fi
+    else
+        warn "No E2E build marker found - cannot verify binary matches frontend"
         return 1
     fi
 
@@ -292,6 +310,21 @@ check_build_freshness() {
         NEEDS_REBUILD=true
     fi
 
+    # Check if dist folder is newer than binary (prevents stale embedded assets)
+    # This catches the case where frontend was rebuilt but Tauri binary wasn't
+    DIST_INDEX_MTIME=$(stat -c %Y "$DIST_PATH/index.html" 2>/dev/null || stat -f %m "$DIST_PATH/index.html" 2>/dev/null || echo "0")
+    if [[ "$DIST_INDEX_MTIME" -gt "$BINARY_MTIME" ]]; then
+        warn "Frontend dist is newer than binary (would cause 'localhost refused' error)"
+        NEEDS_REBUILD=true
+    fi
+
+    # Check package.json for dependency changes
+    PKG_MTIME=$(stat -c %Y "$PROJECT_ROOT/package.json" 2>/dev/null || stat -f %m "$PROJECT_ROOT/package.json" 2>/dev/null || echo "0")
+    if [[ "$PKG_MTIME" -gt "$BINARY_MTIME" ]]; then
+        warn "package.json is newer than binary"
+        NEEDS_REBUILD=true
+    fi
+
     if $NEEDS_REBUILD; then
         return 1
     fi
@@ -306,15 +339,17 @@ do_build() {
 
     cd "$PROJECT_ROOT"
 
-    # Build frontend
+    # Build frontend with E2E test stores exposed
     info "Building frontend..."
-    pnpm build
 
     # Build Tauri binary (debug mode, no bundle)
     info "Building Tauri binary (debug mode)..."
-    pnpm tauri build --debug --no-bundle
+    VITE_E2E=1 pnpm tauri build --debug --no-bundle
 
+    # Create marker file with hash of dist/index.html to track what assets were built into binary
+    md5sum "$DIST_PATH/index.html" 2>/dev/null | cut -d' ' -f1 > "$E2E_BUILD_MARKER"
     success "Build complete: $BINARY_PATH"
+    info "Created E2E build marker: $E2E_BUILD_MARKER"
 }
 
 handle_build() {

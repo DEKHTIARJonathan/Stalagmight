@@ -125,6 +125,10 @@ export const config: Options.Testrunner = {
         execSync('pnpm tauri build --debug --no-bundle', {
           stdio: 'inherit',
           cwd: process.cwd(),
+          env: {
+            ...process.env,
+            VITE_E2E: '1',
+          },
         });
         console.log('Build completed successfully');
       } catch (error) {
