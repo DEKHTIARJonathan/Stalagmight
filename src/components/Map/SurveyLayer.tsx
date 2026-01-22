@@ -71,8 +71,8 @@ export default class SurveyLayer {
   // Config storage with fallback defaults for when config is null (initial load)
   private config: Config | null = null;
   private static readonly DEFAULTS = {
-    station: { radius: 4, hit_area: 10 },
-    shot: { width: 2, hit_area: 8 },
+    station: { radius: 4, hit_area: 10, hover_radius: 6, selection_radius: 5 },
+    shot: { width: 2, hit_area: 8, hover_width: 4, selection_width: 3 },
   };
 
   // Visual state
@@ -167,6 +167,22 @@ export default class SurveyLayer {
 
   private getShotHitArea(): number {
     return this.config?.map?.shot?.hit_area ?? SurveyLayer.DEFAULTS.shot.hit_area;
+  }
+
+  private getStationHoverRadius(): number {
+    return this.config?.map?.station?.hover_radius ?? SurveyLayer.DEFAULTS.station.hover_radius;
+  }
+
+  private getStationSelectionRadius(): number {
+    return this.config?.map?.station?.selection_radius ?? SurveyLayer.DEFAULTS.station.selection_radius;
+  }
+
+  private getShotHoverWidth(): number {
+    return this.config?.map?.shot?.hover_width ?? SurveyLayer.DEFAULTS.shot.hover_width;
+  }
+
+  private getShotSelectionWidth(): number {
+    return this.config?.map?.shot?.selection_width ?? SurveyLayer.DEFAULTS.shot.selection_width;
   }
 
   private initializeSources() {
@@ -943,10 +959,15 @@ export default class SurveyLayer {
   // Priority order: snap > individual hover > section hover > individual selected > section selected > zeroDatum > normal
   private updateVisualState() {
     const baseRadius = this.getStationRadius();
+    const hoverRadius = this.getStationHoverRadius();
+    const selectionRadius = this.getStationSelectionRadius();
+    const baseWidth = this.getShotWidth();
+    const hoverWidth = this.getShotHoverWidth();
+    const selectionWidth = this.getShotSelectionWidth();
 
     // Station stroke width with section-level priorities
-    // Priority: snap (5) > individual hover (4) > section hover (3) > individual selected (2.5) > section selected (2.5) > zeroDatum (2) > normal (1)
-    // Section hover uses 3 to be clearly visible compared to normal (1)
+    // Priority: snap > individual hover > section hover > individual selected > section selected > zeroDatum > normal
+    // Stroke width scales proportionally with hover/selection radius settings
     const stationStrokeWidth = buildPriorityExpression([
       { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.snappedStationId), value: 5 },
       { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.hoveredStationId), value: 4 },
@@ -974,31 +995,30 @@ export default class SurveyLayer {
     ], '#000000');
     this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-color', stationStrokeColor);
 
-    // Station radius - keep existing inline expression (no section-level radius changes needed)
+    // Station radius - uses config values for hover/selection states
     // Priority: snapped > zeroDatum > hovered > selected > base
     const stationIdExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]];
     this.map.setPaintProperty(this.stationsLayerId, 'circle-radius', [
       'case',
       ['==', stationIdExpr, this.snappedStationId ?? ''],
-      baseRadius + 3,
+      baseRadius + 3, // Snap uses offset from base
       ['==', ['get', 'isZeroDatum'], true],
       baseRadius * 2,
       ['==', stationIdExpr, this.hoveredStationId ?? ''],
-      baseRadius + 2,
+      hoverRadius,
       ['==', stationIdExpr, this.selectedStationId ?? ''],
-      baseRadius + 1,
+      selectionRadius,
       baseRadius,
     ]);
 
-    // Shot line width with section-level priorities
-    // Priority: individual hover (5) > section hover (4) > individual selected (3.5) > section selected (3) > normal (2)
-    // Section hover uses 4 to be clearly visible compared to normal (2)
+    // Shot line width - uses config values for hover/selection states
+    // Priority: individual hover > section hover > individual selected > section selected > normal
     const shotLineWidth = buildPriorityExpression([
-      { condition: compositeIdEquals(['sectionId', 'shotId'], this.hoveredShotId), value: 5 },
-      { condition: inSection(this.hoveredSectionId), value: 4 },
-      { condition: compositeIdEquals(['sectionId', 'shotId'], this.selectedShotId), value: 3.5 },
-      { condition: inSection(this.selectedSectionId), value: 3 },
-    ], 2);
+      { condition: compositeIdEquals(['sectionId', 'shotId'], this.hoveredShotId), value: hoverWidth },
+      { condition: inSection(this.hoveredSectionId), value: hoverWidth * 0.8 }, // Section hover slightly smaller
+      { condition: compositeIdEquals(['sectionId', 'shotId'], this.selectedShotId), value: selectionWidth },
+      { condition: inSection(this.selectedSectionId), value: selectionWidth * 0.9 }, // Section selection slightly smaller
+    ], baseWidth);
     this.map.setPaintProperty(this.shotsLayerId, 'line-width', shotLineWidth);
 
     // Update highlight layer radius to match snapped state (baseRadius + 3)

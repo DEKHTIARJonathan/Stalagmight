@@ -52,6 +52,12 @@ pub struct StationConfig {
     /// Clickable area radius in pixels (1.0-50.0, >= radius)
     #[serde(default = "default_station_hit_area")]
     pub hit_area: f64,
+    /// Radius when hovered (1.0-50.0, typically > radius)
+    #[serde(default = "default_station_hover_radius")]
+    pub hover_radius: f64,
+    /// Radius when selected (1.0-50.0, typically > radius)
+    #[serde(default = "default_station_selection_radius")]
+    pub selection_radius: f64,
 }
 
 impl StationConfig {
@@ -62,8 +68,16 @@ impl StationConfig {
         if !self.hit_area.is_finite() {
             self.hit_area = default_station_hit_area();
         }
+        if !self.hover_radius.is_finite() {
+            self.hover_radius = default_station_hover_radius();
+        }
+        if !self.selection_radius.is_finite() {
+            self.selection_radius = default_station_selection_radius();
+        }
         self.radius = self.radius.clamp(1.0, 50.0);
         self.hit_area = self.hit_area.clamp(1.0, 50.0).max(self.radius);
+        self.hover_radius = self.hover_radius.clamp(1.0, 50.0);
+        self.selection_radius = self.selection_radius.clamp(1.0, 50.0);
     }
 }
 
@@ -72,6 +86,8 @@ impl Default for StationConfig {
         Self {
             radius: default_station_radius(),
             hit_area: default_station_hit_area(),
+            hover_radius: default_station_hover_radius(),
+            selection_radius: default_station_selection_radius(),
         }
     }
 }
@@ -84,6 +100,14 @@ fn default_station_hit_area() -> f64 {
     10.0
 }
 
+fn default_station_hover_radius() -> f64 {
+    6.0
+}
+
+fn default_station_selection_radius() -> f64 {
+    5.0
+}
+
 /// Shot visual and interaction configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShotConfig {
@@ -93,6 +117,12 @@ pub struct ShotConfig {
     /// Clickable area width in pixels (0.5-20.0, >= width)
     #[serde(default = "default_shot_hit_area")]
     pub hit_area: f64,
+    /// Width when hovered (0.5-20.0, typically > width)
+    #[serde(default = "default_shot_hover_width")]
+    pub hover_width: f64,
+    /// Width when selected (0.5-20.0, typically > width)
+    #[serde(default = "default_shot_selection_width")]
+    pub selection_width: f64,
 }
 
 impl ShotConfig {
@@ -103,8 +133,16 @@ impl ShotConfig {
         if !self.hit_area.is_finite() {
             self.hit_area = default_shot_hit_area();
         }
+        if !self.hover_width.is_finite() {
+            self.hover_width = default_shot_hover_width();
+        }
+        if !self.selection_width.is_finite() {
+            self.selection_width = default_shot_selection_width();
+        }
         self.width = self.width.clamp(0.5, 20.0);
         self.hit_area = self.hit_area.clamp(0.5, 20.0).max(self.width);
+        self.hover_width = self.hover_width.clamp(0.5, 20.0);
+        self.selection_width = self.selection_width.clamp(0.5, 20.0);
     }
 }
 
@@ -113,6 +151,8 @@ impl Default for ShotConfig {
         Self {
             width: default_shot_width(),
             hit_area: default_shot_hit_area(),
+            hover_width: default_shot_hover_width(),
+            selection_width: default_shot_selection_width(),
         }
     }
 }
@@ -123,6 +163,14 @@ fn default_shot_width() -> f64 {
 
 fn default_shot_hit_area() -> f64 {
     8.0
+}
+
+fn default_shot_hover_width() -> f64 {
+    4.0
+}
+
+fn default_shot_selection_width() -> f64 {
+    3.0
 }
 
 /// Snap-to-station configuration for precision tools
@@ -983,7 +1031,7 @@ mod tests {
 
     #[test]
     fn test_station_validation_accepts_minimum_bound() {
-        let mut config = StationConfig { radius: 1.0, hit_area: 1.0 };
+        let mut config = StationConfig { radius: 1.0, hit_area: 1.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.radius, 1.0);
         assert_eq!(config.hit_area, 1.0);
@@ -991,7 +1039,7 @@ mod tests {
 
     #[test]
     fn test_station_validation_accepts_mid_range() {
-        let mut config = StationConfig { radius: 25.0, hit_area: 25.0 };
+        let mut config = StationConfig { radius: 25.0, hit_area: 25.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.radius, 25.0);
         assert_eq!(config.hit_area, 25.0);
@@ -999,7 +1047,7 @@ mod tests {
 
     #[test]
     fn test_station_validation_accepts_maximum_bound() {
-        let mut config = StationConfig { radius: 50.0, hit_area: 50.0 };
+        let mut config = StationConfig { radius: 50.0, hit_area: 50.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.radius, 50.0);
         assert_eq!(config.hit_area, 50.0);
@@ -1007,7 +1055,7 @@ mod tests {
 
     #[test]
     fn test_station_validation_rejects_zero() {
-        let mut config = StationConfig { radius: 0.0, hit_area: 0.0 };
+        let mut config = StationConfig { radius: 0.0, hit_area: 0.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.radius, 1.0); // clamped to min
         assert_eq!(config.hit_area, 1.0); // clamped to min
@@ -1015,7 +1063,7 @@ mod tests {
 
     #[test]
     fn test_station_validation_rejects_negative() {
-        let mut config = StationConfig { radius: -1.0, hit_area: -1.0 };
+        let mut config = StationConfig { radius: -1.0, hit_area: -1.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.radius, 1.0); // clamped to min
         assert_eq!(config.hit_area, 1.0); // clamped to min
@@ -1023,7 +1071,7 @@ mod tests {
 
     #[test]
     fn test_station_validation_rejects_above_max() {
-        let mut config = StationConfig { radius: 51.0, hit_area: 51.0 };
+        let mut config = StationConfig { radius: 51.0, hit_area: 51.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.radius, 50.0); // clamped to max
         assert_eq!(config.hit_area, 50.0); // clamped to max
@@ -1031,7 +1079,7 @@ mod tests {
 
     #[test]
     fn test_station_validation_rejects_large_values() {
-        let mut config = StationConfig { radius: 100.0, hit_area: 100.0 };
+        let mut config = StationConfig { radius: 100.0, hit_area: 100.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.radius, 50.0); // clamped to max
         assert_eq!(config.hit_area, 50.0); // clamped to max
@@ -1039,7 +1087,7 @@ mod tests {
 
     #[test]
     fn test_station_validation_handles_nan() {
-        let mut config = StationConfig { radius: f64::NAN, hit_area: f64::NAN };
+        let mut config = StationConfig { radius: f64::NAN, hit_area: f64::NAN, ..Default::default() };
         config.normalize();
         assert_eq!(config.radius, 4.0); // default
         assert_eq!(config.hit_area, 10.0); // default
@@ -1047,7 +1095,7 @@ mod tests {
 
     #[test]
     fn test_station_validation_handles_infinity() {
-        let mut config = StationConfig { radius: f64::INFINITY, hit_area: f64::INFINITY };
+        let mut config = StationConfig { radius: f64::INFINITY, hit_area: f64::INFINITY, ..Default::default() };
         config.normalize();
         assert_eq!(config.radius, 4.0); // default
         assert_eq!(config.hit_area, 10.0); // default
@@ -1055,7 +1103,7 @@ mod tests {
 
     #[test]
     fn test_station_validation_handles_neg_infinity() {
-        let mut config = StationConfig { radius: f64::NEG_INFINITY, hit_area: f64::NEG_INFINITY };
+        let mut config = StationConfig { radius: f64::NEG_INFINITY, hit_area: f64::NEG_INFINITY, ..Default::default() };
         config.normalize();
         assert_eq!(config.radius, 4.0); // default
         assert_eq!(config.hit_area, 10.0); // default
@@ -1063,7 +1111,7 @@ mod tests {
 
     #[test]
     fn test_station_hit_area_enforced_gte_radius() {
-        let mut config = StationConfig { radius: 20.0, hit_area: 10.0 };
+        let mut config = StationConfig { radius: 20.0, hit_area: 10.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.radius, 20.0);
         assert_eq!(config.hit_area, 20.0); // enforced >= radius
@@ -1075,7 +1123,7 @@ mod tests {
 
     #[test]
     fn test_shot_validation_accepts_minimum_bound() {
-        let mut config = ShotConfig { width: 0.5, hit_area: 0.5 };
+        let mut config = ShotConfig { width: 0.5, hit_area: 0.5, ..Default::default() };
         config.normalize();
         assert_eq!(config.width, 0.5);
         assert_eq!(config.hit_area, 0.5);
@@ -1083,7 +1131,7 @@ mod tests {
 
     #[test]
     fn test_shot_validation_accepts_mid_range() {
-        let mut config = ShotConfig { width: 10.0, hit_area: 10.0 };
+        let mut config = ShotConfig { width: 10.0, hit_area: 10.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.width, 10.0);
         assert_eq!(config.hit_area, 10.0);
@@ -1091,7 +1139,7 @@ mod tests {
 
     #[test]
     fn test_shot_validation_accepts_maximum_bound() {
-        let mut config = ShotConfig { width: 20.0, hit_area: 20.0 };
+        let mut config = ShotConfig { width: 20.0, hit_area: 20.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.width, 20.0);
         assert_eq!(config.hit_area, 20.0);
@@ -1099,7 +1147,7 @@ mod tests {
 
     #[test]
     fn test_shot_validation_rejects_zero() {
-        let mut config = ShotConfig { width: 0.0, hit_area: 0.0 };
+        let mut config = ShotConfig { width: 0.0, hit_area: 0.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.width, 0.5); // clamped to min
         assert_eq!(config.hit_area, 0.5); // clamped to min
@@ -1107,7 +1155,7 @@ mod tests {
 
     #[test]
     fn test_shot_validation_rejects_negative() {
-        let mut config = ShotConfig { width: -1.0, hit_area: -1.0 };
+        let mut config = ShotConfig { width: -1.0, hit_area: -1.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.width, 0.5); // clamped to min
         assert_eq!(config.hit_area, 0.5); // clamped to min
@@ -1115,7 +1163,7 @@ mod tests {
 
     #[test]
     fn test_shot_validation_rejects_above_max() {
-        let mut config = ShotConfig { width: 21.0, hit_area: 21.0 };
+        let mut config = ShotConfig { width: 21.0, hit_area: 21.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.width, 20.0); // clamped to max
         assert_eq!(config.hit_area, 20.0); // clamped to max
@@ -1123,7 +1171,7 @@ mod tests {
 
     #[test]
     fn test_shot_validation_rejects_large_values() {
-        let mut config = ShotConfig { width: 100.0, hit_area: 100.0 };
+        let mut config = ShotConfig { width: 100.0, hit_area: 100.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.width, 20.0); // clamped to max
         assert_eq!(config.hit_area, 20.0); // clamped to max
@@ -1131,7 +1179,7 @@ mod tests {
 
     #[test]
     fn test_shot_validation_handles_nan() {
-        let mut config = ShotConfig { width: f64::NAN, hit_area: f64::NAN };
+        let mut config = ShotConfig { width: f64::NAN, hit_area: f64::NAN, ..Default::default() };
         config.normalize();
         assert_eq!(config.width, 2.0); // default
         assert_eq!(config.hit_area, 8.0); // default
@@ -1139,7 +1187,7 @@ mod tests {
 
     #[test]
     fn test_shot_validation_handles_infinity() {
-        let mut config = ShotConfig { width: f64::INFINITY, hit_area: f64::INFINITY };
+        let mut config = ShotConfig { width: f64::INFINITY, hit_area: f64::INFINITY, ..Default::default() };
         config.normalize();
         assert_eq!(config.width, 2.0); // default
         assert_eq!(config.hit_area, 8.0); // default
@@ -1147,7 +1195,7 @@ mod tests {
 
     #[test]
     fn test_shot_hit_area_enforced_gte_width() {
-        let mut config = ShotConfig { width: 15.0, hit_area: 5.0 };
+        let mut config = ShotConfig { width: 15.0, hit_area: 5.0, ..Default::default() };
         config.normalize();
         assert_eq!(config.width, 15.0);
         assert_eq!(config.hit_area, 15.0); // enforced >= width

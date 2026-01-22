@@ -178,10 +178,14 @@ describe('Config type safety', () => {
         station: {
           radius: 8.0,
           hit_area: 16.0,
+          hover_radius: 10.0,
+          selection_radius: 9.0,
         },
         shot: {
           width: 4.0,
           hit_area: 12.0,
+          hover_width: 6.0,
+          selection_width: 5.0,
         },
       },
     };

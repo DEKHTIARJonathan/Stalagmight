@@ -1081,8 +1081,8 @@ fn test_config_normalize_clamps_values() {
     use cavechef_lib::config::{MapConfig, StationConfig, ShotConfig, MapSnapConfig};
 
     let mut map_config = MapConfig {
-        station: StationConfig { radius: 0.1, hit_area: 0.5 },  // Below min
-        shot: ShotConfig { width: 100.0, hit_area: 50.0 },       // Above max
+        station: StationConfig { radius: 0.1, hit_area: 0.5, ..Default::default() },  // Below min
+        shot: ShotConfig { width: 100.0, hit_area: 50.0, ..Default::default() },       // Above max
         snap: MapSnapConfig { threshold: -5.0, enabled_draw: true, enabled_merge: true, enabled_measure: true },
         ..Default::default()
     };
@@ -1107,8 +1107,8 @@ fn test_config_normalize_handles_nan_inf() {
     use cavechef_lib::config::{MapConfig, StationConfig, ShotConfig, MapSnapConfig};
 
     let mut map_config = MapConfig {
-        station: StationConfig { radius: f64::NAN, hit_area: f64::INFINITY },
-        shot: ShotConfig { width: f64::NEG_INFINITY, hit_area: f64::NAN },
+        station: StationConfig { radius: f64::NAN, hit_area: f64::INFINITY, ..Default::default() },
+        shot: ShotConfig { width: f64::NEG_INFINITY, hit_area: f64::NAN, ..Default::default() },
         snap: MapSnapConfig { threshold: f64::NAN, enabled_draw: true, enabled_merge: true, enabled_measure: true },
         ..Default::default()
     };
@@ -1129,8 +1129,8 @@ fn test_config_normalize_hit_area_ge_visual_size() {
     use cavechef_lib::config::{MapConfig, StationConfig, ShotConfig};
 
     let mut map_config = MapConfig {
-        station: StationConfig { radius: 20.0, hit_area: 5.0 },  // hit_area < radius
-        shot: ShotConfig { width: 15.0, hit_area: 3.0 },          // hit_area < width
+        station: StationConfig { radius: 20.0, hit_area: 5.0, ..Default::default() },  // hit_area < radius
+        shot: ShotConfig { width: 15.0, hit_area: 3.0, ..Default::default() },          // hit_area < width
         ..Default::default()
     };
 
