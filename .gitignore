@@ -34,3 +34,5 @@ playwright-report/
 test-results/
 .pnpm-store/
 .e2e-build-marker
+e2e-playwright/screenshots/
+.cargo_build/
