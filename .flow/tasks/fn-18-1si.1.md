@@ -41,9 +41,19 @@ export function formatDepth(depth: number, unit: string, precision: number): str
 - [ ] Filters non-finite values (NaN, Infinity) - returns "--" if any input is non-finite
 - [ ] TypeScript types pass (pnpm tsc --noEmit)
 ## Done summary
-TBD
+Created `src/utils/formatStats.ts` with two exported functions:
+- `formatLength(meters, unit, precision?)`: Formats length with unit conversion and "--" for non-finite values
+- `formatDepthRange(min, max, unit, precision?)`: Formats depth ranges, returns "--" for null/non-finite inputs
 
+Both functions:
+- Accept `LengthUnit` type ('meters' | 'feet')
+- Convert meters to feet using FEET_PER_METER = 3.28084
+- Return 'm' or 'ft' suffix based on unit
+- Default to 1 decimal precision
+- Handle non-finite values gracefully
+
+Added comprehensive tests in `src/utils/__tests__/formatStats.test.ts` (25 tests passing).
 ## Evidence
 - Commits:
-- Tests:
+- Tests: pnpm vitest run src/utils/__tests__/formatStats.test.ts - 25 tests passing
 - PRs:

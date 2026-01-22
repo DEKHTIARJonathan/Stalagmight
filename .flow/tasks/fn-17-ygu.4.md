@@ -32,9 +32,8 @@ Update documentation to reflect the fixed export scaling behavior.
 - [ ] Code comments explain scaling logic
 
 ## Done summary
-TBD
-
+Updated export documentation with DPI scaling behavior and element size specifications in SPEC.md section 17.3, added Export Testing section to TESTING.md with test patterns and commands, and enhanced code comments in image.rs explaining the px() helper function.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: d3629d25c9715d77aa26bdaebe6c6542a968e918
+- Tests: pnpm tsc --noEmit, cargo test --manifest-path src-tauri/Cargo.toml export
 - PRs:
