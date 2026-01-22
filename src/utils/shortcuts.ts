@@ -359,7 +359,7 @@ export const RESERVED_CTRL_DESCRIPTIONS: Readonly<Record<string, string>> = {
  * Check if a shortcut conflicts with reserved shortcuts.
  * This is broader than isReservedShortcut - it blocks:
  * 1. Any shortcut using Escape, Delete, or Backspace (regardless of modifiers)
- * 2. Any shortcut using Ctrl+I, Ctrl+E, or Ctrl+A (regardless of additional modifiers)
+ * 2. Any shortcut using Ctrl+I, Ctrl+E, Ctrl+A, or Ctrl+, (regardless of additional modifiers)
  *
  * This matches the runtime behavior where reserved handlers fire even with extra modifiers.
  *
