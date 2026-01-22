@@ -1,0 +1,21 @@
+:root{
+  --sm-cave-ember-700:#3A251A;
+  --sm-cave-ember-900:#1A120B;
+  --sm-basalt-950:#0F0906;
+  --sm-limestone-50:#F3E8D8;
+  --sm-sandstone-200:#C1A07A;
+  --sm-silt-300:#AE8D67;
+
+  --sm-bg-radial: radial-gradient(circle at 35% 30%, var(--sm-cave-ember-700) 0%, var(--sm-cave-ember-900) 100%);
+  --sm-accent-linear: linear-gradient(90deg, var(--sm-limestone-50) 0%, var(--sm-sandstone-200) 100%);
+
+  --sm-radius-app-icon:200px;
+  --sm-radius-card:16px;
+
+  --sm-text-primary-on-dark:var(--sm-limestone-50);
+  --sm-text-secondary-on-dark:var(--sm-sandstone-200);
+  --sm-surface-dark:var(--sm-cave-ember-900);
+  --sm-surface-deeper:var(--sm-basalt-950);
+  --sm-border-subtle:rgba(243,232,216,0.18);
+  --sm-border-strong:rgba(243,232,216,0.60);
+}
