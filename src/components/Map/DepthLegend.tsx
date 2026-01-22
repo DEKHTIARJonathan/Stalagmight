@@ -1,4 +1,5 @@
-import { useId } from 'react';
+import { useId, useMemo } from 'react';
+import { getDepthColor } from '../../utils/colors';
 
 interface DepthLegendProps {
   minDepth: number;
@@ -9,8 +10,15 @@ interface DepthLegendProps {
 }
 
 /**
+ * Number of color stops to generate for the gradient.
+ * More stops = smoother gradient that matches HSL interpolation.
+ */
+const GRADIENT_STOPS = 10;
+
+/**
  * Shows a depth color gradient legend with min/max labels.
  * Positioned in the bottom-left corner of the map, above the scale bar.
+ * Uses the same HSL color interpolation as the map display.
  */
 export function DepthLegend({
   minDepth,
@@ -20,6 +28,23 @@ export function DepthLegend({
   visible,
 }: DepthLegendProps) {
   const gradientId = useId();
+
+  // Generate gradient stops using the same getDepthColor function as the map
+  const gradientStops = useMemo(() => {
+    const isFlat = minDepth === maxDepth;
+    if (isFlat) {
+      return [{ offset: 0, color: shallowColor }, { offset: 100, color: shallowColor }];
+    }
+
+    const stops: { offset: number; color: string }[] = [];
+    for (let i = 0; i <= GRADIENT_STOPS; i++) {
+      const t = i / GRADIENT_STOPS;
+      const depth = minDepth + t * (maxDepth - minDepth);
+      const color = getDepthColor(depth, shallowColor, deepColor, minDepth, maxDepth) ?? shallowColor;
+      stops.push({ offset: t * 100, color });
+    }
+    return stops;
+  }, [minDepth, maxDepth, shallowColor, deepColor]);
 
   if (!visible) return null;
 
@@ -49,8 +74,9 @@ export function DepthLegend({
       >
         <defs>
           <linearGradient id={gradientId} x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor={shallowColor} />
-            <stop offset="100%" stopColor={isFlat ? shallowColor : deepColor} />
+            {gradientStops.map((stop, i) => (
+              <stop key={i} offset={`${stop.offset}%`} stopColor={stop.color} />
+            ))}
           </linearGradient>
         </defs>
         <rect width="16" height="80" fill={`url(#${gradientId})`} rx="2" />
