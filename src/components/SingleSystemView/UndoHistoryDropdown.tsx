@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { formatDistanceToNow, isValid, parseISO, differenceInDays, format } from 'date-fns';
 import { useProjectStore } from '../../store/projectStore';
@@ -176,15 +176,26 @@ export default function UndoHistoryDropdown({
   const [hoveredItem, setHoveredItem] = useState<UndoHistoryItem | null>(null);
   const [hoveredItemRect, setHoveredItemRect] = useState<DOMRect | null>(null);
   const [dropdownRect, setDropdownRect] = useState<DOMRect | null>(null);
+  // State for keyboard navigation - index into items array (-1 = none)
+  const [activeIndex, setActiveIndex] = useState(-1);
+  // Separate hover highlight index (does not trigger focus stealing)
+  const [hoverIndex, setHoverIndex] = useState(-1);
+  // Flag to track if dropdown was opened via keyboard (for focus management)
+  const keyboardNavActiveRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const keyboardOpenTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Token to detect stale hover callbacks (incremented on any close)
   const hoverTokenRef = useRef(0);
   // Track disabled in a ref to avoid closure issues
   const disabledRef = useRef(disabled);
   disabledRef.current = disabled;
+  // Unique ID for ARIA attributes
+  const menuId = useId();
 
   const { getUndoStack, getRedoStack, undoTo, redoTo } = useProjectStore();
 
@@ -205,10 +216,21 @@ export default function UndoHistoryDropdown({
       leaveTimeoutRef.current = null;
     }
 
+    // Clear any pending keyboard open timeout
+    if (keyboardOpenTimeoutRef.current) {
+      clearTimeout(keyboardOpenTimeoutRef.current);
+      keyboardOpenTimeoutRef.current = null;
+    }
+
     // Clear hovered item state
     setHoveredItem(null);
     setHoveredItemRect(null);
     setDropdownRect(null);
+
+    // Reset keyboard navigation state
+    setActiveIndex(-1);
+    setHoverIndex(-1);
+    keyboardNavActiveRef.current = false;
 
     setIsOpen(false);
   }, []);
@@ -293,6 +315,10 @@ export default function UndoHistoryDropdown({
 
     // Small delay before closing to allow moving within component
     leaveTimeoutRef.current = setTimeout(() => {
+      // Reset all navigation state on close
+      setActiveIndex(-1);
+      setHoverIndex(-1);
+      keyboardNavActiveRef.current = false;
       setIsOpen(false);
     }, 100);
   }, []);
@@ -323,7 +349,18 @@ export default function UndoHistoryDropdown({
     setHoveredItemRect(null);
   }, []);
 
-  // Handle item click with index validation
+  // Scroll active item into view
+  const scrollActiveItemIntoView = useCallback((index: number) => {
+    if (!scrollContainerRef.current || index < 0) return;
+    const container = scrollContainerRef.current;
+    const itemId = `${menuId}-item-${index}`;
+    const itemElement = container.querySelector(`[id="${itemId}"]`) as HTMLElement | null;
+    if (itemElement) {
+      itemElement.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [menuId]);
+
+  // Handle item click with index validation (defined before keyboard handlers that use it)
   const handleItemClick = useCallback(async (index: number) => {
     // Validate index before sending to backend
     if (!Number.isInteger(index) || index < 0) {
@@ -336,6 +373,77 @@ export default function UndoHistoryDropdown({
     await action(index);
   }, [mode, undoTo, redoTo, hardClose]);
 
+  // Handle keyboard navigation on trigger button
+  const handleButtonKeyDown = useCallback(async (event: React.KeyboardEvent) => {
+    // Arrow Down opens dropdown and focuses first item
+    if (event.key === 'ArrowDown' && !isOpen && !disabledRef.current) {
+      event.preventDefault();
+      // Fetch stack and open
+      const stack = await fetchStack();
+      if (stack.length > 0) {
+        // Mark as keyboard navigation for focus management
+        keyboardNavActiveRef.current = true;
+        setIsOpen(true);
+        // Set first item as active after React renders (store timeout for cleanup)
+        keyboardOpenTimeoutRef.current = setTimeout(() => {
+          setActiveIndex(0);
+          scrollActiveItemIntoView(0);
+          keyboardOpenTimeoutRef.current = null;
+        }, 0);
+      }
+    }
+  }, [isOpen, fetchStack, scrollActiveItemIntoView]);
+
+  // Handle keyboard navigation when dropdown is open
+  const handleDropdownKeyDown = useCallback((event: React.KeyboardEvent) => {
+    if (!isOpen || items.length === 0) return;
+
+    switch (event.key) {
+      case 'ArrowDown': {
+        event.preventDefault();
+        const nextIndex = activeIndex < items.length - 1 ? activeIndex + 1 : 0;
+        setActiveIndex(nextIndex);
+        scrollActiveItemIntoView(nextIndex);
+        break;
+      }
+      case 'ArrowUp': {
+        event.preventDefault();
+        const prevIndex = activeIndex > 0 ? activeIndex - 1 : items.length - 1;
+        setActiveIndex(prevIndex);
+        scrollActiveItemIntoView(prevIndex);
+        break;
+      }
+      case 'Enter': {
+        event.preventDefault();
+        const item = items[activeIndex];
+        if (item && activeIndex >= 0 && activeIndex < items.length) {
+          handleItemClick(item.index);
+        }
+        break;
+      }
+      case 'Escape': {
+        event.preventDefault();
+        hardClose();
+        // Return focus to trigger button
+        buttonRef.current?.focus();
+        break;
+      }
+      case 'Home': {
+        event.preventDefault();
+        setActiveIndex(0);
+        scrollActiveItemIntoView(0);
+        break;
+      }
+      case 'End': {
+        event.preventDefault();
+        const lastIndex = items.length - 1;
+        setActiveIndex(lastIndex);
+        scrollActiveItemIntoView(lastIndex);
+        break;
+      }
+    }
+  }, [isOpen, items, activeIndex, handleItemClick, hardClose, scrollActiveItemIntoView]);
+
   // Handle button click (single undo/redo) - cancel pending hover and close
   const handleButtonClick = useCallback(() => {
     if (!disabledRef.current) {
@@ -345,7 +453,7 @@ export default function UndoHistoryDropdown({
     }
   }, [onSingleAction, hardClose]);
 
-  // Close on Escape - use hardClose
+  // Close on Escape - use hardClose and return focus to button
   useEffect(() => {
     if (!isOpen) return;
 
@@ -353,6 +461,8 @@ export default function UndoHistoryDropdown({
       if (event.key === 'Escape') {
         event.preventDefault();
         hardClose();
+        // Return focus to trigger button for consistent behavior
+        buttonRef.current?.focus();
       }
     };
 
@@ -410,8 +520,25 @@ export default function UndoHistoryDropdown({
       if (leaveTimeoutRef.current) {
         clearTimeout(leaveTimeoutRef.current);
       }
+      if (keyboardOpenTimeoutRef.current) {
+        clearTimeout(keyboardOpenTimeoutRef.current);
+      }
     };
   }, []);
+
+  // Focus dropdown when opened via keyboard (only when keyboardNavActiveRef is true)
+  useEffect(() => {
+    if (isOpen && keyboardNavActiveRef.current && dropdownRef.current) {
+      dropdownRef.current.focus();
+      // Clear the flag after focusing to prevent re-focusing on hover state changes
+      keyboardNavActiveRef.current = false;
+    }
+  }, [isOpen]);
+
+  // Get the active item ID for aria-activedescendant
+  const activeItemId = activeIndex >= 0 && items[activeIndex]
+    ? `${menuId}-item-${activeIndex}`
+    : undefined;
 
   return (
     <div
@@ -421,10 +548,13 @@ export default function UndoHistoryDropdown({
       onMouseLeave={closeDropdown}
     >
       <button
+        ref={buttonRef}
         onClick={handleButtonClick}
+        onKeyDown={handleButtonKeyDown}
         disabled={disabled}
         aria-expanded={isOpen}
         aria-haspopup="menu"
+        aria-controls={isOpen ? `${menuId}-menu` : undefined}
         className={`
           px-3 py-1.5 text-sm rounded transition-colors
           ${disabled
@@ -440,17 +570,22 @@ export default function UndoHistoryDropdown({
       {isOpen && (
         <div
           ref={dropdownRef}
+          id={`${menuId}-menu`}
           className="absolute left-0 top-full mt-1 w-72 bg-panel border border-border rounded-lg shadow-lg z-50"
           role="menu"
+          aria-activedescendant={activeItemId}
           data-dropdown-open
           data-testid={`${testId}-dropdown`}
           onMouseEnter={cancelClose}
+          onKeyDown={handleDropdownKeyDown}
+          tabIndex={-1}
         >
           <div className="px-3 py-2 text-xs font-medium text-text-secondary uppercase tracking-wide border-b border-border">
             {mode === 'undo' ? 'Undo History' : 'Redo History'}
           </div>
 
           <div
+            ref={scrollContainerRef}
             className="overflow-y-auto undo-history-scrollable"
             style={{
               // Each item is ~44px (py-1.5 = 6px*2 + line-height ~20px*2 = ~52px, but flex shrinks it)
@@ -463,35 +598,53 @@ export default function UndoHistoryDropdown({
                 No {mode} history
               </div>
             ) : (
-              items.map((item) => (
-                <button
-                  key={item.index}
-                  role="menuitem"
-                  onClick={() => handleItemClick(item.index)}
-                  onMouseEnter={(e) => handleItemHover(item, e)}
-                  onMouseLeave={handleItemLeave}
-                  className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-background/50 transition-colors text-left"
-                  data-testid={`${testId}-item-${item.index}`}
-                >
-                  {/* Icon */}
-                  <span className="w-5 h-5 flex items-center justify-center text-sm shrink-0">
-                    {getCommandIcon(item.commandType)}
-                  </span>
+              items.map((item, idx) => {
+                // Keyboard nav takes precedence; otherwise use hover highlight
+                const isKeyboardActive = idx === activeIndex;
+                const isHoverActive = idx === hoverIndex;
+                const isHighlighted = isKeyboardActive || isHoverActive;
+                return (
+                  <button
+                    key={item.index}
+                    id={`${menuId}-item-${idx}`}
+                    role="menuitem"
+                    onClick={() => handleItemClick(item.index)}
+                    onMouseEnter={(e) => {
+                      handleItemHover(item, e);
+                      // Update hover index for visual highlight (does not affect keyboard nav)
+                      setHoverIndex(idx);
+                    }}
+                    onMouseLeave={() => {
+                      handleItemLeave();
+                      setHoverIndex(-1);
+                    }}
+                    className={`
+                      w-full px-3 py-1.5 flex items-center gap-2 transition-colors text-left
+                      ${isHighlighted ? 'bg-background/50' : 'hover:bg-background/50'}
+                    `}
+                    data-testid={`${testId}-item-${item.index}`}
+                    tabIndex={-1}
+                  >
+                    {/* Icon */}
+                    <span className="w-5 h-5 flex items-center justify-center text-sm shrink-0">
+                      {getCommandIcon(item.commandType)}
+                    </span>
 
-                  {/* Description and timestamp */}
-                  <div className="flex-1 min-w-0">
-                    <div
-                      className="text-sm text-text-primary truncate"
-                      title={item.description}
-                    >
-                      {truncateDescription(item.description)}
+                    {/* Description and timestamp */}
+                    <div className="flex-1 min-w-0">
+                      <div
+                        className="text-sm text-text-primary truncate"
+                        title={item.description}
+                      >
+                        {truncateDescription(item.description)}
+                      </div>
+                      <div className="text-xs text-text-secondary">
+                        {formatTimestamp(item.timestamp)}
+                      </div>
                     </div>
-                    <div className="text-xs text-text-secondary">
-                      {formatTimestamp(item.timestamp)}
-                    </div>
-                  </div>
-                </button>
-              ))
+                  </button>
+                );
+              })
             )}
           </div>
         </div>

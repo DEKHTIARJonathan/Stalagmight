@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-22T14:10:02.301289Z",
+  "depends_on": [
+    "fn-18-1si.1"
+  ],
+  "epic": "fn-18-1si",
+  "id": "fn-18-1si.2",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-18-1si.2.md",
+  "status": "todo",
+  "title": "Add selection stats to DmpSelectionDialog",
+  "updated_at": "2026-01-22T14:12:46.100999Z"
+}

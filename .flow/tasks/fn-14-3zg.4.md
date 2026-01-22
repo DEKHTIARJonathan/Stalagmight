@@ -39,9 +39,8 @@ Add detail preview popup that appears when hovering items in the dropdown, showi
 - [ ] pnpm tsc --noEmit passes
 
 ## Done summary
-TBD
-
+Added detail preview popup to UndoHistoryDropdown showing field changes in old->new format. Popup uses createPortal for proper stacking, positions to right of dropdown with left-flip on viewport overflow, includes 150ms fade-in animation with prefers-reduced-motion support, and gracefully handles null previewData.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: e28ca913b67f0b13bfc79440f20452d251d1ddb9
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
