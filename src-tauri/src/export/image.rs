@@ -256,36 +256,44 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
     let svg_width = (width * scale).max(1.0);
     let svg_height = (height * scale).max(1.0);
 
+    // Pixel-to-world conversion: divide desired pixel size by scale
+    // This ensures elements appear at consistent pixel sizes regardless of survey extent
+    let px = |pixels: f64| -> f64 { pixels / scale };
+
     let mut svg = String::new();
     // CSS: station and zero-datum classes only define stroke (fill is inline)
+    // All stroke-widths and font-sizes are scaled to achieve consistent pixel sizes
     svg.push_str(&format!(
         r##"<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="{:.2}" height="{:.2}" viewBox="{:.1} {:.1} {:.1} {:.1}">
+<svg xmlns="http://www.w3.org/2000/svg" width="{svg_width:.2}" height="{svg_height:.2}" viewBox="{vb_x:.1} {vb_y:.1} {vb_w:.1} {vb_h:.1}">
 <style>
-  .shot {{ stroke-width: 2; fill: none; }}
-  .station {{ stroke: #000000; stroke-width: 1; }}
-  .zero-datum {{ stroke: #000000; stroke-width: 1; }}
-  .label {{ font-family: sans-serif; font-size: 10px; fill: #333333; }}
-  .section-name {{ font-family: sans-serif; font-size: 12px; font-weight: bold; fill: #333333; }}
+  .shot {{ stroke-width: {shot_sw}; fill: none; }}
+  .station {{ stroke: #000000; stroke-width: {station_sw}; }}
+  .zero-datum {{ stroke: #000000; stroke-width: {station_sw}; }}
+  .label {{ font-family: sans-serif; font-size: {label_fs}; fill: #333333; }}
+  .section-name {{ font-family: sans-serif; font-size: {section_fs}; font-weight: bold; fill: #333333; }}
 </style>
-<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" fill="#1a1a2e"/>
+<rect x="{vb_x:.1}" y="{vb_y:.1}" width="{vb_w:.1}" height="{vb_h:.1}" fill="#1a1a2e"/>
 "##,
-        svg_width,
-        svg_height,
-        min_x - padding,
-        -(max_y + padding), // Flip Y
-        width,
-        height,
-        min_x - padding,
-        -(max_y + padding),
-        width,
-        height
+        svg_width = svg_width,
+        svg_height = svg_height,
+        vb_x = min_x - padding,
+        vb_y = -(max_y + padding), // Flip Y
+        vb_w = width,
+        vb_h = height,
+        shot_sw = px(2.0),        // 2px shot stroke-width
+        station_sw = px(1.0),     // 1px station stroke-width
+        label_fs = px(10.0),      // 10px label font-size
+        section_fs = px(12.0),    // 12px section-name font-size
     ));
 
     // Draw grid if enabled
     if options.include_grid {
-        svg.push_str(r##"<g class="grid" stroke="#333366" stroke-width="0.5">
-"##);
+        svg.push_str(&format!(
+            r##"<g class="grid" stroke="#333366" stroke-width="{}">
+"##,
+            px(0.5) // 0.5px grid stroke-width
+        ));
         let grid_step = 10.0; // 10 meter grid
         let grid_min_x = (min_x / grid_step).floor() * grid_step;
         let grid_max_x = (max_x / grid_step).ceil() * grid_step;
@@ -337,10 +345,15 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
             let shot = section.shots.get(i);
             let is_virtual = shot.map(|s| s.is_virtual).unwrap_or(false);
 
+            // Virtual shots: 4px dash, 2px gap (scaled to viewBox units)
             let stroke_style = if is_virtual {
-                "stroke-dasharray=\"4,4\" opacity=\"0.5\""
+                format!(
+                    "stroke-dasharray=\"{},{}\" opacity=\"0.5\"",
+                    px(4.0),
+                    px(2.0)
+                )
             } else {
-                ""
+                String::new()
             };
 
             // Shot stroke color: section color or depth-based (average of endpoints)
@@ -372,9 +385,14 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
                 let mid_x = (from.coordinates.x + to.coordinates.x) / 2.0;
                 let mid_y = -(from.coordinates.y + to.coordinates.y) / 2.0;
                 svg.push_str(&format!(
-                    r##"<text class="shot-label" x="{:.2}" y="{:.2}" dx="2" dy="-2" font-size="8" fill="#aaa">{}</text>
+                    r##"<text class="shot-label" x="{mid_x:.2}" y="{mid_y:.2}" dx="{dx}" dy="{dy}" font-size="{fs}" fill="#aaa">{label}</text>
 "##,
-                    mid_x, mid_y, depth_label
+                    mid_x = mid_x,
+                    mid_y = mid_y,
+                    dx = px(2.0),   // 2px offset
+                    dy = px(-2.0),  // -2px offset (negative for upward)
+                    fs = px(8.0),   // 8px font-size
+                    label = depth_label
                 ));
             }
         }
@@ -390,7 +408,8 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
         } else {
             "station"
         };
-        let radius = if station.is_zero_datum { 6.0 } else { 4.0 };
+        // 3px radius for regular stations, 6px for zero-datum (scaled to viewBox units)
+        let radius = if station.is_zero_datum { px(6.0) } else { px(3.0) };
 
         // Fill color: gold for zero-datum, otherwise section or depth color
         let fill_color = if station.is_zero_datum {
@@ -436,9 +455,12 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
         for station in &stations {
             if station.is_zero_datum {
                 svg.push_str(&format!(
-                    r#"<text class="label" x="{:.2}" y="{:.2}" dx="8" dy="4">ZD</text>
+                    r#"<text class="label" x="{x:.2}" y="{y:.2}" dx="{dx}" dy="{dy}">ZD</text>
 "#,
-                    station.coordinates.x, -station.coordinates.y
+                    x = station.coordinates.x,
+                    y = -station.coordinates.y,
+                    dx = px(8.0),  // 8px offset
+                    dy = px(4.0),  // 4px offset
                 ));
             }
         }
@@ -460,11 +482,13 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
                     let mid = section_stations.len() / 2;
                     if let Some(station) = section_stations.get(mid) {
                         svg.push_str(&format!(
-                            r#"<text class="section-name" x="{:.2}" y="{:.2}" dx="5" dy="-5">{}</text>
+                            r#"<text class="section-name" x="{x:.2}" y="{y:.2}" dx="{dx}" dy="{dy}">{name}</text>
 "#,
-                            station.coordinates.x,
-                            -station.coordinates.y,
-                            escape_xml(name)
+                            x = station.coordinates.x,
+                            y = -station.coordinates.y,
+                            dx = px(5.0),   // 5px offset
+                            dy = px(-5.0),  // -5px offset (upward)
+                            name = escape_xml(name)
                         ));
                     }
                 }
@@ -488,6 +512,7 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
             &options.depth_unit,
             options.decimal_precision,
             &bounds,
+            scale, // Pass scale factor for pixel-stable sizing
         );
         svg.push_str(&legend);
     }
@@ -508,22 +533,12 @@ fn escape_xml(s: &str) -> String {
 
 /// Bounds of the survey data in world coordinates.
 struct Bounds {
+    #[allow(dead_code)]
     min_x: f64,
     max_x: f64,
+    #[allow(dead_code)]
     min_y: f64,
     max_y: f64,
-}
-
-impl Bounds {
-    /// Width of the bounding box.
-    fn width(&self) -> f64 {
-        self.max_x - self.min_x
-    }
-
-    /// Height of the bounding box.
-    fn height(&self) -> f64 {
-        self.max_y - self.min_y
-    }
 }
 
 /// Maximum allowed decimal precision to prevent DoS via huge strings.
@@ -554,12 +569,9 @@ fn format_depth_label(depth_meters: f64, unit: &str, precision: u8) -> String {
 /// Number of gradient samples for legend to match backend HSL interpolation exactly.
 const LEGEND_GRADIENT_SAMPLES: usize = 64;
 
-/// Minimum padding for legend positioning (in world units).
-const MIN_LEGEND_PADDING: f64 = 0.5;
-
-/// Generate depth legend SVG element using viewBox-relative units.
+/// Generate depth legend SVG element with pixel-stable sizing.
 ///
-/// Legend is positioned in the top-right corner with dimensions relative to project bounds.
+/// Legend is positioned in the top-right corner with dimensions in pixel units (scaled to viewBox).
 /// Gradient is generated by sampling the backend's HSL interpolation to ensure exact color match.
 ///
 /// # Arguments
@@ -569,6 +581,7 @@ const MIN_LEGEND_PADDING: f64 = 0.5;
 /// * `depth_unit` - Unit string for labels ("m" or "ft")
 /// * `precision` - Decimal precision for labels
 /// * `bounds` - Project bounds for relative positioning
+/// * `scale` - Scale factor (pixels per world unit) for pixel-to-viewBox conversion
 fn generate_depth_legend(
     min_depth: f64,
     max_depth: f64,
@@ -576,14 +589,19 @@ fn generate_depth_legend(
     depth_unit: &str,
     precision: u8,
     bounds: &Bounds,
+    scale: f64,
 ) -> String {
-    // Size relative to project extent (in meters/user units)
-    let legend_width = (bounds.width() * 0.02).max(1.0); // 2% of width, min 1m
-    let legend_height = (bounds.height() * 0.15).max(5.0); // 15% of height, min 5m
-    let font_size = (bounds.height() * 0.02).max(0.8); // Relative font size
+    // Pixel-to-world conversion helper
+    let px = |pixels: f64| -> f64 { pixels / scale };
 
-    // Position: top-right corner with padding (use max of width/height for consistent padding)
-    let padding = (bounds.width().max(bounds.height()) * 0.02).max(MIN_LEGEND_PADDING);
+    // Legend dimensions in pixels (then scaled to viewBox units)
+    let legend_width = px(16.0);   // 16px bar width
+    let legend_height = px(100.0); // 100px bar height
+    let font_size = px(10.0);      // 10px font size
+    let stroke_width = px(0.5);    // 0.5px stroke
+
+    // Position: top-right corner with padding (in pixels, scaled to viewBox)
+    let padding = px(10.0); // 10px padding from edge
     let x = bounds.max_x - legend_width - padding;
     let y = -(bounds.max_y - padding); // Note: Y is flipped in SVG
 
@@ -613,6 +631,10 @@ fn generate_depth_legend(
     // Use unique gradient ID with preset name to avoid collisions
     let gradient_id = format!("depth-gradient-{:?}", preset).to_lowercase();
 
+    // Text offsets (in viewBox units, derived from pixel values)
+    let text_y_offset = px(3.0); // 3px above the bar for min label
+    let max_text_y = legend_height + font_size + px(2.0); // Below bar + padding
+
     format!(
         r##"
 <defs>
@@ -621,8 +643,8 @@ fn generate_depth_legend(
   </linearGradient>
 </defs>
 <g class="depth-legend" transform="translate({x:.2}, {y:.2})">
-  <rect width="{legend_width:.2}" height="{legend_height:.2}" fill="url(#{gradient_id})" stroke="#333" stroke-width="0.1"/>
-  <text x="{text_x:.2}" y="-0.3" text-anchor="middle" font-size="{font_size:.2}" fill="#fff">{min_label}{flat_suffix}</text>
+  <rect width="{legend_width:.2}" height="{legend_height:.2}" fill="url(#{gradient_id})" stroke="#333" stroke-width="{stroke_width}"/>
+  <text x="{text_x:.2}" y="-{text_y_offset}" text-anchor="middle" font-size="{font_size:.2}" fill="#fff">{min_label}{flat_suffix}</text>
   <text x="{text_x:.2}" y="{max_y:.2}" text-anchor="middle" font-size="{font_size:.2}" fill="#fff">{max_label}</text>
 </g>"##,
         gradient_id = gradient_id,
@@ -631,11 +653,13 @@ fn generate_depth_legend(
         y = y,
         legend_width = legend_width,
         legend_height = legend_height,
+        stroke_width = stroke_width,
         text_x = legend_width / 2.0,
+        text_y_offset = text_y_offset,
         font_size = font_size,
         min_label = min_label,
         flat_suffix = flat_suffix,
-        max_y = legend_height + font_size + 0.2,
+        max_y = max_text_y,
         max_label = max_label
     )
 }
@@ -928,12 +952,16 @@ mod tests {
 
         let svg = generate_svg_string(&project, &options).unwrap();
 
-        // CSS .station class should NOT have fill property
-        assert!(svg.contains(".station { stroke: #000000; stroke-width: 1; }"),
-            "CSS .station should only have stroke properties: {}", svg);
+        // CSS .station class should NOT have fill property (stroke-width is dynamic)
+        assert!(svg.contains(".station { stroke: #000000; stroke-width:"),
+            "CSS .station should have stroke properties: {}", svg);
+        assert!(!svg.contains(".station { fill:"),
+            "CSS .station should NOT have fill property: {}", svg);
         // CSS .zero-datum class should NOT have fill property
-        assert!(svg.contains(".zero-datum { stroke: #000000; stroke-width: 1; }"),
-            "CSS .zero-datum should only have stroke properties: {}", svg);
+        assert!(svg.contains(".zero-datum { stroke: #000000; stroke-width:"),
+            "CSS .zero-datum should have stroke properties: {}", svg);
+        assert!(!svg.contains(".zero-datum { fill:"),
+            "CSS .zero-datum should NOT have fill property: {}", svg);
     }
 
     #[test]
@@ -1036,6 +1064,8 @@ mod tests {
             min_y: 0.0,
             max_y: 100.0,
         };
+        // Scale factor for 100m bounds -> 800px target = 8.0
+        let scale = 8.0;
         let legend = generate_depth_legend(
             0.0,
             10.0,
@@ -1043,6 +1073,7 @@ mod tests {
             "m",
             1,
             &bounds,
+            scale,
         );
 
         assert!(legend.contains("linearGradient"), "Legend should contain gradient definition");
@@ -1058,6 +1089,7 @@ mod tests {
             min_y: 0.0,
             max_y: 100.0,
         };
+        let scale = 8.0;
         let legend = generate_depth_legend(
             0.0,
             10.0,
@@ -1065,6 +1097,7 @@ mod tests {
             "m",
             1,
             &bounds,
+            scale,
         );
 
         // Gradient now has LEGEND_GRADIENT_SAMPLES+1 stops (65 samples from 0 to 64)
@@ -1084,7 +1117,8 @@ mod tests {
             min_y: 0.0,
             max_y: 100.0,
         };
-        let legend = generate_depth_legend(0.0, 10.0, super::super::depth_colors::DepthPreset::Ocean, "ft", 1, &bounds);
+        let scale = 8.0;
+        let legend = generate_depth_legend(0.0, 10.0, super::super::depth_colors::DepthPreset::Ocean, "ft", 1, &bounds, scale);
 
         // 0m = 0ft, 10m = 32.8ft
         assert!(legend.contains("0.0ft"), "Legend should show min depth in feet");
@@ -1099,7 +1133,8 @@ mod tests {
             min_y: 0.0,
             max_y: 100.0,
         };
-        let legend = generate_depth_legend(5.0, 5.0, super::super::depth_colors::DepthPreset::Ocean, "m", 1, &bounds);
+        let scale = 8.0;
+        let legend = generate_depth_legend(5.0, 5.0, super::super::depth_colors::DepthPreset::Ocean, "m", 1, &bounds, scale);
 
         assert!(legend.contains("(Flat)"), "Legend should show flat indicator when min ≈ max");
     }
@@ -1255,5 +1290,160 @@ mod tests {
         assert!(svg.contains("<svg"));
         assert!(svg.contains("<rect"));
         assert!(svg.contains("viewBox"));
+    }
+
+    // === Element size scaling tests ===
+
+    /// Helper to extract a numeric attribute value from SVG
+    fn extract_attr_value(svg: &str, pattern: &str) -> Option<f64> {
+        svg.find(pattern).and_then(|start| {
+            let rest = &svg[start + pattern.len()..];
+            let end = rest.find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')?;
+            rest[..end].parse().ok()
+        })
+    }
+
+    #[test]
+    fn test_station_radius_scaling() {
+        let project = create_test_project();
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+
+        // For the test project (10m shot), dimensions are ~50m x 50m with padding
+        // Scale = 800 / 50 = 16.0, so r=3px should become r=0.1875
+        // Check that station circles have small radius values (scaled from 3px)
+        if let Some(r) = extract_attr_value(&svg, "r=\"") {
+            // Scale factor for test project is approximately 800 / (10 + 40) = 16
+            // r = 3px / 16 ≈ 0.1875
+            assert!(r > 0.0 && r < 1.0, "Station radius should be scaled to viewBox units: {}", r);
+        } else {
+            panic!("Could not find station radius in SVG");
+        }
+    }
+
+    #[test]
+    fn test_shot_stroke_width_scaling() {
+        let project = create_test_project();
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+
+        // CSS .shot stroke-width should be scaled
+        if let Some(sw) = extract_attr_value(&svg, ".shot { stroke-width: ") {
+            // stroke-width = 2px / 16 ≈ 0.125 (for test project scale)
+            assert!(sw > 0.0 && sw < 1.0, "Shot stroke-width should be scaled: {}", sw);
+        } else {
+            panic!("Could not find shot stroke-width in SVG CSS");
+        }
+    }
+
+    #[test]
+    fn test_grid_stroke_width_scaling() {
+        let project = create_test_project();
+        let mut options = ExportImageOptions::default();
+        options.include_grid = true;
+
+        let svg = generate_svg_string(&project, &options).unwrap();
+
+        // Grid stroke-width should be scaled (0.5px target)
+        if let Some(sw) = extract_attr_value(&svg, "class=\"grid\" stroke=\"#333366\" stroke-width=\"") {
+            // stroke-width = 0.5px / 16 ≈ 0.03125
+            assert!(sw > 0.0 && sw < 0.5, "Grid stroke-width should be scaled: {}", sw);
+        } else {
+            panic!("Could not find grid stroke-width in SVG");
+        }
+    }
+
+    #[test]
+    fn test_virtual_shot_dasharray_scaling() {
+        // Create project with virtual shot
+        let mut project = Project::new("VirtualTest".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 180.0,
+                length: 10.0,
+                depth_in: 5.0,
+                depth_out: 5.0,
+                is_virtual: true, // Mark as virtual
+                ..Default::default()
+            }],
+        });
+
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+
+        // Virtual shots should have stroke-dasharray with scaled values
+        assert!(svg.contains("stroke-dasharray=\""), "Virtual shot should have dasharray");
+        // The dasharray values should be small (scaled from 4,2 pixels)
+        if let Some(dash) = extract_attr_value(&svg, "stroke-dasharray=\"") {
+            assert!(dash > 0.0 && dash < 1.0, "Dash value should be scaled: {}", dash);
+        }
+    }
+
+    #[test]
+    fn test_label_font_size_scaling() {
+        let project = create_test_project();
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+
+        // CSS .label font-size should be scaled
+        if let Some(fs) = extract_attr_value(&svg, ".label { font-family: sans-serif; font-size: ") {
+            // font-size = 10px / 16 ≈ 0.625
+            assert!(fs > 0.0 && fs < 2.0, "Label font-size should be scaled: {}", fs);
+        } else {
+            panic!("Could not find label font-size in SVG CSS");
+        }
+    }
+
+    #[test]
+    fn test_scaling_produces_correct_pixel_values() {
+        // This test verifies that viewBox_value * scale ≈ target_pixels
+        // For a 100m x 100m survey (with 20m padding on each side = 140m)
+        // scale = 800 / 140 ≈ 5.714
+        // r = 3px / 5.714 ≈ 0.525, and 0.525 * 5.714 ≈ 3px (verified)
+
+        let mut project = Project::new("ScaleTest".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            shots: vec![
+                // Create a 100m x 100m survey
+                ShotData {
+                    azimuth_in: 90.0,
+                    azimuth_out: 270.0,
+                    length: 100.0,
+                    depth_in: 0.0,
+                    depth_out: 0.0,
+                    ..Default::default()
+                },
+            ],
+        });
+
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+
+        // Extract scale from viewBox: scale = 800 / max(width, height)
+        // For 100m shot + 40m padding = 140m, scale ≈ 5.714
+        let expected_scale = 800.0 / 140.0;
+        let tolerance = 0.1;
+
+        // Verify station radius: r * scale ≈ 3px
+        if let Some(r) = extract_attr_value(&svg, "r=\"") {
+            let pixel_r = r * expected_scale;
+            assert!((pixel_r - 3.0).abs() < tolerance,
+                "Station radius * scale should be ~3px, got {}px (r={}, scale={})",
+                pixel_r, r, expected_scale);
+        }
+
+        // Verify shot stroke-width: sw * scale ≈ 2px
+        if let Some(sw) = extract_attr_value(&svg, ".shot { stroke-width: ") {
+            let pixel_sw = sw * expected_scale;
+            assert!((pixel_sw - 2.0).abs() < tolerance,
+                "Shot stroke-width * scale should be ~2px, got {}px",
+                pixel_sw);
+        }
     }
 }
