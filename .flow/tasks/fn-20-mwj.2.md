@@ -57,9 +57,8 @@ Current EditableTable at Table.tsx:104-217 has:
 - [ ] Existing cell editing (Tab, Shift+Tab) still works
 - [ ] Type check passes: `pnpm tsc --noEmit`
 ## Done summary
-TBD
-
+Enhanced EditableTable component with row interactions (click, double-click, hover), scroll-to-row, keyboard navigation (Enter/Shift+Enter), and proper row styling with accent left border for selected rows and subtle background for hovered rows.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 8526c18, 5e2e62d
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
