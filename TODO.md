@@ -1,8 +1,8 @@
 # CaveChef TODO - v1.0 Completion Tasks
 
-This document tracks functionality specified in `docs/SPEC.md` and the task files in `tasks/`.
+This document tracks functionality specified in `docs/SPEC.md` and the Flow-Next tasks in `.flow/` (legacy checklists below are kept for reference).
 
-**Last Updated**: 2026-01-18
+**Last Updated**: 2026-01-22
 
 ---
 
@@ -46,6 +46,31 @@ This document tracks functionality specified in `docs/SPEC.md` and the task file
 
 ---
 
+## Flow-Next Epics (Source of Truth)
+
+Tracked in `.flow/` (specs in `.flow/specs/`, tasks in `.flow/tasks/`). Use `.flow/bin/flowctl` for status.
+
+| Epic | Title | Status | Tasks | Spec |
+|------|-------|--------|-------|------|
+| fn-1-0u5 | Satellite Map Tile Caching | done | 8/8 | `.flow/specs/fn-1-0u5.md` |
+| fn-2-f4f | Zoom Tool Click Behavior | open | 8/8 | `.flow/specs/fn-2-f4f.md` |
+| fn-3-e6v | Display Toggle Visibility & Selection Behavior | open | 9/9 | `.flow/specs/fn-3-e6v.md` |
+| fn-4-7mg | Configurable interaction bounding boxes for shots and stations | open | 9/9 | `.flow/specs/fn-4-7mg.md` |
+| fn-5-jef | Bugfix: Depth Gradient Display Not Working | open | 8/9 | `.flow/specs/fn-5-jef.md` |
+| fn-6-yz5 | Bugfix: Edit Section/Shot Dialog Save Button Not Working | open | 3/3 | `.flow/specs/fn-6-yz5.md` |
+| fn-7-gba | Bugfix: Back button causes app freeze with blank window | open | 3/3 | `.flow/specs/fn-7-gba.md` |
+| fn-8-4v9 | Bugfix: Disable station/shot interactions for Zoom and Pan tools | open | 5/5 | `.flow/specs/fn-8-4v9.md` |
+| fn-9-d6v | Section Hover/Selection Highlighting on Map | open | 11/11 | `.flow/specs/fn-9-d6v.md` |
+| fn-10-i64 | Loading Progress Indicator | open | 9/9 | `.flow/specs/fn-10-i64.md` |
+| fn-11-6w4 | Export System Enhancement | open | 12/12 | `.flow/specs/fn-11-6w4.md` |
+| fn-12-szd | Double-click section to zoom and focus on map | open | 7/7 | `.flow/specs/fn-12-szd.md` |
+| fn-13-e55 | Configurable Keyboard Shortcuts System | open | 10/10 | `.flow/specs/fn-13-e55.md` |
+
+Flow summary (2026-01-22): 13 epics, 103 tasks, 102 done, 1 blocked.
+Blocked: `fn-5-jef.7` Add depth gradient to keyboard shortcuts config.
+
+---
+
 ## 🔥 URGENT: DMP Import Refactoring (fn-51-ctu)
 
 Refactor the DMP import workflow from a single monolithic dialog into a two-step process.
@@ -53,54 +78,54 @@ Refactor the DMP import workflow from a single monolithic dialog into a two-step
 **Step 1 (DmpSelectionDialog)**: User selects sections to import, sets default surveyor/date.
 **Step 2 (DmpSectionConfigDialog)**: Per-section editing with placement options, shot table, and preview.
 
-Full specifications in `tasks/urgent/task-NN-*.md` and Flow epic `.flow/specs/fn-51-ctu.md`.
+Legacy checklist: no matching `tasks/` docs or `.flow/specs/fn-51-ctu.md` in this repo. If reactivating, convert to Flow epics/tasks.
 
 ### Phase 1: Shared Components (Parallel)
 
 | Task | Title | Flow ID | Status |
 |------|-------|---------|--------|
-| 01 | [Shared ShotTableEditor](tasks/urgent/task-01-shared-shot-table-editor.md) | fn-51-ctu.1 | ❌ |
-| 02 | [Shared SectionMetadataForm](tasks/urgent/task-02-shared-section-metadata-form.md) | fn-51-ctu.2 | ❌ |
-| 03 | [Enhanced SectionPreview](tasks/urgent/task-03-enhanced-section-preview.md) | fn-51-ctu.3 | ❌ |
-| 04 | [DmpSelectionDialog Shell](tasks/urgent/task-04-dmp-selection-dialog-shell.md) | fn-51-ctu.4 | ❌ |
-| 15 | [File Hash Tracking](tasks/urgent/task-15-file-hash-tracking.md) | fn-51-ctu.15 | ❌ |
+| 01 | Shared ShotTableEditor | fn-51-ctu.1 | ✅ |
+| 02 | Shared SectionMetadataForm | fn-51-ctu.2 | ✅ |
+| 03 | Enhanced SectionPreview | fn-51-ctu.3 | ✅ |
+| 04 | DmpSelectionDialog Shell | fn-51-ctu.4 | ✅ |
+| 15 | File Hash Tracking | fn-51-ctu.15 | ❌ |
 
 ### Phase 2: Dialog Core (Sequential)
 
 | Task | Title | Flow ID | Dependencies | Status |
 |------|-------|---------|--------------|--------|
-| 05 | [DmpSectionConfigDialog Shell](tasks/urgent/task-05-dmp-section-config-dialog-shell.md) | fn-51-ctu.5 | 01, 02, 03 | ❌ |
-| 06 | [Section Parameters Panel](tasks/urgent/task-06-section-parameters-panel.md) | fn-51-ctu.6 | 02, 05 | ❌ |
-| 07 | [Placement Options Panel](tasks/urgent/task-07-placement-options-panel.md) | fn-51-ctu.7 | 05 | ❌ |
-| 08 | [Shot Table Integration](tasks/urgent/task-08-shot-table-integration.md) | fn-51-ctu.8 | 01, 05 | ❌ |
-| 11 | [Import State Management](tasks/urgent/task-11-import-state-management.md) | fn-51-ctu.11 | 05 | ❌ |
-| 16 | [Session Surveyor Memory](tasks/urgent/task-16-session-surveyor-memory.md) | fn-51-ctu.16 | 04 | ❌ |
-| 17 | [Validation Thresholds](tasks/urgent/task-17-validation-thresholds.md) | fn-51-ctu.17 | 01 | ❌ |
+| 05 | DmpSectionConfigDialog Shell | fn-51-ctu.5 | 01, 02, 03 | ✅ |
+| 06 | Section Parameters Panel | fn-51-ctu.6 | 02, 05 | ✅ |
+| 07 | Placement Options Panel | fn-51-ctu.7 | 05 | ✅ |
+| 08 | Shot Table Integration | fn-51-ctu.8 | 01, 05 | ✅ |
+| 11 | Import State Management | fn-51-ctu.11 | 05 | ✅ |
+| 16 | Session Surveyor Memory | fn-51-ctu.16 | 04 | ✅ |
+| 17 | Validation Thresholds | fn-51-ctu.17 | 01 | ❌ |
 
 ### Phase 3: Placement Features
 
 | Task | Title | Flow ID | Dependencies | Status |
 |------|-------|---------|--------------|--------|
-| 09 | [Merge Preview Visualization](tasks/urgent/task-09-merge-preview-visualization.md) | fn-51-ctu.9 | 03, 07 | ❌ |
-| 10 | [Manual Placement Mode](tasks/urgent/task-10-manual-placement-mode.md) | fn-51-ctu.10 | 07 | ❌ |
-| 12 | [Section Creation Logic](tasks/urgent/task-12-section-creation-logic.md) | fn-51-ctu.12 | 07, 11 | ❌ |
+| 09 | Merge Preview Visualization | fn-51-ctu.9 | 03, 07 | ✅ |
+| 10 | Manual Placement Mode | fn-51-ctu.10 | 07 | ✅ |
+| 12 | Section Creation Logic | fn-51-ctu.12 | 07, 11 | ✅ |
 
 ### Phase 4: Navigation & Integration
 
 | Task | Title | Flow ID | Dependencies | Status |
 |------|-------|---------|--------------|--------|
-| 13 | [Navigation & Import Buttons](tasks/urgent/task-13-navigation-and-import-buttons.md) | fn-51-ctu.13 | 05, 11 | ❌ |
-| 14 | [Context-Aware Triggering](tasks/urgent/task-14-context-aware-dialog-triggering.md) | fn-51-ctu.14 | 04, 05 | ❌ |
-| 18 | [Error Blocking Logic](tasks/urgent/task-18-error-blocking-logic.md) | fn-51-ctu.18 | 13 | ❌ |
+| 13 | Navigation & Import Buttons | fn-51-ctu.13 | 05, 11 | ✅ |
+| 14 | Context-Aware Triggering | fn-51-ctu.14 | 04, 05 | ✅ |
+| 18 | Error Blocking Logic | fn-51-ctu.18 | 13 | ✅ |
 
 ### Phase 5: Cleanup & Testing
 
 | Task | Title | Flow ID | Dependencies | Status |
 |------|-------|---------|--------------|--------|
-| 19 | [Update Edit Section Dialog](tasks/urgent/task-19-update-edit-section-dialog.md) | fn-51-ctu.19 | 01, 02 | ❌ |
-| 20 | [Remove Old Dialog](tasks/urgent/task-20-remove-old-dmp-import-dialog.md) | fn-51-ctu.20 | 14, 18, 19 | ❌ |
-| 21 | [App Close Confirmation](tasks/urgent/task-21-app-close-confirmation.md) | fn-51-ctu.21 | 20 | ❌ |
-| 22 | [Update Existing Tests](tasks/urgent/task-22-update-existing-tests.md) | fn-51-ctu.22 | 20 | ❌ |
+| 19 | Update Edit Section Dialog | fn-51-ctu.19 | 01, 02 | ✅ |
+| 20 | Remove Old Dialog | fn-51-ctu.20 | 14, 18, 19 | ❌ |
+| 21 | App Close Confirmation | fn-51-ctu.21 | 20 | ✅ |
+| 22 | Update Existing Tests | fn-51-ctu.22 | 20 | ✅ |
 
 ### Key Design Decisions
 
@@ -112,27 +137,28 @@ Full specifications in `tasks/urgent/task-NN-*.md` and Flow epic `.flow/specs/fn
 | Session-only surveyor memory | Respects privacy, not persisted to config |
 | Azimuth as average column | Cleaner table, edit sets both in/out |
 
-### Flow Commands
+### Flow Commands (Source of Truth)
 
 ```bash
-# View epic
-.flow/bin/flowctl show fn-51-ctu
+# List epics + tasks
+.flow/bin/flowctl list
 
-# See ready tasks
-.flow/bin/flowctl ready --epic fn-51-ctu
+# List epics only
+.flow/bin/flowctl epics
 
-# Start working on a task
-.flow/bin/flowctl start fn-51-ctu.1
+# Show a specific epic/task
+.flow/bin/flowctl show fn-<epic>
 
-# Mark task complete
-.flow/bin/flowctl done fn-51-ctu.1 --summary-file s.md --evidence-json e.json
+# Start/complete a task
+.flow/bin/flowctl start fn-<epic>.<task>
+.flow/bin/flowctl done fn-<epic>.<task> --summary-file s.md --evidence-json e.json
 ```
 
 ---
 
 ## 🚧 v1.0 COMPLETION TASKS (31-62)
 
-Full specifications in `tasks/task-NN-*.md`. Each task includes:
+Legacy checklist: no matching `tasks/` docs in this repo. If reactivating, convert to Flow epics/tasks.
 - Detailed requirements
 - Files to modify
 - Acceptance criteria
@@ -142,73 +168,73 @@ Full specifications in `tasks/task-NN-*.md`. Each task includes:
 
 | Task | Title | Risk | Status |
 |------|-------|------|--------|
-| 31 | [Loop Detection Algorithm](tasks/task-31-loop-detection.md) | Medium-High | ❌ |
-| 32 | [Closure Error Calculation](tasks/task-32-closure-error.md) | Low-Medium | ❌ |
-| 33 | [Closure Strategy Selector](tasks/task-33-closure-strategy.md) | High | ❌ |
+| 31 | Loop Detection Algorithm | Medium-High | ✅ |
+| 32 | Closure Error Calculation | Low-Medium | ✅ |
+| 33 | Closure Strategy Selector | High | ❌ |
 
 ### Phase B: Settings & Configuration
 
 | Task | Title | Risk | Status |
 |------|-------|------|--------|
-| 34 | [Settings Dialog Shell](tasks/task-34-settings-dialog.md) | Medium | ❌ |
-| 35 | [Display Settings Tab](tasks/task-35-display-settings.md) | Medium | ❌ |
-| 36 | [Validation Thresholds Tab](tasks/task-36-validation-settings.md) | Low-Medium | ❌ |
-| 37 | [Export Defaults Tab](tasks/task-37-export-settings.md) | Low | ❌ |
+| 34 | Settings Dialog Shell | Medium | ✅ |
+| 35 | Display Settings Tab | Medium | ❌ |
+| 36 | Validation Thresholds Tab | Low-Medium | ❌ |
+| 37 | Export Defaults Tab | Low | ❌ |
 
 ### Phase C: Data Table Enhancements
 
 | Task | Title | Risk | Status |
 |------|-------|------|--------|
-| 38 | [Inline Editing](tasks/task-38-inline-editing.md) | High | ❌ |
-| 39 | [Add Row](tasks/task-39-add-row.md) | Medium | ❌ |
-| 40 | [Delete Row with Split](tasks/task-40-delete-row.md) | High | ❌ |
-| 41 | [Row Highlighting Sync](tasks/task-41-row-highlighting.md) | Low-Medium | ❌ |
+| 38 | Inline Editing | High | ✅ |
+| 39 | Add Row | Medium | ❌ |
+| 40 | Delete Row with Split | High | ❌ |
+| 41 | Row Highlighting Sync | Low-Medium | ✅ |
 
 ### Phase D: Accessibility
 
 | Task | Title | Risk | Status |
 |------|-------|------|--------|
-| 42 | [Focus Management](tasks/task-42-focus-management.md) | High | ❌ |
-| 43 | [Screen Reader Announcements](tasks/task-43-screen-reader.md) | Medium-High | ❌ |
-| 44 | [Theme Infrastructure](tasks/task-44-theme-infrastructure.md) | Medium | ❌ |
-| 45 | [Keyboard Navigation](tasks/task-45-keyboard-navigation.md) | Medium | ❌ |
+| 42 | Focus Management | High | ❌ |
+| 43 | Screen Reader Announcements | Medium-High | ❌ |
+| 44 | Theme Infrastructure | Medium | ❌ |
+| 45 | Keyboard Navigation | Medium | ❌ |
 
 ### Phase E: i18n Foundation
 
 | Task | Title | Risk | Status |
 |------|-------|------|--------|
-| 46 | [i18n Infrastructure](tasks/task-46-i18n-infrastructure.md) | Medium | ❌ |
-| 47 | [Extract UI Strings](tasks/task-47-extract-strings.md) | High (tedious) | ❌ |
-| 48 | [Number/Date Formatting](tasks/task-48-number-formatting.md) | Low-Medium | ❌ |
+| 46 | i18n Infrastructure | Medium | ❌ |
+| 47 | Extract UI Strings | High (tedious) | ❌ |
+| 48 | Number/Date Formatting | Low-Medium | ❌ |
 
 ### Phase F: Performance & Polish
 
 | Task | Title | Risk | Status |
 |------|-------|------|--------|
-| 49 | [Virtual Scrolling](tasks/task-49-virtual-scrolling.md) | Medium | ❌ |
-| 50 | [Map Rendering Optimization](tasks/task-50-map-optimization.md) | Medium-High | ❌ |
-| 51 | [Debounced Auto-Save](tasks/task-51-debounced-autosave.md) | Low-Medium | ❌ |
-| 52 | [Loading States](tasks/task-52-loading-states.md) | Medium | ❌ |
+| 49 | Virtual Scrolling | Medium | ❌ |
+| 50 | Map Rendering Optimization | Medium-High | ❌ |
+| 51 | Debounced Auto-Save | Low-Medium | ❌ |
+| 52 | Loading States | Medium | ✅ |
 
 ### Phase G: Error Handling
 
 | Task | Title | Risk | Status |
 |------|-------|------|--------|
-| 53 | [Error Boundary Wrapper](tasks/task-53-error-boundary.md) | Medium | ❌ |
-| 54 | [Network Error Handling](tasks/task-54-network-errors.md) | Medium | ❌ |
-| 55 | [File Corruption Recovery](tasks/task-55-corruption-recovery.md) | Medium | ❌ |
-| 56 | [Validation Error Recovery](tasks/task-56-validation-recovery.md) | Low-Medium | ❌ |
+| 53 | Error Boundary Wrapper | Medium | ❌ |
+| 54 | Network Error Handling | Medium | ❌ |
+| 55 | File Corruption Recovery | Medium | ❌ |
+| 56 | Validation Error Recovery | Low-Medium | ❌ |
 
 ### Phase H: Final Polish
 
 | Task | Title | Risk | Status |
 |------|-------|------|--------|
-| 57 | [Splash Screen](tasks/task-57-splash-screen.md) | Medium | ❌ |
-| 58 | [About Dialog](tasks/task-58-about-dialog.md) | Low | ❌ |
-| 59 | [Keyboard Shortcuts Overlay](tasks/task-59-shortcuts-overlay.md) | Low-Medium | ❌ |
-| 60 | [Release Automation](tasks/task-60-release-automation.md) | Medium | ❌ |
-| 61 | [Bug Reporter](tasks/task-61-bug-reporter.md) | Medium | ❌ |
-| 62 | [Tile Caching](tasks/task-62-tile-caching.md) | Medium-High | ❌ |
+| 57 | Splash Screen | Medium | ❌ |
+| 58 | About Dialog | Low | ❌ |
+| 59 | Keyboard Shortcuts Overlay | Low-Medium | ❌ |
+| 60 | Release Automation | Medium | ❌ |
+| 61 | Bug Reporter | Medium | ❌ |
+| 62 | Tile Caching | Medium-High | ✅ |
 
 ---
 
@@ -218,34 +244,34 @@ Full specifications in `tasks/task-NN-*.md`. Each task includes:
 
 | Phase | Tasks | Completed | Remaining |
 |-------|-------|-----------|-----------|
-| 1: Shared Components | 5 | 0 | 5 |
-| 2: Dialog Core | 7 | 0 | 7 |
-| 3: Placement Features | 3 | 0 | 3 |
-| 4: Navigation & Integration | 3 | 0 | 3 |
-| 5: Cleanup & Testing | 4 | 0 | 4 |
-| **Import Total** | **22** | **0** | **22** |
+| 1: Shared Components | 5 | 4 | 1 |
+| 2: Dialog Core | 7 | 6 | 1 |
+| 3: Placement Features | 3 | 3 | 0 |
+| 4: Navigation & Integration | 3 | 3 | 0 |
+| 5: Cleanup & Testing | 4 | 3 | 1 |
+| **Import Total** | **22** | **19** | **3** |
 
 ### v1.0 Completion Tasks (31-62)
 
 | Phase | Tasks | Completed | Remaining |
 |-------|-------|-----------|-----------|
-| A: Loop Closure | 3 | 0 | 3 |
-| B: Settings | 4 | 0 | 4 |
-| C: Data Table | 4 | 0 | 4 |
+| A: Loop Closure | 3 | 2 | 1 |
+| B: Settings | 4 | 1 | 3 |
+| C: Data Table | 4 | 2 | 2 |
 | D: Accessibility | 4 | 0 | 4 |
 | E: i18n | 3 | 0 | 3 |
-| F: Performance | 4 | 0 | 4 |
+| F: Performance | 4 | 1 | 3 |
 | G: Error Handling | 4 | 0 | 4 |
-| H: Polish | 6 | 0 | 6 |
-| **v1.0 Total** | **32** | **0** | **32** |
+| H: Polish | 6 | 1 | 5 |
+| **v1.0 Total** | **32** | **7** | **25** |
 
 ### Grand Total
 
 | Category | Tasks | Completed | Remaining |
 |----------|-------|-----------|-----------|
-| DMP Import Refactoring | 22 | 0 | 22 |
-| v1.0 Completion | 32 | 0 | 32 |
-| **Grand Total** | **54** | **0** | **54** |
+| DMP Import Refactoring | 22 | 19 | 3 |
+| v1.0 Completion | 32 | 7 | 25 |
+| **Grand Total** | **54** | **26** | **28** |
 
 ---
 
