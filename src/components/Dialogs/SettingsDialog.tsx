@@ -6,8 +6,6 @@ import { DialogWrapper } from './DialogWrapper';
 import {
   SettingsSidebar,
   CATEGORIES,
-  getTabId,
-  getPanelId,
   type SettingsCategory,
 } from './SettingsSidebar';
 import { GeneralSettings } from './settings/GeneralSettings';
@@ -112,6 +110,85 @@ function getCategoryDefaults(category: SettingsCategory): Partial<Config> {
 function getCategoryLabel(category: SettingsCategory): string {
   const cat = CATEGORIES.find((c) => c.id === category);
   return cat?.label ?? category;
+}
+
+/**
+ * Centralized validation for all categories.
+ * Returns a map of category -> hasError.
+ * Defensive: guards against undefined nested props.
+ */
+function validateAllCategories(config: Config): Partial<Record<SettingsCategory, boolean>> {
+  const errors: Partial<Record<SettingsCategory, boolean>> = {};
+
+  try {
+    // Map validation - with defensive access
+    const map = config?.map;
+    const mapHasError = !!(
+      map &&
+      (map.zoom_min >= map.zoom_max ||
+        map.zoom_default < map.zoom_min ||
+        map.zoom_default > map.zoom_max ||
+        map.zoom_step < 0.1 ||
+        map.zoom_step > 5.0 ||
+        (map.satellite_gps_origin?.latitude != null &&
+          (map.satellite_gps_origin.latitude < -90 || map.satellite_gps_origin.latitude > 90)) ||
+        (map.satellite_gps_origin?.longitude != null &&
+          (map.satellite_gps_origin.longitude < -180 || map.satellite_gps_origin.longitude > 180)) ||
+        (map.station?.radius != null && (map.station.radius < 1 || map.station.radius > 50)) ||
+        (map.station?.hit_area != null &&
+          map.station?.radius != null &&
+          map.station.hit_area < map.station.radius) ||
+        (map.shot?.width != null && (map.shot.width < 0.5 || map.shot.width > 20)) ||
+        (map.shot?.hit_area != null && map.shot?.width != null && map.shot.hit_area < map.shot.width) ||
+        (map.snap?.threshold != null && (map.snap.threshold < 1 || map.snap.threshold > 50)) ||
+        (map.animation?.duration != null && (map.animation.duration < 0 || map.animation.duration > 2000)))
+    );
+    errors.map = mapHasError;
+
+    // Validation category
+    const val = config?.validation;
+    const validationHasError = !!(
+      val &&
+      (val.warn_shot_length_min < 0 ||
+        val.warn_shot_length_max <= val.warn_shot_length_min ||
+        val.warn_depth_change_per_shot_max <= 0 ||
+        val.warn_azimuth_deviation_max < 0 ||
+        val.warn_azimuth_deviation_max > 180 ||
+        val.azimuth_diff_threshold < 0 ||
+        val.azimuth_diff_threshold > 180 ||
+        val.pitch_diff_threshold < 0 ||
+        val.pitch_diff_threshold > 90)
+    );
+    errors.validation = validationHasError;
+
+    // Export category
+    const exp = config?.export;
+    const exportHasError = !!(exp && (exp.default_dpi < 72 || exp.default_dpi > 1200));
+    errors.export = exportHasError;
+
+    // Other categories have no validation
+    errors.general = false;
+    errors.units = false;
+    errors.display = false;
+    errors.shortcuts = false;
+    errors.cache = false;
+    errors.advanced = false;
+  } catch {
+    // If any error occurs, return no errors to not block the UI
+    return {
+      general: false,
+      units: false,
+      display: false,
+      map: false,
+      validation: false,
+      export: false,
+      shortcuts: false,
+      cache: false,
+      advanced: false,
+    };
+  }
+
+  return errors;
 }
 
 /**
@@ -240,16 +317,6 @@ export default function SettingsDialog() {
   // Reset confirmation dialog state
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
-  // Track if component is mounted
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
   // Initialize local config from store
   useEffect(() => {
     if (config && !localConfig) {
@@ -283,10 +350,21 @@ export default function SettingsDialog() {
     });
   }, []);
 
+  // Centralized validation for all categories - used for sidebar error dots
+  const centralizedErrors = useMemo(() => {
+    if (!localConfig) return {} as Partial<Record<SettingsCategory, boolean>>;
+    return validateAllCategories(localConfig);
+  }, [localConfig]);
+
+  // Combined errors for sidebar display (centralized validation takes precedence)
+  const combinedCategoryErrors = useMemo(() => {
+    return { ...categoryErrors, ...centralizedErrors };
+  }, [categoryErrors, centralizedErrors]);
+
   // Check if any category has errors
   const hasAnyError = useMemo(() => {
-    return Object.values(categoryErrors).some((hasError) => hasError);
-  }, [categoryErrors]);
+    return Object.values(combinedCategoryErrors).some((hasError) => hasError);
+  }, [combinedCategoryErrors]);
 
   // Handle category change from sidebar
   const handleCategoryChange = useCallback((category: SettingsCategory) => {
@@ -363,6 +441,27 @@ export default function SettingsDialog() {
     setShowResetConfirm(false);
   }, []);
 
+  // Escape key handler for custom overlays
+  useEffect(() => {
+    if (!showUnsavedDialog && !showResetConfirm) {
+      return;
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        if (showUnsavedDialog) {
+          setShowUnsavedDialog(false);
+        } else if (showResetConfirm) {
+          setShowResetConfirm(false);
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, [showUnsavedDialog, showResetConfirm]);
+
   // Show loading state if config hasn't loaded yet
   if (!localConfig) {
     return (
@@ -426,7 +525,7 @@ export default function SettingsDialog() {
         data-testid="settings-dialog"
       >
         {({ requestClose }) => (
-          <div className="flex flex-col min-h-[500px] -m-4">
+          <div className="flex flex-col min-h-[500px] min-w-[600px] -m-4">
             {/* Main content area with sidebar and content */}
             <div className="flex flex-1 overflow-hidden">
               {/* Sidebar */}
@@ -435,7 +534,7 @@ export default function SettingsDialog() {
                 onCategoryChange={handleCategoryChange}
                 focusedIndex={focusedIndex}
                 onFocusChange={handleFocusChange}
-                categoryErrors={categoryErrors}
+                categoryErrors={combinedCategoryErrors}
                 panelIdBase={panelIdBase}
               />
 
@@ -455,14 +554,8 @@ export default function SettingsDialog() {
                   </Button>
                 </div>
 
-                {/* Scrollable content */}
-                <div
-                  className="flex-1 overflow-auto p-4"
-                  role="region"
-                  aria-label={`${getCategoryLabel(activeCategory)} settings`}
-                  id={getPanelId(panelIdBase, activeCategory)}
-                  aria-labelledby={getTabId(panelIdBase, activeCategory)}
-                >
+                {/* Scrollable content - tabpanel semantics owned by category components */}
+                <div className="flex-1 overflow-auto p-4">
                   {renderCategoryContent()}
                 </div>
               </div>
