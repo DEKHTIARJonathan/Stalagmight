@@ -1580,7 +1580,12 @@ impl AppState {
                 {
                     let new_station_ref = StationRef::new(new_section_id, zd.station_ref.station_index);
                     // Use store-only helper to avoid triggering repositioning during merge
-                    let _ = merged_project.store_zero_datum_without_repositioning(new_station_ref, zd.gps);
+                    if let Err(e) = merged_project.store_zero_datum_without_repositioning(new_station_ref, zd.gps) {
+                        return CommandResult::failure(format!(
+                            "Failed to copy zero datum from source project {}: {}",
+                            source_project.name, e
+                        ));
+                    }
                 }
             }
 
