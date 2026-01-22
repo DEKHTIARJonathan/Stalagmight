@@ -24,3 +24,6 @@ WebdriverIO: use closest('[data-testid]') to detect focus on elements inside con
 
 ## 2026-01-21 manual [convention]
 Only call event.preventDefault() when actually handling the event; no-op shortcuts should allow default browser behavior
+
+## 2026-01-22 manual [convention]
+For keyboard shortcut detection with modifiers, use event.key.toLowerCase() to handle Shift+Z producing uppercase 'Z'

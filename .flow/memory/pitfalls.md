@@ -57,3 +57,9 @@ When clearing async requests in useEffect, always clear immediately before any e
 
 ## 2026-01-21 manual [pitfall]
 React event handlers in useEffect can have stale closures; use refs for values needed in keydown/keyup handlers
+
+## 2026-01-22 manual [pitfall]
+Hover dropdown: use a centralized hardClose helper that cancels all timers (hover/leave) and invalidates tokens, call from ALL close paths (click, escape, keyboard shortcuts)
+
+## 2026-01-22 manual [pitfall]
+Props used in setTimeout callbacks become stale closures - track them in a ref (e.g., disabledRef.current = disabled) and check the ref inside the callback
