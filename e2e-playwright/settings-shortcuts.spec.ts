@@ -50,11 +50,14 @@ async function openSettingsDialog(page: Page): Promise<void> {
 }
 
 /**
- * Helper to navigate to the Shortcuts tab
+ * Helper to navigate to the Shortcuts category via sidebar
+ * Updated for new sidebar layout (was tab-based, now sidebar-based)
  */
-async function navigateToShortcutsTab(page: Page): Promise<void> {
+async function navigateToShortcutsCategory(page: Page): Promise<void> {
+  // Click on the Shortcuts item in the settings sidebar
   await page.locator('[data-testid="settings-tab-shortcuts"]').click();
-  await expect(page.locator('[data-testid="shortcuts-tab-content"]')).toBeVisible({ timeout: 2000 });
+  // Wait for the shortcuts panel to become visible
+  await expect(page.locator('[data-testid="settings-panel-shortcuts"]')).toBeVisible({ timeout: 2000 });
 }
 
 /**
@@ -76,10 +79,10 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
   test.describe('Navigation', () => {
     test('opens Settings dialog and navigates to Shortcuts tab', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
-      // Verify shortcuts tab content is visible
-      await expect(page.locator('[data-testid="shortcuts-tab-content"]')).toBeVisible();
+      // Verify shortcuts panel content is visible
+      await expect(page.locator('[data-testid="settings-panel-shortcuts"]')).toBeVisible();
 
       // Verify search input exists
       await expect(page.locator('[data-testid="shortcuts-search"]')).toBeVisible();
@@ -95,7 +98,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
   test.describe('Search Filtering', () => {
     test('search filters actions by name', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Verify Select action is visible initially
       await expect(page.locator('[data-testid="shortcut-row-select"]')).toBeVisible();
@@ -116,7 +119,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
     test('search filters by key binding', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Search for "Ctrl+Z" (undo binding)
       await page.locator('[data-testid="shortcuts-search"]').fill('Ctrl+Z');
@@ -131,7 +134,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
     test('clearing search shows all actions', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Search for something specific
       await page.locator('[data-testid="shortcuts-search"]').fill('undo');
@@ -151,7 +154,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
   test.describe('Shortcut Recording', () => {
     test('records new shortcut via keyboard', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Click on the primary shortcut recorder for "select" action
       const recorder = page.locator('[data-testid="shortcut-primary-select"]');
@@ -177,7 +180,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
     test('Escape cancels recording', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       const recorder = page.locator('[data-testid="shortcut-primary-select"]');
 
@@ -200,7 +203,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
     test('records modifier combinations', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Record a modifier combination for the secondary slot of "select"
       const recorder = page.locator('[data-testid="shortcut-secondary-select"]');
@@ -222,7 +225,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
   test.describe('Conflict Detection', () => {
     test('shows error when recording a reserved shortcut', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Try to assign a reserved shortcut (Escape)
       const recorder = page.locator('[data-testid="shortcut-primary-pan"]');
@@ -241,7 +244,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
     test('shows error when recording a duplicate shortcut', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Try to assign "P" to select (P is already used by pan)
       const recorder = page.locator('[data-testid="shortcut-primary-select"]');
@@ -259,7 +262,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
     test('shows error when assigning same shortcut to both slots of same action', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // First, set primary slot of draw to 'K'
       const primaryRecorder = page.locator('[data-testid="shortcut-primary-draw"]');
@@ -287,7 +290,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
   test.describe('Reset Functionality', () => {
     test('reset single shortcut restores default', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Change the select shortcut
       const recorder = page.locator('[data-testid="shortcut-primary-select"]');
@@ -310,7 +313,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
     test('reset button is disabled when no changes', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Reset button should be disabled for unchanged shortcut
       const resetButton = page.locator('[data-testid="shortcut-reset-select"]');
@@ -319,7 +322,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
     test('Reset All restores all shortcuts to defaults', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Change multiple shortcuts
       const selectRecorder = page.locator('[data-testid="shortcut-primary-select"]');
@@ -345,7 +348,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
   test.describe('Save and Cancel', () => {
     test('Save persists changes', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Change a shortcut
       const recorder = page.locator('[data-testid="shortcut-primary-select"]');
@@ -364,7 +367,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Reopen settings and verify change persisted
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Re-find the recorder after dialog reopened
       const recorderAfter = page.locator('[data-testid="shortcut-primary-select"]');
@@ -373,7 +376,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
     test('Cancel discards changes', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Change a shortcut
       const recorder = page.locator('[data-testid="shortcut-primary-select"]');
@@ -398,7 +401,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Reopen settings and verify change was NOT persisted
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Re-find the recorder after dialog reopened
       const recorderAfter = page.locator('[data-testid="shortcut-primary-select"]');
@@ -412,7 +415,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       // beforeEach has already created a project and we're in project view
       // Open settings from GlobalView (need to go back first)
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Change the pan tool shortcut from P to Q
       const recorder = page.locator('[data-testid="shortcut-primary-pan"]');
@@ -465,7 +468,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
   test.describe('Category Collapse/Expand', () => {
     test('categories can be collapsed and expanded', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       // Verify Tools category is expanded by default
       const toolsToggle = page.locator('[data-testid="shortcut-category-toggle-tools"]');
@@ -490,7 +493,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
   test.describe('Reserved Shortcuts Display', () => {
     test('reserved shortcuts are displayed correctly', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       const reserved = page.locator('[data-testid="reserved-shortcuts"]');
       await expect(reserved).toBeVisible();
@@ -504,7 +507,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
   test.describe('Clear Shortcut', () => {
     test('clear button removes shortcut binding', async ({ page }) => {
       await openSettingsDialog(page);
-      await navigateToShortcutsTab(page);
+      await navigateToShortcutsCategory(page);
 
       const recorder = page.locator('[data-testid="shortcut-primary-select"]');
 
@@ -531,7 +534,7 @@ test.describe('Visual Regression - Shortcuts', () => {
 
   test('empty shortcut slot state', async ({ page }) => {
     await openSettingsDialog(page);
-    await navigateToShortcutsTab(page);
+    await navigateToShortcutsCategory(page);
 
     // Take screenshot of shortcuts tab (secondary slots are often empty)
     await page.screenshot({
@@ -542,7 +545,7 @@ test.describe('Visual Regression - Shortcuts', () => {
 
   test('recording state', async ({ page }) => {
     await openSettingsDialog(page);
-    await navigateToShortcutsTab(page);
+    await navigateToShortcutsCategory(page);
 
     // Start recording
     const recorder = page.locator('[data-testid="shortcut-primary-select"]');
@@ -558,7 +561,7 @@ test.describe('Visual Regression - Shortcuts', () => {
 
   test('conflict error state', async ({ page }) => {
     await openSettingsDialog(page);
-    await navigateToShortcutsTab(page);
+    await navigateToShortcutsCategory(page);
 
     // Create a conflict
     const recorder = page.locator('[data-testid="shortcut-primary-select"]');
@@ -578,7 +581,7 @@ test.describe('Visual Regression - Shortcuts', () => {
 
   test('customized shortcuts state', async ({ page }) => {
     await openSettingsDialog(page);
-    await navigateToShortcutsTab(page);
+    await navigateToShortcutsCategory(page);
 
     // Customize multiple shortcuts
     const selectRecorder = page.locator('[data-testid="shortcut-primary-select"]');
