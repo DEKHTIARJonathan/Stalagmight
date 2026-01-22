@@ -255,13 +255,18 @@ e2e/
 
 CaveChef has two different import flows that serve different purposes:
 
-| Dialog Component | `activeDialog` Value | Opened By | Test File |
-|------------------|---------------------|-----------|-----------|
-| `DmpSelectionDialog` | `'dmp-selection'` | `Ctrl+I` keyboard shortcut | `import-dmp-dialog.spec.ts` |
-| `DmpSectionConfigDialog` | `'dmp-section-config'` | Continue from selection | `import-dmp-dialog.spec.ts` |
-| `ImportDialog` | `'import'` | SectionsPanel "+" button, E2E store | `import-section-dialog.spec.ts` |
+| Dialog Component | `activeDialog` Value | Opened By | Test File | Stats Feature |
+|------------------|---------------------|-----------|-----------|---------------|
+| `DmpSelectionDialog` | `'dmp-selection'` | `Ctrl+I` keyboard shortcut | `import-dmp-dialog.spec.ts` | Selection stats (shot count, total length, depth range) |
+| `DmpSectionConfigDialog` | `'dmp-section-config'` | Continue from selection | `import-dmp-dialog.spec.ts` | Section stats in Parameters panel |
+| `ImportDialog` | `'import'` | SectionsPanel "+" button, E2E store | `import-section-dialog.spec.ts` | N/A |
 
 **Important**: The `Ctrl+I` shortcut opens `DmpSelectionDialog` (Step 1), not `ImportDialog`. Tests that need to verify section name input should use `ImportDialog` via the store.
+
+**Stats Testing Notes:**
+- Step 1 stats update when sections are checked/unchecked - verify `[data-testid="selection-stats"]` content changes
+- Step 2 stats update when shots are edited/deleted - verify `[data-testid="section-stats"]` content changes
+- Use `aria-label` attribute for accessibility testing - contains full descriptive text
 
 ### Dialog Close Behaviors
 
@@ -528,6 +533,8 @@ All UI components must include proper attributes for tests to locate elements re
 | Dialogs | `<name>-dialog` | `data-testid="new-project-dialog"` |
 | Form inputs | `<field>-input` | `data-testid="project-name-input"` |
 | Statistics | `stats-<metric>` | `data-testid="stats-total-length"` |
+| Selection stats (Step 1) | `selection-stats`, `stats-<metric>` | `data-testid="selection-stats"`, `stats-shot-count`, `stats-total-length`, `stats-depth-range` |
+| Section stats (Step 2) | `section-stats`, `section-stats-<metric>` | `data-testid="section-stats"`, `section-stats-shot-count`, `section-stats-total-length`, `section-stats-depth-range` |
 
 ### ARIA Attributes Quick Reference
 
@@ -538,6 +545,26 @@ All UI components must include proper attributes for tests to locate elements re
 | `aria-labelledby` | Connect dialog to its title |
 | `aria-label` | Icon-only buttons |
 | `aria-expanded` | Collapsible panels |
+| `aria-label` (stats) | Statistics containers for screen readers |
+
+#### Statistics ARIA Labels
+
+The selection and section stats containers use descriptive `aria-label` attributes for accessibility:
+
+**Selection Stats (Step 1):**
+```
+aria-label="Selection statistics: 70 shots, 281.8 meters total length, depth range 2.1 to 15.4 meters"
+```
+
+**Section Stats (Step 2):**
+```
+aria-label="Section statistics: 42 shots, 187.3 meters total length, depth range 3.2 to 17.8 meters"
+```
+
+When no depth data is available, the label includes "no depth data" instead of the range:
+```
+aria-label="Selection statistics: 5 shots, 42.3 meters total length, no depth data"
+```
 
 ### Selector Priority
 

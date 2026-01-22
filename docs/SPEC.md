@@ -582,6 +582,8 @@ The DMP import workflow uses a two-step process for improved UX:
 │  │ [ ] ZZZ - Test Data (86 shots, 412.1m)           [Preview]  ││
 │  └──────────────────────────────────────────────────────────────┘│
 │                                                                  │
+│  Selected: 2 sections | 70 shots | 281.8m | Depth: 2.1m - 15.4m │
+│                                                                  │
 │  ⚠ File may have been imported before (same hash detected)     │
 │                                                                  │
 │  [ Cancel ]                              [ Continue (2 of 3) ]   │
@@ -594,6 +596,17 @@ The DMP import workflow uses a two-step process for improved UX:
 - Surveyor remembered for session (not persisted)
 - File hash tracking detects duplicate imports
 - Preview button shows section outline in popup
+- Selection stats update in real-time when sections are checked/unchecked
+- Shows "0 shots | 0.0m | Depth: --" when no sections selected
+
+**Selection Stats Formatting:**
+- Format: `Selected: N sections | X shots | Y.Ym | Depth: A.Am - B.Bm`
+- Units read from project config (length and depth independently)
+- Values converted to feet when config is set to feet (shows `ft` suffix)
+- 1 decimal place precision for length and depth
+- Pipe separators between stats
+- "Depth: --" shown when no depth data available
+- ARIA label provides screen reader description (e.g., "Selection statistics: 70 shots, 281.8 meters total length, depth range 2.1 to 15.4 meters")
 
 ##### Step 2: Section Configuration (DmpSectionConfigDialog)
 
@@ -603,12 +616,14 @@ The DMP import workflow uses a two-step process for improved UX:
 │  Section: 1 of 2                    [◀ Previous] [Next ▶]       │
 │                                                                  │
 │  ┌─ Parameters ─────────┐  ┌─ Preview ──────────────────────────┐│
-│  │ Name:    [Main Line] │  │                                    ││
-│  │ Surveyor:[J. Smith ] │  │        ●──●──●                     ││
-│  │ Date:    [2024-01-12]│  │           \                        ││
-│  │ Color:   [████ ▼]    │  │            ●──●                    ││
-│  │ Direction:[IN ▼]     │  │   (pan/zoom enabled)               ││
-│  └──────────────────────┘  └────────────────────────────────────┘│
+│  │ 42 shots│187.3m│3.2-17.8m│                                   ││
+│  │ ─────────────────────│  │        ●──●──●                     ││
+│  │ Name:    [Main Line] │  │           \                        ││
+│  │ Surveyor:[J. Smith ] │  │            ●──●                    ││
+│  │ Date:    [2024-01-12]│  │   (pan/zoom enabled)               ││
+│  │ Color:   [████ ▼]    │  └────────────────────────────────────┘│
+│  │ Direction:[IN ▼]     │                                        │
+│  └──────────────────────┘                                        │
 │                                                                  │
 │  ┌─ Placement ───────────────────────────────────────────────────┐│
 │  │ (●) At Origin (0,0)                                          ││
@@ -636,6 +651,11 @@ The DMP import workflow uses a two-step process for improved UX:
 
 **Step 2 Behavior:**
 - Per-section editing with navigation between sections
+- Parameters panel with section stats at top:
+  - Shows shot count, total length, depth range for current section
+  - Stats reflect current shot table state (including edits and deletions)
+  - Grayed out when section is excluded
+  - Subtle separator line below stats
 - Parameters panel: name, surveyor (inherited), date, color, direction
 - Interactive preview with pan/zoom and click-to-select-station
 - 4 exclusive placement modes:
@@ -651,6 +671,16 @@ The DMP import workflow uses a two-step process for improved UX:
 - Local undo/redo within dialog
 - Section created on "Place Section" click
 - Warnings inform but don't block; errors block import
+
+**Section Stats Formatting:**
+- Format: `X shots | Y.Ym | Depth: A.Am - B.Bm`
+- Units read from project config (length and depth independently)
+- Values converted to feet when config is set to feet (shows `ft` suffix)
+- 1 decimal place precision for length and depth
+- Pipe separators between stats
+- "Depth: --" shown when no depth data available
+- Stats exclude deleted shots (those marked with delete checkbox)
+- ARIA label provides screen reader description (e.g., "Section statistics: 42 shots, 187.3 meters total length, depth range 3.2 to 17.8 meters")
 
 **Design Decisions:**
 | Decision | Rationale |
