@@ -55,6 +55,12 @@ export function DialogWrapper({
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if ((e.key === 'Escape' || e.key === 'Esc') && !e.repeat && !e.defaultPrevented) {
+        // Don't close dialog if a dropdown is open - let the dropdown close first
+        const openDropdown = document.querySelector('[data-dropdown-open]');
+        if (openDropdown) {
+          return;
+        }
+
         e.preventDefault();
         e.stopPropagation();
         if (showConfirm) {
