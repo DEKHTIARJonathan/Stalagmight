@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="StalagMight favicon">
+  <defs>
+    <radialGradient id="bg" cx="35%" cy="30%" r="85%">
+      <stop offset="0" stop-color="#3A251A"/>
+      <stop offset="1" stop-color="#1A120B"/>
+    </radialGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#F3E8D8"/>
+      <stop offset="1" stop-color="#C1A07A"/>
+    </linearGradient>
+  </defs>
+  <rect x="10" y="10" width="236" height="236" rx="52" fill="url(#bg)"/>
+  <rect x="10" y="10" width="236" height="236" rx="52" fill="none" stroke="#F3E8D8" stroke-width="6" opacity="0.8"/>
+  <circle cx="128" cy="128" r="78" fill="none" stroke="#F3E8D8" stroke-width="6" opacity="0.18"/>
+  <g fill="none" stroke="url(#accent)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" opacity="0.95">
+    <path d="M72 160 L108 128 L140 154 L176 110"/>
+    <path d="M108 128 L104 88 L144 80 L176 110"/>
+  </g>
+  <g fill="#F3E8D8">
+    <circle cx="72" cy="160" r="6"/><circle cx="108" cy="128" r="6"/><circle cx="140" cy="154" r="6"/><circle cx="176" cy="110" r="6"/>
+    <circle cx="104" cy="88" r="6"/><circle cx="144" cy="80" r="6"/>
+  </g>
+</svg>
