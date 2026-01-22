@@ -21,6 +21,8 @@ interface DialogWrapperProps {
   size?: DialogSize;
   'data-testid'?: string;
   maxHeight?: string;
+  /** Whether clicking the backdrop closes the dialog. Defaults to true. */
+  closeOnBackdropClick?: boolean;
 }
 
 export function DialogWrapper({
@@ -31,6 +33,7 @@ export function DialogWrapper({
   size = '2xl',
   'data-testid': testId,
   maxHeight = 'max-h-[90vh]',
+  closeOnBackdropClick = true,
 }: DialogWrapperProps) {
   const titleId = useId();
   const [showConfirm, setShowConfirm] = useState(false);
@@ -74,9 +77,15 @@ export function DialogWrapper({
     return () => document.removeEventListener('keydown', handleEscape, true);
   }, [requestClose, showConfirm, handleCancelDiscard]);
 
+  const handleBackdropClick = useCallback(() => {
+    if (closeOnBackdropClick) {
+      requestClose();
+    }
+  }, [closeOnBackdropClick, requestClose]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={requestClose} />
+      <div className="absolute inset-0 bg-black/50" onClick={handleBackdropClick} />
       <div
         role="dialog"
         aria-modal="true"
