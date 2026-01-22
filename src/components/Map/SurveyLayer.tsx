@@ -99,10 +99,8 @@ export default class SurveyLayer {
   private depthRange: { min: number; max: number } = { min: 0, max: 50 };
 
   // Bound event handlers stored for proper cleanup in destroy()
-  private boundStationEnter: ((e: maplibregl.MapLayerMouseEvent) => void) | null = null;
-  private boundStationLeave: (() => void) | null = null;
-  private boundShotEnter: ((e: maplibregl.MapLayerMouseEvent) => void) | null = null;
-  private boundShotLeave: (() => void) | null = null;
+  private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
+  private boundMapLeave: (() => void) | null = null;
 
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
@@ -604,76 +602,122 @@ export default class SurveyLayer {
 
     // Note: Per-layer click handlers removed - unified handler handles all click logic
 
-    // Station hover handlers - use HITBOX layer for larger hover area
-    // Stations take priority over shots
-    // Store bound functions for proper cleanup in destroy()
-    this.boundStationEnter = (e: maplibregl.MapLayerMouseEvent) => {
-      // Don't show hover effects for non-interactive tools (pan/zoom)
+    // Unified mousemove handler for hover detection
+    // Uses queryRenderedFeatures to find nearest station/shot at cursor position
+    // This replaces per-layer mouseenter/mouseleave which don't fire when moving
+    // between features on the same layer (e.g., station to nearby station)
+    this.boundMouseMove = (e: maplibregl.MapMouseEvent) => {
       if (isNonInteractiveTool(this.activeTool)) return;
 
-      this.map.getCanvas().style.cursor = 'pointer';
-      this.callbacks.onFeatureHover?.(true);
-      const feature = e.features?.[0];
-      if (feature?.properties) {
-        const { sectionId, stationIndex } = feature.properties;
-        const ref: StationRef = {
-          section_id: sectionId as number,
-          station_index: stationIndex as number,
-        };
-        this.hoveredStationId = `${sectionId}:${stationIndex}`;
-        // Clear any shot hover since stations take priority
-        if (this.hoveredShotId) {
-          this.hoveredShotId = null;
-          this.callbacks.onShotHover?.(null);
+      // Query both hitbox layers at cursor position
+      const stationFeatures = this.map.queryRenderedFeatures(e.point, {
+        layers: [this.stationsHitboxLayerId],
+      });
+      const shotFeatures = this.map.queryRenderedFeatures(e.point, {
+        layers: [this.shotsHitboxLayerId],
+      });
+
+      // Resolve nearest of each type using existing resolution functions
+      const nearestStation = this.resolveNearestStation(e, stationFeatures);
+      const nearestShot = this.resolveNearestShot(e, shotFeatures);
+
+      // Calculate distances to determine which is closer
+      let stationDist = Infinity;
+      let shotDist = Infinity;
+
+      if (nearestStation?.geometry.type === 'Point') {
+        const coords = nearestStation.geometry.coordinates as [number, number];
+        const screenPos = this.map.project(coords);
+        stationDist = Math.sqrt(
+          (screenPos.x - e.point.x) ** 2 + (screenPos.y - e.point.y) ** 2
+        );
+      }
+
+      if (nearestShot?.geometry.type === 'LineString') {
+        // Find minimum distance to any segment of the shot
+        for (let i = 0; i < nearestShot.geometry.coordinates.length - 1; i++) {
+          const c1 = nearestShot.geometry.coordinates[i] as [number, number] | undefined;
+          const c2 = nearestShot.geometry.coordinates[i + 1] as [number, number] | undefined;
+          if (!c1 || !c2) continue;
+          const p1 = this.map.project(c1);
+          const p2 = this.map.project(c2);
+          const d = this.distanceToLineSegment(e.point.x, e.point.y, p1.x, p1.y, p2.x, p2.y);
+          if (d < shotDist) shotDist = d;
         }
-        this.callbacks.onStationHover?.(ref);
+      }
+
+      // Determine what to highlight (station wins ties - when equidistant or closer)
+      let newHoveredStationId: string | null = null;
+      let newHoveredShotId: string | null = null;
+
+      if (nearestStation && stationDist <= shotDist) {
+        const { sectionId, stationIndex } = nearestStation.properties ?? {};
+        if (sectionId !== undefined && stationIndex !== undefined) {
+          newHoveredStationId = `${sectionId}:${stationIndex}`;
+        }
+      } else if (nearestShot) {
+        const { sectionId, shotId } = nearestShot.properties ?? {};
+        if (sectionId !== undefined && shotId !== undefined) {
+          newHoveredShotId = `${sectionId}:${shotId}`;
+        }
+      }
+
+      // Update state only if changed (avoids unnecessary re-renders)
+      const stationChanged = newHoveredStationId !== this.hoveredStationId;
+      const shotChanged = newHoveredShotId !== this.hoveredShotId;
+
+      if (stationChanged || shotChanged) {
+        this.hoveredStationId = newHoveredStationId;
+        this.hoveredShotId = newHoveredShotId;
+
+        // Update cursor
+        if (newHoveredStationId || newHoveredShotId) {
+          this.map.getCanvas().style.cursor = 'pointer';
+          this.callbacks.onFeatureHover?.(true);
+        } else {
+          this.map.getCanvas().style.cursor = '';
+          this.callbacks.onFeatureHover?.(false);
+        }
+
+        // Notify callbacks for station changes
+        if (stationChanged) {
+          if (newHoveredStationId) {
+            const [secId, stIdx] = newHoveredStationId.split(':').map(Number);
+            this.callbacks.onStationHover?.({ section_id: secId!, station_index: stIdx! });
+          } else {
+            this.callbacks.onStationHover?.(null);
+          }
+        }
+
+        // Notify callbacks for shot changes
+        if (shotChanged) {
+          if (newHoveredShotId) {
+            const [secId, shId] = newHoveredShotId.split(':').map(Number);
+            this.callbacks.onShotHover?.({ sectionId: secId!, shotId: shId! });
+          } else {
+            this.callbacks.onShotHover?.(null);
+          }
+        }
+
         this.updateVisualState();
       }
     };
 
-    this.boundStationLeave = () => {
-      this.callbacks.onFeatureHover?.(false);
-      this.hoveredStationId = null;
-      this.callbacks.onStationHover?.(null);
-      this.updateVisualState();
-    };
-
-    this.map.on('mouseenter', this.stationsHitboxLayerId, this.boundStationEnter);
-    this.map.on('mouseleave', this.stationsHitboxLayerId, this.boundStationLeave);
-
-    // Shot hover handlers - use HITBOX layer, stations take priority
-    this.boundShotEnter = (e: maplibregl.MapLayerMouseEvent) => {
-      // Don't show hover effects for non-interactive tools (pan/zoom)
-      if (isNonInteractiveTool(this.activeTool)) return;
-
-      // Don't highlight shots if a station is already hovered
-      if (this.hoveredStationId) {
-        return;
-      }
-
-      this.map.getCanvas().style.cursor = 'pointer';
-      this.callbacks.onFeatureHover?.(true);
-      const feature = e.features?.[0];
-      if (feature?.properties) {
-        const { sectionId, shotId } = feature.properties;
-        this.hoveredShotId = `${sectionId}:${shotId}`;
-        this.callbacks.onShotHover?.({ sectionId: sectionId as number, shotId: shotId as number });
-        this.updateVisualState();
-      }
-    };
-
-    this.boundShotLeave = () => {
-      // Only clear feature hover if no station is being hovered
-      if (!this.hoveredStationId) {
+    // Clear all hover when cursor leaves the map canvas
+    this.boundMapLeave = () => {
+      if (this.hoveredStationId || this.hoveredShotId) {
+        this.hoveredStationId = null;
+        this.hoveredShotId = null;
+        this.map.getCanvas().style.cursor = '';
         this.callbacks.onFeatureHover?.(false);
+        this.callbacks.onStationHover?.(null);
+        this.callbacks.onShotHover?.(null);
+        this.updateVisualState();
       }
-      this.hoveredShotId = null;
-      this.callbacks.onShotHover?.(null);
-      this.updateVisualState();
     };
 
-    this.map.on('mouseenter', this.shotsHitboxLayerId, this.boundShotEnter);
-    this.map.on('mouseleave', this.shotsHitboxLayerId, this.boundShotLeave);
+    this.map.on('mousemove', this.boundMouseMove);
+    this.map.getCanvas().addEventListener('mouseleave', this.boundMapLeave);
 
     // UNIFIED context menu handler - queries both hitbox layers with station priority
     this.map.on('contextmenu', this.handleContextMenu);
@@ -1741,10 +1785,8 @@ export default class SurveyLayer {
     // Guard against map being destroyed (race condition on unmount)
     if (!hasLiveStyle(this.map)) {
       // Clear bound handler references even if map is destroyed
-      this.boundStationEnter = null;
-      this.boundStationLeave = null;
-      this.boundShotEnter = null;
-      this.boundShotLeave = null;
+      this.boundMouseMove = null;
+      this.boundMapLeave = null;
       return;
     }
 
@@ -1753,17 +1795,11 @@ export default class SurveyLayer {
       this.map.off('click', this.handleMapClick);
       this.map.off('contextmenu', this.handleContextMenu);
 
-      if (this.boundStationEnter) {
-        this.map.off('mouseenter', this.stationsHitboxLayerId, this.boundStationEnter);
+      if (this.boundMouseMove) {
+        this.map.off('mousemove', this.boundMouseMove);
       }
-      if (this.boundStationLeave) {
-        this.map.off('mouseleave', this.stationsHitboxLayerId, this.boundStationLeave);
-      }
-      if (this.boundShotEnter) {
-        this.map.off('mouseenter', this.shotsHitboxLayerId, this.boundShotEnter);
-      }
-      if (this.boundShotLeave) {
-        this.map.off('mouseleave', this.shotsHitboxLayerId, this.boundShotLeave);
+      if (this.boundMapLeave) {
+        this.map.getCanvas().removeEventListener('mouseleave', this.boundMapLeave);
       }
 
       // Remove all layers first (must be done before removing their sources)
@@ -1852,9 +1888,7 @@ export default class SurveyLayer {
     }
 
     // Clear bound handler references
-    this.boundStationEnter = null;
-    this.boundStationLeave = null;
-    this.boundShotEnter = null;
-    this.boundShotLeave = null;
+    this.boundMouseMove = null;
+    this.boundMapLeave = null;
   }
 }
