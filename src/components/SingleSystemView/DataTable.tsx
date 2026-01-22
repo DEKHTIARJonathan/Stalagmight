@@ -5,6 +5,7 @@ import { useUIStore } from '../../store/uiStore';
 import { EditableTable } from '../common/Table';
 import { Select, type SelectOption } from '../common/Select';
 import type { ProjectWarning } from '../../types/commands';
+import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
 
 interface DataTableProps {
   sections: Section[];
@@ -62,9 +63,23 @@ export default function DataTable({ sections }: DataTableProps) {
     value: unknown,
     _index: number
   ) => {
-    if (selectedSection) {
-      await updateShot(selectedSection.id, shot.id, { [key]: value });
+    if (!selectedSection) return;
+
+    // Handle virtual azimuth column with delta-offset behavior
+    if (key === '_azimuth_avg') {
+      const newValue = value as number;
+      const currentMean = circularMeanDegrees(shot.azimuth_in, shot.azimuth_out);
+      const delta = newValue - currentMean;
+      const newIn = normalizeAngle(shot.azimuth_in + delta);
+      const newOut = normalizeAngle(shot.azimuth_out + delta);
+      await updateShot(selectedSection.id, shot.id, {
+        azimuth_in: newIn,
+        azimuth_out: newOut,
+      });
+      return;
     }
+
+    await updateShot(selectedSection.id, shot.id, { [key]: value });
   };
 
   // Reserved for future use when row selection is enabled
@@ -103,8 +118,14 @@ export default function DataTable({ sections }: DataTableProps) {
     },
     { key: 'id', header: '#', width: '50px' },
     { key: 'length', header: 'Length (m)', width: '80px', align: 'right' as const },
-    { key: 'azimuth_in', header: 'Azi In', width: '70px', align: 'right' as const },
-    { key: 'azimuth_out', header: 'Azi Out', width: '70px', align: 'right' as const },
+    {
+      key: '_azimuth_avg',
+      header: 'Azi',
+      width: '70px',
+      align: 'right' as const,
+      getValue: (shot: Shot) =>
+        circularMeanDegrees(shot.azimuth_in, shot.azimuth_out),
+    },
     { key: 'depth_in', header: 'Depth In', width: '80px', align: 'right' as const },
     { key: 'depth_out', header: 'Depth Out', width: '80px', align: 'right' as const },
     { key: 'left', header: 'L', width: '50px', align: 'right' as const },
@@ -123,8 +144,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
   const editableColumns = [
     'length',
-    'azimuth_in',
-    'azimuth_out',
+    '_azimuth_avg',
     'depth_in',
     'depth_out',
     'left',

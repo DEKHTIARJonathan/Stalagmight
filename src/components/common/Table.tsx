@@ -6,6 +6,8 @@ interface Column<T> {
   width?: string;
   render?: (item: T, index: number) => ReactNode;
   align?: 'left' | 'center' | 'right';
+  /** Get the value for a virtual column (not a direct property on the item) */
+  getValue?: (item: T) => unknown;
 }
 
 interface TableProps<T> {
@@ -160,7 +162,11 @@ export function EditableTable<T extends object>({
     index: number
   ) => {
     // Try to parse as number if the original value was a number
-    const originalValue = (item as Record<string, unknown>)[key];
+    // For virtual columns (getValue), check the returned value type
+    const column = columns.find((c) => c.key === key);
+    const originalValue = column?.getValue
+      ? column.getValue(item)
+      : (item as Record<string, unknown>)[key];
     let parsedValue: unknown = value;
 
     if (typeof originalValue === 'number') {
@@ -319,7 +325,10 @@ export function EditableTable<T extends object>({
                 >
                   {columns.map((column, columnIndex) => {
                     const isEditable = editableColumns.includes(column.key);
-                    const value = (item as Record<string, unknown>)[column.key];
+                    // Use getValue for virtual columns, otherwise access property directly
+                    const value = column.getValue
+                      ? column.getValue(item)
+                      : (item as Record<string, unknown>)[column.key];
                     const isFirstColumn = columnIndex === 0;
 
                     return (
