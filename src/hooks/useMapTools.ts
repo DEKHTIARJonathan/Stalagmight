@@ -35,7 +35,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     setDrawFromStation,
     setHoveredStation,
     setHoveredShot,
-    setHoveredSectionId,
     openDialog,
     snappedStation,
     showStations,
@@ -328,60 +327,30 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     ]
   );
 
-  // Handle station hover
-  // When a station is hovered, set hoveredSectionId for panel highlight
-  // When leaving a station (null), only clear hoveredSectionId if no shot is hovered
-  // This prevents flicker when transitioning between features in the same section
+  // Handle station hover - only highlights the specific station, not the whole section
   const handleStationHover = useCallback(
     (ref: StationRef | null) => {
       // GUARD: No hover for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) {
         setHoveredStation(null);
-        setHoveredSectionId(null);
         return;
       }
       setHoveredStation(ref);
-      if (ref) {
-        // Entering a station - set section for panel highlight
-        setHoveredSectionId(ref.section_id);
-      } else {
-        // Leaving a station - only clear section if no shot is hovered
-        // Check current state to avoid flicker during feature transitions
-        const { hoveredShot } = useUIStore.getState();
-        if (!hoveredShot) {
-          setHoveredSectionId(null);
-        }
-      }
     },
-    [activeTool, setHoveredStation, setHoveredSectionId]
+    [activeTool, setHoveredStation]
   );
 
-  // Handle shot hover
-  // When a shot is hovered, set hoveredSectionId for panel highlight
-  // When leaving a shot (null), only clear hoveredSectionId if no station is hovered
-  // This prevents flicker when transitioning between features in the same section
+  // Handle shot hover - only highlights the specific shot, not the whole section
   const handleShotHover = useCallback(
     (shot: { sectionId: SectionId; shotId: ShotId } | null) => {
       // GUARD: No hover for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) {
         setHoveredShot(null);
-        setHoveredSectionId(null);
         return;
       }
       setHoveredShot(shot);
-      if (shot) {
-        // Entering a shot - set section for panel highlight
-        setHoveredSectionId(shot.sectionId);
-      } else {
-        // Leaving a shot - only clear section if no station is hovered
-        // Check current state to avoid flicker during feature transitions
-        const { hoveredStation } = useUIStore.getState();
-        if (!hoveredStation) {
-          setHoveredSectionId(null);
-        }
-      }
     },
-    [activeTool, setHoveredShot, setHoveredSectionId]
+    [activeTool, setHoveredShot]
   );
 
   // Handle context menu

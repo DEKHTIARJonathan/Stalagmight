@@ -945,14 +945,14 @@ export default class SurveyLayer {
     const baseRadius = this.getStationRadius();
 
     // Station stroke width with section-level priorities
-    // Priority: snap (4) > individual hover (3) > section hover (2.5) > individual selected (2) > section selected (2) > zeroDatum (2) > normal (1)
-    // Section hover uses 2.5 to be visually distinct from individual hover (3) while still being more prominent than selected (2)
+    // Priority: snap (5) > individual hover (4) > section hover (3) > individual selected (2.5) > section selected (2.5) > zeroDatum (2) > normal (1)
+    // Section hover uses 3 to be clearly visible compared to normal (1)
     const stationStrokeWidth = buildPriorityExpression([
-      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.snappedStationId), value: 4 },
-      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.hoveredStationId), value: 3 },
-      { condition: inSection(this.hoveredSectionId), value: 2.5 },
-      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.selectedStationId), value: 2 },
-      { condition: inSection(this.selectedSectionId), value: 2 },
+      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.snappedStationId), value: 5 },
+      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.hoveredStationId), value: 4 },
+      { condition: inSection(this.hoveredSectionId), value: 3 },
+      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.selectedStationId), value: 2.5 },
+      { condition: inSection(this.selectedSectionId), value: 2.5 },
     ], 1);
     // Wrap with zeroDatum check since buildPriorityExpression doesn't handle property-based fallbacks
     this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-width', [
@@ -991,13 +991,13 @@ export default class SurveyLayer {
     ]);
 
     // Shot line width with section-level priorities
-    // Priority: individual hover (4) > section hover (3) > individual selected (3) > section selected (2.5) > normal (2)
-    // Section hover uses 3 to be visually distinct from individual hover (4) while still being more prominent than normal (2)
+    // Priority: individual hover (5) > section hover (4) > individual selected (3.5) > section selected (3) > normal (2)
+    // Section hover uses 4 to be clearly visible compared to normal (2)
     const shotLineWidth = buildPriorityExpression([
-      { condition: compositeIdEquals(['sectionId', 'shotId'], this.hoveredShotId), value: 4 },
-      { condition: inSection(this.hoveredSectionId), value: 3 },
-      { condition: compositeIdEquals(['sectionId', 'shotId'], this.selectedShotId), value: 3 },
-      { condition: inSection(this.selectedSectionId), value: 2.5 },
+      { condition: compositeIdEquals(['sectionId', 'shotId'], this.hoveredShotId), value: 5 },
+      { condition: inSection(this.hoveredSectionId), value: 4 },
+      { condition: compositeIdEquals(['sectionId', 'shotId'], this.selectedShotId), value: 3.5 },
+      { condition: inSection(this.selectedSectionId), value: 3 },
     ], 2);
     this.map.setPaintProperty(this.shotsLayerId, 'line-width', shotLineWidth);
 
