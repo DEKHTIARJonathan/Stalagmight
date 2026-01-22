@@ -56,9 +56,8 @@ Example: `15 shots | 42.3m | Depth: 2.1-15.4m`
 - [ ] aria-label on stats container with descriptive text
 - [ ] TypeScript types pass (pnpm tsc --noEmit)
 ## Done summary
-TBD
-
+Added selection-based statistics to DmpSelectionDialog metadata header, showing shot count, total length, and depth range that update in real-time when sections are toggled.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: af0b31e4cc915b1b93551ba44d5ab1fc28b0c808
+- Tests: pnpm tsc --noEmit, pnpm test:ui -- --grep DMP
 - PRs:
