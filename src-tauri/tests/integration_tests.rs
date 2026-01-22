@@ -10,7 +10,7 @@ use cavechef_lib::models::{
 };
 use cavechef_lib::persistence::Database;
 use chrono::Utc;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tempfile::NamedTempFile;
 
@@ -628,9 +628,12 @@ fn test_undo_persistence() {
 #[test]
 fn test_undo_zero_datum() {
     // This tests the data structure for undo datum
+    let mut offsets = HashMap::new();
+    offsets.insert(0, Some((10.0, 20.0)));
     let undo_data = UndoData::ZeroDatumInfo {
         station_ref: StationRef::new(0, 0),
         previous_gps: None,
+        previous_offsets: offsets,
     };
 
     // Verify serialization
@@ -641,9 +644,11 @@ fn test_undo_zero_datum() {
         UndoData::ZeroDatumInfo {
             station_ref,
             previous_gps,
+            previous_offsets,
         } => {
             assert_eq!(station_ref, StationRef::new(0, 0));
             assert!(previous_gps.is_none());
+            assert_eq!(previous_offsets.get(&0), Some(&Some((10.0, 20.0))));
         }
         _ => panic!("Wrong undo data type"),
     }
@@ -683,6 +688,7 @@ fn test_comprehensive_undo_types() {
                 longitude: -122.0,
                 depth_reference: 5.0,
             }),
+            previous_offsets: HashMap::new(),
         },
         UndoData::ProjectSnapshot("{}".to_string()),
     ];
