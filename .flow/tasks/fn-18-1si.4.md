@@ -37,9 +37,8 @@ aria-label="Section statistics: 5 shots, 42.3 meters total length, depth range 2
 - [ ] TESTING.md ARIA requirements section updated
 - [ ] Documentation follows existing format/style conventions
 ## Done summary
-TBD
-
+Updated SPEC.md and TESTING.md documentation to reflect the new statistics footer feature in DMP import dialogs, including mockup updates, formatting rules, test IDs, and ARIA label patterns.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 09a15ae, cdb1d36
+- Tests: pnpm tsc --noEmit
 - PRs:
