@@ -278,10 +278,11 @@ test.describe('Panel Interactions', () => {
     await page.keyboard.press('Control+3');
     await waitForMapIdle(page);
 
-    // Select a section with shots in the data table
+    // Select a section with shots in the data table (custom Select component)
     const sectionSelector = page.getByTestId('data-table-section-select');
     if (await sectionSelector.isVisible()) {
-      await sectionSelector.selectOption({ label: 'Main Passage' });
+      await sectionSelector.click();
+      await sectionSelector.locator('[role="option"]:has-text("Main Passage")').click();
       await waitForMapIdle(page);
     }
 

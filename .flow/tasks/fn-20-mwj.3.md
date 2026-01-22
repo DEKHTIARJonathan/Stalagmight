@@ -43,9 +43,19 @@ Select component signature at `src/components/common/Select.tsx:18-37`:
 - [ ] data-testid="data-table-section-select" preserved
 - [ ] Type check passes: `pnpm tsc --noEmit`
 ## Done summary
-TBD
+Replaced native HTML `<select>` in DataTable header with themed `<Select>` component for consistent dark theme styling.
 
+Changes:
+- Imported Select component and SelectOption type
+- Added memoized sectionOptions array conversion (id → value string, name → label)
+- Replaced native select (lines 153-164) with themed Select component
+- Updated e2e tests to use custom Select interaction pattern (click to open, click option)
+
+The Select component provides:
+- Dark theme styling matching rest of app
+- Keyboard navigation (Arrow keys, Enter, Escape)
+- Accessible ARIA attributes
 ## Evidence
 - Commits:
-- Tests:
+- Tests: command, result
 - PRs:

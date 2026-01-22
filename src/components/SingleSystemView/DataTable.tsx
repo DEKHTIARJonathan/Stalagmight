@@ -3,6 +3,7 @@ import { type Section, type Shot } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { EditableTable } from '../common/Table';
+import { Select, type SelectOption } from '../common/Select';
 import type { ProjectWarning } from '../../types/commands';
 
 interface DataTableProps {
@@ -33,6 +34,15 @@ export default function DataTable({ sections }: DataTableProps) {
   const getShotWarnings = (sectionId: number, shotId: number): ProjectWarning[] => {
     return shotWarningsMap.get(`${sectionId}:${shotId}`) ?? [];
   };
+
+  // Convert sections to SelectOption format
+  const sectionOptions: SelectOption[] = useMemo(() =>
+    sections.map((section) => ({
+      value: String(section.id),
+      label: section.name ?? `Section ${section.id}`,
+    })),
+    [sections]
+  );
 
   // Update selected section when sections change (e.g., first load)
   useEffect(() => {
@@ -150,18 +160,12 @@ export default function DataTable({ sections }: DataTableProps) {
           <>
             <span className="text-text-secondary">|</span>
             <label className="text-sm text-text-secondary">Section:</label>
-            <select
-              value={selectedSectionId ?? ''}
-              onChange={(e) => setSelectedSectionId(Number(e.target.value))}
-              className="bg-background border border-border rounded px-2 py-1 text-sm"
+            <Select
+              value={String(selectedSectionId ?? '')}
+              onChange={(value) => setSelectedSectionId(Number(value))}
+              options={sectionOptions}
               data-testid="data-table-section-select"
-            >
-              {sections.map((section) => (
-                <option key={section.id} value={section.id}>
-                  {section.name ?? `Section ${section.id}`}
-                </option>
-              ))}
-            </select>
+            />
           </>
         )}
         {!dataTableOpen && selectedSection && (
