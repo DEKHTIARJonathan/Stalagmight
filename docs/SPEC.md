@@ -2,7 +2,7 @@
 
 ## Specification Document v1.0
 
-**Last Updated**: 2026-01-18
+**Last Updated**: 2026-01-22
 **Status**: Implementation Phase B - DMP Import Refactoring
 **Target Version**: 1.0 (Beta Release)
 
@@ -423,7 +423,93 @@ Primary view for survey work.
 | Detail Panel | Open, 300px | Resizable, collapsible |
 | Data Table | Collapsed | Resizable (height), collapsible |
 
-### 6.3 Tools
+### 6.3 Undo/Redo History Dropdown
+
+The Undo and Redo toolbar buttons feature dropdown menus showing recent actions with timestamps and diff previews.
+
+#### Trigger Behavior
+
+- **Hover**: Dropdown opens after 300ms delay when hovering over Undo/Redo buttons
+- **Chevron Indicator**: A small `▾` chevron appears next to the button text when history is available
+- **Click**: Single click on button performs standard undo/redo (one step)
+- **Empty State**: No dropdown shown when stack is empty
+
+#### Dropdown Layout
+
+```
+┌─────────────────────────────────────────────┐
+│  UNDO HISTORY                               │
+├─────────────────────────────────────────────┤
+│  + Create section "Main Line"    2 min ago  │
+│  ✏ Update shot 3                 5 min ago  │
+│  ✕ Delete section "Test"         Jan 12...  │
+│  ⊕ Merge stations                Jan 12...  │
+│  ...                                        │
+└─────────────────────────────────────────────┘
+         │
+         ▼ (hover item)
+    ┌──────────────────────┐
+    │  length              │
+    │  5.0 → 10.5          │
+    │                      │
+    │  azimuth_in          │
+    │  45.0 → 52.3         │
+    │                      │
+    │  +1 more             │
+    └──────────────────────┘
+```
+
+#### Item Display
+
+Each item shows:
+- **Icon**: Text icon based on command type (matches toolbar style)
+  - `+` Create section/shot
+  - `✏` Update shot/section metadata
+  - `✕` Delete section/shot
+  - `⊕` Merge stations
+  - `⊖` Unmerge stations
+  - `◉` Set zero datum
+  - `○` Remove zero datum
+  - `↔` Move section/station
+  - `┄` Set shot virtual
+  - `▤` Batch operation
+  - `•` Default/other
+- **Description**: Truncated at ~40 characters with ellipsis
+- **Timestamp**: Smart hybrid format
+  - Less than 1 day: relative (e.g., "2 minutes ago")
+  - 1 day or older: absolute (e.g., "Jan 12, 3:45 PM")
+  - Legacy entries without timestamp: "Unknown"
+
+#### Detail Preview Popup
+
+Hovering an item shows a preview popup with diff information (where available):
+- Displays up to 3 field changes with old → new values
+- Shows count of additional changes beyond those displayed
+- Flips to left side if would overflow right viewport edge
+- Commands without preview data show "No details"
+
+#### Scrolling
+
+- Maximum height: 10 items visible (~440px)
+- Auto-hide scrollbar (appears on hover)
+- Smooth scroll behavior
+
+#### Index Semantics
+
+- **Index 0 = most recent action** (top of stack, first to undo/redo)
+- Clicking item at index N executes N+1 undo/redo operations
+- Example: `undo_to(3)` undos items at indices 0, 1, 2, 3 (4 total undos)
+
+#### Close Behavior
+
+- Dropdown closes on:
+  - Mouse leaving the button/dropdown area (100ms buffer)
+  - Pressing Escape key
+  - Pressing Ctrl+Z or Ctrl+Y (global undo/redo shortcuts)
+  - Clicking outside the dropdown
+  - Clicking an item (after executing the action)
+
+### 6.4 Tools
 
 | Tool | Shortcut | Click Station | Click Shot | Click Empty | Drag |
 |------|----------|---------------|------------|-------------|------|
@@ -437,7 +523,7 @@ Primary view for survey work.
 | **Move Section** | V | - | - | - | Drag unanchored section |
 | **Move Station** | T | - | - | - | Drag unanchored station |
 
-### 6.4 Map Features
+### 6.5 Map Features
 
 #### Display Toggles (Right-click or menu)
 - Stations (dots)
@@ -459,7 +545,7 @@ Primary view for survey work.
 - Context menu: Right click
 - Snap to station: Automatic when within threshold (configurable)
 
-### 6.5 Visual Indicators
+### 6.6 Visual Indicators
 
 | Element | Appearance |
 |---------|------------|
@@ -472,7 +558,7 @@ Primary view for survey work.
 | Marked as resolved | Light red highlight |
 | Loop closure line | Dashed line with error percentage |
 
-### 6.6 Dialogs
+### 6.7 Dialogs
 
 #### DMP Import - Two-Step Flow
 
@@ -855,29 +941,115 @@ pub enum Command {
 }
 ```
 
-### 8.2 Command Execution
+### 8.2 UndoEntry Structure
+
+Each entry in the undo/redo stack contains:
 
 ```rust
-pub struct CommandResult {
-    pub success: bool,
-    pub state_update: StateUpdate,
+pub struct UndoEntry {
+    /// The command that was executed
+    pub command: Command,
+    /// Data needed to undo this command
     pub undo_data: UndoData,
-    pub warnings: Vec<Warning>,
+    /// Timestamp when the command was executed (None for legacy entries)
+    pub timestamp: Option<DateTime<Utc>>,
 }
+```
 
+**Timestamp Handling:**
+- New entries automatically receive `Utc::now()` timestamp on creation
+- Timestamps persist across app restarts via the `executed_at` column in SQLite
+- Legacy entries (from before timestamps were added) have `None` and display as "Unknown" in UI
+- Format: ISO 8601 / RFC 3339 (e.g., `2024-01-12T14:32:15.123Z`)
+
+### 8.3 UndoData Variants
+
+```rust
 pub enum UndoData {
     /// Simple inverse command
     InverseCommand(Command),
 
-    /// State delta for complex operations
-    StateDelta {
-        affected_entities: Vec<EntitySnapshot>,
+    /// Previous values for updates (JSON serialized)
+    PreviousValues {
+        section_id: SectionId,
+        shot_id: Option<ShotId>,
+        values_json: String,
     },
 
-    /// Full state snapshot for destructive operations
-    Snapshot(ProjectSnapshot),
-}
+    /// Full section snapshot for deleted sections
+    SectionSnapshot {
+        section_id: SectionId,
+        section_data: SectionData,
+    },
 
+    /// Shot snapshot for deleted shots
+    ShotSnapshot {
+        section_id: SectionId,
+        shot_id: ShotId,
+        shot_data: ShotData,
+        position: usize,
+    },
+
+    /// Merge info for unmerging stations
+    MergeInfo {
+        station_a: StationRef,
+        station_b: StationRef,
+        strategy: ClosureStrategy,
+    },
+
+    /// Zero datum info for restoring previous GPS
+    ZeroDatumInfo {
+        station_ref: StationRef,
+        previous_gps: Option<GpsCoordinates>,
+    },
+
+    /// Full project snapshot for batch operations
+    ProjectSnapshot(String),
+
+    /// Before and after snapshots for operations with dynamic IDs
+    ProjectSnapshotPair {
+        before: String,
+        after: String,
+    },
+
+    /// No undo data
+    None,
+}
+```
+
+### 8.4 Stack Exposure Commands
+
+The undo/redo stacks are exposed to the frontend via Tauri IPC commands:
+
+| Command | Description | Returns |
+|---------|-------------|---------|
+| `get_undo_stack` | Get full undo stack with preview data | `Vec<UndoHistoryItem>` |
+| `get_redo_stack` | Get full redo stack with preview data | `Vec<UndoHistoryItem>` |
+| `undo_to` | Undo multiple steps to index N | `UndoRedoResult` |
+| `redo_to` | Redo multiple steps to index N | `UndoRedoResult` |
+
+**UndoHistoryItem DTO:**
+```typescript
+interface UndoHistoryItem {
+  index: number;           // Position in stack (0 = most recent)
+  description: string;     // Human-readable command description
+  timestamp: string | null; // ISO 8601 or null for legacy
+  commandType: string;     // For icon mapping: "create_section", etc.
+  previewData: {           // Diff preview (or null)
+    changes: Array<{ field: string; oldValue: string; newValue: string }>;
+    additionalChanges: number;
+  } | null;
+}
+```
+
+**Multi-step undo/redo:**
+- `undo_to(N)` executes N+1 undo operations (indices 0 through N)
+- Operations execute sequentially (not transactional)
+- Partial completion on failure is acceptable
+
+### 8.5 Command Execution
+
+```rust
 impl CommandExecutor {
     pub fn execute(&mut self, cmd: Command) -> Result<CommandResult> {
         // 1. Validate
@@ -886,8 +1058,8 @@ impl CommandExecutor {
         // 2. Execute
         let (state_update, undo_data) = self.apply(&cmd)?;
 
-        // 3. Push to undo stack
-        self.undo_stack.push(UndoEntry { cmd: cmd.clone(), undo_data: undo_data.clone() });
+        // 3. Push to undo stack (timestamp added automatically)
+        self.undo_stack.push_with_data(cmd.clone(), undo_data.clone());
         self.redo_stack.clear();
 
         // 4. Log
@@ -918,7 +1090,7 @@ impl CommandExecutor {
 }
 ```
 
-### 8.3 Transient Operations
+### 8.6 Transient Operations
 
 These do NOT go through Command Executor:
 
@@ -2022,6 +2194,21 @@ cavechef/
 | Toggle Data Table | Ctrl+3 |
 
 **Note**: When Pan (P) or Zoom (Z) tools are active, selection-related shortcuts (Ctrl+A, Delete/Backspace) are disabled to prevent accidental modifications while navigating the map. Hover effects and click selection are also disabled.
+
+### Undo/Redo Dropdown Keyboard Navigation
+
+When the Undo or Redo dropdown is open:
+
+| Action | Shortcut |
+|--------|----------|
+| Open dropdown | Arrow Down (when button focused) |
+| Navigate items | Arrow Up / Arrow Down |
+| Jump to first item | Home |
+| Jump to last item | End |
+| Select item | Enter |
+| Close dropdown | Escape |
+
+The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortcuts), allowing quick keyboard-driven workflows.
 
 ---
 
