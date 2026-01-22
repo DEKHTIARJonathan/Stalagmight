@@ -2,11 +2,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use tracing::{debug, info};
 
 use super::{
-    ClosureStrategy, Coordinates, GpsBounds, GpsCoordinates, LoopClosure, Section, SectionData,
-    SectionId, SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station, StationMerge,
-    StationRef, ZeroDatum,
+    gps_to_local, ClosureStrategy, Coordinates, GpsBounds, GpsCoordinates, LoopClosure, Section,
+    SectionData, SectionId, SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station,
+    StationMerge, StationRef, ZeroDatum,
 };
 
 /// A complete cave survey project
@@ -534,9 +535,22 @@ impl Project {
         None
     }
 
-    /// Set a station as the zero datum
-    /// Returns Err if the station doesn't exist, GPS is invalid, or if a connected station already has a zero datum
-    pub fn set_zero_datum(&mut self, station_ref: StationRef, gps: GpsCoordinates) -> Result<bool, String> {
+    /// Set a station as the zero datum and reposition connected sections.
+    ///
+    /// When a GPS reference is set:
+    /// - For the first datum: The station is repositioned to (0, 0) via section offsets
+    /// - For subsequent datums: The station is positioned at the GPS offset from the first datum
+    ///
+    /// All sections connected through station merges are moved together.
+    /// Z-coordinates (depths) are preserved and not affected by GPS positioning.
+    ///
+    /// Returns Err if the station doesn't exist, GPS is invalid, or if a connected station
+    /// already has a zero datum.
+    pub fn set_zero_datum(
+        &mut self,
+        station_ref: StationRef,
+        gps: GpsCoordinates,
+    ) -> Result<bool, String> {
         if !self.station_exists(station_ref) {
             return Err("Station does not exist".to_string());
         }
@@ -553,12 +567,133 @@ impl Project {
             ));
         }
 
+        info!(
+            "Setting zero datum on station {}:{} with GPS ({}, {})",
+            station_ref.section_id, station_ref.station_index, gps.latitude, gps.longitude
+        );
+
+        // Get all sections connected through merges
+        let connected_sections = self.get_connected_section_ids(station_ref.section_id);
+        debug!(
+            "Connected sections for datum station: {:?}",
+            connected_sections
+        );
+
+        // Compute current raw coordinates of the datum station
+        let current_coords = self
+            .compute_station_raw_coords(station_ref)
+            .ok_or_else(|| "Failed to compute station coordinates".to_string())?;
+        debug!(
+            "Current station raw coords: ({}, {}, {})",
+            current_coords.x, current_coords.y, current_coords.z
+        );
+
+        // Determine target position based on whether this is the first datum
+        let target_x: f64;
+        let target_y: f64;
+
+        if let Some(first_datum) = self.zero_datums.first() {
+            // Subsequent datum: compute GPS offset from first datum
+            let (east, north) = gps_to_local(&gps, &first_datum.gps);
+            target_x = east;
+            target_y = north;
+            debug!(
+                "Subsequent datum: GPS offset from first datum = ({}, {})",
+                east, north
+            );
+        } else {
+            // First datum: position at origin (0, 0)
+            target_x = 0.0;
+            target_y = 0.0;
+            debug!("First datum: positioning at origin (0, 0)");
+        }
+
+        // Compute the offset needed to move station from current position to target
+        let offset_delta_x = target_x - current_coords.x;
+        let offset_delta_y = target_y - current_coords.y;
+        debug!(
+            "Offset delta to apply: ({}, {})",
+            offset_delta_x, offset_delta_y
+        );
+
+        // Apply offset to all connected sections
+        for section_id in &connected_sections {
+            let current_offset = self.section_offsets.get(section_id).copied().unwrap_or((0.0, 0.0));
+            let new_offset = (
+                current_offset.0 + offset_delta_x,
+                current_offset.1 + offset_delta_y,
+            );
+            self.section_offsets.insert(*section_id, new_offset);
+            debug!(
+                "Section {}: offset {:?} -> {:?}",
+                section_id, current_offset, new_offset
+            );
+        }
+
+        // Store the GPS datum
         // Update in-place if datum exists (preserves order/position for stable center)
-        if let Some(existing) = self.zero_datums.iter_mut().find(|zd| zd.station_ref == station_ref) {
+        if let Some(existing) = self
+            .zero_datums
+            .iter_mut()
+            .find(|zd| zd.station_ref == station_ref)
+        {
             existing.gps = gps;
         } else {
             self.zero_datums.push(ZeroDatum { station_ref, gps });
         }
+
+        self.touch();
+        info!(
+            "Zero datum set successfully. {} sections repositioned.",
+            connected_sections.len()
+        );
+        Ok(true)
+    }
+
+    /// Store a zero datum without triggering section repositioning.
+    ///
+    /// This is an internal helper for use by `merge_projects` and import paths
+    /// that need to copy datums from source projects without recomputing offsets.
+    /// The source project's section_offsets are assumed to already be correct.
+    ///
+    /// Returns Err if validation fails (same rules as `set_zero_datum`).
+    pub fn store_zero_datum_without_repositioning(
+        &mut self,
+        station_ref: StationRef,
+        gps: GpsCoordinates,
+    ) -> Result<bool, String> {
+        if !self.station_exists(station_ref) {
+            return Err("Station does not exist".to_string());
+        }
+
+        // Validate GPS coordinates
+        GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference)?;
+
+        // Check for connected zero datum (same validation as set_zero_datum)
+        if let Some(existing) = self.find_connected_zero_datum(station_ref) {
+            return Err(format!(
+                "Cannot set zero datum: station {}.{} is connected to station {}.{} which already has a zero datum",
+                station_ref.section_id, station_ref.station_index,
+                existing.section_id, existing.station_index
+            ));
+        }
+
+        debug!(
+            "Storing zero datum without repositioning on station {}:{} with GPS ({}, {})",
+            station_ref.section_id, station_ref.station_index, gps.latitude, gps.longitude
+        );
+
+        // Store the GPS datum without computing or applying offsets
+        if let Some(existing) = self
+            .zero_datums
+            .iter_mut()
+            .find(|zd| zd.station_ref == station_ref)
+        {
+            existing.gps = gps;
+        } else {
+            self.zero_datums.push(ZeroDatum { station_ref, gps });
+        }
+
         self.touch();
         Ok(true)
     }
@@ -648,17 +783,9 @@ impl Project {
             }
         }
 
-        // Apply zero datums as offsets
-        if let Some(zd) = self.primary_zero_datum() {
-            if let Some(datum_station) = stations.iter().find(|s| s.station_ref == zd.station_ref) {
-                let offset = datum_station.coordinates;
-                for station in &mut stations {
-                    station.coordinates.x -= offset.x;
-                    station.coordinates.y -= offset.y;
-                    // Keep relative depth, but could also use GPS depth reference
-                }
-            }
-        }
+        // NOTE: Global zero datum subtraction removed (fn-19-mmx.2).
+        // Positioning is now controlled solely by section_offsets, which are
+        // computed when set_zero_datum() is called.
 
         // Mark merged stations - build merge groups (transitive closure)
         // First, build a map of station_ref -> group_id using Union-Find logic
@@ -1007,6 +1134,230 @@ mod tests {
 
         let invalid = project.compute_station_raw_coords(StationRef::new(section_id, 5));
         assert!(invalid.is_none());
+    }
+
+    #[test]
+    fn set_zero_datum_first_datum_positions_station_at_origin() {
+        let mut project = Project::new("FirstDatum".to_string(), None);
+        // Create a section with a shot going north (azimuth 0)
+        let section_id = project
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 10.0, 0.0, 1.0)],
+                ..Default::default()
+            })
+            .id;
+
+        // Station 1 is at (0, 10, 1) before datum is set
+        let station_ref = StationRef::new(section_id, 1);
+        let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
+
+        // Set first datum on station 1
+        project.set_zero_datum(station_ref, gps).unwrap();
+
+        // Check that offset was applied to move station to origin
+        let offset = project.section_offsets.get(&section_id).unwrap();
+        // Station was at (0, 10), needs offset (-0, -10) to be at origin
+        assert!((offset.0 - 0.0).abs() < 1e-6, "Expected x offset ~0, got {}", offset.0);
+        assert!((offset.1 - (-10.0)).abs() < 1e-6, "Expected y offset ~-10, got {}", offset.1);
+
+        // Verify station coordinates after applying offset
+        let coords = project.compute_station_raw_coords(station_ref).unwrap();
+        assert!((coords.x).abs() < 1e-6, "Expected x ~0, got {}", coords.x);
+        assert!((coords.y).abs() < 1e-6, "Expected y ~0, got {}", coords.y);
+        // Z should be preserved
+        assert!((coords.z - 1.0).abs() < 1e-6, "Expected z ~1, got {}", coords.z);
+    }
+
+    #[test]
+    fn set_zero_datum_connected_sections_move_together() {
+        let mut project = Project::new("Connected".to_string(), None);
+        // Create two sections
+        let a = project
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+        let b = project
+            .add_section(SectionData {
+                shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+
+        // Merge section b's station 0 to section a's station 1
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(a, 1),
+            station_b: StationRef::new(b, 0),
+            merged_at: Utc::now(),
+        });
+
+        // Set datum on section a, station 0
+        let station_ref = StationRef::new(a, 0);
+        let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
+        project.set_zero_datum(station_ref, gps).unwrap();
+
+        // Both sections should have offsets applied
+        assert!(project.section_offsets.contains_key(&a));
+        assert!(project.section_offsets.contains_key(&b));
+
+        // Section a station 0 should be at origin
+        let coords_a0 = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
+        assert!((coords_a0.x).abs() < 1e-6);
+        assert!((coords_a0.y).abs() < 1e-6);
+    }
+
+    #[test]
+    fn set_zero_datum_subsequent_datum_uses_gps_offset() {
+        let mut project = Project::new("SubsequentDatum".to_string(), None);
+        // Create two unconnected sections
+        let a = project
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+        let b = project
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+
+        // Set first datum on section a, station 0
+        let gps_a = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
+        project.set_zero_datum(StationRef::new(a, 0), gps_a).unwrap();
+
+        // Section a station 0 should be at origin
+        let coords_a0 = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
+        assert!((coords_a0.x).abs() < 1e-6);
+        assert!((coords_a0.y).abs() < 1e-6);
+
+        // Set second datum on section b with GPS offset
+        // At equator, 0.01 degree longitude ~ 1113 meters east
+        let gps_b = GpsCoordinates::new(0.0, 0.01, 0.0).unwrap();
+        project.set_zero_datum(StationRef::new(b, 0), gps_b).unwrap();
+
+        // Section b station 0 should be at approximately (1113, 0)
+        let coords_b0 = project.compute_station_raw_coords(StationRef::new(b, 0)).unwrap();
+        assert!(
+            (coords_b0.x - 1113.2).abs() < 10.0,
+            "Expected x ~1113, got {}",
+            coords_b0.x
+        );
+        assert!(coords_b0.y.abs() < 10.0, "Expected y ~0, got {}", coords_b0.y);
+    }
+
+    #[test]
+    fn set_zero_datum_z_coordinates_preserved() {
+        let mut project = Project::new("PreserveZ".to_string(), None);
+        let section_id = project
+            .add_section(SectionData {
+                shots: vec![
+                    shot(0.0, 0.0, 10.0, 0.0, 5.0),
+                    shot(0.0, 0.0, 10.0, 5.0, 12.0),
+                ],
+                ..Default::default()
+            })
+            .id;
+
+        // Set datum on station 1 (which has z=5)
+        let station_ref = StationRef::new(section_id, 1);
+        let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
+        project.set_zero_datum(station_ref, gps).unwrap();
+
+        // Check all stations have preserved z coordinates
+        let coords_0 = project.compute_station_raw_coords(StationRef::new(section_id, 0)).unwrap();
+        let coords_1 = project.compute_station_raw_coords(StationRef::new(section_id, 1)).unwrap();
+        let coords_2 = project.compute_station_raw_coords(StationRef::new(section_id, 2)).unwrap();
+
+        assert!((coords_0.z - 0.0).abs() < 1e-6, "Station 0 z should be 0");
+        assert!((coords_1.z - 5.0).abs() < 1e-6, "Station 1 z should be 5");
+        assert!((coords_2.z - 12.0).abs() < 1e-6, "Station 2 z should be 12");
+    }
+
+    #[test]
+    fn remove_zero_datum_keeps_positions_unchanged() {
+        let mut project = Project::new("RemoveDatum".to_string(), None);
+        let section_id = project
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+
+        // Set datum
+        let station_ref = StationRef::new(section_id, 1);
+        let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
+        project.set_zero_datum(station_ref, gps).unwrap();
+
+        // Record offset after setting datum
+        let offset_before = project.section_offsets.get(&section_id).copied();
+
+        // Remove datum
+        project.remove_zero_datum(station_ref);
+
+        // Offset should be unchanged
+        let offset_after = project.section_offsets.get(&section_id).copied();
+        assert_eq!(offset_before, offset_after, "Offset should not change when removing datum");
+    }
+
+    #[test]
+    fn store_zero_datum_without_repositioning_does_not_modify_offsets() {
+        let mut project = Project::new("StoreOnly".to_string(), None);
+        let section_id = project
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+
+        // Pre-set an offset manually (simulating merged project scenario)
+        project.section_offsets.insert(section_id, (100.0, 200.0));
+
+        // Store datum without repositioning
+        let station_ref = StationRef::new(section_id, 0);
+        let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
+        project.store_zero_datum_without_repositioning(station_ref, gps).unwrap();
+
+        // Offset should remain unchanged
+        let offset = project.section_offsets.get(&section_id).unwrap();
+        assert_eq!(*offset, (100.0, 200.0), "Offset should not be modified");
+
+        // But datum should be stored
+        assert_eq!(project.zero_datums.len(), 1);
+        assert_eq!(project.zero_datums[0].station_ref, station_ref);
+    }
+
+    #[test]
+    fn coordinate_computation_no_global_datum_subtraction() {
+        // Verify that compute_station_coordinates no longer subtracts primary datum
+        let mut project = Project::new("NoGlobalSubtract".to_string(), None);
+        let section_id = project
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+
+        // Add a datum directly to zero_datums (bypassing set_zero_datum to avoid offset computation)
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef::new(section_id, 1),
+            gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        });
+
+        // Compute coordinates
+        let stations = project.compute_station_coordinates();
+
+        // Station 0 should be at (0, 0) - no global subtraction
+        let station_0 = stations.iter().find(|s| s.station_ref == StationRef::new(section_id, 0)).unwrap();
+        assert!((station_0.coordinates.x).abs() < 1e-6);
+        assert!((station_0.coordinates.y).abs() < 1e-6);
+
+        // Station 1 should be at (0, 10) - no global subtraction
+        let station_1 = stations.iter().find(|s| s.station_ref == StationRef::new(section_id, 1)).unwrap();
+        assert!((station_1.coordinates.x).abs() < 1e-6);
+        assert!((station_1.coordinates.y - 10.0).abs() < 1e-6);
     }
 }
 
