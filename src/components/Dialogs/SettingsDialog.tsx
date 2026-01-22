@@ -166,26 +166,12 @@ function validateAllCategories(config: Config): Partial<Record<SettingsCategory,
     const exportHasError = !!(exp && (exp.default_dpi < 72 || exp.default_dpi > 1200));
     errors.export = exportHasError;
 
-    // Other categories have no validation
-    errors.general = false;
-    errors.units = false;
-    errors.display = false;
-    errors.shortcuts = false;
-    errors.cache = false;
-    errors.advanced = false;
+    // Only set errors for categories we actually validate
+    // Don't set false for categories without centralized validation
+    // to avoid masking component-reported errors
   } catch {
-    // If any error occurs, return no errors to not block the UI
-    return {
-      general: false,
-      units: false,
-      display: false,
-      map: false,
-      validation: false,
-      export: false,
-      shortcuts: false,
-      cache: false,
-      advanced: false,
-    };
+    // If any error occurs, return empty to not mask component errors
+    return {};
   }
 
   return errors;
@@ -522,10 +508,12 @@ export default function SettingsDialog() {
         size="4xl"
         closeOnBackdropClick={false}
         maxHeight="max-h-[90vh]"
+        overflow="hidden"
+        bodyClassName="flex-1 flex flex-col overflow-hidden"
         data-testid="settings-dialog"
       >
         {({ requestClose }) => (
-          <div className="flex flex-col min-h-[500px] min-w-[600px] -m-4">
+          <div className="flex flex-col min-h-[500px] min-w-[600px] flex-1">
             {/* Main content area with sidebar and content */}
             <div className="flex flex-1 overflow-hidden">
               {/* Sidebar */}
