@@ -891,11 +891,11 @@ impl AppState {
             *proj = Some(project);
         }
 
-        // Load undo stack from database before replacing database reference
-        let loaded_undo = db.load_undo_stack().unwrap_or_default();
+        // Load undo stack from database before replacing database reference (with timestamps)
+        let loaded_undo = db.load_undo_stack_with_timestamps().unwrap_or_default();
         let undo_entries: Vec<_> = loaded_undo
             .into_iter()
-            .map(|(_, cmd, undo)| (cmd, undo))
+            .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
             .collect();
 
         if let Ok(mut database) = self.database.lock() {
@@ -910,7 +910,7 @@ impl AppState {
             if undo_entries.is_empty() {
                 undo_stack.clear();
             } else {
-                undo_stack.load_from_persisted(undo_entries);
+                undo_stack.load_from_persisted_with_timestamps(undo_entries);
                 tracing::info!(count = undo_stack.len(), "Restored undo stack from database");
             }
         }
@@ -1032,7 +1032,7 @@ impl AppState {
             }
         };
 
-        // Persist undo stack to database
+        // Persist undo stack to database (with timestamps)
         let persist_limit = self
             .config
             .lock()
@@ -1042,10 +1042,10 @@ impl AppState {
         if let Ok(undo_stack) = self.undo_stack.lock() {
             let entries: Vec<_> = undo_stack
                 .entries_to_persist(persist_limit)
-                .filter_map(|e| UndoStack::serialize_entry(e))
+                .filter_map(|e| UndoStack::serialize_entry_with_timestamp(e))
                 .collect();
 
-            if let Err(e) = db.save_undo_stack(entries) {
+            if let Err(e) = db.save_undo_stack_with_timestamps(entries) {
                 tracing::warn!(error = %e, "Failed to persist undo stack (project was saved)");
             }
         }
@@ -2449,11 +2449,11 @@ impl AppState {
         // === PHASE 7: Finalizing (10%) - ALL STATE MUTATIONS GUARDED ===
         progress.start_phase(LoadingPhase::Finalizing);
 
-        // Load undo stack from database BEFORE storing db
-        let loaded_undo = db.load_undo_stack().unwrap_or_default();
+        // Load undo stack from database BEFORE storing db (with timestamps)
+        let loaded_undo = db.load_undo_stack_with_timestamps().unwrap_or_default();
         let undo_entries: Vec<_> = loaded_undo
             .into_iter()
-            .map(|(_, cmd, undo)| (cmd, undo))
+            .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
             .collect();
 
         // Guard 1: Project state mutation
@@ -2468,13 +2468,13 @@ impl AppState {
         check_cancelled!();
         self.clear_display_settings_cache();
 
-        // Guard 4: Undo stack restore
+        // Guard 4: Undo stack restore (with timestamps)
         check_cancelled!();
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
             if undo_entries.is_empty() {
                 undo_stack.clear();
             } else {
-                undo_stack.load_from_persisted(undo_entries);
+                undo_stack.load_from_persisted_with_timestamps(undo_entries);
                 tracing::info!(count = undo_stack.len(), "Restored undo stack from database");
             }
         }

@@ -150,7 +150,7 @@ impl UndoStack {
         }
     }
 
-    /// Push a command without undo data (legacy, for backwards compatibility)
+    /// Push a command without undo data (convenience wrapper, timestamps are added automatically)
     pub fn push(&mut self, command: Command) {
         self.push_with_data(command, UndoData::None);
     }

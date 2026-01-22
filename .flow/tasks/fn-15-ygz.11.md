@@ -15,6 +15,22 @@ Update documentation to reflect all Global View changes.
 
 - Update SPEC.md section 6.1.1 with survey rendering details
 - Add new keyboard shortcuts to Appendix A
+- **Document new config options** in configuration.md:
+  - `global_view.fps_threshold` (default 30)
+  - `global_view.tolerance` (default 0.5)
+  - `global_view.throttle_tolerance` (default 1.0)
+- Add test patterns for GlobalView features
+- Update architecture with new files and data flow
+
+## Key context
+
+- Follow existing documentation format and style
+- Include all new keyboard shortcuts
+- Document configurable thresholds with defaults
+## Approach
+
+- Update SPEC.md section 6.1.1 with survey rendering details
+- Add new keyboard shortcuts to Appendix A
 - Document new config options (throttle threshold, tolerances)
 - Add test patterns for GlobalView features
 - Update architecture with new files and data flow
@@ -27,7 +43,7 @@ Update documentation to reflect all Global View changes.
 ## Acceptance
 - [ ] SPEC.md section 6.1.1 updated with survey rendering behavior
 - [ ] Keyboard shortcuts documented in SPEC.md Appendix A
-- [ ] New config options documented in configuration.md
+- [ ] **Config options documented: fps_threshold, tolerance, throttle_tolerance**
 - [ ] Test patterns added to TESTING.md
 - [ ] Architecture.md updated with new files
 - [ ] project-structure.md reflects new components
