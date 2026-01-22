@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -69,11 +71,16 @@ pub enum UndoData {
         strategy: ClosureStrategy,
     },
 
-    /// Zero datum info for restoring previous GPS or removing datum
+    /// Zero datum info for restoring previous GPS and section offsets
     ZeroDatumInfo {
         station_ref: StationRef,
         /// Previous GPS coordinates, None if there was no previous datum
         previous_gps: Option<GpsCoordinates>,
+        /// Previous section offsets for affected sections
+        /// - None value means the key didn't exist (should be removed on undo)
+        /// - Some value means the offset should be restored to that value
+        #[serde(default)]
+        previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
     },
 
     /// Full project snapshot for batch operations (JSON serialized)
@@ -770,6 +777,9 @@ mod tests {
         let mut stack = UndoStack::new();
 
         let gps = GpsCoordinates::new(45.0, -73.5, 100.0).unwrap();
+        let mut offsets = HashMap::new();
+        offsets.insert(1, Some((10.0, 20.0)));
+        offsets.insert(2, None); // Key didn't exist before
         stack.push_with_data(
             Command::SetZeroDatum {
                 station_ref: StationRef::new(1, 0),
@@ -778,6 +788,7 @@ mod tests {
             UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(1, 0),
                 previous_gps: Some(GpsCoordinates::new(40.0, -70.0, 50.0).unwrap()),
+                previous_offsets: offsets,
             },
         );
 
@@ -785,11 +796,14 @@ mod tests {
         if let UndoData::ZeroDatumInfo {
             station_ref,
             previous_gps,
+            previous_offsets,
         } = data
         {
             assert_eq!(station_ref.section_id, 1);
             let prev = previous_gps.as_ref().unwrap();
             assert_eq!(prev.latitude, 40.0);
+            assert_eq!(previous_offsets.get(&1), Some(&Some((10.0, 20.0))));
+            assert_eq!(previous_offsets.get(&2), Some(&None));
         } else {
             panic!("Expected ZeroDatumInfo");
         }
@@ -1153,6 +1167,7 @@ mod tests {
                 undo_data: UndoData::ZeroDatumInfo {
                     station_ref: StationRef::new(1, 0),
                     previous_gps: None,
+                    previous_offsets: HashMap::new(),
                 },
                 timestamp: None,
             },

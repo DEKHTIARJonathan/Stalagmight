@@ -199,8 +199,9 @@ impl Project {
 
     // === Station operations ===
 
-    /// Helper to get sections connected to a station through merges
-    fn get_connected_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
+    /// Get all section IDs connected to the given section through station merges.
+    /// Returns a set containing the given section and all transitively connected sections.
+    pub fn get_connected_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
         let mut connected = HashSet::new();
         let mut queue = vec![section_id];
 

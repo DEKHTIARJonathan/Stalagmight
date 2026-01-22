@@ -379,6 +379,8 @@ pub fn entry_to_history_item(entry: &UndoEntry, index: usize) -> UndoHistoryItem
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::models::{SectionData, ShotData, ShotUpdates, GpsCoordinates, StationRef};
     use chrono::Utc;
@@ -522,6 +524,7 @@ mod tests {
             undo_data: UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(0, 0),
                 previous_gps: None,
+                previous_offsets: HashMap::new(),
             },
             timestamp: None,
         };

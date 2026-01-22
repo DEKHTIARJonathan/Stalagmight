@@ -718,7 +718,7 @@ impl AppState {
                 }
             }
 
-            // For zero datum operations
+            // For zero datum operations - capture GPS and section offsets
             Command::SetZeroDatum { station_ref, .. } => {
                 // Find if there was a previous datum for this station
                 let previous_gps = project
@@ -727,9 +727,23 @@ impl AppState {
                     .find(|zd| zd.station_ref == *station_ref)
                     .map(|zd| zd.gps);
 
+                // Capture section offsets for all connected sections
+                // This allows undo to restore exact previous state
+                let connected_sections = project.get_connected_section_ids(station_ref.section_id);
+                let mut previous_offsets = HashMap::new();
+                for section_id in connected_sections {
+                    // Store Option - None means key didn't exist (remove on undo)
+                    // Some means restore to that value
+                    previous_offsets.insert(
+                        section_id,
+                        project.section_offsets.get(&section_id).copied(),
+                    );
+                }
+
                 UndoData::ZeroDatumInfo {
                     station_ref: *station_ref,
                     previous_gps,
+                    previous_offsets,
                 }
             }
 
@@ -741,9 +755,21 @@ impl AppState {
                     .find(|zd| zd.station_ref == *station_ref)
                     .map(|zd| zd.gps);
 
+                // Capture section offsets for all connected sections
+                // RemoveZeroDatum doesn't change offsets, but we capture for consistency
+                let connected_sections = project.get_connected_section_ids(station_ref.section_id);
+                let mut previous_offsets = HashMap::new();
+                for section_id in connected_sections {
+                    previous_offsets.insert(
+                        section_id,
+                        project.section_offsets.get(&section_id).copied(),
+                    );
+                }
+
                 UndoData::ZeroDatumInfo {
                     station_ref: *station_ref,
                     previous_gps,
+                    previous_offsets,
                 }
             }
 
@@ -1825,13 +1851,59 @@ impl AppState {
             UndoData::ZeroDatumInfo {
                 station_ref,
                 previous_gps,
+                previous_offsets,
             } => {
-                // Restore previous datum state
-                if let Some(gps) = previous_gps {
-                    self.set_zero_datum(*station_ref, *gps)
-                } else {
-                    self.remove_zero_datum(*station_ref)
+                // Restore previous datum state directly without recomputing offsets
+                // This is critical because set_zero_datum would compute new offsets
+                // instead of restoring the exact previous state
+                let mut proj_guard = match self.project.lock() {
+                    Ok(g) => g,
+                    Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+                };
+
+                let project = match proj_guard.as_mut() {
+                    Some(p) => p,
+                    None => return CommandResult::failure("No project open".to_string()),
+                };
+
+                // Restore section offsets directly
+                for (section_id, prev_offset) in previous_offsets {
+                    match prev_offset {
+                        Some(offset) => {
+                            // Restore to previous value
+                            project.section_offsets.insert(*section_id, *offset);
+                        }
+                        None => {
+                            // Key didn't exist before - remove it
+                            project.section_offsets.remove(section_id);
+                        }
+                    }
                 }
+
+                // Restore GPS datum state
+                if let Some(gps) = previous_gps {
+                    // Update or add the datum with previous GPS
+                    if let Some(existing) = project
+                        .zero_datums
+                        .iter_mut()
+                        .find(|zd| zd.station_ref == *station_ref)
+                    {
+                        existing.gps = *gps;
+                    } else {
+                        project.zero_datums.push(crate::models::ZeroDatum {
+                            station_ref: *station_ref,
+                            gps: *gps,
+                        });
+                    }
+                } else {
+                    // Remove the datum (there was no previous datum)
+                    project
+                        .zero_datums
+                        .retain(|zd| zd.station_ref != *station_ref);
+                }
+
+                project.touch();
+                CommandResult::success()
             }
 
             UndoData::ProjectSnapshot(json) => {
