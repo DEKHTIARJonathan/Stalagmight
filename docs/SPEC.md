@@ -505,7 +505,7 @@ Hovering an item shows a preview popup with diff information (where available):
 - Dropdown closes on:
   - Mouse leaving the button/dropdown area (100ms buffer)
   - Pressing Escape key
-  - Pressing Ctrl+Z or Ctrl+Y (global undo/redo shortcuts)
+  - Global undo/redo shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
   - Clicking outside the dropdown
   - Clicking an item (after executing the action)
 
@@ -1025,8 +1025,8 @@ The undo/redo stacks are exposed to the frontend via Tauri IPC commands:
 |---------|-------------|---------|
 | `get_undo_stack` | Get full undo stack with preview data | `Vec<UndoHistoryItem>` |
 | `get_redo_stack` | Get full redo stack with preview data | `Vec<UndoHistoryItem>` |
-| `undo_to` | Undo multiple steps to index N | `UndoRedoResult` |
-| `redo_to` | Redo multiple steps to index N | `UndoRedoResult` |
+| `undo_to` | Undo multiple steps to index N | `CommandResult` |
+| `redo_to` | Redo multiple steps to index N | `CommandResult` |
 
 **UndoHistoryItem DTO:**
 ```typescript
@@ -1082,7 +1082,7 @@ impl CommandExecutor {
 
     pub fn redo(&mut self) -> Result<CommandResult> {
         let entry = self.redo_stack.pop().ok_or(Error::NothingToRedo)?;
-        let result = self.apply(&entry.cmd)?;
+        let result = self.apply(&entry.command)?;
         self.undo_stack.push(entry);
         info!("Redo performed");
         Ok(result)

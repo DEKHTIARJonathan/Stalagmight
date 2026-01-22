@@ -568,7 +568,8 @@ The `UndoHistoryDropdown` component uses hover-triggered display with ARIA menu 
 | Redo button | `toolbar-redo-button` | Main trigger button |
 | Undo dropdown | `toolbar-undo-button-dropdown` | Container with `role="menu"` |
 | Redo dropdown | `toolbar-redo-button-dropdown` | Container with `role="menu"` |
-| Dropdown item | `toolbar-undo-button-item-{index}` | Index matches item.index from stack |
+| Undo item | `toolbar-undo-button-item-{index}` | Index matches item.index from stack |
+| Redo item | `toolbar-redo-button-item-{index}` | Index matches item.index from stack |
 | Detail preview | `detail-preview-popup` | Shows on item hover |
 | Undo chevron | `undo-chevron` | Visible when stack not empty |
 | Redo chevron | `redo-chevron` | Visible when stack not empty |
