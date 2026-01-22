@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-22T15:09:58.849417Z",
+  "depends_on": [],
+  "epic": "fn-19-mmx",
+  "id": "fn-19-mmx.7",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-19-mmx.7.md",
+  "status": "todo",
+  "title": "Update documentation for zero datum behavior",
+  "updated_at": "2026-01-22T15:09:58.849430Z"
+}
