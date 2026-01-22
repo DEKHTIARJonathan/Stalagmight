@@ -729,16 +729,8 @@ impl AppState {
 
                 // Capture section offsets for all connected sections
                 // This allows undo to restore exact previous state
-                let connected_sections = project.get_connected_section_ids(station_ref.section_id);
-                let mut previous_offsets = HashMap::new();
-                for section_id in connected_sections {
-                    // Store Option - None means key didn't exist (remove on undo)
-                    // Some means restore to that value
-                    previous_offsets.insert(
-                        section_id,
-                        project.section_offsets.get(&section_id).copied(),
-                    );
-                }
+                let previous_offsets =
+                    project.capture_connected_section_offsets(station_ref.section_id);
 
                 UndoData::ZeroDatumInfo {
                     station_ref: *station_ref,
@@ -757,14 +749,8 @@ impl AppState {
 
                 // Capture section offsets for all connected sections
                 // RemoveZeroDatum doesn't change offsets, but we capture for consistency
-                let connected_sections = project.get_connected_section_ids(station_ref.section_id);
-                let mut previous_offsets = HashMap::new();
-                for section_id in connected_sections {
-                    previous_offsets.insert(
-                        section_id,
-                        project.section_offsets.get(&section_id).copied(),
-                    );
-                }
+                let previous_offsets =
+                    project.capture_connected_section_offsets(station_ref.section_id);
 
                 UndoData::ZeroDatumInfo {
                     station_ref: *station_ref,
@@ -1881,8 +1867,13 @@ impl AppState {
                 }
 
                 // Restore GPS datum state
+                // Note: If previous_gps is Some, the datum existed before SetZeroDatum
+                // was called (it was an update, not a create). In this case, we update
+                // in place to preserve datum ordering. The push fallback handles the
+                // unlikely edge case where the datum was removed by another operation
+                // after SetZeroDatum but before undo - in this case, ordering may change.
                 if let Some(gps) = previous_gps {
-                    // Update or add the datum with previous GPS
+                    // Update existing datum in place (preserves ordering)
                     if let Some(existing) = project
                         .zero_datums
                         .iter_mut()
@@ -1890,13 +1881,15 @@ impl AppState {
                     {
                         existing.gps = *gps;
                     } else {
+                        // Fallback: datum was removed by another operation - re-add at end
+                        // This may change datum ordering but shouldn't occur in normal undo flow
                         project.zero_datums.push(crate::models::ZeroDatum {
                             station_ref: *station_ref,
                             gps: *gps,
                         });
                     }
                 } else {
-                    // Remove the datum (there was no previous datum)
+                    // Remove the datum (there was no previous datum - this was a create)
                     project
                         .zero_datums
                         .retain(|zd| zd.station_ref != *station_ref);
@@ -4487,6 +4480,131 @@ mod tests {
         assert!((datum.gps.latitude - 48.8584).abs() < 0.0001);
         assert!((datum.gps.longitude - 2.2945).abs() < 0.0001);
         assert!((datum.gps.depth_reference - 35.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_undo_set_zero_datum_restores_section_offsets() {
+        // Verify undo restores exact previous section_offsets, including
+        // removing keys that were newly created by the command
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        // Create two sections with shots
+        let result_a = state.execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(10.0)],
+        });
+        let section_a = result_a.section_id.unwrap();
+
+        let result_b = state.execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(10.0)],
+        });
+        let section_b = result_b.section_id.unwrap();
+
+        // Set an existing offset on section A only
+        // (section B has no offset - key doesn't exist)
+        {
+            let mut proj = state.project.lock().unwrap();
+            let project = proj.as_mut().unwrap();
+            project.section_offsets.insert(section_a, (100.0, 200.0));
+        }
+
+        // Merge the sections so they're connected
+        state.execute(Command::MergeStations {
+            station_a: StationRef::new(section_a, 1),
+            station_b: StationRef::new(section_b, 0),
+            closure_strategy: ClosureStrategy::KeepRaw,
+        });
+
+        // Clear undo stack to focus on SetZeroDatum
+        {
+            let mut stack = state.undo_stack.lock().unwrap();
+            stack.clear();
+        }
+
+        // Capture pre-command state
+        let (pre_offset_a, pre_offset_b, pre_datum_count) = {
+            let proj = state.project.lock().unwrap();
+            let project = proj.as_ref().unwrap();
+            (
+                project.section_offsets.get(&section_a).copied(),
+                project.section_offsets.get(&section_b).copied(),
+                project.zero_datums.len(),
+            )
+        };
+
+        // Set zero datum - this will create/modify offsets for both connected sections
+        let station_ref = StationRef::new(section_a, 0);
+        let gps = GpsCoordinates::new(45.0, -73.0, 100.0).unwrap();
+        let result = state.execute(Command::SetZeroDatum {
+            station_ref,
+            coordinates: gps,
+        });
+        assert!(result.success);
+
+        // Verify offsets changed after SetZeroDatum
+        let (post_offset_a, post_offset_b, post_datum_count) = {
+            let proj = state.project.lock().unwrap();
+            let project = proj.as_ref().unwrap();
+            (
+                project.section_offsets.get(&section_a).copied(),
+                project.section_offsets.get(&section_b).copied(),
+                project.zero_datums.len(),
+            )
+        };
+        assert_ne!(pre_offset_a, post_offset_a, "Section A offset should change");
+        assert!(post_offset_b.is_some(), "Section B should now have an offset");
+        assert_eq!(post_datum_count, pre_datum_count + 1, "Datum should be added");
+
+        // Undo the SetZeroDatum
+        let undo_result = state.undo();
+        assert!(undo_result.success, "Undo should succeed");
+
+        // Verify exact previous state is restored
+        let (restored_offset_a, restored_offset_b, restored_datum_count) = {
+            let proj = state.project.lock().unwrap();
+            let project = proj.as_ref().unwrap();
+            (
+                project.section_offsets.get(&section_a).copied(),
+                project.section_offsets.get(&section_b).copied(),
+                project.zero_datums.len(),
+            )
+        };
+
+        // Section A should have its original offset restored
+        assert_eq!(
+            restored_offset_a, pre_offset_a,
+            "Section A offset should be restored to original value"
+        );
+
+        // Section B key should be removed (it didn't exist before)
+        assert_eq!(
+            restored_offset_b, pre_offset_b,
+            "Section B offset key should be removed (was None before)"
+        );
+        assert!(
+            pre_offset_b.is_none() && restored_offset_b.is_none(),
+            "Section B offset key must not exist after undo"
+        );
+
+        // Datum should be removed
+        assert_eq!(
+            restored_datum_count, pre_datum_count,
+            "Datum should be removed after undo"
+        );
     }
 
     #[test]
