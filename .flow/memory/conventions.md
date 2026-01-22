@@ -27,3 +27,6 @@ Only call event.preventDefault() when actually handling the event; no-op shortcu
 
 ## 2026-01-22 manual [convention]
 For keyboard shortcut detection with modifiers, use event.key.toLowerCase() to handle Shift+Z producing uppercase 'Z'
+
+## 2026-01-22 manual [convention]
+Use specific data-testid selectors instead of generic CSS selectors (input[type=number]) in E2E tests to avoid order-dependent failures

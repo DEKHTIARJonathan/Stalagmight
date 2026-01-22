@@ -387,13 +387,13 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       // Verify change is shown locally
       await expect(recorder).toContainText('Q');
 
-      // Cancel (click outside or press Cancel button)
-      await page.locator('button:has-text("Cancel")').click();
+      // Cancel using testid
+      await page.locator('[data-testid="settings-cancel-button"]').click();
 
-      // Handle potential confirmation dialog for dirty state
-      const confirmDialog = page.locator('text=Discard changes');
+      // Handle potential confirmation dialog for dirty state using testids
+      const confirmDialog = page.locator('[data-testid="unsaved-changes-dialog"]');
       if (await confirmDialog.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await page.locator('button:has-text("Discard")').click();
+        await page.locator('[data-testid="unsaved-discard"]').click();
       }
 
       // Dialog should close

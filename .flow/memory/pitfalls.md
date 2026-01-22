@@ -69,3 +69,6 @@ In E2E tests, wait for aria-activedescendant to be set before asserting on keybo
 
 ## 2026-01-22 manual [pitfall]
 Wrapping non-labelable elements (div with role=switch) in <label> does not associate them - use aria-labelledby with an id on the label text instead
+
+## 2026-01-22 manual [pitfall]
+Replace waitForTimeout() with deterministic assertions (e.g., toHaveAttribute, toContainText) after UI state changes to prevent flaky E2E tests
