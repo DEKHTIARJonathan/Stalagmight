@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-22T17:13:02.215553Z",
+  "depends_on": [
+    "fn-20-mwj.2"
+  ],
+  "epic": "fn-20-mwj",
+  "id": "fn-20-mwj.7",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-20-mwj.7.md",
+  "status": "todo",
+  "title": "Implement DataTable hover/click/double-click to Map sync",
+  "updated_at": "2026-01-22T17:14:46.604652Z"
+}
