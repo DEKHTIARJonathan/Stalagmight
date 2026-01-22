@@ -533,8 +533,8 @@ All UI components must include proper attributes for tests to locate elements re
 | Dialogs | `<name>-dialog` | `data-testid="new-project-dialog"` |
 | Form inputs | `<field>-input` | `data-testid="project-name-input"` |
 | Statistics | `stats-<metric>` | `data-testid="stats-total-length"` |
-| Selection stats (Step 1) | `selection-stats`, `stats-<metric>` | `data-testid="selection-stats"`, `stats-shot-count`, `stats-total-length`, `stats-depth-range` |
-| Section stats (Step 2) | `section-stats`, `section-stats-<metric>` | `data-testid="section-stats"`, `section-stats-shot-count`, `section-stats-total-length`, `section-stats-depth-range` |
+| Selection stats (Step 1) | `selection-stats`, `stats-<metric>` | `data-testid="selection-stats"`, `data-testid="stats-shot-count"`, `data-testid="stats-total-length"`, `data-testid="stats-depth-range"` |
+| Section stats (Step 2) | `section-stats`, `section-stats-<metric>` | `data-testid="section-stats"`, `data-testid="section-stats-shot-count"`, `data-testid="section-stats-total-length"`, `data-testid="section-stats-depth-range"` |
 
 ### ARIA Attributes Quick Reference
 
@@ -553,17 +553,17 @@ The selection and section stats containers use descriptive `aria-label` attribut
 
 **Selection Stats (Step 1):**
 ```
-aria-label="Selection statistics: 70 shots, 281.8 meters total length, depth range 2.1 to 15.4 meters"
+aria-label="Selection statistics: 70 shots, 281.8m total length, depth range 2.1-15.4m"
 ```
 
 **Section Stats (Step 2):**
 ```
-aria-label="Section statistics: 42 shots, 187.3 meters total length, depth range 3.2 to 17.8 meters"
+aria-label="Section statistics: 42 shots, 187.3m total length, depth range 3.2-17.8m"
 ```
 
-When no depth data is available, the label includes "no depth data" instead of the range:
+When no depth data is available, the label shows "--" for depth range:
 ```
-aria-label="Selection statistics: 5 shots, 42.3 meters total length, no depth data"
+aria-label="Selection statistics: 5 shots, 42.3m total length, depth range --"
 ```
 
 ### Selector Priority
