@@ -443,6 +443,8 @@ pub fn run() {
             commands::history::redo,
             commands::history::can_undo,
             commands::history::can_redo,
+            commands::history::get_undo_stack,
+            commands::history::get_redo_stack,
             // Import/Export
             commands::import::import_dmp,
             commands::import::calculate_file_hash,

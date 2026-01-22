@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-22T12:36:17.946803Z",
+  "depends_on": [
+    "fn-15-ygz.10"
+  ],
+  "epic": "fn-15-ygz",
+  "id": "fn-15-ygz.11",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-15-ygz.11.md",
+  "status": "todo",
+  "title": "Update documentation for Global View changes",
+  "updated_at": "2026-01-22T12:38:04.072819Z"
+}

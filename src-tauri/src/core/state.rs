@@ -2186,6 +2186,38 @@ impl AppState {
             .unwrap_or(false)
     }
 
+    /// Get the undo stack as a list of history items for the UI
+    pub fn get_undo_stack(&self) -> Vec<crate::commands::history::UndoHistoryItem> {
+        self.undo_stack
+            .lock()
+            .map(|stack| {
+                stack
+                    .undo_entries()
+                    .enumerate()
+                    .map(|(idx, entry)| {
+                        crate::commands::history::entry_to_history_item(entry, idx)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get the redo stack as a list of history items for the UI
+    pub fn get_redo_stack(&self) -> Vec<crate::commands::history::UndoHistoryItem> {
+        self.undo_stack
+            .lock()
+            .map(|stack| {
+                stack
+                    .redo_entries()
+                    .enumerate()
+                    .map(|(idx, entry)| {
+                        crate::commands::history::entry_to_history_item(entry, idx)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Load resolved warnings from database
     pub fn load_resolved_warnings(&self) -> Result<Vec<crate::persistence::ResolvedWarning>> {
         let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
@@ -2862,6 +2894,7 @@ mod tests {
                 before: "{}".to_string(),
                 after: "not-json".to_string(),
             },
+            timestamp: None,
         };
         stack.push_redo(entry);
         drop(stack);
@@ -2883,6 +2916,7 @@ mod tests {
                 archive_originals: false,
             },
             undo_data: UndoData::None,
+            timestamp: None,
         };
         stack.push_redo(entry);
         drop(stack);
@@ -3586,6 +3620,7 @@ mod tests {
         let entry = UndoEntry {
             command: Command::CloseProject,
             undo_data: UndoData::ProjectSnapshotPair { before, after },
+            timestamp: None,
         };
 
         let mut stack = state.undo_stack.lock().unwrap();
