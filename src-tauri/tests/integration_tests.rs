@@ -574,6 +574,7 @@ fn test_batch_command_structure() {
             shots: vec![],
         },
         undo_data: UndoData::ProjectSnapshot("{}".to_string()),
+        timestamp: None,
     };
 
     // Verify entry can be serialized

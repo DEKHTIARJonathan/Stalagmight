@@ -684,6 +684,22 @@ impl Database {
         Ok(entries)
     }
 
+    /// Load undo stack from database with timestamps
+    pub fn load_undo_stack_with_timestamps(&self) -> Result<Vec<(i64, String, String, Option<String>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT sequence, command_json, undo_data_json, executed_at FROM undo_stack ORDER BY sequence")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row?);
+        }
+        Ok(entries)
+    }
+
     /// Clear undo stack entries after a given sequence
     pub fn clear_undo_after(&self, sequence: i64) -> Result<()> {
         self.conn.execute(
@@ -707,6 +723,25 @@ impl Database {
         }
 
         tracing::info!(count = entries.len(), "Saved undo stack to database");
+        Ok(())
+    }
+
+    /// Save undo stack with timestamps (clear existing and save new entries)
+    pub fn save_undo_stack_with_timestamps(&self, entries: Vec<(String, String, Option<String>)>) -> Result<()> {
+        // Clear existing
+        self.conn.execute("DELETE FROM undo_stack", [])?;
+
+        // Save new entries
+        for (seq, (command_json, undo_data_json, timestamp_str)) in entries.iter().enumerate() {
+            // Use provided timestamp or fall back to current time
+            let executed_at = timestamp_str.clone().unwrap_or_else(|| Utc::now().to_rfc3339());
+            self.conn.execute(
+                "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) VALUES (?1, ?2, ?3, ?4)",
+                params![seq as i64, command_json, undo_data_json, executed_at],
+            )?;
+        }
+
+        tracing::info!(count = entries.len(), "Saved undo stack with timestamps to database");
         Ok(())
     }
 

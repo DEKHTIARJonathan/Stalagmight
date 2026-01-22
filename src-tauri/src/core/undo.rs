@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::Command;
@@ -26,6 +27,9 @@ pub struct UndoEntry {
     pub command: Command,
     /// Data needed to undo this command
     pub undo_data: UndoData,
+    /// Timestamp when the command was executed (None for legacy entries)
+    #[serde(default)]
+    pub timestamp: Option<DateTime<Utc>>,
 }
 
 /// Data needed to undo a command
@@ -129,7 +133,11 @@ impl UndoStack {
 
     /// Push a command with its undo data to the undo stack
     pub fn push_with_data(&mut self, command: Command, undo_data: UndoData) {
-        let entry = UndoEntry { command, undo_data };
+        let entry = UndoEntry {
+            command,
+            undo_data,
+            timestamp: Some(Utc::now()),
+        };
 
         self.undo_stack.push(entry);
 
@@ -210,17 +218,48 @@ impl UndoStack {
     }
 
     /// Serialize an entry to JSON for persistence
+    /// Returns (command_json, undo_data_json, timestamp_iso8601)
     pub fn serialize_entry(entry: &UndoEntry) -> Option<(String, String)> {
         let command_json = serde_json::to_string(&entry.command).ok()?;
         let undo_data_json = serde_json::to_string(&entry.undo_data).ok()?;
         Some((command_json, undo_data_json))
     }
 
+    /// Serialize an entry with timestamp for database persistence
+    /// Returns (command_json, undo_data_json, timestamp_iso8601)
+    pub fn serialize_entry_with_timestamp(entry: &UndoEntry) -> Option<(String, String, Option<String>)> {
+        let command_json = serde_json::to_string(&entry.command).ok()?;
+        let undo_data_json = serde_json::to_string(&entry.undo_data).ok()?;
+        let timestamp_str = entry.timestamp.map(|t| t.to_rfc3339());
+        Some((command_json, undo_data_json, timestamp_str))
+    }
+
     /// Deserialize an entry from JSON
     pub fn deserialize_entry(command_json: &str, undo_data_json: &str) -> Option<UndoEntry> {
         let command: Command = serde_json::from_str(command_json).ok()?;
         let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
-        Some(UndoEntry { command, undo_data })
+        Some(UndoEntry {
+            command,
+            undo_data,
+            timestamp: None, // Legacy entries without timestamp
+        })
+    }
+
+    /// Deserialize an entry from JSON with optional timestamp
+    pub fn deserialize_entry_with_timestamp(
+        command_json: &str,
+        undo_data_json: &str,
+        timestamp_str: Option<&str>,
+    ) -> Option<UndoEntry> {
+        let command: Command = serde_json::from_str(command_json).ok()?;
+        let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
+        let timestamp = timestamp_str.and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+        Some(UndoEntry {
+            command,
+            undo_data,
+            timestamp,
+        })
     }
 
     /// Load entries from persisted data
@@ -230,6 +269,27 @@ impl UndoStack {
 
         for (command_json, undo_data_json) in entries {
             if let Some(entry) = Self::deserialize_entry(&command_json, &undo_data_json) {
+                self.undo_stack.push(entry);
+            }
+        }
+
+        // Trim to history limit
+        while self.undo_stack.len() > self.history_limit {
+            self.undo_stack.remove(0);
+        }
+    }
+
+    /// Load entries from persisted data with timestamps
+    pub fn load_from_persisted_with_timestamps(&mut self, entries: Vec<(String, String, Option<String>)>) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+
+        for (command_json, undo_data_json, timestamp_str) in entries {
+            if let Some(entry) = Self::deserialize_entry_with_timestamp(
+                &command_json,
+                &undo_data_json,
+                timestamp_str.as_deref(),
+            ) {
                 self.undo_stack.push(entry);
             }
         }
@@ -253,6 +313,18 @@ impl UndoStack {
     /// Get the number of entries in the redo stack
     pub fn redo_len(&self) -> usize {
         self.redo_stack.len()
+    }
+
+    /// Get an iterator over the undo stack entries (index 0 = most recent)
+    /// Returns entries in LIFO order (most recent first)
+    pub fn undo_entries(&self) -> impl Iterator<Item = &UndoEntry> {
+        self.undo_stack.iter().rev()
+    }
+
+    /// Get an iterator over the redo stack entries (index 0 = most recent)
+    /// Returns entries in LIFO order (most recent first)
+    pub fn redo_entries(&self) -> impl Iterator<Item = &UndoEntry> {
+        self.redo_stack.iter().rev()
     }
 }
 
@@ -382,6 +454,7 @@ mod tests {
         stack.push_redo(UndoEntry {
             command: test_create_section_command("Redo"),
             undo_data: UndoData::None,
+            timestamp: None,
         });
 
         stack.clear();
@@ -400,6 +473,7 @@ mod tests {
         let entry = UndoEntry {
             command: test_create_section_command("Test"),
             undo_data: UndoData::None,
+            timestamp: None,
         };
 
         stack.push_redo(entry);
@@ -415,10 +489,12 @@ mod tests {
         stack.push_redo(UndoEntry {
             command: test_create_section_command("First"),
             undo_data: UndoData::None,
+            timestamp: None,
         });
         stack.push_redo(UndoEntry {
             command: test_create_section_command("Second"),
             undo_data: UndoData::None,
+            timestamp: None,
         });
 
         let entry = stack.pop_redo().unwrap();
@@ -443,6 +519,7 @@ mod tests {
         let entry = UndoEntry {
             command: test_create_section_command("Test"),
             undo_data: UndoData::None,
+            timestamp: None,
         };
 
         stack.push_redo(entry);
@@ -460,10 +537,12 @@ mod tests {
         stack.push_redo(UndoEntry {
             command: test_create_section_command("Redo1"),
             undo_data: UndoData::None,
+            timestamp: None,
         });
         stack.push_redo(UndoEntry {
             command: test_create_section_command("Redo2"),
             undo_data: UndoData::None,
+            timestamp: None,
         });
 
         assert!(stack.can_redo());
@@ -483,12 +562,14 @@ mod tests {
         stack.push_redo(UndoEntry {
             command: test_create_section_command("Redo"),
             undo_data: UndoData::None,
+            timestamp: None,
         });
 
         // push_undo is used for redo operations and should NOT clear redo
         stack.push_undo(UndoEntry {
             command: test_create_section_command("Restored"),
             undo_data: UndoData::None,
+            timestamp: None,
         });
 
         assert!(stack.can_redo()); // Redo stack preserved
@@ -721,6 +802,7 @@ mod tests {
         let entry = UndoEntry {
             command: test_create_section_command("Serialize Test"),
             undo_data: UndoData::None,
+            timestamp: None,
         };
 
         let result = UndoStack::serialize_entry(&entry);
@@ -736,6 +818,7 @@ mod tests {
         let entry = UndoEntry {
             command: test_create_section_command("Deserialize Test"),
             undo_data: UndoData::InverseCommand(test_delete_section_command(42)),
+            timestamp: None,
         };
 
         let (cmd_json, undo_json) = UndoStack::serialize_entry(&entry).unwrap();
@@ -772,6 +855,7 @@ mod tests {
                 section_id: 5,
                 section_data: test_section_data("Snapshot"),
             },
+            timestamp: None,
         };
 
         let result = UndoStack::serialize_entry(&entry);
@@ -802,6 +886,7 @@ mod tests {
                 let entry = UndoEntry {
                     command: test_create_section_command(&format!("Section {}", i)),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(i as u32)),
+                    timestamp: None,
                 };
                 UndoStack::serialize_entry(&entry).unwrap()
             })
@@ -832,6 +917,7 @@ mod tests {
                 let entry = UndoEntry {
                     command: test_create_section_command(&format!("Section {}", i)),
                     undo_data: UndoData::None,
+                    timestamp: None,
                 };
                 UndoStack::serialize_entry(&entry).unwrap()
             })
@@ -859,12 +945,14 @@ mod tests {
         stack.push_redo(UndoEntry {
             command: test_create_section_command("Existing Redo"),
             undo_data: UndoData::None,
+            timestamp: None,
         });
 
         // Load persisted data should clear existing
         let entries: Vec<(String, String)> = vec![UndoStack::serialize_entry(&UndoEntry {
             command: test_create_section_command("Loaded"),
             undo_data: UndoData::None,
+            timestamp: None,
         })
         .unwrap()];
 
@@ -881,6 +969,7 @@ mod tests {
         let valid_entry = UndoStack::serialize_entry(&UndoEntry {
             command: test_create_section_command("Valid"),
             undo_data: UndoData::None,
+            timestamp: None,
         })
         .unwrap();
 
@@ -943,6 +1032,7 @@ mod tests {
         let entry = UndoEntry {
             command: test_create_section_command("Test"),
             undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+            timestamp: None,
         };
         stack.push_with_data(entry.command.clone(), entry.undo_data.clone());
 
@@ -1024,10 +1114,12 @@ mod tests {
             UndoEntry {
                 command: test_create_section_command("None"),
                 undo_data: UndoData::None,
+                timestamp: None,
             },
             UndoEntry {
                 command: test_create_section_command("Inverse"),
                 undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+                timestamp: None,
             },
             UndoEntry {
                 command: test_delete_section_command(2),
@@ -1035,6 +1127,7 @@ mod tests {
                     section_id: 2,
                     section_data: test_section_data("Snapshot"),
                 },
+                timestamp: None,
             },
             UndoEntry {
                 command: Command::DeleteShot {
@@ -1050,6 +1143,7 @@ mod tests {
                     },
                     position: 0,
                 },
+                timestamp: None,
             },
             UndoEntry {
                 command: Command::SetZeroDatum {
@@ -1060,6 +1154,7 @@ mod tests {
                     station_ref: StationRef::new(1, 0),
                     previous_gps: None,
                 },
+                timestamp: None,
             },
             UndoEntry {
                 command: Command::MergeStations {
@@ -1072,10 +1167,12 @@ mod tests {
                     station_b: StationRef::new(2, 1),
                     strategy: ClosureStrategy::ProportionalByLength,
                 },
+                timestamp: None,
             },
             UndoEntry {
                 command: Command::Batch { commands: vec![] },
                 undo_data: UndoData::ProjectSnapshot("{}".to_string()),
+                timestamp: None,
             },
             UndoEntry {
                 command: Command::UpdateShot {
@@ -1091,6 +1188,7 @@ mod tests {
                     shot_id: Some(100),
                     values_json: r#"{"length":5.0}"#.to_string(),
                 },
+                timestamp: None,
             },
         ];
 
