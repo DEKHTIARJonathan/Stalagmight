@@ -718,25 +718,6 @@ mod tests {
     }
 
     #[test]
-    fn test_export_image_png_returns_error_and_writes_svg() {
-        let project = create_test_project();
-        let file = NamedTempFile::new().unwrap();
-        let path = file.path().with_extension("png");
-
-        let mut options = ExportImageOptions::default();
-        options.format = ImageFormat::Png;
-
-        let result = export_image(&project, &path, &options);
-        assert!(result.is_err());
-
-        let svg_path = path.with_extension("svg");
-        let contents = std::fs::read_to_string(&svg_path).unwrap();
-        assert!(contents.contains("<svg"));
-
-        std::fs::remove_file(&svg_path).ok();
-    }
-
-    #[test]
     fn test_export_png_72_dpi() {
         let project = create_test_project();
         let file = NamedTempFile::new().unwrap();

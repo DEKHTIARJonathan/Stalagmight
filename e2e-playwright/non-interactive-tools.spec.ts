@@ -1,5 +1,11 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupTauriMocks } from './mocks/tauri-ipc';
+import {
+  setupMockedPage,
+  createProject,
+  seedProjectWithSections,
+  waitForMapReady,
+  type SectionSeed,
+} from './helpers/app';
 
 /**
  * E2E tests for non-interactive tool behavior (pan, zoom).
@@ -12,60 +18,11 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
  */
 
 /**
- * Helper to wait for the map to be fully loaded.
- */
-async function waitForMapReady(page: Page): Promise<void> {
-  await page.waitForFunction(
-    () => {
-      const map = (window as unknown as { __cavechef_map__?: { loaded: () => boolean } }).__cavechef_map__;
-      return map && map.loaded();
-    },
-    { timeout: 10000 }
-  );
-}
-
-/**
  * Helper to create a project with imported sections so stations/shots are visible.
- * Uses the two-step import flow pattern from import-placement-flow.spec.ts.
  */
 async function createProjectWithStations(page: Page): Promise<void> {
-  // Create project
-  const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-  await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill('Non-Interactive Tool Test');
-  await page.click('.fixed.inset-0 button:has-text("Create")');
-  await page.waitForSelector('canvas', { timeout: 10000 });
-  await waitForMapReady(page);
-
-  // Import sections via Ctrl+I
-  await page.keyboard.press('Control+i');
-  await page.waitForSelector('[data-testid="dmp-selection-dialog"]', { timeout: 5000 });
-  await page.waitForSelector('text=Main Passage', { timeout: 5000 });
-
-  // Deselect error sections, keep just Main Passage for simplicity
-  const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-  await dialog.locator('[data-testid="select-none-button"]').click();
-  await page.locator('[data-testid="section-checkbox-0"]').click(); // Main Passage
-
-  // Proceed to Step 2
-  await page.locator('[data-testid="continue-button"]').click();
-  await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
-
-  // Place and finish (single section = "Place and finish" button)
-  await page.locator('[data-testid="place-and-finish-button"]').click();
-  await expect(page.locator('[data-testid="dmp-section-config-dialog"]')).not.toBeVisible({ timeout: 5000 });
-
-  // Close any import error dialogs that may appear (mock sections may trigger errors)
-  // Wait for dialog to potentially appear then dismiss it
-  await page.waitForTimeout(500);
-  const okButton = page.locator('button:has-text("OK")');
-  if (await okButton.isVisible().catch(() => false)) {
-    await okButton.click();
-    await page.waitForTimeout(200);
-  }
-
-  // Wait for stations to actually render on the map (deterministic wait)
+  await createProject(page, 'Non-Interactive Tool Test');
+  await seedProjectWithSections(page, sectionSeeds);
   await waitForMapReady(page);
   await expect.poll(
     async () => {
@@ -81,6 +38,24 @@ async function createProjectWithStations(page: Page): Promise<void> {
     { timeout: 10000 }
   ).toBeGreaterThan(0);
 }
+
+const sectionSeeds: SectionSeed[] = [
+  {
+    name: 'Non-Interactive Main',
+    direction: 'in',
+    shots: [
+      { azimuth_in: 45, azimuth_out: 225, length: 10.5, depth_in: -2, depth_out: -2.5 },
+      { azimuth_in: 90, azimuth_out: 270, length: 15.2, depth_in: -2.5, depth_out: -5.0 },
+    ],
+  },
+  {
+    name: 'Non-Interactive Side',
+    direction: 'out',
+    shots: [
+      { azimuth_in: 270, azimuth_out: 90, length: 5.0, depth_in: -3.0, depth_out: -4.0 },
+    ],
+  },
+];
 
 /**
  * Helper to find station screen coordinates via queryRenderedFeatures.
@@ -121,9 +96,7 @@ async function getCanvasBoundingBox(page: Page): Promise<{
 
 test.describe('Non-interactive tools', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
     await createProjectWithStations(page);
   });
 
@@ -307,39 +280,25 @@ test.describe('Non-interactive tools', () => {
     expect(selection).toBeNull();
   });
 
-  /**
-   * NOTE: Zoom tool tests are skipped because zoom uses spring-loaded behavior.
-   * The spring-loaded mechanism requires a real keydown event that Playwright's
-   * keyboard.down() doesn't fully replicate in CI environments.
-   *
-   * The non-interactive tool logic for zoom is the same as pan (they share
-   * NON_INTERACTIVE_TOOLS array), so the pan tests above provide adequate
-   * coverage of the feature.
-   */
-  test.skip('Zoom tool prevents station selection (spring-loaded, tested manually)', async ({ page }) => {
-    // This test is skipped - zoom uses spring-loaded behavior which is flaky in CI
-    // The code path is tested via pan tool tests above
-  });
+  test('Selection still works after switching back to select tool', async ({ page }) => {
+    // Switch to pan tool, then back to select
+    await page.keyboard.press('p');
+    await page.keyboard.press('s');
 
-  test.skip('Switching to zoom clears existing hover (spring-loaded, tested manually)', async ({ page }) => {
-    // This test is skipped - zoom uses spring-loaded behavior which is flaky in CI
-    // The code path is tested via "Switching to pan clears existing hover" above
-  });
+    const pos = await getStationPosition(page);
+    expect(pos).not.toBeNull();
 
-  test.skip('Ctrl+A does nothing when zoom active (spring-loaded, tested manually)', async ({ page }) => {
-    // This test is skipped - zoom uses spring-loaded behavior which is flaky in CI
-    // The code path is tested via "Ctrl+A does nothing when pan active" above
-  });
+    const canvasBox = await getCanvasBoundingBox(page);
+    await page.mouse.click(canvasBox.x + pos!.x, canvasBox.y + pos!.y);
 
-  /**
-   * NOTE: This test is skipped because the click-to-select behavior depends on
-   * map rendering timing and hitbox detection that is flaky when combined with
-   * DMP import flow. The core non-interactive tool behavior is already tested
-   * by the pan tests above.
-   */
-  test.skip('Selection still works after switching back to select tool', async ({ page }) => {
-    // This test verifies that selection still works after switching away from
-    // a non-interactive tool. The functionality is exercised in other E2E tests
-    // that don't use DMP import, like hitbox-detection.spec.ts
+    await expect.poll(async () => {
+      return page.evaluate(() => {
+        return (window as unknown as {
+          __E2E_TEST__?: {
+            uiStore: { getState: () => { selection: { type: string } | null } };
+          };
+        }).__E2E_TEST__?.uiStore?.getState()?.selection?.type ?? null;
+      });
+    }, { timeout: 2000 }).toBe('station');
   });
 });

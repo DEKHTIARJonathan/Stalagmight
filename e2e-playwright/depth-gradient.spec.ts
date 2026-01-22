@@ -1,5 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import { seedProjectWithSections, type SectionSeed } from './helpers/app';
 
 /**
  * E2E tests for depth gradient functionality.
@@ -17,6 +18,24 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.click('.fixed.inset-0 button:has-text("Create")');
   await page.waitForSelector('canvas', { timeout: 10000 });
 }
+
+const sectionSeeds: SectionSeed[] = [
+  {
+    name: 'Depth Gradient A',
+    direction: 'in',
+    shots: [
+      { azimuth_in: 45, azimuth_out: 225, length: 12, depth_in: 0, depth_out: -6 },
+      { azimuth_in: 90, azimuth_out: 270, length: 8, depth_in: -6, depth_out: -12 },
+    ],
+  },
+  {
+    name: 'Depth Gradient B',
+    direction: 'out',
+    shots: [
+      { azimuth_in: 180, azimuth_out: 0, length: 6, depth_in: -12, depth_out: -3 },
+    ],
+  },
+];
 
 /**
  * Helper to open the Display menu
@@ -66,6 +85,7 @@ test.describe('Depth Gradient', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await createProject(page, 'Depth Gradient Test');
+    await seedProjectWithSections(page, sectionSeeds);
     await waitForMapLoaded(page);
   });
 
@@ -337,6 +357,7 @@ test.describe('Depth Gradient with Menu Interactions', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await createProject(page, 'Depth Gradient Menu Test');
+    await seedProjectWithSections(page, sectionSeeds);
     await waitForMapLoaded(page);
   });
 

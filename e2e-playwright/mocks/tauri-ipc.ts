@@ -238,41 +238,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const now = new Date().toISOString();
             sectionCounter = 0;
 
-            // Pre-populate with sections for testing (provides mock stations)
-            const defaultSections = [
-              {
-                id: ++sectionCounter,
-                name: 'Mock Tunnel A',
-                surveyor: 'Test Surveyor',
-                date: now.split('T')[0],
-                color: '#4ECDC4',
-                shots: [
-                  { id: 1, azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: 0, depth_out: -2, is_virtual: false },
-                  { id: 2, azimuth_in: 90, azimuth_out: 270, length: 15, depth_in: -2, depth_out: -5, is_virtual: false },
-                  { id: 3, azimuth_in: 120, azimuth_out: 300, length: 8, depth_in: -5, depth_out: -3, is_virtual: true },
-                ],
-              },
-              {
-                id: ++sectionCounter,
-                name: 'Mock Tunnel B',
-                surveyor: 'Test Surveyor',
-                date: now.split('T')[0],
-                color: '#FF6B6B',
-                shots: [
-                  { id: 1, azimuth_in: 180, azimuth_out: 0, length: 12, depth_in: -5, depth_out: -8, is_virtual: false },
-                  { id: 2, azimuth_in: 210, azimuth_out: 30, length: 9, depth_in: -8, depth_out: -6, is_virtual: false },
-                ],
-              },
-              {
-                id: ++sectionCounter,
-                name: 'Empty Section',
-                surveyor: 'Test Surveyor',
-                date: now.split('T')[0],
-                color: '#9B59B6',
-                shots: [],
-              },
-            ];
-
             currentProject = {
               id: 1,
               name,
@@ -280,7 +245,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               created_at: now,
               modified_at: now,
               file_path: null,
-              sections: defaultSections,
+              sections: [],
               station_merges: [],
               zero_datums: [],
               loop_closures: [],
@@ -379,12 +344,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               merged_with: never[];
             }> = [];
 
-            for (const section of currentProject.sections as Array<{ id: number; shots: unknown[] }>) {
-              const shotCount = section.shots?.length ?? 0;
-              for (let i = 0; i <= shotCount; i++) {
+            for (const section of currentProject.sections as Array<{ id: number; shots: Array<{ depth_in?: number; depth_out?: number }> }>) {
+              const shots = section.shots ?? [];
+              const depths: number[] = [];
+              if (shots.length > 0) {
+                const firstDepth = shots[0]?.depth_in ?? 0;
+                depths.push(firstDepth);
+                for (const shot of shots) {
+                  depths.push(shot.depth_out ?? depths[depths.length - 1] ?? 0);
+                }
+              } else {
+                depths.push(0);
+              }
+
+              for (let i = 0; i < depths.length; i++) {
                 mockStations.push({
                   station_ref: { section_id: section.id, station_index: i },
-                  coordinates: { x: i * 10, y: 0, z: 0 },
+                  coordinates: { x: i * 10, y: 0, z: depths[i] ?? 0 },
                   is_zero_datum: i === 0,
                   gps_coordinates: null,
                   merged_with: [],
@@ -416,6 +392,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               isIndeterminate: true,
             });
 
+            const shotLengths = defaultSections.flatMap((section) =>
+              (section.shots ?? []).map((shot: { length?: number }) => shot.length ?? 0)
+            );
+            const totalLength = shotLengths.reduce((sum, length) => sum + length, 0);
+            const depthValues = defaultSections.flatMap((section) =>
+              (section.shots ?? []).flatMap((shot: { depth_in?: number; depth_out?: number }) => [
+                shot.depth_in ?? 0,
+                shot.depth_out ?? 0,
+              ])
+            );
+            const minDepth = depthValues.length > 0 ? Math.min(...depthValues) : 0;
+            const maxDepth = depthValues.length > 0 ? Math.max(...depthValues) : 0;
+            const shotCount = defaultSections.reduce((count, section) => count + (section.shots?.length ?? 0), 0);
+
             // Return LoadProjectFullResult format
             return {
               loadingId,
@@ -423,10 +413,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               stations: mockStations,
               stats: {
                 section_count: currentProject.sections.length,
-                shot_count: mockStations.length > 0 ? mockStations.length - 1 : 0,
-                total_length: 25,
-                min_depth: -5,
-                max_depth: 0,
+                shot_count: shotCount,
+                total_length: totalLength,
+                min_depth: minDepth,
+                max_depth: maxDepth,
+                station_count: mockStations.length,
+                loop_count: 0,
+                penetration_distance: totalLength,
               },
               warnings: [],
               displaySettings: {
@@ -516,18 +509,32 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }
             }
 
+            const depthValues = mockStations.map((station) => station.coordinates.z);
+            const minDepth = depthValues.length > 0 ? Math.min(...depthValues) : 0;
+            const maxDepth = depthValues.length > 0 ? Math.max(...depthValues) : 0;
+            const shotCount =
+              currentProject?.sections.reduce(
+                (count, section) => count + ((section as { shots?: Array<{ length?: number }> }).shots?.length ?? 0),
+                0
+              ) ?? 0;
+            const totalLength =
+              currentProject?.sections.reduce((total, section) => {
+                const shots = (section as { shots?: Array<{ length?: number }> }).shots ?? [];
+                return total + shots.reduce((sum, shot) => sum + (shot.length ?? 0), 0);
+              }, 0) ?? 0;
+
             return {
               project: currentProject,
               stations: mockStations,
               stats: {
                 section_count: currentProject?.sections.length ?? 0,
-                shot_count: mockStations.length > 0 ? mockStations.length - 1 : 0,
-                total_length: 0,
-                min_depth: 0,
-                max_depth: 0,
+                shot_count: shotCount,
+                total_length: totalLength,
+                min_depth: minDepth,
+                max_depth: maxDepth,
                 station_count: mockStations.length,
                 loop_count: 0,
-                penetration_distance: 0,
+                penetration_distance: totalLength,
               },
             };
           }
@@ -1040,9 +1047,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 zoom_in: ['Equal', 'Plus'],
                 zoom_out: ['Minus'],
                 // Panels
-                toggle_sections_panel: ['1'],
-                toggle_detail_panel: ['2'],
-                toggle_data_table: ['3'],
+                toggle_sections_panel: ['Ctrl+1'],
+                toggle_detail_panel: ['Ctrl+2'],
+                toggle_data_table: ['Ctrl+3'],
               },
               panels: {
                 sections_panel_width: 250,
@@ -1183,9 +1190,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 zoom_in: ['Equal', 'Plus'],
                 zoom_out: ['Minus'],
                 // Panels
-                toggle_sections_panel: ['1'],
-                toggle_detail_panel: ['2'],
-                toggle_data_table: ['3'],
+                toggle_sections_panel: ['Ctrl+1'],
+                toggle_detail_panel: ['Ctrl+2'],
+                toggle_data_table: ['Ctrl+3'],
               },
               panels: {
                 sections_panel_width: 250,

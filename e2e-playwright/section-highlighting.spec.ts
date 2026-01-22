@@ -1,5 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import { seedProjectWithSections, type SectionSeed } from './helpers/app';
 
 /**
  * E2E tests for section hover/selection highlighting.
@@ -36,6 +37,25 @@ async function waitForAppReady(page: Page): Promise<void> {
 }
 
 /**
+ * Helper to wait for shot features to be rendered.
+ */
+async function waitForShotsRendered(page: Page): Promise<void> {
+  await expect.poll(async () => {
+    return page.evaluate(() => {
+      const map = (window as unknown as {
+        __cavechef_map__?: { queryRenderedFeatures: (opts: { layers: string[] }) => Array<unknown> };
+      }).__cavechef_map__;
+      if (!map) return 0;
+      try {
+        return map.queryRenderedFeatures({ layers: ['survey-shots'] }).length;
+      } catch {
+        return 0;
+      }
+    });
+  }, { timeout: 10000 }).toBeGreaterThan(0);
+}
+
+/**
  * Helper to create a new project with the given name.
  * The mock setup provides pre-populated sections with shots.
  */
@@ -46,6 +66,49 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.locator('.fixed.inset-0 input').first().fill(name);
   await page.click('.fixed.inset-0 button:has-text("Create")');
   await waitForAppReady(page);
+  await seedProjectWithSections(page, sectionSeeds);
+  await waitForShotsRendered(page);
+}
+
+const sectionSeeds: SectionSeed[] = [
+  {
+    name: 'Highlight Main',
+    direction: 'in',
+    shots: [
+      { azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: -1, depth_out: -3 },
+      { azimuth_in: 90, azimuth_out: 270, length: 12, depth_in: -3, depth_out: -6 },
+      { azimuth_in: 120, azimuth_out: 300, length: 6, depth_in: -6, depth_out: -4, is_virtual: true },
+    ],
+  },
+  {
+    name: 'Highlight Secondary',
+    direction: 'out',
+    shots: [
+      { azimuth_in: 180, azimuth_out: 0, length: 7, depth_in: -2, depth_out: -4 },
+    ],
+  },
+  {
+    name: 'Empty Section',
+    direction: 'in',
+    shots: [],
+  },
+];
+
+/**
+ * Helper to get a section ID by name.
+ */
+async function getSectionIdByName(page: Page, name: string): Promise<number | null> {
+  return page.evaluate((sectionName) => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore: { getState: () => { project: { sections: Array<{ id: number; name: string }> } | null } };
+      };
+    }).__E2E_TEST__;
+
+    const sections = stores?.projectStore.getState().project?.sections ?? [];
+    const match = sections.find((section) => section.name === sectionName);
+    return match?.id ?? null;
+  }, name);
 }
 
 /**
@@ -455,21 +518,21 @@ test.describe('Section Highlighting', () => {
     test('empty section is interactive and shows panel highlight', async ({ page }) => {
       await createProject(page, 'Empty Section Test');
 
-      // Find the empty section row (mock data now includes "Empty Section")
-      const emptySectionRow = page.locator('[data-testid]').filter({ hasText: 'Empty Section' }).first();
+      // Find the empty section row by name
+      const emptySectionRow = page.locator('[data-testid^="section-item-"]').filter({ hasText: 'Empty Section' }).first();
       await expect(emptySectionRow).toBeVisible();
 
       // Hover should work
       await emptySectionRow.hover();
 
       // Get the section ID for the empty section
-      const sectionIds = await getAvailableSectionIds(page);
-      const emptySectionId = sectionIds[2]; // Third section is Empty Section
-      expect(emptySectionId).toBeDefined();
+      const emptySectionId = await getSectionIdByName(page, 'Empty Section');
+      expect(emptySectionId).not.toBeNull();
+      const resolvedEmptySectionId = emptySectionId as number;
 
       // Verify hover state is set
-      const hoveredId = await pollHoveredSectionId(page, (id) => id === emptySectionId);
-      expect(hoveredId).toBe(emptySectionId);
+      const hoveredId = await pollHoveredSectionId(page, (id) => id === resolvedEmptySectionId);
+      expect(hoveredId).toBe(resolvedEmptySectionId);
 
       // Click should select it
       await emptySectionRow.click();
@@ -477,7 +540,7 @@ test.describe('Section Highlighting', () => {
       // Should be able to select (even though no shots)
       const selection = await pollSelectionState(page, (sel) => sel?.type === 'section');
       expect(selection?.type).toBe('section');
-      expect(selection?.sectionId).toBe(emptySectionId);
+      expect(selection?.sectionId).toBe(resolvedEmptySectionId);
 
       // Verify no map features for empty section (it has no shots)
       const featureCount = await page.evaluate((secId) => {
@@ -492,7 +555,7 @@ test.describe('Section Highlighting', () => {
         if (!map) return -1;
         const features = map.queryRenderedFeatures({ layers: ['survey-shots'] });
         return features.filter(f => f.properties.sectionId === secId).length;
-      }, emptySectionId);
+      }, resolvedEmptySectionId);
 
       expect(featureCount).toBe(0);
     });
@@ -500,10 +563,21 @@ test.describe('Section Highlighting', () => {
     test('virtual shots are included in section highlighting', async ({ page }) => {
       await createProject(page, 'Virtual Shot Highlight Test');
 
-      // Get section IDs from project
-      const sectionIds = await getAvailableSectionIds(page);
-      expect(sectionIds.length).toBeGreaterThan(0);
-      const firstSectionId = sectionIds[0]!; // Mock Tunnel A has a virtual shot
+      const virtualSectionId = await page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: {
+            projectStore: { getState: () => {
+              project: { sections: Array<{ id: number; shots: Array<{ is_virtual?: boolean }> }> } | null
+            } };
+          };
+        }).__E2E_TEST__;
+
+        const sections = stores?.projectStore.getState().project?.sections ?? [];
+        const match = sections.find((section) => section.shots?.some((shot) => shot.is_virtual));
+        return match?.id ?? null;
+      });
+      expect(virtualSectionId).not.toBeNull();
+      const resolvedVirtualSectionId = virtualSectionId as number;
 
       // Verify the section has a virtual shot in the mock data
       const hasVirtualShot = await page.evaluate((secId) => {
@@ -524,21 +598,21 @@ test.describe('Section Highlighting', () => {
         const project = stores.projectStore.getState().project;
         const section = project?.sections.find(s => s.id === secId);
         return section?.shots.some(s => s.is_virtual) ?? false;
-      }, firstSectionId);
+      }, resolvedVirtualSectionId);
 
       expect(hasVirtualShot).toBe(true);
 
       // Hover the section row
-      const sectionRow = page.locator(`[data-testid="section-row-${firstSectionId}"]`);
+      const sectionRow = page.locator(`[data-testid="section-row-${resolvedVirtualSectionId}"]`);
       await sectionRow.hover();
 
       // Verify hover state is set
-      const hoveredId = await pollHoveredSectionId(page, (id) => id === firstSectionId);
-      expect(hoveredId).toBe(firstSectionId);
+      const hoveredId = await pollHoveredSectionId(page, (id) => id === resolvedVirtualSectionId);
+      expect(hoveredId).toBe(resolvedVirtualSectionId);
 
       // Verify the map state includes the section for highlighting
       // (SurveyLayer.updateVisualState applies to all shots in section, including virtual)
-      const hasMapHover = await hasSectionMapHighlight(page, firstSectionId, 'hover');
+      const hasMapHover = await hasSectionMapHighlight(page, resolvedVirtualSectionId, 'hover');
       expect(hasMapHover).toBe(true);
 
       // Query shot features - should include virtual shot
@@ -556,7 +630,7 @@ test.describe('Section Highlighting', () => {
         const sectionFeatures = features.filter(f => f.properties.sectionId === secId);
         const virtualFeatures = sectionFeatures.filter(f => f.properties.isVirtual);
         return { total: sectionFeatures.length, virtual: virtualFeatures.length };
-      }, firstSectionId);
+      }, resolvedVirtualSectionId);
 
       expect(shotFeatures.total).toBeGreaterThan(0);
       // Virtual shot should be rendered (with is_virtual: true in mock data)

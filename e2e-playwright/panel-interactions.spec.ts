@@ -213,19 +213,19 @@ test.describe('Panel Interactions', () => {
     await expect(sectionsPanel).toBeVisible({ timeout: 3000 });
 
     // Find a section item to select/expand
-    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: 'Main Passage' });
-    await expect(sectionItem).toBeVisible({ timeout: 2000 });
+    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Main Passage' });
+    await expect(sectionRow).toBeVisible({ timeout: 2000 });
 
     // Initially the section shows basic info (name and stats)
-    const sectionStats = sectionItem.locator('text=/\\d+ shots/');
+    const sectionStats = sectionRow.locator('text=/\\d+ shots/');
     await expect(sectionStats).toBeVisible();
 
     // Click on the section to select it
-    await sectionItem.click();
+    await sectionRow.click();
     await waitForMapIdle(page);
 
     // When a section is selected, it should have a highlight (bg-accent/20)
-    await expect(sectionItem).toHaveClass(/bg-accent/);
+    await expect(sectionRow).toHaveClass(/bg-accent/);
 
     // The detail panel should now show section details
     const detailPanel = page.getByTestId('detail-panel');
@@ -236,16 +236,16 @@ test.describe('Panel Interactions', () => {
     }
 
     // Click on a different section to verify selection changes
-    const anotherSection = page.locator('[data-testid^="section-item-"]').filter({ hasText: 'Side Tunnel' });
+    const anotherSection = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Side Tunnel' });
     if (await anotherSection.isVisible()) {
       await anotherSection.click();
       await waitForMapIdle(page);
 
       // The new section should be selected
-      await expect(anotherSection).toHaveClass(/bg-accent/);
+      await expect(anotherSection).toHaveAttribute('aria-selected', 'true');
 
       // The previous section should no longer be selected
-      await expect(sectionItem).not.toHaveClass(/bg-accent\/20/);
+      await expect(sectionRow).toHaveAttribute('aria-selected', 'false');
     }
 
     // App should remain functional
