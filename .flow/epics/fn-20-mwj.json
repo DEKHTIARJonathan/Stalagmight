@@ -4,10 +4,10 @@
   "depends_on_epics": [],
   "id": "fn-20-mwj",
   "next_task": 1,
-  "plan_review_status": "unknown",
-  "plan_reviewed_at": null,
+  "plan_review_status": "ship",
+  "plan_reviewed_at": "2026-01-22T17:17:31.135185Z",
   "spec_path": ".flow/specs/fn-20-mwj.md",
   "status": "open",
   "title": "Data Table Panel Improvements",
-  "updated_at": "2026-01-22T17:12:54.516766Z"
+  "updated_at": "2026-01-22T17:17:31.135197Z"
 }
