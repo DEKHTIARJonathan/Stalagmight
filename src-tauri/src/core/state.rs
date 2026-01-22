@@ -2218,6 +2218,78 @@ impl AppState {
             .unwrap_or_default()
     }
 
+    /// Perform multiple undos to reach a specific history point
+    /// Index 0 = most recent action, so undo_to(N) executes (N+1) undos
+    pub fn undo_to(&self, index: usize) -> CommandResult {
+        // Validate index first
+        {
+            let stack = match self.undo_stack.lock() {
+                Ok(s) => s,
+                Err(_) => return CommandResult::failure("Failed to lock undo stack".to_string()),
+            };
+            if index >= stack.len() {
+                return CommandResult::failure(format!(
+                    "Invalid undo index: {} (stack has {} entries)",
+                    index,
+                    stack.len()
+                ));
+            }
+        }
+
+        // Execute (index + 1) undos to include the target index
+        let count = index + 1;
+        for i in 0..count {
+            let result = self.undo();
+            if !result.success {
+                return CommandResult::failure(format!(
+                    "Undo failed at step {} of {}: {}",
+                    i + 1,
+                    count,
+                    result.error.unwrap_or_else(|| "Unknown error".to_string())
+                ));
+            }
+        }
+
+        tracing::info!(index = index, count = count, "Undo to index completed");
+        CommandResult::success()
+    }
+
+    /// Perform multiple redos to reach a specific history point
+    /// Index 0 = most recent undone action, so redo_to(N) executes (N+1) redos
+    pub fn redo_to(&self, index: usize) -> CommandResult {
+        // Validate index first
+        {
+            let stack = match self.undo_stack.lock() {
+                Ok(s) => s,
+                Err(_) => return CommandResult::failure("Failed to lock undo stack".to_string()),
+            };
+            if index >= stack.redo_len() {
+                return CommandResult::failure(format!(
+                    "Invalid redo index: {} (stack has {} entries)",
+                    index,
+                    stack.redo_len()
+                ));
+            }
+        }
+
+        // Execute (index + 1) redos to include the target index
+        let count = index + 1;
+        for i in 0..count {
+            let result = self.redo();
+            if !result.success {
+                return CommandResult::failure(format!(
+                    "Redo failed at step {} of {}: {}",
+                    i + 1,
+                    count,
+                    result.error.unwrap_or_else(|| "Unknown error".to_string())
+                ));
+            }
+        }
+
+        tracing::info!(index = index, count = count, "Redo to index completed");
+        CommandResult::success()
+    }
+
     /// Load resolved warnings from database
     pub fn load_resolved_warnings(&self) -> Result<Vec<crate::persistence::ResolvedWarning>> {
         let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
