@@ -109,9 +109,9 @@ zoom_in = ["Equal", "Plus"]         # = or + key
 zoom_out = ["Minus"]                # - key
 
 # Panel toggles
-toggle_sections_panel = ["1"]
-toggle_detail_panel = ["2"]
-toggle_data_table = ["3"]
+toggle_sections_panel = ["Ctrl+1"]
+toggle_detail_panel = ["Ctrl+2"]
+toggle_data_table = ["Ctrl+3"]
 ```
 
 ### All Configurable Actions
@@ -139,9 +139,9 @@ toggle_data_table = ["3"]
 | | `fit_to_bounds` | `F` | Fit map to survey bounds |
 | | `zoom_in` | `=`, `+` | Zoom in on map |
 | | `zoom_out` | `-` | Zoom out on map |
-| **Panels** | `toggle_sections_panel` | `1` | Toggle sections panel |
-| | `toggle_detail_panel` | `2` | Toggle detail panel |
-| | `toggle_data_table` | `3` | Toggle data table |
+| **Panels** | `toggle_sections_panel` | `Ctrl+1` | Toggle sections panel |
+| | `toggle_detail_panel` | `Ctrl+2` | Toggle detail panel |
+| | `toggle_data_table` | `Ctrl+3` | Toggle data table |
 
 ### Reserved Shortcuts
 

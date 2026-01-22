@@ -105,6 +105,23 @@ function normalizeKeyName(key: string): string {
     return 'Space';
   }
 
+  // Normalize digit and numpad keys (e.g., "Digit1", "Numpad1") to "1"
+  const digitMatch = lower.match(/^digit([0-9])$/);
+  if (digitMatch) {
+    const digit = digitMatch[1];
+    if (digit !== undefined) {
+      return digit;
+    }
+  }
+
+  const numpadMatch = lower.match(/^numpad([0-9])$/);
+  if (numpadMatch) {
+    const digit = numpadMatch[1];
+    if (digit !== undefined) {
+      return digit;
+    }
+  }
+
   // Function keys (F1, F2, ... - match Rust: accepts any numeric suffix that parses)
   if (lower.startsWith('f') && lower.length > 1) {
     const numStr = lower.slice(1);

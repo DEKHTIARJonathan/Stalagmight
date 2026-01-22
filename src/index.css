@@ -40,6 +40,25 @@ body {
   outline-offset: 2px;
 }
 
+@supports selector(:focus-visible) {
+  input:focus:not(:focus-visible),
+  select:focus:not(:focus-visible),
+  textarea:focus:not(:focus-visible),
+  button:focus:not(:focus-visible) {
+    outline: none;
+  }
+}
+
+@supports not selector(:focus-visible) {
+  input:focus,
+  select:focus,
+  textarea:focus,
+  button:focus {
+    outline: 2px solid #4ecdc4;
+    outline-offset: 2px;
+  }
+}
+
 /* Input styles */
 input, select, textarea {
   background-color: #16213e;
@@ -51,7 +70,6 @@ input, select, textarea {
 
 input:focus, select:focus, textarea:focus {
   border-color: #4ecdc4;
-  outline: none;
 }
 
 /* Force dark theme for native controls (dropdowns, date pickers) */
@@ -117,6 +135,13 @@ input[type="radio"]:disabled {
 input[type="checkbox"]:hover:not(:disabled),
 input[type="radio"]:hover:not(:disabled) {
   border-color: #4ecdc4;
+}
+
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: 2px solid #4ecdc4;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px rgba(78, 205, 196, 0.5);
 }
 
 /* Color picker dark theme */

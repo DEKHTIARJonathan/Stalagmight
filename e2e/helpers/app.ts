@@ -809,6 +809,46 @@ export async function selectTool(
   await waitForActiveTool(storeToolNames[tool] ?? tool);
 }
 
+function shortcutToKeys(shortcut: string): string[] {
+  return shortcut
+    .split('+')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const lower = part.toLowerCase();
+      switch (lower) {
+        case 'ctrl':
+        case 'control':
+        case 'cmd':
+        case 'command':
+        case 'meta':
+          return 'Control';
+        case 'alt':
+        case 'option':
+          return 'Alt';
+        case 'shift':
+          return 'Shift';
+        case 'space':
+          return ' ';
+        case 'escape':
+        case 'esc':
+          return 'Escape';
+        case 'plus':
+          return '+';
+        case 'minus':
+          return '-';
+        case 'equal':
+        case 'equals':
+          return '=';
+        default:
+          if (part.length === 1 && /[A-Z]/.test(part)) {
+            return part.toLowerCase();
+          }
+          return part;
+      }
+    });
+}
+
 /**
  * Toggle a panel visibility.
  */
@@ -818,6 +858,22 @@ export async function togglePanel(panel: 'sections' | 'detail' | 'dataTable'): P
     detail: '2',
     dataTable: '3',
   };
+
+  await browser.execute(() => {
+    const active = document.activeElement as HTMLElement | null;
+    if (active && typeof active.blur === 'function') {
+      active.blur();
+    }
+    if (!document.body.hasAttribute('tabindex')) {
+      document.body.setAttribute('tabindex', '-1');
+    }
+    document.body.focus();
+  });
+
+  const mapCanvas = await $('[data-testid="map-canvas"]');
+  if (await mapCanvas.isExisting()) {
+    await mapCanvas.click();
+  }
 
   const wasOpen = await browser.execute((panelName: 'sections' | 'detail' | 'dataTable') => {
     const e2e = (window as unknown as {
@@ -830,8 +886,28 @@ export async function togglePanel(panel: 'sections' | 'detail' | 'dataTable'): P
     return ui.dataTableOpen;
   }, panel);
 
-  // Config file has shortcuts as just '1', '2', '3' (without Ctrl modifier)
-  await browser.keys([panelKeys[panel] ?? '1']);
+  const shortcut = await browser.execute((panelName: 'sections' | 'detail' | 'dataTable') => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore?: {
+          getState: () => { config?: { shortcuts?: Record<string, string[]> } };
+        };
+      };
+    }).__E2E_TEST__;
+    const shortcuts = e2e?.projectStore?.getState().config?.shortcuts;
+    if (!shortcuts) return null;
+    const map: Record<string, string> = {
+      sections: 'toggle_sections_panel',
+      detail: 'toggle_detail_panel',
+      dataTable: 'toggle_data_table',
+    };
+    const key = map[panelName];
+    const bindings = shortcuts[key];
+    return Array.isArray(bindings) && bindings.length > 0 ? bindings[0] : null;
+  }, panel);
+
+  const keySequence = shortcut ? shortcutToKeys(shortcut) : [panelKeys[panel] ?? '1'];
+  await browser.keys(keySequence.length > 0 ? keySequence : [panelKeys[panel] ?? '1']);
   if (wasOpen !== null) {
     await waitForPanelState(panel, !wasOpen);
   } else {

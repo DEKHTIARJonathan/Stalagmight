@@ -38,6 +38,31 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cargo_build}"
 BINARY_PATH="$CARGO_TARGET_DIR/debug/cavechef"
 DIST_PATH="$PROJECT_ROOT/dist"
+DEFAULT_MAX_INSTANCES=1
+if command -v nproc &> /dev/null; then
+    CPU_COUNT=$(nproc)
+elif command -v getconf &> /dev/null; then
+    CPU_COUNT=$(getconf _NPROCESSORS_ONLN)
+else
+    CPU_COUNT=1
+fi
+if [[ "$CPU_COUNT" -gt 1 ]]; then
+    DEFAULT_MAX_INSTANCES=$CPU_COUNT
+fi
+if [[ "$DEFAULT_MAX_INSTANCES" -gt 4 ]]; then
+    DEFAULT_MAX_INSTANCES=4
+fi
+
+WDIO_MAX_INSTANCES="${WDIO_MAX_INSTANCES:-$DEFAULT_MAX_INSTANCES}"
+WDIO_BASE_PORT="${WDIO_BASE_PORT:-4444}"
+if [[ -z "${WDIO_BASE_NATIVE_PORT:-}" ]]; then
+    WDIO_BASE_NATIVE_PORT=$((WDIO_BASE_PORT + 1000))
+else
+    WDIO_BASE_NATIVE_PORT="${WDIO_BASE_NATIVE_PORT}"
+fi
+export WDIO_MAX_INSTANCES
+export WDIO_BASE_PORT
+export WDIO_BASE_NATIVE_PORT
 
 # ===== Argument parsing =====
 FORCE_REBUILD=false
@@ -100,6 +125,10 @@ Examples:
 
 Environment Variables:
   CARGO_TARGET_DIR  Location of cargo build output (default: ~/.cargo_build)
+  WDIO_MAX_INSTANCES  Number of parallel workers (default: min(4, CPU count))
+  WDIO_BASE_PORT      Base tauri-driver port (default: 4444)
+  WDIO_BASE_NATIVE_PORT  Base native WebDriver port (default: base port + 1000)
+  WDIO_PORT_RANGE        Number of ports to clean (default: spec count)
 EOF
 }
 
@@ -229,12 +258,30 @@ cleanup_ports() {
         pkill -9 cavechef 2>/dev/null || true
     fi
 
-    # Check if ports are in use and free them
-    for port in 4444 4445; do
-        if command -v fuser &> /dev/null && fuser "$port/tcp" > /dev/null 2>&1; then
-            warn "Port $port in use, killing process..."
-            fuser -k "$port/tcp" 2>/dev/null || true
-        fi
+    # Check if ports are in use and free them (cover parallel worker range)
+    local max_instances="$WDIO_MAX_INSTANCES"
+    if ! [[ "$max_instances" =~ ^[0-9]+$ ]]; then
+        max_instances=1
+    fi
+
+    local spec_count
+    spec_count=$(find "$PROJECT_ROOT/e2e/specs" -name "*.spec.ts" 2>/dev/null | wc -l | tr -d ' ')
+    if ! [[ "$spec_count" =~ ^[0-9]+$ ]] || [[ "$spec_count" -lt 1 ]]; then
+        spec_count=$max_instances
+    fi
+
+    local port_range="${WDIO_PORT_RANGE:-$spec_count}"
+    if ! [[ "$port_range" =~ ^[0-9]+$ ]] || [[ "$port_range" -lt 1 ]]; then
+        port_range=$max_instances
+    fi
+
+    for ((i=0; i<port_range; i++)); do
+        for port in "$((WDIO_BASE_PORT + i))" "$((WDIO_BASE_NATIVE_PORT + i))"; do
+            if command -v fuser &> /dev/null && fuser "$port/tcp" > /dev/null 2>&1; then
+                warn "Port $port in use, killing process..."
+                fuser -k "$port/tcp" 2>/dev/null || true
+            fi
+        done
     done
 
     # Wait for processes to terminate

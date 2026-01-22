@@ -815,6 +815,14 @@ fn normalize_shortcut(shortcut: &str) -> Option<String> {
 /// Single letter keys are uppercase to match KeyboardEvent.key (e.g., "S" not "s").
 fn normalize_key_name(key: &str) -> String {
     let lower = key.to_lowercase();
+    if let Some(num) = lower
+        .strip_prefix("digit")
+        .or_else(|| lower.strip_prefix("numpad"))
+    {
+        if num.len() == 1 && num.chars().all(|c| c.is_ascii_digit()) {
+            return num.to_string();
+        }
+    }
     match lower.as_str() {
         // Special keys - canonical names (PascalCase, matching KeyboardEvent.key)
         "space" | "spacebar" => "Space".to_string(),
@@ -1899,6 +1907,8 @@ select = "S"
         assert_eq!(normalize_shortcut("S"), Some("S".to_string()));
         assert_eq!(normalize_shortcut("s"), Some("S".to_string()));
         assert_eq!(normalize_shortcut("1"), Some("1".to_string()));
+        assert_eq!(normalize_shortcut("Digit1"), Some("1".to_string()));
+        assert_eq!(normalize_shortcut("Numpad1"), Some("1".to_string()));
     }
 
     #[test]
@@ -1906,6 +1916,8 @@ select = "S"
         assert_eq!(normalize_shortcut("Ctrl+S"), Some("Ctrl+S".to_string()));
         assert_eq!(normalize_shortcut("ctrl+s"), Some("Ctrl+S".to_string()));
         assert_eq!(normalize_shortcut("CTRL+S"), Some("Ctrl+S".to_string()));
+        assert_eq!(normalize_shortcut("Ctrl+Digit1"), Some("Ctrl+1".to_string()));
+        assert_eq!(normalize_shortcut("Ctrl+Numpad1"), Some("Ctrl+1".to_string()));
     }
 
     #[test]
