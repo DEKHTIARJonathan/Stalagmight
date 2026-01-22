@@ -37,16 +37,16 @@ export function ValidationSettings({
       errors.push('Depth change warning threshold must be positive');
     }
 
-    // Validate azimuth deviation
-    if (config.validation.warn_azimuth_deviation_max <= 0 || config.validation.warn_azimuth_deviation_max > 180) {
+    // Validate azimuth deviation (0 means disabled)
+    if (config.validation.warn_azimuth_deviation_max < 0 || config.validation.warn_azimuth_deviation_max > 180) {
       errors.push('Azimuth deviation warning must be between 0 and 180');
     }
 
-    // Validate diff thresholds
-    if (config.validation.azimuth_diff_threshold <= 0 || config.validation.azimuth_diff_threshold > 180) {
+    // Validate diff thresholds (0 means disabled)
+    if (config.validation.azimuth_diff_threshold < 0 || config.validation.azimuth_diff_threshold > 180) {
       errors.push('Azimuth difference threshold must be between 0 and 180');
     }
-    if (config.validation.pitch_diff_threshold <= 0 || config.validation.pitch_diff_threshold > 90) {
+    if (config.validation.pitch_diff_threshold < 0 || config.validation.pitch_diff_threshold > 90) {
       errors.push('Pitch difference threshold must be between 0 and 90');
     }
 

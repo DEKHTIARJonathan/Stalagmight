@@ -9,9 +9,8 @@ import { isFieldChanged } from './types';
 
 const IMAGE_FORMAT_OPTIONS = [
   { value: 'png', label: 'PNG' },
-  { value: 'jpg', label: 'JPEG' },
-  { value: 'webp', label: 'WebP' },
   { value: 'svg', label: 'SVG' },
+  { value: 'pdf', label: 'PDF' },
 ];
 
 const DPI_OPTIONS = [

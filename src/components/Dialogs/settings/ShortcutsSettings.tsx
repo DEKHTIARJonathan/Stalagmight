@@ -281,6 +281,7 @@ export function ShortcutsSettings({
             value={shortcutSearch}
             onChange={(e) => setShortcutSearch(e.target.value)}
             placeholder="Search shortcuts..."
+            aria-label="Search keyboard shortcuts"
             className="w-full px-3 py-2 pl-9 bg-background border border-border rounded text-sm"
             data-testid="shortcuts-search"
           />

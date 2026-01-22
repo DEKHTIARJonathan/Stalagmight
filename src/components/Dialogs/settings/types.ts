@@ -24,33 +24,3 @@ export function isFieldChanged(changedFields: Set<string>, ...paths: string[]): 
   return paths.some((path) => changedFields.has(path));
 }
 
-/**
- * Helper to update a nested config value.
- */
-export function updateNestedConfig<T extends Config>(
-  config: T,
-  path: string,
-  value: unknown
-): Partial<T> {
-  const parts = path.split('.');
-  if (parts.length === 0) return config;
-
-  const result: Record<string, unknown> = {};
-  let current = result;
-
-  // Build nested object structure
-  for (let i = 0; i < parts.length - 1; i++) {
-    const part = parts[i];
-    if (!part) continue;
-    current[part] = { ...((config as Record<string, unknown>)[part] as Record<string, unknown>) };
-    current = current[part] as Record<string, unknown>;
-  }
-
-  // Set the final value
-  const lastPart = parts[parts.length - 1];
-  if (lastPart) {
-    current[lastPart] = value;
-  }
-
-  return result as Partial<T>;
-}

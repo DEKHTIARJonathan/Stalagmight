@@ -7,10 +7,10 @@ import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
 
+// Backend currently only supports ESRI tile provider
+// See src-tauri/src/lib.rs SUPPORTED_PROVIDERS
 const SATELLITE_PROVIDER_OPTIONS = [
-  { value: 'openstreetmap', label: 'OpenStreetMap' },
-  { value: 'mapbox', label: 'Mapbox' },
-  { value: 'google', label: 'Google Maps' },
+  { value: 'esri', label: 'ESRI World Imagery' },
 ];
 
 /**
@@ -224,6 +224,30 @@ export function MapSettings({
     }
   };
 
+  const handleStationHoverRadiusChange = (value: string) => {
+    const num = parseFloat(value);
+    if (!isNaN(num)) {
+      onChange({
+        map: {
+          ...config.map,
+          station: { ...config.map.station, hover_radius: num },
+        },
+      });
+    }
+  };
+
+  const handleStationSelectionRadiusChange = (value: string) => {
+    const num = parseFloat(value);
+    if (!isNaN(num)) {
+      onChange({
+        map: {
+          ...config.map,
+          station: { ...config.map.station, selection_radius: num },
+        },
+      });
+    }
+  };
+
   // Shot settings
   const handleShotWidthChange = (value: string) => {
     const num = parseFloat(value);
@@ -244,6 +268,30 @@ export function MapSettings({
         map: {
           ...config.map,
           shot: { ...config.map.shot, hit_area: num },
+        },
+      });
+    }
+  };
+
+  const handleShotHoverWidthChange = (value: string) => {
+    const num = parseFloat(value);
+    if (!isNaN(num)) {
+      onChange({
+        map: {
+          ...config.map,
+          shot: { ...config.map.shot, hover_width: num },
+        },
+      });
+    }
+  };
+
+  const handleShotSelectionWidthChange = (value: string) => {
+    const num = parseFloat(value);
+    if (!isNaN(num)) {
+      onChange({
+        map: {
+          ...config.map,
+          shot: { ...config.map.shot, selection_width: num },
         },
       });
     }
@@ -569,6 +617,44 @@ export function MapSettings({
             data-testid="input-station-hit-area"
           />
         </SettingRow>
+
+        <SettingRow
+          label="Station hover radius"
+          helpText="Radius when hovered (1-50 pixels)"
+          isChanged={isFieldChanged(changedFields, 'map.station.hover_radius')}
+          data-testid="setting-station-hover-radius"
+        >
+          <input
+            type="number"
+            step={0.5}
+            min={1}
+            max={50}
+            value={config.map.station.hover_radius}
+            onChange={(e) => handleStationHoverRadiusChange(e.target.value)}
+            className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
+            aria-label="Station hover radius"
+            data-testid="input-station-hover-radius"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label="Station selection radius"
+          helpText="Radius when selected (1-50 pixels)"
+          isChanged={isFieldChanged(changedFields, 'map.station.selection_radius')}
+          data-testid="setting-station-selection-radius"
+        >
+          <input
+            type="number"
+            step={0.5}
+            min={1}
+            max={50}
+            value={config.map.station.selection_radius}
+            onChange={(e) => handleStationSelectionRadiusChange(e.target.value)}
+            className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
+            aria-label="Station selection radius"
+            data-testid="input-station-selection-radius"
+          />
+        </SettingRow>
       </SettingsSection>
 
       <SettingsSection title="Shot Appearance" data-testid="section-shot">
@@ -607,6 +693,44 @@ export function MapSettings({
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
             aria-label="Shot hit area"
             data-testid="input-shot-hit-area"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label="Shot hover width"
+          helpText="Width when hovered (0.5-20 pixels)"
+          isChanged={isFieldChanged(changedFields, 'map.shot.hover_width')}
+          data-testid="setting-shot-hover-width"
+        >
+          <input
+            type="number"
+            step={0.5}
+            min={0.5}
+            max={20}
+            value={config.map.shot.hover_width}
+            onChange={(e) => handleShotHoverWidthChange(e.target.value)}
+            className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
+            aria-label="Shot hover width"
+            data-testid="input-shot-hover-width"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label="Shot selection width"
+          helpText="Width when selected (0.5-20 pixels)"
+          isChanged={isFieldChanged(changedFields, 'map.shot.selection_width')}
+          data-testid="setting-shot-selection-width"
+        >
+          <input
+            type="number"
+            step={0.5}
+            min={0.5}
+            max={20}
+            value={config.map.shot.selection_width}
+            onChange={(e) => handleShotSelectionWidthChange(e.target.value)}
+            className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
+            aria-label="Shot selection width"
+            data-testid="input-shot-selection-width"
           />
         </SettingRow>
       </SettingsSection>
