@@ -1,7 +1,9 @@
 {
   "branch_name": "fn-21-q0u",
   "created_at": "2026-01-22T17:31:01.854119Z",
-  "depends_on_epics": [],
+  "depends_on_epics": [
+    "fn-20-mwj"
+  ],
   "id": "fn-21-q0u",
   "next_task": 1,
   "plan_review_status": "unknown",
@@ -9,5 +11,5 @@
   "spec_path": ".flow/specs/fn-21-q0u.md",
   "status": "open",
   "title": "Details Panel Hyperlinks and Center Button",
-  "updated_at": "2026-01-22T17:43:12.948684Z"
+  "updated_at": "2026-01-22T17:50:06.089127Z"
 }

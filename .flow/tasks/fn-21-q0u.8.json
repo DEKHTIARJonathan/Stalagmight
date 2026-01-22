@@ -1,0 +1,18 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-22T17:44:11.239250Z",
+  "depends_on": [
+    "fn-21-q0u.3",
+    "fn-21-q0u.4",
+    "fn-21-q0u.5"
+  ],
+  "epic": "fn-21-q0u",
+  "id": "fn-21-q0u.8",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-21-q0u.8.md",
+  "status": "todo",
+  "title": "WebdriverIO tests for map centering",
+  "updated_at": "2026-01-22T17:46:00.909563Z"
+}

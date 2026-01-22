@@ -1,0 +1,17 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-22T17:44:11.071377Z",
+  "depends_on": [
+    "fn-21-q0u.1",
+    "fn-21-q0u.2"
+  ],
+  "epic": "fn-21-q0u",
+  "id": "fn-21-q0u.4",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-21-q0u.4.md",
+  "status": "todo",
+  "title": "Add hyperlinks and center button to StationDetail",
+  "updated_at": "2026-01-22T17:52:08.741296Z"
+}
