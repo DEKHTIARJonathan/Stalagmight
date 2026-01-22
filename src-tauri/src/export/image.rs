@@ -177,6 +177,8 @@ fn export_png(project: &Project, path: &Path, options: &ExportImageOptions) -> R
         .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap for {}x{} image", width, height))?;
 
     // Render SVG to pixmap with scaling transform
+    // Note: resvg 0.43's render() returns () and always succeeds if the tree was parsed.
+    // Rendering failures (e.g., out-of-bounds) silently produce empty regions.
     let transform = tiny_skia::Transform::from_scale(scale, scale);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
@@ -357,8 +359,9 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
             };
 
             // Shot stroke color: section color or depth-based (average of endpoints)
+            // Sanitize user-controlled colors to prevent SVG injection
             let stroke_color = match options.color_mode {
-                ColorMode::Section => section.color.clone(),
+                ColorMode::Section => sanitize_color(&section.color).to_string(),
                 ColorMode::Depth => {
                     let avg_depth = (from.coordinates.z + to.coordinates.z) / 2.0;
                     get_depth_color(avg_depth, min_depth, max_depth, options.depth_preset)
@@ -412,6 +415,7 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
         let radius = if station.is_zero_datum { px(6.0) } else { px(3.0) };
 
         // Fill color: gold for zero-datum, otherwise section or depth color
+        // Sanitize user-controlled colors to prevent SVG injection
         let fill_color = if station.is_zero_datum {
             "#ffd700".to_string() // Gold for zero datum, always
         } else {
@@ -422,8 +426,8 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
                         .sections
                         .iter()
                         .find(|s| s.id == station.station_ref.section_id)
-                        .map(|s| s.color.clone())
-                        .unwrap_or_else(|| "#ffffff".to_string())
+                        .map(|s| sanitize_color(&s.color).to_string())
+                        .unwrap_or_else(|| DEFAULT_COLOR.to_string())
                 }
                 ColorMode::Depth => {
                     get_depth_color(
@@ -499,11 +503,12 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
 
     // Draw depth legend if enabled and in depth mode
     if options.include_legend && options.color_mode == ColorMode::Depth {
-        let bounds = Bounds {
-            min_x,
-            max_x,
-            min_y,
-            max_y,
+        // Use viewBox bounds (with padding) for correct legend positioning
+        let viewbox_bounds = Bounds {
+            min_x: min_x - padding,
+            max_x: max_x + padding,
+            min_y: min_y - padding,
+            max_y: max_y + padding,
         };
         let legend = generate_depth_legend(
             min_depth,
@@ -511,7 +516,7 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
             options.depth_preset,
             &options.depth_unit,
             options.decimal_precision,
-            &bounds,
+            &viewbox_bounds,
             scale, // Pass scale factor for pixel-stable sizing
         );
         svg.push_str(&legend);
@@ -529,6 +534,35 @@ fn escape_xml(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+/// Default fallback color when user-provided color is invalid.
+const DEFAULT_COLOR: &str = "#808080";
+
+/// Validate and sanitize a color string for safe SVG injection.
+///
+/// Accepts only valid hex colors (#RGB, #RRGGBB, #RRGGBBAA).
+/// Returns the color unchanged if valid, or DEFAULT_COLOR if invalid.
+fn sanitize_color(color: &str) -> &str {
+    // Must start with #
+    if !color.starts_with('#') {
+        return DEFAULT_COLOR;
+    }
+
+    let hex_part = &color[1..];
+
+    // Must be 3, 6, or 8 hex characters
+    let valid_length = hex_part.len() == 3 || hex_part.len() == 6 || hex_part.len() == 8;
+    if !valid_length {
+        return DEFAULT_COLOR;
+    }
+
+    // Must contain only hex digits
+    if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
+        return DEFAULT_COLOR;
+    }
+
+    color
 }
 
 /// Bounds of the survey data in world coordinates.
@@ -1237,6 +1271,71 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_color_valid_hex6() {
+        assert_eq!(sanitize_color("#4ecdc4"), "#4ecdc4");
+        assert_eq!(sanitize_color("#FFFFFF"), "#FFFFFF");
+        assert_eq!(sanitize_color("#000000"), "#000000");
+    }
+
+    #[test]
+    fn test_sanitize_color_valid_hex3() {
+        assert_eq!(sanitize_color("#fff"), "#fff");
+        assert_eq!(sanitize_color("#ABC"), "#ABC");
+    }
+
+    #[test]
+    fn test_sanitize_color_valid_hex8() {
+        assert_eq!(sanitize_color("#4ecdc4ff"), "#4ecdc4ff");
+        assert_eq!(sanitize_color("#00000080"), "#00000080");
+    }
+
+    #[test]
+    fn test_sanitize_color_invalid_returns_default() {
+        // Missing hash
+        assert_eq!(sanitize_color("4ecdc4"), DEFAULT_COLOR);
+        // Wrong length
+        assert_eq!(sanitize_color("#4ecd"), DEFAULT_COLOR);
+        assert_eq!(sanitize_color("#4ecdc4f"), DEFAULT_COLOR);
+        // Non-hex characters
+        assert_eq!(sanitize_color("#gggggg"), DEFAULT_COLOR);
+        // Empty
+        assert_eq!(sanitize_color(""), DEFAULT_COLOR);
+        // Injection attempt
+        assert_eq!(sanitize_color("#fff\" onclick=\"alert(1)"), DEFAULT_COLOR);
+        assert_eq!(sanitize_color("red"), DEFAULT_COLOR);
+        assert_eq!(sanitize_color("url(#gradient)"), DEFAULT_COLOR);
+    }
+
+    #[test]
+    fn test_svg_uses_sanitized_colors() {
+        // Create project with invalid color
+        let mut project = Project::new("ColorTest".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Bad".to_string()),
+            surveyor: None,
+            date: None,
+            color: "red\" onclick=\"alert(1)".to_string(), // Injection attempt
+            direction: None,
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 180.0,
+                length: 10.0,
+                depth_in: 5.0,
+                depth_out: 5.0,
+                ..Default::default()
+            }],
+        });
+
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+
+        // Should not contain the injection
+        assert!(!svg.contains("onclick"), "SVG should not contain onclick");
+        assert!(!svg.contains("alert"), "SVG should not contain alert");
+        // Should use default color instead
+        assert!(svg.contains(DEFAULT_COLOR), "SVG should use default color for invalid input");
+    }
+
+    #[test]
     fn test_empty_project_depth_mode_no_infinity() {
         let project = Project::new("Empty".to_string(), None);
         let options = ExportImageOptions {
@@ -1436,6 +1535,8 @@ mod tests {
             assert!((pixel_r - 3.0).abs() < tolerance,
                 "Station radius * scale should be ~3px, got {}px (r={}, scale={})",
                 pixel_r, r, expected_scale);
+        } else {
+            panic!("Could not find station radius in SVG");
         }
 
         // Verify shot stroke-width: sw * scale ≈ 2px
@@ -1444,6 +1545,8 @@ mod tests {
             assert!((pixel_sw - 2.0).abs() < tolerance,
                 "Shot stroke-width * scale should be ~2px, got {}px",
                 pixel_sw);
+        } else {
+            panic!("Could not find shot stroke-width in SVG CSS");
         }
     }
 }
