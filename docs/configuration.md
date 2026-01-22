@@ -84,8 +84,7 @@ Shortcuts use the format `Modifier+Modifier+Key`, where:
 # Tools - single letter keys for quick access
 select = ["S"]
 pan = ["P"]
-zoom = ["Z"]                        # Toggle zoom mode
-quick_zoom = ["Q"]                  # Spring-loaded zoom (hold to zoom, release to restore)
+zoom = ["Z"]
 draw = ["D"]
 delete_tool = ["X"]
 merge = ["M"]
@@ -121,8 +120,7 @@ toggle_data_table = ["3"]
 |----------|--------|---------|-------------|
 | **Tools** | `select` | `S` | Select tool |
 | | `pan` | `P` | Pan/hand tool |
-| | `zoom` | `Z` | Zoom tool (toggle) |
-| | `quick_zoom` | `Q` | Spring-loaded zoom (hold key) |
+| | `zoom` | `Z` | Zoom tool |
 | | `draw` | `D` | Draw tool |
 | | `delete_tool` | `X` | Delete tool |
 | | `merge` | `M` | Merge tool |

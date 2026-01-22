@@ -106,7 +106,6 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Zoom-related actions should be visible
       await expect(page.locator('[data-testid="shortcut-row-zoom"]')).toBeVisible();
-      await expect(page.locator('[data-testid="shortcut-row-quick_zoom"]')).toBeVisible();
       await expect(page.locator('[data-testid="shortcut-row-zoom_in"]')).toBeVisible();
       await expect(page.locator('[data-testid="shortcut-row-zoom_out"]')).toBeVisible();
 
