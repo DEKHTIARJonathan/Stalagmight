@@ -506,24 +506,12 @@ impl Project {
     /// Get all station refs connected to this station via shots and merges (transitive)
     /// All stations in a section are connected via shots, and merges connect stations across sections
     fn get_connected_stations(&self, station_ref: StationRef) -> HashSet<StationRef> {
+        // Reuse get_connected_section_ids for section-level traversal
+        let connected_sections = self.get_connected_section_ids(station_ref.section_id);
+
+        // Enumerate all stations in connected sections
         let mut connected = HashSet::new();
-        let mut sections_to_process: HashSet<SectionId> = HashSet::new();
-        let mut processed_sections: HashSet<SectionId> = HashSet::new();
-
-        // Start with the section containing this station
-        sections_to_process.insert(station_ref.section_id);
-
-        while !sections_to_process.is_empty() {
-            // Get a section to process
-            let section_id = *sections_to_process.iter().next().unwrap();
-            sections_to_process.remove(&section_id);
-
-            if processed_sections.contains(&section_id) {
-                continue;
-            }
-            processed_sections.insert(section_id);
-
-            // Add all stations in this section (they're all connected via shots)
+        for section_id in connected_sections {
             if let Some(section) = self.sections.iter().find(|s| s.id == section_id) {
                 // A section with N shots has N+1 stations (indices 0 to N)
                 for i in 0..=section.shots.len() {
@@ -531,19 +519,6 @@ impl Project {
                         section_id,
                         station_index: i as u32,
                     });
-                }
-            }
-
-            // Find all sections connected via merges to any station in this section
-            for merge in &self.station_merges {
-                if merge.station_a.section_id == section_id {
-                    if !processed_sections.contains(&merge.station_b.section_id) {
-                        sections_to_process.insert(merge.station_b.section_id);
-                    }
-                } else if merge.station_b.section_id == section_id {
-                    if !processed_sections.contains(&merge.station_a.section_id) {
-                        sections_to_process.insert(merge.station_a.section_id);
-                    }
                 }
             }
         }
@@ -563,8 +538,8 @@ impl Project {
     }
 
     /// Format a station reference for user display.
-    /// Uses section name if available, otherwise "Section N" (1-indexed).
-    /// Station index is displayed as 1-indexed for user-facing messages.
+    /// Uses section name if available, otherwise "Section N" (0-indexed to match canonical IDs).
+    /// Station index is displayed as 0-indexed to match UI format (e.g., "Section #0").
     fn format_station_ref_for_display(&self, station_ref: StationRef) -> String {
         let section_label = self
             .sections
@@ -572,10 +547,10 @@ impl Project {
             .find(|s| s.id == station_ref.section_id)
             .and_then(|s| s.name.as_ref())
             .map(|name| format!("\"{}\"", name))
-            .unwrap_or_else(|| format!("Section {}", station_ref.section_id + 1));
+            .unwrap_or_else(|| format!("Section {}", station_ref.section_id));
 
-        // Display station index as 1-indexed for users
-        format!("{}, Station {}", section_label, station_ref.station_index + 1)
+        // Display station index as 0-indexed to match canonical StationRef format
+        format!("{} #{}", section_label, station_ref.station_index)
     }
 
     /// Set a station as the zero datum and reposition connected sections.
@@ -730,7 +705,7 @@ impl Project {
             let new_station = self.format_station_ref_for_display(station_ref);
             let existing_station = self.format_station_ref_for_display(existing);
             return Err(format!(
-                "Cannot set zero datum: {} is connected to {} which already has a zero datum",
+                "Cannot store zero datum: {} is connected to {} which already has a zero datum",
                 new_station, existing_station
             ));
         }
@@ -1779,7 +1754,7 @@ mod tests {
 
     #[test]
     fn set_zero_datum_error_includes_station_number() {
-        // Error message should include human-readable station numbers (1-indexed)
+        // Error message should include station numbers (0-indexed to match canonical IDs)
         let mut project = Project::new("StationNumbers".to_string(), None);
         let section_id = project
             .add_section(SectionData {
@@ -1791,17 +1766,17 @@ mod tests {
             })
             .id;
 
-        // Set first datum on station 0 (displayed as Station 1)
+        // Set first datum on station 0
         let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
         project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
 
-        // Attempt to set on station 2 (displayed as Station 3)
+        // Attempt to set on station 2
         let result = project.set_zero_datum(StationRef::new(section_id, 2), gps);
         let err = result.unwrap_err();
 
-        // Error should reference stations as 1-indexed
-        assert!(err.contains("Station 3"), "New station should be Station 3: {}", err);
-        assert!(err.contains("Station 1"), "Existing datum station should be Station 1: {}", err);
+        // Error should reference stations with 0-indexed format (e.g., "Section 0 #2")
+        assert!(err.contains("#2"), "New station should include #2: {}", err);
+        assert!(err.contains("#0"), "Existing datum station should include #0: {}", err);
     }
 
     #[test]
