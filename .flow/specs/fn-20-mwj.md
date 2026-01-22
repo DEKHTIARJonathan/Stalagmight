@@ -2,84 +2,90 @@
 
 Comprehensive improvements to the Data Table panel including bi-directional selection sync with the map, themed dropdown styling, ID format changes, azimuth simplification, and visual polish.
 
-## Problem
+## Overview
 
-The Data Table panel currently operates somewhat independently from the rest of the application. There's no synchronization between selections made on the map/sections panel and the Data Table, the section dropdown uses unstyled native HTML select, shot IDs display internal database IDs rather than user-friendly formats, and azimuth is split across two columns when a single averaged column would be cleaner.
+The Data Table panel currently operates independently from the rest of the application. This epic adds:
+- Bi-directional selection sync between DataTable and Map/Sections Panel
+- Themed dropdown styling using existing Select component
+- User-friendly ID format (sectionId:shotPosition instead of internal IDs)
+- Single azimuth column with circular mean calculation
+- Row hover/selection styling
+- Enhanced keyboard navigation (Enter/Shift+Enter)
+- Proper edge case handling for deletions
+- Screen reader support
 
-## Key Decisions
+## Scope
 
-### 1. Bi-directional Selection Sync
-- **Data Table follows external selection**: When a shot/station is selected on the map or sections panel, the Data Table:
-  - Switches to the correct section (auto-switch dropdown)
-  - Highlights the corresponding row
-  - Scrolls just enough to make the row visible (minimal scroll, not center)
-  - Only syncs if Data Table is already open (no auto-expand)
-- **Station selection**: Highlights the shot that ENDS at that station (station index N = end of shot N)
-- **Section selection**: Switches dropdown to that section, no row highlighted
+**In scope:**
+- DataTable.tsx component enhancements
+- EditableTable.tsx enhancements (row interactions, scroll, keyboard nav)
+- DetailPanel.tsx ID format updates
+- Shared utility extraction (circularMeanDegrees, formatShotId)
+- Column width fixes
+- ARIA announcements
 
-### 2. Data Table to Map/Detail Panel Sync
-- **Row hover**: Immediately highlights shot on map (using existing hoveredShot state)
-- **Row click**: Selects the shot (full selection state, updates Detail Panel too)
-- **Cell edit**: Entering edit mode sets the shot as selected
-- **Double-click row**: Pans map to center on that shot
-- **No auto-pan on hover**: Only double-click triggers map panning
+**Out of scope:**
+- Backend changes
+- New database fields
+- Export functionality changes
 
-### 3. Section Dropdown Styling
-- Replace native `<select>` with themed `<Select>` component from `src/components/common/Select.tsx`
-- Use component as-is (no style modifications needed)
-- Keep "Section:" label prefix
+## Approach
 
-### 4. ID Format Changes
-- **Data Table ID column**: Show `sectionId:shotPosition` format (e.g., "5:3")
-  - Section ID: Use internal database ID as-is (not display position)
-  - Shot position: 1-indexed position within the section (1st shot = 1)
-- **Detail Panel shot ID**: Match Data Table format (sectionId:shotPosition)
-- **Warnings panel**: Update to show sectionId:position format for consistency
+### Key Patterns to Follow
 
-### 5. Azimuth Simplification
-- Replace two columns (Azi In, Azi Out) with single "Azi" column showing circular mean
-- **Display**: 1 decimal place (e.g., "123.4°")
-- **Circular mean calculation**: Handle wrap-around (350° and 10° averages to 0°, not 180°)
-- **Editable**: Yes - editing offsets both azimuth_in and azimuth_out by the delta
-  - Example: If avg=50 (in=45, out=55) and user changes to 60, result is in=55, out=65
-  - Normalize results to 0-360 range after edit
+1. **Selection state** - Use existing `uiStore.selection`, `hoveredShot` states
+   - Pattern at `src/store/uiStore.ts:56-99`
+   
+2. **Row styling** - Follow SectionsPanel pattern
+   - Pattern at `src/components/SingleSystemView/SectionsPanel.tsx:218-219`
+   - `isSelected || hoveredSectionId === section.id ? 'bg-accent/20' : 'hover:bg-accent/20'`
 
-### 6. Column Width Fixes
-- Increase minimum width for "Length (m)" column to prevent text wrapping
-- Increase minimum width for "Depth Out" column to prevent text wrapping
+3. **Map panning** - Use existing fitToSection/easeTo patterns
+   - Pattern at `src/components/Map/MapCanvas.tsx:1186-1297`
+   
+4. **Circular mean** - Reuse existing function
+   - Located at `src/components/Dialogs/SectionPreview.tsx:24-36`
+   - Extract to shared utils
 
-### 7. Row Styling
-- **Hover**: Subtle background change
-- **Selected**: Accent-colored left border indicator
-- Hover and selected are visually distinct styles
+5. **Themed Select** - Use existing component as-is
+   - Located at `src/components/common/Select.tsx`
 
-### 8. Keyboard Navigation Enhancement
-- **Enter**: Move to cell below (same column)
-- **Shift+Enter**: Move to cell above (same column)
-- Stay at boundary when reaching first/last row (no wrap)
-- Keep existing: Tab=next cell right, Shift+Tab=next cell left
+### Technical Notes
 
-### 9. Section Switching Behavior
-- Manually switching section dropdown clears current selection and selects the new section
-- If current section is deleted, auto-switch to first remaining section
+- **Shot position**: Calculate as `shots.findIndex(s => s.id === shotId) + 1` (1-indexed)
+- **Virtual shots**: Include in position count (matches visual display order)
+- **Azimuth edit delta**: `newValue - oldMean` applied to both in/out, then normalize 0-360
+- **Scroll behavior**: Use `scrollIntoView({ block: 'nearest' })` for minimal scroll
+- **Edit focus on Enter**: Move focus to same column in next row, auto-enter edit mode
 
-### 10. Shot Deletion Handling
-- When selected shot is deleted, clear selection (no auto-select adjacent)
+### Dependencies (from epic-scout)
 
-## Edge Cases
+- fn-3-e6v (Display Toggle Visibility) - establishes showShots state
+- fn-9-d6v (Section Hover/Selection) - establishes selection sync patterns
+- fn-4-7mg (Interaction hitboxes) - clickable shot layers on map
+- fn-8-4v9 (Disable pan/zoom interactions) - guards in useMapTools.ts
 
-- **Station selection mapping**: Station index N corresponds to end of shot N (shot N ends at station N)
-- **Azimuth wrap-around**: Use circular mean for proper 0°/360° boundary handling
-- **Azimuth edit wrap-around**: Normalize results to 0-360 after applying delta
-- **Section deletion**: Auto-switch to first remaining section if current section deleted
-- **Shot deletion**: Clear selection when selected shot is deleted
-- **Empty section**: Show "No shots in this section" message (existing behavior)
-- **Data Table collapsed**: Don't auto-expand on selection, just sync state for when opened
-- **Cross-section selection**: Auto-switch dropdown to match externally selected shot's section
+## Quick commands
 
-## Open Questions
+```bash
+# Run Playwright tests for DataTable
+pnpm test:ui --grep "data-table"
 
-- None - all requirements clarified during interview
+# Run type check
+pnpm tsc --noEmit
+
+# Run dev server to test manually
+./scripts/dev.sh
+```
+
+## Risks
+
+| Risk | Mitigation |
+|------|------------|
+| Infinite re-render loops from selection sync | Use derived state, not synced state; use useEffect guards |
+| Stale closures in event handlers | Use refs for values needed in callbacks |
+| EditableTable breaking changes | Keep existing API, add optional new props |
+| Azimuth wrap-around bugs | Use proven circularMean algorithm with normalize |
 
 ## Acceptance
 
@@ -100,3 +106,21 @@ The Data Table panel currently operates somewhat independently from the rest of 
 - [ ] Section deletion switches to first remaining section
 - [ ] Shot deletion clears selection
 - [ ] Screen reader announces row selection changes
+
+## References
+
+- DataTable component: `src/components/SingleSystemView/DataTable.tsx`
+- EditableTable component: `src/components/common/Table.tsx:104-217`
+- DetailPanel component: `src/components/SingleSystemView/DetailPanel.tsx`
+- Select component: `src/components/common/Select.tsx`
+- UI Store selection: `src/store/uiStore.ts:56-99`
+- Circular mean function: `src/components/Dialogs/SectionPreview.tsx:24-36`
+- Row styling pattern: `src/components/SingleSystemView/SectionsPanel.tsx:218-219`
+- Map pan pattern: `src/components/Map/MapCanvas.tsx:1186-1297`
+
+## Documentation Updates Needed
+
+- docs/SPEC.md Section 6: Add Data Table Panel specifics
+- docs/TESTING.md Section 15.4: Add DataTable test identifiers
+- docs/TESTING.md Section 11.2: Add DataTable keyboard navigation
+- docs/architecture.md: Add selection sync pattern documentation

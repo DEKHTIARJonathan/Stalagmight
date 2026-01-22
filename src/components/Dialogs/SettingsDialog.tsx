@@ -378,13 +378,24 @@ export default function SettingsDialog() {
   }, [localConfig, isDirty, hasAnyError, updateConfig, closeDialog]);
 
   // Request close - show custom dialog if dirty
+  // Short-circuit if an overlay is already open to prevent Escape conflicts
   const handleRequestClose = useCallback(() => {
+    // If an overlay is open, close it instead of the main dialog
+    if (showResetConfirm) {
+      setShowResetConfirm(false);
+      return;
+    }
+    if (showUnsavedDialog) {
+      setShowUnsavedDialog(false);
+      return;
+    }
+    // Normal close logic
     if (isDirty) {
       setShowUnsavedDialog(true);
     } else {
       closeDialog();
     }
-  }, [isDirty, closeDialog]);
+  }, [isDirty, closeDialog, showResetConfirm, showUnsavedDialog]);
 
   // Handle custom unsaved dialog - Save
   const handleSaveAndClose = useCallback(async () => {
