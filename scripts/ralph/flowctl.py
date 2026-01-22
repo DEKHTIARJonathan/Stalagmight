@@ -17,9 +17,28 @@ import shlex
 import shutil
 import sys
 import tempfile
+from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, ContextManager, Optional
+
+# Platform-specific file locking (fcntl on Unix, no-op on Windows)
+try:
+    import fcntl
+
+    def _flock(f, lock_type):
+        fcntl.flock(f, lock_type)
+
+    LOCK_EX = fcntl.LOCK_EX
+    LOCK_UN = fcntl.LOCK_UN
+except ImportError:
+    # Windows: fcntl not available, use no-op (acceptable for single-machine use)
+    def _flock(f, lock_type):
+        pass
+
+    LOCK_EX = 0
+    LOCK_UN = 0
 
 
 # --- Constants ---
@@ -43,6 +62,17 @@ TASK_SPEC_HEADINGS = [
     "## Done summary",
     "## Evidence",
 ]
+
+# Runtime fields stored in state-dir (not tracked in git)
+RUNTIME_FIELDS = {
+    "status",
+    "updated_at",
+    "claimed_at",
+    "assignee",
+    "claim_note",
+    "evidence",
+    "blocked_reason",
+}
 
 
 # --- Helpers ---
@@ -73,9 +103,193 @@ def ensure_flow_exists() -> bool:
     return get_flow_dir().exists()
 
 
+def get_state_dir() -> Path:
+    """Get state directory for runtime task state.
+
+    Resolution order:
+    1. FLOW_STATE_DIR env var (explicit override for orchestrators)
+    2. git common-dir (shared across all worktrees automatically)
+    3. Fallback to .flow/state for non-git repos
+    """
+    # 1. Explicit override
+    if state_dir := os.environ.get("FLOW_STATE_DIR"):
+        return Path(state_dir).resolve()
+
+    # 2. Git common-dir (shared across worktrees)
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir", "--path-format=absolute"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        common = result.stdout.strip()
+        return Path(common) / "flow-state"
+    except subprocess.CalledProcessError:
+        pass
+
+    # 3. Fallback for non-git repos
+    return get_flow_dir() / "state"
+
+
+# --- StateStore (runtime task state) ---
+
+
+class StateStore(ABC):
+    """Abstract interface for runtime task state storage."""
+
+    @abstractmethod
+    def load_runtime(self, task_id: str) -> Optional[dict]:
+        """Load runtime state for a task. Returns None if no state file."""
+        ...
+
+    @abstractmethod
+    def save_runtime(self, task_id: str, data: dict) -> None:
+        """Save runtime state for a task."""
+        ...
+
+    @abstractmethod
+    def lock_task(self, task_id: str) -> ContextManager:
+        """Context manager for exclusive task lock."""
+        ...
+
+    @abstractmethod
+    def list_runtime_files(self) -> list[str]:
+        """List all task IDs that have runtime state files."""
+        ...
+
+
+class LocalFileStateStore(StateStore):
+    """File-based state store with fcntl locking."""
+
+    def __init__(self, state_dir: Path):
+        self.state_dir = state_dir
+        self.tasks_dir = state_dir / "tasks"
+        self.locks_dir = state_dir / "locks"
+
+    def _state_path(self, task_id: str) -> Path:
+        return self.tasks_dir / f"{task_id}.state.json"
+
+    def _lock_path(self, task_id: str) -> Path:
+        return self.locks_dir / f"{task_id}.lock"
+
+    def load_runtime(self, task_id: str) -> Optional[dict]:
+        state_path = self._state_path(task_id)
+        if not state_path.exists():
+            return None
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return None
+
+    def save_runtime(self, task_id: str, data: dict) -> None:
+        self.tasks_dir.mkdir(parents=True, exist_ok=True)
+        state_path = self._state_path(task_id)
+        content = json.dumps(data, indent=2, sort_keys=True) + "\n"
+        atomic_write(state_path, content)
+
+    @contextmanager
+    def lock_task(self, task_id: str):
+        """Acquire exclusive lock for task operations."""
+        self.locks_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = self._lock_path(task_id)
+        with open(lock_path, "w") as f:
+            try:
+                _flock(f, LOCK_EX)
+                yield
+            finally:
+                _flock(f, LOCK_UN)
+
+    def list_runtime_files(self) -> list[str]:
+        if not self.tasks_dir.exists():
+            return []
+        return [
+            f.stem.replace(".state", "")
+            for f in self.tasks_dir.glob("*.state.json")
+        ]
+
+
+def get_state_store() -> LocalFileStateStore:
+    """Get the state store instance."""
+    return LocalFileStateStore(get_state_dir())
+
+
+# --- Task Loading with State Merge ---
+
+
+def load_task_definition(task_id: str, use_json: bool = True) -> dict:
+    """Load task definition from tracked file (no runtime state)."""
+    flow_dir = get_flow_dir()
+    def_path = flow_dir / TASKS_DIR / f"{task_id}.json"
+    return load_json_or_exit(def_path, f"Task {task_id}", use_json=use_json)
+
+
+def load_task_with_state(task_id: str, use_json: bool = True) -> dict:
+    """Load task definition merged with runtime state.
+
+    Backward compatible: if no state file exists, reads legacy runtime
+    fields from definition file.
+    """
+    definition = load_task_definition(task_id, use_json=use_json)
+
+    # Load runtime state
+    store = get_state_store()
+    runtime = store.load_runtime(task_id)
+
+    if runtime is None:
+        # Backward compat: extract runtime fields from definition
+        runtime = {k: definition[k] for k in RUNTIME_FIELDS if k in definition}
+        if not runtime:
+            runtime = {"status": "todo"}
+
+    # Merge: runtime overwrites definition for runtime fields
+    merged = {**definition, **runtime}
+    return normalize_task(merged)
+
+
+def save_task_runtime(task_id: str, updates: dict) -> None:
+    """Write runtime state only (merge with existing). Never touch definition file."""
+    store = get_state_store()
+    with store.lock_task(task_id):
+        current = store.load_runtime(task_id) or {"status": "todo"}
+        merged = {**current, **updates, "updated_at": now_iso()}
+        store.save_runtime(task_id, merged)
+
+
+def reset_task_runtime(task_id: str) -> None:
+    """Reset runtime state to baseline (overwrite, not merge). Used by task reset."""
+    store = get_state_store()
+    with store.lock_task(task_id):
+        # Overwrite with clean baseline state
+        store.save_runtime(task_id, {"status": "todo", "updated_at": now_iso()})
+
+
+def delete_task_runtime(task_id: str) -> None:
+    """Delete runtime state file entirely. Used by checkpoint restore when no runtime."""
+    store = get_state_store()
+    with store.lock_task(task_id):
+        state_path = store._state_path(task_id)
+        if state_path.exists():
+            state_path.unlink()
+
+
+def save_task_definition(task_id: str, definition: dict) -> None:
+    """Write definition to tracked file (filters out runtime fields)."""
+    flow_dir = get_flow_dir()
+    def_path = flow_dir / TASKS_DIR / f"{task_id}.json"
+    # Filter out runtime fields
+    clean_def = {k: v for k, v in definition.items() if k not in RUNTIME_FIELDS}
+    atomic_write_json(def_path, clean_def)
+
+
 def get_default_config() -> dict:
     """Return default config structure."""
-    return {"memory": {"enabled": False}, "planSync": {"enabled": False}, "review": {"backend": None}}
+    return {
+        "memory": {"enabled": False},
+        "planSync": {"enabled": False, "crossEpic": False},
+        "review": {"backend": None},
+    }
 
 
 def deep_merge(base: dict, override: dict) -> dict:
@@ -274,6 +488,7 @@ def build_chat_payload(
     mode: str,
     new_chat: bool = False,
     chat_name: Optional[str] = None,
+    chat_id: Optional[str] = None,
     selected_paths: Optional[list[str]] = None,
 ) -> str:
     payload: dict[str, Any] = {
@@ -284,6 +499,8 @@ def build_chat_payload(
         payload["new_chat"] = True
     if chat_name:
         payload["chat_name"] = chat_name
+    if chat_id:
+        payload["chat_id"] = chat_id
     if selected_paths:
         payload["selected_paths"] = selected_paths
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -817,10 +1034,12 @@ def build_review_prompt(
     spec_content: str,
     context_hints: str,
     diff_summary: str = "",
+    task_specs: str = "",
 ) -> str:
     """Build XML-structured review prompt for codex.
 
     review_type: 'impl' or 'plan'
+    task_specs: Combined task spec content (plan reviews only)
 
     Uses same Carmack-level criteria as RepoPrompt workflow to ensure parity.
     """
@@ -861,6 +1080,35 @@ a thorough review requires understanding the system, not just the diff.
 6. **Tests** - Adequate coverage? Testing behavior?
 7. **Security** - Injection? Auth gaps?
 
+## Scenario Exploration (for changed code only)
+
+Walk through these scenarios for new/modified code paths:
+- Happy path: Normal operation with valid inputs
+- Invalid inputs: Null, empty, malformed data
+- Boundary conditions: Min/max values, empty collections
+- Concurrent access: Race conditions, deadlocks
+- Network issues: Timeouts, partial failures
+- Resource exhaustion: Memory, disk, connections
+- Security attacks: Injection, overflow, DoS vectors
+- Data corruption: Partial writes, inconsistency
+- Cascading failures: Downstream service issues
+
+Only flag issues in the **changed code** - not pre-existing patterns.
+
+## Verdict Scope
+
+Explore broadly to understand impact, but your VERDICT must only consider:
+- Issues **introduced** by this changeset
+- Issues **directly affected** by this changeset (e.g., broken by the change)
+- Pre-existing issues that would **block shipping** this specific change
+
+Do NOT mark NEEDS_WORK for:
+- Pre-existing issues unrelated to the change
+- "Nice to have" improvements outside the change scope
+- Style nitpicks in untouched code
+
+You MAY mention these as "FYI" observations without affecting the verdict.
+
 ## Output Format
 
 For each issue found:
@@ -883,6 +1131,18 @@ Do NOT skip this tag. The automation depends on it."""
             context_preamble
             + """Conduct a John Carmack-level review of this plan.
 
+## Review Scope
+
+You are reviewing:
+1. **Epic spec** in `<spec>` - The high-level plan
+2. **Task specs** in `<task_specs>` - Individual task breakdowns (if provided)
+
+**CRITICAL**: Check for consistency between epic and tasks. Flag if:
+- Task specs contradict or miss epic requirements
+- Task acceptance criteria don't align with epic acceptance criteria
+- Task approaches would need to change based on epic design decisions
+- Epic mentions states/enums/types that tasks don't account for
+
 ## Review Criteria
 
 1. **Completeness** - All requirements covered? Missing edge cases?
@@ -892,12 +1152,28 @@ Do NOT skip this tag. The automation depends on it."""
 5. **Risks** - Blockers identified? Security gaps? Mitigation?
 6. **Scope** - Right-sized? Over/under-engineering?
 7. **Testability** - How will we verify this works?
+8. **Consistency** - Do task specs align with epic spec?
+
+## Verdict Scope
+
+Explore the codebase to understand context, but your VERDICT must only consider:
+- Issues **within this plan** that block implementation
+- Feasibility problems given the **current codebase state**
+- Missing requirements that are **part of the stated goal**
+- Inconsistencies between epic and task specs
+
+Do NOT mark NEEDS_WORK for:
+- Pre-existing codebase issues unrelated to this plan
+- Suggestions for features outside the plan scope
+- "While we're at it" improvements
+
+You MAY mention these as "FYI" observations without affecting the verdict.
 
 ## Output Format
 
 For each issue found:
 - **Severity**: Critical / Major / Minor / Nitpick
-- **Location**: Which task or section
+- **Location**: Which task or section (e.g., "fn-1.3 Description" or "Epic Acceptance #2")
 - **Problem**: What's wrong
 - **Suggestion**: How to fix
 
@@ -920,6 +1196,10 @@ Do NOT skip this tag. The automation depends on it."""
         parts.append(f"<diff_summary>\n{diff_summary}\n</diff_summary>")
 
     parts.append(f"<spec>\n{spec_content}\n</spec>")
+
+    if task_specs:
+        parts.append(f"<task_specs>\n{task_specs}\n</task_specs>")
+
     parts.append(f"<review_instructions>\n{instruction}\n</review_instructions>")
 
     return "\n\n".join(parts)
@@ -935,6 +1215,29 @@ def build_rereview_preamble(changed_files: list[str], review_type: str) -> str:
     if len(changed_files) > 30:
         files_list += f"\n- ... and {len(changed_files) - 30} more files"
 
+    task_sync_note = ""
+    if review_type == "plan":
+        task_sync_note = """
+
+## Task Spec Sync Required
+
+If you modified the epic spec in ways that affect task specs, you MUST also update
+the affected task specs before requesting re-review. Use:
+
+```bash
+flowctl task set-spec <TASK_ID> --file - <<'EOF'
+<updated task spec content>
+EOF
+```
+
+Task specs need updating when epic changes affect:
+- State/enum values referenced in tasks
+- Acceptance criteria that tasks implement
+- Approach/design decisions tasks depend on
+- Lock/retry/error handling semantics
+- API signatures or type definitions
+"""
+
     return f"""## IMPORTANT: Re-review After Fixes
 
 This is a RE-REVIEW. Code has been modified since your last review.
@@ -944,7 +1247,7 @@ This is a RE-REVIEW. Code has been modified since your last review.
 
 Use your file reading tools to get the CURRENT content of these files.
 Do NOT rely on what you saw in the previous review - the code has changed.
-
+{task_sync_note}
 After re-reading, conduct a fresh {review_type} review on the updated code.
 
 ---
@@ -1209,7 +1512,8 @@ def find_dependents(task_id: str, same_epic: bool = False) -> list[str]:
                 # Skip if same_epic filter and different epic
                 if same_epic and epic_id_from_task(tid) != epic_id:
                     continue
-                deps = task_data.get("depends_on", [])
+                # Support both legacy "deps" and current "depends_on"
+                deps = task_data.get("depends_on", task_data.get("deps", []))
                 if checking in deps:
                     dependents.add(tid)
                     to_check.append(tid)
@@ -1429,10 +1733,12 @@ def cmd_status(args: argparse.Namespace) -> None:
         if tasks_dir.exists():
             for task_file in tasks_dir.glob("fn-*.json"):
                 # Skip non-task files (must have . before .json)
-                if "." not in task_file.stem:
+                task_id = task_file.stem
+                if "." not in task_id:
                     continue
                 try:
-                    task_data = load_json(task_file)
+                    # Use merged state for accurate status counts
+                    task_data = load_task_with_state(task_id, use_json=True)
                     status = task_data.get("status", "todo")
                     if status in task_counts:
                         task_counts[status] += 1
@@ -2142,16 +2448,15 @@ def cmd_show(args: argparse.Namespace) -> None:
             load_json_or_exit(epic_path, f"Epic {args.id}", use_json=args.json)
         )
 
-        # Get tasks for this epic
+        # Get tasks for this epic (with merged runtime state)
         tasks = []
         tasks_dir = flow_dir / TASKS_DIR
         if tasks_dir.exists():
             for task_file in sorted(tasks_dir.glob(f"{args.id}.*.json")):
-                task_data = normalize_task(
-                    load_json_or_exit(
-                        task_file, f"Task {task_file.stem}", use_json=args.json
-                    )
-                )
+                task_id = task_file.stem
+                if "." not in task_id:
+                    continue  # Skip non-task files
+                task_data = load_task_with_state(task_id, use_json=args.json)
                 if "id" not in task_data:
                     continue  # Skip artifact files (GH-21)
                 tasks.append(
@@ -2188,10 +2493,8 @@ def cmd_show(args: argparse.Namespace) -> None:
                 print(f"  [{t['status']}] {t['id']}: {t['title']}{deps}")
 
     elif is_task_id(args.id):
-        task_path = flow_dir / TASKS_DIR / f"{args.id}.json"
-        task_data = normalize_task(
-            load_json_or_exit(task_path, f"Task {args.id}", use_json=args.json)
-        )
+        # Load task with merged runtime state
+        task_data = load_task_with_state(args.id, use_json=args.json)
 
         if args.json:
             json_output(task_data)
@@ -2228,15 +2531,16 @@ def cmd_epics(args: argparse.Namespace) -> None:
                     epic_file, f"Epic {epic_file.stem}", use_json=args.json
                 )
             )
-            # Count tasks
+            # Count tasks (with merged runtime state)
             tasks_dir = flow_dir / TASKS_DIR
             task_count = 0
             done_count = 0
             if tasks_dir.exists():
                 for task_file in tasks_dir.glob(f"{epic_data['id']}.*.json"):
-                    task_data = load_json_or_exit(
-                        task_file, f"Task {task_file.stem}", use_json=args.json
-                    )
+                    task_id = task_file.stem
+                    if "." not in task_id:
+                        continue
+                    task_data = load_task_with_state(task_id, use_json=args.json)
                     task_count += 1
                     if task_data.get("status") == "done":
                         done_count += 1
@@ -2287,12 +2591,11 @@ def cmd_tasks(args: argparse.Namespace) -> None:
         pattern = f"{args.epic}.*.json" if args.epic else "fn-*.json"
         for task_file in sorted(tasks_dir.glob(pattern)):
             # Skip if it's not a task file (must have . in the name before .json)
-            stem = task_file.stem
-            if "." not in stem:
+            task_id = task_file.stem
+            if "." not in task_id:
                 continue
-            task_data = normalize_task(
-                load_json_or_exit(task_file, f"Task {stem}", use_json=args.json)
-            )
+            # Load task with merged runtime state
+            task_data = load_task_with_state(task_id, use_json=args.json)
             if "id" not in task_data:
                 continue  # Skip artifact files (GH-21)
             # Filter by status if requested
@@ -2365,17 +2668,15 @@ def cmd_list(args: argparse.Namespace) -> None:
 
     epics.sort(key=epic_sort_key)
 
-    # Load all tasks grouped by epic
+    # Load all tasks grouped by epic (with merged runtime state)
     tasks_by_epic = {}
     all_tasks = []
     if tasks_dir.exists():
         for task_file in sorted(tasks_dir.glob("fn-*.json")):
-            stem = task_file.stem
-            if "." not in stem:
+            task_id = task_file.stem
+            if "." not in task_id:
                 continue
-            task_data = normalize_task(
-                load_json_or_exit(task_file, f"Task {stem}", use_json=args.json)
-            )
+            task_data = load_task_with_state(task_id, use_json=args.json)
             if "id" not in task_data or "epic" not in task_data:
                 continue  # Skip artifact files (GH-21)
             epic_id = task_data["epic"]
@@ -2723,10 +3024,10 @@ def cmd_task_set_acceptance(args: argparse.Namespace) -> None:
 
 
 def cmd_task_set_spec(args: argparse.Namespace) -> None:
-    """Set task description and/or acceptance in one call.
+    """Set task spec - full replacement (--file) or section patches.
 
-    Reduces tool calls: instead of separate set-description + set-acceptance,
-    both can be set atomically with a single JSON timestamp update.
+    Full replacement mode: --file replaces entire spec content (like epic set-plan).
+    Section patch mode: --description and/or --acceptance update specific sections.
     """
     if not ensure_flow_exists():
         error_exit(
@@ -2740,10 +3041,11 @@ def cmd_task_set_spec(args: argparse.Namespace) -> None:
             use_json=args.json,
         )
 
-    # Need at least one of description or acceptance
-    if not args.description and not args.acceptance:
+    # Need at least one of file, description, or acceptance
+    has_file = hasattr(args, "file") and args.file
+    if not has_file and not args.description and not args.acceptance:
         error_exit(
-            "At least one of --description or --acceptance required",
+            "Requires --file, --description, or --acceptance",
             use_json=args.json,
         )
 
@@ -2758,6 +3060,20 @@ def cmd_task_set_spec(args: argparse.Namespace) -> None:
     # Load task JSON first (fail early)
     task_data = load_json_or_exit(task_json_path, f"Task {task_id}", use_json=args.json)
 
+    # Full file replacement mode (like epic set-plan)
+    if has_file:
+        content = read_file_or_stdin(args.file, "Spec file", use_json=args.json)
+        atomic_write(task_spec_path, content)
+        task_data["updated_at"] = now_iso()
+        atomic_write_json(task_json_path, task_data)
+
+        if args.json:
+            json_output({"id": task_id, "message": f"Task {task_id} spec replaced"})
+        else:
+            print(f"Task {task_id} spec replaced")
+        return
+
+    # Section patch mode (existing behavior)
     # Read current spec
     current_spec = read_text_or_exit(
         task_spec_path, f"Task {task_id} spec", use_json=args.json
@@ -2821,7 +3137,8 @@ def cmd_task_reset(args: argparse.Namespace) -> None:
     if not task_json_path.exists():
         error_exit(f"Task {task_id} not found", use_json=args.json)
 
-    task_data = load_json_or_exit(task_json_path, f"Task {task_id}", use_json=args.json)
+    # Load task with merged runtime state
+    task_data = load_task_with_state(task_id, use_json=args.json)
 
     # Load epic to check if closed
     epic_id = epic_id_from_task(task_id)
@@ -2833,7 +3150,7 @@ def cmd_task_reset(args: argparse.Namespace) -> None:
                 f"Cannot reset task in closed epic {epic_id}", use_json=args.json
             )
 
-    # Check status validations
+    # Check status validations (use merged state)
     current_status = task_data.get("status", "todo")
     if current_status == "in_progress":
         error_exit(
@@ -2850,23 +3167,20 @@ def cmd_task_reset(args: argparse.Namespace) -> None:
             print(f"{task_id} already todo")
         return
 
-    # Reset task
-    task_data["status"] = "todo"
-    task_data["updated_at"] = now_iso()
+    # Reset runtime state to baseline (overwrite, not merge - clears all runtime fields)
+    reset_task_runtime(task_id)
 
-    # Clear optional fields
-    task_data.pop("blocked_reason", None)
-    task_data.pop("completed_at", None)
-
-    # Clear claim fields (MU-2)
-    task_data.pop("assignee", None)
-    task_data.pop("claimed_at", None)
-    task_data.pop("claim_note", None)
-
-    # Clear evidence from JSON
-    task_data.pop("evidence", None)
-
-    atomic_write_json(task_json_path, task_data)
+    # Also clear legacy runtime fields from definition file (for backward compat cleanup)
+    def_data = load_json_or_exit(task_json_path, f"Task {task_id}", use_json=args.json)
+    def_data.pop("blocked_reason", None)
+    def_data.pop("completed_at", None)
+    def_data.pop("assignee", None)
+    def_data.pop("claimed_at", None)
+    def_data.pop("claim_note", None)
+    def_data.pop("evidence", None)
+    def_data["status"] = "todo"  # Keep in sync for backward compat
+    def_data["updated_at"] = now_iso()
+    atomic_write_json(task_json_path, def_data)
 
     # Clear evidence section from spec markdown
     clear_task_evidence(task_id)
@@ -2880,23 +3194,30 @@ def cmd_task_reset(args: argparse.Namespace) -> None:
             dep_path = flow_dir / TASKS_DIR / f"{dep_id}.json"
             if not dep_path.exists():
                 continue
-            dep_data = load_json(dep_path)
+
+            # Load merged state for dependent
+            dep_data = load_task_with_state(dep_id, use_json=args.json)
             dep_status = dep_data.get("status", "todo")
 
             # Skip in_progress and already todo
             if dep_status == "in_progress" or dep_status == "todo":
                 continue
 
-            dep_data["status"] = "todo"
-            dep_data["updated_at"] = now_iso()
-            dep_data.pop("blocked_reason", None)
-            dep_data.pop("completed_at", None)
-            dep_data.pop("assignee", None)
-            dep_data.pop("claimed_at", None)
-            dep_data.pop("claim_note", None)
-            dep_data.pop("evidence", None)
+            # Reset runtime state for dependent (overwrite, not merge)
+            reset_task_runtime(dep_id)
 
-            atomic_write_json(dep_path, dep_data)
+            # Also clear legacy fields from definition
+            dep_def = load_json(dep_path)
+            dep_def.pop("blocked_reason", None)
+            dep_def.pop("completed_at", None)
+            dep_def.pop("assignee", None)
+            dep_def.pop("claimed_at", None)
+            dep_def.pop("claim_note", None)
+            dep_def.pop("evidence", None)
+            dep_def["status"] = "todo"
+            dep_def["updated_at"] = now_iso()
+            atomic_write_json(dep_path, dep_def)
+
             clear_task_evidence(dep_id)
             reset_ids.append(dep_id)
 
@@ -2983,7 +3304,7 @@ def cmd_ready(args: argparse.Namespace) -> None:
     # MU-2: Get current actor for display (marks your tasks)
     current_actor = get_actor()
 
-    # Get all tasks for epic
+    # Get all tasks for epic (with merged runtime state)
     tasks_dir = flow_dir / TASKS_DIR
     if not tasks_dir.exists():
         error_exit(
@@ -2992,9 +3313,10 @@ def cmd_ready(args: argparse.Namespace) -> None:
         )
     tasks = {}
     for task_file in tasks_dir.glob(f"{args.epic}.*.json"):
-        task_data = normalize_task(
-            load_json_or_exit(task_file, f"Task {task_file.stem}", use_json=args.json)
-        )
+        task_id = task_file.stem
+        if "." not in task_id:
+            continue
+        task_data = load_task_with_state(task_id, use_json=args.json)
         if "id" not in task_data:
             continue  # Skip artifact files (GH-21)
         tasks[task_data["id"]] = task_data
@@ -3185,11 +3507,11 @@ def cmd_next(args: argparse.Namespace) -> None:
 
         tasks: dict[str, dict] = {}
         for task_file in tasks_dir.glob(f"{epic_id}.*.json"):
-            task_data = normalize_task(
-                load_json_or_exit(
-                    task_file, f"Task {task_file.stem}", use_json=args.json
-                )
-            )
+            task_id = task_file.stem
+            if "." not in task_id:
+                continue
+            # Load task with merged runtime state
+            task_data = load_task_with_state(task_id, use_json=args.json)
             if "id" not in task_data:
                 continue  # Skip artifact files (GH-21)
             tasks[task_data["id"]] = task_data
@@ -3275,55 +3597,15 @@ def cmd_start(args: argparse.Namespace) -> None:
             f"Invalid task ID: {args.id}. Expected format: fn-N.M or fn-N-xxx.M", use_json=args.json
         )
 
-    flow_dir = get_flow_dir()
-    task_path = flow_dir / TASKS_DIR / f"{args.id}.json"
+    # Load task definition for dependency info (outside lock)
+    # Normalize to handle legacy "deps" field
+    task_def = normalize_task(load_task_definition(args.id, use_json=args.json))
+    depends_on = task_def.get("depends_on", []) or []
 
-    task_data = load_json_or_exit(task_path, f"Task {args.id}", use_json=args.json)
-
-    # MU-2: Soft-claim semantics
-    current_actor = get_actor()
-    existing_assignee = task_data.get("assignee")
-
-    # Cannot start done task
-    if task_data["status"] == "done":
-        error_exit(
-            f"Cannot start task {args.id}: status is 'done'.", use_json=args.json
-        )
-
-    # Blocked requires --force
-    if task_data["status"] == "blocked" and not args.force:
-        error_exit(
-            f"Cannot start task {args.id}: status is 'blocked'. Use --force to override.",
-            use_json=args.json,
-        )
-
-    # Check if claimed by someone else (unless --force)
-    if not args.force and existing_assignee and existing_assignee != current_actor:
-        error_exit(
-            f"Cannot start task {args.id}: claimed by '{existing_assignee}'. "
-            f"Use --force to override.",
-            use_json=args.json,
-        )
-
-    # Validate task is in todo status (unless --force or resuming own task)
-    if not args.force and task_data["status"] != "todo":
-        # Allow resuming your own in_progress task
-        if not (
-            task_data["status"] == "in_progress" and existing_assignee == current_actor
-        ):
-            error_exit(
-                f"Cannot start task {args.id}: status is '{task_data['status']}', expected 'todo'. "
-                f"Use --force to override.",
-                use_json=args.json,
-            )
-
-    # Validate all dependencies are done (unless --force)
+    # Validate all dependencies are done (outside lock - this is read-only check)
     if not args.force:
-        for dep in task_data.get("depends_on", []):
-            dep_path = flow_dir / TASKS_DIR / f"{dep}.json"
-            dep_data = load_json_or_exit(
-                dep_path, f"Dependency {dep}", use_json=args.json
-            )
+        for dep in depends_on:
+            dep_data = load_task_with_state(dep, use_json=args.json)
             if dep_data["status"] != "done":
                 error_exit(
                     f"Cannot start task {args.id}: dependency {dep} is '{dep_data['status']}', not 'done'. "
@@ -3331,21 +3613,69 @@ def cmd_start(args: argparse.Namespace) -> None:
                     use_json=args.json,
                 )
 
-    # Set status and claim fields
-    task_data["status"] = "in_progress"
-    if not existing_assignee:
-        task_data["assignee"] = current_actor
-        task_data["claimed_at"] = now_iso()
-    if args.note:
-        task_data["claim_note"] = args.note
-    elif args.force and existing_assignee and existing_assignee != current_actor:
-        # Force override: note the takeover
-        task_data["assignee"] = current_actor
-        task_data["claimed_at"] = now_iso()
-        if not args.note:
-            task_data["claim_note"] = f"Taken over from {existing_assignee}"
-    task_data["updated_at"] = now_iso()
-    atomic_write_json(task_path, task_data)
+    current_actor = get_actor()
+    store = get_state_store()
+
+    # Atomic claim: validation + write inside lock to prevent race conditions
+    with store.lock_task(args.id):
+        # Re-load runtime state inside lock for accurate check
+        runtime = store.load_runtime(args.id)
+        if runtime is None:
+            # Backward compat: extract from definition
+            runtime = {k: task_def[k] for k in RUNTIME_FIELDS if k in task_def}
+            if not runtime:
+                runtime = {"status": "todo"}
+
+        status = runtime.get("status", "todo")
+        existing_assignee = runtime.get("assignee")
+
+        # Cannot start done task
+        if status == "done":
+            error_exit(
+                f"Cannot start task {args.id}: status is 'done'.", use_json=args.json
+            )
+
+        # Blocked requires --force
+        if status == "blocked" and not args.force:
+            error_exit(
+                f"Cannot start task {args.id}: status is 'blocked'. Use --force to override.",
+                use_json=args.json,
+            )
+
+        # Check if claimed by someone else (unless --force)
+        if not args.force and existing_assignee and existing_assignee != current_actor:
+            error_exit(
+                f"Cannot start task {args.id}: claimed by '{existing_assignee}'. "
+                f"Use --force to override.",
+                use_json=args.json,
+            )
+
+        # Validate task is in todo status (unless --force or resuming own task)
+        if not args.force and status != "todo":
+            # Allow resuming your own in_progress task
+            if not (status == "in_progress" and existing_assignee == current_actor):
+                error_exit(
+                    f"Cannot start task {args.id}: status is '{status}', expected 'todo'. "
+                    f"Use --force to override.",
+                    use_json=args.json,
+                )
+
+        # Build runtime state updates
+        runtime_updates = {**runtime, "status": "in_progress", "updated_at": now_iso()}
+        if not existing_assignee:
+            runtime_updates["assignee"] = current_actor
+            runtime_updates["claimed_at"] = now_iso()
+        if args.note:
+            runtime_updates["claim_note"] = args.note
+        elif args.force and existing_assignee and existing_assignee != current_actor:
+            # Force override: note the takeover
+            runtime_updates["assignee"] = current_actor
+            runtime_updates["claimed_at"] = now_iso()
+            if not args.note:
+                runtime_updates["claim_note"] = f"Taken over from {existing_assignee}"
+
+        # Write inside lock
+        store.save_runtime(args.id, runtime_updates)
 
     # NOTE: We no longer update epic timestamp on task start/done.
     # Epic timestamp only changes on epic-level operations (set-plan, close).
@@ -3376,11 +3706,10 @@ def cmd_done(args: argparse.Namespace) -> None:
         )
 
     flow_dir = get_flow_dir()
-    task_json_path = flow_dir / TASKS_DIR / f"{args.id}.json"
     task_spec_path = flow_dir / TASKS_DIR / f"{args.id}.md"
 
-    # Load task JSON (fail early before any writes)
-    task_data = load_json_or_exit(task_json_path, f"Task {args.id}", use_json=args.json)
+    # Load task with merged runtime state (fail early before any writes)
+    task_data = load_task_with_state(args.id, use_json=args.json)
 
     # MU-2: Require in_progress status (unless --force)
     if not args.force and task_data["status"] != "in_progress":
@@ -3470,13 +3799,11 @@ def cmd_done(args: argparse.Namespace) -> None:
     except ValueError as e:
         error_exit(str(e), use_json=args.json)
 
-    # All validation passed - now write (spec, task)
+    # All validation passed - now write (spec to tracked file, runtime to state-dir)
     atomic_write(task_spec_path, updated_spec)
 
-    task_data["status"] = "done"
-    task_data["updated_at"] = now_iso()
-    task_data["evidence"] = evidence  # Store raw evidence dict for programmatic access
-    atomic_write_json(task_json_path, task_data)
+    # Write runtime state to state-dir (not definition file)
+    save_task_runtime(args.id, {"status": "done", "evidence": evidence})
 
     # NOTE: We no longer update epic timestamp on task done.
     # This reduces merge conflicts in multi-user scenarios.
@@ -3502,12 +3829,10 @@ def cmd_block(args: argparse.Namespace) -> None:
         )
 
     flow_dir = get_flow_dir()
-    task_json_path = flow_dir / TASKS_DIR / f"{args.id}.json"
     task_spec_path = flow_dir / TASKS_DIR / f"{args.id}.md"
 
-    task_data = normalize_task(
-        load_json_or_exit(task_json_path, f"Task {args.id}", use_json=args.json)
-    )
+    # Load task with merged runtime state
+    task_data = load_task_with_state(args.id, use_json=args.json)
 
     if task_data["status"] == "done":
         error_exit(
@@ -3536,9 +3861,8 @@ def cmd_block(args: argparse.Namespace) -> None:
 
     atomic_write(task_spec_path, updated_spec)
 
-    task_data["status"] = "blocked"
-    task_data["updated_at"] = now_iso()
-    atomic_write_json(task_json_path, task_data)
+    # Write runtime state to state-dir (not definition file)
+    save_task_runtime(args.id, {"status": "blocked", "blocked_reason": reason})
 
     if args.json:
         json_output(
@@ -3546,6 +3870,97 @@ def cmd_block(args: argparse.Namespace) -> None:
         )
     else:
         print(f"Task {args.id} blocked")
+
+
+def cmd_state_path(args: argparse.Namespace) -> None:
+    """Show resolved state directory path."""
+    state_dir = get_state_dir()
+
+    if args.task:
+        if not is_task_id(args.task):
+            error_exit(
+                f"Invalid task ID: {args.task}. Expected format: fn-N.M or fn-N-xxx.M",
+                use_json=args.json,
+            )
+        state_path = state_dir / "tasks" / f"{args.task}.state.json"
+        if args.json:
+            json_output({"state_dir": str(state_dir), "task_state_path": str(state_path)})
+        else:
+            print(state_path)
+    else:
+        if args.json:
+            json_output({"state_dir": str(state_dir)})
+        else:
+            print(state_dir)
+
+
+def cmd_migrate_state(args: argparse.Namespace) -> None:
+    """Migrate runtime state from definition files to state-dir."""
+    if not ensure_flow_exists():
+        error_exit(
+            ".flow/ does not exist. Run 'flowctl init' first.", use_json=args.json
+        )
+
+    flow_dir = get_flow_dir()
+    tasks_dir = flow_dir / TASKS_DIR
+    store = get_state_store()
+
+    migrated = []
+    skipped = []
+
+    if not tasks_dir.exists():
+        if args.json:
+            json_output({"migrated": [], "skipped": [], "message": "No tasks directory"})
+        else:
+            print("No tasks directory found.")
+        return
+
+    for task_file in tasks_dir.glob("fn-*.json"):
+        task_id = task_file.stem
+        if "." not in task_id:
+            continue  # Skip non-task files
+
+        # Check if state file already exists
+        if store.load_runtime(task_id) is not None:
+            skipped.append(task_id)
+            continue
+
+        # Load definition and extract runtime fields
+        try:
+            definition = load_json(task_file)
+        except Exception:
+            skipped.append(task_id)
+            continue
+
+        runtime = {k: definition[k] for k in RUNTIME_FIELDS if k in definition}
+        if not runtime or runtime.get("status") == "todo":
+            # No runtime state to migrate
+            skipped.append(task_id)
+            continue
+
+        # Write runtime state
+        store.save_runtime(task_id, runtime)
+        migrated.append(task_id)
+
+        # Optionally clean definition file (only with --clean flag)
+        if args.clean:
+            clean_def = {k: v for k, v in definition.items() if k not in RUNTIME_FIELDS}
+            atomic_write_json(task_file, clean_def)
+
+    if args.json:
+        json_output({
+            "migrated": migrated,
+            "skipped": skipped,
+            "cleaned": args.clean,
+        })
+    else:
+        print(f"Migrated: {len(migrated)} tasks")
+        if migrated:
+            for t in migrated:
+                print(f"  {t}")
+        print(f"Skipped: {len(skipped)} tasks (already migrated or no state)")
+        if args.clean:
+            print("Definition files cleaned (runtime fields removed)")
 
 
 def cmd_epic_close(args: argparse.Namespace) -> None:
@@ -3566,7 +3981,7 @@ def cmd_epic_close(args: argparse.Namespace) -> None:
     if not epic_path.exists():
         error_exit(f"Epic {args.id} not found", use_json=args.json)
 
-    # Check all tasks are done
+    # Check all tasks are done (with merged runtime state)
     tasks_dir = flow_dir / TASKS_DIR
     if not tasks_dir.exists():
         error_exit(
@@ -3575,9 +3990,10 @@ def cmd_epic_close(args: argparse.Namespace) -> None:
         )
     incomplete = []
     for task_file in tasks_dir.glob(f"{args.id}.*.json"):
-        task_data = load_json_or_exit(
-            task_file, f"Task {task_file.stem}", use_json=args.json
-        )
+        task_id = task_file.stem
+        if "." not in task_id:
+            continue
+        task_data = load_task_with_state(task_id, use_json=args.json)
         if task_data["status"] != "done":
             incomplete.append(f"{task_data['id']} ({task_data['status']})")
 
@@ -3669,25 +4085,26 @@ def validate_epic(
             if not dep_path.exists():
                 errors.append(f"Epic {epic_id}: depends_on_epics missing epic {dep}")
 
-    # Get all tasks
+    # Get all tasks (with merged runtime state for accurate status)
     tasks_dir = flow_dir / TASKS_DIR
     tasks = {}
     if tasks_dir.exists():
         for task_file in tasks_dir.glob(f"{epic_id}.*.json"):
-            task_data = normalize_task(
-                load_json_or_exit(
-                    task_file, f"Task {task_file.stem}", use_json=use_json
-                )
-            )
+            task_id = task_file.stem
+            if "." not in task_id:
+                continue  # Skip non-task files
+            # Use merged state to get accurate status
+            task_data = load_task_with_state(task_id, use_json=use_json)
             if "id" not in task_data:
                 continue  # Skip artifact files (GH-21)
             tasks[task_data["id"]] = task_data
 
     # Validate each task
     for task_id, task in tasks.items():
-        # Validate status
-        if task.get("status") not in TASK_STATUS:
-            errors.append(f"Task {task_id}: invalid status '{task.get('status')}'")
+        # Validate status (use merged state which defaults to "todo" if missing)
+        status = task.get("status", "todo")
+        if status not in TASK_STATUS:
+            errors.append(f"Task {task_id}: invalid status '{status}'")
 
         # Check task spec exists
         task_spec_path = flow_dir / TASKS_DIR / f"{task_id}.md"
@@ -3863,19 +4280,60 @@ def cmd_rp_ensure_workspace(args: argparse.Namespace) -> None:
 def cmd_rp_builder(args: argparse.Namespace) -> None:
     window = args.window
     summary = args.summary
+    response_type = getattr(args, "response_type", None)
+
+    # Build builder command with optional response-type
+    builder_expr = f"builder {json.dumps(summary)}"
+    if response_type:
+        builder_expr += f" --response-type {response_type}"
+
     cmd = [
         "-w",
         str(window),
+        "--raw-json" if response_type else "",
         "-e",
-        f"builder {json.dumps(summary)}",
+        builder_expr,
     ]
+    cmd = [c for c in cmd if c]  # Remove empty strings
     res = run_rp_cli(cmd)
     output = (res.stdout or "") + ("\n" + res.stderr if res.stderr else "")
-    tab = parse_builder_tab(output)
-    if args.json:
-        print(json.dumps({"window": window, "tab": tab}))
+
+    # For review response-type, parse the full JSON response
+    if response_type == "review":
+        try:
+            data = json.loads(res.stdout or "{}")
+            tab = data.get("tab_id", "")
+            chat_id = data.get("review", {}).get("chat_id", "")
+            review_response = data.get("review", {}).get("response", "")
+            if args.json:
+                print(
+                    json.dumps(
+                        {
+                            "window": window,
+                            "tab": tab,
+                            "chat_id": chat_id,
+                            "review": review_response,
+                            "file_count": data.get("file_count", 0),
+                            "total_tokens": data.get("total_tokens", 0),
+                        }
+                    )
+                )
+            else:
+                print(f"T={tab} CHAT_ID={chat_id}")
+                if review_response:
+                    print(review_response)
+        except json.JSONDecodeError:
+            tab = parse_builder_tab(output)
+            if args.json:
+                print(json.dumps({"window": window, "tab": tab, "error": "parse_failed"}))
+            else:
+                print(tab)
     else:
-        print(tab)
+        tab = parse_builder_tab(output)
+        if args.json:
+            print(json.dumps({"window": window, "tab": tab}))
+        else:
+            print(tab)
 
 
 def cmd_rp_prompt_get(args: argparse.Namespace) -> None:
@@ -3916,11 +4374,14 @@ def cmd_rp_select_add(args: argparse.Namespace) -> None:
 
 def cmd_rp_chat_send(args: argparse.Namespace) -> None:
     message = read_text_or_exit(Path(args.message_file), "Message file", use_json=False)
+    chat_id_arg = getattr(args, "chat_id", None)
+    mode = getattr(args, "mode", "chat") or "chat"
     payload = build_chat_payload(
         message=message,
-        mode="chat",
+        mode=mode,
         new_chat=args.new_chat,
         chat_name=args.chat_name,
+        chat_id=chat_id_arg,
         selected_paths=args.selected_paths,
     )
     cmd = [
@@ -3957,15 +4418,19 @@ def cmd_rp_setup_review(args: argparse.Namespace) -> None:
     """Atomic setup: pick-window + builder.
 
     Returns W=<window> T=<tab> on success, exits non-zero on failure.
+    With --response-type review, also returns CHAT_ID and review findings.
     Writes state file for ralph-guard to verify pick-window ran.
 
     Note: ensure-workspace removed - if user opens RP on a folder, workspace
     already exists. pick-window matches by folder path.
+
+    Requires RepoPrompt 1.6.0+ for --response-type review.
     """
     import hashlib
 
     repo_root = os.path.realpath(args.repo_root)
     summary = args.summary
+    response_type = getattr(args, "response_type", None)
 
     # Step 1: pick-window
     roots = normalize_repo_root(repo_root)
@@ -3992,34 +4457,88 @@ def cmd_rp_setup_review(args: argparse.Namespace) -> None:
                 break
 
     if win_id is None:
-        error_exit("No RepoPrompt window matches repo root", use_json=False, code=2)
+        if getattr(args, "create", False):
+            # Auto-create window via workspace create --new-window (RP 1.5.68+)
+            ws_name = os.path.basename(repo_root)
+            create_cmd = f"workspace create {shlex.quote(ws_name)} --new-window --folder-path {shlex.quote(repo_root)}"
+            create_res = run_rp_cli(["--raw-json", "-e", create_cmd])
+            try:
+                data = json.loads(create_res.stdout or "{}")
+                win_id = data.get("window_id")
+            except json.JSONDecodeError:
+                pass
+            if not win_id:
+                error_exit(
+                    f"Failed to create RP window: {create_res.stderr or create_res.stdout}",
+                    use_json=False,
+                    code=2,
+                )
+        else:
+            error_exit("No RepoPrompt window matches repo root", use_json=False, code=2)
 
     # Write state file for ralph-guard verification
     repo_hash = hashlib.sha256(repo_root.encode()).hexdigest()[:16]
     state_file = Path(f"/tmp/.ralph-pick-window-{repo_hash}")
     state_file.write_text(f"{win_id}\n{repo_root}\n")
 
-    # Step 2: builder
+    # Step 2: builder (with optional response-type for RP 1.6.0+)
+    builder_expr = f"builder {json.dumps(summary)}"
+    if response_type:
+        builder_expr += f" --response-type {response_type}"
+
     builder_cmd = [
         "-w",
         str(win_id),
+        "--raw-json" if response_type else "",
         "-e",
-        f"builder {json.dumps(summary)}",
+        builder_expr,
     ]
+    builder_cmd = [c for c in builder_cmd if c]  # Remove empty strings
     builder_res = run_rp_cli(builder_cmd)
     output = (builder_res.stdout or "") + (
         "\n" + builder_res.stderr if builder_res.stderr else ""
     )
-    tab = parse_builder_tab(output)
 
-    if not tab:
-        error_exit("Builder did not return a tab id", use_json=False, code=2)
+    # Parse response based on response-type
+    if response_type == "review":
+        try:
+            data = json.loads(builder_res.stdout or "{}")
+            tab = data.get("tab_id", "")
+            chat_id = data.get("review", {}).get("chat_id", "")
+            review_response = data.get("review", {}).get("response", "")
 
-    # Output
-    if args.json:
-        print(json.dumps({"window": win_id, "tab": tab, "repo_root": repo_root}))
+            if not tab:
+                error_exit("Builder did not return a tab id", use_json=False, code=2)
+
+            if args.json:
+                print(
+                    json.dumps(
+                        {
+                            "window": win_id,
+                            "tab": tab,
+                            "chat_id": chat_id,
+                            "review": review_response,
+                            "repo_root": repo_root,
+                            "file_count": data.get("file_count", 0),
+                            "total_tokens": data.get("total_tokens", 0),
+                        }
+                    )
+                )
+            else:
+                print(f"W={win_id} T={tab} CHAT_ID={chat_id}")
+                if review_response:
+                    print(review_response)
+        except json.JSONDecodeError:
+            error_exit("Failed to parse builder review response", use_json=False, code=2)
     else:
-        print(f"W={win_id} T={tab}")
+        tab = parse_builder_tab(output)
+        if not tab:
+            error_exit("Builder did not return a tab id", use_json=False, code=2)
+
+        if args.json:
+            print(json.dumps({"window": win_id, "tab": tab, "repo_root": repo_root}))
+        else:
+            print(f"W={win_id} T={tab}")
 
 
 # --- Codex Commands ---
@@ -4069,6 +4588,35 @@ Review all changes on the current branch compared to {base_branch}.
 3. **Simplicity** - Is this the simplest solution?
 4. **Security** - Injection, auth gaps, resource exhaustion?
 5. **Edge Cases** - Failure modes, race conditions, malformed input?
+
+## Scenario Exploration (for changed code only)
+
+Walk through these scenarios for new/modified code paths:
+- Happy path: Normal operation with valid inputs
+- Invalid inputs: Null, empty, malformed data
+- Boundary conditions: Min/max values, empty collections
+- Concurrent access: Race conditions, deadlocks
+- Network issues: Timeouts, partial failures
+- Resource exhaustion: Memory, disk, connections
+- Security attacks: Injection, overflow, DoS vectors
+- Data corruption: Partial writes, inconsistency
+- Cascading failures: Downstream service issues
+
+Only flag issues in the **changed code** - not pre-existing patterns.
+
+## Verdict Scope
+
+Your VERDICT must only consider issues in the **changed code**:
+- Issues **introduced** by this changeset
+- Issues **directly affected** by this changeset
+- Pre-existing issues that would **block shipping** this specific change
+
+Do NOT mark NEEDS_WORK for:
+- Pre-existing issues in untouched code
+- "Nice to have" improvements outside the diff
+- Style nitpicks in files you didn't change
+
+You MAY mention these as "FYI" observations without affecting the verdict.
 
 ## Output Format
 
@@ -4176,6 +4724,13 @@ def cmd_codex_impl_review(args: argparse.Namespace) -> None:
             "timestamp": now_iso(),
             "review": output,  # Full review feedback for fix loop
         }
+        # Add iteration if running under Ralph
+        ralph_iter = os.environ.get("RALPH_ITERATION")
+        if ralph_iter:
+            try:
+                receipt_data["iteration"] = int(ralph_iter)
+            except ValueError:
+                pass
         if focus:
             receipt_data["focus"] = focus
         Path(receipt_path).write_text(
@@ -4220,12 +4775,22 @@ def cmd_codex_plan_review(args: argparse.Namespace) -> None:
 
     epic_spec = epic_spec_path.read_text(encoding="utf-8")
 
+    # Load task specs for this epic
+    tasks_dir = flow_dir / TASKS_DIR
+    task_specs_parts = []
+    for task_file in sorted(tasks_dir.glob(f"{epic_id}.*.md")):
+        task_id = task_file.stem
+        task_content = task_file.read_text(encoding="utf-8")
+        task_specs_parts.append(f"### {task_id}\n\n{task_content}")
+
+    task_specs = "\n\n---\n\n".join(task_specs_parts) if task_specs_parts else ""
+
     # Get context hints (from main branch for plans)
     base_branch = args.base if hasattr(args, "base") and args.base else "main"
     context_hints = gather_context_hints(base_branch)
 
     # Build prompt
-    prompt = build_review_prompt("plan", epic_spec, context_hints)
+    prompt = build_review_prompt("plan", epic_spec, context_hints, task_specs=task_specs)
 
     # Check for existing session in receipt (indicates re-review)
     receipt_path = args.receipt if hasattr(args, "receipt") and args.receipt else None
@@ -4241,10 +4806,13 @@ def cmd_codex_plan_review(args: argparse.Namespace) -> None:
             except (json.JSONDecodeError, Exception):
                 pass
 
-    # For re-reviews, prepend instruction to re-read spec file
+    # For re-reviews, prepend instruction to re-read spec files
     if is_rereview:
-        # For plan reviews, the spec file is what changes
+        # For plan reviews, epic spec and task specs may change
         spec_files = [str(epic_spec_path)]
+        # Add task spec files
+        for task_file in sorted(tasks_dir.glob(f"{epic_id}.*.md")):
+            spec_files.append(str(task_file))
         rereview_preamble = build_rereview_preamble(spec_files, "plan")
         prompt = rereview_preamble + prompt
 
@@ -4265,6 +4833,13 @@ def cmd_codex_plan_review(args: argparse.Namespace) -> None:
             "timestamp": now_iso(),
             "review": output,  # Full review feedback for fix loop
         }
+        # Add iteration if running under Ralph
+        ralph_iter = os.environ.get("RALPH_ITERATION")
+        if ralph_iter:
+            try:
+                receipt_data["iteration"] = int(ralph_iter)
+            except ValueError:
+                pass
         Path(receipt_path).write_text(
             json.dumps(receipt_data, indent=2) + "\n", encoding="utf-8"
         )
@@ -4323,25 +4898,32 @@ def cmd_checkpoint_save(args: argparse.Namespace) -> None:
     if spec_path.exists():
         epic_spec = spec_path.read_text(encoding="utf-8")
 
-    # Load all tasks for this epic
+    # Load all tasks for this epic (including runtime state)
     tasks_dir = flow_dir / TASKS_DIR
+    store = get_state_store()
     tasks = []
     if tasks_dir.exists():
         for task_file in sorted(tasks_dir.glob(f"{epic_id}.*.json")):
+            task_id = task_file.stem
+            if "." not in task_id:
+                continue  # Skip non-task files
             task_data = load_json(task_file)
-            task_spec_path = tasks_dir / f"{task_file.stem}.md"
+            task_spec_path = tasks_dir / f"{task_id}.md"
             task_spec = ""
             if task_spec_path.exists():
                 task_spec = task_spec_path.read_text(encoding="utf-8")
+            # Include runtime state in checkpoint
+            runtime_state = store.load_runtime(task_id)
             tasks.append({
-                "id": task_file.stem,
+                "id": task_id,
                 "data": task_data,
                 "spec": task_spec,
+                "runtime": runtime_state,  # May be None if no state file
             })
 
     # Build checkpoint
     checkpoint = {
-        "schema_version": 1,
+        "schema_version": 2,  # Bumped for runtime state support
         "created_at": now_iso(),
         "epic_id": epic_id,
         "epic": {
@@ -4410,8 +4992,9 @@ def cmd_checkpoint_restore(args: argparse.Namespace) -> None:
     if checkpoint["epic"]["spec"]:
         atomic_write(spec_path, checkpoint["epic"]["spec"])
 
-    # Restore tasks
+    # Restore tasks (including runtime state)
     tasks_dir = flow_dir / TASKS_DIR
+    store = get_state_store()
     restored_tasks = []
     for task in checkpoint["tasks"]:
         task_id = task["id"]
@@ -4424,6 +5007,17 @@ def cmd_checkpoint_restore(args: argparse.Namespace) -> None:
 
         if task["spec"]:
             atomic_write(task_spec_path, task["spec"])
+
+        # Restore runtime state from checkpoint (schema_version >= 2)
+        runtime = task.get("runtime")
+        if runtime is not None:
+            # Restore saved runtime state
+            with store.lock_task(task_id):
+                store.save_runtime(task_id, runtime)
+        else:
+            # No runtime in checkpoint - delete any existing runtime state
+            delete_task_runtime(task_id)
+
         restored_tasks.append(task_id)
 
     if args.json:
@@ -4764,14 +5358,17 @@ def main() -> None:
     p_task_acc.set_defaults(func=cmd_task_set_acceptance)
 
     p_task_set_spec = task_sub.add_parser(
-        "set-spec", help="Set description and/or acceptance in one call"
+        "set-spec", help="Set task spec (full file or sections)"
     )
     p_task_set_spec.add_argument("id", help="Task ID (fn-N.M)")
     p_task_set_spec.add_argument(
-        "--description", help="Description file (use '-' for stdin)"
+        "--file", help="Full spec file (use '-' for stdin) - replaces entire spec"
     )
     p_task_set_spec.add_argument(
-        "--acceptance", help="Acceptance file (use '-' for stdin)"
+        "--description", help="Description section file (use '-' for stdin)"
+    )
+    p_task_set_spec.add_argument(
+        "--acceptance", help="Acceptance section file (use '-' for stdin)"
     )
     p_task_set_spec.add_argument("--json", action="store_true", help="JSON output")
     p_task_set_spec.set_defaults(func=cmd_task_set_spec)
@@ -4872,6 +5469,26 @@ def main() -> None:
     )
     p_block.add_argument("--json", action="store_true", help="JSON output")
     p_block.set_defaults(func=cmd_block)
+
+    # state-path
+    p_state_path = subparsers.add_parser(
+        "state-path", help="Show resolved state directory path"
+    )
+    p_state_path.add_argument("--task", help="Task ID to show state file path for")
+    p_state_path.add_argument("--json", action="store_true", help="JSON output")
+    p_state_path.set_defaults(func=cmd_state_path)
+
+    # migrate-state
+    p_migrate = subparsers.add_parser(
+        "migrate-state", help="Migrate runtime state from definition files to state-dir"
+    )
+    p_migrate.add_argument(
+        "--clean",
+        action="store_true",
+        help="Remove runtime fields from definition files after migration",
+    )
+    p_migrate.add_argument("--json", action="store_true", help="JSON output")
+    p_migrate.set_defaults(func=cmd_migrate_state)
 
     # validate
     p_validate = subparsers.add_parser("validate", help="Validate epic or all")
@@ -4977,6 +5594,12 @@ def main() -> None:
     p_rp_builder = rp_sub.add_parser("builder", help="Run builder and return tab")
     p_rp_builder.add_argument("--window", type=int, required=True, help="Window id")
     p_rp_builder.add_argument("--summary", required=True, help="Builder summary")
+    p_rp_builder.add_argument(
+        "--response-type",
+        dest="response_type",
+        choices=["review", "plan", "question"],
+        help="Builder response type (requires RP 1.6.0+)",
+    )
     p_rp_builder.add_argument("--json", action="store_true", help="JSON output")
     p_rp_builder.set_defaults(func=cmd_rp_builder)
 
@@ -5009,6 +5632,17 @@ def main() -> None:
     p_rp_chat.add_argument("--new-chat", action="store_true", help="Start new chat")
     p_rp_chat.add_argument("--chat-name", help="Chat name (with --new-chat)")
     p_rp_chat.add_argument(
+        "--chat-id",
+        dest="chat_id",
+        help="Continue specific chat by ID (RP 1.6.0+)",
+    )
+    p_rp_chat.add_argument(
+        "--mode",
+        choices=["chat", "review", "plan", "edit"],
+        default="chat",
+        help="Chat mode (default: chat)",
+    )
+    p_rp_chat.add_argument(
         "--selected-paths", nargs="*", help="Override selected paths"
     )
     p_rp_chat.add_argument(
@@ -5026,7 +5660,18 @@ def main() -> None:
         "setup-review", help="Atomic: pick-window + workspace + builder"
     )
     p_rp_setup.add_argument("--repo-root", required=True, help="Repo root path")
-    p_rp_setup.add_argument("--summary", required=True, help="Builder summary")
+    p_rp_setup.add_argument("--summary", required=True, help="Builder summary/instructions")
+    p_rp_setup.add_argument(
+        "--response-type",
+        dest="response_type",
+        choices=["review"],
+        help="Use builder review mode (requires RP 1.6.0+)",
+    )
+    p_rp_setup.add_argument(
+        "--create",
+        action="store_true",
+        help="Create new RP window if none matches (requires RP 1.5.68+)",
+    )
     p_rp_setup.add_argument("--json", action="store_true", help="JSON output")
     p_rp_setup.set_defaults(func=cmd_rp_setup_review)
 
