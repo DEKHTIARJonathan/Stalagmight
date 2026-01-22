@@ -132,27 +132,9 @@ export function EditableTable<T extends object>({
 
   // Refs for row elements, indexed by data index
   const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
-  const tbodyRef = useRef<HTMLTableSectionElement>(null);
 
-  // Track pending single-click to distinguish from double-click
-  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingClickRef = useRef<{ item: T; index: number } | null>(null);
-
-  // Track which column index has focus for keyboard navigation
-  const focusedColumnIndexRef = useRef<number>(-1);
-
-  // Store callbacks in refs to avoid stale closures in setTimeout
-  const onRowClickRef = useRef(onRowClick);
-  const onRowDoubleClickRef = useRef(onRowDoubleClick);
+  // Store callbacks in refs to avoid stale closures
   const onRowHoverRef = useRef(onRowHover);
-
-  useEffect(() => {
-    onRowClickRef.current = onRowClick;
-  }, [onRowClick]);
-
-  useEffect(() => {
-    onRowDoubleClickRef.current = onRowDoubleClick;
-  }, [onRowDoubleClick]);
 
   useEffect(() => {
     onRowHoverRef.current = onRowHover;
@@ -193,36 +175,20 @@ export function EditableTable<T extends object>({
     onCellEdit?.(item, key, parsedValue, index);
   };
 
-  // Handle single click with delay to distinguish from double-click
-  const handleRowClick = useCallback((item: T, index: number) => {
-    // Clear any pending click
-    if (clickTimerRef.current) {
-      clearTimeout(clickTimerRef.current);
-      clickTimerRef.current = null;
+  // Handle click - use event.detail to distinguish single from double click
+  // event.detail === 1 means single click, === 2 means double click
+  const handleRowClick = useCallback((e: React.MouseEvent, item: T, index: number) => {
+    // Only fire onRowClick for true single clicks (detail === 1)
+    // This prevents firing twice during double-click
+    if (e.detail === 1) {
+      onRowClick?.(item, index);
     }
+  }, [onRowClick]);
 
-    pendingClickRef.current = { item, index };
-
-    clickTimerRef.current = setTimeout(() => {
-      if (pendingClickRef.current) {
-        onRowClickRef.current?.(pendingClickRef.current.item, pendingClickRef.current.index);
-        pendingClickRef.current = null;
-      }
-      clickTimerRef.current = null;
-    }, 200);
-  }, []);
-
-  // Handle double-click - cancel pending single click and fire double-click
+  // Handle double-click directly
   const handleRowDoubleClick = useCallback((item: T, index: number) => {
-    // Cancel pending single click
-    if (clickTimerRef.current) {
-      clearTimeout(clickTimerRef.current);
-      clickTimerRef.current = null;
-    }
-    pendingClickRef.current = null;
-
-    onRowDoubleClickRef.current?.(item, index);
-  }, []);
+    onRowDoubleClick?.(item, index);
+  }, [onRowDoubleClick]);
 
   // Handle mouse enter on row
   const handleRowMouseEnter = useCallback((item: T, index: number) => {
@@ -250,9 +216,6 @@ export function EditableTable<T extends object>({
         return;
       }
 
-      // Remember which column we're in
-      focusedColumnIndexRef.current = columnIndex;
-
       // Find the input in the target row at the same column
       const targetRow = rowRefs.current.get(targetRowIndex);
       if (targetRow) {
@@ -269,24 +232,21 @@ export function EditableTable<T extends object>({
     }
   }, [data.length]);
 
-  // Get default row styling
+  // Get default row styling (for <tr> element)
   const getRowClassName = (item: T, isSelected: boolean, isHovered: boolean): string => {
     if (rowClassName) {
       return rowClassName(item, isSelected, isHovered);
     }
 
-    // Default styling: selected has accent left border, hovered has subtle background
+    // Default styling: hovered has subtle background
     const classes: string[] = [];
 
-    if (isSelected) {
-      classes.push('border-l-3 border-accent');
-    } else {
-      // Reserve space for border to prevent layout shift
-      classes.push('border-l-3 border-transparent');
-    }
-
-    if (isHovered && !isSelected) {
+    // External hover state takes precedence, otherwise use default hover:bg-accent/10
+    if (isHovered) {
       classes.push('bg-accent/10');
+    } else if (hoveredKey === undefined) {
+      // Only add hover:bg-accent/10 when no external hover state is being managed
+      classes.push('hover:bg-accent/10');
     }
 
     if (onRowClick || onRowDoubleClick) {
@@ -294,6 +254,15 @@ export function EditableTable<T extends object>({
     }
 
     return classes.join(' ');
+  };
+
+  // Get first cell class for accent left border indicator (borders don't work reliably on <tr>)
+  const getFirstCellBorderClass = (isSelected: boolean): string => {
+    if (isSelected) {
+      return 'border-l-2 border-accent';
+    }
+    // Reserve space for border to prevent layout shift
+    return 'border-l-2 border-transparent';
   };
 
   return (
@@ -315,7 +284,7 @@ export function EditableTable<T extends object>({
             ))}
           </tr>
         </thead>
-        <tbody ref={tbodyRef}>
+        <tbody>
           {data.length === 0 ? (
             <tr>
               <td
@@ -342,7 +311,7 @@ export function EditableTable<T extends object>({
                     }
                   }}
                   className={getRowClassName(item, isSelected, isHovered)}
-                  onClick={() => handleRowClick(item, index)}
+                  onClick={(e) => handleRowClick(e, item, index)}
                   onDoubleClick={() => handleRowDoubleClick(item, index)}
                   onMouseEnter={() => handleRowMouseEnter(item, index)}
                   onMouseLeave={handleRowMouseLeave}
@@ -351,11 +320,12 @@ export function EditableTable<T extends object>({
                   {columns.map((column, columnIndex) => {
                     const isEditable = editableColumns.includes(column.key);
                     const value = (item as Record<string, unknown>)[column.key];
+                    const isFirstColumn = columnIndex === 0;
 
                     return (
                       <td
                         key={column.key}
-                        className={`p-0 ${alignmentClasses[column.align ?? 'left']}`}
+                        className={`p-0 ${alignmentClasses[column.align ?? 'left']} ${isFirstColumn ? getFirstCellBorderClass(isSelected) : ''}`}
                       >
                         {column.render ? (
                           column.render(item, index)
