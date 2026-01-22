@@ -622,35 +622,12 @@ export default class SurveyLayer {
       const nearestShot = this.resolveNearestShot(e, shotFeatures);
 
       // Calculate distances to determine which is closer
-      let stationDist = Infinity;
-      let shotDist = Infinity;
-
-      if (nearestStation?.geometry.type === 'Point') {
-        const coords = nearestStation.geometry.coordinates as [number, number];
-        const screenPos = this.map.project(coords);
-        stationDist = Math.sqrt(
-          (screenPos.x - e.point.x) ** 2 + (screenPos.y - e.point.y) ** 2
-        );
-      }
-
-      if (nearestShot?.geometry.type === 'LineString') {
-        // Find minimum distance to any segment of the shot
-        for (let i = 0; i < nearestShot.geometry.coordinates.length - 1; i++) {
-          const c1 = nearestShot.geometry.coordinates[i] as [number, number] | undefined;
-          const c2 = nearestShot.geometry.coordinates[i + 1] as [number, number] | undefined;
-          if (!c1 || !c2) continue;
-          const p1 = this.map.project(c1);
-          const p2 = this.map.project(c2);
-          const d = this.distanceToLineSegment(e.point.x, e.point.y, p1.x, p1.y, p2.x, p2.y);
-          if (d < shotDist) shotDist = d;
-        }
-      }
-
-      // Determine what to highlight (station wins ties - when equidistant or closer)
+      // Determine what to highlight (stations always take priority)
       let newHoveredStationId: string | null = null;
       let newHoveredShotId: string | null = null;
 
-      if (nearestStation && stationDist <= shotDist) {
+      // Stations always take priority when cursor is over one
+      if (nearestStation) {
         const { sectionId, stationIndex } = nearestStation.properties ?? {};
         if (sectionId !== undefined && stationIndex !== undefined) {
           newHoveredStationId = `${sectionId}:${stationIndex}`;
