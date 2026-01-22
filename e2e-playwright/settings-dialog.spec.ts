@@ -78,22 +78,17 @@ test.describe('Settings Dialog - Keyboard Shortcuts to Open', () => {
     await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
   });
 
-  test('Cmd/Ctrl+, works when focused in input field in project view', async ({ page }) => {
+  test('Cmd/Ctrl+, works repeatedly and after closing dialog', async ({ page }) => {
     // We're in project view (SingleSystemView) where keyboard shortcuts are active
-    // First, find and focus an input in the project view itself (not inside Settings)
-    // The sections panel should have a section name that can be clicked to focus
-
     // Wait for the map UI to be fully ready
     await page.waitForTimeout(300);
 
-    // Try to find an input element in the project view
-    // The detail panel or section panel may have editable fields
-    // If no input exists in project view, we'll use the canvas which is focusable
+    // Focus the canvas (main interactive element in project view)
     const canvas = page.locator('canvas');
     await expect(canvas).toBeVisible({ timeout: 5000 });
     await canvas.click();
 
-    // Now test the keyboard shortcut - Ctrl+, should open Settings even from canvas
+    // First: keyboard shortcut opens Settings
     await page.keyboard.down('Control');
     await page.keyboard.press(',');
     await page.keyboard.up('Control');
@@ -103,7 +98,7 @@ test.describe('Settings Dialog - Keyboard Shortcuts to Open', () => {
     await page.locator('[data-testid="settings-cancel-button"]').click();
     await expect(page.locator('[data-testid="settings-dialog"]')).not.toBeVisible({ timeout: 5000 });
 
-    // Test again - shortcut should work repeatedly
+    // Second: shortcut should work repeatedly after closing
     await page.keyboard.down('Control');
     await page.keyboard.press(',');
     await page.keyboard.up('Control');
@@ -535,9 +530,11 @@ test.describe('Settings Dialog - Reset to Defaults', () => {
   test('Cancel in reset dialog keeps changes', async ({ page }) => {
     await openSettingsDialog(page);
 
-    // Make a change first
+    // Make a change first using specific testid
     await page.locator('[data-testid="settings-tab-validation"]').click();
-    const input = page.locator('input[type="number"]').first();
+    await expect(page.locator('[data-testid="settings-panel-validation"]')).toBeVisible();
+    const input = page.locator('[data-testid="input-shot-length-min"]');
+    await expect(input).toBeVisible();
     const newValue = '999';
     await input.fill(newValue);
 
@@ -565,8 +562,11 @@ test.describe('Settings Dialog - Reset to Defaults', () => {
 
     const recorder = page.locator('[data-testid="shortcut-primary-select"]');
     await recorder.click();
+    // Wait for recording state
+    await expect(recorder).toHaveAttribute('data-recording', 'true', { timeout: 2000 });
     await page.keyboard.press('Q');
-    await page.waitForTimeout(100);
+    // Wait for recording to complete
+    await expect(recorder).toHaveAttribute('data-recording', 'false', { timeout: 2000 });
 
     // Verify change
     await expect(recorder).toContainText('Q');
