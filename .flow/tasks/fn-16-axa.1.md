@@ -40,3 +40,10 @@ Create a reusable Toggle/Switch component styled like iOS toggles for boolean se
 - [ ] Works with external label via aria-labelledby
 - [ ] Implemented as non-button focusable element (div with tabIndex=0)
 - [ ] pnpm tsc --noEmit passes
+
+## Done summary
+Created iOS-style Toggle component with Space-only activation and proper ARIA accessibility. The component uses a non-button div with role="switch" to ensure Enter key does not toggle, and auto-associates visible labels via aria-labelledby using React's useId hook.
+## Evidence
+- Commits: f73697b, 7263b19
+- Tests: pnpm tsc --noEmit
+- PRs:
