@@ -1,27 +1,33 @@
 # fn-19-mmx.5 Add validation for duplicate datum in connected group
 
 ## Description
-Add validation to prevent setting a second zero datum on a station that is in the same connected group as an existing datum.
+Confirm and improve the existing duplicate datum validation. The validation already exists via `find_connected_zero_datum()` - this task improves the error message and adds tests.
 
 **Size:** S
 **Files:** `src-tauri/src/models/project.rs`
 
 ## Approach
 
-1. Before setting datum, call `get_connected_section_ids()` for the target station
-2. Check if any station in connected group already has `is_zero_datum: true`
-3. If yes, return error: "This station group already has a zero datum at Station X"
-4. Allow setting datum if no existing datum in connected group
+1. Review existing `find_connected_zero_datum()` logic for correctness
+2. Improve error message to include the existing datum station identifier (e.g., "Section 3, Station 2")
+3. Add/improve unit tests for the validation
+4. Ensure error is returned before any state changes occur
+
+**Note**: The validation already exists - do NOT duplicate the logic. Just improve the error message and test coverage.
 
 ## Key context
 
-One datum per connected group rule. Disconnected groups can each have their own datum. The validation must traverse merges to find all stations in the group.
+Current `Project::set_zero_datum()` calls `find_connected_zero_datum()` which uses station-level connectivity (not just section-level) to find existing datums.
+
 ## Acceptance
+- [ ] Existing validation logic reviewed and confirmed correct
+- [ ] Error message includes existing datum station identifier
 - [ ] Error returned when trying to set duplicate datum in same group
-- [ ] Error message identifies existing datum station
 - [ ] Disconnected groups can each have their own datum
 - [ ] Validation runs before any state changes
+- [ ] Unit tests for validation scenarios added/improved
 - [ ] Rust tests pass (cargo test)
+
 ## Done summary
 TBD
 

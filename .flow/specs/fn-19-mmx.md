@@ -7,18 +7,18 @@ When a zero datum (GPS reference point) is set on a station, the station should 
 ## Scope
 
 **In scope:**
-- GPS-to-local coordinate conversion (ENU projection)
+- GPS-to-local coordinate conversion (ENU projection with alt=0)
 - Section repositioning via `section_offsets` when datum is set
-- Recompute station coordinates from shots with new origin
-- Validation for duplicate datum in connected group
-- Enhanced undo data to capture section_offsets
-- Merge propagates datum repositioning
+- Removal of global primary_zero_datum subtraction (rely solely on section_offsets)
+- Enhanced undo to capture and restore section_offsets directly
+- Validation improvements for duplicate datum in connected group
 - Frontend fit-to-bounds after datum set
 
 **Out of scope:**
-- Visual preview before repositioning
+- Merge undo restoring section_offsets (existing limitation)
 - GPS coordinate validation against external services
 - Export coordinate conversion (GPS output)
+- Visual preview before repositioning
 
 ## Quick commands
 
@@ -35,103 +35,107 @@ pnpm tsc --noEmit
 
 ## Approach
 
+### Critical Architecture Decision: Remove Global Subtraction
+
+**Problem identified**: Current `compute_station_coordinates_with_progress` subtracts `primary_zero_datum()` coordinates globally. This means:
+1. Removing the first datum changes what gets subtracted, shifting all stations
+2. Setting first datum would move unconnected sections unless offsets are applied
+
+**Solution**: Remove the global subtraction step entirely. Rely solely on `section_offsets` for positioning:
+- When first datum is set, compute and apply offset to connected group so datum station lands at (0,0)
+- When subsequent datums are set, compute offset from first datum's GPS position
+- When datum is removed, section_offsets remain unchanged (positions stable)
+- This eliminates the coupling between `zero_datums` order and station positions
+
 ### GPS-to-Local Conversion
 
 Implement ENU (East-North-Up) projection using WGS84 ellipsoid:
-1. Convert geodetic (lat, lon) to ECEF (x, y, z)
+1. Convert geodetic (lat, lon, **alt=0**) to ECEF (x, y, z)
 2. Convert ECEF difference to ENU (east, north, up)
 3. First datum GPS becomes projection center
-4. Local coordinates: East→x (meters), North→y (meters)
+4. **Important**: Use alt=0 for both points, ignore `depth_reference` (it's not ellipsoid height)
+5. Local coordinates: East→x (meters), North→y (meters)
 
-WGS84 constants in Rust:
-```rust
-const WGS84_A: f64 = 6_378_137.0;  // semi-major axis
-const WGS84_E2: f64 = 0.00669437999014;  // eccentricity squared
-```
+### Section Repositioning (set_zero_datum)
 
-### Section Repositioning
+1. Call `get_connected_section_ids()` to find all affected sections
+2. Compute current station position via `compute_station_raw_coords()`
+3. **For first datum**: Compute offset so station's raw coords become (0,0), apply to connected sections
+4. **For subsequent datums**: Compute GPS offset from first datum in meters, then compute offset so station lands there
+5. Store GPS in `zero_datums` vector
+6. Return success
 
-Enhance `Project::set_zero_datum()` to:
-1. Find all connected sections via `get_connected_section_ids()`
-2. Compute current station coordinates via `compute_station_raw_coords()`
-3. For first datum: Station becomes (0,0), no offset changes needed
-4. For subsequent datums: Compute GPS offset from first datum in meters
-5. Calculate offset needed to move station to target position
-6. Apply offset to all connected sections via `section_offsets`
+### Undo Implementation (state.rs)
 
-### Undo Enhancement
+**Key insight**: Undo is implemented in `state.rs`, not just `undo.rs`. The current pattern calls `set_zero_datum`/`remove_zero_datum` on undo, which would recompute offsets.
 
-Modify `UndoData::ZeroDatumInfo` to capture:
-```rust
-pub struct ZeroDatumInfo {
-    pub station_ref: StationRef,
-    pub previous_gps: Option<GpsCoordinates>,
-    pub previous_offsets: HashMap<SectionId, (f64, f64)>,  // NEW
-}
-```
+**Fix**: In `state.rs`:
+1. Before executing SetZeroDatum, capture `previous_offsets` for all affected sections
+2. On undo, restore `section_offsets` directly from captured values (don't call `set_zero_datum`)
+3. Also track which offsets didn't exist (new keys) vs existed (restore value)
 
-### Key Files
+### merge_projects Compatibility
+
+Current `merge_projects` in `state.rs:1581` calls `set_zero_datum`. After our changes, this would reposition sections during merge.
+
+**Solution**: Add internal helper `Project::store_zero_datum_without_repositioning()` for use by merge/import paths that need to preserve copied offsets.
+
+### Existing Validation
+
+Review found that `Project::set_zero_datum()` already calls `find_connected_zero_datum()` for validation. Task 5 should confirm this behavior and improve the error message, not duplicate logic.
+
+## Key Files
 
 | File | Changes |
 |------|---------|
-| `src-tauri/src/models/project.rs` | Enhance set_zero_datum, add GPS conversion |
+| `src-tauri/src/models/project.rs` | Add GPS conversion, enhance set_zero_datum, remove global subtraction, add store helper |
+| `src-tauri/src/core/state.rs` | Enhance undo to capture/restore offsets directly |
 | `src-tauri/src/core/undo.rs` | Enhance ZeroDatumInfo with offsets |
-| `src-tauri/src/models/project.rs` | Merge propagation for datum |
 | `src/store/projectStore.ts` | Call triggerFitToBounds after datum |
 | `docs/SPEC.md` | Document zero datum behavior |
 
-### Existing Patterns to Follow
-
-- Section offset application: `project.rs:333-443` (`merge_stations`)
-- Connected group traversal: `project.rs:202-222` (`get_connected_section_ids`)
-- Coordinate computation: `project.rs:596-727` (`compute_station_coordinates`)
-- Undo data capture: `undo.rs:72-77` (`UndoData::ZeroDatumInfo`)
-
 ## Edge Cases
 
-- First datum removal: Next datum in vector becomes primary (or none)
-- First datum on station with existing offset: GPS position overrides offset
-- Datum on merged station: Use the section containing the station
-- GPS coordinates identical for different groups: Both groups at same position (valid)
-- Merge connects to datum group: Merged sections reposition
-- Unmerge from datum group: Detached section keeps current position
+- First datum removal: Section offsets unchanged, positions stable
+- Subsequent datum removal: Offsets unchanged, positions stable
+- First datum on station with existing offset: Compute additional offset to reach (0,0)
+- merge_projects: Use store-only helper to preserve source offsets
 - Empty section: Valid to set datum (station still exists)
+- GPS altitude: Always use alt=0 for conversion, ignore depth_reference
 
 ## Risks
 
 | Risk | Mitigation |
 |------|------------|
-| Performance with large projects | Only recompute affected connected group |
-| GPS conversion accuracy | Use proper ENU projection, not approximation |
-| Undo state bloat | Only store affected section offsets |
-| Merge/datum interaction complexity | Clear precedence: datum controls offset |
+| Merge undo doesn't restore offsets | Document as existing limitation, out of scope |
+| merge_projects behavior change | Add store-only helper for backward compatibility |
+| GPS conversion accuracy | Use proper ENU with WGS84 constants |
 
 ## Test Notes
 
-- Test first datum sets station to (0,0)
+- Test first datum sets station to (0,0) via offset
 - Test second datum on different group uses GPS offset
-- Test duplicate datum on same group returns error
-- Test undo restores previous positions
-- Test merge propagates repositioning
-- Test unmerge keeps position
-- Test fit-to-bounds called after set
+- Test duplicate datum on same group returns error with station ID
+- Test undo restores previous section_offsets directly
+- Test remove datum keeps positions unchanged
+- Test ENU conversion with known values (small deltas at equator, 0.01 degree tolerance)
+- Test merge_projects still works (uses store-only helper)
 
 ## Acceptance
 
-- [ ] Setting zero datum repositions the station to GPS coordinates (as local coords)
-- [ ] First zero datum station becomes local (0,0,z)
+- [ ] Setting zero datum repositions station to GPS coordinates via section_offsets
+- [ ] First zero datum station becomes local (0,0,z) via offset application
 - [ ] All transitively connected sections reposition relative to the datum
-- [ ] Station coordinates recalculated from shot data using datum as origin
+- [ ] Global primary_zero_datum subtraction removed from compute_station_coordinates
 - [ ] Second datum's local position computed from GPS offset relative to first datum
-- [ ] Error shown when trying to set datum on already-referenced station group
-- [ ] Merge propagates datum repositioning to newly connected sections
-- [ ] Unmerge keeps detached section at current position
-- [ ] Setting datum is fully undoable (restores previous positions)
-- [ ] Removing datum keeps positions, only loses GPS reference
+- [ ] Error shown when trying to set datum on already-referenced station group (with station ID)
+- [ ] Setting datum is fully undoable (restores exact previous section_offsets)
+- [ ] Removing datum keeps positions (offsets unchanged)
 - [ ] Map view fits to bounds after datum is set
 - [ ] GPS coordinates validated (-90/90 lat, -180/180 lon)
-- [ ] Detailed logging of GPS coords, offsets, and affected stations
-- [ ] Z-coordinates (depths) are preserved, not overwritten by GPS depth_reference
+- [ ] ENU conversion uses alt=0, ignores depth_reference
+- [ ] merge_projects uses store-only helper (no repositioning during merge)
+- [ ] Z-coordinates (depths) are preserved
 - [ ] Unconnected sections maintain position when first datum is set
 
 ## References
@@ -140,6 +144,6 @@ pub struct ZeroDatumInfo {
 - Current set_zero_datum: `src-tauri/src/models/project.rs:539-564`
 - Section offsets: `src-tauri/src/models/project.rs` (`section_offsets` field)
 - Connected groups: `src-tauri/src/models/project.rs:202-222`
-- Merge pattern: `src-tauri/src/models/project.rs:333-443`
-- Undo data: `src-tauri/src/core/undo.rs:72-77`
+- Undo handler: `src-tauri/src/core/state.rs` (undo for SetZeroDatum)
+- merge_projects: `src-tauri/src/core/state.rs:1581`
 - ENU projection: Wikipedia Local_tangent_plane_coordinates

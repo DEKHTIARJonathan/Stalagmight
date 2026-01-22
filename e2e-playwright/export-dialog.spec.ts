@@ -50,9 +50,9 @@ test.describe('Export Dialog', () => {
     await formatSelect.locator('button').first().click();
     // The dropdown options are in a div with class 'absolute'
     const dropdown = formatSelect.locator('.absolute');
-    await expect(dropdown.locator('button:has-text("CSV")')).toBeVisible();
+    await expect(dropdown.locator('[role="option"]:has-text("CSV")')).toBeVisible();
     // Click CSV to close dropdown (selecting default value)
-    await dropdown.locator('button:has-text("CSV")').click();
+    await dropdown.locator('[role="option"]:has-text("CSV")').click();
 
     // Preview should not be visible for data export (only for image export)
     const preview = page.locator('[data-testid="export-preview"]');
@@ -75,8 +75,8 @@ test.describe('Export Dialog', () => {
     const formatSelect = page.locator('[data-testid="data-format-select"]');
     // Click to open dropdown
     await formatSelect.locator('button').first().click();
-    // Click JSON option
-    await formatSelect.locator('button:has-text("JSON")').click();
+    // Click JSON option (scoped to the dropdown)
+    await formatSelect.locator('.absolute [role="option"]:has-text("JSON")').click();
 
     // Verify JSON is now selected (check button text)
     await expect(formatSelect.locator('button').first()).toHaveText('JSON');
@@ -109,11 +109,11 @@ test.describe('Export Dialog', () => {
     await imageFormatSelect.locator('button').first().click();
     // The dropdown options are in a div with class 'absolute'
     const imageDropdown = imageFormatSelect.locator('.absolute');
-    await expect(imageDropdown.locator('button:has-text("PNG")')).toBeVisible();
-    await expect(imageDropdown.locator('button:has-text("SVG")')).toBeVisible();
-    await expect(imageDropdown.locator('button:has-text("PDF")')).toBeVisible();
+    await expect(imageDropdown.locator('[role="option"]:has-text("PNG")')).toBeVisible();
+    await expect(imageDropdown.locator('[role="option"]:has-text("SVG")')).toBeVisible();
+    await expect(imageDropdown.locator('[role="option"]:has-text("PDF")')).toBeVisible();
     // Click PNG to close dropdown (selecting default value)
-    await imageDropdown.locator('button:has-text("PNG")').click();
+    await imageDropdown.locator('[role="option"]:has-text("PNG")').click();
 
     // Image options checkboxes should be visible
     await expect(page.locator('[data-testid="option-include-labels"]')).toBeVisible();
@@ -264,7 +264,7 @@ test.describe('Export Dialog', () => {
 
     // Verify 600 DPI option is available
     const dropdown = resolutionSelect.locator('.absolute');
-    await expect(dropdown.locator('button:has-text("600")')).toBeVisible();
+    await expect(dropdown.locator('[role="option"]:has-text("600")')).toBeVisible();
   });
 
   test('should hide depth options when switching from depth to section mode', async ({ page }) => {

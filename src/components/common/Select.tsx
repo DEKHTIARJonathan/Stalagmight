@@ -2,7 +2,7 @@
  * Custom Select component with dark theme styling.
  * Replaces native HTML select which has dropdown styling issues in WebView.
  */
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useId } from 'react';
 
 export interface SelectOption {
   value: string;
@@ -61,6 +61,47 @@ function findLabel(options: SelectOption[] | SelectOptionGroup[], value: string)
   return null;
 }
 
+/**
+ * Flatten grouped options into a single array with metadata
+ */
+interface FlattenedOption extends SelectOption {
+  groupLabel?: string;
+  isFirstInGroup?: boolean;
+}
+
+function flattenOptions(options: SelectOption[] | SelectOptionGroup[]): FlattenedOption[] {
+  if (isGroupedOptions(options)) {
+    const result: FlattenedOption[] = [];
+    for (const group of options) {
+      for (let i = 0; i < group.options.length; i++) {
+        const opt = group.options[i];
+        if (!opt) continue;
+        const flatOpt: FlattenedOption = {
+          value: opt.value,
+          label: opt.label,
+          groupLabel: group.label,
+          isFirstInGroup: i === 0,
+        };
+        if (opt.disabled !== undefined) {
+          flatOpt.disabled = opt.disabled;
+        }
+        result.push(flatOpt);
+      }
+    }
+    return result;
+  }
+  return options.map(opt => {
+    const flatOpt: FlattenedOption = {
+      value: opt.value,
+      label: opt.label,
+    };
+    if (opt.disabled !== undefined) {
+      flatOpt.disabled = opt.disabled;
+    }
+    return flatOpt;
+  });
+}
+
 export function Select({
   value,
   onChange,
@@ -73,7 +114,24 @@ export function Select({
   'aria-labelledby': ariaLabelledBy,
 }: SelectProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
   const containerRef = useRef<HTMLDivElement>(null);
+  const listboxRef = useRef<HTMLDivElement>(null);
+  const optionRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  // Generate unique IDs for ARIA
+  const baseId = useId();
+  const listboxId = `${baseId}-listbox`;
+  const getOptionId = (index: number) => `${baseId}-option-${index}`;
+
+  // Flatten options for keyboard navigation
+  const flatOptions = flattenOptions(options);
+
+  // Find index of currently selected value
+  const findSelectedIndex = useCallback(() => {
+    return flatOptions.findIndex(opt => opt.value === value);
+  }, [flatOptions, value]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -89,68 +147,227 @@ export function Select({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
 
-  // Close on escape - stop propagation to prevent dialog from closing
+  // Reset highlighted index when dropdown opens/closes
   useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        event.preventDefault();
-        setIsOpen(false);
+    if (isOpen) {
+      // When opening, highlight the currently selected option if enabled, otherwise first enabled option
+      const selectedIdx = findSelectedIndex();
+      const selectedOpt = selectedIdx >= 0 ? flatOptions[selectedIdx] : null;
+      if (selectedIdx >= 0 && selectedOpt && !selectedOpt.disabled) {
+        setHighlightedIndex(selectedIdx);
+      } else {
+        // Find first enabled option (returns -1 if none)
+        const firstEnabled = flatOptions.findIndex(opt => opt && !opt.disabled);
+        setHighlightedIndex(firstEnabled);
       }
-    };
+    } else {
+      setHighlightedIndex(-1);
+    }
+  }, [isOpen, findSelectedIndex, flatOptions]);
 
-    // Use capture phase to handle before other listeners
-    document.addEventListener('keydown', handleKeyDown, true);
-    return () => document.removeEventListener('keydown', handleKeyDown, true);
-  }, [isOpen]);
+  // Scroll highlighted option into view
+  useEffect(() => {
+    if (isOpen && highlightedIndex >= 0 && optionRefs.current[highlightedIndex]) {
+      optionRefs.current[highlightedIndex]?.scrollIntoView({
+        block: 'nearest',
+      });
+    }
+  }, [isOpen, highlightedIndex]);
+
+  // Find next non-disabled option index
+  const findNextEnabledIndex = useCallback((currentIndex: number, direction: 'up' | 'down'): number => {
+    const step = direction === 'down' ? 1 : -1;
+    let nextIndex = currentIndex + step;
+
+    while (nextIndex >= 0 && nextIndex < flatOptions.length) {
+      const opt = flatOptions[nextIndex];
+      if (opt && !opt.disabled) {
+        return nextIndex;
+      }
+      nextIndex += step;
+    }
+
+    return currentIndex; // Stay at current if no enabled option found
+  }, [flatOptions]);
+
+  // Find first/last non-disabled option (returns -1 if none found)
+  const findFirstEnabledIndex = useCallback((): number => {
+    for (let i = 0; i < flatOptions.length; i++) {
+      const opt = flatOptions[i];
+      if (opt && !opt.disabled) return i;
+    }
+    return -1;
+  }, [flatOptions]);
+
+  const findLastEnabledIndex = useCallback((): number => {
+    for (let i = flatOptions.length - 1; i >= 0; i--) {
+      const opt = flatOptions[i];
+      if (opt && !opt.disabled) return i;
+    }
+    return -1;
+  }, [flatOptions]);
 
   const handleSelect = useCallback((optionValue: string, optionDisabled?: boolean) => {
     if (optionDisabled) return;
     onChange(optionValue);
     setIsOpen(false);
+    // Return focus to trigger
+    triggerRef.current?.focus();
   }, [onChange]);
+
+  // Keyboard navigation handler
+  const handleKeyDown = useCallback((event: React.KeyboardEvent) => {
+    if (disabled) return;
+
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        event.stopPropagation();
+        if (!isOpen) {
+          setIsOpen(true);
+        } else {
+          setHighlightedIndex(prev => findNextEnabledIndex(prev, 'down'));
+        }
+        break;
+
+      case 'ArrowUp':
+        event.preventDefault();
+        event.stopPropagation();
+        if (!isOpen) {
+          setIsOpen(true);
+        } else {
+          setHighlightedIndex(prev => findNextEnabledIndex(prev, 'up'));
+        }
+        break;
+
+      case 'Home':
+        if (isOpen) {
+          event.preventDefault();
+          event.stopPropagation();
+          const firstIdx = findFirstEnabledIndex();
+          if (firstIdx >= 0) {
+            setHighlightedIndex(firstIdx);
+          }
+        }
+        break;
+
+      case 'End':
+        if (isOpen) {
+          event.preventDefault();
+          event.stopPropagation();
+          const lastIdx = findLastEnabledIndex();
+          if (lastIdx >= 0) {
+            setHighlightedIndex(lastIdx);
+          }
+        }
+        break;
+
+      case 'Enter':
+      case ' ':
+        event.preventDefault();
+        event.stopPropagation();
+        if (isOpen && highlightedIndex >= 0 && flatOptions[highlightedIndex]) {
+          handleSelect(flatOptions[highlightedIndex].value, flatOptions[highlightedIndex].disabled);
+        } else if (!isOpen) {
+          setIsOpen(true);
+        }
+        break;
+
+      case 'Escape':
+        // Only prevent default/stop propagation when dropdown is open
+        // This allows modal Escape-to-close to work when dropdown is closed
+        if (isOpen) {
+          event.preventDefault();
+          event.stopPropagation();
+          setIsOpen(false);
+          triggerRef.current?.focus();
+        }
+        break;
+
+      case 'Tab':
+        // Close dropdown on tab, let default behavior move focus
+        if (isOpen) {
+          setIsOpen(false);
+        }
+        break;
+    }
+  }, [disabled, isOpen, highlightedIndex, flatOptions, findNextEnabledIndex, findFirstEnabledIndex, findLastEnabledIndex, handleSelect]);
 
   const selectedLabel = findLabel(options, value);
 
-  const renderOptions = (opts: SelectOption[], groupLabel?: string) => (
-    <>
-      {groupLabel && (
-        <div className="px-3 py-1 text-xs text-text-secondary font-semibold bg-background/50">
-          {groupLabel}
-        </div>
-      )}
-      {opts.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          className={`w-full px-3 py-2 text-left text-sm hover:bg-accent/20 ${
-            option.value === value ? 'bg-accent/10 text-accent' : ''
-          } ${option.disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+  // Track current flattened index for rendering
+  let flatIndex = -1;
+
+  const renderOption = (option: SelectOption, optionIndex: number, groupLabel?: string, isFirstInGroup?: boolean) => {
+    const isHighlighted = optionIndex === highlightedIndex;
+    const isSelected = option.value === value;
+
+    return (
+      <div key={option.value}>
+        {groupLabel && isFirstInGroup && (
+          <div className="px-3 py-1 text-xs text-text-secondary font-semibold bg-background/50">
+            {groupLabel}
+          </div>
+        )}
+        <div
+          ref={(el) => { optionRefs.current[optionIndex] = el; }}
+          role="option"
+          id={getOptionId(optionIndex)}
+          aria-selected={isSelected}
+          aria-disabled={option.disabled || undefined}
+          className={`w-full px-3 py-2 text-left text-sm cursor-pointer ${
+            isHighlighted ? 'bg-accent/30' : ''
+          } ${isSelected ? 'bg-accent/10 text-accent' : ''} ${
+            option.disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-accent/20'
+          }`}
           onClick={() => handleSelect(option.value, option.disabled)}
-          disabled={option.disabled}
+          onMouseEnter={() => !option.disabled && setHighlightedIndex(optionIndex)}
         >
           {option.label}
-        </button>
-      ))}
-    </>
-  );
+        </div>
+      </div>
+    );
+  };
+
+  const renderOptions = () => {
+    flatIndex = -1;
+
+    if (isGroupedOptions(options)) {
+      return options.map((group) => (
+        <div key={group.label} role="group" aria-label={group.label}>
+          {group.options.map((option, idx) => {
+            flatIndex++;
+            return renderOption(option, flatIndex, group.label, idx === 0);
+          })}
+        </div>
+      ));
+    } else {
+      return options.map((option) => {
+        flatIndex++;
+        return renderOption(option, flatIndex);
+      });
+    }
+  };
 
   return (
     <div ref={containerRef} className={`relative ${className}`} data-testid={testId} data-dropdown-open={isOpen || undefined}>
       {/* Trigger button */}
       <button
+        ref={triggerRef}
         type="button"
+        role="combobox"
         className={`w-full px-3 py-2 bg-background border border-border rounded text-left flex items-center justify-between ${
           disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-accent'
         }`}
         onClick={() => !disabled && setIsOpen(!isOpen)}
+        onKeyDown={handleKeyDown}
         disabled={disabled}
         aria-label={ariaLabel}
         aria-labelledby={ariaLabelledBy}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
+        aria-controls={listboxId}
+        aria-activedescendant={isOpen && highlightedIndex >= 0 ? getOptionId(highlightedIndex) : undefined}
       >
         <span className={selectedLabel ? 'text-foreground' : 'text-text-secondary'}>
           {selectedLabel || placeholder}
@@ -167,16 +384,15 @@ export function Select({
 
       {/* Dropdown */}
       {isOpen && (
-        <div className="absolute z-50 w-full mt-1 bg-panel border border-border rounded shadow-lg max-h-60 overflow-auto">
-          {isGroupedOptions(options) ? (
-            options.map((group, idx) => (
-              <div key={group.label + idx}>
-                {renderOptions(group.options, group.label)}
-              </div>
-            ))
-          ) : (
-            renderOptions(options)
-          )}
+        <div
+          ref={listboxRef}
+          role="listbox"
+          id={listboxId}
+          aria-label={ariaLabel}
+          aria-labelledby={ariaLabelledBy}
+          className="absolute z-50 w-full mt-1 bg-panel border border-border rounded shadow-lg max-h-60 overflow-auto"
+        >
+          {renderOptions()}
         </div>
       )}
     </div>

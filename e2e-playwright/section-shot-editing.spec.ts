@@ -263,7 +263,7 @@ test.describe('Section and Shot Editing', () => {
     const trigger = directionSelect.locator('button').first();
     await trigger.click();
 
-    const outOption = directionSelect.locator('button:has-text("Out")');
+    const outOption = directionSelect.locator('[role="option"]:has-text("Out")');
     await outOption.click();
 
     await expect(directionSelect).toContainText('Out');
