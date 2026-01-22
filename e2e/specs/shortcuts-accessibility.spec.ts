@@ -358,41 +358,6 @@ describe('Shortcuts Settings Accessibility', () => {
       );
     });
 
-    // Skip: Focus ring detection is unreliable with Tailwind CSS ring classes.
-    // Visual focus indicators exist but may use different CSS properties.
-    it.skip('focus visible indicator appears on keyboard navigation', async () => {
-      const recorder = await $('[data-testid="shortcut-primary-draw"]');
-
-      // Focus via keyboard
-      await browser.execute((el: HTMLElement) => el.focus(), recorder);
-
-      // Wait for focus to apply
-      await browser.waitUntil(
-        async () => {
-          const isFocused = await browser.execute(() => {
-            const el = document.activeElement;
-            return el?.getAttribute('data-testid') === 'shortcut-primary-draw';
-          });
-          return isFocused;
-        },
-        { timeout: 2000, timeoutMsg: 'Focus did not apply' }
-      );
-
-      // Check for focus indicator (outline or box-shadow)
-      const hasFocusIndicator = await browser.execute(() => {
-        const el = document.activeElement as HTMLElement;
-        if (!el) return false;
-        const styles = window.getComputedStyle(el);
-        // Check for visible focus ring (outline or box-shadow)
-        return (
-          (styles.outlineStyle !== 'none' && styles.outlineWidth !== '0px') ||
-          (styles.boxShadow !== 'none' && styles.boxShadow !== '')
-        );
-      });
-
-      expect(hasFocusIndicator).toBe(true);
-    });
-
     it('category collapse/expand works with keyboard', async () => {
       const categoryToggle = await $('[data-testid="shortcut-category-toggle-tools"]');
       await browser.execute((el: HTMLElement) => el.focus(), categoryToggle);
@@ -462,43 +427,6 @@ describe('Shortcuts Settings Accessibility', () => {
       // Also verify role="status" for proper SR support
       const role = await liveRegion.getAttribute('role');
       expect(role).toBe('status');
-    });
-
-    // Skip: Live region text content detection is unreliable in WebdriverIO.
-    // The live region exists but text updates may not be captured consistently.
-    it.skip('live region announces when recording starts', async () => {
-      const recorder = await $('[data-testid="shortcut-primary-select"]');
-
-      // Click to start recording
-      await recorder.click();
-
-      // Wait for recording state
-      await browser.waitUntil(
-        async () => {
-          const pressed = await recorder.getAttribute('aria-pressed');
-          return pressed === 'true';
-        },
-        { timeout: 2000, timeoutMsg: 'Recording did not start' }
-      );
-
-      // Check that live region has announcement text
-      // The live region is inside the recorder component
-      const liveRegion = await recorder.$('[aria-live="polite"]');
-
-      // Wait for announcement to be set
-      await browser.waitUntil(
-        async () => {
-          const text = await liveRegion.getText();
-          return text.length > 0;
-        },
-        { timeout: 2000, timeoutMsg: 'No announcement in live region' }
-      );
-
-      const announcement = await liveRegion.getText();
-      expect(announcement.toLowerCase()).toMatch(/recording|press/);
-
-      // Clean up
-      await browser.keys(['Escape']);
     });
 
     it('live region announces when recording is cancelled', async () => {
