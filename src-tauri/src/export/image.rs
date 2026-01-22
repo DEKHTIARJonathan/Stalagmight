@@ -1549,4 +1549,305 @@ mod tests {
             panic!("Could not find shot stroke-width in SVG CSS");
         }
     }
+
+    // === Visual regression tests for export scaling (fn-17-ygu.3) ===
+    // These tests verify that SVG element sizes scale correctly to achieve
+    // consistent pixel sizes regardless of survey extent. They would catch
+    // the original 3-4x scaling bug if reverted.
+
+    /// Helper to create a test project with known dimensions for scaling tests
+    fn create_scaling_test_project(extent_meters: f64) -> Project {
+        let mut project = Project::new("ScalingTest".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("TestSection".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff6b6b".to_string(),
+            direction: None,
+            shots: vec![ShotData {
+                azimuth_in: 90.0,
+                azimuth_out: 270.0,
+                length: extent_meters,
+                depth_in: 0.0,
+                depth_out: 0.0,
+                is_virtual: true, // Test virtual shot dasharray
+                ..Default::default()
+            }],
+        });
+        project
+    }
+
+    /// Calculate the expected scale factor for a survey
+    fn calculate_scale(extent_meters: f64) -> f64 {
+        let padding = 20.0;
+        let total_extent = extent_meters + padding * 2.0;
+        const TARGET_SIZE: f64 = 800.0;
+        TARGET_SIZE / total_extent
+    }
+
+    #[test]
+    fn test_scaling_regression_station_radius() {
+        // Test with known dimensions: 100m extent
+        // This catches the original bug where radius was 3.0 instead of px(3.0)
+        let project = create_scaling_test_project(100.0);
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+
+        let scale = calculate_scale(100.0);
+        let tolerance = 0.1; // ±0.1px tolerance
+
+        // Station radius should be 3px when multiplied by scale
+        if let Some(r) = extract_attr_value(&svg, "r=\"") {
+            let pixel_value = r * scale;
+            assert!(
+                (pixel_value - 3.0).abs() < tolerance,
+                "Station radius should be 3px (±{}px), got {}px (r={}, scale={})",
+                tolerance, pixel_value, r, scale
+            );
+        } else {
+            panic!("Could not find station radius in SVG");
+        }
+    }
+
+    #[test]
+    fn test_scaling_regression_shot_stroke_width() {
+        let project = create_scaling_test_project(100.0);
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+
+        let scale = calculate_scale(100.0);
+        let tolerance = 0.1;
+
+        // Shot stroke-width should be 2px when multiplied by scale
+        if let Some(sw) = extract_attr_value(&svg, ".shot { stroke-width: ") {
+            let pixel_value = sw * scale;
+            assert!(
+                (pixel_value - 2.0).abs() < tolerance,
+                "Shot stroke-width should be 2px (±{}px), got {}px",
+                tolerance, pixel_value
+            );
+        } else {
+            panic!("Could not find shot stroke-width in SVG CSS");
+        }
+    }
+
+    #[test]
+    fn test_scaling_regression_grid_stroke_width() {
+        let project = create_scaling_test_project(100.0);
+        let mut options = ExportImageOptions::default();
+        options.include_grid = true;
+
+        let svg = generate_svg_string(&project, &options).unwrap();
+
+        let scale = calculate_scale(100.0);
+        let tolerance = 0.1;
+
+        // Grid stroke-width should be 0.5px when multiplied by scale
+        if let Some(sw) = extract_attr_value(&svg, "class=\"grid\" stroke=\"#333366\" stroke-width=\"") {
+            let pixel_value = sw * scale;
+            assert!(
+                (pixel_value - 0.5).abs() < tolerance,
+                "Grid stroke-width should be 0.5px (±{}px), got {}px",
+                tolerance, pixel_value
+            );
+        } else {
+            panic!("Could not find grid stroke-width in SVG");
+        }
+    }
+
+    /// Helper to parse stroke-dasharray="X,Y" and return (dash, gap) values
+    fn parse_dasharray(svg: &str) -> Option<(f64, f64)> {
+        let marker = "stroke-dasharray=\"";
+        let start = svg.find(marker)? + marker.len();
+        let end = svg[start..].find('"')? + start;
+        let value = &svg[start..end];
+        let parts: Vec<&str> = value.split(',').collect();
+        if parts.len() != 2 {
+            return None;
+        }
+        let dash = parts[0].parse().ok()?;
+        let gap = parts[1].parse().ok()?;
+        Some((dash, gap))
+    }
+
+    #[test]
+    fn test_scaling_regression_virtual_shot_dasharray() {
+        let project = create_scaling_test_project(100.0);
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+
+        let scale = calculate_scale(100.0);
+        let tolerance = 0.1;
+
+        // Virtual shot dasharray should have 4px dash, 2px gap
+        let (dash, gap) = parse_dasharray(&svg)
+            .expect("Could not find/parse stroke-dasharray in SVG (is virtual shot present?)");
+
+        let pixel_dash = dash * scale;
+        assert!(
+            (pixel_dash - 4.0).abs() < tolerance,
+            "Virtual shot dash should be 4px (±{}px), got {}px",
+            tolerance, pixel_dash
+        );
+
+        let pixel_gap = gap * scale;
+        assert!(
+            (pixel_gap - 2.0).abs() < tolerance,
+            "Virtual shot gap should be 2px (±{}px), got {}px",
+            tolerance, pixel_gap
+        );
+    }
+
+    #[test]
+    fn test_scaling_regression_label_font_size() {
+        let project = create_scaling_test_project(100.0);
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+
+        let scale = calculate_scale(100.0);
+        let tolerance = 0.1;
+
+        // Label font-size should be 10px when multiplied by scale
+        if let Some(fs) = extract_attr_value(&svg, ".label { font-family: sans-serif; font-size: ") {
+            let pixel_value = fs * scale;
+            assert!(
+                (pixel_value - 10.0).abs() < tolerance,
+                "Label font-size should be 10px (±{}px), got {}px",
+                tolerance, pixel_value
+            );
+        } else {
+            panic!("Could not find label font-size in SVG CSS");
+        }
+    }
+
+    #[test]
+    fn test_scaling_regression_section_name_font_size() {
+        let project = create_scaling_test_project(100.0);
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+
+        let scale = calculate_scale(100.0);
+        let tolerance = 0.1;
+
+        // Section-name font-size should be 12px when multiplied by scale
+        if let Some(fs) = extract_attr_value(&svg, ".section-name { font-family: sans-serif; font-size: ") {
+            let pixel_value = fs * scale;
+            assert!(
+                (pixel_value - 12.0).abs() < tolerance,
+                "Section-name font-size should be 12px (±{}px), got {}px",
+                tolerance, pixel_value
+            );
+        } else {
+            panic!("Could not find section-name font-size in SVG CSS");
+        }
+    }
+
+    #[test]
+    fn test_scaling_consistent_across_different_survey_sizes() {
+        // Test that pixel sizes remain consistent regardless of survey extent
+        // This is the key property that the px() helper provides
+        let tolerance = 0.1;
+
+        for extent in [10.0, 50.0, 100.0, 500.0, 1000.0] {
+            let project = create_scaling_test_project(extent);
+            let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+            let scale = calculate_scale(extent);
+
+            // Station radius should always be 3px
+            if let Some(r) = extract_attr_value(&svg, "r=\"") {
+                let pixel_r = r * scale;
+                assert!(
+                    (pixel_r - 3.0).abs() < tolerance,
+                    "Station radius at {}m extent should be 3px (±{}px), got {}px",
+                    extent, tolerance, pixel_r
+                );
+            }
+
+            // Shot stroke-width should always be 2px
+            if let Some(sw) = extract_attr_value(&svg, ".shot { stroke-width: ") {
+                let pixel_sw = sw * scale;
+                assert!(
+                    (pixel_sw - 2.0).abs() < tolerance,
+                    "Shot stroke-width at {}m extent should be 2px (±{}px), got {}px",
+                    extent, tolerance, pixel_sw
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_scaling_zero_datum_larger_radius() {
+        // Zero datum stations should have 6px radius (double the normal 3px)
+        let mut project = create_scaling_test_project(100.0);
+        let section_id = project.sections[0].id;
+        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
+        project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
+
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+        let scale = calculate_scale(100.0);
+        let tolerance = 0.1;
+
+        // Find zero-datum circle (has class="zero-datum")
+        if let Some(pos) = svg.find("class=\"zero-datum\"") {
+            let rest = &svg[pos..];
+            if let Some(r) = extract_attr_value(rest, "r=\"") {
+                let pixel_r = r * scale;
+                assert!(
+                    (pixel_r - 6.0).abs() < tolerance,
+                    "Zero-datum radius should be 6px (±{}px), got {}px",
+                    tolerance, pixel_r
+                );
+            } else {
+                panic!("Could not find radius for zero-datum circle");
+            }
+        } else {
+            panic!("Could not find zero-datum circle in SVG");
+        }
+    }
+
+    #[test]
+    fn test_png_dimensions_scale_with_dpi() {
+        // Test that PNG dimensions scale correctly with DPI
+        // This validates the DPI scaling formula: dim = svg_dim * (dpi / 72)
+        let project = create_test_project();
+
+        for (dpi, expected_scale) in [(72u32, 1.0f64), (150, 150.0/72.0), (300, 300.0/72.0), (600, 600.0/72.0)] {
+            let file = NamedTempFile::new().unwrap();
+            let path = file.path().with_extension("png");
+
+            let options = ExportImageOptions {
+                format: ImageFormat::Png,
+                dpi,
+                ..Default::default()
+            };
+
+            let result = export_png(&project, &path, &options);
+            assert!(result.is_ok(), "PNG export at {} DPI failed: {:?}", dpi, result.err());
+
+            // Read PNG and check dimensions via header (bytes 16-23 contain width/height)
+            let contents = std::fs::read(&path).unwrap();
+
+            // Assert valid PNG: must have at least 24 bytes for header + IHDR chunk
+            assert!(contents.len() >= 24, "PNG file too small at {} DPI: {} bytes", dpi, contents.len());
+
+            // Verify PNG magic bytes
+            let magic = &contents[0..8];
+            assert_eq!(magic, &[137, 80, 78, 71, 13, 10, 26, 10], "Invalid PNG magic at {} DPI", dpi);
+
+            // PNG IHDR chunk: width at bytes 16-19, height at 20-23 (big-endian)
+            let width = u32::from_be_bytes([contents[16], contents[17], contents[18], contents[19]]);
+            let height = u32::from_be_bytes([contents[20], contents[21], contents[22], contents[23]]);
+
+            // Base dimensions at 72 DPI
+            let base_dim = 800.0; // TARGET_SIZE from generate_svg_string
+            let expected_dim = (base_dim * expected_scale).ceil() as u32;
+
+            // Allow small tolerance for rounding
+            let dim_tolerance = 2;
+            let larger_dim = width.max(height);
+            assert!(
+                larger_dim >= expected_dim.saturating_sub(dim_tolerance) &&
+                larger_dim <= expected_dim + dim_tolerance,
+                "PNG at {} DPI: expected ~{}px, got {}x{}",
+                dpi, expected_dim, width, height
+            );
+
+            std::fs::remove_file(&path).ok();
+        }
+    }
 }
