@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { formatDistanceToNow, isValid, parseISO, differenceInDays, format } from 'date-fns';
 import { useProjectStore } from '../../store/projectStore';
-import type { UndoHistoryItem } from '../../types/commands';
+import type { UndoHistoryItem, PreviewData } from '../../types/commands';
 
 interface UndoHistoryDropdownProps {
   /** 'undo' for undo button, 'redo' for redo button */
@@ -80,6 +81,88 @@ function truncateDescription(description: string, maxLength = 40): string {
   return description.slice(0, maxLength - 1) + '…';
 }
 
+interface DetailPreviewPopupProps {
+  previewData: PreviewData | null;
+  anchorRect: DOMRect;
+  dropdownRect: DOMRect;
+}
+
+/** Detail preview popup showing field changes */
+function DetailPreviewPopup({ previewData, anchorRect, dropdownRect }: DetailPreviewPopupProps) {
+  const popupRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<'right' | 'left'>('right');
+
+  // Calculate position on mount and when anchor changes
+  useEffect(() => {
+    const popupWidth = 220; // Approximate width of preview popup
+    const padding = 8; // Gap between dropdown and preview
+    const viewportWidth = window.innerWidth;
+
+    // Calculate position to the right of the dropdown
+    const rightEdge = dropdownRect.right + padding + popupWidth;
+
+    // Flip to left if would overflow right edge
+    if (rightEdge > viewportWidth) {
+      setPosition('left');
+    } else {
+      setPosition('right');
+    }
+  }, [dropdownRect]);
+
+  // If no preview data, show "No details" message
+  const hasChanges = previewData && previewData.changes.length > 0;
+
+  // Calculate actual position
+  const style: React.CSSProperties = {
+    position: 'fixed',
+    top: anchorRect.top,
+    zIndex: 60, // Above dropdown (z-50)
+    ...(position === 'right'
+      ? { left: dropdownRect.right + 8 }
+      : { right: window.innerWidth - dropdownRect.left + 8 }),
+  };
+
+  return createPortal(
+    <div
+      ref={popupRef}
+      className="detail-preview-popup bg-panel border border-border rounded-lg shadow-lg p-3 w-[220px]"
+      style={style}
+      data-testid="detail-preview-popup"
+    >
+      {!hasChanges ? (
+        <div className="text-sm text-text-secondary">No details</div>
+      ) : (
+        <>
+          <div className="space-y-2">
+            {previewData.changes.map((change, idx) => (
+              <div key={idx} className="text-xs">
+                <div className="text-text-secondary font-medium mb-0.5">
+                  {change.field}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-text-primary truncate max-w-[70px]" title={change.oldValue}>
+                    {change.oldValue || '(empty)'}
+                  </span>
+                  <span className="text-text-secondary shrink-0">→</span>
+                  <span className="text-text-primary truncate max-w-[70px]" title={change.newValue}>
+                    {change.newValue || '(empty)'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+          {previewData.additionalChanges > 0 && (
+            <div className="mt-2 pt-2 border-t border-border text-xs text-text-secondary">
+              +{previewData.additionalChanges} more
+            </div>
+          )}
+        </>
+      )}
+    </div>,
+    document.body
+  );
+}
+
 export default function UndoHistoryDropdown({
   mode,
   disabled,
@@ -89,7 +172,12 @@ export default function UndoHistoryDropdown({
 }: UndoHistoryDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [items, setItems] = useState<UndoHistoryItem[]>([]);
+  // State for preview popup
+  const [hoveredItem, setHoveredItem] = useState<UndoHistoryItem | null>(null);
+  const [hoveredItemRect, setHoveredItemRect] = useState<DOMRect | null>(null);
+  const [dropdownRect, setDropdownRect] = useState<DOMRect | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Token to detect stale hover callbacks (incremented on any close)
@@ -116,6 +204,11 @@ export default function UndoHistoryDropdown({
       clearTimeout(leaveTimeoutRef.current);
       leaveTimeoutRef.current = null;
     }
+
+    // Clear hovered item state
+    setHoveredItem(null);
+    setHoveredItemRect(null);
+    setDropdownRect(null);
 
     setIsOpen(false);
   }, []);
@@ -210,6 +303,24 @@ export default function UndoHistoryDropdown({
       clearTimeout(leaveTimeoutRef.current);
       leaveTimeoutRef.current = null;
     }
+  }, []);
+
+  // Handle item hover - show preview popup immediately (no delay per spec)
+  const handleItemHover = useCallback((item: UndoHistoryItem, event: React.MouseEvent<HTMLButtonElement>) => {
+    const target = event.currentTarget;
+    const rect = target.getBoundingClientRect();
+    const dropdown = dropdownRef.current;
+    if (dropdown) {
+      setDropdownRect(dropdown.getBoundingClientRect());
+    }
+    setHoveredItemRect(rect);
+    setHoveredItem(item);
+  }, []);
+
+  // Handle item leave - clear preview
+  const handleItemLeave = useCallback(() => {
+    setHoveredItem(null);
+    setHoveredItemRect(null);
   }, []);
 
   // Handle item click with index validation
@@ -328,6 +439,7 @@ export default function UndoHistoryDropdown({
 
       {isOpen && (
         <div
+          ref={dropdownRef}
           className="absolute left-0 top-full mt-1 w-72 bg-panel border border-border rounded-lg shadow-lg z-50"
           role="menu"
           data-dropdown-open
@@ -356,6 +468,8 @@ export default function UndoHistoryDropdown({
                   key={item.index}
                   role="menuitem"
                   onClick={() => handleItemClick(item.index)}
+                  onMouseEnter={(e) => handleItemHover(item, e)}
+                  onMouseLeave={handleItemLeave}
                   className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-background/50 transition-colors text-left"
                   data-testid={`${testId}-item-${item.index}`}
                 >
@@ -383,7 +497,16 @@ export default function UndoHistoryDropdown({
         </div>
       )}
 
-      {/* CSS for auto-hide scrollbar */}
+      {/* Detail preview popup - rendered via portal */}
+      {hoveredItem && hoveredItemRect && dropdownRect && (
+        <DetailPreviewPopup
+          previewData={hoveredItem.previewData}
+          anchorRect={hoveredItemRect}
+          dropdownRect={dropdownRect}
+        />
+      )}
+
+      {/* CSS for auto-hide scrollbar and preview animation */}
       <style>{`
         .undo-history-scrollable {
           scrollbar-width: thin;
@@ -404,6 +527,25 @@ export default function UndoHistoryDropdown({
         }
         .undo-history-scrollable:hover::-webkit-scrollbar-thumb {
           background-color: var(--color-border);
+        }
+
+        /* Detail preview popup fade-in animation */
+        @keyframes previewFadeIn {
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
+        }
+        .detail-preview-popup {
+          animation: previewFadeIn 150ms ease-out;
+        }
+        /* Respect prefers-reduced-motion */
+        @media (prefers-reduced-motion: reduce) {
+          .detail-preview-popup {
+            animation: none;
+          }
         }
       `}</style>
     </div>
