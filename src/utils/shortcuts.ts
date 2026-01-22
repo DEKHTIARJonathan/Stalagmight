@@ -26,6 +26,7 @@ export const RESERVED_SHORTCUTS: ReadonlySet<string> = new Set([
   'Ctrl+I', // Import DMP
   'Ctrl+E', // Export
   'Ctrl+A', // Select all
+  'Ctrl+,', // Open Settings
 ]);
 
 /**
@@ -340,7 +341,19 @@ export const RESERVED_CTRL_KEYS: ReadonlySet<string> = new Set([
   'I', // Import DMP
   'E', // Export
   'A', // Select all
+  ',', // Open Settings
 ]);
+
+/**
+ * Human-readable descriptions for reserved Ctrl+key shortcuts.
+ * Used in checkReservedConflict() to explain why a shortcut is reserved.
+ */
+export const RESERVED_CTRL_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  I: 'Import DMP',
+  E: 'Export',
+  A: 'Select all',
+  ',': 'Open Settings',
+};
 
 /**
  * Check if a shortcut conflicts with reserved shortcuts.
@@ -377,16 +390,11 @@ export function checkReservedConflict(shortcut: string): { isReserved: boolean; 
     };
   }
 
-  // Check if Ctrl + reserved key (I, E, A)
+  // Check if Ctrl + reserved key (I, E, A, ,)
   if (key && hasCtrl && RESERVED_CTRL_KEYS.has(key)) {
-    const descriptions: Record<string, string> = {
-      I: 'Import DMP',
-      E: 'Export',
-      A: 'Select all',
-    };
     return {
       isReserved: true,
-      reason: descriptions[key] ?? `Reserved for Ctrl+${key}`,
+      reason: RESERVED_CTRL_DESCRIPTIONS[key] ?? `Reserved for Ctrl+${key}`,
     };
   }
 

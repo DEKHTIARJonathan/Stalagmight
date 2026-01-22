@@ -67,6 +67,7 @@ const RESERVED_SHORTCUT_DESCRIPTIONS: Record<string, string> = {
   'Ctrl+I': 'Import DMP',
   'Ctrl+E': 'Export',
   'Ctrl+A': 'Select all',
+  'Ctrl+,': 'Open Settings',
 };
 
 /**
