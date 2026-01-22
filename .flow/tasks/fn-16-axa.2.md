@@ -50,3 +50,44 @@ Enhance the existing custom Select component to add full ARIA listbox roles and 
 - [ ] Existing SelectProps interface preserved (backwards compatible)
 - [ ] `data-dropdown-open` attribute behavior preserved
 - [ ] pnpm tsc --noEmit passes
+
+## Done summary
+## Summary
+
+Enhanced the custom Select component with full ARIA listbox roles and keyboard navigation for accessibility compliance.
+
+### Changes Made
+
+1. **ARIA Roles Added** (`src/components/common/Select.tsx`):
+   - Trigger button: `role="combobox"`, `aria-expanded`, `aria-haspopup="listbox"`, `aria-controls`
+   - Options container: `role="listbox"` with unique `id`
+   - Each option: `role="option"`, `aria-selected`, unique `id`
+   - Group containers: `role="group"` with `aria-label`
+   - `aria-activedescendant` on trigger points to highlighted option
+
+2. **Keyboard Navigation**:
+   - Arrow Up/Down: Navigate options with visual highlight
+   - Enter/Space: Select highlighted option and close
+   - Escape: Close without selecting
+   - Home/End: Jump to first/last option
+   - Tab: Close dropdown and move focus
+
+3. **Visual Feedback**:
+   - Active option scrolls into view during keyboard navigation
+   - Highlighted option has distinct `bg-accent/30` background
+   - Selected option retains its `bg-accent/10 text-accent` styling
+
+4. **Implementation Details**:
+   - Used `useId()` hook for generating unique ARIA IDs
+   - Created `flattenOptions()` helper to handle both flat and grouped options
+   - Added `highlightedIndex` state for tracking keyboard navigation
+   - Focus stays on trigger button, using `aria-activedescendant` pattern
+   - Disabled options are skipped during keyboard navigation
+
+5. **Test Updates**:
+   - Updated E2E tests to use `[role="option"]` selectors instead of `button` for dropdown options
+   - All 440 Playwright tests pass
+## Evidence
+- Commits:
+- Tests:
+- PRs:
