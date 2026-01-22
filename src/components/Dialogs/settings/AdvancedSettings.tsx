@@ -234,7 +234,11 @@ export function AdvancedSettings({
       if (!mountedRef.current) return;
 
       const changes = computeConfigDiff(config, newConfig);
+
+      // Update both the store and the local dialog state via onChange
+      // This ensures the UI reflects the reloaded config and clears unsaved changes
       setConfig(newConfig);
+      onChange(newConfig);
 
       if (changes.length > 0) {
         const changeList = changes
@@ -254,7 +258,7 @@ export function AdvancedSettings({
         setIsReloading(false);
       }
     }
-  }, [config, setConfig]);
+  }, [config, setConfig, onChange]);
 
   return (
     <div

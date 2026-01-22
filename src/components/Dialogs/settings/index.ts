@@ -15,4 +15,4 @@ export { AdvancedSettings } from './AdvancedSettings';
 
 // Types
 export type { SettingsCategoryProps } from './types';
-export { isFieldChanged, updateNestedConfig } from './types';
+export { isFieldChanged } from './types';
