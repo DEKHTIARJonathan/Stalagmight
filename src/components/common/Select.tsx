@@ -89,18 +89,21 @@ export function Select({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
 
-  // Close on escape
+  // Close on escape - stop propagation to prevent dialog from closing
   useEffect(() => {
     if (!isOpen) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        event.stopPropagation();
+        event.preventDefault();
         setIsOpen(false);
       }
     };
 
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
+    // Use capture phase to handle before other listeners
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
   }, [isOpen]);
 
   const handleSelect = useCallback((optionValue: string, optionDisabled?: boolean) => {
@@ -135,7 +138,7 @@ export function Select({
   );
 
   return (
-    <div ref={containerRef} className={`relative ${className}`} data-testid={testId}>
+    <div ref={containerRef} className={`relative ${className}`} data-testid={testId} data-dropdown-open={isOpen || undefined}>
       {/* Trigger button */}
       <button
         type="button"

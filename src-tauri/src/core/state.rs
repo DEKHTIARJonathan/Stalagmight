@@ -191,10 +191,25 @@ impl AppState {
                 d.clone()
             }
             None => {
-                // Default to user's documents directory
-                directories::UserDirs::new()
+                // Default to user's documents directory, with fallbacks
+                let base_dir = directories::UserDirs::new()
                     .and_then(|ud| ud.document_dir().map(|d| d.to_path_buf()))
-                    .ok_or_else(|| "Could not determine documents directory".to_string())?
+                    .or_else(|| {
+                        // Fallback to $HOME/Documents
+                        std::env::var("HOME")
+                            .ok()
+                            .map(|h| std::path::PathBuf::from(h).join("Documents"))
+                    })
+                    .ok_or_else(|| "Could not determine documents directory".to_string())?;
+
+                // Ensure the directory exists
+                if !base_dir.exists() {
+                    std::fs::create_dir_all(&base_dir).map_err(|e| {
+                        format!("Failed to create documents directory: {}", e)
+                    })?;
+                }
+
+                base_dir
             }
         };
 
