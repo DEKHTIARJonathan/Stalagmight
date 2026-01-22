@@ -50,11 +50,25 @@ interface SettingsSidebarProps {
 }
 
 /**
+ * Get the tab ID for a given base and category.
+ */
+export function getTabId(idBase: string, category: SettingsCategory): string {
+  return `${idBase}-tab-${category}`;
+}
+
+/**
+ * Get the panel ID for a given base and category.
+ */
+export function getPanelId(idBase: string, category: SettingsCategory): string {
+  return `${idBase}-panel-${category}`;
+}
+
+/**
  * Settings sidebar navigation with vertical tab pattern.
  *
  * Implements WAI-ARIA tab pattern with manual activation:
  * - Arrow keys move focus (focusedIndex) without changing selection
- * - Enter key activates the focused category (sets activeCategory)
+ * - Enter/Space key activates the focused category (sets activeCategory)
  * - Uses roving tabindex (focused tab has tabindex=0, others have -1)
  */
 export function SettingsSidebar({
@@ -68,23 +82,39 @@ export function SettingsSidebar({
   const generatedIdBase = useId();
   const idBase = panelIdBase ?? generatedIdBase;
   const tabRefs = useRef<(HTMLDivElement | null)[]>([]);
+  // Track if focus change came from keyboard navigation (vs click/external)
+  const focusFromKeyboardRef = useRef(false);
 
-  // Get the panel ID for a category (used in aria-controls)
-  const getPanelId = (category: SettingsCategory) => `${idBase}-panel-${category}`;
-
-  // Focus the element when focusedIndex changes
-  useEffect(() => {
+  // Compute effective focused index with fallback for invalid values
+  // This ensures at least one tab always has tabIndex=0 for keyboard accessibility
+  const effectiveFocusedIndex = (() => {
     if (focusedIndex >= 0 && focusedIndex < CATEGORIES.length) {
+      return focusedIndex;
+    }
+    // Fallback: try to use activeCategory's index, else default to 0
+    const activeIndex = CATEGORIES.findIndex((c) => c.id === activeCategory);
+    return activeIndex >= 0 ? activeIndex : 0;
+  })();
+
+  // Focus the element when focusedIndex changes from keyboard navigation
+  useEffect(() => {
+    if (focusFromKeyboardRef.current && focusedIndex >= 0 && focusedIndex < CATEGORIES.length) {
       tabRefs.current[focusedIndex]?.focus();
+      focusFromKeyboardRef.current = false;
     }
   }, [focusedIndex]);
 
   const handleKeyDown = (event: React.KeyboardEvent, currentIndex: number) => {
+    // Only handle keyboard events when the tab element itself is focused,
+    // not when focus is on nested controls
+    if (event.target !== event.currentTarget) return;
+
     switch (event.key) {
       case 'ArrowDown':
         event.preventDefault();
         event.stopPropagation();
         if (currentIndex < CATEGORIES.length - 1) {
+          focusFromKeyboardRef.current = true;
           onFocusChange(currentIndex + 1);
         }
         break;
@@ -93,6 +123,7 @@ export function SettingsSidebar({
         event.preventDefault();
         event.stopPropagation();
         if (currentIndex > 0) {
+          focusFromKeyboardRef.current = true;
           onFocusChange(currentIndex - 1);
         }
         break;
@@ -100,16 +131,19 @@ export function SettingsSidebar({
       case 'Home':
         event.preventDefault();
         event.stopPropagation();
+        focusFromKeyboardRef.current = true;
         onFocusChange(0);
         break;
 
       case 'End':
         event.preventDefault();
         event.stopPropagation();
+        focusFromKeyboardRef.current = true;
         onFocusChange(CATEGORIES.length - 1);
         break;
 
       case 'Enter':
+      case ' ':
         event.preventDefault();
         event.stopPropagation();
         {
@@ -123,8 +157,17 @@ export function SettingsSidebar({
   };
 
   const handleClick = (category: SettingsCategory, index: number) => {
+    // Don't set focusFromKeyboardRef - click already focuses the element
     onFocusChange(index);
     onCategoryChange(category);
+  };
+
+  const handleFocus = (index: number) => {
+    // Only notify parent if the index actually changed
+    // This prevents redundant updates when focus comes from click or effect
+    if (index !== focusedIndex) {
+      onFocusChange(index);
+    }
   };
 
   return (
@@ -137,7 +180,7 @@ export function SettingsSidebar({
     >
       {CATEGORIES.map((category, index) => {
         const isActive = activeCategory === category.id;
-        const isFocused = focusedIndex === index;
+        const isFocused = effectiveFocusedIndex === index;
         const hasError = categoryErrors[category.id] === true;
         const isAdvanced = category.id === 'advanced';
 
@@ -151,9 +194,10 @@ export function SettingsSidebar({
               ref={(el) => {
                 tabRefs.current[index] = el;
               }}
+              id={getTabId(idBase, category.id)}
               role="tab"
               aria-selected={isActive}
-              aria-controls={getPanelId(category.id)}
+              aria-controls={getPanelId(idBase, category.id)}
               tabIndex={isFocused ? 0 : -1}
               data-testid={`settings-sidebar-${category.id}`}
               className={`
@@ -164,7 +208,7 @@ export function SettingsSidebar({
               `}
               onClick={() => handleClick(category.id, index)}
               onKeyDown={(e) => handleKeyDown(e, index)}
-              onFocus={() => onFocusChange(index)}
+              onFocus={() => handleFocus(index)}
             >
               <span className="flex items-center gap-2">
                 {category.label}
