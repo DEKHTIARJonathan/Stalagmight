@@ -46,9 +46,8 @@ function circularMeanDegrees(a: number, b: number): number {
 - [ ] `formatShotId(5, 3)` returns "5:3"
 - [ ] Type check passes: `pnpm tsc --noEmit`
 ## Done summary
-TBD
-
+Extracted circularMeanDegrees and normalizeAngle to src/utils/angles.ts, and formatShotId to src/utils/formatters.ts. Updated SectionPreview.tsx to import from shared utils. Added comprehensive unit tests for all utilities.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 2edcbd71f84c7ae502f6d18ccb41f39976d3dad7
+- Tests: pnpm vitest run src/utils/__tests__/angles.test.ts src/utils/__tests__/formatters.test.ts, pnpm tsc --noEmit
 - PRs:
