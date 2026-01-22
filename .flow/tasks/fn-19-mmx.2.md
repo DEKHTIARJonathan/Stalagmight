@@ -48,9 +48,8 @@ The key insight is that removing global subtraction means:
 - [ ] Rust tests pass (cargo test)
 
 ## Done summary
-TBD
-
+Enhanced set_zero_datum to reposition sections when GPS reference is set: first datum positions station at (0,0) via section_offsets, subsequent datums use GPS offset from first datum. Added store_zero_datum_without_repositioning helper for merge/import paths. Removed global primary_zero_datum subtraction from coordinate computation.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: d9c3549, 6e22155
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:
