@@ -270,13 +270,13 @@ test.describe('Map Tools', () => {
     await expect(canvas).toBeVisible();
 
     // First, select something - let's select a section from the sections panel
-    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: 'Side Tunnel' });
-    if (await sectionItem.isVisible()) {
-      await sectionItem.click();
+    const sectionRow = page.locator('[data-testid^="section-row-"]').filter({ hasText: 'Side Tunnel' });
+    if (await sectionRow.isVisible()) {
+      await sectionRow.click();
       await waitForMapIdle(page);
 
       // Verify section is selected (has highlight)
-      await expect(sectionItem).toHaveClass(/bg-accent/);
+      await expect(sectionRow).toHaveClass(/bg-accent/);
 
       // Press Delete key to trigger deletion
       await page.keyboard.press('Delete');
@@ -342,21 +342,13 @@ test.describe('Map Tools', () => {
  */
 test.describe('Zoom Tool Click Behavior', () => {
   test.beforeEach(async ({ page }) => {
-    await setupTauriMocks(page);
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await setupMockedPage(page);
   });
 
   test('should zoom in on left click and zoom out on right click', async ({ page }) => {
-    // Create a minimal project to get to the map view
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Zoom Test Project');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-    await page.waitForSelector('canvas', { timeout: 10000 });
+    await createProjectWithSections(page);
 
-    const canvas = page.locator('canvas').first();
+    const canvas = page.getByTestId('map-canvas');
     await expect(canvas).toBeVisible();
 
     // Switch to zoom tool
@@ -403,15 +395,9 @@ test.describe('Zoom Tool Click Behavior', () => {
   });
 
   test('should not select stations when zoom tool is active', async ({ page }) => {
-    // Create a minimal project
-    const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
-    await newProjectBtn.click();
-    await page.waitForSelector('.fixed.inset-0');
-    await page.locator('.fixed.inset-0 input').first().fill('Zoom Selection Test');
-    await page.click('.fixed.inset-0 button:has-text("Create")');
-    await page.waitForSelector('canvas', { timeout: 10000 });
+    await createProjectWithSections(page);
 
-    const canvas = page.locator('canvas').first();
+    const canvas = page.getByTestId('map-canvas');
     await expect(canvas).toBeVisible();
 
     // Verify no selection initially

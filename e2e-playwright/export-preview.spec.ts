@@ -13,10 +13,11 @@ import {
 async function createProjectWithData(page: import('@playwright/test').Page) {
   await createProject(page, 'Export Test Project');
   await openDmpSelectionDialog(page);
-  await expect(page.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+  const dialog = page.getByTestId('dmp-selection-dialog');
+  await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
 
   // Deselect problematic sections to avoid validation-blocked imports
-  const validationSection = page.locator('[data-testid^="section-row-"]').filter({
+  const validationSection = dialog.locator('[data-testid^="section-row-"]').filter({
     hasText: 'Validation Test Section',
   });
   const validationCheckbox = validationSection.locator('input[type="checkbox"]');
@@ -24,7 +25,7 @@ async function createProjectWithData(page: import('@playwright/test').Page) {
     await validationCheckbox.click();
   }
 
-  const mixedLrudSection = page.locator('[data-testid^="section-row-"]').filter({
+  const mixedLrudSection = dialog.locator('[data-testid^="section-row-"]').filter({
     hasText: 'Mixed LRUD Section',
   });
   const mixedCheckbox = mixedLrudSection.locator('input[type="checkbox"]');

@@ -185,9 +185,9 @@ impl Default for ShortcutsConfig {
             zoom_out: vec!["Minus".to_string()],
 
             // Panels
-            toggle_sections_panel: vec!["1".to_string()],
-            toggle_detail_panel: vec!["2".to_string()],
-            toggle_data_table: vec!["3".to_string()],
+            toggle_sections_panel: vec!["Ctrl+1".to_string()],
+            toggle_detail_panel: vec!["Ctrl+2".to_string()],
+            toggle_data_table: vec!["Ctrl+3".to_string()],
 
             // Legacy field (always None for new configs)
             legacy_delete: None,

@@ -1,5 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import { seedProjectWithSections, type SectionSeed } from './helpers/app';
 
 /**
  * E2E tests for hitbox detection functionality.
@@ -14,8 +15,10 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
 async function waitForMapReady(page: Page): Promise<void> {
   await page.waitForFunction(
     () => {
-      const map = (window as unknown as { __cavechef_map__?: { loaded: () => boolean } }).__cavechef_map__;
-      return map && map.loaded();
+      const map = (window as unknown as {
+        __cavechef_map__?: { loaded?: () => boolean; isStyleLoaded?: () => boolean };
+      }).__cavechef_map__;
+      return Boolean(map && ((map.isStyleLoaded && map.isStyleLoaded()) || (map.loaded && map.loaded())));
     },
     { timeout: 10000 }
   );
@@ -30,6 +33,25 @@ async function waitForAppReady(page: Page): Promise<void> {
 }
 
 /**
+ * Helper to wait for station features to be rendered.
+ */
+async function waitForStationsRendered(page: Page): Promise<void> {
+  await expect.poll(async () => {
+    return page.evaluate(() => {
+      const map = (window as unknown as {
+        __cavechef_map__?: { queryRenderedFeatures: (opts: { layers: string[] }) => Array<unknown> };
+      }).__cavechef_map__;
+      if (!map) return 0;
+      try {
+        return map.queryRenderedFeatures({ layers: ['survey-stations'] }).length;
+      } catch {
+        return 0;
+      }
+    });
+  }, { timeout: 10000 }).toBeGreaterThan(0);
+}
+
+/**
  * Helper to create a new project with the given name.
  */
 async function createProject(page: Page, name: string): Promise<void> {
@@ -39,7 +61,27 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.locator('.fixed.inset-0 input').first().fill(name);
   await page.click('.fixed.inset-0 button:has-text("Create")');
   await waitForAppReady(page);
+  await seedProjectWithSections(page, sectionSeeds);
+  await waitForStationsRendered(page);
 }
+
+const sectionSeeds: SectionSeed[] = [
+  {
+    name: 'Hitbox Main',
+    direction: 'in',
+    shots: [
+      { azimuth_in: 0, azimuth_out: 180, length: 10, depth_in: 0, depth_out: -2 },
+      { azimuth_in: 90, azimuth_out: 270, length: 8, depth_in: -2, depth_out: -4 },
+    ],
+  },
+  {
+    name: 'Hitbox Branch',
+    direction: 'out',
+    shots: [
+      { azimuth_in: 45, azimuth_out: 225, length: 6, depth_in: -1, depth_out: -3 },
+    ],
+  },
+];
 
 /**
  * Helper to get a station's screen position using map.queryRenderedFeatures + map.project().
@@ -1072,11 +1114,25 @@ test.describe('E2E Test Infrastructure', () => {
   test('__cavechef_map__ is exposed after map loads', async ({ page }) => {
     await createProject(page, 'Map Exposure Test');
 
+    // Ensure map has finished loading after project seeding
+    await expect.poll(
+      async () => {
+        return page.evaluate(() => {
+          const map = (window as unknown as {
+            __cavechef_map__?: { loaded?: () => boolean; isStyleLoaded?: () => boolean };
+          }).__cavechef_map__;
+          return Boolean(map && ((map.isStyleLoaded && map.isStyleLoaded()) || (map.loaded && map.loaded())));
+        });
+      },
+      { timeout: 10000 }
+    ).toBe(true);
+
     // Verify __cavechef_map__ is available with required methods
     const hasMapAPI = await page.evaluate(() => {
       const map = (window as unknown as {
         __cavechef_map__?: {
           loaded: () => boolean;
+          isStyleLoaded?: () => boolean;
           project: (coords: [number, number]) => { x: number; y: number };
           getStyle: () => { layers: unknown[] };
           getPaintProperty: (layer: string, prop: string) => unknown;
@@ -1086,7 +1142,7 @@ test.describe('E2E Test Infrastructure', () => {
 
       return {
         hasMap: !!map,
-        isLoaded: map?.loaded?.() ?? false,
+        isLoaded: (map?.isStyleLoaded?.() ?? false) || (map?.loaded?.() ?? false),
         hasProject: typeof map?.project === 'function',
         hasGetStyle: typeof map?.getStyle === 'function',
         hasGetPaintProperty: typeof map?.getPaintProperty === 'function',

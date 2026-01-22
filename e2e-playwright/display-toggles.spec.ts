@@ -1,5 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import { seedProjectWithSections, waitForMapReady, type SectionSeed } from './helpers/app';
 
 /**
  * E2E tests for visibility toggle behavior in the Display menu.
@@ -25,6 +26,24 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.click('.fixed.inset-0 button:has-text("Create")');
   await page.waitForSelector('canvas', { timeout: 10000 });
 }
+
+const sectionSeeds: SectionSeed[] = [
+  {
+    name: 'Visibility Main',
+    direction: 'in',
+    shots: [
+      { azimuth_in: 45, azimuth_out: 225, length: 10.5, depth_in: -2, depth_out: -2.5, left: 1.5, right: 2.3, up: 3.0, down: 0.8 },
+      { azimuth_in: 90, azimuth_out: 270, length: 15.2, depth_in: -2.5, depth_out: -5.0, left: 0.5, right: 0.7, up: 1.2, down: 1.5 },
+    ],
+  },
+  {
+    name: 'Visibility Side',
+    direction: 'out',
+    shots: [
+      { azimuth_in: 270, azimuth_out: 90, length: 5.0, depth_in: -3.0, depth_out: -4.0, left: 0, right: 0, up: 0, down: 0 },
+    ],
+  },
+];
 
 /**
  * Helper to open the Display menu
@@ -117,6 +136,9 @@ test.describe('Display Toggle Visibility', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await createProject(page, 'Display Toggle Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
   });
 
   test('toggle stations hides and shows station markers on canvas', async ({ page }) => {
@@ -204,6 +226,9 @@ test.describe('Selection Blocking When Hidden', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await createProject(page, 'Selection Blocking Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
   });
 
   test('cannot select hidden stations - selection blocked', async ({ page }) => {
@@ -318,6 +343,9 @@ test.describe('Selection Clearing on Toggle', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await createProject(page, 'Selection Clearing Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
   });
 
   test('station selection cleared when stations hidden', async ({ page }) => {
@@ -432,6 +460,8 @@ test.describe('Toast Notifications', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await createProject(page, 'Toast Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
   });
 
   test('toast is throttled - same key blocked within 5 seconds', async ({ page }) => {
@@ -512,6 +542,9 @@ test.describe('Toggle Relationship Tests', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await createProject(page, 'Toggle Relationship Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
   });
 
   test('Virtual Shots toggle is disabled when Shots hidden', async ({ page }) => {
@@ -590,6 +623,9 @@ test.describe('Tool Operation Tests', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await createProject(page, 'Tool Operation Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
   });
 
   test('draw operation continues when stations hidden - highlight layer shows origin', async ({ page }) => {
@@ -715,6 +751,9 @@ test.describe('Display Menu State Persistence', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await createProject(page, 'State Persistence Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
   });
 
   test('toggle states persist when menu is closed and reopened', async ({ page }) => {

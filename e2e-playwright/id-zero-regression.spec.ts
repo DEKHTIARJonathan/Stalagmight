@@ -199,11 +199,12 @@ test.describe('ID=0 Bug Fixes', () => {
 
   test('Section Adjust dialog applies changes when sectionId === 0', async ({ page }) => {
     // Verify the section exists before opening dialog
-    const sectionExists = await page.evaluate(() => {
-      const state = (window as any).__E2E_TEST__.projectStore.getState();
-      return state.project?.sections?.some((s: any) => s.id === 0);
-    });
-    expect(sectionExists).toBe(true);
+    await expect.poll(async () => {
+      return page.evaluate(() => {
+        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        return state.project?.sections?.some((s: any) => s.id === 0);
+      });
+    }, { timeout: 5000 }).toBe(true);
 
     // Open the Section Adjust dialog via store
     await page.evaluate(() => {
@@ -213,14 +214,6 @@ test.describe('ID=0 Bug Fixes', () => {
     // Wait for dialog to appear
     const dialog = page.getByTestId('section-adjust-dialog');
     await expect(dialog).toBeVisible({ timeout: 3000 });
-
-    // Check if we got "Section not found" error - if so, the fixture didn't sync properly
-    const dialogText = await dialog.textContent();
-    if (dialogText?.includes('Section not found')) {
-      // This is a known timing issue - skip this test iteration
-      test.skip();
-      return;
-    }
 
     // Verify the dialog shows section name (proves id=0 lookup works)
     await expect(dialog.locator('text=Zero Section')).toBeVisible({ timeout: 2000 });
@@ -243,11 +236,12 @@ test.describe('ID=0 Bug Fixes', () => {
 
   test('Section Adjust dialog cancels correctly when sectionId === 0', async ({ page }) => {
     // Verify the section exists before opening dialog
-    const sectionExists = await page.evaluate(() => {
-      const state = (window as any).__E2E_TEST__.projectStore.getState();
-      return state.project?.sections?.some((s: any) => s.id === 0);
-    });
-    expect(sectionExists).toBe(true);
+    await expect.poll(async () => {
+      return page.evaluate(() => {
+        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        return state.project?.sections?.some((s: any) => s.id === 0);
+      });
+    }, { timeout: 5000 }).toBe(true);
 
     // Open the Section Adjust dialog via store
     await page.evaluate(() => {
@@ -257,14 +251,6 @@ test.describe('ID=0 Bug Fixes', () => {
     // Wait for dialog to appear
     const dialog = page.getByTestId('section-adjust-dialog');
     await expect(dialog).toBeVisible({ timeout: 3000 });
-
-    // Check if we got "Section not found" error - if so, the fixture didn't sync properly
-    const dialogText = await dialog.textContent();
-    if (dialogText?.includes('Section not found')) {
-      // This is a known timing issue - skip this test iteration
-      test.skip();
-      return;
-    }
 
     // Verify the dialog shows section name (proves id=0 lookup works)
     await expect(dialog.locator('text=Zero Section')).toBeVisible({ timeout: 2000 });

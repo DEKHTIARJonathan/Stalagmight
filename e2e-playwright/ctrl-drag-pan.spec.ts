@@ -435,38 +435,45 @@ test.describe('Ctrl+Drag Panning', () => {
       expect(cursor).not.toBe('grab');
     });
 
-    test('should handle tool switch while Ctrl is held', async ({ page }) => {
+    test('should keep active tool while Ctrl is held and allow switch after release', async ({ page }) => {
       // Start in select mode
       await page.keyboard.press('s');
       await waitForActiveTool(page, 'select');
 
-      // Hold Ctrl
+      // Hold Ctrl (spring-loaded pan modifier)
       await page.keyboard.down('Control');
       await page.waitForFunction(() => {
         const canvas = document.querySelector('canvas');
         return canvas?.style.cursor === 'grab';
       });
 
-      // Verify cursor is grab
+      // Verify cursor is grab while Ctrl is held
       let cursor = await page.evaluate(() => {
         const canvas = document.querySelector('canvas');
         return canvas?.style.cursor || '';
       });
       expect(cursor).toBe('grab');
 
-      // Switch to pan tool while Ctrl is held
-      await page.keyboard.press('p');
-      await waitForActiveTool(page, 'pan');
+      // Drag to pan while Ctrl is held (no tool switch expected)
+      const canvas = page.getByTestId('map-canvas');
+      const box = await canvas.boundingBox();
+      expect(box).not.toBeNull();
+      if (box) {
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2 + 80, { steps: 6 });
+        await page.mouse.up();
+      }
 
-      // Pan tool has 'grab' cursor naturally, so it should still show grab
-      cursor = await page.evaluate(() => {
-        const canvas = document.querySelector('canvas');
-        return canvas?.style.cursor || '';
-      });
-      expect(cursor).toBe('grab');
+      // Active tool should remain select
+      await waitForActiveTool(page, 'select');
 
       // Release Ctrl
       await page.keyboard.up('Control');
+
+      // Now switch to pan tool explicitly (no modifier)
+      await page.keyboard.press('p');
+      await waitForActiveTool(page, 'pan');
 
       // Switch to zoom tool
       await page.keyboard.press('z');
@@ -480,7 +487,6 @@ test.describe('Ctrl+Drag Panning', () => {
       expect(cursor).toBe('zoom-in');
 
       // Map should remain functional after all these switches
-      const canvas = page.getByTestId('map-canvas');
       await expect(canvas).toBeVisible();
     });
   });

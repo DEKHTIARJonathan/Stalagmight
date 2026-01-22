@@ -62,14 +62,14 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
         return { success: false, error: 'Disk full: no space left on device' };
       }
 
-      if (errorMode === 'open_corrupted' && (cmd === 'open_project' || cmd === 'load_project')) {
+      if (errorMode === 'open_corrupted' && (cmd === 'open_project' || cmd === 'load_project' || cmd === 'load_project_full')) {
         console.log('[Mock IPC] Simulating corrupted file error');
-        return { success: false, error: 'File corrupted: invalid project format' };
+        throw new Error('File corrupted: invalid project format');
       }
 
-      if (errorMode === 'open_not_found' && (cmd === 'open_project' || cmd === 'load_project')) {
+      if (errorMode === 'open_not_found' && (cmd === 'open_project' || cmd === 'load_project' || cmd === 'load_project_full')) {
         console.log('[Mock IPC] Simulating file not found error');
-        return { success: false, error: 'File not found: the specified file does not exist' };
+        throw new Error('File not found: the specified file does not exist');
       }
 
       if (errorMode === 'dmp_parse_error' && (cmd === 'import_dmp' || cmd === 'parse_dmp')) {
@@ -111,6 +111,89 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
             section_offsets: {},
           };
           return { success: true, project: currentProject };
+        }
+
+        case 'create_project_full': {
+          const name = (args?.name as string) ?? 'Untitled Project';
+          const now = new Date().toISOString();
+          sectionCounter = 0;
+          currentProject = {
+            id: 1,
+            name,
+            location: null,
+            created_at: now,
+            modified_at: now,
+            file_path: null,
+            sections: [],
+            station_merges: [],
+            zero_datums: [],
+            loop_closures: [],
+            section_offsets: {},
+          };
+          return {
+            loadingId: Date.now(),
+            project: currentProject,
+            displaySettings: {
+              showStations: true,
+              showSectionNames: true,
+              showStationLabels: false,
+              showShotData: false,
+              showVirtualShots: true,
+              showZeroDatum: true,
+              showGrid: false,
+              showScaleBar: true,
+              showSatellite: false,
+              showDepthGradient: false,
+              gridSpacing: 10,
+            },
+          };
+        }
+
+        case 'load_project_full': {
+          projectPath = (args?.path as string) ?? null;
+          const now = new Date().toISOString();
+          currentProject = {
+            id: 1,
+            name: 'Test Project',
+            location: null,
+            created_at: now,
+            modified_at: now,
+            file_path: projectPath,
+            sections: [],
+            station_merges: [],
+            zero_datums: [],
+            loop_closures: [],
+            section_offsets: {},
+          };
+          return {
+            loadingId: Date.now(),
+            project: currentProject,
+            stations: [],
+            stats: {
+              section_count: 0,
+              shot_count: 0,
+              total_length: 0,
+              min_depth: 0,
+              max_depth: 0,
+              station_count: 0,
+              loop_count: 0,
+              penetration_distance: 0,
+            },
+            warnings: [],
+            displaySettings: {
+              showStations: true,
+              showSectionNames: true,
+              showStationLabels: false,
+              showShotData: false,
+              showVirtualShots: true,
+              showZeroDatum: true,
+              showGrid: false,
+              showScaleBar: true,
+              showSatellite: false,
+              showDepthGradient: false,
+              gridSpacing: 10,
+            },
+          };
         }
 
         case 'load_project':
@@ -542,7 +625,20 @@ test.describe('Error Handling', () => {
 
       // Wait for error processing or dialog appearance
       const anyDialog = page.locator('[data-testid="error-dialog"]');
-      await anyDialog.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+      const loadingError = page.getByTestId('loading-progress');
+      await Promise.race([
+        anyDialog.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {}),
+        loadingError.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {}),
+      ]);
+
+      // Close loading error overlay if present (blocks UI)
+      if (await loadingError.isVisible().catch(() => false)) {
+        const dismissButton = loadingError.locator('button:has-text("Dismiss")').first();
+        if (await dismissButton.isVisible().catch(() => false)) {
+          await dismissButton.click();
+        }
+        await loadingError.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+      }
 
       // Check if any modal/dialog appeared and close it if visible
       if (await anyDialog.isVisible().catch(() => false)) {
@@ -567,7 +663,19 @@ test.describe('Error Handling', () => {
       await openBtn.click();
 
       // Wait for error processing or dialog appearance
-      await anyDialog.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+      await Promise.race([
+        anyDialog.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {}),
+        loadingError.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {}),
+      ]);
+
+      // Close loading error overlay if present
+      if (await loadingError.isVisible().catch(() => false)) {
+        const dismissButton = loadingError.locator('button:has-text("Dismiss")').first();
+        if (await dismissButton.isVisible().catch(() => false)) {
+          await dismissButton.click();
+        }
+        await loadingError.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+      }
 
       // Close any dialog that appeared
       if (await anyDialog.isVisible().catch(() => false)) {

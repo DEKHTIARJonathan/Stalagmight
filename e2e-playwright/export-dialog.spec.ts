@@ -178,7 +178,7 @@ test.describe('Export Dialog', () => {
   });
 
   test('should show color mode options for image export', async ({ page }) => {
-    await createProject(page);
+    await createProject(page, 'Export Dialog Test Project');
 
     // Open export dialog
     await page.keyboard.press('Control+e');
@@ -200,7 +200,7 @@ test.describe('Export Dialog', () => {
   });
 
   test('should show depth preset dropdown when depth mode selected', async ({ page }) => {
-    await createProject(page);
+    await createProject(page, 'Export Dialog Test Project');
 
     // Open export dialog
     await page.keyboard.press('Control+e');
@@ -222,7 +222,7 @@ test.describe('Export Dialog', () => {
   });
 
   test('should show include legend checkbox when depth mode selected', async ({ page }) => {
-    await createProject(page);
+    await createProject(page, 'Export Dialog Test Project');
 
     // Open export dialog
     await page.keyboard.press('Control+e');
@@ -245,7 +245,7 @@ test.describe('Export Dialog', () => {
   });
 
   test('should include 600 DPI option in resolution selector', async ({ page }) => {
-    await createProject(page);
+    await createProject(page, 'Export Dialog Test Project');
 
     // Open export dialog
     await page.keyboard.press('Control+e');
@@ -268,7 +268,7 @@ test.describe('Export Dialog', () => {
   });
 
   test('should hide depth options when switching from depth to section mode', async ({ page }) => {
-    await createProject(page);
+    await createProject(page, 'Export Dialog Test Project');
 
     // Open export dialog
     await page.keyboard.press('Control+e');

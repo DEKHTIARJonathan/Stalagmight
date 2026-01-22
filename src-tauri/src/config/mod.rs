@@ -2084,9 +2084,9 @@ delete = "X"
         assert_eq!(config.toggle_grid, vec!["Shift+G".to_string()]);
         assert_eq!(config.toggle_satellite, vec!["B".to_string()]);
         assert_eq!(config.fit_to_bounds, vec!["F".to_string()]);
-        assert_eq!(config.toggle_sections_panel, vec!["1".to_string()]);
-        assert_eq!(config.toggle_detail_panel, vec!["2".to_string()]);
-        assert_eq!(config.toggle_data_table, vec!["3".to_string()]);
+        assert_eq!(config.toggle_sections_panel, vec!["Ctrl+1".to_string()]);
+        assert_eq!(config.toggle_detail_panel, vec!["Ctrl+2".to_string()]);
+        assert_eq!(config.toggle_data_table, vec!["Ctrl+3".to_string()]);
     }
 
     #[test]
@@ -2198,15 +2198,14 @@ shortcut_feedback = "all"
 
         assert_eq!(deserialized.shortcut_feedback, ShortcutFeedback::None);
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
+    // ========================================================================
+    // File I/O Tests
+    // ========================================================================
 
     #[test]
     fn test_load_from_path_missing_returns_default() {
+        use tempfile::tempdir;
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let config = Config::load_from_path(&path).unwrap();
@@ -2216,6 +2215,7 @@ mod tests {
 
     #[test]
     fn test_save_to_path_and_load_roundtrip() {
+        use tempfile::tempdir;
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
 
@@ -2234,6 +2234,7 @@ mod tests {
 
     #[test]
     fn test_load_from_path_invalid_toml_errors() {
+        use tempfile::tempdir;
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "not = [valid").unwrap();

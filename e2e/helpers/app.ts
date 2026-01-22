@@ -15,27 +15,6 @@ export async function getMapZoom(): Promise<number> {
 }
 
 /**
- * Wait for the MapLibre map to be fully ready (loaded and zoom available).
- * Call this after creating a project to ensure map interactions work reliably.
- */
-export async function waitForMapReady(): Promise<void> {
-  await browser.waitUntil(
-    async () => {
-      const mapReady = await browser.execute(() => {
-        const map = (window as unknown as { __cavechef_map__?: { loaded: () => boolean; getZoom: () => number } }).__cavechef_map__;
-        return map && map.loaded() && typeof map.getZoom() === 'number';
-      });
-      return mapReady;
-    },
-    {
-      timeout: 10000,
-      timeoutMsg: 'Map did not become ready within 10 seconds',
-      interval: 100,
-    }
-  );
-}
-
-/**
  * Load a project fixture by name.
  * Creates a new project with pre-defined survey data for testing.
  *

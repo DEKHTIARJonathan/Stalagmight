@@ -33,7 +33,7 @@ import {
 async function createProjectAndOpenImportDialog(page: Page): Promise<void> {
   await createProject(page, 'Placement Test');
   await openDmpSelectionDialog(page);
-  await expect(page.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+  await expect(page.getByTestId('dmp-selection-dialog').getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
 }
 
 /**
@@ -48,11 +48,11 @@ async function selectSectionsAndProceed(page: Page, sectionIndices: number[]): P
 
   // Select specified sections
   for (const idx of sectionIndices) {
-    await page.locator(`[data-testid="section-checkbox-${idx}"]`).click();
+    await dialog.locator(`[data-testid="section-checkbox-${idx}"]`).click();
   }
 
   // Proceed to Step 2
-  await page.locator('[data-testid="continue-button"]').click();
+  await dialog.locator('[data-testid="continue-button"]').click();
   await expect(page.getByTestId('dmp-section-config-dialog')).toBeVisible({ timeout: 5000 });
 }
 

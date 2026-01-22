@@ -265,7 +265,7 @@ test.describe('Satellite Display', () => {
    * triggers the unsaved-changes dialog with timing issues. The cache functionality
    * is tested in e2e-playwright/ui-components.spec.ts via Settings tests from GlobalView.
    */
-  test.describe.fixme('Cache Status', () => {
+  test.describe('Cache Status', () => {
     /**
      * Helper to navigate back to GlobalView and open Settings dialog
      * Settings is only accessible from the GlobalView, not from within a project
@@ -276,12 +276,13 @@ test.describe('Satellite Display', () => {
 
       // Handle unsaved changes dialog if it appears
       const discardButton = page.locator('button:has-text("Discard Changes")');
-      if (await discardButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+      const needsDiscard = await discardButton.waitFor({ state: 'visible', timeout: 1500 }).then(() => true).catch(() => false);
+      if (needsDiscard) {
         await discardButton.click();
       }
 
       // Wait for GlobalView to load
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("CaveChef")', { timeout: 5000 });
+      await page.waitForSelector('[data-testid="global-view"], h1:has-text("CaveChef")', { timeout: 8000 });
 
       // Click Settings button
       await page.click('[data-testid="settings-button"], button:has-text("Settings")');

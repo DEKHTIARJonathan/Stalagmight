@@ -29,7 +29,7 @@ async function createProjectAndOpenImportDialog(page: Page): Promise<void> {
 
   const dialog = page.getByTestId('dmp-selection-dialog');
   await expect(dialog).toBeVisible();
-  await expect(page.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+  await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
   await expect(dialog.getByTestId('dmp-metadata')).toContainText('Version: 5');
 }
 
@@ -63,21 +63,21 @@ test.describe('DMP Import Dialog', () => {
     await expect(dialog).toHaveAttribute('aria-modal', 'true');
 
     // Verify section names displayed in Step 1
-    await expect(page.locator('text=Main Passage')).toBeVisible();
-    await expect(page.locator('text=Side Tunnel')).toBeVisible();
+    await expect(dialog.locator('text=Main Passage')).toBeVisible();
+    await expect(dialog.locator('text=Side Tunnel')).toBeVisible();
 
     // Step 1 shows a table with checkboxes, section names, dates, and shot counts
     // Verify the section table has expected structure
-    const sectionRow0 = page.locator('[data-testid="section-row-0"]');
+    const sectionRow0 = dialog.locator('[data-testid="section-row-0"]');
     await expect(sectionRow0).toBeVisible();
     await expect(sectionRow0).toContainText('Main Passage');
 
-    const sectionRow1 = page.locator('[data-testid="section-row-1"]');
+    const sectionRow1 = dialog.locator('[data-testid="section-row-1"]');
     await expect(sectionRow1).toBeVisible();
     await expect(sectionRow1).toContainText('Side Tunnel');
 
     // Verify section checkboxes are present
-    const checkbox0 = page.locator('[data-testid="section-checkbox-0"]');
+    const checkbox0 = dialog.locator('[data-testid="section-checkbox-0"]');
     await expect(checkbox0).toBeVisible();
     await expect(checkbox0).toBeChecked(); // Non-empty sections are selected by default
 
@@ -170,28 +170,27 @@ test.describe('DMP Import Dialog', () => {
     await createProjectAndOpenImportDialog(page);
 
     // Verify multiple sections are listed (mock returns 6 sections)
-    await expect(page.locator('text=Main Passage')).toBeVisible();
-    await expect(page.locator('text=Side Tunnel')).toBeVisible();
-    await expect(page.locator('text=Mixed LRUD Section')).toBeVisible();
-    await expect(page.locator('text=Undefined LRUD Section')).toBeVisible();
-    await expect(page.locator('text=Empty Section')).toBeVisible();
-    await expect(page.locator('text=Validation Test Section')).toBeVisible();
+    const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
+    await expect(dialog.locator('text=Main Passage')).toBeVisible();
+    await expect(dialog.locator('text=Side Tunnel')).toBeVisible();
+    await expect(dialog.locator('text=Mixed LRUD Section')).toBeVisible();
+    await expect(dialog.locator('text=Undefined LRUD Section')).toBeVisible();
+    await expect(dialog.locator('text=Empty Section')).toBeVisible();
+    await expect(dialog.locator('text=Validation Test Section')).toBeVisible();
 
     // Step 1 shows section rows with checkboxes - no expand buttons in Step 1
-    const sectionRow0 = page.locator('[data-testid="section-row-0"]');
-    const sectionRow1 = page.locator('[data-testid="section-row-1"]');
+    const sectionRow0 = dialog.locator('[data-testid="section-row-0"]');
+    const sectionRow1 = dialog.locator('[data-testid="section-row-1"]');
     await expect(sectionRow0).toBeVisible();
     await expect(sectionRow1).toBeVisible();
 
     // Empty section should be displayed but with (empty) indicator and disabled checkbox
-    const emptyRow = page.locator('[data-testid="section-row-4"]');
+    const emptyRow = dialog.locator('[data-testid="section-row-4"]');
     await expect(emptyRow).toContainText('(empty)');
-    const emptyCheckbox = page.locator('[data-testid="section-checkbox-4"]');
+    const emptyCheckbox = dialog.locator('[data-testid="section-checkbox-4"]');
     await expect(emptyCheckbox).toBeDisabled();
 
     // Test section selection checkboxes
-    const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-
     // Click "Select None" to deselect all sections
     await dialog.locator('[data-testid="select-none-button"]').click();
 
@@ -208,8 +207,8 @@ test.describe('DMP Import Dialog', () => {
     await dialog.locator('[data-testid="select-none-button"]').click();
 
     // Select Main Passage and Side Tunnel only
-    await page.locator('[data-testid="section-checkbox-0"]').click();
-    await page.locator('[data-testid="section-checkbox-1"]').click();
+    await dialog.locator('[data-testid="section-checkbox-0"]').click();
+    await dialog.locator('[data-testid="section-checkbox-1"]').click();
 
     // Selection count should show 2 selected
     await expect(dialog.locator('text=/2 of 5 sections selected/')).toBeVisible();

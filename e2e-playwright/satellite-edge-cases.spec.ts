@@ -211,7 +211,7 @@ test.describe('Satellite Edge Cases', () => {
      * Project switch tests require navigating back to GlobalView which triggers
      * the unsaved-changes dialog with timing issues in the mock environment.
      */
-    test.fixme('should preserve satellite state across project switch', async ({ page }) => {
+    test('should reset satellite state across project switch', async ({ page }) => {
       // Enable satellite
       await openDisplayMenu(page);
       await toggleSatellite(page);
@@ -225,12 +225,13 @@ test.describe('Satellite Edge Cases', () => {
 
       // Handle unsaved changes dialog if it appears
       const discardButton = page.locator('button:has-text("Discard Changes")');
-      if (await discardButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+      const needsDiscard = await discardButton.waitFor({ state: 'visible', timeout: 1500 }).then(() => true).catch(() => false);
+      if (needsDiscard) {
         await discardButton.click();
       }
 
       // Wait for GlobalView
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("CaveChef")', { timeout: 5000 });
+      await page.waitForSelector('[data-testid="global-view"], h1:has-text("CaveChef")', { timeout: 8000 });
 
       // Create a new project
       await createProject(page, 'Satellite Test Project 2');
@@ -238,8 +239,8 @@ test.describe('Satellite Edge Cases', () => {
       // Open display menu and check state
       await openDisplayMenu(page);
 
-      // Satellite state persists in UI store (session-scoped)
-      await expect.poll(() => isSatelliteEnabled(page)).toBe(true);
+      // New project should apply default display settings (satellite off)
+      await expect.poll(() => isSatelliteEnabled(page)).toBe(false);
     });
 
     test('should toggle immediately after project create', async ({ page }) => {
@@ -259,18 +260,19 @@ test.describe('Satellite Edge Cases', () => {
      * Creating a new project requires navigating back to GlobalView which triggers
      * the unsaved-changes dialog with timing issues in the mock environment.
      */
-    test.fixme('should toggle with empty project (no stations)', async ({ page }) => {
+    test('should toggle with empty project (no stations)', async ({ page }) => {
       // Go back to home and create empty project using the "← Back" button
       await page.click('button:has-text("Back")');
 
       // Handle unsaved changes dialog if it appears
       const discardButton = page.locator('button:has-text("Discard Changes")');
-      if (await discardButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+      const needsDiscard = await discardButton.waitFor({ state: 'visible', timeout: 1500 }).then(() => true).catch(() => false);
+      if (needsDiscard) {
         await discardButton.click();
       }
 
       // Wait for GlobalView
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("CaveChef")', { timeout: 5000 });
+      await page.waitForSelector('[data-testid="global-view"], h1:has-text("CaveChef")', { timeout: 8000 });
 
       // Create new project (mock has default sections, but test the flow)
       await createProject(page, 'Empty Satellite Test');
@@ -373,7 +375,7 @@ test.describe('Satellite Edge Cases', () => {
    * The cache functionality is tested in e2e-playwright/ui-components.spec.ts via
    * Settings tests from GlobalView (without having created a project first).
    */
-  test.describe.fixme('Settings Dialog Interactions', () => {
+  test.describe('Settings Dialog Interactions', () => {
     /**
      * Helper to navigate back to GlobalView and open Settings dialog
      * Settings is only accessible from the GlobalView, not from within a project
@@ -384,12 +386,13 @@ test.describe('Satellite Edge Cases', () => {
 
       // Handle unsaved changes dialog if it appears
       const discardButton = page.locator('button:has-text("Discard Changes")');
-      if (await discardButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+      const needsDiscard = await discardButton.waitFor({ state: 'visible', timeout: 1500 }).then(() => true).catch(() => false);
+      if (needsDiscard) {
         await discardButton.click();
       }
 
       // Wait for GlobalView to load
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("CaveChef")', { timeout: 5000 });
+      await page.waitForSelector('[data-testid="global-view"], h1:has-text("CaveChef")', { timeout: 8000 });
 
       // Click Settings button
       await page.click('[data-testid="settings-button"], button:has-text("Settings")');
