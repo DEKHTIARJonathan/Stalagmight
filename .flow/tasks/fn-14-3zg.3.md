@@ -55,8 +55,53 @@ Create UndoHistoryDropdown React component with hover trigger (300ms delay), scr
 - [ ] pnpm tsc --noEmit passes
 
 ## Done summary
-TBD
+## Task fn-14-3zg.3: Frontend: UndoHistoryDropdown component with hover trigger
 
+### Changes Made
+
+1. **Added UndoHistoryItem types to commands.ts**
+   - FieldChange, PreviewData, UndoHistoryItem interfaces matching backend DTOs
+
+2. **Extended projectStore.ts with new methods**
+   - `undoTo(index)`: Calls undo_to backend command + refreshProjectState
+   - `redoTo(index)`: Calls redo_to backend command + refreshProjectState
+   - `getUndoStack()`: Fetches undo history from backend
+   - `getRedoStack()`: Fetches redo history from backend
+
+3. **Created UndoHistoryDropdown.tsx component**
+   - 300ms hover delay to open dropdown (setTimeout/clearTimeout)
+   - Small leave delay buffer (100ms) to allow moving to dropdown
+   - Scrollable list with max 10 visible items (280px max-height)
+   - Auto-hide scrollbar via scrollbarWidth: 'thin'
+   - Icon mapping from commandType to icons (matching Toolbar style)
+   - Truncated descriptions (~40 chars with ellipsis)
+   - Timestamps: relative for <1 day (date-fns formatDistanceToNow), absolute for older, "Unknown" for null
+   - data-dropdown-open attribute for Escape key coordination
+   - Closes on Escape key
+   - Closes on Ctrl+Z/Y keyboard shortcuts
+   - Closes on click outside
+   - Guard: Only opens if canUndo/canRedo AND fetched list is non-empty
+   - Calls projectStore.undoTo/redoTo (not invoke directly) to ensure refreshProjectState runs
+
+4. **Updated Toolbar.tsx**
+   - Replaced Button components with UndoHistoryDropdown for both Undo and Redo buttons
+   - Click behavior preserved (single undo/redo via onSingleAction prop)
+
+5. **Installed date-fns for timestamp formatting**
+
+### Acceptance Criteria Verification
+- [x] Dropdown appears after 300ms hover delay
+- [x] Dropdown closes on mouse leave (with small delay buffer)
+- [x] Shows up to 10 items, scrollable for more with auto-hide scrollbar
+- [x] Each item shows: icon (mapped from commandType), description (truncated ~40 chars), timestamp
+- [x] Timestamps: relative for <1 day, absolute for older, "Unknown" for null
+- [x] Index 0 (most recent) displayed at top of list
+- [x] data-dropdown-open attribute set when open
+- [x] Click on item calls projectStore.undoTo/redoTo (not invoke directly) and closes dropdown
+- [x] projectStore.undoTo/redoTo calls refreshProjectState after command success
+- [x] Dropdown does not open if canUndo/canRedo is false OR if fetched list is empty
+- [x] Dropdown closes when Ctrl+Z/Y keyboard shortcuts are pressed
+- [x] pnpm tsc --noEmit passes
 ## Evidence
 - Commits:
 - Tests:

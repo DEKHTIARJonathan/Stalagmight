@@ -19,7 +19,7 @@ import type {
   Coordinates,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand } from '../types/commands';
+import type { CommandResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
 /**
@@ -186,6 +186,10 @@ interface ProjectStore {
 
   undo: () => Promise<CommandResult>;
   redo: () => Promise<CommandResult>;
+  undoTo: (index: number) => Promise<CommandResult>;
+  redoTo: (index: number) => Promise<CommandResult>;
+  getUndoStack: () => Promise<UndoHistoryItem[]>;
+  getRedoStack: () => Promise<UndoHistoryItem[]>;
   refreshUndoState: () => Promise<void>;
 
   // Batch execution - groups multiple commands into a single undo/redo unit
@@ -729,6 +733,32 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       set({ isDirty: true });
     }
     return result;
+  },
+
+  undoTo: async (index: number) => {
+    const result = await invoke<CommandResult>('undo_to', { index });
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
+  },
+
+  redoTo: async (index: number) => {
+    const result = await invoke<CommandResult>('redo_to', { index });
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
+  },
+
+  getUndoStack: async () => {
+    return await invoke<UndoHistoryItem[]>('get_undo_stack');
+  },
+
+  getRedoStack: async () => {
+    return await invoke<UndoHistoryItem[]>('get_redo_stack');
   },
 
   refreshUndoState: async () => {
