@@ -48,17 +48,24 @@ Create content panel components for each of the 9 settings categories, with prop
 - Settings that require restart: logging.level
 
 ## Acceptance
-- [ ] All 9 category content components created
-- [ ] SettingRow provides consistent label + help text + control layout
-- [ ] SettingsSection provides subsection groupings with headers
-- [ ] Toggle component used for all boolean settings
-- [ ] Custom Select component used for all enum/dropdown settings
-- [ ] Number inputs have min/max validation
-- [ ] Changed fields highlighted with subtle background
-- [ ] Restart-required settings have indicator badge (logging.level)
-- [ ] Shortcuts table layout preserved from existing implementation
-- [ ] Cache stats and clear button preserved with data-testid attributes
-- [ ] Reload Config button in Advanced category
-- [ ] Each component has `role="tabpanel"`, `aria-labelledby`
-- [ ] onValidationError callback reports errors to parent
-- [ ] pnpm tsc --noEmit passes
+- [x] All 9 category content components created
+- [x] SettingRow provides consistent label + help text + control layout
+- [x] SettingsSection provides subsection groupings with headers
+- [x] Toggle component used for all boolean settings
+- [x] Custom Select component used for all enum/dropdown settings
+- [x] Number inputs have min/max validation
+- [x] Changed fields highlighted with subtle background
+- [x] Restart-required settings have indicator badge (logging.level)
+- [x] Shortcuts table layout preserved from existing implementation
+- [x] Cache stats and clear button preserved with data-testid attributes
+- [x] Reload Config button in Advanced category
+- [x] Each component has `role="tabpanel"`, `aria-labelledby`
+- [x] onValidationError callback reports errors to parent
+- [x] pnpm tsc --noEmit passes
+
+## Done summary
+Created all 9 settings category content components with SettingRow and SettingsSection shared components. Each component uses Toggle for boolean settings and custom Select for enum settings, with proper ARIA roles, validation error reporting, and changed field highlighting.
+## Evidence
+- Commits: a45ade7a46e6f9a930c3b0e2df56a8d24b4a89c1, 398602c0ed2cddbe112663db292416ac60ec00c0
+- Tests: pnpm tsc --noEmit
+- PRs:
