@@ -271,34 +271,6 @@ describe('Export Dialog Accessibility', () => {
         expect(text).toMatch(/\(.*\)/);
       }
     });
-
-    // Skip: Escape key handling in dropdown is unreliable in WebdriverIO tests.
-    // The dropdown may not properly receive the Escape key event.
-    it.skip('closes dropdown on Escape key', async () => {
-      const select = await $('[data-testid="export-dialog"] [data-testid="depth-preset-select"]');
-      const triggerButton = await select.$('button');
-
-      // Open dropdown
-      await triggerButton.click();
-      await browser.waitUntil(
-        async () => (await triggerButton.getAttribute('aria-expanded')) === 'true',
-        { timeout: 2000, timeoutMsg: 'Dropdown should be expanded' }
-      );
-
-      // Press Escape - should close dropdown (not the entire dialog)
-      await browser.keys(['Escape']);
-
-      // Wait for dropdown to close - check both that button exists and aria-expanded is false
-      // The dialog should still be open, only the dropdown should close
-      await browser.waitUntil(
-        async () => {
-          const btn = await $('[data-testid="export-dialog"] [data-testid="depth-preset-select"] button');
-          if (!(await btn.isExisting())) return false;
-          return (await btn.getAttribute('aria-expanded')) === 'false';
-        },
-        { timeout: 2000, timeoutMsg: 'Dropdown should be closed after Escape' }
-      );
-    });
   });
 
   describe('Legend Checkbox', () => {

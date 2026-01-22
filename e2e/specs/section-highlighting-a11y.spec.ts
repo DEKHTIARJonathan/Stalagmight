@@ -292,61 +292,6 @@ describe('Visual Highlight States', () => {
   });
 
   describe('Highlight appearance consistency', () => {
-    // Skip: WebdriverIO's moveTo() doesn't reliably trigger CSS :hover states in WebKit.
-    // This works correctly with real mouse input.
-    it.skip('hover state appears on mouse enter', async () => {
-      const options = await $$('[role="option"]');
-      expect(options.length).toBeGreaterThan(0);
-
-      const firstOption = options[0];
-
-      // Move mouse away from option first to ensure clean initial state
-      const header = await $('h2');
-      await header.moveTo();
-
-      // Wait for initial state to settle
-      await browser.waitUntil(
-        async () => {
-          const hoverId = await browser.execute(() => {
-            const e2e = (window as { __E2E_TEST__?: { uiStore: { getState: () => { hoveredSectionId: number | null } } } }).__E2E_TEST__;
-            return e2e?.uiStore.getState().hoveredSectionId;
-          });
-          return hoverId === null;
-        },
-        { timeout: 3000, timeoutMsg: 'Hover state did not clear' }
-      );
-
-      // Get initial background color (should be transparent or default)
-      const initialBgColor = await browser.execute((el) => {
-        return window.getComputedStyle(el).backgroundColor;
-      }, firstOption);
-
-      // Hover over the section row
-      await firstOption.moveTo();
-
-      // Wait for hover state to apply - background should change
-      await browser.waitUntil(
-        async () => {
-          const bgColor = await browser.execute((el) => {
-            return window.getComputedStyle(el).backgroundColor;
-          }, firstOption);
-          // Either the color changed from initial, or it's now non-transparent
-          return bgColor !== initialBgColor && bgColor !== 'rgba(0, 0, 0, 0)';
-        },
-        { timeout: 3000, timeoutMsg: 'Hover state did not apply' }
-      );
-
-      // Get hover background color
-      const hoverBgColor = await browser.execute((el) => {
-        return window.getComputedStyle(el).backgroundColor;
-      }, firstOption);
-
-      // Background should change on hover (bg-accent/20)
-      // Verify the color changed AND is visible
-      expect(hoverBgColor).not.toBe(initialBgColor);
-      expect(hoverBgColor).not.toBe('rgba(0, 0, 0, 0)');
-    });
-
     it('selection state appears on click', async () => {
       const options = await $$('[role="option"]');
       expect(options.length).toBeGreaterThan(0);
