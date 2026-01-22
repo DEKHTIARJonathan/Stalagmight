@@ -35,17 +35,19 @@ For every SVG length that should be pixel-stable, use: `value_world = value_px /
 
 ### Elements to Scale
 
-| Element | CSS/Attr | Current | Target Pixels | Fix |
-|---------|----------|---------|---------------|-----|
-| Station radius | `r` attr | 4.0/6.0 | 3/6 (match preview) | `r = target_px / scale` |
-| Station stroke-width | `stroke-width` | 1 | 1 | `stroke_width = 1.0 / scale` |
-| Shot stroke-width | CSS `.shot` | 2 | 2 | `stroke_width = 2.0 / scale` |
-| Virtual shot dasharray | `stroke-dasharray` | 4,2 | 4,2 | `dash = 4.0/scale, gap = 2.0/scale` |
-| Grid stroke-width | `stroke-width` | 0.5 | 0.5 | `stroke_width = 0.5 / scale` |
-| Shot-label font-size | `font-size` attr | 8 (no unit) | 8px | Add `px` suffix |
-| Label dx/dy offsets | `dx`, `dy` | 6, -6 | 6, -6 | `offset = 6.0 / scale` |
-| Legend font-size | `font-size` attr | varies | 10-12px | `font_size = 10.0 / scale` |
-| Legend bar width | `width` attr | 15% of bounds | ~16px min | Scale proportionally |
+| Element | Target Pixels | Fix Formula |
+|---------|---------------|-------------|
+| Station radius | 3 (6 for ZD) | `r = 3.0 / scale` |
+| Station stroke-width | 1 | `stroke_width = 1.0 / scale` |
+| Shot stroke-width | 2 | `stroke_width = 2.0 / scale` |
+| Virtual shot dasharray | 4,2 | `"{4.0/scale},{2.0/scale}"` |
+| Grid stroke-width | 0.5 | `stroke_width = 0.5 / scale` |
+| Shot-label font-size | 8 | `font_size = 8.0 / scale` |
+| Shot-label dx/dy | 2/2 | `dx="{2.0/scale}" dy="{2.0/scale}"` |
+| ZD label dx/dy | 8/4 | `dx="{8.0/scale}" dy="{4.0/scale}"` |
+| Section-name dx/dy | 5/5 | `dx="{5.0/scale}" dy="{5.0/scale}"` |
+| Legend font-size | 10-12 | scale proportionally |
+| Legend bar width | ~16px min | scale proportionally |
 
 ### Files to Modify
 
@@ -60,12 +62,12 @@ pnpm tsc --noEmit
 
 ## Acceptance
 
-- [ ] Station circles are ~3px radius (6px for zero datum) when measured as `r * scale`
-- [ ] Shot lines are ~2px stroke width when measured as `stroke-width * scale`
-- [ ] Grid lines are ~0.5px stroke width when measured
+- [ ] Station circles: `r * scale ≈ 3px` (6px for zero datum)
+- [ ] Shot lines: `stroke-width * scale ≈ 2px`
+- [ ] Grid lines: `stroke-width * scale ≈ 0.5px`
 - [ ] Virtual shot dashes scale correctly
-- [ ] Label offsets (dx/dy) scale correctly
-- [ ] Shot-label font-size has `px` unit suffix
+- [ ] All label offsets (dx/dy) scale correctly
+- [ ] All font-sizes scale correctly (not just px suffix)
 - [ ] Legend sizing is consistent (~10-12px font, ~16px bar width minimum)
 - [ ] Higher DPI exports (150, 300, 600) produce proportionally larger pixel dimensions
 - [ ] Rust unit tests verify SVG element scaling
