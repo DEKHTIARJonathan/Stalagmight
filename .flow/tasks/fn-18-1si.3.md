@@ -50,9 +50,30 @@ With subtle `border-b border-border pb-3 mb-3` separator
 - [ ] aria-label on stats container with descriptive text
 - [ ] TypeScript types pass (pnpm tsc --noEmit)
 ## Done summary
-TBD
+## Summary
 
+Added section statistics display to the top of the Parameters panel in DmpSectionConfigDialog. The stats show:
+- Shot count (filtered to visible, non-deleted shots)
+- Total length (with unit conversion, excluding negative lengths)
+- Depth range (with "Depth:" prefix, excluding NaN/Infinity values)
+
+Stats use pipe separators and are formatted with the user's preferred units from config. When a section is excluded, the stats are grayed out with reduced opacity.
+
+## Changes
+
+- `src/components/Dialogs/DmpSectionConfigDialog.tsx`:
+  - Added imports for `useProjectStore`, `defaultConfig`, and formatting utilities
+  - Added config subscription for length and depth units
+  - Added `sectionStats` useMemo that computes shot count, total length, and depth range from visible shots
+  - Added stats display div with proper test IDs and aria-label for accessibility
+  - Applied gray-out styling when `isCurrentExcluded` is true
+
+## Verification
+
+- TypeScript compilation passes (`pnpm tsc --noEmit`)
+- All Rust tests pass (`cargo test`)
+- 463/464 Playwright tests pass (1 pre-existing flaky satellite test)
 ## Evidence
 - Commits:
-- Tests:
+- Tests: typescript, rust, playwright
 - PRs:
