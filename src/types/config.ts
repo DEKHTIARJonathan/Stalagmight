@@ -76,6 +76,10 @@ export interface StationConfig {
   radius: number;
   /** Clickable area radius in pixels (1.0-50.0, >= radius) */
   hit_area: number;
+  /** Radius when hovered (1.0-50.0, typically > radius) */
+  hover_radius: number;
+  /** Radius when selected (1.0-50.0, typically > radius) */
+  selection_radius: number;
 }
 
 /** Shot visual and interaction configuration */
@@ -84,6 +88,10 @@ export interface ShotConfig {
   width: number;
   /** Clickable area width in pixels (0.5-20.0, >= width) */
   hit_area: number;
+  /** Width when hovered (0.5-20.0, typically > width) */
+  hover_width: number;
+  /** Width when selected (0.5-20.0, typically > width) */
+  selection_width: number;
 }
 
 /** Snap-to-station configuration for precision tools */
@@ -280,10 +288,14 @@ export const defaultConfig: Config = {
     station: {
       radius: 4.0,
       hit_area: 10.0,
+      hover_radius: 6.0,
+      selection_radius: 5.0,
     },
     shot: {
       width: 2.0,
       hit_area: 8.0,
+      hover_width: 4.0,
+      selection_width: 3.0,
     },
     snap: {
       threshold: 10.0,
