@@ -55,6 +55,9 @@ Task tracking for AI agents. All state lives in `.flow/`.
 # Work
 .flow/bin/flowctl start fn-1.2       # Claim task
 .flow/bin/flowctl done fn-1.2 --summary-file s.md --evidence-json e.json
+
+# Dependencies
+flowctl dep add fn-1.3 fn-1.2        # This makes fn-1.3 depend on fn-1.2 (fn-1.3 cannot start until fn-1.2 is done).
 ```
 
 ## Workflow
