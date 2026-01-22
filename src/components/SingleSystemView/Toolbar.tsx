@@ -59,7 +59,10 @@ export default function Toolbar({
           onSingleAction={onUndo}
           testId="toolbar-undo-button"
         >
-          Undo
+          <span className="inline-flex items-center gap-0.5">
+            Undo
+            {canUndo && <span className="text-[10px] opacity-60" data-testid="undo-chevron">▾</span>}
+          </span>
         </UndoHistoryDropdown>
         <UndoHistoryDropdown
           mode="redo"
@@ -67,7 +70,10 @@ export default function Toolbar({
           onSingleAction={onRedo}
           testId="toolbar-redo-button"
         >
-          Redo
+          <span className="inline-flex items-center gap-0.5">
+            Redo
+            {canRedo && <span className="text-[10px] opacity-60" data-testid="redo-chevron">▾</span>}
+          </span>
         </UndoHistoryDropdown>
       </div>
 
