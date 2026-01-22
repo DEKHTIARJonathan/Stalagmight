@@ -29,9 +29,8 @@ Current `Project::set_zero_datum()` calls `find_connected_zero_datum()` which us
 - [ ] Rust tests pass (cargo test)
 
 ## Done summary
-TBD
-
+Improved duplicate datum validation error message to include station identifiers (section/station indices). Refactored get_connected_stations() to reuse get_connected_section_ids(). Added comprehensive unit tests for validation scenarios.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 094a944, 0e40b6a
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:
