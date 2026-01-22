@@ -226,12 +226,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   updateConfig: async (config: Config) => {
-    const result = await invoke<CommandResult>('update_config', { config });
-    if (result.success) {
+    try {
+      // Rust command returns Result<(), String> - success returns nothing, error throws
+      await invoke('update_config', { config });
       // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
       await get().loadConfig();
+      return { success: true, error: null, warnings: [] };
+    } catch (e) {
+      return { success: false, error: String(e), warnings: [] };
     }
-    return result;
   },
 
   setConfig: (config: Config) => {

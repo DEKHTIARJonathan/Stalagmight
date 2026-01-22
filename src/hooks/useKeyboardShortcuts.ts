@@ -16,7 +16,6 @@ type ShortcutAction =
   | 'select'
   | 'pan'
   | 'zoom'
-  | 'quick_zoom'
   | 'draw'
   | 'delete_tool'
   | 'merge'
@@ -94,7 +93,6 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   select: 'Select tool',
   pan: 'Pan tool',
   zoom: 'Zoom tool',
-  quick_zoom: 'Quick zoom',
   draw: 'Draw tool',
   delete_tool: 'Delete tool',
   merge: 'Merge tool',
@@ -140,7 +138,6 @@ function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutActio
     'select',
     'pan',
     'zoom',
-    'quick_zoom',
     'draw',
     'delete_tool',
     'merge',
@@ -481,14 +478,7 @@ export function useKeyboardShortcuts() {
         }
 
         case 'zoom':
-          // Regular toggle to zoom tool (not spring-loaded)
-          event.preventDefault();
-          setActiveTool('zoom');
-          maybeShowToast(action);
-          break;
-
-        case 'quick_zoom':
-          // With modifier key - regular toggle (spring-loaded handled above)
+          // Regular toggle to zoom tool
           event.preventDefault();
           setActiveTool('zoom');
           maybeShowToast(action);

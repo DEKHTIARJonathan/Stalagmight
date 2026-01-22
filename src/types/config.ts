@@ -185,7 +185,6 @@ export interface ShortcutsConfig {
   select: string[];
   pan: string[];
   zoom: string[];
-  quick_zoom: string[];
   draw: string[];
   delete_tool: string[];
   merge: string[];
@@ -332,8 +331,7 @@ export const defaultConfig: Config = {
     // Tools
     select: ['S'],
     pan: ['P'],
-    zoom: [], // No default - use quick_zoom for spring-loaded Z
-    quick_zoom: ['Z'], // Spring-loaded (keydown activates, keyup restores)
+    zoom: ['Z'],
     draw: ['D'],
     delete_tool: ['X'],
     merge: ['M'],

@@ -2107,7 +2107,39 @@ impl AppState {
 
     /// Update config
     pub fn update_config(&self, mut config: Config) -> Result<()> {
+        // Check if cache setting changed before saving
+        let old_cache_enabled = self
+            .config
+            .lock()
+            .ok()
+            .map(|c| c.cache.tile_cache_enabled)
+            .unwrap_or(true);
+        let new_cache_enabled = config.cache.tile_cache_enabled;
+
         config.save()?;
+
+        // Sync tile cache if cache setting changed
+        if old_cache_enabled != new_cache_enabled {
+            if let Ok(mut cache_guard) = self.tile_cache.lock() {
+                if new_cache_enabled {
+                    // Enable cache - create new cache
+                    match Self::init_tile_cache(&config) {
+                        Ok(cache) => {
+                            tracing::info!("Tile cache enabled");
+                            *cache_guard = Some(cache);
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to initialize tile cache");
+                        }
+                    }
+                } else {
+                    // Disable cache - set to None (existing cache data remains on disk)
+                    tracing::info!("Tile cache disabled");
+                    *cache_guard = None;
+                }
+            }
+        }
+
         if let Ok(mut cfg) = self.config.lock() {
             *cfg = config;
         }

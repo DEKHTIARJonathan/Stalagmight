@@ -160,7 +160,6 @@ impl Default for ShortcutsConfig {
             select: vec!["S".to_string()],
             pan: vec!["P".to_string()],
             zoom: vec!["Z".to_string()],
-            quick_zoom: vec!["Q".to_string()],
             draw: vec!["D".to_string()],
             delete_tool: vec!["X".to_string()],
             merge: vec!["M".to_string()],

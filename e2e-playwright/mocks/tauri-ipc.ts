@@ -1024,8 +1024,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // Tools
                 select: ['S'],
                 pan: ['P'],
-                zoom: [], // No default - use quick_zoom for spring-loaded Z
-                quick_zoom: ['Z'], // Spring-loaded (keydown activates, keyup restores)
+                zoom: ['Z'],
                 draw: ['D'],
                 delete_tool: ['X'],
                 merge: ['M'],
@@ -1167,8 +1166,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // Tools
                 select: ['S'],
                 pan: ['P'],
-                zoom: [], // No default - use quick_zoom for spring-loaded Z
-                quick_zoom: ['Z'], // Spring-loaded (keydown activates, keyup restores)
+                zoom: ['Z'],
                 draw: ['D'],
                 delete_tool: ['X'],
                 merge: ['M'],

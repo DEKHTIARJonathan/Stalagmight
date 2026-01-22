@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
+import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { ShortcutRecorder } from '../Settings/ShortcutRecorder';
 import {
@@ -161,7 +162,7 @@ const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
   {
     id: 'tools',
     label: 'Tools',
-    actions: ['select', 'pan', 'zoom', 'quick_zoom', 'draw', 'delete_tool', 'merge', 'measure', 'move_section', 'move_station'],
+    actions: ['select', 'pan', 'zoom', 'draw', 'delete_tool', 'merge', 'measure', 'move_section', 'move_station'],
   },
   {
     id: 'edit',
@@ -877,29 +878,30 @@ export default function SettingsDialog() {
                       <h3 className="text-sm font-medium mb-3">Feedback</h3>
                       <div className="space-y-4">
                         <div>
-                          <label htmlFor="shortcut-feedback" className="block text-sm mb-1">
+                          <label id="shortcut-feedback-label" className="block text-sm mb-1">
                             Shortcut feedback
                           </label>
-                          <select
-                            id="shortcut-feedback"
+                          <Select
                             value={localConfig.general.shortcut_feedback}
-                            onChange={(e) => {
+                            onChange={(value) => {
                               setLocalConfig({
                                 ...localConfig,
                                 general: {
                                   ...localConfig.general,
-                                  shortcut_feedback: e.target.value as ShortcutFeedback,
+                                  shortcut_feedback: value as ShortcutFeedback,
                                 },
                               });
                               setIsDirty(true);
                             }}
-                            className="w-full max-w-xs px-3 py-2 bg-background border border-border rounded text-sm"
+                            options={[
+                              { value: 'none', label: 'None' },
+                              { value: 'non_obvious', label: 'Non-obvious only' },
+                              { value: 'all', label: 'All' },
+                            ]}
+                            className="max-w-xs"
+                            aria-labelledby="shortcut-feedback-label"
                             data-testid="shortcut-feedback-select"
-                          >
-                            <option value="none">None</option>
-                            <option value="non_obvious">Non-obvious only</option>
-                            <option value="all">All</option>
-                          </select>
+                          />
                           <p className="text-xs text-text-secondary mt-1">
                             Show toast notifications when keyboard shortcuts are activated
                           </p>

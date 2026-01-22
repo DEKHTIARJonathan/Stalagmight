@@ -517,8 +517,6 @@ pub struct ShortcutsConfig {
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub zoom: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
-    pub quick_zoom: Vec<String>,
-    #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub draw: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub delete_tool: Vec<String>,
@@ -607,7 +605,6 @@ impl ShortcutsConfig {
         normalize_shortcut_field(&mut self.select, &defaults.select, "select");
         normalize_shortcut_field(&mut self.pan, &defaults.pan, "pan");
         normalize_shortcut_field(&mut self.zoom, &defaults.zoom, "zoom");
-        normalize_shortcut_field(&mut self.quick_zoom, &defaults.quick_zoom, "quick_zoom");
         normalize_shortcut_field(&mut self.draw, &defaults.draw, "draw");
         normalize_shortcut_field(&mut self.delete_tool, &defaults.delete_tool, "delete_tool");
         normalize_shortcut_field(&mut self.merge, &defaults.merge, "merge");
@@ -879,7 +876,10 @@ impl Config {
 
     /// Save config to file
     pub fn save(&mut self) -> Result<()> {
-        self.normalize();
+        // Note: We intentionally do NOT call normalize() here.
+        // Normalization fills in defaults for missing fields and should only
+        // happen when LOADING from file, not when SAVING. This allows users
+        // to explicitly set shortcuts to empty (no shortcut).
         let config_path = Self::config_path()?;
         self.save_to_path(&config_path)
     }
@@ -2122,7 +2122,6 @@ delete = "X"
 
         // Verify new actions have defaults
         assert_eq!(config.delete_tool, vec!["X".to_string()]);
-        assert_eq!(config.quick_zoom, vec!["Q".to_string()]);
         assert_eq!(config.toggle_station_labels, vec!["L".to_string()]);
         assert_eq!(config.toggle_shot_labels, vec!["Shift+L".to_string()]);
         assert_eq!(config.toggle_section_labels, vec!["Ctrl+L".to_string()]);
