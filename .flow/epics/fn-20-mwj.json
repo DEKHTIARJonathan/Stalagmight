@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-20-mwj",
+  "created_at": "2026-01-22T16:49:45.365713Z",
+  "depends_on_epics": [],
+  "id": "fn-20-mwj",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-20-mwj.md",
+  "status": "open",
+  "title": "Data Table Panel Improvements",
+  "updated_at": "2026-01-22T16:50:18.739062Z"
+}
