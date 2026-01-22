@@ -44,3 +44,10 @@ Add the standard Cmd+, (macOS) / Ctrl+, (Windows/Linux) keyboard shortcut to ope
 - [ ] Uses `event.key === ','` (not 'Comma')
 - [ ] event.preventDefault() called when handling
 - [ ] pnpm tsc --noEmit passes
+
+## Done summary
+Added Cmd/Ctrl+, keyboard shortcut to open the Settings dialog globally (including when focused in input fields). Added the comma key to RESERVED_CTRL_KEYS and RESERVED_CTRL_DESCRIPTIONS, updated checkReservedConflict() to use the new descriptions map, and handled the shortcut before the input guard in useKeyboardShortcuts.ts.
+## Evidence
+- Commits: 3b83cbe, 198f217
+- Tests: pnpm tsc --noEmit, pnpm vitest run src/utils/__tests__/shortcuts.test.ts
+- PRs:
