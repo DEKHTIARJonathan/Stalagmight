@@ -61,7 +61,7 @@ export default function Toolbar({
         >
           <span className="inline-flex items-center gap-0.5">
             Undo
-            {canUndo && <span className="text-[10px] opacity-60" data-testid="undo-chevron">▾</span>}
+            {canUndo && <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="undo-chevron">{' '}▾</span>}
           </span>
         </UndoHistoryDropdown>
         <UndoHistoryDropdown
@@ -72,7 +72,7 @@ export default function Toolbar({
         >
           <span className="inline-flex items-center gap-0.5">
             Redo
-            {canRedo && <span className="text-[10px] opacity-60" data-testid="redo-chevron">▾</span>}
+            {canRedo && <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="redo-chevron">{' '}▾</span>}
           </span>
         </UndoHistoryDropdown>
       </div>

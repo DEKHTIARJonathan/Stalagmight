@@ -1,6 +1,7 @@
 # fn-17-ygu.4 Update export documentation
 
 ## Description
+
 Update documentation to reflect the fixed export scaling behavior.
 
 **Size:** S
@@ -18,12 +19,16 @@ Update documentation to reflect the fixed export scaling behavior.
 ## Key context
 
 - Document formula: `viewBox_size = pixel_size / scale`
-- Element sizes: station 4px, shot stroke 2px, grid 0.5px, labels 8-12px
+- Element sizes: station 3px (6px ZD), shot stroke 2px, grid 0.5px, labels 8-12px
+- DPI options: 72, 150, 300, 600
+
 ## Acceptance
+
 - [ ] SPEC.md section 17.3 updated with scaling details
-- [ ] Element size specifications documented
+- [ ] Element size specifications documented (3px/6px station, 2px shot, 0.5px grid)
 - [ ] TESTING.md has export testing section
 - [ ] Code comments explain scaling logic
+
 ## Done summary
 TBD
 

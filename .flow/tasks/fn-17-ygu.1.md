@@ -1,33 +1,57 @@
 # fn-17-ygu.1 Fix element size scaling in SVG export
 
 ## Description
-Fix the SVG export so that element sizes (station radius, shot stroke-width, grid stroke-width) match the screen display. Currently elements appear ~3-4x larger because sizes are specified in viewBox units (meters) instead of being scaled to pixels.
+
+Fix the SVG export so that all element sizes match expected pixel values. Currently elements appear ~3-4x larger because sizes are specified in viewBox units (meters) instead of being scaled to pixels.
 
 **Size:** M
 **Files:**
-- `src-tauri/src/export/image.rs` (lines 265-268, 355-356, 393-394, 458-459)
+- `src-tauri/src/export/image.rs`
 
 ## Approach
 
-The scale factor is already calculated at line 252-257. For each element type, divide the desired pixel size by scale to get viewBox units:
+For every SVG length that should be pixel-stable, apply: `value_world = value_px / scale`
 
-1. **Station radius** (line 393): Divide desired px (4.0/6.0) by scale
-2. **Shot stroke-width** (CSS line 265): Use `vector-effect="non-scaling-stroke"` or calculate `2.0/scale`
-3. **Grid stroke-width** (line 458-459): Calculate `0.5/scale`
-4. **Add minimum size clamp** to prevent sub-pixel elements at large surveys
+The scale factor is at line 254: `scale = TARGET_SIZE / width.max(height)` where width/height already include padding.
+
+**Elements to scale (ALL of these):**
+
+| Element | Location | Current | Target px | Fix |
+|---------|----------|---------|-----------|-----|
+| Station radius | line 393 `r` attr | 4.0/6.0 | 3/6 | `r = 3.0 / scale` |
+| Station stroke-width | line 393 | 1 | 1 | `stroke_width = 1.0 / scale` |
+| Shot stroke-width | CSS `.shot` line 265 | 2 | 2 | inject scaled value |
+| Virtual shot dasharray | `stroke-dasharray` | 4,2 | 4,2 | `"{4.0/scale},{2.0/scale}"` |
+| Grid stroke-width | line 458 | 0.5 | 0.5 | `stroke_width = 0.5 / scale` |
+| Shot-label dx/dy | line 375 | dx=2 dy=-2 | 2/2 | `dx="{2.0/scale}"` etc. |
+| ZD label dx/dy | line 439 | dx=8 dy=4 | 8/4 | `dx="{8.0/scale}"` etc. |
+| Section-name dx/dy | line 463 | dx=5 dy=-5 | 5/5 | `dx="{5.0/scale}"` etc. |
+| Legend font-size | line 583 | varies | 10-12 | scale proportionally |
+| Legend bar width | legend section | 15% | ~16px min | scale proportionally |
+
+**DPI semantics**: Do NOT use `vector-effect="non-scaling-stroke"`. Higher DPI should produce proportionally thicker lines (same physical size when printed).
 
 ## Key context
 
-- Preview uses MapLibre with pixel-based sizes: `'circle-radius': 3`, `'line-width': 2`
+- Preview (`ExportPreview.tsx:149-163`) uses pixel sizes: `'circle-radius': 3`, `'line-width': 2`
 - Export generates SVG with viewBox in world coordinates (meters)
-- DPI scaling happens AFTER SVG generation (in PNG rasterization)
+- DPI scaling applies AFTER SVG generation during PNG rasterization
+- All lengths must be in viewBox units for correct DPI behavior
+
 ## Acceptance
-- [ ] Station circles are ~4px radius (6px for zero datum)
-- [ ] Shot lines are ~2px stroke width
-- [ ] Grid lines are ~0.5px stroke width
-- [ ] Elements scale correctly at all survey sizes (10m to 10km)
-- [ ] Minimum size prevents invisible elements at large surveys
+
+- [ ] Station circles: `r * scale ≈ 3px` (6px for zero datum)
+- [ ] Station stroke-width: `stroke-width * scale ≈ 1px`
+- [ ] Shot stroke-width: `stroke-width * scale ≈ 2px`
+- [ ] Virtual shot dasharray: `dash * scale ≈ 4px`, `gap * scale ≈ 2px`
+- [ ] Grid stroke-width: `stroke-width * scale ≈ 0.5px`
+- [ ] Shot-label offsets: `dx * scale ≈ 2px`, `dy * scale ≈ 2px`
+- [ ] ZD label offsets: `dx * scale ≈ 8px`, `dy * scale ≈ 4px`
+- [ ] Section-name offsets: `dx * scale ≈ 5px`, `dy * scale ≈ 5px`
+- [ ] Legend sizing scales correctly
+- [ ] Higher DPI (150, 300, 600) produces proportionally larger pixel dimensions
 - [ ] Existing Rust tests pass
+
 ## Done summary
 TBD
 
