@@ -57,3 +57,10 @@ Create the left sidebar navigation component for the Settings dialog with catego
 - [ ] Roving tabindex pattern (only focused tab has tabindex=0)
 - [ ] `data-testid` attributes on sidebar items for E2E testing
 - [ ] pnpm tsc --noEmit passes
+
+## Done summary
+Created SettingsSidebar component with vertical tab pattern, ARIA roles (tablist/tab), manual activation (Enter/Space activates, arrows move focus), roving tabindex with fallback for invalid focusedIndex, red dot error indicators, and visual separator before Advanced category.
+## Evidence
+- Commits: 20829a03c8f9dced79a459c4c7e59764b38b8f9a, 3b9dfd5604a59964191acf37babfb264036b86ed
+- Tests: pnpm tsc --noEmit
+- PRs:
