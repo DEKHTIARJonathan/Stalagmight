@@ -411,7 +411,9 @@ impl Project {
             return Ok(true);
         }
 
-        // Check zero datum status
+        // Check zero datum status - uses transitive connections through existing merges
+        // This ensures that if B is connected to a datum-holding section C through an
+        // earlier merge, b_has_zd will be true and the merge will propagate datum positioning
         let a_has_zd = self.section_has_zero_datum(station_a.section_id);
         let b_has_zd = self.section_has_zero_datum(station_b.section_id);
 
@@ -419,16 +421,21 @@ impl Project {
             return Err("Both stations are connected to zero datums. Use Closure instead to handle survey loops.".to_string());
         }
 
-        // Compute current coordinates
+        // Compute current coordinates (includes existing section offsets)
+        // Coordinates are in the world coordinate system established by the datum
         let coords_a = self.compute_station_raw_coords(station_a)
             .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
         let coords_b = self.compute_station_raw_coords(station_b)
             .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
 
+        // Datum propagation: When merging a section without datum into a datum group,
+        // the non-datum section is repositioned to align with the datum coordinate system.
+        // This is similar to set_zero_datum() offset calculation but triggered by merge.
+        //
         // Determine which section group needs to move:
-        // - If A has zero datum, B's group moves
-        // - If B has zero datum, A's group moves
-        // - If neither has zero datum, A's group moves to align with B
+        // - If A has zero datum (direct or transitive), B's group moves to align with A
+        // - If B has zero datum (direct or transitive), A's group moves to align with B
+        // - If neither has zero datum, A's group moves to align with B (arbitrary choice)
         let (anchor_coords, moving_coords, moving_section_id) = if a_has_zd {
             (coords_a, coords_b, station_b.section_id)
         } else {
@@ -436,11 +443,13 @@ impl Project {
             (coords_b, coords_a, station_a.section_id)
         };
 
-        // Calculate offset to align moving station with anchor
+        // Calculate offset to move the merge point station from its current position
+        // to the anchor station's position, aligning them in world coordinates
         let offset_x = anchor_coords.x - moving_coords.x;
         let offset_y = anchor_coords.y - moving_coords.y;
 
         // Apply offset to all sections in the moving group
+        // This repositions the entire moving group relative to the datum coordinate system
         let moving_sections = self.get_connected_section_ids(moving_section_id);
         for section_id in moving_sections {
             let current_offset = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
@@ -1468,6 +1477,176 @@ mod tests {
         let station_1 = stations.iter().find(|s| s.station_ref == StationRef::new(section_id, 1)).unwrap();
         assert!((station_1.coordinates.x).abs() < 1e-6);
         assert!((station_1.coordinates.y - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn merge_stations_propagates_datum_positioning_a_into_b() {
+        // Test: Section without datum merges into section group with datum
+        // The merged section should be repositioned relative to the datum
+        let mut project = Project::new("MergeDatumA".to_string(), None);
+
+        // Section A: has datum, shot goes north 10m
+        let a = project.add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        }).id;
+
+        // Set datum on A.0 (positions A.0 at origin)
+        project.set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap()
+        ).unwrap();
+
+        // Verify A is positioned correctly before merge
+        let a0_coords = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
+        assert!((a0_coords.x).abs() < 1e-6, "A.0 x should be 0");
+        assert!((a0_coords.y).abs() < 1e-6, "A.0 y should be 0");
+        let a1_coords = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
+        assert!((a1_coords.y - 10.0).abs() < 1e-6, "A.1 y should be 10");
+
+        // Section B: no datum, shot goes east 5m
+        let b = project.add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        }).id;
+
+        // Merge B.0 into A.1 (B merges into datum group)
+        project.merge_stations(
+            StationRef::new(a, 1),
+            StationRef::new(b, 0),
+            ClosureStrategy::KeepRaw
+        ).unwrap();
+
+        // After merge, B should be positioned in datum coordinate system
+        // B.0 should be at A.1's position (0, 10)
+        let b0_coords = project.compute_station_raw_coords(StationRef::new(b, 0)).unwrap();
+        assert!((b0_coords.x).abs() < 1e-6, "B.0 x should be 0, got {}", b0_coords.x);
+        assert!((b0_coords.y - 10.0).abs() < 1e-6, "B.0 y should be 10, got {}", b0_coords.y);
+
+        // B.1 should be at (5, 10) - 5m east of B.0
+        let b1_coords = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+        assert!((b1_coords.x - 5.0).abs() < 1e-6, "B.1 x should be 5, got {}", b1_coords.x);
+        assert!((b1_coords.y - 10.0).abs() < 1e-6, "B.1 y should be 10, got {}", b1_coords.y);
+
+        // A's positions should be unchanged
+        let a0_after = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
+        assert!((a0_after.x).abs() < 1e-6, "A.0 x should still be 0");
+        assert!((a0_after.y).abs() < 1e-6, "A.0 y should still be 0");
+    }
+
+    #[test]
+    fn merge_stations_propagates_datum_positioning_b_into_a() {
+        // Test: Section with datum merges with section without datum
+        // The non-datum section should be repositioned
+        let mut project = Project::new("MergeDatumB".to_string(), None);
+
+        // Section A: no datum, shot goes north 10m
+        let a = project.add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        }).id;
+
+        // Section B: has datum, shot goes east 5m
+        let b = project.add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        }).id;
+
+        // Set datum on B.0 (positions B.0 at origin)
+        project.set_zero_datum(
+            StationRef::new(b, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap()
+        ).unwrap();
+
+        // Verify B is positioned correctly before merge
+        let b0_coords = project.compute_station_raw_coords(StationRef::new(b, 0)).unwrap();
+        assert!((b0_coords.x).abs() < 1e-6, "B.0 x should be 0");
+        assert!((b0_coords.y).abs() < 1e-6, "B.0 y should be 0");
+
+        // Merge A.0 into B.1 (A merges into datum group)
+        // B.1 is at (5, 0)
+        project.merge_stations(
+            StationRef::new(a, 0),
+            StationRef::new(b, 1),
+            ClosureStrategy::KeepRaw
+        ).unwrap();
+
+        // After merge, A should be positioned in datum coordinate system
+        // A.0 should be at B.1's position (5, 0)
+        let a0_coords = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
+        assert!((a0_coords.x - 5.0).abs() < 1e-6, "A.0 x should be 5, got {}", a0_coords.x);
+        assert!((a0_coords.y).abs() < 1e-6, "A.0 y should be 0, got {}", a0_coords.y);
+
+        // A.1 should be at (5, 10) - 10m north of A.0
+        let a1_coords = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
+        assert!((a1_coords.x - 5.0).abs() < 1e-6, "A.1 x should be 5, got {}", a1_coords.x);
+        assert!((a1_coords.y - 10.0).abs() < 1e-6, "A.1 y should be 10, got {}", a1_coords.y);
+
+        // B's positions should be unchanged
+        let b0_after = project.compute_station_raw_coords(StationRef::new(b, 0)).unwrap();
+        assert!((b0_after.x).abs() < 1e-6, "B.0 x should still be 0");
+        assert!((b0_after.y).abs() < 1e-6, "B.0 y should still be 0");
+    }
+
+    #[test]
+    fn merge_stations_transitive_datum_propagation() {
+        // Test: Merge into a section that's connected to a datum group through another merge
+        // C merges into B, which is already merged with datum-holding A
+        let mut project = Project::new("TransitiveDatum".to_string(), None);
+
+        // Section A: has datum, shot goes north 10m
+        let a = project.add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        }).id;
+
+        // Set datum on A.0
+        project.set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap()
+        ).unwrap();
+
+        // Section B: shot goes east 5m (will be connected to A)
+        let b = project.add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        }).id;
+
+        // Merge B.0 into A.1 - B now connected to datum group
+        project.merge_stations(
+            StationRef::new(a, 1),
+            StationRef::new(b, 0),
+            ClosureStrategy::KeepRaw
+        ).unwrap();
+
+        // Section C: shot goes south 3m
+        let c = project.add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+            ..Default::default()
+        }).id;
+
+        // Verify B.1 position before merging C
+        // B.1 should be at (5, 10) - B.0 at (0, 10), B.1 5m east
+        let b1_before = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+        assert!((b1_before.x - 5.0).abs() < 1e-6, "B.1 x should be 5");
+        assert!((b1_before.y - 10.0).abs() < 1e-6, "B.1 y should be 10");
+
+        // Merge C.0 into B.1 - C should be positioned via transitive datum
+        project.merge_stations(
+            StationRef::new(b, 1),
+            StationRef::new(c, 0),
+            ClosureStrategy::KeepRaw
+        ).unwrap();
+
+        // C.0 should be at B.1's position (5, 10)
+        let c0_coords = project.compute_station_raw_coords(StationRef::new(c, 0)).unwrap();
+        assert!((c0_coords.x - 5.0).abs() < 1e-6, "C.0 x should be 5, got {}", c0_coords.x);
+        assert!((c0_coords.y - 10.0).abs() < 1e-6, "C.0 y should be 10, got {}", c0_coords.y);
+
+        // C.1 should be at (5, 7) - 3m south of C.0
+        let c1_coords = project.compute_station_raw_coords(StationRef::new(c, 1)).unwrap();
+        assert!((c1_coords.x - 5.0).abs() < 1e-6, "C.1 x should be 5, got {}", c1_coords.x);
+        assert!((c1_coords.y - 7.0).abs() < 1e-6, "C.1 y should be 7, got {}", c1_coords.y);
     }
 }
 
