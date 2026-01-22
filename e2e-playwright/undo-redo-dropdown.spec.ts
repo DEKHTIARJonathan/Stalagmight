@@ -333,6 +333,9 @@ test.describe('Undo/Redo History Dropdown', () => {
       await page.keyboard.press('ArrowDown');
       await expect(dropdown).toBeVisible();
 
+      // Wait for aria-activedescendant to be set (component sets it in setTimeout(0))
+      await expect(dropdown).toHaveAttribute('aria-activedescendant', /.+/);
+
       // Get initial aria-activedescendant
       const getActiveDescendant = async () => {
         return await dropdown.getAttribute('aria-activedescendant');
