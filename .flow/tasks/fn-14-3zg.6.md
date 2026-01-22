@@ -30,9 +30,8 @@ Integrate UndoHistoryDropdown into Toolbar component and add chevron indicator t
 - [ ] Existing button styling preserved
 - [ ] pnpm tsc --noEmit passes
 ## Done summary
-TBD
-
+Added chevron indicator (▾) to Undo/Redo toolbar buttons that shows when the action is available. The chevron is hidden when the button is disabled. Also improved accessibility by adding aria-hidden and proper text spacing.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 80388c5, 484e18b
+- Tests: pnpm tsc --noEmit, pnpm test:ui, cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:

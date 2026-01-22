@@ -1,36 +1,46 @@
 # fn-16-axa.6 Add Cmd/Ctrl+comma keyboard shortcut to open Settings
 
 ## Description
-Add the standard Cmd+, (macOS) / Ctrl+, (Windows/Linux) keyboard shortcut to open the Settings dialog.
+Add the standard Cmd+, (macOS) / Ctrl+, (Windows/Linux) keyboard shortcut to open the Settings dialog. Should work globally, including when focused in input fields.
 
 **Size:** S
 **Files:**
-- `src/types/shortcuts.ts` - Add to reserved shortcuts
-- `src/hooks/useKeyboardShortcuts.ts` - Handle the shortcut
-- `src/store/uiStore.ts` - May need to verify openDialog exists
+- `src/utils/shortcuts.ts` - Add to RESERVED_CTRL_KEYS and description map
+- `src/hooks/useKeyboardShortcuts.ts` - Handle the shortcut before input guard
 
 ## Approach
 
-1. Add Cmd/Ctrl+, to reserved shortcuts list at `src/types/shortcuts.ts:22-29`
+1. **Add to RESERVED_CTRL_KEYS** at `src/utils/shortcuts.ts`:
+   - Add `','` to `RESERVED_CTRL_KEYS` array (currently only has I/E/A)
+   - Add description to `RESERVED_CTRL_DESCRIPTIONS` map: `',': 'Open Settings'`
+   - This ensures `checkReservedConflict()` blocks users from assigning Ctrl/Cmd+, to custom shortcuts
 2. Handle in useKeyboardShortcuts.ts:
-   - Check for 'Comma' key with Ctrl (Windows/Linux) or Meta (macOS) modifier
+   - **Check BEFORE the input guard** (before `shouldIgnoreInput(e)` check)
+   - Use `event.key === ','` (NOT 'Comma' - that's event.code, codebase uses event.key)
+   - Check `(e.metaKey || e.ctrlKey)` for Ctrl/Meta modifier
    - Call `useUIStore.getState().openDialog('settings')` when triggered
-3. Shortcut should work globally (not just in specific views)
-4. Memory note: "Only call event.preventDefault() when actually handling the event"
+3. Shortcut should work **globally including in input fields** (handle before input guard)
+4. Don't trigger if Settings is already open
+5. Call `event.preventDefault()` when handling
 
 ## Key Context
 
-- Reserved shortcuts defined at `src/types/shortcuts.ts:22-29`
+- Reserved shortcuts defined via `RESERVED_CTRL_KEYS` and `RESERVED_CTRL_DESCRIPTIONS` at `src/utils/shortcuts.ts`
+- `checkReservedConflict()` function uses `RESERVED_CTRL_KEYS` to block conflicts in Shortcuts UI
 - Keyboard handler at `src/hooks/useKeyboardShortcuts.ts`
 - Dialog opening via `useUIStore.openDialog('settings')` - pattern at GlobalView.tsx:218
-- Shortcut key normalization uses UPPERCASE for letters (memory note)
-- Key value for comma is `','` or `'Comma'` in KeyboardEvent.key
+- **Key detection uses `event.key`** not `event.code` in this codebase
+- `event.key` for comma is `','` (the literal comma character)
+- Input guard (`shouldIgnoreInput`) currently blocks non-Escape shortcuts in inputs - need to handle Settings shortcut BEFORE this check
 
 ## Acceptance
 - [ ] Cmd+, opens Settings on macOS
 - [ ] Ctrl+, opens Settings on Windows/Linux
-- [ ] Shortcut added to reserved shortcuts list (not user-configurable)
-- [ ] Works from any view when Settings isn't already open
+- [ ] **Works even when focused in input/textarea/select fields** (global shortcut)
+- [ ] `','` added to `RESERVED_CTRL_KEYS` array
+- [ ] `','` added to `RESERVED_CTRL_DESCRIPTIONS` map with 'Open Settings' description
+- [ ] `checkReservedConflict()` blocks users from assigning Ctrl/Cmd+, to custom shortcuts
 - [ ] Does not trigger when Settings is already open
+- [ ] Uses `event.key === ','` (not 'Comma')
 - [ ] event.preventDefault() called when handling
 - [ ] pnpm tsc --noEmit passes

@@ -10,25 +10,30 @@ The current Settings dialog uses horizontal tabs at the top (General, Cache, Sho
 - **Sidebar content**: Text-only category labels (no icons)
 - **Divider**: Thin border line between sidebar and content area
 - **Dialog size**: Fixed size, minimum 600px width × 500px height
-- **Content area**: Independent scrolling, sidebar stays fixed
+- **Content area**: Independent scrolling (via flex layout with overflow-hidden on wrapper, overflow-auto on content pane)
 - **Dialog title**: Static "Settings" (doesn't change per category)
+- **Backdrop click**: Does NOT close dialog (requires explicit close via X or Cancel)
 
 ### Categories (9 total)
-1. **General** - Auto-save, auto-expand sections, coordinate system, survey file preference
-2. **Units** - Length units, angle units, grouped by type with subsection headers
-3. **Display** - Visual settings, section colors (predefined palette)
-4. **Map** - Station map and station point settings combined
-5. **Validation** - Shot validation thresholds and length limits
-6. **Export** - Export formats, precision, units preferences
-7. **Shortcuts** - Keep current table layout for key binding editor
-8. **Cache** - Cache settings, clear button, show cache statistics (size, item count)
-9. **Advanced** - Debug settings, logging, panel positions, internal state, Reload Config button (separated visually with divider above)
+Categories map to existing Config sections in `src/types/config.ts`:
+1. **General** - `general` config: auto_save, auto_save_interval_seconds, recent_projects_max, undo_history_limit, undo_persist_limit, shortcut_feedback
+2. **Units** - `units` config: length, depth, angle, decimal_precision
+3. **Display** - `display` + `section_colors` config: background, grid, font, depth_gradient settings, color palette
+4. **Map** - `map` config: satellite_provider, satellite_enabled, satellite_gps_origin, zoom settings, station, shot, snap, animation configs
+5. **Validation** - `validation` config: warn_shot_length_min/max, warn_depth_change_per_shot_max, warn_azimuth_deviation_max, azimuth_diff_threshold, pitch_diff_threshold
+6. **Export** - `export` config: default_image_format, default_dpi, default_include_satellite/grid/labels
+7. **Shortcuts** - Keep current ShortcutsTabContent table layout
+8. **Cache** - `cache` config: tile_cache_enabled, tile_cache_max_mb, tile_ttl_days, plus cache stats display and clear button
+9. **Advanced** - `debug` + `logging` + `panels` configs, Reload Config button (separated visually with divider above)
 
 ### Navigation & Selection
 - **Selection style**: Background highlight with existing accent color
 - **Hover effect**: Subtle hover state
 - **Error indicator**: Red dot next to category name when validation issues exist
-- **Keyboard navigation**: Full support (arrow keys to navigate, Enter to select)
+- **Keyboard navigation**: Full support
+  - Arrow Up/Down: Move focus between categories (roving tabindex)
+  - Enter: Activate focused category (manual activation pattern)
+  - Track `focusedCategory` (roving tabindex=0) separately from `activeCategory` (aria-selected=true)
 - **Remember tab**: No - always open to General category
 - **Sidebar collapsible**: No - always visible at fixed width
 
@@ -36,12 +41,12 @@ The current Settings dialog uses horizontal tabs at the top (General, Cache, Sho
 - **Category header**: Display category title as header in content area
 - **Subsection headers**: Group related settings with subtle headers within categories
 - **Help text**: Inline description below each setting explaining what it does
-- **Restart indicator**: Mark settings that require app restart with small label/icon
-- **Change indicator**: Highlight changed fields before saving
+- **Restart indicator**: Mark settings that require app restart with small label/icon (logging.level)
+- **Change indicator**: Highlight changed fields with subtle background color
 
 ### Controls
-- **Toggle settings**: iOS-style switch/toggle components
-- **Dropdowns**: Custom styled dropdowns matching app visual style
+- **Toggle settings**: Non-button focusable element (`div tabIndex=0 role="switch"`), Space toggles, Enter does NOT toggle
+- **Dropdowns**: Enhance existing custom Select with ARIA listbox roles and keyboard navigation
 - **Number inputs**: Text input with validation (min/max)
 - **Color settings**: Predefined palette (keep current behavior)
 
@@ -53,17 +58,27 @@ The current Settings dialog uses horizontal tabs at the top (General, Cache, Sho
 
 ### Behavior
 - **Unsaved changes**: Preserve when switching categories (don't discard)
-- **Close with X**: Show confirmation dialog ("Discard unsaved changes?") with Save/Discard/Cancel
-- **Click outside**: Does not close dialog (require explicit close)
+- **Close with X**: Show custom confirmation dialog with Save/Discard/Cancel options (DialogWrapper's built-in only has Cancel/Discard)
+- **Backdrop click**: Does NOT close dialog (add `closeOnBackdropClick={false}` prop to DialogWrapper or Settings-specific wrapper)
 - **Transitions**: No animation when switching categories (instant)
 - **Search**: No search functionality (categories are clear enough)
 - **Import/Export**: No (settings file can be copied manually)
 
 ### Keyboard Shortcut
 - **Open Settings**: Cmd/Ctrl+, (standard app settings shortcut)
+- **Key detection**: Use `event.key === ','` with Ctrl/Meta modifier
+- **Reserved shortcuts file**: `src/utils/shortcuts.ts` (not src/types/shortcuts.ts)
+- **Input guard behavior**: Allow Ctrl/Cmd+, even in input fields (handle before input guard in useKeyboardShortcuts)
+
+### Validation & Error State
+- **categoryErrors**: `Record<Category, boolean>` computed from localConfig + validation state
+- **Shortcuts validation**: Validate entire binding set on load (detect pre-existing conflicts)
+- **Error flow**: Field components report errors up to SettingsDialog, which computes categoryErrors and passes to sidebar
 
 ### Accessibility
 - Full ARIA support with proper roles, labels, and keyboard navigation
+- Tab pattern with manual activation (focus vs selection separation)
+- Custom Select: upgrade to ARIA listbox with `role="listbox"`, `role="option"`, `aria-activedescendant`
 
 ### Preserve from Current Implementation
 - Shortcuts table layout (current key binding editor)
@@ -74,6 +89,7 @@ The current Settings dialog uses horizontal tabs at the top (General, Cache, Sho
 - Long setting values should truncate with ellipsis
 - Content area scrolls if settings exceed visible area
 - Error states in shortcuts (conflicts) show red dot on Shortcuts category
+- Dialog cannot be closed by clicking outside (explicit close required)
 
 ## Open Questions
 - None - all decisions captured during interview
@@ -89,16 +105,17 @@ The current Settings dialog uses horizontal tabs at the top (General, Cache, Sho
 - [ ] Category title displayed as header in content area
 - [ ] Settings grouped with subsection headers within categories
 - [ ] Inline help text descriptions under settings
-- [ ] Toggle switches for boolean settings
-- [ ] Custom styled dropdowns
+- [ ] Toggle switches for boolean settings (Space toggles, Enter does not)
+- [ ] Custom styled dropdowns with ARIA listbox
 - [ ] Reset to Defaults button in category header with confirmation
 - [ ] Restart-required indicator on applicable settings
 - [ ] Changed fields highlighted before saving
 - [ ] Save button disabled when no changes
 - [ ] Unsaved changes preserved when switching categories
-- [ ] Confirmation dialog when closing with unsaved changes
+- [ ] Custom confirmation dialog when closing with unsaved changes (Save/Discard/Cancel)
+- [ ] Backdrop click does NOT close dialog
 - [ ] Dialog has minimum size 600px × 500px
-- [ ] Cmd/Ctrl+, keyboard shortcut opens Settings
+- [ ] Cmd/Ctrl+, keyboard shortcut opens Settings (works even in input fields)
 - [ ] Cache category shows statistics (size, item count)
 - [ ] Advanced category visually separated with divider
 - [ ] Shortcuts table layout preserved
