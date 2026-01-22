@@ -1,32 +1,35 @@
 # fn-15-ygz.9 Add FPS monitoring and auto-throttle
 
 ## Description
-Add FPS monitoring and auto-throttle that reduces detail when frame rate drops below threshold.
+
+Add FPS monitoring and auto-throttle that reduces detail when frame rate drops.
 
 **Size:** M
-**Files:** 
+**Files:**
 - `src/hooks/useFpsMonitor.ts` (new hook)
-- `src/components/GlobalView/GlobalSurveyLayer.ts` (detail level adjustment)
-- `src/types/config.ts` (add throttle config)
+- `src/components/GlobalView/GlobalSurveyLayer.ts` (detail adjustment)
+- `src/types/config.ts` (add config types)
+- `src-tauri/src/config/mod.rs` (add Rust config)
+- `src-tauri/src/config/defaults.rs` (add defaults)
 
 ## Approach
 
-- Use `requestAnimationFrame` timing to calculate FPS
-- Sample over 30 frames, calculate rolling average
-- When FPS < 30 (configurable): increase GeoJSON tolerance, reduce max rendered features
-- When FPS recovers > 45: gradually restore detail
-- Store threshold in config (default 30 FPS)
+- Use `requestAnimationFrame` timing to calculate FPS (rolling 30-frame average)
+- When FPS < threshold: increase GeoJSON tolerance from 0.5 to 1.0 (primary throttle action)
+- When FPS recovers > 45: restore detail
+- Add config to both Rust and TypeScript:
+  - `global_view.fps_threshold` (default 30)
+  - `global_view.tolerance` (default 0.5)
+  - `global_view.throttle_tolerance` (default 1.0)
 
-## Key context
-
-- FPS = 1000 / (currentTime - lastTime)
-- Auto-throttle actions: increase tolerance from 0.5 to 1.0+, hide small features
 ## Acceptance
-- [ ] FPS monitored via requestAnimationFrame timing
-- [ ] When FPS drops below threshold, detail is reduced
-- [ ] When FPS recovers, detail is gradually restored
-- [ ] Threshold configurable in config (default 30)
-- [ ] No visual stutter from throttle adjustment
+
+- [ ] FPS monitored via requestAnimationFrame
+- [ ] Detail reduced (tolerance increased) when FPS drops below threshold
+- [ ] Detail restored when FPS recovers
+- [ ] Config options added in Rust and TypeScript
+- [ ] Config options persisted correctly
+
 ## Done summary
 TBD
 

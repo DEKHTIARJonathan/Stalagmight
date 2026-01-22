@@ -123,7 +123,7 @@ fn get_command_type(command: &Command) -> String {
         Command::RemoveZeroDatum { .. } => "remove_zero_datum".to_string(),
         Command::MoveSection { .. } => "move_section".to_string(),
         Command::MoveStation { .. } => "move_station".to_string(),
-        Command::Batch { commands } => format!("batch_{}", commands.len()),
+        Command::Batch { .. } => "batch".to_string(),
         Command::MergeProjects { .. } => "merge_projects".to_string(),
     }
 }
@@ -318,13 +318,15 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
             })
         }
 
-        // Batch - show summary of operations count
+        // Batch - show summary of operations count (human-readable)
         (Command::Batch { commands }, _) => {
+            let count = commands.len();
+            let label = if count == 1 { "operation" } else { "operations" };
             Some(PreviewData {
                 changes: vec![FieldChange {
-                    field: "operations".to_string(),
+                    field: "count".to_string(),
                     old_value: String::new(),
-                    new_value: commands.len().to_string(),
+                    new_value: format!("{} {}", count, label),
                 }],
                 additional_changes: 0,
             })
@@ -378,7 +380,7 @@ mod tests {
 
         assert_eq!(get_command_type(&Command::Batch {
             commands: vec![Command::CloseProject, Command::CloseProject],
-        }), "batch_2");
+        }), "batch");
     }
 
     #[test]

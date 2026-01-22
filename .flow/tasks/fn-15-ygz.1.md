@@ -1,10 +1,11 @@
 # fn-15-ygz.1 Add Tauri command for survey geometry
 
 ## Description
-Add a new Tauri command `get_survey_geometry` that returns lightweight GPS-transformed survey data for rendering in the global view. This command loads a project file and extracts only the geometry needed for visualization.
+
+Add new Tauri command `get_survey_geometry` that returns lightweight GPS-transformed survey data for rendering in the global view.
 
 **Size:** M
-**Files:** 
+**Files:**
 - `src-tauri/src/commands/mod.rs` (add command export)
 - `src-tauri/src/commands/survey_geometry.rs` (new file)
 - `src/types/survey.ts` (add TypeScript types)
@@ -12,22 +13,26 @@ Add a new Tauri command `get_survey_geometry` that returns lightweight GPS-trans
 ## Approach
 
 - Follow command pattern at `src-tauri/src/commands/project.rs:load_project`
-- Transform coordinates using GPS origin like `metersToMapCoords()` does in frontend
-- Return minimal data: file_path, gps_origin, shots (as coordinate pairs), stations (as points), is_virtual flags
-- Handle errors gracefully: return Result with descriptive error messages
+- Implement `meters_to_map_coords` with latitude-adjusted formula matching frontend:
+  ```rust
+  let meters_per_degree_lat = 111320.0;
+  let meters_per_degree_lng = 111320.0 * origin_lat.to_radians().cos();
+  let lng = origin_lng + (x / meters_per_degree_lng);
+  let lat = origin_lat + (y / meters_per_degree_lat);
+  ```
+- Return SurveyGeometry: file_path, name, total_length, station_count, gps_origin, shots, stations, is_virtual
+- Reject projects without GPS (gps_center == null)
 
-## Key context
-
-- Backend uses `serde` for serialization - match existing patterns
-- GPS transformation: multiply local meters by scale factor, add to origin lat/lng
-- Virtual shots have `is_virtual: true` in Shot struct
 ## Acceptance
-- [ ] New Tauri command `get_survey_geometry` registered and callable from frontend
-- [ ] Returns `SurveyGeometry` struct with GPS-transformed coordinates
-- [ ] Filters out corrupted/invalid geometry (NaN, Infinity values)
-- [ ] Returns proper error for missing/corrupted files
-- [ ] TypeScript types added for frontend consumption
-- [ ] Rust tests pass for valid and invalid project files
+
+- [ ] New Tauri command `get_survey_geometry` registered
+- [ ] Returns SurveyGeometry with GPS-transformed coordinates
+- [ ] Includes metadata: file_path, name, total_length, station_count
+- [ ] Uses latitude-adjusted coordinate transform matching frontend
+- [ ] Unit tests compare Rust transform against known frontend values
+- [ ] Returns error for projects without GPS
+- [ ] TypeScript types added
+
 ## Done summary
 TBD
 
