@@ -179,7 +179,7 @@ interface ProjectStore {
 
   mergeStations: (stationA: StationRef, stationB: StationRef, strategy: ClosureStrategy) => Promise<CommandResult>;
   unmergeStations: (stationRef: StationRef) => Promise<CommandResult>;
-  setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates) => Promise<CommandResult>;
+  setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
   moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
   moveStation: (stationRef: StationRef, newPosition: Coordinates) => Promise<CommandResult>;
@@ -680,11 +680,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     return result;
   },
 
-  setZeroDatum: async (stationRef: StationRef, coordinates: GpsCoordinates) => {
+  setZeroDatum: async (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => {
     const result = await invoke<CommandResult>('set_zero_datum', { stationRef, coordinates });
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
+      if (options?.fitToBounds !== false) {
+        useUIStore.getState().triggerFitToBounds();
+      }
     }
     return result;
   },
