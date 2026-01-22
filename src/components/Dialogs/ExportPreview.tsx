@@ -68,6 +68,7 @@ export default function ExportPreview({ options, theme, presetColors }: ExportPr
       style: {
         version: 8,
         sources: {},
+        glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
         layers: [
           {
             id: 'background',
@@ -529,27 +530,35 @@ export default function ExportPreview({ options, theme, presetColors }: ExportPr
       });
     }
 
-    // Update layer visibility
-    map.setLayoutProperty(
-      'preview-grid-layer',
-      'visibility',
-      options.include_grid ? 'visible' : 'none'
-    );
-    map.setLayoutProperty(
-      'preview-section-labels-layer',
-      'visibility',
-      options.include_section_names ? 'visible' : 'none'
-    );
-    map.setLayoutProperty(
-      'preview-station-labels-layer',
-      'visibility',
-      options.include_labels ? 'visible' : 'none'
-    );
-    map.setLayoutProperty(
-      'preview-shot-labels-layer',
-      'visibility',
-      options.include_shot_data ? 'visible' : 'none'
-    );
+    // Update layer visibility (with guards in case layers failed to create)
+    if (map.getLayer('preview-grid-layer')) {
+      map.setLayoutProperty(
+        'preview-grid-layer',
+        'visibility',
+        options.include_grid ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('preview-section-labels-layer')) {
+      map.setLayoutProperty(
+        'preview-section-labels-layer',
+        'visibility',
+        options.include_section_names ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('preview-station-labels-layer')) {
+      map.setLayoutProperty(
+        'preview-station-labels-layer',
+        'visibility',
+        options.include_labels ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('preview-shot-labels-layer')) {
+      map.setLayoutProperty(
+        'preview-shot-labels-layer',
+        'visibility',
+        options.include_shot_data ? 'visible' : 'none'
+      );
+    }
 
     // Fit bounds to show all content
     if (stations.length > 0) {
