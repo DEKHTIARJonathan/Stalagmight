@@ -37,6 +37,14 @@ Create comprehensive E2E tests for the new Settings dialog sidebar layout AND up
    - Content panels: `settings-panel-${category}` (e.g., `settings-panel-general`)
    - Individual settings: `setting-${name}` (e.g., `setting-auto-save`)
    - Inputs: `input-${name}`, `toggle-${name}`, `select-${name}`
+<!-- Updated by plan-sync: fn-16-axa.5 added custom dialog test IDs -->
+7. **Custom dialog test IDs** (implemented by fn-16-axa.5):
+   - Unsaved changes dialog: `unsaved-changes-dialog`
+   - Unsaved dialog buttons: `unsaved-cancel`, `unsaved-discard`, `unsaved-save`
+   - Reset confirmation dialog: `reset-confirm-dialog`
+   - Reset dialog buttons: `reset-cancel`, `reset-confirm`
+   - Reset to Defaults button: `reset-category-defaults`
+   - Settings Save/Cancel: `settings-save-button`, `settings-cancel-button`
 
 ## Key Context
 
@@ -46,6 +54,8 @@ Create comprehensive E2E tests for the new Settings dialog sidebar layout AND up
 - Test convention: `closest('[data-testid]')` to find containers
 - **Navigate to Shortcuts category**: `page.click('[data-testid="settings-sidebar-shortcuts"]')`
 - **Error indicator visible**: `page.locator('[data-testid="settings-sidebar-error-general"]').isVisible()`
+<!-- Updated by plan-sync: fn-16-axa.5 implemented custom Escape handling for overlays -->
+- **Escape key behavior**: When unsaved/reset dialogs are open, Escape closes overlay first (not main dialog)
 
 ## Acceptance
 - [ ] **Update existing settings-shortcuts.spec.ts** for new sidebar layout

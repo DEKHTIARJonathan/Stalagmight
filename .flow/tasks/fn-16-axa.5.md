@@ -75,3 +75,10 @@ Refactor the main SettingsDialog component to use the new sidebar layout, integr
 - [ ] Opens to General category by default
 - [ ] All existing functionality preserved (save, reload config)
 - [ ] pnpm tsc --noEmit passes
+
+## Done summary
+Refactored SettingsDialog to use sidebar layout with centralized validation, custom dirty tracking, overflow control for fixed footer, and proper Escape key handling for overlays.
+## Evidence
+- Commits: 5415bb0, 8471f02, c692cb7, 63bfd97
+- Tests: pnpm tsc --noEmit, pnpm test:ui
+- PRs:
