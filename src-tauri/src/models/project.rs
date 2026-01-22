@@ -223,6 +223,23 @@ impl Project {
         connected
     }
 
+    /// Capture section offsets for all sections connected to the given section.
+    /// Returns a HashMap where:
+    /// - Key is the section ID
+    /// - Value is Option<(f64, f64)>: Some if offset existed, None if key didn't exist
+    /// This is used by undo to restore exact previous state.
+    pub fn capture_connected_section_offsets(
+        &self,
+        section_id: SectionId,
+    ) -> HashMap<SectionId, Option<(f64, f64)>> {
+        let connected_sections = self.get_connected_section_ids(section_id);
+        let mut offsets = HashMap::new();
+        for sid in connected_sections {
+            offsets.insert(sid, self.section_offsets.get(&sid).copied());
+        }
+        offsets
+    }
+
     /// Check if a section is connected to a zero datum (directly or through merges)
     fn section_has_zero_datum(&self, section_id: SectionId) -> bool {
         let connected = self.get_connected_section_ids(section_id);
