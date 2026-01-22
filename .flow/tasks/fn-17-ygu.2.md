@@ -1,7 +1,8 @@
-# fn-17-ygu.2 Add px unit to shot-label font-size
+# fn-17-ygu.2 Fix shot-label font-size scaling
 
 ## Description
-Fix the shot-label font-size attribute which is missing the `px` unit suffix, causing inconsistent sizing.
+
+Fix the shot-label font-size to scale correctly like all other elements. Currently it's hardcoded as `font-size="8"` which is interpreted as viewBox units (meters), making it ~3-4x too large.
 
 **Size:** S
 **Files:**
@@ -9,17 +10,32 @@ Fix the shot-label font-size attribute which is missing the `px` unit suffix, ca
 
 ## Approach
 
-1. Locate shot-label at line 375: change `font-size="8"` to `font-size="8px"`
-2. Verify other font-size attributes have correct units (lines 268, 269, 583)
+Apply the same `value_world = value_px / scale` formula used for other elements:
+
+```rust
+// Current (broken) - hardcoded 8 in viewBox units
+font-size="8"
+
+// Fixed - scale the font size
+let shot_label_font_size = 8.0 / scale;
+format!(r##"... font-size="{:.2}" ..."##, shot_label_font_size)
+```
+
+The scale factor is already available from line 254.
 
 ## Key context
 
-- CSS `font-size` in SVG defaults to user units (viewBox) when no unit specified
-- Adding `px` makes it absolute pixels regardless of viewBox scaling
+- CSS `font-size` in SVG without a unit is interpreted as viewBox units
+- All other lengths are being scaled by `1/scale` to achieve constant pixel size
+- Font sizes must follow the same pattern for consistency
+
 ## Acceptance
-- [ ] Shot-label font-size has `px` unit suffix
-- [ ] Shot labels are readable at ~8px
+
+- [ ] Shot-label font-size is scaled: `font_size = 8.0 / scale`
+- [ ] Shot labels appear at ~8px regardless of survey size
 - [ ] No regression in other label sizes
+- [ ] Labels remain readable at extreme survey sizes (10m to 10km)
+
 ## Done summary
 TBD
 
