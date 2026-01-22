@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-22T14:19:32.797886Z",
+  "depends_on": [],
+  "epic": "fn-16-axa",
+  "id": "fn-16-axa.7",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-16-axa.7.md",
+  "status": "todo",
+  "title": "Add E2E Playwright tests for Settings dialog",
+  "updated_at": "2026-01-22T14:19:32.797905Z"
+}
