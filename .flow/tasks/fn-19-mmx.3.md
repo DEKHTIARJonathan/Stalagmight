@@ -42,9 +42,8 @@ Current undo for SetZeroDatum in state.rs calls `set_zero_datum`/`remove_zero_da
 - [ ] Rust tests pass (cargo test)
 
 ## Done summary
-TBD
-
+Enhanced SetZeroDatum undo to capture and restore section_offsets directly, ensuring exact previous state is restored instead of recomputing offsets. Added previous_offsets HashMap to ZeroDatumInfo, updated undo handler to restore offsets and datum GPS without calling set_zero_datum, and added comprehensive test for offset restoration including key removal.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: cc865e42d5cbc8ab6d74a45c0ac8c04b76c0a51b, ccb58b9ad5b8e2f8f57cfa83102eb65dbed4cb07
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, cargo test test_undo_set_zero_datum_restores_section_offsets
 - PRs:
