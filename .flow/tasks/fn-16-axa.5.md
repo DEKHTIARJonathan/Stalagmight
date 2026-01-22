@@ -1,4 +1,5 @@
 # fn-16-axa.5 Refactor SettingsDialog to sidebar layout with dirty tracking
+<!-- Updated by plan-sync: fn-16-axa.4 added panelIdBase prop and exports types/helpers from ./settings/types and ./SettingsSidebar -->
 
 ## Description
 Refactor the main SettingsDialog component to use the new sidebar layout, integrate all category content components, implement field-level dirty tracking, add Reset to Defaults functionality, and custom unsaved-changes dialog.
@@ -22,7 +23,8 @@ Refactor the main SettingsDialog component to use the new sidebar layout, integr
    - Track changes per-field using object diff or Set
    - `changedFields: Set<string>` to track which fields have been modified
    - Derive `isDirty` from changedFields.size > 0
-   - `categoryErrors: Record<Category, boolean>` computed from validation callbacks
+   - `categoryErrors: Record<SettingsCategory, boolean>` computed from validation callbacks
+   - Generate unique `panelIdBase` using `useId()` for ARIA associations
 5. **Validation flow**:
    - Category components call `onValidationError(category, hasError)`
    - SettingsDialog maintains `categoryErrors` state
@@ -49,6 +51,11 @@ Refactor the main SettingsDialog component to use the new sidebar layout, integr
 - Existing `computeConfigDiff()` function can be adapted for field-level tracking
 - Default config at `src/types/config.ts` exports `defaultConfig`
 - ConfirmDialog at `src/components/Dialogs/ConfirmDialog.tsx` can be used/adapted for reset confirmation
+- **Category components** (from fn-16-axa.4) require props: `{ config, onChange, changedFields, onValidationError, panelIdBase }`
+  - Import `SettingsCategoryProps` type from `./settings/types`
+  - Import `isFieldChanged` helper from `./settings/types`
+  - Import `getTabId`, `getPanelId`, `SettingsCategory`, `CATEGORIES` from `./SettingsSidebar`
+  - Pass `panelIdBase` prop (from `useId()`) to each category component for ARIA associations
 
 ## Acceptance
 - [ ] DialogWrapper supports `closeOnBackdropClick` prop (false for Settings)

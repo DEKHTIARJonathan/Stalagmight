@@ -1,4 +1,5 @@
 # fn-16-axa.7 Add E2E Playwright tests for Settings dialog
+<!-- Updated by plan-sync: fn-16-axa.4 documented actual test ID patterns for sidebar/panels/errors -->
 
 ## Description
 Create comprehensive E2E tests for the new Settings dialog sidebar layout AND update existing settings-shortcuts.spec.ts to work with the new layout.
@@ -29,7 +30,13 @@ Create comprehensive E2E tests for the new Settings dialog sidebar layout AND up
    - Error indicators (red dots) on categories
    - Escape closes dialog
 5. Use `data-testid` selectors for reliable element targeting
-6. Add `data-testid` attributes to sidebar items: `settings-sidebar-general`, `settings-sidebar-cache`, etc.
+6. **Test ID patterns** (already implemented by fn-16-axa.3 and fn-16-axa.4):
+   - Sidebar: `settings-sidebar` (tablist container)
+   - Sidebar items: `settings-sidebar-${category}` (e.g., `settings-sidebar-general`, `settings-sidebar-cache`)
+   - Sidebar error dots: `settings-sidebar-error-${category}` (e.g., `settings-sidebar-error-general`)
+   - Content panels: `settings-panel-${category}` (e.g., `settings-panel-general`)
+   - Individual settings: `setting-${name}` (e.g., `setting-auto-save`)
+   - Inputs: `input-${name}`, `toggle-${name}`, `select-${name}`
 
 ## Key Context
 
@@ -37,6 +44,8 @@ Create comprehensive E2E tests for the new Settings dialog sidebar layout AND up
 - **settings-shortcuts.spec.ts WILL BREAK** - depends on tab testids like `settings-tab-shortcuts` that won't exist
 - Use `data-testid` attributes for selectors
 - Test convention: `closest('[data-testid]')` to find containers
+- **Navigate to Shortcuts category**: `page.click('[data-testid="settings-sidebar-shortcuts"]')`
+- **Error indicator visible**: `page.locator('[data-testid="settings-sidebar-error-general"]').isVisible()`
 
 ## Acceptance
 - [ ] **Update existing settings-shortcuts.spec.ts** for new sidebar layout
