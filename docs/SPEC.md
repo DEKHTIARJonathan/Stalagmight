@@ -241,6 +241,27 @@ Examples:
 - **Azimuth**: Degrees from magnetic north (0-360), support for declination correction
 - **Depth**: Positive values = below surface
 
+#### GPS-to-Local Coordinate Transformation
+
+When a zero datum is set with GPS coordinates, a coordinate transformation converts GPS (WGS84) to local ENU (East-North-Up) meters:
+
+1. **Geodetic to ECEF**: Convert (lat, lon) to Earth-Centered Earth-Fixed coordinates
+   - Uses WGS84 ellipsoid (semi-major axis a = 6,378,137m, eccentricity² = 0.00669437999014)
+   - Altitude is always 0 (depth_reference is meters below surface, not ellipsoid height)
+
+2. **ECEF to ENU**: Convert ECEF difference to local tangent plane coordinates
+   - Origin is the zero datum's GPS position
+   - East (+X) points east, North (+Y) points north
+   - Up component is discarded (cave surveys use depth measurements)
+
+3. **Result**: (east, north) offset in meters
+   - These become the local X, Y coordinates for positioning sections
+   - All other stations are computed relative to this origin
+
+The transformation is implemented in `src-tauri/src/models/geo.rs` with:
+- `geodetic_to_ecef(lat, lon, alt)` - WGS84 to ECEF
+- `gps_to_local(gps, origin)` - Main entry point returning (east, north) meters
+
 ### 4.4 Computed Values
 
 These are derived from shot data, not stored:
@@ -891,6 +912,47 @@ For manual entry (no DMP file), goes directly to Step 2 (DmpSectionConfigDialog)
 2. Individual stations can be moved with Move Station tool (if unanchored)
 3. This preserves zero datum integrity
 
+### 7.10 Setting a Zero Datum
+
+The zero datum establishes the coordinate system origin and enables GPS-accurate positioning:
+
+**Setting Zero Datum via Map:**
+1. Right-click on a station → "Set as Zero Datum"
+2. GPS Coordinates dialog appears:
+   - Enter latitude (degrees, -90 to 90)
+   - Enter longitude (degrees, -180 to 180)
+   - Optionally enter depth reference (meters below surface)
+3. Click "Set Zero Datum"
+4. Station marked with golden star icon
+5. Map auto-zooms to fit survey in new position
+6. All section offsets are recalculated
+
+**Setting Zero Datum during Import:**
+1. In Step 2 of DMP import, select "GPS Coordinates" placement mode
+2. Enter latitude and longitude
+3. Select which station to designate as zero datum
+4. Section is positioned using GPS-to-local transformation
+
+**What Happens Internally:**
+1. GPS coordinates (WGS84) are stored with the station
+2. Coordinates are converted to local ENU meters via geodetic transformation
+3. Section offsets are recalculated to maintain relative positions
+4. The zero datum station becomes the (0,0) origin of the local coordinate system
+5. Connected sections' positions are preserved through offset tracking
+
+**Updating an Existing Zero Datum:**
+1. Right-click on zero datum station → "Edit GPS Coordinates"
+2. Modify coordinates and confirm
+3. All section offsets are recalculated
+4. Undo restores previous GPS coordinates
+
+**Removing a Zero Datum:**
+1. Right-click on zero datum station → "Remove Zero Datum"
+2. Confirm removal
+3. Station loses golden star icon
+4. If this was the only datum, coordinate system reverts to (0,0) origin
+5. Undo restores the GPS coordinates
+
 ---
 
 ## 8. Command System
@@ -951,10 +1013,42 @@ pub enum Command {
     UnmergeStations {
         station_ref: StationRef,
     },
+    /// Set a station as the zero datum (coordinate system origin).
+    ///
+    /// # Parameters
+    /// - `station_ref`: The station to designate as zero datum (section_id:station_index)
+    /// - `coordinates`: GPS coordinates (WGS84 latitude, longitude, depth_reference)
+    ///
+    /// # Behavior
+    /// - Station becomes the origin (0,0) of the local coordinate system
+    /// - All other station coordinates are recalculated relative to this point
+    /// - GPS coordinates are converted to local ENU (East-North-Up) meters
+    /// - Section offsets are updated to maintain visual positions
+    /// - A golden star icon marks the zero datum on the map
+    /// - Triggers map fit-to-bounds to show the survey in its new position
+    ///
+    /// # Undo Behavior
+    /// Undo restores:
+    /// - Previous GPS coordinates (if station had a datum before)
+    /// - Previous section offsets
+    /// - Previous coordinate system origin
+    /// If the station had no prior datum, undo removes it entirely.
     SetZeroDatum {
         station_ref: StationRef,
         coordinates: GpsCoordinates,
     },
+    /// Remove the zero datum designation from a station.
+    ///
+    /// # Parameters
+    /// - `station_ref`: The station to remove zero datum from
+    ///
+    /// # Behavior
+    /// - Station loses its GPS coordinates
+    /// - If this was the only zero datum, coordinate system reverts to (0,0) origin
+    /// - Section offsets may be recalculated
+    ///
+    /// # Undo Behavior
+    /// Undo restores the GPS coordinates that were removed.
     RemoveZeroDatum {
         station_ref: StationRef,
     },

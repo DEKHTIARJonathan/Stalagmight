@@ -30,6 +30,7 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 | `src-tauri/src/persistence/sqlite.rs` | Database schema and operations |
 | `src-tauri/src/parsers/dmp.rs` | mNemo DMP file parser |
 | `src-tauri/src/models/project.rs` | Project model with merge/offset logic |
+| `src-tauri/src/models/geo.rs` | GPS-to-local coordinate transformation (WGS84 → ENU) |
 | `src-tauri/src/cache/tiles.rs` | Satellite tile cache (SQLite-based) |
 | `src-tauri/src/commands/cache.rs` | Cache IPC commands (stats, clear, fetch) |
 | `src/store/projectStore.ts` | Frontend state, Tauri IPC calls |
@@ -86,3 +87,22 @@ When stations are merged, section positions are recalculated:
 - Use `Database::open_existing()` for reading (doesn't create files)
 - Use `Database::open()` for writing (creates if needed)
 - Shot IDs are generated on load: `section_id * 100000 + sequence`
+
+### Coordinate Transformation (Zero Datum)
+
+When a station is set as zero datum with GPS coordinates, the system converts GPS (WGS84) to local ENU (East-North-Up) meters:
+
+**Algorithm** (in `src-tauri/src/models/geo.rs`):
+1. **Geodetic → ECEF**: Convert lat/lon to Earth-Centered Earth-Fixed coordinates using WGS84 ellipsoid
+2. **ECEF → ENU**: Rotate ECEF difference to local tangent plane at origin
+3. **Result**: (east, north) offset in meters relative to zero datum
+
+**Key functions**:
+- `geodetic_to_ecef(lat, lon, alt)` - WGS84 to ECEF (public)
+- `ecef_to_enu(dx, dy, dz, lat0, lon0)` - ECEF diff to ENU (private)
+- `gps_to_local(gps, origin)` - Main entry point returning (east, north)
+
+**Important notes**:
+- Altitude is always 0; `depth_reference` is meters below surface, not ellipsoid height
+- The "Up" component is discarded; caves use depth measurements instead
+- Section offsets are tracked in `Project.section_offsets` to maintain visual positions after datum changes
