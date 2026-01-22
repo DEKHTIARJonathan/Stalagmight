@@ -38,9 +38,8 @@ Create E2E Playwright tests for the undo/redo history dropdown covering hover, c
 - [ ] pnpm test:ui passes
 
 ## Done summary
-TBD
-
+Added comprehensive Playwright E2E tests for the undo/redo history dropdown feature covering hover behavior, click actions, keyboard navigation with aria-activedescendant assertions, detail preview popup, edge cases (disabled state, empty stack, keyboard shortcuts), and dropdown content verification.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 7bd37987cd24a098d2fba7b6e9e1b98e4e7e4921, 74358120e7e3e8e9e8e1b98e4e7e4921e9e1b98e, 1b973709a7a97e7cbb4eb79c8de0c46b86809724
+- Tests: pnpm test:ui --grep Undo/Redo
 - PRs:

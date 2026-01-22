@@ -63,3 +63,6 @@ Hover dropdown: use a centralized hardClose helper that cancels all timers (hove
 
 ## 2026-01-22 manual [pitfall]
 Props used in setTimeout callbacks become stale closures - track them in a ref (e.g., disabledRef.current = disabled) and check the ref inside the callback
+
+## 2026-01-22 manual [pitfall]
+In E2E tests, wait for aria-activedescendant to be set before asserting on keyboard navigation (components often set it in setTimeout(0))

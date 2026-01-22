@@ -554,6 +554,116 @@ All UI components must include proper attributes for tests to locate elements re
 - [ ] Form inputs have `data-testid`
 - [ ] Icon-only buttons have `aria-label`
 
+## Testing Dropdown Components
+
+### Undo/Redo History Dropdown
+
+The `UndoHistoryDropdown` component uses hover-triggered display with ARIA menu patterns.
+
+#### Test Identifiers
+
+| Element | data-testid | Notes |
+|---------|-------------|-------|
+| Undo button | `toolbar-undo-button` | Main trigger button |
+| Redo button | `toolbar-redo-button` | Main trigger button |
+| Undo dropdown | `toolbar-undo-button-dropdown` | Container with `role="menu"` |
+| Redo dropdown | `toolbar-redo-button-dropdown` | Container with `role="menu"` |
+| Dropdown item | `toolbar-undo-button-item-{index}` | Index matches item.index from stack |
+| Detail preview | `detail-preview-popup` | Shows on item hover |
+| Undo chevron | `undo-chevron` | Visible when stack not empty |
+| Redo chevron | `redo-chevron` | Visible when stack not empty |
+
+#### Hover Trigger Testing
+
+The dropdown opens after a 300ms delay on hover. Tests should account for this:
+
+```typescript
+// Trigger hover and wait for dropdown
+await page.hover('[data-testid="toolbar-undo-button"]');
+await page.waitForSelector('[data-testid="toolbar-undo-button-dropdown"]', { timeout: 500 });
+
+// Verify dropdown is visible
+await expect(page.locator('[role="menu"]')).toBeVisible();
+```
+
+#### Keyboard Navigation Testing
+
+```typescript
+// Focus button and press Arrow Down to open
+await page.focus('[data-testid="toolbar-undo-button"]');
+await page.keyboard.press('ArrowDown');
+
+// Wait for aria-activedescendant to be set (may be async)
+await page.waitForFunction(() => {
+  const dropdown = document.querySelector('[role="menu"]');
+  return dropdown && dropdown.getAttribute('aria-activedescendant');
+});
+
+// Navigate and select
+await page.keyboard.press('ArrowDown');  // Move to second item
+await page.keyboard.press('Enter');       // Select
+```
+
+**Important**: The component sets `aria-activedescendant` in a `setTimeout(0)` callback after keyboard open. Always wait for this attribute before asserting on keyboard navigation state.
+
+#### Close Behavior Testing
+
+Test all close paths:
+
+```typescript
+// 1. Escape key
+await page.keyboard.press('Escape');
+await expect(page.locator('[role="menu"]')).not.toBeVisible();
+
+// 2. Click outside (mousedown)
+await page.click('body', { position: { x: 10, y: 10 } });
+
+// 3. Global undo/redo shortcut
+await page.keyboard.press('Control+z');
+
+// 4. Mouse leave (100ms buffer)
+await page.hover('[data-testid="map-canvas"]');
+await page.waitForTimeout(150);
+```
+
+#### Detail Preview Testing
+
+The preview popup appears on item hover without delay:
+
+```typescript
+// Hover an item to show preview
+const item = page.locator('[data-testid="toolbar-undo-button-item-0"]');
+await item.hover();
+
+// Preview should appear immediately (no delay)
+await expect(page.locator('[data-testid="detail-preview-popup"]')).toBeVisible();
+
+// Verify preview content
+await expect(page.locator('.detail-preview-popup')).toContainText('length');
+```
+
+#### Mock Requirements
+
+When testing with mocked IPC, ensure `get_undo_stack` and `get_redo_stack` return the correct structure:
+
+```typescript
+case 'get_undo_stack': {
+  return [
+    {
+      index: 0,
+      description: 'Create section "Main Line"',
+      timestamp: new Date().toISOString(),
+      commandType: 'create_section',
+      previewData: {
+        changes: [{ field: 'name', oldValue: '', newValue: 'Main Line' }],
+        additionalChanges: 0,
+      },
+    },
+    // ... more items
+  ];
+}
+```
+
 ## Troubleshooting
 
 ### Playwright Tests Failing
