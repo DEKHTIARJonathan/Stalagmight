@@ -199,7 +199,7 @@ export function SettingsSidebar({
               aria-selected={isActive}
               aria-controls={getPanelId(idBase, category.id)}
               tabIndex={isFocused ? 0 : -1}
-              data-testid={`settings-sidebar-${category.id}`}
+              data-testid={`settings-tab-${category.id}`}
               className={`
                 relative px-4 py-2 text-sm cursor-pointer select-none
                 transition-colors outline-none
@@ -217,7 +217,7 @@ export function SettingsSidebar({
                   <span
                     className="w-2 h-2 rounded-full bg-error flex-shrink-0"
                     aria-label="Has validation errors"
-                    data-testid={`settings-sidebar-error-${category.id}`}
+                    data-testid={`settings-tab-error-${category.id}`}
                   />
                 )}
               </span>
