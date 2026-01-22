@@ -238,9 +238,11 @@ function App() {
 
       if (placement.type === 'zeroDatum') {
         // Set zero datum on the specified station
+        // Skip fitToBounds during import - we'll do a single fit at the end
         const zeroDatumResult = await setZeroDatum(
           { section_id: sectionId, station_index: placement.stationIndex },
-          placement.coordinates
+          placement.coordinates,
+          { fitToBounds: false }
         );
 
         if (!zeroDatumResult.success) {

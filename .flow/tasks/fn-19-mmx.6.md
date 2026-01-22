@@ -23,9 +23,8 @@ Follow existing pattern from import placement at `App.tsx:236-244`.
 - [ ] Works for both setting new datum and modifying existing
 - [ ] TypeScript types pass (pnpm tsc --noEmit)
 ## Done summary
-TBD
-
+Added triggerFitToBounds() call after successful setZeroDatum in projectStore.ts:688. Map now automatically fits to bounds when zero datum is set, matching existing patterns used in project load/open operations.
 ## Evidence
 - Commits:
-- Tests:
+- Tests: TypeScript passes (pnpm tsc --noEmit), Playwright tests pass (464/464), Rust tests pass (678 + 80 integration)
 - PRs:
