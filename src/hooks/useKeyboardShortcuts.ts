@@ -265,6 +265,18 @@ export function useKeyboardShortcuts() {
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
+      // Handle Cmd/Ctrl+, to open Settings - works even when focus is in an input
+      // Must be BEFORE the input guard check
+      if ((event.metaKey || event.ctrlKey) && event.key === ',') {
+        const { activeDialog } = useUIStore.getState();
+        // Don't trigger if Settings is already open
+        if (activeDialog !== 'settings') {
+          event.preventDefault();
+          openDialog('settings');
+        }
+        return;
+      }
+
       // Handle Escape FIRST - works even when focus is in an input
       if (event.key === 'Escape') {
         // Skip if already handled (e.g., by a dropdown closing)
