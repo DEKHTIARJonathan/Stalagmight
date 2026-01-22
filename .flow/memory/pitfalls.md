@@ -66,3 +66,6 @@ Props used in setTimeout callbacks become stale closures - track them in a ref (
 
 ## 2026-01-22 manual [pitfall]
 In E2E tests, wait for aria-activedescendant to be set before asserting on keyboard navigation (components often set it in setTimeout(0))
+
+## 2026-01-22 manual [pitfall]
+Wrapping non-labelable elements (div with role=switch) in <label> does not associate them - use aria-labelledby with an id on the label text instead

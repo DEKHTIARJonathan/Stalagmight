@@ -3,12 +3,14 @@
   "claim_note": "",
   "claimed_at": null,
   "created_at": "2026-01-22T15:09:58.622452Z",
-  "depends_on": [],
+  "depends_on": [
+    "fn-19-mmx.1"
+  ],
   "epic": "fn-19-mmx",
   "id": "fn-19-mmx.2",
   "priority": null,
   "spec_path": ".flow/tasks/fn-19-mmx.2.md",
   "status": "todo",
   "title": "Enhance set_zero_datum to reposition sections",
-  "updated_at": "2026-01-22T15:09:58.622467Z"
+  "updated_at": "2026-01-22T15:11:01.707485Z"
 }
