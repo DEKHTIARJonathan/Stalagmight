@@ -33,3 +33,4 @@ src-tauri/target/
 playwright-report/
 test-results/
 .pnpm-store/
+.e2e-build-marker

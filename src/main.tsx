@@ -21,10 +21,10 @@ declare global {
   }
 }
 
-// Expose stores for E2E testing (only in dev/test mode)
+// Expose stores for E2E testing (dev/test mode or explicit E2E build flag)
 // Guarded to prevent shipping internal store access to production builds
 // Uses additive pattern to avoid clobbering other test helpers
-if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
+if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VITE_E2E === '1') {
   const testAPI = window.__E2E_TEST__ || {};
   testAPI.uiStore = useUIStore;
   testAPI.projectStore = useProjectStore;

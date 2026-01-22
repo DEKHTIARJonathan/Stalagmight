@@ -14,12 +14,16 @@
  * - Access window.__E2E_TEST__ for store state verification
  */
 
+import path from 'path';
 import {
   waitForAppReady,
   resetAppState,
   createNewProject,
   waitForMapReady,
+  importDmpFile,
 } from '../helpers/app';
+
+const FIXTURES_DIR = path.resolve(process.cwd(), 'e2e', 'fixtures');
 
 /**
  * Helper to invoke IPC command using window.__TAURI__.core.invoke
@@ -110,6 +114,9 @@ describe('Depth Gradient Display', () => {
     await waitForAppReady();
     await resetAppState();
     await createNewProject('Depth Gradient Test');
+    // Import survey data so depth legend can be rendered (requires stats from survey data)
+    const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
+    await importDmpFile(dmpPath);
     await waitForMapReady();
   });
 
@@ -259,6 +266,9 @@ describe('Depth Gradient Persistence', () => {
     await waitForAppReady();
     await resetAppState();
     await createNewProject('Persistence Test');
+    // Import survey data so depth legend can render (requires stats)
+    const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
+    await importDmpFile(dmpPath);
     await waitForMapReady();
 
     // Verify initial state - showDepthGradient should be false (default)

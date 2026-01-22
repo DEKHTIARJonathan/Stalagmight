@@ -340,63 +340,6 @@ describe('parseKeyEvent for shortcut matching', () => {
   });
 });
 
-describe('spring-loaded quick_zoom detection', () => {
-  function isNonModifierShortcut(shortcut: string): boolean {
-    const normalized = normalizeShortcut(shortcut);
-    if (!normalized) return false;
-    return !normalized.includes('+');
-  }
-
-  function buildSpringLoadedSet(quickZoomBindings: string[]): Set<string> {
-    const springLoaded = new Set<string>();
-    for (const binding of quickZoomBindings) {
-      if (isNonModifierShortcut(binding)) {
-        const normalized = normalizeShortcut(binding);
-        if (normalized) {
-          springLoaded.add(normalized);
-        }
-      }
-    }
-    return springLoaded;
-  }
-
-  it('includes non-modifier keys in spring-loaded set', () => {
-    const bindings = ['Q', 'Shift+Q'];
-    const springLoaded = buildSpringLoadedSet(bindings);
-
-    expect(springLoaded.has('Q')).toBe(true);
-    expect(springLoaded.has('Shift+Q')).toBe(false);
-  });
-
-  it('excludes all modifier keys from spring-loaded set', () => {
-    const bindings = ['Ctrl+Z', 'Shift+Z', 'Alt+Z', 'Ctrl+Shift+Z'];
-    const springLoaded = buildSpringLoadedSet(bindings);
-
-    expect(springLoaded.size).toBe(0);
-  });
-
-  it('handles mixed bindings correctly', () => {
-    const bindings = ['Q', 'Ctrl+Q', 'Space'];
-    const springLoaded = buildSpringLoadedSet(bindings);
-
-    expect(springLoaded.has('Q')).toBe(true);
-    expect(springLoaded.has('Space')).toBe(true);
-    expect(springLoaded.has('Ctrl+Q')).toBe(false);
-    expect(springLoaded.size).toBe(2);
-  });
-
-  it('normalizes keys before adding to set', () => {
-    const bindings = ['q', 'space'];
-    const springLoaded = buildSpringLoadedSet(bindings);
-
-    // Should be normalized to uppercase
-    expect(springLoaded.has('Q')).toBe(true);
-    expect(springLoaded.has('Space')).toBe(true);
-    expect(springLoaded.has('q')).toBe(false);
-    expect(springLoaded.has('space')).toBe(false);
-  });
-});
-
 describe('zoom action configuration', () => {
   it('zoom_in respects zoom_max limit', () => {
     const currentZoom = 20;

@@ -60,28 +60,6 @@ export interface Selection {
   shotId?: ShotId;
 }
 
-/**
- * Spring-loaded key state for temporary tool switching.
- * When a spring-loaded key is held, the tool switches temporarily.
- * On release, if held > threshold, restores previous state; if tapped, keeps new tool.
- */
-export interface SpringLoadedState {
-  /** The tool that was active before spring-loaded activation */
-  previousTool: ToolType;
-  /** The tool we switched to (e.g., 'zoom') */
-  targetTool: ToolType;
-  /** Saved merge station A (restored on hold release) */
-  mergeStationA: StationRef | null;
-  /** Saved measure start point (restored on hold release) */
-  measureStart: StationRef | Coordinates | null;
-  /** Saved measure end point (restored on hold release) */
-  measureEnd: StationRef | Coordinates | null;
-  /** Saved draw from station (restored on hold release) */
-  drawFromStation: StationRef | null;
-  /** Timestamp when spring-loaded was activated (for tap vs hold detection) */
-  activatedAt: number;
-}
-
 // Helper to compare selections
 export function selectionsEqual(a: Selection, b: Selection): boolean {
   if (a.type !== b.type) return false;
@@ -255,12 +233,6 @@ interface UIStore {
   mapViewportCenterProject: { x: number; y: number } | null;
   setMapViewportCenterProject: (center: { x: number; y: number } | null) => void;
   getMapViewportCenter: () => { x: number; y: number };
-
-  // Spring-loaded key state (for temporary tool switching)
-  springLoadedState: SpringLoadedState | null;
-  activateSpringLoaded: (targetTool: ToolType) => void;
-  deactivateSpringLoaded: () => void;
-  cancelSpringLoaded: () => void;
 }
 
 export type DisplayToggleKey =
@@ -662,78 +634,4 @@ export const useUIStore = create<UIStore>((set) => ({
     const center = useUIStore.getState().mapViewportCenterProject;
     return center ?? { x: 0, y: 0 };
   },
-
-  // Spring-loaded key state
-  springLoadedState: null,
-
-  activateSpringLoaded: (targetTool: ToolType) =>
-    set((state) => {
-      // Don't activate if already in target tool
-      if (state.activeTool === targetTool) return state;
-      // Don't activate if already spring-loaded
-      if (state.springLoadedState) return state;
-
-      return {
-        springLoadedState: {
-          previousTool: state.activeTool,
-          targetTool: targetTool,
-          mergeStationA: state.mergeStationA,
-          measureStart: state.measureStart,
-          measureEnd: state.measureEnd,
-          drawFromStation: state.drawFromStation,
-          activatedAt: Date.now(),
-        },
-        activeTool: targetTool,
-      };
-    }),
-
-  deactivateSpringLoaded: () =>
-    set((state) => {
-      if (!state.springLoadedState) return state;
-
-      // Only restore if still on the target tool (user didn't manually switch away)
-      if (state.activeTool !== state.springLoadedState.targetTool) {
-        return { springLoadedState: null };
-      }
-
-      const elapsed = Date.now() - state.springLoadedState.activatedAt;
-      const HOLD_THRESHOLD_MS = 200;
-
-      if (elapsed > HOLD_THRESHOLD_MS) {
-        // Held long enough - restore previous tool and state
-        return {
-          activeTool: state.springLoadedState.previousTool,
-          mergeStationA: state.springLoadedState.mergeStationA,
-          measureStart: state.springLoadedState.measureStart,
-          measureEnd: state.springLoadedState.measureEnd,
-          drawFromStation: state.springLoadedState.drawFromStation,
-          springLoadedState: null,
-        };
-      } else {
-        // Tap - keep new tool, just clear spring state
-        return { springLoadedState: null };
-      }
-    }),
-
-  cancelSpringLoaded: () =>
-    set((state) => {
-      if (!state.springLoadedState) return state;
-
-      // Only restore if still on the target tool (user didn't manually switch away)
-      // This mirrors the guard in deactivateSpringLoaded
-      if (state.activeTool !== state.springLoadedState.targetTool) {
-        return { springLoadedState: null };
-      }
-
-      // Force restore previous tool and state (used on blur/unmount to prevent stuck state)
-      // Skip threshold check - always restore when canceling
-      return {
-        activeTool: state.springLoadedState.previousTool,
-        mergeStationA: state.springLoadedState.mergeStationA,
-        measureStart: state.springLoadedState.measureStart,
-        measureEnd: state.springLoadedState.measureEnd,
-        drawFromStation: state.springLoadedState.drawFromStation,
-        springLoadedState: null,
-      };
-    }),
 }));

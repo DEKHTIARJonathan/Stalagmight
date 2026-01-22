@@ -642,12 +642,12 @@ describe('Project Persistence', () => {
       return e2e.projectStore.getState().recentProjects;
     });
 
-    // Verify our project is in the recent list
+    // Verify our project is in the recent list (name includes timestamp suffix from E2E helper)
     const foundProject = recentProjects.find(
-      (p) => (p.path || p.file_path)?.includes('recent-test.cvproj')
+      (p) => (p.path || p.file_path)?.includes('Recent Test')
     );
     expect(foundProject).toBeDefined();
-    expect(foundProject?.name).toBe('Recent Test');
+    expect(foundProject?.name?.startsWith('Recent Test')).toBe(true);
   });
 
   /**
@@ -891,25 +891,23 @@ describe('Project Persistence', () => {
     );
     expect(openResult.success).toBe(true);
 
-    // Wait a moment for the state to update
-    await waitForUiIdle(200);
+    // Wait for the map to settle and fit-to-bounds to be processed
+    await waitForUiIdle(500);
 
-    // Verify triggerFitToBounds was called (requestFitToBounds should be true)
-    const fitToBoundsTriggered = await browser.execute(() => {
-      const e2e = (window as unknown as {
-        __E2E_TEST__?: {
-          uiStore: {
-            getState: () => {
-              requestFitToBounds: boolean;
-            };
-          };
-        };
-      }).__E2E_TEST__;
-
-      if (!e2e) return false;
-      return e2e.uiStore.getState().requestFitToBounds;
+    // Verify fit-to-bounds occurred by checking that stations are visible on the map.
+    // The requestFitToBounds flag is transient (cleared immediately after being consumed),
+    // so we verify the outcome: the map should have zoomed to show the data.
+    const zoomResult = await browser.execute(() => {
+      const mapRef = (window as unknown as { __cavechef_map__?: { getZoom: () => number } })
+        .__cavechef_map__;
+      if (!mapRef) return { hasMap: false, zoom: 0 };
+      return { hasMap: true, zoom: mapRef.getZoom() };
     });
 
-    expect(fitToBoundsTriggered).toBe(true);
+    // Map should exist and have a reasonable zoom level (fit-to-bounds was triggered)
+    expect(zoomResult.hasMap).toBe(true);
+    // After fit-to-bounds, zoom should be greater than the default initial zoom (typically 1-2)
+    // A reasonable zoom after fitting survey data is typically 10-20
+    expect(zoomResult.zoom).toBeGreaterThan(5);
   });
 });
