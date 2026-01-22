@@ -289,8 +289,13 @@ await browser.execute(() => {
 
 See `wdio.conf.ts`. Key settings:
 - Auto-builds debug Tauri app before tests
-- Starts tauri-driver on port 4444
+- Starts tauri-driver on base port 4444 (workers use base + index)
 - 30-second timeout for app startup
+- Parallel execution enabled by default (maxInstances = min(4, CPU count))
+- Per-worker config/data/cache isolation under a temp directory (auto-cleaned)
+- Worker ports derived from base ports (4444 / base+1000) + worker index
+- Base ports configurable via `WDIO_BASE_PORT` and `WDIO_BASE_NATIVE_PORT`
+- Set `WDIO_MAX_INSTANCES=1` to force serial execution
 
 ### Running WebdriverIO Tests
 
@@ -335,6 +340,9 @@ xvfb-run -a pnpm test:e2e
 
 # Skip rebuild if binary already exists
 SKIP_BUILD=1 xvfb-run -a pnpm test:e2e
+
+# Run with N parallel workers
+WDIO_MAX_INSTANCES=4 xvfb-run -a pnpm test:e2e
 
 # Run a single spec file (must use npx wdio directly, not pnpm test:e2e)
 SKIP_BUILD=1 npx wdio run wdio.conf.ts --spec e2e/specs/ctrl-drag-pan-movement.spec.ts

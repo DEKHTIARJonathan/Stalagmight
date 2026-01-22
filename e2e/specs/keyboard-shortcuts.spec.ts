@@ -43,7 +43,7 @@ describe('Keyboard Shortcuts', () => {
   });
 
   describe('Panel Toggle Shortcuts', () => {
-    it('should toggle sections panel with Ctrl+1', async () => {
+    it('should toggle sections panel with 1', async () => {
       await togglePanel('sections');
 
       // The panel state should have changed
@@ -55,7 +55,7 @@ describe('Keyboard Shortcuts', () => {
       await expect(mainView).toBeExisting();
     });
 
-    it('should toggle detail panel with Ctrl+2', async () => {
+    it('should toggle detail panel with 2', async () => {
       await togglePanel('detail');
       await waitForUiIdle(300);
 
@@ -63,7 +63,7 @@ describe('Keyboard Shortcuts', () => {
       await expect(mainView).toBeExisting();
     });
 
-    it('should toggle data table panel with Ctrl+3', async () => {
+    it('should toggle data table panel with 3', async () => {
       await togglePanel('dataTable');
       await waitForUiIdle(300);
 
