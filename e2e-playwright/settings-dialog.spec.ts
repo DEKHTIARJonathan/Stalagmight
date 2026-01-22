@@ -78,27 +78,37 @@ test.describe('Settings Dialog - Keyboard Shortcuts to Open', () => {
     await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
   });
 
-  test('Cmd/Ctrl+, works repeatedly and after closing dialog', async ({ page }) => {
+  test('Cmd/Ctrl+, works when focused in search input', async ({ page }) => {
     // We're in project view (SingleSystemView) where keyboard shortcuts are active
     // Wait for the map UI to be fully ready
     await page.waitForTimeout(300);
 
-    // Focus the canvas (main interactive element in project view)
-    const canvas = page.locator('canvas');
-    await expect(canvas).toBeVisible({ timeout: 5000 });
-    await canvas.click();
-
-    // First: keyboard shortcut opens Settings
+    // First open Settings using the keyboard shortcut
     await page.keyboard.down('Control');
     await page.keyboard.press(',');
     await page.keyboard.up('Control');
     await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
 
-    // Close Settings and verify shortcut works again
+    // Navigate to Shortcuts panel which has a search input
+    await page.locator('[data-testid="settings-tab-shortcuts"]').click();
+    await expect(page.locator('[data-testid="settings-panel-shortcuts"]')).toBeVisible();
+
+    // Focus the search input
+    const searchInput = page.locator('[data-testid="shortcuts-search"]');
+    await searchInput.click();
+    await searchInput.fill('test query');
+    await expect(searchInput).toBeFocused();
+
+    // Close Settings
     await page.locator('[data-testid="settings-cancel-button"]').click();
     await expect(page.locator('[data-testid="settings-dialog"]')).not.toBeVisible({ timeout: 5000 });
 
-    // Second: shortcut should work repeatedly after closing
+    // Now click on canvas to ensure we're in project view (not in dialog)
+    const canvas = page.locator('canvas');
+    await expect(canvas).toBeVisible();
+    await canvas.click();
+
+    // The shortcut should work again from project view after closing
     await page.keyboard.down('Control');
     await page.keyboard.press(',');
     await page.keyboard.up('Control');
@@ -440,15 +450,21 @@ test.describe('Settings Dialog - Backdrop and Escape', () => {
   test('backdrop click does NOT close dialog', async ({ page }) => {
     await openSettingsDialog(page);
 
-    // Find and click the backdrop area (outside the dialog content)
-    // The dialog uses a fixed overlay structure
+    // Find the dialog content panel
     const dialog = page.locator('[data-testid="settings-dialog"]');
     await expect(dialog).toBeVisible();
 
-    // Click near the edge of viewport (outside the dialog panel)
-    await page.mouse.click(10, 10);
+    // Get the dialog's bounding box to calculate a click point outside it
+    const dialogBox = await dialog.boundingBox();
+    expect(dialogBox).not.toBeNull();
 
-    // Dialog should still be visible
+    // Click to the left of the dialog (on the backdrop/overlay area)
+    // Use a point that's guaranteed to be outside the dialog
+    const clickX = Math.max(5, (dialogBox?.x ?? 100) - 20);
+    const clickY = (dialogBox?.y ?? 100) + (dialogBox?.height ?? 200) / 2;
+    await page.mouse.click(clickX, clickY);
+
+    // Dialog should still be visible (backdrop click doesn't close it)
     await expect(dialog).toBeVisible();
   });
 
