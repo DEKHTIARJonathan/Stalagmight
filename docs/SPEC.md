@@ -1922,6 +1922,46 @@ pub struct DmpShot {
 - SVG preserves vector quality
 - PDF includes metadata
 
+#### DPI Scaling
+
+The export system uses a scale factor to convert pixel values to SVG viewBox units:
+
+```
+viewBox_size = pixel_size / scale
+```
+
+where `scale = TARGET_SIZE / max(width, height)` with `TARGET_SIZE = 800px`.
+
+Higher DPI settings produce proportionally larger raster images:
+- 72 DPI: Base size (800px)
+- 150 DPI: ~1667px
+- 300 DPI: ~3333px
+- 600 DPI: ~6667px
+
+PNG exports are limited to 16384px maximum dimension to prevent out-of-memory errors.
+
+#### Element Size Specifications
+
+All SVG elements use pixel-stable sizing via the `px()` helper function. This ensures consistent visual appearance regardless of survey extent.
+
+| Element | Target Pixels | Notes |
+|---------|---------------|-------|
+| Station radius | 3px | Regular stations |
+| Station radius (Zero Datum) | 6px | Double size for visibility |
+| Station stroke-width | 1px | Black outline |
+| Shot stroke-width | 2px | Section or depth color |
+| Virtual shot dasharray | 4px, 2px | Dotted line pattern |
+| Grid stroke-width | 0.5px | Thin grid lines |
+| Shot-label font-size | 8px | Depth labels when enabled |
+| Shot-label dx/dy | 2px, -2px | Offset from midpoint |
+| ZD label dx/dy | 8px, 4px | Offset from zero datum |
+| Section-name dx/dy | 5px, -5px | Offset from midpoint |
+| Label font-size | 10px | Station labels |
+| Section-name font-size | 12px | Bold section names |
+| Legend bar width | 16px | Depth gradient bar |
+| Legend height | 100px | Depth gradient bar |
+| Legend font-size | 10px | Min/max depth labels |
+
 **Survey Data (CSV):**
 ```csv
 section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,is_virtual,comment

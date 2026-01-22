@@ -258,8 +258,12 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
     let svg_width = (width * scale).max(1.0);
     let svg_height = (height * scale).max(1.0);
 
-    // Pixel-to-world conversion: divide desired pixel size by scale
-    // This ensures elements appear at consistent pixel sizes regardless of survey extent
+    // Pixel-to-world conversion helper: viewBox_size = pixel_size / scale
+    // This ensures elements appear at consistent pixel sizes regardless of survey extent.
+    // Example: For a 100m survey with 20m padding (140m total), scale = 800/140 ≈ 5.714
+    //   - Station radius: px(3.0) = 3.0/5.714 ≈ 0.525 viewBox units
+    //   - When rendered: 0.525 * 5.714 ≈ 3.0 pixels
+    // See SPEC.md section 17.3 for complete element size specifications.
     let px = |pixels: f64| -> f64 { pixels / scale };
 
     let mut svg = String::new();
@@ -616,6 +620,9 @@ const LEGEND_GRADIENT_SAMPLES: usize = 64;
 /// * `precision` - Decimal precision for labels
 /// * `bounds` - Project bounds for relative positioning
 /// * `scale` - Scale factor (pixels per world unit) for pixel-to-viewBox conversion
+///
+/// The px() helper converts pixel dimensions to viewBox units: viewBox_size = pixel_size / scale.
+/// This ensures legend elements maintain consistent pixel sizes at any DPI.
 fn generate_depth_legend(
     min_depth: f64,
     max_depth: f64,

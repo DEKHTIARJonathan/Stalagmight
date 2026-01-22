@@ -665,6 +665,70 @@ case 'get_undo_stack': {
 }
 ```
 
+## Export Testing
+
+### SVG/PNG Export Scaling
+
+The export system uses pixel-stable sizing to ensure consistent element appearance regardless of survey extent. Tests verify that SVG element sizes scale correctly.
+
+#### Key Scaling Formula
+
+```rust
+let px = |pixels: f64| -> f64 { pixels / scale };
+```
+
+where `scale = TARGET_SIZE / max(width, height)` with `TARGET_SIZE = 800px`.
+
+#### Verifying Element Sizes
+
+To verify an element has the correct pixel size, multiply its viewBox value by the scale factor:
+
+```rust
+// Scale for 100m survey with 20m padding = 140m total
+let scale = 800.0 / 140.0; // ≈ 5.714
+
+// Station radius in viewBox units
+let r = 0.525; // from SVG
+
+// Verify: r * scale ≈ 3px (target station radius)
+assert!((r * scale - 3.0).abs() < 0.1);
+```
+
+#### Target Element Sizes
+
+| Element | Target Pixels | Test Pattern |
+|---------|---------------|--------------|
+| Station radius | 3px | `r="..."` attribute |
+| Shot stroke-width | 2px | CSS `.shot { stroke-width: ... }` |
+| Grid stroke-width | 0.5px | `class="grid" ... stroke-width="..."` |
+| Virtual shot dash | 4px | `stroke-dasharray="X,Y"` |
+| Virtual shot gap | 2px | `stroke-dasharray="X,Y"` |
+| Label font-size | 10px | CSS `.label { font-size: ... }` |
+| Section-name font-size | 12px | CSS `.section-name { font-size: ... }` |
+
+#### Running Export Tests
+
+```bash
+# Run all Rust export tests
+cargo test --manifest-path src-tauri/Cargo.toml export
+
+# Run scaling regression tests specifically
+cargo test --manifest-path src-tauri/Cargo.toml scaling_regression
+
+# Run visual regression tests
+cargo test --manifest-path src-tauri/Cargo.toml scaling_consistent
+```
+
+#### PNG DPI Scaling Tests
+
+PNG exports scale dimensions based on DPI:
+
+```
+pixel_dimensions = svg_dimensions * (dpi / 72)
+```
+
+Tests verify that PNG dimensions match expected values at 72, 150, 300, and 600 DPI.
+
 ## Troubleshooting
 
 ### Playwright Tests Failing

@@ -75,3 +75,6 @@ Replace waitForTimeout() with deterministic assertions (e.g., toHaveAttribute, t
 
 ## 2026-01-22 manual [pitfall]
 User-controlled color strings in SVG/HTML must be validated (#RGB/#RRGGBB only) to prevent markup injection attacks
+
+## 2026-01-22 manual [pitfall]
+When parsing SVG/XML attributes in tests, use dedicated parsers or well-structured string splitting rather than magic offsets that silently skip assertions on failure
