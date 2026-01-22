@@ -1572,13 +1572,15 @@ impl AppState {
             }
 
             // Copy zero datums with remapped section IDs
+            // Use store_zero_datum_without_repositioning to preserve original offsets
+            // (section_offsets were already copied above with remapped IDs)
             for zd in &source_project.zero_datums {
                 if let Some(&new_section_id) =
                     section_id_map.get(&(proj_idx, zd.station_ref.section_id))
                 {
                     let new_station_ref = StationRef::new(new_section_id, zd.station_ref.station_index);
-                    // Use set_zero_datum to properly validate and add
-                    let _ = merged_project.set_zero_datum(new_station_ref, zd.gps);
+                    // Use store-only helper to avoid triggering repositioning during merge
+                    let _ = merged_project.store_zero_datum_without_repositioning(new_station_ref, zd.gps);
                 }
             }
 

@@ -38,9 +38,8 @@ ENU result: East→x (meters), North→y (meters), Up→ignored
 - [ ] Rust tests pass (cargo test)
 
 ## Done summary
-TBD
-
+Added GPS-to-local ENU coordinate conversion using WGS84 ellipsoid. Implemented geodetic_to_ecef() and gps_to_local() functions with comprehensive unit tests verifying accuracy at equator and mid-latitudes within ±5m tolerance.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 03d0229b0b444d5bec32faea56dc26bb125e9b11
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml geo::
 - PRs:

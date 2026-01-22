@@ -17,6 +17,12 @@ Follow existing documentation patterns in SPEC.md.
 
 ## Key context
 
+<!-- Updated by plan-sync: fn-19-mmx.1 implemented geo module at src-tauri/src/models/geo.rs -->
+GPS-to-local conversion implemented in `src-tauri/src/models/geo.rs` with:
+- `geodetic_to_ecef(lat, lon, alt)` - public
+- `ecef_to_enu(dx, dy, dz, lat0, lon0)` - private helper
+- `gps_to_local(gps, origin)` - public, main entry point
+
 Docs gap analysis identified: Command parameter docs, coordinate transformation algorithm, user workflow steps, undo behavior documentation all need updates.
 ## Acceptance
 - [ ] SPEC.md Section 8 documents SetZeroDatum parameters and undo behavior
