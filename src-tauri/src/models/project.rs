@@ -589,10 +589,22 @@ impl Project {
         );
 
         // Determine target position based on whether this is the first datum
+        // Special case: if updating the first datum station itself, keep it at origin
         let target_x: f64;
         let target_y: f64;
 
-        if let Some(first_datum) = self.zero_datums.first() {
+        let is_first_datum_station = self
+            .zero_datums
+            .first()
+            .map(|d| d.station_ref == station_ref)
+            .unwrap_or(false);
+
+        if is_first_datum_station {
+            // Updating the first datum: keep at origin (0, 0)
+            target_x = 0.0;
+            target_y = 0.0;
+            debug!("Updating first datum: keeping at origin (0, 0)");
+        } else if let Some(first_datum) = self.zero_datums.first() {
             // Subsequent datum: compute GPS offset from first datum
             let (east, north) = gps_to_local(&gps, &first_datum.gps);
             target_x = east;
@@ -1192,8 +1204,17 @@ mod tests {
             merged_at: Utc::now(),
         });
 
-        // Set datum on section a, station 0
-        let station_ref = StationRef::new(a, 0);
+        // Record positions before setting datum
+        // Section a station 1 is at (0, 10) before datum (shot goes north)
+        // Section b station 0 is at (0, 0) before datum (no offset yet)
+        // Section b station 1 is at (5, 0) before datum (shot goes east)
+        let coords_b1_before = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+        assert!((coords_b1_before.x - 5.0).abs() < 1e-6, "Pre-datum b.1 x should be 5");
+        assert!((coords_b1_before.y - 0.0).abs() < 1e-6, "Pre-datum b.1 y should be 0");
+
+        // Set datum on section a, station 1 (which is at y=10 before datum)
+        // This should move all connected sections so a.1 lands at origin
+        let station_ref = StationRef::new(a, 1);
         let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
         project.set_zero_datum(station_ref, gps).unwrap();
 
@@ -1201,10 +1222,30 @@ mod tests {
         assert!(project.section_offsets.contains_key(&a));
         assert!(project.section_offsets.contains_key(&b));
 
-        // Section a station 0 should be at origin
+        // Section a station 1 (datum station) should be at origin
+        let coords_a1 = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
+        assert!((coords_a1.x).abs() < 1e-6, "Datum station x should be 0, got {}", coords_a1.x);
+        assert!((coords_a1.y).abs() < 1e-6, "Datum station y should be 0, got {}", coords_a1.y);
+
+        // Section a station 0 should be at (0, -10) since it's 10m south of the datum
         let coords_a0 = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
-        assert!((coords_a0.x).abs() < 1e-6);
-        assert!((coords_a0.y).abs() < 1e-6);
+        assert!((coords_a0.x).abs() < 1e-6, "a.0 x should be 0, got {}", coords_a0.x);
+        assert!((coords_a0.y - (-10.0)).abs() < 1e-6, "a.0 y should be -10, got {}", coords_a0.y);
+
+        // Section b should have moved by the same delta as section a
+        // Before: b.1 was at (5, 0). After: b.1 should be at (5, -10)
+        // (The offset delta was (0, -10) to move a.1 from (0, 10) to (0, 0))
+        let coords_b1_after = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+        assert!(
+            (coords_b1_after.x - 5.0).abs() < 1e-6,
+            "b.1 x should be 5, got {}",
+            coords_b1_after.x
+        );
+        assert!(
+            (coords_b1_after.y - (-10.0)).abs() < 1e-6,
+            "b.1 y should be -10 (moved with connected sections), got {}",
+            coords_b1_after.y
+        );
     }
 
     #[test]
@@ -1300,6 +1341,57 @@ mod tests {
         // Offset should be unchanged
         let offset_after = project.section_offsets.get(&section_id).copied();
         assert_eq!(offset_before, offset_after, "Offset should not change when removing datum");
+    }
+
+    #[test]
+    fn update_first_datum_gps_keeps_station_at_origin() {
+        // Issue: Re-setting the first datum should not move it away from origin
+        let mut project = Project::new("UpdateFirstDatum".to_string(), None);
+        let section_id = project
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+
+        // Set first datum on station 1 (which is at y=10 before datum)
+        let station_ref = StationRef::new(section_id, 1);
+        let gps1 = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
+        project.set_zero_datum(station_ref, gps1).unwrap();
+
+        // Station 1 should be at origin
+        let coords_after_first = project.compute_station_raw_coords(station_ref).unwrap();
+        assert!((coords_after_first.x).abs() < 1e-6, "First datum: x should be 0");
+        assert!((coords_after_first.y).abs() < 1e-6, "First datum: y should be 0");
+        let offset_after_first = project.section_offsets.get(&section_id).copied().unwrap();
+
+        // Update the first datum with different GPS coordinates
+        let gps2 = GpsCoordinates::new(46.0, -91.0, 0.0).unwrap();
+        project.set_zero_datum(station_ref, gps2).unwrap();
+
+        // Station 1 should STILL be at origin (updating first datum doesn't reposition)
+        let coords_after_update = project.compute_station_raw_coords(station_ref).unwrap();
+        assert!(
+            (coords_after_update.x).abs() < 1e-6,
+            "After update: x should still be 0, got {}",
+            coords_after_update.x
+        );
+        assert!(
+            (coords_after_update.y).abs() < 1e-6,
+            "After update: y should still be 0, got {}",
+            coords_after_update.y
+        );
+
+        // Offset should be unchanged (no repositioning happened)
+        let offset_after_update = project.section_offsets.get(&section_id).copied().unwrap();
+        assert_eq!(
+            offset_after_first, offset_after_update,
+            "Offset should not change when updating first datum GPS"
+        );
+
+        // GPS should be updated
+        assert_eq!(project.zero_datums[0].gps.latitude, 46.0);
+        assert_eq!(project.zero_datums[0].gps.longitude, -91.0);
     }
 
     #[test]
