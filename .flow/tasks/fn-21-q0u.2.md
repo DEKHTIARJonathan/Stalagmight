@@ -17,22 +17,28 @@ Follow `triggerZoomToSection` pattern at L149-151:
 
 ### MapCanvas.tsx
 Follow `fitToSection()` pattern at L1186-1262:
-- Add `fitToStation(stationRef: StationRef)` - use `easeTo()` with `point_zoom` config
-- Add `fitToShot(sectionId, shotId)` - calculate shot midpoint, use `easeTo()`
+- Add `fitToStation(stationRef: StationRef)` - use `easeTo()` with `point_zoom` config (no padding needed for single point)
+- Add `fitToShot(sectionId, shotId)` - calculate shot midpoint, use `easeTo()` with `point_zoom` (no padding needed)
 - Wire up `useEffect` to listen to `requestCenterOnStation` and `requestCenterOnShot`
 
-## Key context
+### Map Centering Approach
+- **Sections**: Use existing `fitBounds()` with padding (multiple points in bounding box)
+- **Stations/Shots**: Use `easeTo()` with `point_zoom` config (single point centering, no bounding box, no padding)
+
+### Key context
 - Single point centering uses `easeTo()` not `fitBounds()` (see L1241-1248)
 - Use `mapConfig.point_zoom` for zoom level when centering on single point
 - Shot midpoint = average of start and end station coordinates
+
 ## Acceptance
 - [ ] uiStore has `requestCenterOnStation`, `triggerCenterOnStation`, `clearCenterOnStationRequest`
 - [ ] uiStore has `requestCenterOnShot`, `triggerCenterOnShot`, `clearCenterOnShotRequest`
-- [ ] MapCanvas has `fitToStation()` that centers map on station coordinates
-- [ ] MapCanvas has `fitToShot()` that centers map on shot midpoint
-- [ ] Both use `easeTo()` with smooth animation
+- [ ] MapCanvas has `fitToStation()` that centers map on station coordinates using `easeTo()`
+- [ ] MapCanvas has `fitToShot()` that centers map on shot midpoint using `easeTo()`
+- [ ] Both use `point_zoom` config (not fitBounds with padding)
 - [ ] useEffect hooks respond to request state changes
-- [ ] Unit tests for uiStore actions
+- [ ] Vitest unit tests for uiStore actions
+
 ## Done summary
 TBD
 

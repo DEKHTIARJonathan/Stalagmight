@@ -32,7 +32,7 @@ Component accepts `testId` prop for explicit control, or generates from type + I
 - [ ] Section links use `data-testid="section-{sectionId}-link"`
 - [ ] Shows warning indicator when `isMissing={true}` (yellow text or icon)
 - [ ] Full keyboard support (focusable, Enter activates)
-- [ ] Unit tests for component rendering, prop variations, and missing state
+- [ ] Vitest unit tests for helper functions (testId generation, aria-label formatting)
 
 ## Done summary
 TBD

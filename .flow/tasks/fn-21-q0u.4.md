@@ -14,6 +14,17 @@ Add bordered section before Edit button (before L312) with:
 - **Next Shot**: Link to shot at position = station_index + 1 (hidden if last station)
 - **Section**: Link to section using format `sectionId: sectionName`
 
+### Station Previous/Next Shot Mapping (CRITICAL - verify with examples)
+Station at `station_index` has:
+- Previous shot: `section.shots[station_index - 1]` (display position = station_index)
+- Next shot: `section.shots[station_index]` (display position = station_index + 1)
+
+**Concrete examples to verify implementation:**
+- Station index 0 (display "1"): No previous shot (hidden), Next shot = shots[0] (display "1")
+- Station index 1 (display "2"): Previous shot = shots[0] (display "1"), Next shot = shots[1] (display "2")
+- Station index 5 (display "6"): Previous shot = shots[4] (display "5"), Next shot = shots[5] (display "6") - if exists
+- Last station (index = shots.length): Previous shot = shots[shots.length-1], No next shot (hidden)
+
 ### Target Validation
 Before rendering each link, validate the target exists:
 - **Shot links**: Check if shot exists at the computed index in section.shots array
@@ -34,7 +45,8 @@ Update existing "Merged with" list (L297-308) to use DetailLink for each merged 
 - Merged station links: `station-{sectionId}-{position}-link`
 
 ### Center Button
-Add crosshairs button to Panel header using `headerActions` prop:
+Add inline SVG crosshairs button to Panel header using `headerActions` prop:
+- Icon: Inline SVG crosshairs (follow pattern at ShortcutRecorder.tsx:309-320)
 - onClick: Call `triggerCenterOnStation(station.station_ref)`
 - aria-label: `Center map on station {sectionId}:{stationPosition}`
 - data-testid: `center-station-button`
@@ -51,7 +63,7 @@ Add crosshairs button to Panel header using `headerActions` prop:
 - [ ] Section link shows `sectionId: name` format with `data-testid="section-{sectionId}-link"`
 - [ ] Merged station references are clickable DetailLink components
 - [ ] Merged station links validated - `isMissing` passed when not found
-- [ ] Crosshairs button in header calls `triggerCenterOnStation`
+- [ ] Inline SVG crosshairs button in header calls `triggerCenterOnStation`
 - [ ] All links use DetailLink component with appropriate data-testid
 - [ ] All links have proper aria-labels
 - [ ] Clicking links updates selection correctly

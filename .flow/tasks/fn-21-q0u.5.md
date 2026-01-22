@@ -30,7 +30,8 @@ If section has only 1 station (0 shots):
 - Station links: `station-{sectionId}-{position}-link`
 
 ### Center Button
-Add crosshairs button to Panel header using `headerActions` prop:
+Add inline SVG crosshairs button to Panel header using `headerActions` prop:
+- Icon: Inline SVG crosshairs (follow pattern at ShortcutRecorder.tsx:309-320)
 - onClick: Call `triggerZoomToSection(section.id)` (reuse existing)
 - aria-label: `Center map on section {sectionId}: {sectionName}`
 - data-testid: `center-section-button`
@@ -44,7 +45,7 @@ Add "Endpoints" section after "Depth Range" section (around L463), before "Proje
 - [ ] Last Station link shows 1-indexed position and navigates to station
 - [ ] Station link targets validated - `isMissing` passed to DetailLink when not found
 - [ ] Single-station sections show "Only Station" instead of First/Last
-- [ ] Crosshairs button in header calls `triggerZoomToSection`
+- [ ] Inline SVG crosshairs button in header calls `triggerZoomToSection`
 - [ ] All links use DetailLink component with `data-testid="station-{sectionId}-{position}-link"`
 - [ ] All links have proper aria-labels
 - [ ] Clicking links updates selection correctly
