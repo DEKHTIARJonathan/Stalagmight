@@ -64,9 +64,8 @@ Add timestamp field to UndoEntry struct and create new Tauri commands to expose 
 - [ ] cargo test passes
 
 ## Done summary
-TBD
-
+Added timestamp tracking and stack introspection to the undo/redo system. New Tauri commands get_undo_stack and get_redo_stack return UndoHistoryItem DTOs with description, timestamp, commandType, and previewData fields for UI display.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 38b4d4baede80d4dd2f7a94fb1a0d99aa4e51bee, 2b2469b7fd458a60255e0e2f9c5f6a0f0a77b796
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, pnpm tsc --noEmit
 - PRs:

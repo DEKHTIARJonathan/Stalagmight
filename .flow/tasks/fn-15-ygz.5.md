@@ -25,7 +25,7 @@ Add search/filter functionality in GlobalView toolbar.
 ## Acceptance
 
 - [ ] Search input in GlobalView toolbar
-- [ ] Case-insensitive substring match using index-of expression
+- [ ] Case-insensitive substring match using `index-of` + `downcase` expression
 - [ ] Non-matching systems dim to 25% opacity
 - [ ] Dimmed systems still clickable/selectable
 - [ ] Selection preserved when search cleared

@@ -445,6 +445,8 @@ pub fn run() {
             commands::history::can_redo,
             commands::history::get_undo_stack,
             commands::history::get_redo_stack,
+            commands::history::undo_to,
+            commands::history::redo_to,
             // Import/Export
             commands::import::import_dmp,
             commands::import::calculate_file_hash,
