@@ -33,3 +33,6 @@ Use specific data-testid selectors instead of generic CSS selectors (input[type=
 
 ## 2026-01-23 manual [convention]
 Use generation counter pattern for async cancellation instead of per-item pending sets that can race with clear operations
+
+## 2026-01-23 manual [convention]
+In WebdriverIO E2E tests, throw explicit errors in browser.execute callbacks when required globals (__E2E_TEST__, __cavechef_map__) are missing to get clear failures instead of confusing timeouts
