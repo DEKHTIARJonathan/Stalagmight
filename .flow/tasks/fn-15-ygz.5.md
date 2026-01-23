@@ -11,6 +11,8 @@ Add search/filter functionality in GlobalView toolbar.
 
 ## Approach
 
+<!-- Updated by plan-sync: fn-15-ygz.2 layer IDs and source structure -->
+
 - Add text input in GlobalView toolbar
 - Filter by name using index-of + downcase expression (NOT `in` which is for array membership):
   ```javascript
@@ -18,6 +20,9 @@ Add search/filter functionality in GlobalView toolbar.
     ['>=', ['index-of', ['downcase', searchTerm], ['downcase', ['get', 'name']]], 0],
     1.0, 0.25]
   ```
+- Apply opacity to visual layers: `global-survey-shots-layer` and `global-survey-stations-layer`
+- Source ID is `global-survey-data` with features containing `name` property
+- Add `setSearchFilter(term: string | null)` method to GlobalSurveyLayer
 - Instant filtering, dimmed systems still clickable
 - Preserve selection when search cleared
 - Clear with Escape key or X button

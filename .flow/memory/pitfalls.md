@@ -81,3 +81,6 @@ When parsing SVG/XML attributes in tests, use dedicated parsers or well-structur
 
 ## 2026-01-23 manual [pitfall]
 React useEffect reading derived state (e.g., selectedSection) may see stale value during transitions - compute from source (e.g., sections.find) using the selection's own IDs
+
+## 2026-01-23 manual [pitfall]
+React refs don't trigger re-renders - use state for mapLoaded flags so dependent effects re-run; buffer data arriving before async initialization completes
