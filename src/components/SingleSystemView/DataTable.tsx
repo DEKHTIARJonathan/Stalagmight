@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { type Section, type Shot } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
-import { useUIStore } from '../../store/uiStore';
+import { useUIStore, type Selection } from '../../store/uiStore';
 import { EditableTable } from '../common/Table';
 import { Select, type SelectOption } from '../common/Select';
 import type { ProjectWarning } from '../../types/commands';
@@ -16,6 +16,10 @@ export default function DataTable({ sections }: DataTableProps) {
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(
     sections[0]?.id ?? null
   );
+  // Track key for scrolling to a row (set when external selection changes)
+  const [scrollToKey, setScrollToKey] = useState<number | null>(null);
+  // Track previous selection to only react to actual selection changes
+  const prevSelectionRef = useRef<Selection | null>(null);
 
   const { updateShot, warnings } = useProjectStore();
   const {
@@ -64,6 +68,84 @@ export default function DataTable({ sections }: DataTableProps) {
       }
     }
   }, [sections, selectedSectionId]);
+
+  // Sync external selection (from Map, Sections Panel) to DataTable
+  // Only react to actual selection changes (not sections data changes)
+  useEffect(() => {
+    // Check if selection actually changed
+    const prevSelection = prevSelectionRef.current;
+    const selectionChanged =
+      selection !== prevSelection &&
+      (selection === null ||
+        prevSelection === null ||
+        selection.type !== prevSelection.type ||
+        selection.sectionId !== prevSelection.sectionId ||
+        selection.shotId !== prevSelection.shotId ||
+        selection.stationRef?.section_id !== prevSelection.stationRef?.section_id ||
+        selection.stationRef?.station_index !== prevSelection.stationRef?.station_index);
+
+    prevSelectionRef.current = selection;
+
+    if (!selectionChanged) return;
+
+    if (!selection) {
+      // No selection - clear scroll target but keep current dropdown
+      if (dataTableOpen) {
+        setScrollToKey(null);
+      }
+      return;
+    }
+
+    if (selection.type === 'shot' && selection.sectionId !== undefined && selection.shotId !== undefined) {
+      // Shot selected externally - switch dropdown and scroll to row
+      if (selection.sectionId !== selectedSectionId) {
+        setSelectedSectionId(selection.sectionId);
+      }
+      // Only scroll if DataTable is open
+      if (dataTableOpen) {
+        setScrollToKey(selection.shotId);
+      }
+    } else if (selection.type === 'station' && selection.stationRef) {
+      // Station selected - highlight the shot connected to this station.
+      // Shot N connects station N to station N+1, so:
+      // - Station 0 is the start of shot 0 (highlight shot 0)
+      // - Station N (N >= 1) is the end of shot N-1 (highlight shot N-1)
+      const { section_id, station_index } = selection.stationRef;
+      const section = sections.find((s) => s.id === section_id);
+      if (section) {
+        // Switch section if needed
+        if (section_id !== selectedSectionId) {
+          setSelectedSectionId(section_id);
+        }
+        // Only scroll if DataTable is open
+        if (dataTableOpen) {
+          // Compute which shot to highlight/scroll to
+          const shotIndex = station_index >= 1 ? station_index - 1 : 0;
+          if (shotIndex >= 0 && shotIndex < section.shots.length) {
+            const shot = section.shots[shotIndex];
+            if (shot) {
+              setScrollToKey(shot.id);
+            }
+          }
+        }
+      }
+    } else if (selection.type === 'section' && selection.sectionId !== undefined) {
+      // Section selected externally - switch dropdown, clear row highlight
+      if (selection.sectionId !== selectedSectionId) {
+        setSelectedSectionId(selection.sectionId);
+      }
+      if (dataTableOpen) {
+        setScrollToKey(null);
+      }
+    }
+  }, [selection, selectedSectionId, sections, dataTableOpen]);
+
+  // Clear scrollToKey after it's been consumed (to allow re-scrolling to same row)
+  useEffect(() => {
+    if (scrollToKey === null) return;
+    const timer = setTimeout(() => setScrollToKey(null), 100);
+    return () => clearTimeout(timer);
+  }, [scrollToKey]);
 
   const selectedSection = sections.find((s) => s.id === selectedSectionId);
 
@@ -139,6 +221,47 @@ export default function DataTable({ sections }: DataTableProps) {
     },
     [selectedSection, setHoveredShot]
   );
+
+  // Section dropdown manual change - select the new section
+  // Note: Select component with controlled value doesn't call onChange when value changes
+  // programmatically, only on user interaction, so no feedback loop prevention needed
+  const handleSectionChange = useCallback(
+    (value: string) => {
+      const newSectionId = Number(value);
+      // Manual dropdown change - select the section and clear any shot selection
+      setSelectedSectionId(newSectionId);
+      setSelection({ type: 'section', sectionId: newSectionId });
+    },
+    [setSelection]
+  );
+
+  // Derive the highlighted shot ID for the table
+  // - For shot selection: use the shot ID directly
+  // - For station selection: compute the corresponding shot ID
+  // - For section selection or no selection: no highlight
+  const highlightedShotId = useMemo((): number | null => {
+    if (!selection || selection.sectionId !== selectedSectionId) {
+      // For station selection, check stationRef.section_id instead
+      if (selection?.type === 'station' && selection.stationRef?.section_id === selectedSectionId) {
+        const { station_index } = selection.stationRef;
+        const section = sections.find((s) => s.id === selectedSectionId);
+        if (section) {
+          const shotIndex = station_index >= 1 ? station_index - 1 : 0;
+          if (shotIndex >= 0 && shotIndex < section.shots.length) {
+            return section.shots[shotIndex]?.id ?? null;
+          }
+        }
+      }
+      return null;
+    }
+
+    if (selection.type === 'shot' && selection.shotId !== undefined) {
+      return selection.shotId;
+    }
+
+    // Section selection - no row highlight
+    return null;
+  }, [selection, selectedSectionId, sections]);
 
   const columns = [
     {
@@ -241,7 +364,7 @@ export default function DataTable({ sections }: DataTableProps) {
             <label className="text-sm text-text-secondary">Section:</label>
             <Select
               value={String(selectedSectionId ?? '')}
-              onChange={(value) => setSelectedSectionId(Number(value))}
+              onChange={handleSectionChange}
               options={sectionOptions}
               data-testid="data-table-section-select"
             />
@@ -264,17 +387,13 @@ export default function DataTable({ sections }: DataTableProps) {
               keyField="id"
               onCellEdit={handleCellEdit}
               editableColumns={editableColumns}
-              selectedKey={
-                selection?.type === 'shot' &&
-                selection.sectionId === selectedSectionId
-                  ? selection.shotId
-                  : null
-              }
+              selectedKey={highlightedShotId}
               hoveredKey={
                 hoveredShot?.sectionId === selectedSectionId
                   ? hoveredShot.shotId
                   : null
               }
+              scrollToKey={scrollToKey}
               onRowClick={handleRowClick}
               onRowDoubleClick={handleRowDoubleClick}
               onRowHover={handleRowHover}
