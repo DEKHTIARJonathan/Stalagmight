@@ -574,12 +574,13 @@ Each detail view (Shot, Station, Section) includes a center button in the panel 
 
 #### 6.2.3 ARIA Live Announcements
 
-Selection changes triggered by Detail Panel hyperlinks are announced to screen readers via an ARIA live region.
+Selection changes are announced to screen readers via an ARIA live region.
 
 **Implementation:**
 - Single ARIA live region at App component root level (always mounted)
 - Uses `role="status" aria-live="polite" aria-atomic="true"`
-- Only announces hyperlink-triggered selection changes (not map clicks)
+- Announcements triggered by: Detail Panel hyperlinks, Data Table shot selection
+- Map clicks do not trigger announcements (avoids excessive verbosity during exploration)
 - Visually hidden with `sr-only` class
 
 **Announcement Format:**
