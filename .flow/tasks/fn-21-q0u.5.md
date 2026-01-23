@@ -40,20 +40,20 @@ Add inline SVG crosshairs button to Panel header using `headerActions` prop:
 Add "Endpoints" section after "Depth Range" section (around L463), before "Project Contribution" section.
 
 ## Acceptance
-- [ ] "Endpoints" bordered section appears after Depth Range
-- [ ] First Station link shows 1-indexed position and navigates to station
-- [ ] Last Station link shows 1-indexed position and navigates to station
-- [ ] Station link targets validated - `isMissing` passed to DetailLink when not found
-- [ ] Single-station sections show "Only Station" instead of First/Last
-- [ ] Inline SVG crosshairs button in header calls `triggerZoomToSection`
-- [ ] All links use DetailLink component with `data-testid="station-{sectionId}-{position}-link"`
-- [ ] All links have proper aria-labels
-- [ ] Clicking links updates selection correctly
+- [x] "Endpoints" bordered section appears after Depth Range
+- [x] First Station link shows 1-indexed position and navigates to station
+- [x] Last Station link shows 1-indexed position and navigates to station
+- [x] Station link targets validated - `isMissing` passed to DetailLink when not found
+- [x] Single-station sections show "Only Station" instead of First/Last
+- [x] Inline SVG crosshairs button in header calls `triggerZoomToSection`
+- [x] All links use DetailLink component with `data-testid="station-{sectionId}-{position}-link"`
+- [x] All links have proper aria-labels
+- [x] Clicking links updates selection correctly
 
 ## Done summary
-TBD
+Added Endpoints section to SectionDetail showing First/Last station links (or "Only Station" for single-station sections) with validated targets and isMissing indicators, plus inline SVG crosshairs center button using headerActions prop that triggers triggerZoomToSection.
 
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 20fc49e6a5846e52d52af99ca5e979bd3bd63537
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:

@@ -51,9 +51,9 @@ The live region already exists at app root level in `src/App.tsx:585-592`:
 - [ ] **Verification:** Manually test with screen reader (NVDA/VoiceOver) that announcements work
 
 ## Done summary
-TBD
+Verified ARIA live announcements code infrastructure is correctly implemented. Live region exists in App.tsx with role="status" and aria-live="polite". DetailLink component calls onAnnounce with format "Selected {type} {displayText}" when clicked. All detail views pass announceSelection callback to DetailLink components. Note: Manual screen reader verification (NVDA/VoiceOver) is pending and will be performed separately.
 
 ## Evidence
 - Commits:
-- Tests:
+- Tests: pnpm tsc --noEmit, pnpm test:ui (471 passed)
 - PRs:
