@@ -1,49 +1,54 @@
 # fn-21-q0u.6 Add ARIA live announcements for selection changes
 
+<!-- Updated by plan-sync: fn-21-q0u.4 - ARIA infrastructure already exists, this task just needs verification -->
+
 ## Description
-Add ARIA live region to announce selection changes when hyperlinks are clicked.
+Verify ARIA live region announces selection changes when hyperlinks are clicked.
 
-**Size:** S
-**Files:** `src/components/SingleSystemView/DetailPanel.tsx`
+**Size:** XS (verification only - infrastructure already implemented)
+**Files:** No changes needed - verify existing implementation
 
-## Approach
+## Existing Implementation (already done)
 
-### Live Region - MUST be in DetailPanel, not DetailsContent
-Add visually hidden live region at **DetailPanel component root level** (not inside DetailsContent):
+### Live Region - EXISTS in App.tsx
+The live region already exists at app root level in `src/App.tsx:585-592`:
 ```tsx
-// In DetailPanel component, at root level
-<span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+<div
+  id="selection-announcer"
+  role="status"
+  aria-live="polite"
+  aria-atomic="true"
+  className="sr-only"
+>
   {selectionAnnouncement}
-</span>
+</div>
 ```
 
-**Why DetailPanel not DetailsContent?** DetailsContent may re-mount on selection changes, which would break the "always mounted" requirement. DetailPanel is stable.
+### Store State - EXISTS in uiStore.ts
+- `selectionAnnouncement: string` state at line 247
+- `announceSelection: (message: string) => void` action at line 248
 
-Follow existing pattern at `ShortcutRecorder.tsx:325-332`.
+### DetailLink Integration - ALREADY WIRED
+- DetailLink accepts `onAnnounce` callback prop (implemented in fn-21-q0u.2)
+- StationDetail passes `onAnnounce={announceSelection}` to all DetailLink components
+- ShotDetail passes `onAnnounce={announceSelection}` to all DetailLink components
+- DetailLink calls `onAnnounce` with format: `Selected {type} {displayText}`
 
-### Announcement Logic (Hyperlink-Triggered Only)
-Only announce selection changes triggered by DetailLink clicks - NOT map clicks or Sections Panel clicks:
-- Add `announcement` state to DetailPanel component
-- Pass `onAnnounce` callback down through DetailsContent to DetailLink components
-- DetailLink calls `onAnnounce` when clicked (before calling onSelect)
-- Live region re-renders with new announcement text
+## Approach (verification only)
 
-Announcement formats:
-- Station: "Selected station {sectionId}:{stationPosition}"
-- Shot: "Selected shot {sectionId}:{shotPosition}"
-- Section: "Selected section {sectionId}: {sectionName}"
-
-Use `aria-live="polite"` (not "assertive") - selection is non-urgent.
-Keep live region always mounted (don't conditionally render).
+1. Verify live region exists in App.tsx
+2. Verify announceSelection is called when DetailLinks are clicked
+3. Test screen reader announces selections (manual test with NVDA/VoiceOver)
 
 ## Acceptance
-- [ ] Visually hidden live region exists at DetailPanel component root (not in DetailsContent)
-- [ ] Selection changes from hyperlink clicks are announced
-- [ ] Selection changes from map/panel clicks are NOT announced (no duplicate announcements)
-- [ ] Announcement format: "Selected {type} {id}"
-- [ ] Uses `aria-live="polite"` for non-urgent updates
-- [ ] Live region always mounted (not conditionally rendered)
-- [ ] DetailLink accepts `onAnnounce` callback prop
+- [x] Visually hidden live region exists in App.tsx (at app root, always mounted)
+- [x] Selection changes from hyperlink clicks are announced via `announceSelection`
+- [x] Selection changes from map/panel clicks are NOT announced (DetailLink triggers, not setSelection)
+- [x] Announcement format: "Selected {type} {displayText}" (e.g., "Selected station 1:3")
+- [x] Uses `aria-live="polite"` for non-urgent updates
+- [x] Live region always mounted (in App.tsx, not conditionally rendered)
+- [x] DetailLink accepts `onAnnounce` callback prop
+- [ ] **Verification:** Manually test with screen reader (NVDA/VoiceOver) that announcements work
 
 ## Done summary
 TBD
