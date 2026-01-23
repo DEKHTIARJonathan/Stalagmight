@@ -70,7 +70,9 @@ function extractStations(shots: GeometryShot[]): [number, number][] {
  * as circles. Each system has a distinct, stable color derived from its file path.
  *
  * Layer architecture:
- * - Single GeoJSON source containing all systems
+ * - Single GeoJSON source containing all systems (both shots and stations)
+ * - Features distinguished by featureType property ('shot' or 'station')
+ * - Multiple layers filter by featureType for rendering shots vs stations
  * - Shot lines layer (rendered first, below stations)
  * - Station circles layer (rendered second, above shots)
  * - Hitbox layers for click detection (invisible)
@@ -81,9 +83,8 @@ export default class GlobalSurveyLayer {
   private map: MaplibreMap;
   private callbacks: GlobalSurveyLayerCallbacks;
 
-  // Source IDs
-  private shotsSourceId = 'global-survey-shots';
-  private stationsSourceId = 'global-survey-stations';
+  // Single source for all features
+  private sourceId = 'global-survey-data';
 
   // Layer IDs
   private shotsLayerId = 'global-survey-shots-layer';
@@ -119,19 +120,9 @@ export default class GlobalSurveyLayer {
   }
 
   private initializeSources(): void {
-    // Shots line source
-    this.map.addSource(this.shotsSourceId, {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-      tolerance: 0.5,
-      generateId: true,
-    });
-
-    // Stations point source
-    this.map.addSource(this.stationsSourceId, {
+    // Single GeoJSON source for all features (shots and stations)
+    // Features are distinguished by featureType property
+    this.map.addSource(this.sourceId, {
       type: 'geojson',
       data: {
         type: 'FeatureCollection',
@@ -151,7 +142,8 @@ export default class GlobalSurveyLayer {
     this.map.addLayer({
       id: this.shotsHitboxLayerId,
       type: 'line',
-      source: this.shotsSourceId,
+      source: this.sourceId,
+      filter: ['==', ['get', 'featureType'], 'shot'],
       layout: {
         'line-cap': 'round',
       },
@@ -166,7 +158,8 @@ export default class GlobalSurveyLayer {
     this.map.addLayer({
       id: this.stationsHitboxLayerId,
       type: 'circle',
-      source: this.stationsSourceId,
+      source: this.sourceId,
+      filter: ['==', ['get', 'featureType'], 'station'],
       paint: {
         'circle-radius': 10, // Larger hit area
         'circle-color': '#000000',
@@ -182,7 +175,8 @@ export default class GlobalSurveyLayer {
     this.map.addLayer({
       id: this.shotsLayerId,
       type: 'line',
-      source: this.shotsSourceId,
+      source: this.sourceId,
+      filter: ['==', ['get', 'featureType'], 'shot'],
       paint: {
         'line-color': '#888888', // Fallback, replaced by match expression on update()
         'line-width': [
@@ -205,7 +199,8 @@ export default class GlobalSurveyLayer {
     this.map.addLayer({
       id: this.stationsLayerId,
       type: 'circle',
-      source: this.stationsSourceId,
+      source: this.sourceId,
+      filter: ['==', ['get', 'featureType'], 'station'],
       paint: {
         'circle-radius': 4,
         'circle-color': '#888888', // Fallback, replaced by match expression on update()
@@ -301,9 +296,8 @@ export default class GlobalSurveyLayer {
    * Update the layer with new system geometry data.
    */
   update(systems: SystemGeometry[]): void {
-    // Build shot features
-    const shotFeatures: GeoJSON.Feature[] = [];
-    const stationFeatures: GeoJSON.Feature[] = [];
+    // Build all features in a single array
+    const features: GeoJSON.Feature[] = [];
 
     // Clear and rebuild system colors
     this.systemColors.clear();
@@ -312,15 +306,16 @@ export default class GlobalSurveyLayer {
       const color = generateSystemColor(system.metadata.file_path);
       this.systemColors.set(system.metadata.file_path, color);
 
-      // Build shot features - no per-feature color, use match expression instead
+      // Build shot features
       for (const shot of system.geometry.shots) {
-        shotFeatures.push({
+        features.push({
           type: 'Feature',
           geometry: {
             type: 'LineString',
             coordinates: [shot.from, shot.to],
           },
           properties: {
+            featureType: 'shot',
             systemId: system.metadata.file_path,
             name: system.metadata.name,
             totalLength: system.metadata.total_length,
@@ -330,16 +325,17 @@ export default class GlobalSurveyLayer {
         });
       }
 
-      // Extract and build station features - no per-feature color
+      // Extract and build station features
       const stations = extractStations(system.geometry.shots);
       for (const [lng, lat] of stations) {
-        stationFeatures.push({
+        features.push({
           type: 'Feature',
           geometry: {
             type: 'Point',
             coordinates: [lng, lat],
           },
           properties: {
+            featureType: 'station',
             systemId: system.metadata.file_path,
             name: system.metadata.name,
             totalLength: system.metadata.total_length,
@@ -349,20 +345,12 @@ export default class GlobalSurveyLayer {
       }
     }
 
-    // Update sources
-    const shotsSource = this.map.getSource(this.shotsSourceId);
-    if (shotsSource && 'setData' in shotsSource) {
-      (shotsSource as maplibregl.GeoJSONSource).setData({
+    // Update the single source with all features
+    const source = this.map.getSource(this.sourceId);
+    if (source && 'setData' in source) {
+      (source as maplibregl.GeoJSONSource).setData({
         type: 'FeatureCollection',
-        features: shotFeatures,
-      });
-    }
-
-    const stationsSource = this.map.getSource(this.stationsSourceId);
-    if (stationsSource && 'setData' in stationsSource) {
-      (stationsSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features: stationFeatures,
+        features,
       });
     }
 
@@ -415,9 +403,13 @@ export default class GlobalSurveyLayer {
    * Applies to both visual and hitbox layers to prevent hidden shots from being clickable.
    */
   setShowVirtualShots(visible: boolean): void {
-    const filter: maplibregl.FilterSpecification | null = visible
-      ? null
-      : ['!=', ['get', 'isVirtual'], true];
+    // Base filter for shot features
+    const shotTypeFilter: maplibregl.ExpressionSpecification = ['==', ['get', 'featureType'], 'shot'];
+
+    // Combined filter: show shots AND (optionally) exclude virtual
+    const filter: maplibregl.FilterSpecification = visible
+      ? shotTypeFilter
+      : ['all', shotTypeFilter, ['!=', ['get', 'isVirtual'], true]];
 
     // Apply filter to visual layer
     if (this.map.getLayer(this.shotsLayerId)) {
@@ -519,12 +511,9 @@ export default class GlobalSurveyLayer {
         this.map.removeLayer(this.shotsHitboxLayerId);
       }
 
-      // Remove sources
-      if (this.map.getSource(this.stationsSourceId)) {
-        this.map.removeSource(this.stationsSourceId);
-      }
-      if (this.map.getSource(this.shotsSourceId)) {
-        this.map.removeSource(this.shotsSourceId);
+      // Remove source
+      if (this.map.getSource(this.sourceId)) {
+        this.map.removeSource(this.sourceId);
       }
     } catch {
       // Map may already be destroyed
