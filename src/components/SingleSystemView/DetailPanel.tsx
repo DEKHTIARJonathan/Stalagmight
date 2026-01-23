@@ -631,7 +631,7 @@ interface SectionDetailProps {
 }
 
 function SectionDetail({ section, stations, totalProjectLength }: SectionDetailProps) {
-  const { openDialog } = useUIStore();
+  const { openDialog, setSelection, triggerZoomToSection, announceSelection } = useUIStore();
 
   // Calculate section statistics
   const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
@@ -650,13 +650,72 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   const minDepth = depths.length > 0 ? Math.min(...depths) : 0;
   const maxDepth = depths.length > 0 ? Math.max(...depths) : 0;
 
+  // Endpoint stations for navigation links
+  // First station: index 0, position 1
+  // Last station: index = shots.length, position = shots.length + 1
+  const firstStationIndex = 0;
+  const firstStationPosition = 1;
+  const lastStationIndex = section.shots.length; // Number of shots = last station index
+  const lastStationPosition = lastStationIndex + 1;
+
+  // Single station case: when there are 0 shots, there's only station 0 (position 1)
+  const hasSingleStation = section.shots.length === 0;
+
+  // Validate station targets exist
+  const firstStationExists = stations.some(
+    (s) => s.station_ref.section_id === section.id && s.station_ref.station_index === firstStationIndex
+  );
+  const lastStationExists = stations.some(
+    (s) => s.station_ref.section_id === section.id && s.station_ref.station_index === lastStationIndex
+  );
+
+  const handleSelectFirstStation = () => {
+    setSelection({
+      type: 'station',
+      stationRef: { section_id: section.id, station_index: firstStationIndex },
+    });
+  };
+
+  const handleSelectLastStation = () => {
+    setSelection({
+      type: 'station',
+      stationRef: { section_id: section.id, station_index: lastStationIndex },
+    });
+  };
+
+  const handleCenterOnSection = () => {
+    triggerZoomToSection(section.id);
+  };
+
   const handleEditSection = () => {
     openDialog('edit-section', { sectionId: section.id });
   };
 
+  const sectionDisplayName = section.name ?? 'Unnamed';
+
+  const centerButton = (
+    <button
+      type="button"
+      onClick={handleCenterOnSection}
+      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background/50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
+      aria-label={`Center map on section ${section.id}: ${sectionDisplayName}`}
+      data-testid="center-section-button"
+    >
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <circle cx="12" cy="12" r="3" strokeWidth={2} />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+      </svg>
+    </button>
+  );
+
   return (
-    <div className="h-full bg-panel overflow-auto">
-      <Panel title="Section">
+    <div className="h-full bg-panel overflow-auto" data-testid="section-detail">
+      <Panel title="Section" headerActions={centerButton}>
         <div className="space-y-4">
           {/* Section info */}
           <div className="space-y-2">
@@ -698,6 +757,57 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
               <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                 <StatCard label="Shallowest" value={`${minDepth.toFixed(1)} m`} />
                 <StatCard label="Deepest" value={`${maxDepth.toFixed(1)} m`} />
+              </div>
+            </div>
+          )}
+
+          {/* Endpoints - first and last station links */}
+          {sectionStations.length > 0 && (
+            <div className="space-y-2 pt-2 border-t border-border">
+              <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+                Endpoints
+              </h4>
+              <div className="space-y-1 text-sm">
+                {hasSingleStation ? (
+                  // Single station case
+                  <div className="flex justify-between">
+                    <span className="text-text-secondary">Only Station:</span>
+                    <DetailLink
+                      type="station"
+                      target={{ sectionId: section.id, position: firstStationPosition }}
+                      displayText={`${section.id}:${firstStationPosition}`}
+                      onSelect={handleSelectFirstStation}
+                      isMissing={!firstStationExists}
+                      onAnnounce={announceSelection}
+                    />
+                  </div>
+                ) : (
+                  // Multiple stations case
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-text-secondary">First Station:</span>
+                      <DetailLink
+                        type="station"
+                        target={{ sectionId: section.id, position: firstStationPosition }}
+                        displayText={`${section.id}:${firstStationPosition}`}
+                        onSelect={handleSelectFirstStation}
+                        isMissing={!firstStationExists}
+                        onAnnounce={announceSelection}
+                      />
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-text-secondary">Last Station:</span>
+                      <DetailLink
+                        type="station"
+                        target={{ sectionId: section.id, position: lastStationPosition }}
+                        displayText={`${section.id}:${lastStationPosition}`}
+                        onSelect={handleSelectLastStation}
+                        isMissing={!lastStationExists}
+                        onAnnounce={announceSelection}
+                      />
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}
