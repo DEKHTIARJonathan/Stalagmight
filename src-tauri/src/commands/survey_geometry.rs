@@ -2,12 +2,18 @@
 //!
 //! Provides the `get_survey_geometry` command that returns shot data with
 //! GPS-transformed coordinates for map display.
+//!
+//! Also provides `get_survey_geometry_for_file` for lazy loading geometry
+//! from arbitrary project files (used by GlobalView for on-demand loading).
+
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 use crate::core::AppState;
-use crate::models::{GpsCoordinates, SectionId, StationRef};
+use crate::models::{GpsCoordinates, Project, SectionId, StationRef};
+use crate::persistence::Database;
 
 /// Minimum cosine value to avoid division by near-zero at extreme latitudes.
 /// This corresponds to latitudes beyond ±89.4° where the approximation breaks down.
@@ -108,15 +114,45 @@ pub async fn get_survey_geometry(
     }
 }
 
-/// Internal implementation for testing.
-pub(crate) fn get_survey_geometry_impl(
-    state: &AppState,
+/// Get survey geometry for a specific file path without loading into AppState.
+///
+/// This is used by GlobalView for lazy loading geometry from arbitrary projects.
+/// Opens the database read-only, computes geometry, and closes it.
+///
+/// # Returns
+/// - `Ok(SurveyGeometry)` with shots and origin
+/// - `Err(SurveyGeometryError)` if file doesn't exist or has no GPS reference
+#[tauri::command]
+pub async fn get_survey_geometry_for_file(
+    path: PathBuf,
 ) -> Result<SurveyGeometry, SurveyGeometryError> {
-    // Get project state
-    let project = state.get_project_state().ok_or_else(|| SurveyGeometryError {
-        message: "No project loaded".to_string(),
+    // Use spawn_blocking for UI responsiveness
+    tauri::async_runtime::spawn_blocking(move || get_survey_geometry_for_file_impl(&path))
+        .await
+        .map_err(|e| SurveyGeometryError {
+            message: format!("Internal error: {}", e),
+        })?
+}
+
+/// Internal implementation for file-based geometry loading.
+fn get_survey_geometry_for_file_impl(path: &PathBuf) -> Result<SurveyGeometry, SurveyGeometryError> {
+    // Open database read-only
+    let db = Database::open(path).map_err(|e| SurveyGeometryError {
+        message: format!("Failed to open project: {}", e),
     })?;
 
+    // Load project from database
+    let project = db.load_project().map_err(|e| SurveyGeometryError {
+        message: format!("Failed to load project: {}", e),
+    })?;
+
+    // Compute geometry from project
+    get_survey_geometry_for_project(&project)
+}
+
+/// Compute survey geometry from a project struct.
+/// Shared implementation used by both AppState-based and file-based commands.
+fn get_survey_geometry_for_project(project: &Project) -> Result<SurveyGeometry, SurveyGeometryError> {
     // Find zero datum for GPS origin
     let zero_datum = project.zero_datums.first().ok_or_else(|| SurveyGeometryError {
         message: "Project has no GPS reference. Set a zero datum with GPS coordinates first."
@@ -183,6 +219,18 @@ pub(crate) fn get_survey_geometry_impl(
     }
 
     Ok(SurveyGeometry { shots, origin })
+}
+
+/// Internal implementation for testing.
+pub(crate) fn get_survey_geometry_impl(
+    state: &AppState,
+) -> Result<SurveyGeometry, SurveyGeometryError> {
+    // Get project state
+    let project = state.get_project_state().ok_or_else(|| SurveyGeometryError {
+        message: "No project loaded".to_string(),
+    })?;
+
+    get_survey_geometry_for_project(&project)
 }
 
 #[cfg(test)]

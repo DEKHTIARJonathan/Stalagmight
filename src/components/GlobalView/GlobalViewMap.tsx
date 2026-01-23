@@ -3,14 +3,17 @@ import maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
 import GlobalSurveyLayer, { type SystemGeometry } from './GlobalSurveyLayer';
 import type { SurveyGeometry } from '../../types/survey';
+import { useGlobalViewStore, type SystemGeometryState } from '../../store/globalViewStore';
 
 interface GlobalViewMapProps {
   projects: ProjectMetadata[];
   selectedProjectId: string | null;
   onProjectSelect: (filePath: string) => void;
   onProjectOpen: (filePath: string) => void;
-  /** Survey geometry data keyed by file_path. Populated by parent via lazy loading (fn-15-ygz.3). */
+  /** Survey geometry data keyed by file_path. */
   geometryData?: Map<string, SurveyGeometry>;
+  /** Loading states keyed by file_path. */
+  geometryStates?: Map<string, SystemGeometryState>;
 }
 
 /**
@@ -23,6 +26,7 @@ export default function GlobalViewMap({
   onProjectSelect,
   onProjectOpen,
   geometryData = new Map(),
+  geometryStates = new Map(),
 }: GlobalViewMapProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
@@ -32,10 +36,11 @@ export default function GlobalViewMap({
   // Buffer for geometry data that arrives before map is ready
   const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
 
-  // Filter to only projects with GPS coordinates
-  const gpsProjects = projects.filter(
-    (p) => p.gps_center !== null
-  );
+  // Access lazy loading functions from store
+  const { loadGeometry } = useGlobalViewStore();
+
+  // Filter to only projects with GPS coordinates (null check only, no sentinel)
+  const gpsProjects = projects.filter((p) => p.gps_center !== null);
 
   // Calculate bounds to fit all systems (max 500km x 500km)
   const calculateBounds = useCallback(() => {
@@ -218,6 +223,54 @@ export default function GlobalViewMap({
     surveyLayerRef.current?.setSelectedSystem(selectedProjectId);
   }, [selectedProjectId]);
 
+  // Lazy load geometry for visible systems when map loads or moveend
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+
+    const loadVisibleSystems = () => {
+      if (!map.current) return;
+
+      const bounds = map.current.getBounds();
+      const center = bounds.getCenter();
+
+      // Find systems in view and sort by distance from center
+      const visibleSystems = gpsProjects
+        .filter((p) => {
+          if (!p.gps_center) return false;
+          const [lng, lat] = p.gps_center;
+          return bounds.contains([lng, lat]);
+        })
+        .map((p) => {
+          const [lng, lat] = p.gps_center!;
+          const dist = Math.sqrt(
+            Math.pow(lng - center.lng, 2) + Math.pow(lat - center.lat, 2)
+          );
+          return { project: p, dist };
+        })
+        .sort((a, b) => a.dist - b.dist)
+        .map((item) => item.project.file_path);
+
+      // Load systems in priority order
+      for (const filePath of visibleSystems) {
+        const state = geometryStates.get(filePath)?.state ?? 'idle';
+        if (state === 'idle') {
+          loadGeometry(filePath);
+        }
+      }
+    };
+
+    // Load visible systems now
+    loadVisibleSystems();
+
+    // Load visible systems on map movement
+    const handleMoveEnd = () => loadVisibleSystems();
+    map.current.on('moveend', handleMoveEnd);
+
+    return () => {
+      map.current?.off('moveend', handleMoveEnd);
+    };
+  }, [mapLoaded, gpsProjects, geometryStates, loadGeometry]);
+
   // Update markers when projects or selection changes
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
@@ -231,6 +284,22 @@ export default function GlobalViewMap({
       if (!project.gps_center) continue;
 
       const [lng, lat] = project.gps_center;
+      const loadingState = geometryStates.get(project.file_path)?.state ?? 'idle';
+      const isSelected = selectedProjectId === project.file_path;
+
+      // Determine marker color based on state
+      let bgColor: string;
+      let borderColor: string;
+      if (loadingState === 'error') {
+        bgColor = '#ef4444'; // Red for error
+        borderColor = '#fca5a5';
+      } else if (isSelected) {
+        bgColor = '#3b82f6'; // Blue for selected
+        borderColor = '#60a5fa';
+      } else {
+        bgColor = '#4ecdc4'; // Teal default
+        borderColor = '#ffffff';
+      }
 
       // Create marker element
       const el = document.createElement('div');
@@ -240,8 +309,8 @@ export default function GlobalViewMap({
         width: 24px;
         height: 24px;
         border-radius: 50%;
-        background-color: ${selectedProjectId === project.file_path ? '#3b82f6' : '#4ecdc4'};
-        border: 3px solid ${selectedProjectId === project.file_path ? '#60a5fa' : '#ffffff'};
+        background-color: ${bgColor};
+        border: 3px solid ${borderColor};
         cursor: pointer;
         display: flex;
         align-items: center;
@@ -249,6 +318,21 @@ export default function GlobalViewMap({
         box-shadow: 0 2px 4px rgba(0,0,0,0.3);
         transition: transform 0.2s, background-color 0.2s;
       `;
+
+      // Add spinner for loading state
+      if (loadingState === 'loading') {
+        const spinner = document.createElement('div');
+        spinner.className = 'marker-spinner';
+        spinner.style.cssText = `
+          width: 12px;
+          height: 12px;
+          border: 2px solid rgba(255,255,255,0.3);
+          border-top-color: white;
+          border-radius: 50%;
+          animation: spin 0.8s linear infinite;
+        `;
+        el.appendChild(spinner);
+      }
 
       // Hover effect
       el.addEventListener('mouseenter', () => {
@@ -275,7 +359,10 @@ export default function GlobalViewMap({
         .setLngLat([lng, lat])
         .addTo(map.current!);
 
-      // Add popup with project name
+      // Add popup with project name and loading state
+      const stateText = loadingState === 'loading' ? '<br/><span style="font-size: 0.75em; color: #888;">Loading geometry...</span>'
+        : loadingState === 'error' ? '<br/><span style="font-size: 0.75em; color: #ef4444;">Failed to load</span>'
+        : '';
       const popup = new maplibregl.Popup({
         closeButton: false,
         closeOnClick: false,
@@ -284,6 +371,7 @@ export default function GlobalViewMap({
         <div style="color: #1a1a2e; font-weight: 500; padding: 4px;">
           ${project.name}
           ${project.location ? `<br/><span style="font-size: 0.85em; color: #666;">${project.location}</span>` : ''}
+          ${stateText}
         </div>
       `);
 
@@ -296,17 +384,28 @@ export default function GlobalViewMap({
 
       markersRef.current.set(project.file_path, marker);
     }
-  }, [gpsProjects, selectedProjectId, mapLoaded, onProjectSelect, onProjectOpen]);
+  }, [gpsProjects, selectedProjectId, mapLoaded, onProjectSelect, onProjectOpen, geometryStates]);
 
-  // Update marker styles when selection changes
+  // Update marker styles when selection or loading states change
   useEffect(() => {
     markersRef.current.forEach((marker, filePath) => {
       const el = marker.getElement();
       const isSelected = selectedProjectId === filePath;
-      el.style.backgroundColor = isSelected ? '#3b82f6' : '#4ecdc4';
-      el.style.borderColor = isSelected ? '#60a5fa' : '#ffffff';
+      const loadingState = geometryStates.get(filePath)?.state ?? 'idle';
+
+      // Determine marker color based on state
+      if (loadingState === 'error') {
+        el.style.backgroundColor = '#ef4444';
+        el.style.borderColor = '#fca5a5';
+      } else if (isSelected) {
+        el.style.backgroundColor = '#3b82f6';
+        el.style.borderColor = '#60a5fa';
+      } else {
+        el.style.backgroundColor = '#4ecdc4';
+        el.style.borderColor = '#ffffff';
+      }
     });
-  }, [selectedProjectId]);
+  }, [selectedProjectId, geometryStates]);
 
   // Fit to bounds button handler
   const fitToBounds = useCallback(() => {

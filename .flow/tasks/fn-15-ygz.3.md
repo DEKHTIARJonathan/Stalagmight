@@ -26,18 +26,38 @@ Implement lazy loading of survey geometry with marker placeholders.
 
 ## Acceptance
 
-- [ ] GPS filter uses `gps_center !== null` only (no sentinel check)
-- [ ] Systems show markers with spinner while loading
-- [ ] Geometry loads on demand when visible in viewport
-- [ ] Loading state tracked per system (idle/loading/loaded/error)
-- [ ] Fade transition (150ms) when survey data appears
-- [ ] Failed loads show red marker
-- [ ] Geometry cached until single-system view
+- [x] GPS filter uses `gps_center !== null` only (no sentinel check)
+- [x] Systems show markers with spinner while loading
+- [x] Geometry loads on demand when visible in viewport
+- [x] Loading state tracked per system (idle/loading/loaded/error)
+- [ ] Fade transition (150ms) when survey data appears (survey layer already animates, no additional CSS needed)
+- [x] Failed loads show red marker
+- [x] Geometry cached until single-system view
 
 ## Done summary
-TBD
+Implemented lazy loading of survey geometry for GlobalView map with marker loading states.
 
+### Changes
+
+**Backend:**
+- Added `get_survey_geometry_for_file` async command to load geometry from arbitrary project files
+- Refactored to share `get_survey_geometry_for_project` implementation between both commands
+
+**Frontend:**
+- Created `globalViewStore.ts` for per-system geometry loading states (idle/loading/loaded/error)
+- Fixed GPS filter to use `gps_center !== null` only (removed sentinel check)
+- Added lazy loading on map moveend, prioritized by distance from viewport center
+- Markers show spinner while loading, red color on error
+- Geometry cached until entering single-system view
+
+### Files Modified
+- src-tauri/src/commands/survey_geometry.rs
+- src-tauri/src/lib.rs
+- src/store/globalViewStore.ts (new)
+- src/components/GlobalView/GlobalView.tsx
+- src/components/GlobalView/GlobalViewMap.tsx
+- src/index.css
 ## Evidence
 - Commits:
-- Tests:
+- Tests: rust, typescript, ui
 - PRs:
