@@ -535,6 +535,13 @@ All UI components must include proper attributes for tests to locate elements re
 | Statistics | `stats-<metric>` | `data-testid="stats-total-length"` |
 | Selection stats (Step 1) | `selection-stats`, `stats-<metric>` | `data-testid="selection-stats"`, `data-testid="stats-shot-count"`, `data-testid="stats-total-length"`, `data-testid="stats-depth-range"` |
 | Section stats (Step 2) | `section-stats`, `section-stats-<metric>` | `data-testid="section-stats"`, `data-testid="section-stats-shot-count"`, `data-testid="section-stats-total-length"`, `data-testid="section-stats-depth-range"` |
+| Detail panel links | `<type>-<sectionId>-<position>-link` | `data-testid="station-2-5-link"`, `data-testid="shot-2-3-link"` |
+| Section links | `section-<sectionId>-link` | `data-testid="section-2-link"` |
+| Center buttons | `center-<type>-button` | `data-testid="center-station-button"`, `data-testid="center-shot-button"`, `data-testid="center-section-button"` |
+| Detail panel | `detail-panel` | `data-testid="detail-panel"` |
+| Station detail | `station-detail` | `data-testid="station-detail"` |
+| Shot detail | `shot-detail` | `data-testid="shot-detail"` |
+| Section detail | `section-detail` | `data-testid="section-detail"` |
 
 ### ARIA Attributes Quick Reference
 
@@ -565,6 +572,51 @@ When no depth data is available, the label shows "--" for depth range:
 ```
 aria-label="Selection statistics: 5 shots, 42.3m total length, depth range --"
 ```
+
+#### Detail Link ARIA Labels
+
+Detail panel hyperlinks use descriptive `aria-label` attributes for screen readers:
+
+```
+aria-label="Select station 2:5"
+aria-label="Select shot 2:3"
+aria-label="Select section 2: Main Line"
+```
+
+Missing targets additionally have `aria-disabled="true"` and show a warning indicator.
+
+#### Center Button ARIA Labels
+
+Center buttons use dynamic `aria-label` attributes based on the element type and ID:
+
+```
+aria-label="Center map on station 2:5"
+aria-label="Center map on shot 2:3"
+aria-label="Center map on section 2: Main Line"
+```
+
+#### ARIA Live Region Testing
+
+The application uses an ARIA live region to announce selection changes triggered by Detail Panel hyperlinks. The live region is at the App component root level (always mounted).
+
+**Testing ARIA Live Announcements:**
+
+```typescript
+// Verify live region exists
+const liveRegion = page.locator('[role="status"][aria-live="polite"]');
+await expect(liveRegion).toBeVisible({ visible: false }); // sr-only is visually hidden
+
+// Click a detail link and verify announcement
+await page.click('[data-testid="station-2-5-link"]');
+
+// Check the live region content (may require small delay for state update)
+await expect(liveRegion).toHaveText('Selected station 2:5');
+```
+
+**Notes:**
+- The live region uses `role="status"`, `aria-live="polite"`, and `aria-atomic="true"`
+- Only hyperlink-triggered selection changes are announced (not map clicks)
+- The region is visually hidden with the `sr-only` class
 
 ### Selector Priority
 
@@ -690,6 +742,87 @@ case 'get_undo_stack': {
     // ... more items
   ];
 }
+```
+
+## Testing Detail Panel
+
+The Detail Panel provides navigation hyperlinks and center buttons for survey elements.
+
+### Test Identifiers
+
+| Element | data-testid | Notes |
+|---------|-------------|-------|
+| Detail panel container | `detail-panel` | Main panel container |
+| Station detail view | `station-detail` | Shown when station selected |
+| Shot detail view | `shot-detail` | Shown when shot selected |
+| Section detail view | `section-detail` | Shown when section selected |
+| Station link | `station-{sectionId}-{position}-link` | Position is 1-indexed |
+| Shot link | `shot-{sectionId}-{position}-link` | Position is 1-indexed |
+| Section link | `section-{sectionId}-link` | No position for sections |
+| Center station button | `center-station-button` | In station detail header |
+| Center shot button | `center-shot-button` | In shot detail header |
+| Center section button | `center-section-button` | In section detail header |
+
+### Hyperlink Testing
+
+```typescript
+// Click a station link to change selection
+await page.click('[data-testid="station-2-5-link"]');
+
+// Verify selection changed (detail panel updates)
+await expect(page.locator('[data-testid="station-detail"]')).toBeVisible();
+
+// Verify ARIA announcement was made
+const liveRegion = page.locator('[role="status"][aria-live="polite"]');
+await expect(liveRegion).toHaveText('Selected station 2:5');
+```
+
+### Center Button Testing
+
+```typescript
+// Click center button to pan/zoom map
+await page.click('[data-testid="center-station-button"]');
+
+// Wait for map animation to complete
+await waitForMapIdle(page);
+
+// Verify map centered on element (check map state)
+const center = await page.evaluate(() => {
+  return (window as any).__cavechef_map__?.getCenter();
+});
+// Assert center is near expected coordinates
+```
+
+**Important**: When testing map centering, first pan the map away from the target element before clicking the center button. Otherwise the test may pass/fail depending on initial map position.
+
+```typescript
+// First pan map off-target to ensure center button actually moves the view
+await browser.execute(() => {
+  const map = (window as any).__cavechef_map__;
+  if (map) {
+    const center = map.getCenter();
+    map.setCenter([center.lng + 0.001, center.lat + 0.001]);
+  }
+});
+await waitForMapIdle(page);
+
+// Now click center button and verify map moves back
+await page.click('[data-testid="center-station-button"]');
+await waitForMapIdle(page);
+```
+
+### Missing Target Testing
+
+Links to missing targets show a warning indicator and are non-clickable:
+
+```typescript
+// Missing target links have aria-disabled
+const missingLink = page.locator('[data-testid="station-2-99-link"]');
+await expect(missingLink).toHaveAttribute('aria-disabled', 'true');
+
+// Clicking does not change selection
+await missingLink.click();
+// Verify selection did not change
 ```
 
 ## Export Testing
