@@ -51,7 +51,7 @@ pub struct ProjectMetadata {
     pub modified_at: DateTime<Utc>,
     pub section_count: usize,
     pub total_length: f64,
-    /// GPS center from first zero datum (lat, lng)
+    /// GPS center from first zero datum (lng, lat) - MapLibre order
     pub gps_center: Option<(f64, f64)>,
     /// GPS bounds including all zero datums
     pub gps_bounds: Option<GpsBounds>,
@@ -1000,9 +1000,9 @@ impl Project {
             return (None, None);
         }
 
-        // Center from first valid zero datum
+        // Center from first valid zero datum (lng, lat order for MapLibre)
         let first_gps = &valid_datums[0].gps;
-        let gps_center = Some((first_gps.latitude, first_gps.longitude));
+        let gps_center = Some((first_gps.longitude, first_gps.latitude));
 
         // Bounds from all valid zero datums with dateline-aware longitude handling
         let mut south = f64::INFINITY;

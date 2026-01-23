@@ -1980,8 +1980,8 @@ fn test_gps_metadata_single_datum() {
 
     let metadata = project.metadata().unwrap();
 
-    // Center should be from first (and only) datum
-    let (lat, lng) = metadata.gps_center.unwrap();
+    // Center should be from first (and only) datum (lng, lat order for MapLibre)
+    let (lng, lat) = metadata.gps_center.unwrap();
     assert!((lat - 45.5).abs() < 0.0001);
     assert!((lng - (-122.7)).abs() < 0.0001);
 
@@ -2025,8 +2025,8 @@ fn test_gps_metadata_multiple_datums() {
 
     let metadata = project.metadata().unwrap();
 
-    // Center should be from first datum
-    let (lat, lng) = metadata.gps_center.unwrap();
+    // Center should be from first datum (lng, lat order for MapLibre)
+    let (lng, lat) = metadata.gps_center.unwrap();
     assert!((lat - 45.0).abs() < 0.0001);
     assert!((lng - (-122.0)).abs() < 0.0001);
 
@@ -2174,8 +2174,9 @@ fn test_gps_metadata_update_preserves_order() {
     project.set_zero_datum(StationRef::new(0, 0), gps_a_updated).unwrap();
 
     // Center should still be from first datum (now with updated values)
+    // (lng, lat order for MapLibre)
     let metadata = project.metadata().unwrap();
-    let (center_lat, center_lng) = metadata.gps_center.unwrap();
+    let (center_lng, center_lat) = metadata.gps_center.unwrap();
 
     // Verify center is the updated first datum, not the second
     assert!((center_lat - 45.5).abs() < 0.0001, "Center should be updated first datum lat");

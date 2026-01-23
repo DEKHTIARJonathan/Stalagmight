@@ -185,6 +185,7 @@ export interface ProjectMetadata {
   modified_at: string;
   section_count: number;
   total_length: number;
+  /** GPS center as [longitude, latitude] - MapLibre order */
   gps_center: [number, number] | null;
   gps_bounds: GpsBounds | null;
 }
