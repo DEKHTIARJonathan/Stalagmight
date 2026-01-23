@@ -216,8 +216,20 @@ export function EditableTable<T extends object>({
     onRowHoverRef.current?.(item, index);
   }, []);
 
-  // Handle mouse leave on row
-  const handleRowMouseLeave = useCallback(() => {
+  // Handle mouse leave on row - only clear hover when leaving the table entirely
+  // This prevents flicker when moving between rows
+  const handleRowMouseLeave = useCallback((e: React.MouseEvent<HTMLTableRowElement>) => {
+    // Check if relatedTarget (where mouse is going) is still within the table
+    const relatedTarget = e.relatedTarget as HTMLElement | null;
+    if (relatedTarget) {
+      // Check if we're moving to another row in the same tbody
+      const parentTbody = e.currentTarget.parentElement;
+      if (parentTbody && parentTbody.contains(relatedTarget)) {
+        // Moving to another row, don't clear hover (mouseenter on new row will update it)
+        return;
+      }
+    }
+    // Actually leaving the table, clear hover
     onRowHoverRef.current?.(null, null);
   }, []);
 
