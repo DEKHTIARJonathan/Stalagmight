@@ -34,9 +34,8 @@ Add view mode toggle control to switch between survey geometry and markers-only 
 - [ ] Tooltip shows on hover
 - [ ] Switching to markers cancels pending geometry loads
 ## Done summary
-TBD
-
+Added view mode toggle to GlobalView map that switches between survey geometry and markers-only views, with localStorage persistence and proper handling of in-flight geometry loads.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 07aa9157f05d2e9fd0a7b5dba6b8e391b6b92478, 4d932aeaca0abb939227d91f819369dfd192883c
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
