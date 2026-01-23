@@ -40,12 +40,23 @@ cavechef/
 │   ├── App.tsx                   # Root component
 │   ├── components/
 │   │   ├── GlobalView/           # Landing/overview view
+│   │   │   ├── GlobalView.tsx        # Container component
+│   │   │   ├── GlobalViewMap.tsx     # MapLibre map integration
+│   │   │   ├── GlobalSurveyLayer.ts  # Multi-system geometry rendering
+│   │   │   ├── ViewModeToggle.tsx    # Survey/markers toggle
+│   │   │   ├── MetadataPanel.tsx     # System metadata display
+│   │   │   └── SystemCard.tsx        # System list item
 │   │   ├── SingleSystemView/     # Main editing view
 │   │   ├── Map/                  # MapLibre integration
 │   │   ├── Dialogs/              # All dialog components
 │   │   └── common/               # Button, Panel, Table
 │   ├── store/                    # Zustand stores
+│   │   ├── projectStore.ts           # Project state
+│   │   ├── uiStore.ts                # UI state
+│   │   └── globalViewStore.ts        # Global View state
 │   ├── hooks/                    # Custom React hooks
+│   │   ├── useFpsMonitor.ts          # FPS monitoring for throttle
+│   │   └── ...
 │   ├── utils/                    # Coordinate/color utilities
 │   └── types/                    # TypeScript type definitions
 │

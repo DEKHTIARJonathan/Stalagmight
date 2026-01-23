@@ -48,6 +48,11 @@ tile_cache_enabled = true           # Cache satellite tiles for offline use
 tile_cache_max_mb = 500             # Maximum cache size in MB
 tile_ttl_days = 30                  # Days before tiles are stale
 
+[global_view]
+fps_threshold = 30                  # FPS below which auto-throttle activates
+tolerance = 0.5                     # GeoJSON simplification tolerance (normal)
+throttle_tolerance = 1.0            # GeoJSON simplification tolerance (throttled)
+
 [validation]
 # Validation thresholds for warnings
 

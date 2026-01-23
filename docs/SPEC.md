@@ -382,28 +382,65 @@ User Action → Command Dispatcher → Tauri IPC → Rust Executor
 
 #### 6.1.1 Global View
 
-Shows all cave systems the user has loaded.
+Shows all cave systems the user has loaded, with survey geometry rendering for GPS-positioned projects.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  [Import] [New Project] [Settings]                    CaveChef │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│                                                                 │
+│  [Fit All]                                    [Navigation]      │
+│                                                  [+][-]         │
 │                     Map showing all cave systems                │
+│                     Survey geometry: shots and stations         │
 │                     (positioned by GPS coordinates)             │
-│                                                                 │
+│                                               [View Toggle]     │
 │                     Click system → metadata in side panel       │
 │                     Double-click → open in Single System View   │
 │                                                                 │
-│                     Multi-select: Shift+click, Ctrl+click       │
-│                     Right-click → Merge Systems, Export, etc.   │
+│                     Multi-select: Ctrl+click                    │
+│                     Right-click → context menu                  │
 │                                                                 │
-│                                                                 │
+│  [Search: ____________]                  N systems on map       │
 ├─────────────────────────────────────────────────────────────────┤
 │  Systems: 5 | Total Length: 127.4 km | Status: Ready           │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**Survey Rendering:**
+- GPS-positioned projects render actual survey geometry (shots and stations)
+- Each system has a distinct auto-assigned color (stable across sessions)
+- System-level selection with hover highlighting
+- Lazy loading: markers with spinners show while geometry loads
+- Error states: red marker with popup on click
+
+**View Mode Toggle:**
+- Toggle button in top-right corner (below navigation controls)
+- Two modes: `survey` (default) shows geometry, `markers` shows simple pins
+- Mode persisted in localStorage (`globalViewMode` key)
+- Switching to markers cancels pending geometry loads
+
+**Map Position Persistence:**
+- Map position and zoom persisted to localStorage on every move
+- Restored on component mount
+- "Fit All" button temporarily overrides but does not persist
+- Validation prevents corrupted storage from crashing MapLibre
+
+**Soft Bounds:**
+- Systems constrained with rubber-band panning effect
+- Soft bounds (20% padding): animate back when user releases pan outside
+- Hard bounds (50% padding): cannot pan beyond this limit
+
+**Search Filter:**
+- Text input filters systems by name
+- Non-matching systems dimmed to 25% opacity
+- Uses MapLibre `index-of` + `downcase` expression
+
+**FPS Monitoring:**
+- Auto-throttle when FPS drops below threshold (default 30)
+- Increases GeoJSON simplification tolerance when throttled
+- "(reduced detail)" indicator shown when throttled
+- Hysteresis: recovers at 45 FPS to prevent oscillation
 
 #### 6.1.2 Single System View
 
@@ -2411,6 +2448,18 @@ When the Undo or Redo dropdown is open:
 | Close dropdown | Escape |
 
 The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortcuts), allowing quick keyboard-driven workflows.
+
+### Global View Keyboard Shortcuts
+
+| Action | Shortcut |
+|--------|----------|
+| Zoom In | + / = |
+| Zoom Out | - |
+| Fit All Systems | F |
+| Focus Search | Ctrl+F |
+| Clear Search | Escape (when search focused) |
+
+**Note**: Global View has limited keyboard shortcuts since the map-based interface is primarily mouse-driven. The search filter supports keyboard navigation of results.
 
 ---
 
