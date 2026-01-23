@@ -1,0 +1,28 @@
+{
+  "tests": {
+    "typescript": "pnpm tsc --noEmit - passed",
+    "playwright": "pnpm test:ui - 464 passed",
+    "rust": "cargo test - 80 passed"
+  },
+  "files_changed": [
+    "src/components/SingleSystemView/DataTable.tsx"
+  ],
+  "implementation_details": {
+    "watch_selection": "useEffect watches uiStore.selection changes with prevSelectionRef to detect actual changes",
+    "shot_selection": "Switches dropdown to selection.sectionId, sets scrollToKey to selection.shotId when dataTableOpen",
+    "station_selection": "Maps station_index to shot index (N-1 for N>=1, 0 for station 0), highlights and scrolls to that shot",
+    "section_selection": "Switches dropdown, clears scrollToKey (no row highlight)",
+    "manual_dropdown": "handleSectionChange always sets selection type to 'section' - no feedback loop issue since Select only fires onChange on user interaction",
+    "highlighted_shot_id": "Computed via useMemo to derive correct shot ID from both shot and station selections",
+    "sync_gating": "Only performs scroll/highlight work when dataTableOpen is true",
+    "performance": "prevSelectionRef tracks previous selection to avoid triggering on sections data changes",
+    "scroll_cleanup": "useEffect clears scrollToKey after 100ms to allow re-scrolling to same row"
+  },
+  "review_fixes": {
+    "removed_isExternalSelectionRef": "Not needed - Select doesn't call onChange on controlled value changes",
+    "added_highlightedShotId_memo": "Derives shot ID for both shot and station selections",
+    "gated_scroll_on_dataTableOpen": "Only scroll/highlight when table is open",
+    "added_prevSelectionRef": "Tracks previous selection to avoid reacting to sections array changes",
+    "fixed_station_comment": "Clarified station-to-shot mapping in comments"
+  }
+}
