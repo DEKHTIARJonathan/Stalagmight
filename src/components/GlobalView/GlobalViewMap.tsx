@@ -33,6 +33,10 @@ interface GlobalViewMapProps {
   geometryStates?: Map<string, SystemGeometryState>;
   /** Search filter term (owned by GlobalView, passed down for filtering) */
   searchTerm?: string;
+  /** Called when user right-clicks on a system (for context menu). */
+  onContextMenu?: (filePath: string, x: number, y: number) => void;
+  /** Called to zoom to a specific system by file path. */
+  zoomToSystem?: string | null;
 }
 
 /**
@@ -48,6 +52,8 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     geometryData = new Map(),
     geometryStates = new Map(),
     searchTerm = '',
+    onContextMenu,
+    zoomToSystem,
   },
   ref
 ) {
@@ -55,6 +61,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   const map = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
   const surveyLayerRef = useRef<GlobalSurveyLayer | null>(null);
+  const errorPopupRef = useRef<maplibregl.Popup | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   // Buffer for geometry data that arrives before map is ready
   const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
@@ -361,6 +368,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           onSystemHover: () => {
             // Hover handling could update metadata panel preview
           },
+          onSystemContextMenu: (filePath, event) => {
+            event.preventDefault();
+            onContextMenuRef.current?.(filePath, event.clientX, event.clientY);
+          },
         });
 
         // Apply any pending geometry that arrived before map was ready
@@ -475,12 +486,14 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   const onProjectOpenRef = useRef(onProjectOpen);
   const selectSystemRef = useRef(selectSystem);
   const toggleSystemSelectionRef = useRef(toggleSystemSelection);
+  const onContextMenuRef = useRef(onContextMenu);
   useEffect(() => {
     onProjectSelectRef.current = onProjectSelect;
     onProjectOpenRef.current = onProjectOpen;
     selectSystemRef.current = selectSystem;
     toggleSystemSelectionRef.current = toggleSystemSelection;
-  }, [onProjectSelect, onProjectOpen, selectSystem, toggleSystemSelection]);
+    onContextMenuRef.current = onContextMenu;
+  }, [onProjectSelect, onProjectOpen, selectSystem, toggleSystemSelection, onContextMenu]);
 
   // Update survey layer when geometry data changes (from props)
   useEffect(() => {
@@ -608,6 +621,45 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     };
   }, [mapLoaded, gpsProjects, loadGeometryBatch, viewMode]);
 
+  // Show error popup for a failed geometry load
+  const showErrorPopup = useCallback((filePath: string, name: string, error: string, lng: number, lat: number) => {
+    if (!map.current) return;
+
+    // Remove existing error popup if any
+    if (errorPopupRef.current) {
+      errorPopupRef.current.remove();
+    }
+
+    // Build popup content using DOM to prevent XSS (per memory: use textContent, not innerHTML)
+    const container = document.createElement('div');
+    container.style.cssText = 'color: #1a1a2e; padding: 8px; max-width: 300px;';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-weight: 600; margin-bottom: 4px; color: #ef4444;';
+    title.textContent = `Error loading ${name}`;
+    container.appendChild(title);
+
+    const errorDiv = document.createElement('div');
+    errorDiv.style.cssText = 'font-size: 0.85em; color: #666; word-wrap: break-word;';
+    errorDiv.textContent = error;
+    container.appendChild(errorDiv);
+
+    const pathDiv = document.createElement('div');
+    pathDiv.style.cssText = 'font-size: 0.75em; color: #888; margin-top: 8px; word-wrap: break-word;';
+    pathDiv.textContent = filePath;
+    container.appendChild(pathDiv);
+
+    errorPopupRef.current = new maplibregl.Popup({
+      closeButton: true,
+      closeOnClick: true,
+      maxWidth: '320px',
+      offset: 15,
+    })
+      .setLngLat([lng, lat])
+      .setDOMContent(container)
+      .addTo(map.current);
+  }, []);
+
   // Update markers when projects or selection changes
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
@@ -679,16 +731,30 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         el.style.transform = 'scale(1)';
       });
 
-      // Click handler
+      // Click handler - for error markers, show error popup instead of selecting
       el.addEventListener('click', (e) => {
         e.stopPropagation();
-        onProjectSelect(project.file_path);
+        if (loadingState === 'error') {
+          // Show error popup on click of red error marker
+          const errorState = geometryStates.get(project.file_path);
+          const errorMsg = errorState?.error ?? 'Unknown error';
+          showErrorPopup(project.file_path, project.name, errorMsg, lng, lat);
+        } else {
+          onProjectSelect(project.file_path);
+        }
       });
 
       // Double-click handler
       el.addEventListener('dblclick', (e) => {
         e.stopPropagation();
         onProjectOpen(project.file_path);
+      });
+
+      // Context menu handler (right-click)
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onContextMenu?.(project.file_path, e.clientX, e.clientY);
       });
 
       // Create and add marker
@@ -750,6 +816,31 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     const bounds = calculateBounds();
     map.current.fitBounds(bounds, { padding: 50, maxZoom: 15 });
   }, [calculateBounds, gpsProjects.length]);
+
+  // Handle zoom to specific system when zoomToSystem prop changes
+  useEffect(() => {
+    if (!map.current || !mapLoaded || !zoomToSystem) return;
+
+    // Find the project to zoom to
+    const project = gpsProjects.find(p => p.file_path === zoomToSystem);
+    if (!project) return;
+
+    // Get bounds from project if available, otherwise use center point
+    if (project.gps_bounds) {
+      const bounds = new maplibregl.LngLatBounds(
+        [project.gps_bounds.west, project.gps_bounds.south],
+        [project.gps_bounds.east, project.gps_bounds.north]
+      );
+      map.current.fitBounds(bounds, { padding: 100, maxZoom: 16 });
+    } else if (project.gps_center) {
+      // Zoom to center point with a reasonable zoom level
+      map.current.flyTo({
+        center: project.gps_center,
+        zoom: 15,
+        duration: 500,
+      });
+    }
+  }, [zoomToSystem, mapLoaded, gpsProjects]);
 
   if (gpsProjects.length === 0) {
     return (
