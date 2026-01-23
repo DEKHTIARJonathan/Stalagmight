@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import maplibregl from 'maplibre-gl';
+import type { SectionId, ShotId } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import {
@@ -58,6 +59,8 @@ export default function MapCanvas() {
   const [pixelsPerMeter, setPixelsPerMeter] = useState(1);
   // Pending section zoom request (stored when map not loaded, processed when it loads)
   const pendingZoomToSectionRef = useRef<number | null>(null);
+  // Pending pan-to-shot request (stored when map not loaded, processed when it loads)
+  const pendingPanToShotRef = useRef<{ sectionId: number; shotId: number } | null>(null);
 
   const { project, stations, stats, config, moveSection, moveStation } = useProjectStore();
 
@@ -100,6 +103,7 @@ export default function MapCanvas() {
     setSnappedStation,
     setHoveredStation,
     setHoveredShot,
+    hoveredShot,
     hoveredSectionId,
     placementMode,
     updatePlacementCursor,
@@ -683,6 +687,16 @@ export default function MapCanvas() {
     surveyLayerRef.current.setHoveredSection(hoveredSectionId);
   }, [hoveredSectionId, mapLoaded]);
 
+  // Sync hoveredShot from uiStore to SurveyLayer (for DataTable row hover)
+  // Depends on mapLoaded to re-run when SurveyLayer becomes available
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setHoveredShot(
+      hoveredShot?.sectionId ?? null,
+      hoveredShot?.shotId ?? null
+    );
+  }, [hoveredShot, mapLoaded]);
+
   // Sync highlight layer with snap/draw/merge state
   // Shows snapped/origin stations even when stations layer is hidden
   useEffect(() => {
@@ -1265,7 +1279,7 @@ export default function MapCanvas() {
 
   // Pan to a shot's midpoint (used when double-clicking a row in DataTable)
   const panToShotMidpoint = useCallback(
-    (sectionId: number, shotId: number) => {
+    (sectionId: SectionId, shotId: ShotId) => {
       if (!map.current || !config || !project) return;
 
       // Find the section
@@ -1347,17 +1361,27 @@ export default function MapCanvas() {
 
   // Pan to shot midpoint when requested (e.g., from DataTable double-click)
   useEffect(() => {
+    // CRITICAL: Clear request immediately (before any early returns) to prevent stuck requests
     if (requestPanToShot !== null) {
       const { sectionId, shotId } = requestPanToShot;
       clearPanToShotRequest();
-      // Only process if map is loaded
+      // If map is loaded, process immediately; otherwise store for later
       if (mapLoaded) {
         panToShotMidpoint(sectionId, shotId);
+      } else {
+        pendingPanToShotRef.current = { sectionId, shotId };
       }
-      // Note: Unlike section zoom, we don't store pending requests for shots
-      // since it's a minor interaction that doesn't need deferred handling
     }
   }, [requestPanToShot, mapLoaded, clearPanToShotRequest, panToShotMidpoint]);
+
+  // Process pending pan-to-shot request when map loads
+  useEffect(() => {
+    if (mapLoaded && pendingPanToShotRef.current !== null) {
+      const { sectionId, shotId } = pendingPanToShotRef.current;
+      pendingPanToShotRef.current = null;
+      panToShotMidpoint(sectionId, shotId);
+    }
+  }, [mapLoaded, panToShotMidpoint]);
 
   // Handle Escape key for placement mode
   useEffect(() => {
