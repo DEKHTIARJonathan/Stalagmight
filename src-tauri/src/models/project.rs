@@ -51,6 +51,8 @@ pub struct ProjectMetadata {
     pub modified_at: DateTime<Utc>,
     pub section_count: usize,
     pub total_length: f64,
+    /// Number of stations in the project (shots + 1 per section)
+    pub station_count: usize,
     /// GPS center from first zero datum (lng, lat) - MapLibre order
     pub gps_center: Option<(f64, f64)>,
     /// GPS bounds including all zero datums
@@ -979,6 +981,7 @@ impl Project {
             modified_at: self.modified_at,
             section_count: stats.section_count,
             total_length: stats.total_length,
+            station_count: stats.station_count,
             gps_center,
             gps_bounds,
         })
