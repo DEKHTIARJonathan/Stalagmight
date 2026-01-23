@@ -481,6 +481,117 @@ Primary view for survey work.
 | Detail Panel | Open, 300px | Resizable, collapsible |
 | Data Table | Collapsed | Resizable (height), collapsible |
 
+#### 6.2.1 Detail Panel Hyperlinks
+
+The Detail Panel provides interactive hyperlinks that enable quick navigation between related survey elements (shots, stations, sections).
+
+**ID Format Standard:**
+All element IDs use the format `sectionId:position` where position is 1-indexed:
+- Station position = `station_index + 1`
+- Shot position = `shot array index + 1`
+- Section links show `sectionId: sectionName` (or `sectionId: Unnamed` if no name)
+
+**Shot Detail - Connected Section:**
+```
+┌─ Shot ─────────────────────────────────────────────┐
+│  ID: 2:3                                           │
+│  Length: 4.5m  Azimuth: 127.3 deg  Depth: 8.2m    │
+│                                                    │
+│  ┌─ Connected ───────────────────────────────────┐ │
+│  │  Start Station: 2:3 (link)                    │ │
+│  │  End Station: 2:4 (link)                      │ │
+│  │  Section: 2: Main Line (link)                 │ │
+│  └───────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────┘
+```
+
+**Station Detail - Connected Section:**
+```
+┌─ Station ──────────────────────────────────────────┐
+│  ID: 2:5                                           │
+│  Depth: 12.3m  Section: Main Line                  │
+│                                                    │
+│  ┌─ Connected ───────────────────────────────────┐ │
+│  │  Previous Shot: 2:4 (link)                    │ │
+│  │  Next Shot: 2:5 (link)                        │ │
+│  │  Section: 2: Main Line (link)                 │ │
+│  └───────────────────────────────────────────────┘ │
+│                                                    │
+│  (Previous/Next hidden at section boundaries)      │
+└────────────────────────────────────────────────────┘
+```
+
+**Section Detail - Endpoints Section:**
+```
+┌─ Section ──────────────────────────────────────────┐
+│  Name: Main Line                                   │
+│  Length: 127.4m  Shots: 42                         │
+│                                                    │
+│  ┌─ Endpoints ───────────────────────────────────┐ │
+│  │  First Station: 2:1 (link)                    │ │
+│  │  Last Station: 2:43 (link)                    │ │
+│  └───────────────────────────────────────────────┘ │
+│  (Single station sections show only "Station:")    │
+└────────────────────────────────────────────────────┘
+```
+
+**Link Behavior:**
+- Click changes selection and updates Detail Panel content
+- Section links also highlight the section in Sections Panel
+- Missing targets show warning indicator and are non-clickable
+- Full keyboard accessibility (Tab + Enter)
+- Links use accent color with underline styling
+
+**Shot-to-Station Mapping:**
+Shot at array index `i` (0-indexed) connects:
+- Start station: `station_index = i` (display position = `i + 1`)
+- End station: `station_index = i + 1` (display position = `i + 2`)
+
+Station at `station_index` has:
+- Previous shot: `section.shots[station_index - 1]` (hidden when `station_index === 0`)
+- Next shot: `section.shots[station_index]` (hidden when `station_index >= section.shots.length`)
+
+#### 6.2.2 Detail Panel Center Button
+
+Each detail view (Shot, Station, Section) includes a center button in the panel header that pans and zooms the map to the selected element.
+
+**Appearance:**
+- Inline SVG crosshairs icon in panel header
+- Uses `headerActions` prop pattern (same as other panel header buttons)
+- Not shown in Project Stats view
+
+**Behavior:**
+- Click pans and zooms map to fit the element
+- Stations/Shots: Uses `easeTo()` with configured `point_zoom` level
+- Sections: Uses `fitBounds()` with padding (fits all points)
+- Full keyboard accessibility (Tab + Enter)
+- Dynamic aria-label: "Center map on [type] [id]"
+
+**Example aria-labels:**
+- Station: "Center map on station 2:5"
+- Shot: "Center map on shot 2:3"
+- Section: "Center map on section 2: Main Line"
+
+#### 6.2.3 ARIA Live Announcements
+
+Selection changes triggered by Detail Panel hyperlinks are announced to screen readers via an ARIA live region.
+
+**Implementation:**
+- Single ARIA live region at App component root level (always mounted)
+- Uses `role="status" aria-live="polite" aria-atomic="true"`
+- Only announces hyperlink-triggered selection changes (not map clicks)
+- Visually hidden with `sr-only` class
+
+**Announcement Format:**
+```
+"Selected [type] [id]"
+```
+
+Examples:
+- "Selected station 2:5"
+- "Selected shot 2:3"
+- "Selected section 2: Main Line"
+
 ### 6.3 Undo/Redo History Dropdown
 
 The Undo and Redo toolbar buttons feature dropdown menus showing recent actions with timestamps and diff previews.
