@@ -93,3 +93,6 @@ Tooltips using innerHTML with user data (names, paths) are XSS vectors in Tauri 
 
 ## 2026-01-23 manual [pitfall]
 Percentage-based bounds padding produces degenerate results when span is 0 (single point/line) - enforce a minimum span before applying padding factor
+
+## 2026-01-23 manual [pitfall]
+MapLibre easeTo() inherits current padding; call map.stop() and setPadding({0}) before easeTo() to ensure deterministic centering
