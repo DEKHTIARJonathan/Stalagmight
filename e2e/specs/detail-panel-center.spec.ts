@@ -237,14 +237,7 @@ describe('Detail Panel Center Button', () => {
     // Load basic-survey fixture which creates sections programmatically
     await loadProjectFixture('basic-survey');
 
-    // Wait for single-system-view to appear (indicates view switched properly)
-    const singleView = await $('[data-testid="single-system-view"]');
-    await singleView.waitForExist({ timeout: 20000 });
-
-    // Wait for map canvas to appear
-    const mapCanvas = await $('[data-testid="map-canvas"]');
-    await mapCanvas.waitForExist({ timeout: 20000 });
-
+    // Wait for map to be ready (loadProjectFixture already switches to single view)
     await waitForMapReady();
     await waitForMapIdle(500);
     await ensureDetailPanelOpen();
