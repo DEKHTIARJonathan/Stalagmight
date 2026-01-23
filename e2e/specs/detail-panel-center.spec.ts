@@ -38,15 +38,17 @@ async function getMapCenter(): Promise<{ lng: number; lat: number } | null> {
 /**
  * Pan the map by a pixel offset to ensure it's not already centered on target.
  * This prevents false negatives when testing center button functionality.
+ * @throws Error if map instance is not available.
  */
 async function panMapOffTarget(): Promise<void> {
   await browser.execute(() => {
     const map = (window as unknown as {
       __cavechef_map__?: { panBy: (offset: [number, number], options?: { animate: boolean }) => void };
     }).__cavechef_map__;
-    if (map) {
-      map.panBy([200, 100], { animate: false });
+    if (!map) {
+      throw new Error('Map instance not available - __cavechef_map__ is not defined');
     }
+    map.panBy([200, 100], { animate: false });
   });
   await waitForMapIdle(200);
 }
