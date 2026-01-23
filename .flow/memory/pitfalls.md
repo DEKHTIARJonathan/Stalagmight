@@ -87,3 +87,6 @@ React refs don't trigger re-renders - use state for mapLoaded flags so dependent
 
 ## 2026-01-23 manual [pitfall]
 Database::open can create/mutate files - use open_readonly for read-only operations like lazy loading geometry
+
+## 2026-01-23 manual [pitfall]
+Tooltips using innerHTML with user data (names, paths) are XSS vectors in Tauri webview - use textContent or DOM building instead
