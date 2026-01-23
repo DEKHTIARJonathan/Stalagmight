@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-14-3zg",
+  "created_at": "2026-01-22T12:07:12.395248Z",
+  "depends_on_epics": [],
+  "id": "fn-14-3zg",
+  "next_task": 1,
+  "plan_review_status": "ship",
+  "plan_reviewed_at": "2026-01-22T12:30:36.887541Z",
+  "spec_path": ".flow/specs/fn-14-3zg.md",
+  "status": "open",
+  "title": "Undo/Redo History Dropdown",
+  "updated_at": "2026-01-22T12:30:36.887553Z"
+}
