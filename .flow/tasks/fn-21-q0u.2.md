@@ -40,9 +40,31 @@ Follow `fitToSection()` pattern at L1186-1262:
 - [ ] Vitest unit tests for uiStore actions
 
 ## Done summary
-TBD
+## Summary
 
+Added station/shot centering infrastructure to uiStore and MapCanvas:
+
+### uiStore.ts
+- Added `requestCenterOnStation: StationRef | null` state
+- Added `triggerCenterOnStation(ref: StationRef)` action
+- Added `clearCenterOnStationRequest()` action
+- Added `requestCenterOnShot: { sectionId: SectionId, shotId: ShotId } | null` state
+- Added `triggerCenterOnShot(sectionId, shotId)` action
+- Added `clearCenterOnShotRequest()` action
+
+### MapCanvas.tsx
+- Added `fitToStation(stationRef)` function using `easeTo()` with `point_zoom` config
+- Added `fitToShot(sectionId, shotId)` function that calculates shot midpoint and uses `easeTo()` with `point_zoom`
+- Added `useEffect` hooks to respond to `requestCenterOnStation` and `requestCenterOnShot` state changes
+- Added pending request refs for deferred processing when map is not loaded
+
+### Tests
+- Created `src/store/__tests__/uiStore.centering.test.ts` with 12 unit tests covering:
+  - `triggerCenterOnStation` / `clearCenterOnStationRequest` actions
+  - `triggerCenterOnShot` / `clearCenterOnShotRequest` actions
+  - Independence of station and shot centering requests
+  - Edge cases (section_id 0, idempotent clears)
 ## Evidence
 - Commits:
-- Tests:
+- Tests: src/store/__tests__/uiStore.centering.test.ts (12 tests passed)
 - PRs:
