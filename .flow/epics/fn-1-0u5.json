@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-1-0u5",
+  "created_at": "2026-01-20T05:26:12.593622Z",
+  "depends_on_epics": [],
+  "id": "fn-1-0u5",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-1-0u5.md",
+  "status": "done",
+  "title": "Satellite Map Tile Caching",
+  "updated_at": "2026-01-20T16:26:42.510531Z"
+}
