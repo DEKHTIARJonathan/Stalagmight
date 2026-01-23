@@ -485,8 +485,8 @@ Primary view for survey work.
 
 The Detail Panel provides interactive hyperlinks that enable quick navigation between related survey elements (shots, stations, sections).
 
-**ID Format Standard:**
-All element IDs use the format `sectionId:position` where position is 1-indexed:
+**UI Display ID Format:**
+Detail Panel display IDs (distinct from internal data model IDs) use the format `sectionId:position` where position is 1-indexed:
 - Station position = `station_index + 1`
 - Shot position = `shot array index + 1`
 - Section links show `sectionId: sectionName` (or `sectionId: Unnamed` if no name)
