@@ -4,6 +4,7 @@ import type { ProjectMetadata } from '../../types/project';
 import GlobalSurveyLayer, { type SystemGeometry } from './GlobalSurveyLayer';
 import type { SurveyGeometry } from '../../types/survey';
 import { useGlobalViewStore, type SystemGeometryState } from '../../store/globalViewStore';
+import { useProjectStore } from '../../store/projectStore';
 import { ViewModeToggle, useViewMode, type ViewMode } from './ViewModeToggle';
 import { useFpsMonitor } from '../../hooks/useFpsMonitor';
 import { defaultConfig } from '../../types/config';
@@ -76,8 +77,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   const viewModeRef = useRef<ViewMode>(viewMode);
   viewModeRef.current = viewMode;
 
-  // Config values for FPS monitoring (using defaults for now, could be passed via props later)
-  const { fps_threshold, tolerance, throttle_tolerance } = defaultConfig.global_view;
+  // Get runtime config from store (falls back to defaults if not loaded)
+  const config = useProjectStore((s) => s.config);
+  const globalViewConfig = config?.global_view ?? defaultConfig.global_view;
+  const { fps_threshold, tolerance, throttle_tolerance } = globalViewConfig;
 
   // FPS monitoring callbacks - adjust tolerance when performance drops/recovers
   const handleThrottleNeeded = useCallback(() => {
@@ -520,6 +523,15 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     selectSystem(selectedProjectId);
   }, [selectedProjectId, selectSystem]);
 
+  // Sync tolerance to survey layer when throttle state changes or geometry updates
+  // This handles the case where throttling happens before geometry arrives
+  useEffect(() => {
+    if (surveyLayerRef.current && viewMode === 'survey') {
+      const targetTolerance = isThrottled ? throttle_tolerance : tolerance;
+      surveyLayerRef.current.setTolerance(targetTolerance);
+    }
+  }, [isThrottled, tolerance, throttle_tolerance, viewMode, geometryData]);
+
   // Handle view mode changes - cancel pending loads and update visibility
   const handleViewModeChange = useCallback((newMode: ViewMode) => {
     setViewMode(newMode);
@@ -530,11 +542,15 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       cancelPendingLoads();
       // Clear pending geometry buffer to prevent stale data from being applied
       pendingGeometryRef.current = null;
+      // Restore normal tolerance when leaving survey mode
+      // (FPS monitor will call onThrottleRestore when disabled, but we also
+      // explicitly restore here in case the hook was already disabled)
+      surveyLayerRef.current?.setTolerance(tolerance);
     }
 
     // Update survey layer visibility
     surveyLayerRef.current?.setVisible(newMode === 'survey');
-  }, [setViewMode, cancelPendingLoads]);
+  }, [setViewMode, cancelPendingLoads, tolerance]);
 
   // Sync view mode to survey layer when it becomes ready
   useEffect(() => {
