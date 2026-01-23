@@ -38,6 +38,9 @@ export default function GlobalViewMap({
   // Search filter state
   const [searchTerm, setSearchTerm] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Store searchTerm in ref for access during map initialization (avoids stale closure)
+  const searchTermRef = useRef(searchTerm);
+  searchTermRef.current = searchTerm;
 
   // Access lazy loading functions and multi-select from store
   const {
@@ -191,6 +194,9 @@ export default function GlobalViewMap({
           }
           pendingGeometryRef.current = null;
         }
+
+        // Apply current search filter immediately after layer construction
+        surveyLayerRef.current.setSearchFilter(searchTermRef.current || null);
       }
 
       // Trigger re-render so effects that depend on mapLoaded can run
@@ -249,10 +255,10 @@ export default function GlobalViewMap({
     surveyLayerRef.current?.setSelectedSystems(selectedSystemIds);
   }, [selectedSystemIds]);
 
-  // Sync search filter to survey layer
+  // Sync search filter to survey layer (layer applies initial filter on construction)
   useEffect(() => {
     surveyLayerRef.current?.setSearchFilter(searchTerm || null);
-  }, [searchTerm, mapLoaded]);
+  }, [searchTerm]);
 
   // Handle search input changes (instant filtering)
   const handleSearchChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
