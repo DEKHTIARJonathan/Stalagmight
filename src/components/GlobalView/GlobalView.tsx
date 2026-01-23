@@ -108,8 +108,31 @@ export default function GlobalView() {
     return () => document.removeEventListener('keydown', handleEscape);
   }, [contextMenu.visible]);
 
-  // Access global view store for lazy loading
-  const { geometryData, geometryStates, clearSelection, selectSystem } = useGlobalViewStore();
+  // Access global view store for lazy loading and selection
+  const { geometryData, geometryStates, clearSelection, selectSystem, selectedSystemIds } = useGlobalViewStore();
+
+  // Sync store selection to local state when map Ctrl+click changes store
+  // This ensures keyboard shortcuts work with map multi-selection
+  useEffect(() => {
+    // Only sync when there's an actual change to avoid loops
+    const storeSet = selectedSystemIds;
+    const localSet = multiSelectedIds;
+
+    // Check if sets are different
+    const areDifferent = storeSet.size !== localSet.size ||
+      [...storeSet].some(id => !localSet.has(id));
+
+    if (areDifferent && storeSet.size > 0) {
+      setMultiSelectedIds(new Set(storeSet));
+      // Update primary selection to first in store set if current isn't in set
+      if (!storeSet.has(selectedProjectId ?? '')) {
+        const firstId = [...storeSet][0];
+        if (firstId) {
+          setSelectedProjectId(firstId);
+        }
+      }
+    }
+  }, [selectedSystemIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Check if there are any GPS-positioned projects (null check only, no sentinel)
   const hasGpsProjects = recentProjects.some((p) => p.gps_center !== null);
@@ -248,10 +271,17 @@ export default function GlobalView() {
       switch (e.key) {
         case 'Enter': {
           // Open the primary selected project (selectedProjectId takes precedence)
-          const primarySelection = selectedProjectIdRef.current;
-          if (primarySelection) {
+          // Fall back to first in multiSelectedIds if selectedProjectId is null
+          let targetProject = selectedProjectIdRef.current;
+          if (!targetProject && multiSelectedIdsRef.current.size > 0) {
+            const firstSelected = [...multiSelectedIdsRef.current][0];
+            if (firstSelected) {
+              targetProject = firstSelected;
+            }
+          }
+          if (targetProject) {
             e.preventDefault();
-            handleProjectOpenRef.current(primarySelection);
+            handleProjectOpenRef.current(targetProject);
           }
           break;
         }
