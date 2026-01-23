@@ -51,9 +51,8 @@ Update documentation to reflect all Global View changes.
 - [ ] project-structure.md reflects new components
 
 ## Done summary
-TBD
-
+Updated documentation for Global View survey rendering feature including SPEC.md section 6.1.1, keyboard shortcuts in Appendix A, config options in configuration.md, data flow and new files in architecture.md, test patterns in TESTING.md, and component tree in project-structure.md.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 46ab97a, c571a05
+- Tests: pnpm tsc --noEmit
 - PRs:
