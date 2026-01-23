@@ -5,6 +5,7 @@ import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
 import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
+import { formatShotId } from '../../utils/formatters';
 
 export default function DetailPanel() {
   const { selection, detailPanelTab, setDetailPanelTab, setSelection } = useUIStore();
@@ -232,7 +233,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                       {warning.message}
                     </div>
                     <div className="text-xs text-text-secondary mt-0.5">
-                      {getSectionName(warning.section_id)} • Shot {warning.shot_index + 1}
+                      {getSectionName(warning.section_id)} • Shot {formatShotId(warning.section_id, warning.shot_index + 1)}
                     </div>
                   </div>
                 </div>
@@ -339,7 +340,7 @@ function ShotDetail({ section, shot }: { section: Section; shot: Shot }) {
     <div className="h-full bg-panel overflow-auto">
       <Panel title="Shot">
         <div className="space-y-3">
-          <DetailRow label="ID" value={`${section.id}:${shot.id}`} />
+          <DetailRow label="ID" value={formatShotId(section.id, section.shots.indexOf(shot) + 1)} />
           <DetailRow label="Section" value={section.name ?? `Section ${section.id}`} />
           <DetailRow label="Length" value={`${shot.length.toFixed(2)} m`} />
           <DetailRow label="Azimuth In" value={`${shot.azimuth_in.toFixed(1)}°`} />
