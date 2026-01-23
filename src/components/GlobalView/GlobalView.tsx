@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent } fr
 import { useProject } from '../../hooks/useProject';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { useGlobalViewStore } from '../../store/globalViewStore';
 import { Button } from '../common/Button';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
@@ -102,10 +103,11 @@ export default function GlobalView() {
     return () => document.removeEventListener('keydown', handleEscape);
   }, [contextMenu.visible]);
 
-  // Check if there are any GPS-positioned projects
-  const hasGpsProjects = recentProjects.some(
-    (p) => p.gps_center !== null && p.gps_center[0] !== 0 && p.gps_center[1] !== 0
-  );
+  // Access global view store for lazy loading
+  const { geometryData, geometryStates, cancelPendingLoads, clearGeometryCache } = useGlobalViewStore();
+
+  // Check if there are any GPS-positioned projects (null check only, no sentinel)
+  const hasGpsProjects = recentProjects.some((p) => p.gps_center !== null);
 
   // Handle project selection (single click)
   const handleProjectSelect = useCallback((filePath: string, ctrlKey?: boolean) => {
@@ -147,9 +149,13 @@ export default function GlobalView() {
 
   // Handle project open (double-click on map or from metadata panel)
   const handleProjectOpen = useCallback(async (filePath: string) => {
+    // Cancel pending geometry loads to avoid race conditions
+    cancelPendingLoads();
+    // Clear geometry cache when entering single-system view
+    clearGeometryCache();
     // loadProject handles view switching internally
     await loadProject(filePath);
-  }, [loadProject]);
+  }, [loadProject, cancelPendingLoads, clearGeometryCache]);
 
   // Handle cancel during loading
   const handleCancelLoading = useCallback(async () => {
@@ -236,7 +242,7 @@ export default function GlobalView() {
                 : 'border-transparent text-text-secondary hover:text-text'
             }`}
           >
-            Map {hasGpsProjects ? `(${recentProjects.filter(p => p.gps_center !== null && p.gps_center[0] !== 0 && p.gps_center[1] !== 0).length})` : ''}
+            Map {hasGpsProjects ? `(${recentProjects.filter(p => p.gps_center !== null).length})` : ''}
           </button>
           <button
             data-testid="globalview-list-tab"
@@ -291,6 +297,8 @@ export default function GlobalView() {
               selectedProjectId={selectedProjectId}
               onProjectSelect={(path) => handleProjectSelect(path, false)}
               onProjectOpen={handleProjectOpen}
+              geometryData={geometryData}
+              geometryStates={geometryStates}
             />
           ) : (
             <div className="h-full overflow-auto p-6">
