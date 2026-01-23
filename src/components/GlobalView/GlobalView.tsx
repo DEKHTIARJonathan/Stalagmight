@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { useProject } from '../../hooks/useProject';
 import { useGlobalViewShortcuts } from '../../hooks/useGlobalViewShortcuts';
 import { useProjectStore } from '../../store/projectStore';
@@ -79,6 +80,8 @@ export default function GlobalView() {
     projectPath: null,
   });
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  // State for zoom to system trigger (used by context menu "Zoom to System" action)
+  const [zoomToSystem, setZoomToSystem] = useState<string | null>(null);
 
   useEffect(() => {
     loadRecentProjects();
@@ -155,7 +158,7 @@ export default function GlobalView() {
     }
   }, []);
 
-  // Handle right-click context menu
+  // Handle right-click context menu (from list view)
   const handleContextMenu = useCallback((e: MouseEvent, filePath: string) => {
     e.preventDefault();
     // If right-clicked project isn't selected, select it
@@ -167,6 +170,21 @@ export default function GlobalView() {
       visible: true,
       x: e.clientX,
       y: e.clientY,
+      projectPath: filePath,
+    });
+  }, [multiSelectedIds]);
+
+  // Handle context menu from map (called with coordinates instead of MouseEvent)
+  const handleMapContextMenu = useCallback((filePath: string, x: number, y: number) => {
+    // If right-clicked project isn't selected, select it
+    if (!multiSelectedIds.has(filePath)) {
+      setSelectedProjectId(filePath);
+      setMultiSelectedIds(new Set([filePath]));
+    }
+    setContextMenu({
+      visible: true,
+      x,
+      y,
       projectPath: filePath,
     });
   }, [multiSelectedIds]);
@@ -235,6 +253,39 @@ export default function GlobalView() {
       openDialog('merge-projects', { selectedProjects });
     }
   }, [multiSelectedIds, recentProjects, openDialog]);
+
+  // Handle zoom to system (context menu action)
+  const handleZoomToSystem = useCallback(() => {
+    if (contextMenu.projectPath) {
+      // Toggle to map tab if not already there
+      if (activeTab !== 'map') {
+        setActiveTab('map');
+      }
+      // Trigger zoom - use a counter pattern to ensure re-trigger even for same path
+      setZoomToSystem(contextMenu.projectPath);
+    }
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+  }, [contextMenu.projectPath, activeTab]);
+
+  // Clear zoom trigger after it's been processed
+  useEffect(() => {
+    if (!zoomToSystem) return;
+    // Clear after a short delay to ensure the map processes it
+    const timer = setTimeout(() => setZoomToSystem(null), 100);
+    return () => clearTimeout(timer);
+  }, [zoomToSystem]);
+
+  // Handle show in folder (context menu action)
+  const handleShowInFolder = useCallback(async () => {
+    if (contextMenu.projectPath) {
+      try {
+        await revealItemInDir(contextMenu.projectPath);
+      } catch (err) {
+        console.error('Failed to reveal in folder:', err);
+      }
+    }
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+  }, [contextMenu.projectPath]);
 
   // Handle search input changes (instant filtering)
   const handleSearchChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
@@ -405,6 +456,8 @@ export default function GlobalView() {
               geometryData={geometryData}
               geometryStates={geometryStates}
               searchTerm={searchTerm}
+              onContextMenu={handleMapContextMenu}
+              zoomToSystem={zoomToSystem}
             />
           ) : (
             <div className="h-full overflow-auto p-6">
@@ -469,7 +522,7 @@ export default function GlobalView() {
       {contextMenu.visible && (
         <div
           ref={contextMenuRef}
-          className="fixed z-50 bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[160px]"
+          className="fixed z-50 bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[180px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           role="menu"
           aria-label="Project context menu"
@@ -486,7 +539,23 @@ export default function GlobalView() {
             role="menuitem"
             data-testid="context-menu-open"
           >
-            Open Project
+            Open
+          </button>
+          <button
+            className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 flex items-center gap-2"
+            onClick={handleZoomToSystem}
+            role="menuitem"
+            data-testid="context-menu-zoom"
+          >
+            Zoom to System
+          </button>
+          <button
+            className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 flex items-center gap-2"
+            onClick={handleShowInFolder}
+            role="menuitem"
+            data-testid="context-menu-show-in-folder"
+          >
+            Show in Folder
           </button>
           {selectedCount >= 2 && (
             <button
@@ -502,7 +571,13 @@ export default function GlobalView() {
           <button
             className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 text-error flex items-center gap-2"
             onClick={() => {
-              if (contextMenu.projectPath) {
+              // Handle multi-selection remove with count
+              if (selectedCount > 1) {
+                // Remove all selected projects
+                for (const id of multiSelectedIds) {
+                  handleRemoveFromRecent(id);
+                }
+              } else if (contextMenu.projectPath) {
                 handleRemoveFromRecent(contextMenu.projectPath);
               }
               setContextMenu((prev) => ({ ...prev, visible: false }));
@@ -510,7 +585,7 @@ export default function GlobalView() {
             role="menuitem"
             data-testid="context-menu-remove"
           >
-            Remove from Recent
+            {selectedCount > 1 ? `Remove ${selectedCount} from Recent` : 'Remove from Recent'}
           </button>
         </div>
       )}

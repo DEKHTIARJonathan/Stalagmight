@@ -25,6 +25,8 @@ export interface GlobalSurveyLayerCallbacks {
   onSystemHover?: (filePath: string | null) => void;
   /** Called when mouse enters/leaves any feature */
   onFeatureHover?: (isHovering: boolean) => void;
+  /** Called when a system is right-clicked (for context menu) */
+  onSystemContextMenu?: (filePath: string, event: MouseEvent) => void;
 }
 
 /**
@@ -116,6 +118,7 @@ export default class GlobalSurveyLayer {
   private boundMapLeave: (() => void) | null = null;
   private boundClick: ((e: maplibregl.MapMouseEvent) => void) | null = null;
   private boundDoubleClick: ((e: maplibregl.MapMouseEvent) => void) | null = null;
+  private boundContextMenu: ((e: MouseEvent) => void) | null = null;
 
   constructor(map: MaplibreMap, callbacks: GlobalSurveyLayerCallbacks = {}) {
     this.map = map;
@@ -362,6 +365,40 @@ export default class GlobalSurveyLayer {
       this.hideTooltip();
     };
     this.map.getCanvas().addEventListener('mouseleave', this.boundMapLeave);
+
+    // Context menu handler for right-click
+    this.boundContextMenu = (e: MouseEvent) => {
+      // Get point from mouse event relative to map container
+      const rect = this.map.getContainer().getBoundingClientRect();
+      const point: [number, number] = [e.clientX - rect.left, e.clientY - rect.top];
+
+      // Query both hitbox layers - stations have priority
+      const stationFeatures = this.map.queryRenderedFeatures(point, {
+        layers: [this.stationsHitboxLayerId],
+      });
+
+      if (stationFeatures.length > 0) {
+        const feature = stationFeatures[0];
+        const systemId = feature?.properties?.systemId as string | undefined;
+        if (systemId) {
+          this.callbacks.onSystemContextMenu?.(systemId, e);
+          return;
+        }
+      }
+
+      const shotFeatures = this.map.queryRenderedFeatures(point, {
+        layers: [this.shotsHitboxLayerId],
+      });
+
+      if (shotFeatures.length > 0) {
+        const feature = shotFeatures[0];
+        const systemId = feature?.properties?.systemId as string | undefined;
+        if (systemId) {
+          this.callbacks.onSystemContextMenu?.(systemId, e);
+        }
+      }
+    };
+    this.map.getCanvas().addEventListener('contextmenu', this.boundContextMenu);
   }
 
   /**
@@ -869,6 +906,9 @@ export default class GlobalSurveyLayer {
     if (this.boundMapLeave) {
       this.map.getCanvas().removeEventListener('mouseleave', this.boundMapLeave);
     }
+    if (this.boundContextMenu) {
+      this.map.getCanvas().removeEventListener('contextmenu', this.boundContextMenu);
+    }
 
     // Remove tooltip
     if (this.tooltip && this.tooltip.parentNode) {
@@ -904,5 +944,6 @@ export default class GlobalSurveyLayer {
     this.boundDoubleClick = null;
     this.boundMouseMove = null;
     this.boundMapLeave = null;
+    this.boundContextMenu = null;
   }
 }
