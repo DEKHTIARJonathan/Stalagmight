@@ -541,10 +541,10 @@ export default class GlobalSurveyLayer {
     } else {
       // Search filter active - dim non-matching systems
       // Case-insensitive substring match: index-of returns >= 0 if found
-      const searchTerm = this.searchFilter.toLowerCase();
+      // Use MapLibre downcase for both search term and name (no JS toLowerCase)
       const matchExpr: maplibregl.ExpressionSpecification = [
         '>=',
-        ['index-of', ['downcase', searchTerm], ['downcase', ['get', 'name']]],
+        ['index-of', ['downcase', ['literal', this.searchFilter]], ['downcase', ['get', 'name']]],
         0,
       ];
 
@@ -566,6 +566,8 @@ export default class GlobalSurveyLayer {
     }
     if (this.map.getLayer(this.stationsLayerId)) {
       this.map.setPaintProperty(this.stationsLayerId, 'circle-opacity', stationsOpacity);
+      // Also dim stroke opacity to ensure full 25% dimming effect
+      this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-opacity', stationsOpacity);
     }
   }
 
