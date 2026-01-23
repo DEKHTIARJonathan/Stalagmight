@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
 import GlobalSurveyLayer, { type SystemGeometry } from './GlobalSurveyLayer';
@@ -28,7 +28,9 @@ export default function GlobalViewMap({
   const map = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
   const surveyLayerRef = useRef<GlobalSurveyLayer | null>(null);
-  const mapLoadedRef = useRef(false);
+  const [mapLoaded, setMapLoaded] = useState(false);
+  // Buffer for geometry data that arrives before map is ready
+  const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
 
   // Filter to only projects with GPS coordinates
   const gpsProjects = projects.filter(
@@ -132,7 +134,6 @@ export default function GlobalViewMap({
     );
 
     map.current.on('load', () => {
-      mapLoadedRef.current = true;
       // Fit to bounds after load
       if (gpsProjects.length > 0 && map.current) {
         map.current.fitBounds(bounds, { padding: 50, maxZoom: 15 });
@@ -148,7 +149,25 @@ export default function GlobalViewMap({
             // Hover handling could update metadata panel preview
           },
         });
+
+        // Apply any pending geometry that arrived before map was ready
+        if (pendingGeometryRef.current && pendingGeometryRef.current.size > 0) {
+          const systems: SystemGeometry[] = [];
+          for (const project of gpsProjects) {
+            const geometry = pendingGeometryRef.current.get(project.file_path);
+            if (geometry) {
+              systems.push({ metadata: project, geometry });
+            }
+          }
+          if (systems.length > 0) {
+            surveyLayerRef.current.update(systems);
+          }
+          pendingGeometryRef.current = null;
+        }
       }
+
+      // Trigger re-render so effects that depend on mapLoaded can run
+      setMapLoaded(true);
     });
 
     return () => {
@@ -185,9 +204,13 @@ export default function GlobalViewMap({
     }
 
     if (surveyLayerRef.current) {
+      // Layer ready - apply immediately
       surveyLayerRef.current.update(systems);
+      pendingGeometryRef.current = null;
+    } else {
+      // Layer not ready yet - buffer for when it initializes
+      pendingGeometryRef.current = geometryData;
     }
-    // If layer not ready yet, useEffect will re-run when geometryData changes after layer init
   }, [geometryData, gpsProjects]);
 
   // Update survey layer selection when selected project changes
@@ -197,7 +220,7 @@ export default function GlobalViewMap({
 
   // Update markers when projects or selection changes
   useEffect(() => {
-    if (!map.current || !mapLoadedRef.current) return;
+    if (!map.current || !mapLoaded) return;
 
     // Remove old markers
     markersRef.current.forEach((marker) => marker.remove());
@@ -273,7 +296,7 @@ export default function GlobalViewMap({
 
       markersRef.current.set(project.file_path, marker);
     }
-  }, [gpsProjects, selectedProjectId, onProjectSelect, onProjectOpen]);
+  }, [gpsProjects, selectedProjectId, mapLoaded, onProjectSelect, onProjectOpen]);
 
   // Update marker styles when selection changes
   useEffect(() => {
