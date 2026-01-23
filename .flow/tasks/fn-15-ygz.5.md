@@ -36,9 +36,8 @@ Add search/filter functionality in GlobalView toolbar.
 - [ ] Selection preserved when search cleared
 
 ## Done summary
-TBD
-
+Added search filter to GlobalView toolbar for filtering survey systems by name. Implements case-insensitive substring match using MapLibre expressions, with non-matching systems dimmed to 25% opacity while remaining clickable.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 04776ea, d4b6fb8, 12ebea4
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
