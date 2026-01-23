@@ -6,69 +6,80 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { generateTestId, generateAriaLabel, type DetailLinkType, type DetailLinkTarget } from '../DetailLink';
+import {
+  generateTestId,
+  generateAriaLabel,
+  hasPosition,
+  type DetailLinkType,
+  type StationOrShotTarget,
+  type SectionTarget,
+} from '../DetailLink';
 
 describe('generateTestId', () => {
   describe('station links', () => {
     it('generates correct test ID for station', () => {
-      const target: DetailLinkTarget = { sectionId: 2, position: 5 };
+      const target: StationOrShotTarget = { sectionId: 2, position: 5 };
       expect(generateTestId('station', target)).toBe('station-2-5-link');
     });
 
     it('generates correct test ID for first station in first section', () => {
-      const target: DetailLinkTarget = { sectionId: 1, position: 1 };
+      const target: StationOrShotTarget = { sectionId: 1, position: 1 };
       expect(generateTestId('station', target)).toBe('station-1-1-link');
     });
 
     it('handles large numbers', () => {
-      const target: DetailLinkTarget = { sectionId: 123, position: 456 };
+      const target: StationOrShotTarget = { sectionId: 123, position: 456 };
       expect(generateTestId('station', target)).toBe('station-123-456-link');
     });
   });
 
   describe('shot links', () => {
     it('generates correct test ID for shot', () => {
-      const target: DetailLinkTarget = { sectionId: 2, position: 3 };
+      const target: StationOrShotTarget = { sectionId: 2, position: 3 };
       expect(generateTestId('shot', target)).toBe('shot-2-3-link');
     });
 
     it('generates correct test ID for first shot', () => {
-      const target: DetailLinkTarget = { sectionId: 1, position: 1 };
+      const target: StationOrShotTarget = { sectionId: 1, position: 1 };
       expect(generateTestId('shot', target)).toBe('shot-1-1-link');
     });
 
     it('handles large numbers', () => {
-      const target: DetailLinkTarget = { sectionId: 99, position: 88 };
+      const target: StationOrShotTarget = { sectionId: 99, position: 88 };
       expect(generateTestId('shot', target)).toBe('shot-99-88-link');
     });
   });
 
   describe('section links', () => {
     it('generates correct test ID for section', () => {
-      const target: DetailLinkTarget = { sectionId: 2 };
+      const target: SectionTarget = { sectionId: 2 };
       expect(generateTestId('section', target)).toBe('section-2-link');
     });
 
     it('ignores position for section links', () => {
-      const target: DetailLinkTarget = { sectionId: 5, position: 99 };
+      const target: StationOrShotTarget = { sectionId: 5, position: 99 };
       expect(generateTestId('section', target)).toBe('section-5-link');
     });
 
     it('generates correct test ID for first section', () => {
-      const target: DetailLinkTarget = { sectionId: 1 };
+      const target: SectionTarget = { sectionId: 1 };
       expect(generateTestId('section', target)).toBe('section-1-link');
     });
   });
 
-  describe('edge cases', () => {
-    it('handles undefined position for station (though invalid usage)', () => {
-      const target: DetailLinkTarget = { sectionId: 1 };
-      // This would be invalid usage, but function should not crash
-      expect(generateTestId('station', target)).toBe('station-1-undefined-link');
+  describe('error handling', () => {
+    it('throws error for station without position', () => {
+      const target: SectionTarget = { sectionId: 1 };
+      expect(() => generateTestId('station', target)).toThrow('station links require a position');
+    });
+
+    it('throws error for shot without position', () => {
+      const target: SectionTarget = { sectionId: 1 };
+      expect(() => generateTestId('shot', target)).toThrow('shot links require a position');
     });
 
     it('handles zero values (edge case)', () => {
-      const target: DetailLinkTarget = { sectionId: 0, position: 0 };
+      const target: StationOrShotTarget = { sectionId: 0, position: 0 };
       expect(generateTestId('shot', target)).toBe('shot-0-0-link');
     });
   });
@@ -110,8 +121,16 @@ describe('generateAriaLabel', () => {
   });
 
   describe('display text variations', () => {
-    it('handles empty display text', () => {
-      expect(generateAriaLabel('station', '')).toBe('Select station ');
+    it('handles empty display text without trailing space', () => {
+      expect(generateAriaLabel('station', '')).toBe('Select station');
+    });
+
+    it('handles whitespace-only display text without trailing space', () => {
+      expect(generateAriaLabel('station', '   ')).toBe('Select station');
+    });
+
+    it('trims leading/trailing whitespace from display text', () => {
+      expect(generateAriaLabel('station', '  2:5  ')).toBe('Select station 2:5');
     });
 
     it('handles special characters in display text', () => {
@@ -124,39 +143,63 @@ describe('generateAriaLabel', () => {
   });
 });
 
+describe('hasPosition', () => {
+  it('returns true for target with position', () => {
+    const target: StationOrShotTarget = { sectionId: 1, position: 5 };
+    expect(hasPosition(target)).toBe(true);
+  });
+
+  it('returns false for target without position', () => {
+    const target: SectionTarget = { sectionId: 1 };
+    expect(hasPosition(target)).toBe(false);
+  });
+
+  it('returns true for zero position (valid)', () => {
+    const target: StationOrShotTarget = { sectionId: 1, position: 0 };
+    expect(hasPosition(target)).toBe(true);
+  });
+});
+
 describe('type safety', () => {
-  it('accepts all valid link types', () => {
+  it('accepts all valid link types with proper targets', () => {
+    const stationTarget: StationOrShotTarget = { sectionId: 1, position: 1 };
+    const sectionTarget: SectionTarget = { sectionId: 1 };
+
+    // Station and shot require position
+    expect(generateTestId('station', stationTarget)).toContain('-link');
+    expect(generateTestId('shot', stationTarget)).toContain('-link');
+
+    // Section works without position
+    expect(generateTestId('section', sectionTarget)).toContain('-link');
+
+    // All types work with ariaLabel
     const types: DetailLinkType[] = ['station', 'shot', 'section'];
-    const target: DetailLinkTarget = { sectionId: 1, position: 1 };
-
     for (const type of types) {
-      const testId = generateTestId(type, target);
-      expect(testId).toContain('-link');
-
       const ariaLabel = generateAriaLabel(type, '1:1');
       expect(ariaLabel).toContain('Select');
     }
   });
 
-  it('target requires sectionId', () => {
-    const validTarget: DetailLinkTarget = { sectionId: 1 };
+  it('SectionTarget only requires sectionId', () => {
+    const validTarget: SectionTarget = { sectionId: 1 };
     expect(validTarget.sectionId).toBe(1);
-    expect(validTarget.position).toBeUndefined();
+    expect(hasPosition(validTarget)).toBe(false);
   });
 
-  it('target with position', () => {
-    const validTarget: DetailLinkTarget = { sectionId: 1, position: 5 };
+  it('StationOrShotTarget requires both sectionId and position', () => {
+    const validTarget: StationOrShotTarget = { sectionId: 1, position: 5 };
     expect(validTarget.sectionId).toBe(1);
     expect(validTarget.position).toBe(5);
+    expect(hasPosition(validTarget)).toBe(true);
   });
 });
 
 describe('test ID format consistency', () => {
   it('all test IDs end with -link suffix', () => {
     const targets = [
-      { type: 'station' as const, target: { sectionId: 1, position: 1 } },
-      { type: 'shot' as const, target: { sectionId: 2, position: 3 } },
-      { type: 'section' as const, target: { sectionId: 5 } },
+      { type: 'station' as const, target: { sectionId: 1, position: 1 } as StationOrShotTarget },
+      { type: 'shot' as const, target: { sectionId: 2, position: 3 } as StationOrShotTarget },
+      { type: 'section' as const, target: { sectionId: 5 } as SectionTarget },
     ];
 
     for (const { type, target } of targets) {
@@ -167,7 +210,7 @@ describe('test ID format consistency', () => {
 
   it('test IDs contain the type', () => {
     const types: DetailLinkType[] = ['station', 'shot', 'section'];
-    const target: DetailLinkTarget = { sectionId: 1, position: 1 };
+    const target: StationOrShotTarget = { sectionId: 1, position: 1 };
 
     for (const type of types) {
       const testId = generateTestId(type, target);
@@ -176,7 +219,7 @@ describe('test ID format consistency', () => {
   });
 
   it('test IDs use hyphen separators', () => {
-    const target: DetailLinkTarget = { sectionId: 2, position: 5 };
+    const target: StationOrShotTarget = { sectionId: 2, position: 5 };
     const testId = generateTestId('station', target);
 
     // Should not contain any other separators
