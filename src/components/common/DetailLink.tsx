@@ -15,20 +15,40 @@ import { useCallback } from 'react';
 export type DetailLinkType = 'station' | 'shot' | 'section';
 
 /**
- * Target identifier for DetailLink.
- * For stations and shots: sectionId + position (1-indexed)
- * For sections: just sectionId
+ * Target identifier for station or shot links.
+ * Both sectionId and position are required.
  */
-export interface DetailLinkTarget {
+export interface StationOrShotTarget {
   sectionId: number;
   /** 1-indexed position within section (required for stations and shots) */
-  position?: number;
+  position: number;
+}
+
+/**
+ * Target identifier for section links.
+ * Only sectionId is required.
+ */
+export interface SectionTarget {
+  sectionId: number;
+}
+
+/**
+ * Union type for all target types.
+ * Use StationOrShotTarget for stations/shots, SectionTarget for sections.
+ */
+export type DetailLinkTarget = StationOrShotTarget | SectionTarget;
+
+/**
+ * Type guard to check if target has position (station or shot target).
+ */
+export function hasPosition(target: DetailLinkTarget): target is StationOrShotTarget {
+  return 'position' in target && typeof target.position === 'number';
 }
 
 export interface DetailLinkProps {
   /** Type of element this link navigates to */
   type: DetailLinkType;
-  /** Target identifier (sectionId required, position for stations/shots) */
+  /** Target identifier (sectionId required, position required for stations/shots) */
   target: DetailLinkTarget;
   /** Text to display in the link */
   displayText: string;
@@ -51,10 +71,16 @@ export interface DetailLinkProps {
  * - Station: "station-{sectionId}-{position}-link"
  * - Shot: "shot-{sectionId}-{position}-link"
  * - Section: "section-{sectionId}-link"
+ *
+ * @throws Error if station/shot type is used without position
  */
 export function generateTestId(type: DetailLinkType, target: DetailLinkTarget): string {
   if (type === 'section') {
     return `section-${target.sectionId}-link`;
+  }
+  // Station and shot require position
+  if (!hasPosition(target)) {
+    throw new Error(`${type} links require a position in target, got: ${JSON.stringify(target)}`);
   }
   return `${type}-${target.sectionId}-${target.position}-link`;
 }
@@ -66,7 +92,11 @@ export function generateTestId(type: DetailLinkType, target: DetailLinkTarget): 
  * Example: "Select station 2:5"
  */
 export function generateAriaLabel(type: DetailLinkType, displayText: string): string {
-  return `Select ${type} ${displayText}`;
+  const trimmed = displayText.trim();
+  if (trimmed === '') {
+    return `Select ${type}`;
+  }
+  return `Select ${type} ${trimmed}`;
 }
 
 /**
@@ -96,34 +126,16 @@ export function DetailLink({
     }
   }, [type, displayText, onSelect, onAnnounce, isMissing]);
 
-  const handleKeyDown = useCallback(
-    (event: React.KeyboardEvent) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        handleClick();
-      }
-    },
-    [handleClick]
-  );
-
-  // Base styles: text-accent underline with focus ring
-  const baseStyles = `
-    text-accent underline
-    focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset
-    cursor-pointer
-  `.trim();
-
-  // Warning styles for missing targets: yellow text
-  const warningStyles = isMissing
-    ? 'text-yellow-400 cursor-not-allowed'
-    : '';
+  // Build class list conditionally to avoid conflicting Tailwind utilities
+  const baseClasses = 'underline focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset';
+  const colorClass = isMissing ? 'text-yellow-400' : 'text-accent';
+  const cursorClass = isMissing ? 'cursor-not-allowed' : 'cursor-pointer';
 
   return (
     <button
       type="button"
       onClick={handleClick}
-      onKeyDown={handleKeyDown}
-      className={`${baseStyles} ${warningStyles} ${className}`}
+      className={`${baseClasses} ${colorClass} ${cursorClass} ${className}`}
       aria-label={ariaLabel}
       aria-disabled={isMissing}
       data-testid={computedTestId}
