@@ -84,3 +84,6 @@ React useEffect reading derived state (e.g., selectedSection) may see stale valu
 
 ## 2026-01-23 manual [pitfall]
 React refs don't trigger re-renders - use state for mapLoaded flags so dependent effects re-run; buffer data arriving before async initialization completes
+
+## 2026-01-23 manual [pitfall]
+Database::open can create/mutate files - use open_readonly for read-only operations like lazy loading geometry
