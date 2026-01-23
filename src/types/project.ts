@@ -185,6 +185,8 @@ export interface ProjectMetadata {
   modified_at: string;
   section_count: number;
   total_length: number;
+  /** Number of stations in the project (shots + 1 per section) */
+  station_count: number;
   /** GPS center as [longitude, latitude] - MapLibre order */
   gps_center: [number, number] | null;
   gps_bounds: GpsBounds | null;

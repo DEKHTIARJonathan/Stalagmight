@@ -21,9 +21,8 @@ Fix the coordinate order mismatch in `gps_center`. Currently Rust stores `(latit
 - [ ] Existing global view map still renders correctly
 - [ ] Type comments updated in both languages
 ## Done summary
-TBD
-
+Fixed gps_center coordinate order from (lat,lng) to (lng,lat) for MapLibre compatibility. Updated Rust code, TypeScript type comments, and integration tests.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: bab96707e8b7a385b067e419dd7d17bb2dbd26cf
+- Tests: pnpm tsc --noEmit, cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:
