@@ -597,7 +597,7 @@ aria-label="Center map on section 2: Main Line"
 
 #### ARIA Live Region Testing
 
-The application uses an ARIA live region to announce selection changes triggered by Detail Panel hyperlinks. The live region is at the App component root level (always mounted).
+The application uses an ARIA live region to announce selection changes triggered by Detail Panel hyperlinks and Data Table shot selection. The live region is at the App component root level (always mounted).
 
 **Testing ARIA Live Announcements:**
 
