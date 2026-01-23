@@ -184,13 +184,12 @@ export default function DataTable({ sections }: DataTableProps) {
   // Uses a ref to track previous selection and only announce actual changes
   const prevAnnouncedSelectionRef = useRef<{ sectionId: number; shotId: number } | null>(null);
   useEffect(() => {
-    // Only announce shot selections when DataTable is the active context
+    // Only announce shot selections
     if (!selection || selection.type !== 'shot') {
       prevAnnouncedSelectionRef.current = null;
       return;
     }
     if (selection.sectionId === undefined || selection.shotId === undefined) return;
-    if (!selectedSection) return;
 
     // Check if this is actually a new selection
     const prev = prevAnnouncedSelectionRef.current;
@@ -198,8 +197,12 @@ export default function DataTable({ sections }: DataTableProps) {
       return; // Same selection, don't re-announce
     }
 
+    // Find the section for the selection (may differ from selectedSection during transitions)
+    const section = sections.find((s) => s.id === selection.sectionId);
+    if (!section) return;
+
     // Find shot position (1-indexed) for announcement
-    const shotIndex = selectedSection.shots.findIndex((s) => s.id === selection.shotId);
+    const shotIndex = section.shots.findIndex((s) => s.id === selection.shotId);
     if (shotIndex === -1) return;
 
     const shotPosition = shotIndex + 1;
@@ -208,7 +211,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
     // Update ref with new selection
     prevAnnouncedSelectionRef.current = { sectionId: selection.sectionId, shotId: selection.shotId };
-  }, [selection, selectedSection, announceSelection]);
+  }, [selection, sections, announceSelection]);
 
   const handleCellEdit = async (
     shot: Shot,
