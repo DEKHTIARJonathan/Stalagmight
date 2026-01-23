@@ -15,6 +15,7 @@ Update documentation to reflect all Global View changes.
 ## Approach
 
 <!-- Updated by plan-sync: fn-15-ygz.7 added view mode toggle with useViewMode hook -->
+<!-- Updated by plan-sync: fn-15-ygz.14 added map position/zoom persistence -->
 
 - Update SPEC.md section 6.1.1 with survey rendering details
 - Add new keyboard shortcuts to Appendix A
@@ -24,6 +25,13 @@ Update documentation to reflect all Global View changes.
   - `useViewMode()` hook for localStorage persistence
   - Local storage key: `globalViewMode`
   - Switching to markers cancels pending geometry loads
+- Document map position/zoom persistence:
+  - Persisted to localStorage on map movement (`moveend` event)
+  - Local storage key: `globalViewMapState`
+  - Data structure: `{ center: [lng, lat], zoom: number }`
+  - Restored on component mount
+  - Fit All button temporarily overrides persisted position
+  - Validation prevents corrupted storage from crashing MapLibre
 - Document config options in configuration.md:
   - `global_view.fps_threshold` (default 30)
   - `global_view.tolerance` (default 0.5)
