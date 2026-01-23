@@ -368,6 +368,9 @@ export default class GlobalSurveyLayer {
 
     // Context menu handler for right-click
     this.boundContextMenu = (e: MouseEvent) => {
+      // Only handle if callback is set - allows default context menu when no callback
+      if (!this.callbacks.onSystemContextMenu) return;
+
       // Get point from mouse event relative to map container
       const rect = this.map.getContainer().getBoundingClientRect();
       const point: [number, number] = [e.clientX - rect.left, e.clientY - rect.top];
@@ -381,7 +384,9 @@ export default class GlobalSurveyLayer {
         const feature = stationFeatures[0];
         const systemId = feature?.properties?.systemId as string | undefined;
         if (systemId) {
-          this.callbacks.onSystemContextMenu?.(systemId, e);
+          // Prevent default browser context menu when we handle the event
+          e.preventDefault();
+          this.callbacks.onSystemContextMenu(systemId, e);
           return;
         }
       }
@@ -394,7 +399,9 @@ export default class GlobalSurveyLayer {
         const feature = shotFeatures[0];
         const systemId = feature?.properties?.systemId as string | undefined;
         if (systemId) {
-          this.callbacks.onSystemContextMenu?.(systemId, e);
+          // Prevent default browser context menu when we handle the event
+          e.preventDefault();
+          this.callbacks.onSystemContextMenu(systemId, e);
         }
       }
     };
