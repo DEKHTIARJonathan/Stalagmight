@@ -96,3 +96,6 @@ Percentage-based bounds padding produces degenerate results when span is 0 (sing
 
 ## 2026-01-23 manual [pitfall]
 MapLibre easeTo() inherits current padding; call map.stop() and setPadding({0}) before easeTo() to ensure deterministic centering
+
+## 2026-01-23 manual [pitfall]
+When testing map centering in E2E tests, first pan the map off-target before clicking center buttons, otherwise the test may pass/fail depending on whether the map was already centered on the target
