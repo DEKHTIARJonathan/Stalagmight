@@ -37,6 +37,8 @@ interface GlobalViewMapProps {
   onContextMenu?: (filePath: string, x: number, y: number) => void;
   /** Called to zoom to a specific system by file path. */
   zoomToSystem?: string | null;
+  /** Called after zoom to system is handled, to clear the zoom request. */
+  onZoomHandled?: () => void;
 }
 
 /**
@@ -54,6 +56,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     searchTerm = '',
     onContextMenu,
     zoomToSystem,
+    onZoomHandled,
   },
   ref
 ) {
@@ -473,6 +476,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       // Clean up survey layer
       surveyLayerRef.current?.destroy();
       surveyLayerRef.current = null;
+      // Clean up error popup
+      errorPopupRef.current?.remove();
+      errorPopupRef.current = null;
       // Clean up markers
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current.clear();
@@ -750,11 +756,11 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         onProjectOpen(project.file_path);
       });
 
-      // Context menu handler (right-click)
+      // Context menu handler (right-click) - use ref to avoid stale closures
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        onContextMenu?.(project.file_path, e.clientX, e.clientY);
+        onContextMenuRef.current?.(project.file_path, e.clientX, e.clientY);
       });
 
       // Create and add marker
@@ -823,7 +829,11 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
     // Find the project to zoom to
     const project = gpsProjects.find(p => p.file_path === zoomToSystem);
-    if (!project) return;
+    if (!project) {
+      // Project not found, still clear the zoom request
+      onZoomHandled?.();
+      return;
+    }
 
     // Get bounds from project if available, otherwise use center point
     if (project.gps_bounds) {
@@ -840,7 +850,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         duration: 500,
       });
     }
-  }, [zoomToSystem, mapLoaded, gpsProjects]);
+
+    // Signal that zoom was handled so parent can clear the request
+    onZoomHandled?.();
+  }, [zoomToSystem, mapLoaded, gpsProjects, onZoomHandled]);
 
   if (gpsProjects.length === 0) {
     return (

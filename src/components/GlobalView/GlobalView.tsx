@@ -267,13 +267,10 @@ export default function GlobalView() {
     setContextMenu((prev) => ({ ...prev, visible: false }));
   }, [contextMenu.projectPath, activeTab]);
 
-  // Clear zoom trigger after it's been processed
-  useEffect(() => {
-    if (!zoomToSystem) return;
-    // Clear after a short delay to ensure the map processes it
-    const timer = setTimeout(() => setZoomToSystem(null), 100);
-    return () => clearTimeout(timer);
-  }, [zoomToSystem]);
+  // Callback for GlobalViewMap to signal zoom was handled
+  const handleZoomHandled = useCallback(() => {
+    setZoomToSystem(null);
+  }, []);
 
   // Handle show in folder (context menu action)
   const handleShowInFolder = useCallback(async () => {
@@ -458,6 +455,7 @@ export default function GlobalView() {
               searchTerm={searchTerm}
               onContextMenu={handleMapContextMenu}
               zoomToSystem={zoomToSystem}
+              onZoomHandled={handleZoomHandled}
             />
           ) : (
             <div className="h-full overflow-auto p-6">
@@ -570,15 +568,19 @@ export default function GlobalView() {
           <div className="border-t border-border my-1" />
           <button
             className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 text-error flex items-center gap-2"
-            onClick={() => {
+            onClick={async () => {
               // Handle multi-selection remove with count
-              if (selectedCount > 1) {
-                // Remove all selected projects
-                for (const id of multiSelectedIds) {
-                  handleRemoveFromRecent(id);
+              try {
+                if (selectedCount > 1) {
+                  // Remove all selected projects sequentially
+                  for (const id of multiSelectedIds) {
+                    await handleRemoveFromRecent(id);
+                  }
+                } else if (contextMenu.projectPath) {
+                  await handleRemoveFromRecent(contextMenu.projectPath);
                 }
-              } else if (contextMenu.projectPath) {
-                handleRemoveFromRecent(contextMenu.projectPath);
+              } catch (err) {
+                console.error('Failed to remove from recent:', err);
               }
               setContextMenu((prev) => ({ ...prev, visible: false }));
             }}
