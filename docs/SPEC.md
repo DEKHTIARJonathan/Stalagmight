@@ -583,15 +583,19 @@ Selection changes are announced to screen readers via an ARIA live region.
 - Map clicks do not trigger announcements (avoids excessive verbosity during exploration)
 - Visually hidden with `sr-only` class
 
-**Announcement Format:**
+**Announcement Formats:**
+
+Detail Panel hyperlinks:
 ```
 "Selected [type] [id]"
 ```
+Examples: "Selected station 2:5", "Selected shot 2:3", "Selected section 2: Main Line"
 
-Examples:
-- "Selected station 2:5"
-- "Selected shot 2:3"
-- "Selected section 2: Main Line"
+Data Table shot selection:
+```
+"Shot [id] selected"
+```
+Example: "Shot 2:3 selected"
 
 ### 6.3 Undo/Redo History Dropdown
 
