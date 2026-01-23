@@ -327,7 +327,7 @@ test.describe('Detail Panel Links', () => {
       expect(selection?.stationRef?.station_index).toBe(1);
     });
 
-    test('clicking Section link changes selection to section', async ({ page }) => {
+    test('clicking Section link changes selection and highlights in Sections Panel', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
@@ -350,6 +350,10 @@ test.describe('Detail Panel Links', () => {
       );
       expect(selection?.type).toBe('section');
       expect(selection?.sectionId).toBe(mainSectionId);
+
+      // Verify section row is highlighted in Sections Panel
+      const sectionRow = page.getByTestId(`section-row-${mainSectionId}`);
+      await expect(sectionRow).toHaveAttribute('aria-selected', 'true');
     });
   });
 
@@ -648,7 +652,7 @@ test.describe('Detail Panel Links', () => {
   });
 
   test.describe('Center Buttons', () => {
-    test('shot center button has correct aria-label and accessibility attributes', async ({ page }) => {
+    test('shot center button click triggers triggerCenterOnShot', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
@@ -671,9 +675,46 @@ test.describe('Detail Panel Links', () => {
       // Verify button attributes for accessibility
       await expect(centerButton).toHaveAttribute('type', 'button');
       await expect(centerButton).toBeEnabled();
+
+      // Set up a flag to capture when triggerCenterOnShot is called
+      // This intercepts the trigger before map clears it
+      let capturedRequest: { sectionId: number; shotId: number } | null = null;
+      await page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: {
+            uiStore: {
+              getState: () => {
+                triggerCenterOnShot: (sectionId: number, shotId: number) => void;
+              };
+              setState: (state: unknown) => void;
+            };
+          };
+        }).__E2E_TEST__;
+        if (stores) {
+          const originalTrigger = stores.uiStore.getState().triggerCenterOnShot;
+          (window as unknown as { __capturedCenterOnShot?: unknown }).__capturedCenterOnShot = null;
+          stores.uiStore.setState({
+            triggerCenterOnShot: (sectionId: number, shotId: number) => {
+              (window as unknown as { __capturedCenterOnShot?: unknown }).__capturedCenterOnShot = { sectionId, shotId };
+              originalTrigger(sectionId, shotId);
+            },
+          });
+        }
+      });
+
+      // Click the center button
+      await centerButton.click();
+
+      // Verify the trigger was called with correct values
+      capturedRequest = await page.evaluate(() => {
+        return (window as unknown as { __capturedCenterOnShot?: { sectionId: number; shotId: number } | null }).__capturedCenterOnShot ?? null;
+      });
+      expect(capturedRequest).not.toBeNull();
+      expect(capturedRequest?.sectionId).toBe(mainSectionId);
+      expect(capturedRequest?.shotId).toBe(firstShotId);
     });
 
-    test('station center button has correct aria-label and accessibility attributes', async ({ page }) => {
+    test('station center button click triggers triggerCenterOnStation', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
@@ -694,9 +735,44 @@ test.describe('Detail Panel Links', () => {
       // Verify button attributes for accessibility
       await expect(centerButton).toHaveAttribute('type', 'button');
       await expect(centerButton).toBeEnabled();
+
+      // Set up a flag to capture when triggerCenterOnStation is called
+      await page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: {
+            uiStore: {
+              getState: () => {
+                triggerCenterOnStation: (ref: { section_id: number; station_index: number }) => void;
+              };
+              setState: (state: unknown) => void;
+            };
+          };
+        }).__E2E_TEST__;
+        if (stores) {
+          const originalTrigger = stores.uiStore.getState().triggerCenterOnStation;
+          (window as unknown as { __capturedCenterOnStation?: unknown }).__capturedCenterOnStation = null;
+          stores.uiStore.setState({
+            triggerCenterOnStation: (ref: { section_id: number; station_index: number }) => {
+              (window as unknown as { __capturedCenterOnStation?: unknown }).__capturedCenterOnStation = ref;
+              originalTrigger(ref);
+            },
+          });
+        }
+      });
+
+      // Click the center button
+      await centerButton.click();
+
+      // Verify the trigger was called with correct values
+      const capturedRequest = await page.evaluate(() => {
+        return (window as unknown as { __capturedCenterOnStation?: { section_id: number; station_index: number } | null }).__capturedCenterOnStation ?? null;
+      });
+      expect(capturedRequest).not.toBeNull();
+      expect(capturedRequest?.section_id).toBe(mainSectionId);
+      expect(capturedRequest?.station_index).toBe(0);
     });
 
-    test('section center button has correct aria-label and accessibility attributes', async ({ page }) => {
+    test('section center button click triggers triggerZoomToSection', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
@@ -717,9 +793,42 @@ test.describe('Detail Panel Links', () => {
       // Verify button attributes for accessibility
       await expect(centerButton).toHaveAttribute('type', 'button');
       await expect(centerButton).toBeEnabled();
+
+      // Set up a flag to capture when triggerZoomToSection is called
+      await page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: {
+            uiStore: {
+              getState: () => {
+                triggerZoomToSection: (sectionId: number) => void;
+              };
+              setState: (state: unknown) => void;
+            };
+          };
+        }).__E2E_TEST__;
+        if (stores) {
+          const originalTrigger = stores.uiStore.getState().triggerZoomToSection;
+          (window as unknown as { __capturedZoomToSection?: unknown }).__capturedZoomToSection = null;
+          stores.uiStore.setState({
+            triggerZoomToSection: (sectionId: number) => {
+              (window as unknown as { __capturedZoomToSection?: unknown }).__capturedZoomToSection = sectionId;
+              originalTrigger(sectionId);
+            },
+          });
+        }
+      });
+
+      // Click the center button
+      await centerButton.click();
+
+      // Verify the trigger was called with correct value
+      const capturedRequest = await page.evaluate(() => {
+        return (window as unknown as { __capturedZoomToSection?: number | null }).__capturedZoomToSection ?? null;
+      });
+      expect(capturedRequest).toBe(mainSectionId);
     });
 
-    test('center button is keyboard focusable and has proper semantics', async ({ page }) => {
+    test('center button keyboard Enter triggers action', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
@@ -736,11 +845,41 @@ test.describe('Detail Panel Links', () => {
       await centerButton.focus();
       await expect(centerButton).toBeFocused();
 
-      // Verify the button is not disabled
-      await expect(centerButton).toBeEnabled();
-
       // Verify the button has type="button" (proper keyboard semantics)
       await expect(centerButton).toHaveAttribute('type', 'button');
+
+      // Set up capture for triggerZoomToSection
+      await page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: {
+            uiStore: {
+              getState: () => {
+                triggerZoomToSection: (sectionId: number) => void;
+              };
+              setState: (state: unknown) => void;
+            };
+          };
+        }).__E2E_TEST__;
+        if (stores) {
+          const originalTrigger = stores.uiStore.getState().triggerZoomToSection;
+          (window as unknown as { __capturedZoomToSection?: unknown }).__capturedZoomToSection = null;
+          stores.uiStore.setState({
+            triggerZoomToSection: (sectionId: number) => {
+              (window as unknown as { __capturedZoomToSection?: unknown }).__capturedZoomToSection = sectionId;
+              originalTrigger(sectionId);
+            },
+          });
+        }
+      });
+
+      // Press Enter to activate
+      await page.keyboard.press('Enter');
+
+      // Verify the trigger was called
+      const capturedRequest = await page.evaluate(() => {
+        return (window as unknown as { __capturedZoomToSection?: number | null }).__capturedZoomToSection ?? null;
+      });
+      expect(capturedRequest).toBe(mainSectionId);
     });
   });
 
