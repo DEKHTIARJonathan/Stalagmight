@@ -36,9 +36,8 @@ Add FPS monitoring and auto-throttle that reduces detail when frame rate drops.
 - [ ] Config options persisted correctly
 
 ## Done summary
-TBD
-
+Implemented FPS monitoring with auto-throttle for GlobalView. Added useFpsMonitor hook with rolling 30-frame average, hysteresis (30 FPS down / 45 FPS recovery), pause detection for tab switches, and throttled state updates. Added setTolerance method to GlobalSurveyLayer for dynamic GeoJSON simplification. Integrated with GlobalViewConfig (fps_threshold, tolerance, throttle_tolerance) in both Rust and TypeScript.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 6c249ac, 7c0a51c
+- Tests: pnpm tsc --noEmit, cargo test --manifest-path src-tauri/Cargo.toml, pnpm test:ui
 - PRs:
