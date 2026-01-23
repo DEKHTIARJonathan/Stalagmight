@@ -39,6 +39,12 @@ interface GlobalViewStore {
   geometryData: Map<string, SurveyGeometry>;
 
   /**
+   * Selected system IDs for multi-select.
+   * Empty set means no selection.
+   */
+  selectedSystemIds: Set<string>;
+
+  /**
    * Load geometry for a system by file path.
    * Skips if already loading/loaded.
    */
@@ -60,12 +66,30 @@ interface GlobalViewStore {
    * Call when entering single-system view.
    */
   clearGeometryCache: () => void;
+
+  /**
+   * Select a single system (clears existing selection).
+   */
+  selectSystem: (filePath: string | null) => void;
+
+  /**
+   * Toggle a system's selection (for Ctrl+click).
+   * If already selected, removes from selection.
+   * If not selected, adds to selection.
+   */
+  toggleSystemSelection: (filePath: string) => void;
+
+  /**
+   * Clear all selection.
+   */
+  clearSelection: () => void;
 }
 
 export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
   generation: 0,
   geometryStates: new Map(),
   geometryData: new Map(),
+  selectedSystemIds: new Set(),
 
   loadGeometry: async (filePath: string) => {
     const startGeneration = get().generation;
@@ -160,5 +184,29 @@ export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
       geometryStates: new Map(),
       geometryData: new Map(),
     }));
+  },
+
+  selectSystem: (filePath: string | null) => {
+    if (filePath === null) {
+      set({ selectedSystemIds: new Set() });
+    } else {
+      set({ selectedSystemIds: new Set([filePath]) });
+    }
+  },
+
+  toggleSystemSelection: (filePath: string) => {
+    set((state) => {
+      const newSelection = new Set(state.selectedSystemIds);
+      if (newSelection.has(filePath)) {
+        newSelection.delete(filePath);
+      } else {
+        newSelection.add(filePath);
+      }
+      return { selectedSystemIds: newSelection };
+    });
+  },
+
+  clearSelection: () => {
+    set({ selectedSystemIds: new Set() });
   },
 }));
