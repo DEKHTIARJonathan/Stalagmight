@@ -756,6 +756,106 @@ pixel_dimensions = svg_dimensions * (dpi / 72)
 
 Tests verify that PNG dimensions match expected values at 72, 150, 300, and 600 DPI.
 
+## Global View Testing
+
+The Global View has several testable features for survey geometry rendering.
+
+### Test Identifiers
+
+| Element | data-testid | Notes |
+|---------|-------------|-------|
+| Map container | `globalview-map` | Main map container |
+| View mode toggle | `view-mode-toggle` | Survey/markers toggle button |
+| System marker | `system-marker-{filePath}` | Marker element for each system |
+| Search input | `globalview-search` | Search filter input |
+
+### View Mode Toggle Testing
+
+```typescript
+// Toggle between survey and markers mode
+await page.click('[data-testid="view-mode-toggle"]');
+
+// Verify mode change persists to localStorage
+const mode = await page.evaluate(() => localStorage.getItem('globalViewMode'));
+expect(mode).toBe('markers');
+```
+
+### Map Position Persistence Testing
+
+```typescript
+// Pan the map and verify state is saved
+const mapCanvas = page.locator('[data-testid="globalview-map"] canvas');
+await mapCanvas.hover();
+await page.mouse.down();
+await page.mouse.move(100, 100, { steps: 5 });
+await page.mouse.up();
+
+// Wait for moveend event to fire
+await page.waitForTimeout(100);
+
+// Verify localStorage was updated
+const mapState = await page.evaluate(() => localStorage.getItem('globalViewMapState'));
+expect(mapState).not.toBeNull();
+const parsed = JSON.parse(mapState!);
+expect(parsed).toHaveProperty('center');
+expect(parsed).toHaveProperty('zoom');
+```
+
+### Geometry Loading State Testing
+
+```typescript
+// Mock get_survey_geometry to control loading states
+// In tauri-ipc.ts:
+case 'get_survey_geometry': {
+  const filePath = args?.file_path as string;
+  // Return mock geometry or simulate error
+  if (filePath.includes('error')) {
+    throw new Error('Failed to load geometry');
+  }
+  return {
+    file_path: filePath,
+    name: 'Test System',
+    total_length: 100.0,
+    station_count: 10,
+    gps_origin: [-81.78, 24.55],
+    shots: [{ from: [-81.78, 24.55], to: [-81.77, 24.56], is_virtual: false }],
+    stations: [[-81.78, 24.55], [-81.77, 24.56]],
+  };
+}
+```
+
+### Multi-Select Testing
+
+```typescript
+// Ctrl+click to multi-select systems
+await page.click('[data-testid="system-marker-system1.cvproj"]');
+await page.click('[data-testid="system-marker-system2.cvproj"]', { modifiers: ['Control'] });
+
+// Verify multiple systems are selected in store
+const selected = await page.evaluate(() => {
+  return (window as any).__E2E_TEST__.globalViewStore.getState().selectedSystemIds;
+});
+expect(selected).toHaveLength(2);
+```
+
+### Context Menu Testing
+
+```typescript
+// Right-click to open context menu
+await page.click('[data-testid="system-marker-system1.cvproj"]', { button: 'right' });
+await expect(page.locator('[data-testid="context-menu"]')).toBeVisible();
+```
+
+### Search Filter Testing
+
+```typescript
+// Type in search to filter systems
+await page.fill('[data-testid="globalview-search"]', 'sistema');
+
+// Verify non-matching systems are dimmed (via filter expression)
+// This requires checking MapLibre layer paint properties
+```
+
 ## Troubleshooting
 
 ### Playwright Tests Failing
