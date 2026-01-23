@@ -151,17 +151,20 @@ export default function GlobalViewMap({
 
       // Initialize survey layer now that map is loaded
       if (!surveyLayerRef.current && map.current) {
+        // Disable default double-click zoom so our handler can open projects
+        map.current.doubleClickZoom.disable();
+
         surveyLayerRef.current = new GlobalSurveyLayer(map.current, {
           onSystemClick: (filePath, _event, ctrlKey) => {
             if (ctrlKey) {
               // Ctrl+click: toggle selection (multi-select)
+              // Don't call onProjectSelect to avoid resetting to single-select
               toggleSystemSelectionRef.current(filePath);
             } else {
-              // Regular click: select single system
+              // Regular click: select single system in store and notify parent
               selectSystemRef.current(filePath);
+              onProjectSelectRef.current(filePath);
             }
-            // Also call the legacy onProjectSelect for compatibility
-            onProjectSelectRef.current(filePath);
           },
           onSystemDoubleClick: (filePath) => {
             onProjectOpenRef.current(filePath);
@@ -247,9 +250,8 @@ export default function GlobalViewMap({
   useEffect(() => {
     // If selectedProjectId from props changes, update the store
     // This maintains backward compatibility with existing code
-    if (selectedProjectId) {
-      selectSystem(selectedProjectId);
-    }
+    // Handle both truthy and null/undefined cases
+    selectSystem(selectedProjectId);
   }, [selectedProjectId, selectSystem]);
 
   // Lazy load geometry for visible systems when map loads or moveend

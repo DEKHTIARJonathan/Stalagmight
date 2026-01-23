@@ -421,6 +421,9 @@ export default class GlobalSurveyLayer {
 
     // Update color expressions using match on systemId
     this.updateColorExpressions();
+
+    // Reapply hover/selection styling in case selection existed before data loaded
+    this.updateVisualState();
   }
 
   /**
@@ -621,14 +624,30 @@ export default class GlobalSurveyLayer {
       lengthStr = `${length.toFixed(1)} m`;
     }
 
-    // Build tooltip content
+    // Build tooltip content using textContent to avoid XSS
     const name = properties.name ?? 'Unknown';
     const stationCount = properties.stationCount ?? 0;
-    this.tooltip.innerHTML = `
-      <div style="font-weight: 600; margin-bottom: 4px;">${name}</div>
-      <div style="color: #aaa;">Length: ${lengthStr}</div>
-      <div style="color: #aaa;">Stations: ${stationCount}</div>
-    `;
+
+    // Clear existing content
+    this.tooltip.textContent = '';
+
+    // Name row
+    const nameDiv = document.createElement('div');
+    nameDiv.style.cssText = 'font-weight: 600; margin-bottom: 4px;';
+    nameDiv.textContent = name;
+    this.tooltip.appendChild(nameDiv);
+
+    // Length row
+    const lengthDiv = document.createElement('div');
+    lengthDiv.style.color = '#aaa';
+    lengthDiv.textContent = `Length: ${lengthStr}`;
+    this.tooltip.appendChild(lengthDiv);
+
+    // Station count row
+    const stationDiv = document.createElement('div');
+    stationDiv.style.color = '#aaa';
+    stationDiv.textContent = `Stations: ${stationCount}`;
+    this.tooltip.appendChild(stationDiv);
 
     // Position tooltip near cursor (offset by 15px)
     const container = this.map.getContainer();
@@ -636,14 +655,19 @@ export default class GlobalSurveyLayer {
     const x = event.clientX - rect.left + 15;
     const y = event.clientY - rect.top + 15;
 
-    // Keep tooltip within container bounds
+    // Temporarily make visible but hidden for measurement
+    this.tooltip.style.visibility = 'hidden';
+    this.tooltip.style.display = 'block';
+
+    // Measure tooltip dimensions
     const tooltipRect = this.tooltip.getBoundingClientRect();
     const maxX = container.clientWidth - tooltipRect.width - 10;
     const maxY = container.clientHeight - tooltipRect.height - 10;
 
-    this.tooltip.style.left = `${Math.min(x, maxX)}px`;
-    this.tooltip.style.top = `${Math.min(y, maxY)}px`;
-    this.tooltip.style.display = 'block';
+    // Clamp position to keep tooltip within container bounds (min 0)
+    this.tooltip.style.left = `${Math.max(0, Math.min(x, maxX))}px`;
+    this.tooltip.style.top = `${Math.max(0, Math.min(y, maxY))}px`;
+    this.tooltip.style.visibility = 'visible';
   }
 
   /**
