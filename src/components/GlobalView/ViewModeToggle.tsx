@@ -118,11 +118,12 @@ export function ViewModeToggle({ mode, onModeChange }: ViewModeToggleProps) {
           bg-panel border border-border rounded p-2
           hover:bg-background transition-colors duration-200
           focus:outline-none focus:ring-2 focus:ring-accent
+          group
         "
         aria-label={tooltipText}
         data-testid="view-mode-toggle"
       >
-        <span className="transition-transform duration-200 inline-block">
+        <span className="inline-block transition-transform duration-200 group-hover:scale-110 group-active:scale-95">
           {mode === 'survey' ? <SurveyIcon /> : <MarkersIcon />}
         </span>
       </button>

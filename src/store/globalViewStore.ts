@@ -68,6 +68,14 @@ interface GlobalViewStore {
   clearGeometryCache: () => void;
 
   /**
+   * Cancel in-flight geometry loads without clearing already-loaded data.
+   * Increments generation to invalidate pending requests while preserving
+   * geometryData and geometryStates for already-loaded systems.
+   * Call when switching to markers-only view.
+   */
+  cancelPendingLoads: () => void;
+
+  /**
    * Select a single system (clears existing selection).
    */
   selectSystem: (filePath: string | null) => void;
@@ -190,6 +198,25 @@ export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
       geometryStates: new Map(),
       geometryData: new Map(),
     }));
+  },
+
+  cancelPendingLoads: () => {
+    // Bump generation to invalidate in-flight requests
+    // but preserve geometryData and loaded states
+    set((state) => {
+      // Remove 'loading' entries from geometryStates (reset to idle)
+      // Keep 'loaded' and 'error' states intact
+      const newStates = new Map<string, SystemGeometryState>();
+      for (const [key, value] of state.geometryStates) {
+        if (value.state !== 'loading') {
+          newStates.set(key, value);
+        }
+      }
+      return {
+        generation: state.generation + 1,
+        geometryStates: newStates,
+      };
+    });
   },
 
   selectSystem: (filePath: string | null) => {
