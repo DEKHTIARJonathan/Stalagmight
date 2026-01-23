@@ -23,9 +23,8 @@ Implement soft bounds with rubber-band panning effect. MapLibre GL JS 4.7.1 does
 - [ ] Fit All button works
 
 ## Done summary
-TBD
-
+Implemented soft bounds with rubber-band panning for GlobalView map. Added hard bounds (50% padding) via maxBounds constraint and soft bounds (20% padding) with easeTo animation when user pans outside. Bounds update dynamically when projects change.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: b84faf4, 58d7a33
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
