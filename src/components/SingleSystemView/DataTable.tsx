@@ -31,6 +31,7 @@ export default function DataTable({ sections }: DataTableProps) {
     dataTableOpen,
     toggleDataTable,
     dataTableHeight,
+    announceSelection,
   } = useUIStore();
 
   // Create a map of shot warnings for quick lookup
@@ -59,13 +60,29 @@ export default function DataTable({ sections }: DataTableProps) {
     [sections]
   );
 
-  // Update selected section when sections change (e.g., first load)
+  // Update selected section when sections change (e.g., first load or section deleted)
   useEffect(() => {
-    if (sections.length > 0 && selectedSectionId === null) {
+    if (sections.length === 0) {
+      // No sections - clear selection
+      setSelectedSectionId(null);
+      return;
+    }
+
+    if (selectedSectionId === null) {
+      // No selection yet - select first section
       const firstSection = sections[0];
       if (firstSection) {
         setSelectedSectionId(firstSection.id);
       }
+      return;
+    }
+
+    // Check if currently selected section still exists
+    const sectionExists = sections.some((s) => s.id === selectedSectionId);
+    if (!sectionExists) {
+      // Section was deleted - switch to first remaining section
+      const firstSection = sections[0];
+      setSelectedSectionId(firstSection?.id ?? null);
     }
   }, [sections, selectedSectionId]);
 
@@ -148,6 +165,50 @@ export default function DataTable({ sections }: DataTableProps) {
   }, [scrollToKey]);
 
   const selectedSection = sections.find((s) => s.id === selectedSectionId);
+
+  // Handle shot deletion - clear selection if selected shot no longer exists
+  useEffect(() => {
+    if (!selection || selection.type !== 'shot') return;
+    if (selection.sectionId !== selectedSectionId) return;
+    if (!selectedSection) return;
+
+    // Check if the selected shot still exists in this section
+    const shotExists = selectedSection.shots.some((s) => s.id === selection.shotId);
+    if (!shotExists) {
+      // Shot was deleted - clear selection
+      setSelection(null);
+    }
+  }, [selection, selectedSection, selectedSectionId, setSelection]);
+
+  // Announce shot selection changes to screen readers
+  // Uses a ref to track previous selection and only announce actual changes
+  const prevAnnouncedSelectionRef = useRef<{ sectionId: number; shotId: number } | null>(null);
+  useEffect(() => {
+    // Only announce shot selections when DataTable is the active context
+    if (!selection || selection.type !== 'shot') {
+      prevAnnouncedSelectionRef.current = null;
+      return;
+    }
+    if (selection.sectionId === undefined || selection.shotId === undefined) return;
+    if (!selectedSection) return;
+
+    // Check if this is actually a new selection
+    const prev = prevAnnouncedSelectionRef.current;
+    if (prev && prev.sectionId === selection.sectionId && prev.shotId === selection.shotId) {
+      return; // Same selection, don't re-announce
+    }
+
+    // Find shot position (1-indexed) for announcement
+    const shotIndex = selectedSection.shots.findIndex((s) => s.id === selection.shotId);
+    if (shotIndex === -1) return;
+
+    const shotPosition = shotIndex + 1;
+    const message = `Shot ${formatShotId(selection.sectionId, shotPosition)} selected`;
+    announceSelection(message);
+
+    // Update ref with new selection
+    prevAnnouncedSelectionRef.current = { sectionId: selection.sectionId, shotId: selection.shotId };
+  }, [selection, selectedSection, announceSelection]);
 
   const handleCellEdit = async (
     shot: Shot,

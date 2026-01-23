@@ -236,6 +236,10 @@ interface UIStore {
   mapViewportCenterProject: { x: number; y: number } | null;
   setMapViewportCenterProject: (center: { x: number; y: number } | null) => void;
   getMapViewportCenter: () => { x: number; y: number };
+
+  // ARIA selection announcements for screen readers
+  selectionAnnouncement: string;
+  announceSelection: (message: string) => void;
 }
 
 export type DisplayToggleKey =
@@ -640,4 +644,8 @@ export const useUIStore = create<UIStore>((set) => ({
     const center = useUIStore.getState().mapViewportCenterProject;
     return center ?? { x: 0, y: 0 };
   },
+
+  // ARIA selection announcements for screen readers
+  selectionAnnouncement: '',
+  announceSelection: (message) => set({ selectionAnnouncement: message }),
 }));

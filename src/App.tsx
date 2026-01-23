@@ -61,7 +61,7 @@ function calculateStationPositions(shots: ImportedSectionConfig['shots']): Array
 
 function App() {
   const { project, stations, loadConfig, config, isDirty, createSection, createSectionAndMerge, setZeroDatum, mergeStations, moveSection, importDmp } = useProjectStore();
-  const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, hasImportedDmpPath, addImportedDmpPath, triggerFitToBounds, toast } = useUIStore();
+  const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, hasImportedDmpPath, addImportedDmpPath, triggerFitToBounds, toast, selectionAnnouncement } = useUIStore();
 
   // Listen for loading progress events from backend
   useLoadingProgress();
@@ -579,6 +579,17 @@ function App() {
         </div>,
         document.body
       )}
+
+      {/* ARIA live region for selection announcements (mounted permanently) */}
+      <div
+        id="selection-announcer"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {selectionAnnouncement}
+      </div>
     </div>
   );
 }
