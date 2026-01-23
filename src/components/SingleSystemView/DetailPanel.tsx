@@ -255,32 +255,116 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
 }
 
 function StationDetail({ station }: { station: Station }) {
-  const { project } = useProjectStore();
-  const { openDialog } = useUIStore();
+  const { project, stations } = useProjectStore();
+  const { openDialog, setSelection, triggerCenterOnStation, announceSelection } = useUIStore();
   const section = project?.sections.find(
     (s) => s.id === station.station_ref.section_id
   );
+
+  // Station position is 1-indexed for display
+  const stationIndex = station.station_ref.station_index;
+  const stationPosition = stationIndex + 1;
+  const sectionId = station.station_ref.section_id;
+
+  // Station-to-Shot mapping:
+  // Station at station_index has:
+  // - Previous shot: section.shots[station_index - 1] (display position = station_index)
+  // - Next shot: section.shots[station_index] (display position = station_index + 1)
+  const prevShotIndex = stationIndex - 1;
+  const nextShotIndex = stationIndex;
+  const prevShotPosition = stationIndex; // station_index for display
+  const nextShotPosition = stationIndex + 1; // station_index + 1 for display
+
+  // Check if shots exist
+  const prevShotExists = section ? prevShotIndex >= 0 && prevShotIndex < section.shots.length : false;
+  const nextShotExists = section ? nextShotIndex >= 0 && nextShotIndex < section.shots.length : false;
+
+  // Determine if we should show prev/next shot links
+  const isFirstStation = stationIndex === 0;
+  const isLastStation = section ? stationIndex >= section.shots.length : true;
 
   const handleEdit = () => {
     openDialog('edit-station', { stationRef: station.station_ref });
   };
 
+  const handleSelectPrevShot = () => {
+    if (section && prevShotExists) {
+      const shot = section.shots[prevShotIndex];
+      if (shot) {
+        setSelection({ type: 'shot', sectionId, shotId: shot.id });
+      }
+    }
+  };
+
+  const handleSelectNextShot = () => {
+    if (section && nextShotExists) {
+      const shot = section.shots[nextShotIndex];
+      if (shot) {
+        setSelection({ type: 'shot', sectionId, shotId: shot.id });
+      }
+    }
+  };
+
+  const handleSelectSection = () => {
+    setSelection({ type: 'section', sectionId });
+  };
+
+  const handleSelectMergedStation = (ref: { section_id: number; station_index: number }) => {
+    setSelection({
+      type: 'station',
+      stationRef: { section_id: ref.section_id, station_index: ref.station_index },
+    });
+  };
+
+  const handleCenterOnStation = () => {
+    triggerCenterOnStation(station.station_ref);
+  };
+
+  // Validate merged station targets exist
+  const mergedStationExists = (ref: { section_id: number; station_index: number }): boolean => {
+    return stations.some(
+      (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
+    );
+  };
+
+  const sectionDisplayText = `${sectionId}: ${section?.name ?? 'Unnamed'}`;
+
+  const centerButton = (
+    <button
+      type="button"
+      onClick={handleCenterOnStation}
+      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background/50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
+      aria-label={`Center map on station ${sectionId}:${stationPosition}`}
+      data-testid="center-station-button"
+    >
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <circle cx="12" cy="12" r="3" strokeWidth={2} />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+      </svg>
+    </button>
+  );
+
   return (
     <div className="h-full bg-panel overflow-auto" data-testid="station-detail">
-      <Panel title="Station">
+      <Panel title="Station" headerActions={centerButton}>
         <div className="space-y-3">
           <DetailRow
             label="ID"
-            value={`${station.station_ref.section_id}:${station.station_ref.station_index}`}
+            value={`${sectionId}:${stationPosition}`}
           />
-          <DetailRow label="Section" value={section?.name ?? `Section ${station.station_ref.section_id}`} />
+          <DetailRow label="Section" value={section?.name ?? `Section ${sectionId}`} />
           <DetailRow label="X" value={`${station.coordinates.x.toFixed(2)} m`} />
           <DetailRow label="Y" value={`${station.coordinates.y.toFixed(2)} m`} />
           <DetailRow label="Depth" value={`${station.coordinates.z.toFixed(1)} m`} />
 
           {station.is_zero_datum && (
             <div className="pt-2 border-t border-border">
-              <span className="text-warning">★ Zero Datum</span>
+              <span className="text-warning">&#9733; Zero Datum</span>
               {station.gps_coordinates && (
                 <div className="mt-2 text-sm">
                   <DetailRow
@@ -299,15 +383,65 @@ function StationDetail({ station }: { station: Station }) {
           {station.merged_with.length > 0 && (
             <div className="pt-2 border-t border-border">
               <span className="text-sm text-text-secondary">Merged with:</span>
-              <ul className="mt-1">
+              <ul className="mt-1 space-y-1">
                 {station.merged_with.map((ref, i) => (
                   <li key={i} className="text-sm">
-                    {ref.section_id}:{ref.station_index}
+                    <DetailLink
+                      type="station"
+                      target={{ sectionId: ref.section_id, position: ref.station_index + 1 }}
+                      displayText={`${ref.section_id}:${ref.station_index + 1}`}
+                      onSelect={() => handleSelectMergedStation(ref)}
+                      isMissing={!mergedStationExists(ref)}
+                      onAnnounce={announceSelection}
+                    />
                   </li>
                 ))}
               </ul>
             </div>
           )}
+
+          {/* Connected section with hyperlinks */}
+          <div className="pt-2 border-t border-border">
+            <span className="text-sm text-text-secondary">Connected:</span>
+            <div className="mt-1 space-y-1 text-sm">
+              {!isFirstStation && (
+                <div className="flex justify-between">
+                  <span className="text-text-secondary">Previous Shot:</span>
+                  <DetailLink
+                    type="shot"
+                    target={{ sectionId, position: prevShotPosition }}
+                    displayText={`${sectionId}:${prevShotPosition}`}
+                    onSelect={handleSelectPrevShot}
+                    isMissing={!prevShotExists}
+                    onAnnounce={announceSelection}
+                  />
+                </div>
+              )}
+              {!isLastStation && (
+                <div className="flex justify-between">
+                  <span className="text-text-secondary">Next Shot:</span>
+                  <DetailLink
+                    type="shot"
+                    target={{ sectionId, position: nextShotPosition }}
+                    displayText={`${sectionId}:${nextShotPosition}`}
+                    onSelect={handleSelectNextShot}
+                    isMissing={!nextShotExists}
+                    onAnnounce={announceSelection}
+                  />
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-text-secondary">Section:</span>
+                <DetailLink
+                  type="section"
+                  target={{ sectionId }}
+                  displayText={sectionDisplayText}
+                  onSelect={handleSelectSection}
+                  onAnnounce={announceSelection}
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </Panel>
 
