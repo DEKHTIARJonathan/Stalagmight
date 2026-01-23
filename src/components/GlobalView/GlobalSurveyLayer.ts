@@ -519,6 +519,32 @@ export default class GlobalSurveyLayer {
   }
 
   /**
+   * Set visibility of all survey layers (shots and stations).
+   * Used by view mode toggle to switch between survey and markers-only view.
+   *
+   * @param visible - Whether survey layers should be visible
+   */
+  setVisible(visible: boolean): void {
+    const visibility = visible ? 'visible' : 'none';
+
+    // Set visibility on visual layers
+    if (this.map.getLayer(this.shotsLayerId)) {
+      this.map.setLayoutProperty(this.shotsLayerId, 'visibility', visibility);
+    }
+    if (this.map.getLayer(this.stationsLayerId)) {
+      this.map.setLayoutProperty(this.stationsLayerId, 'visibility', visibility);
+    }
+
+    // Also set visibility on hitbox layers to prevent invisible features from being clickable
+    if (this.map.getLayer(this.shotsHitboxLayerId)) {
+      this.map.setLayoutProperty(this.shotsHitboxLayerId, 'visibility', visibility);
+    }
+    if (this.map.getLayer(this.stationsHitboxLayerId)) {
+      this.map.setLayoutProperty(this.stationsHitboxLayerId, 'visibility', visibility);
+    }
+  }
+
+  /**
    * Update opacity expressions on visual layers based on search filter.
    * Non-matching systems are dimmed to 25% opacity.
    */

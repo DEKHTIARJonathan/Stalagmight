@@ -33,9 +33,8 @@ Implement keyboard shortcuts for GlobalView navigation and actions.
 - [ ] MapLibre built-in keyboard handler disabled
 - [ ] No stale closure issues with event handlers
 ## Done summary
-TBD
-
+Implemented GlobalView keyboard shortcuts via dedicated useGlobalViewShortcuts hook: Enter opens selected project, Delete/Backspace removes from recent, Escape deselects all, Ctrl+A selects all systems, Arrow keys navigate to nearest system by centroid. Disabled MapLibre built-in keyboard handler to prevent conflicts.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: f708085, fd61001, db15664, 91c0421, ed03129
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
