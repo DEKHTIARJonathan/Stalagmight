@@ -39,9 +39,21 @@ Extend existing selection and hover highlighting with multi-select and tooltip f
 - [ ] Filter-based highlighting (not feature-state) (already implemented)
 
 ## Done summary
-TBD
+## Summary
 
+Implemented multi-select, double-click to open project, and tooltip features for GlobalSurveyLayer:
+
+- Multi-select with Ctrl+click (adds/removes systems from selection set)
+- Double-click opens project (disabled MapLibre's default zoom behavior)
+- Tooltip follows cursor showing system name, total length, and station count
+- Updated updateVisualState() to handle multiple selected IDs using filter expressions
+- Fixed compatibility sync between selectedProjectId and selectedSystemIds
+
+## Files Changed
+- src/components/GlobalView/GlobalSurveyLayer.ts (multi-select, tooltip, visual state)
+- src/components/GlobalView/GlobalViewMap.tsx (event wiring, double-click handling)
+- src/store/globalViewStore.ts (selectedSystemIds Set state)
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 8e59cb3, ba9384b
+- Tests: pnpm tsc --noEmit passed
 - PRs:
