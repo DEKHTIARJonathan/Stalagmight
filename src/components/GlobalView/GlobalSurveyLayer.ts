@@ -97,6 +97,7 @@ export default class GlobalSurveyLayer {
   // Visual state
   private hoveredSystemId: string | null = null;
   private selectedSystemIds: Set<string> = new Set();
+  private searchFilter: string | null = null;
 
   // Store system colors for match expressions
   private systemColors: Map<string, string> = new Map();
@@ -502,6 +503,69 @@ export default class GlobalSurveyLayer {
     // Also apply to hitbox layer to prevent hidden shots from being clickable
     if (this.map.getLayer(this.shotsHitboxLayerId)) {
       this.map.setFilter(this.shotsHitboxLayerId, filter);
+    }
+  }
+
+  /**
+   * Set search filter to dim non-matching systems.
+   * Uses case-insensitive substring match on system name.
+   * Non-matching systems dim to 25% opacity but remain clickable.
+   *
+   * @param term - Search term to filter by, or null to clear filter
+   */
+  setSearchFilter(term: string | null): void {
+    this.searchFilter = term;
+    this.updateOpacityExpressions();
+  }
+
+  /**
+   * Update opacity expressions on visual layers based on search filter.
+   * Non-matching systems are dimmed to 25% opacity.
+   */
+  private updateOpacityExpressions(): void {
+    // Build opacity expression based on search filter
+    // If no filter, all systems have full opacity
+    // If filter set, use index-of + downcase for case-insensitive substring match
+    let shotsOpacity: maplibregl.ExpressionSpecification | number;
+    let stationsOpacity: maplibregl.ExpressionSpecification | number;
+
+    if (!this.searchFilter) {
+      // No search filter - shots use default opacity (virtual shots dimmed)
+      shotsOpacity = [
+        'case',
+        ['boolean', ['get', 'isVirtual'], false],
+        0.5,
+        1,
+      ];
+      stationsOpacity = 1;
+    } else {
+      // Search filter active - dim non-matching systems
+      // Case-insensitive substring match: index-of returns >= 0 if found
+      const searchTerm = this.searchFilter.toLowerCase();
+      const matchExpr: maplibregl.ExpressionSpecification = [
+        '>=',
+        ['index-of', ['downcase', searchTerm], ['downcase', ['get', 'name']]],
+        0,
+      ];
+
+      // Shots: full opacity if match (with virtual dimming), 25% if no match
+      shotsOpacity = [
+        'case',
+        matchExpr,
+        ['case', ['boolean', ['get', 'isVirtual'], false], 0.5, 1],
+        0.25,
+      ];
+
+      // Stations: full opacity if match, 25% if no match
+      stationsOpacity = ['case', matchExpr, 1, 0.25];
+    }
+
+    // Apply to visual layers
+    if (this.map.getLayer(this.shotsLayerId)) {
+      this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', shotsOpacity);
+    }
+    if (this.map.getLayer(this.stationsLayerId)) {
+      this.map.setPaintProperty(this.stationsLayerId, 'circle-opacity', stationsOpacity);
     }
   }
 

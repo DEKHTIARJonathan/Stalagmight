@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
 import GlobalSurveyLayer, { type SystemGeometry } from './GlobalSurveyLayer';
@@ -35,6 +35,9 @@ export default function GlobalViewMap({
   const [mapLoaded, setMapLoaded] = useState(false);
   // Buffer for geometry data that arrives before map is ready
   const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
+  // Search filter state
+  const [searchTerm, setSearchTerm] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Access lazy loading functions and multi-select from store
   const {
@@ -245,6 +248,30 @@ export default function GlobalViewMap({
   useEffect(() => {
     surveyLayerRef.current?.setSelectedSystems(selectedSystemIds);
   }, [selectedSystemIds]);
+
+  // Sync search filter to survey layer
+  useEffect(() => {
+    surveyLayerRef.current?.setSearchFilter(searchTerm || null);
+  }, [searchTerm, mapLoaded]);
+
+  // Handle search input changes (instant filtering)
+  const handleSearchChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    setSearchTerm(e.target.value);
+  }, []);
+
+  // Handle clearing search (X button)
+  const handleClearSearch = useCallback(() => {
+    setSearchTerm('');
+    searchInputRef.current?.focus();
+  }, []);
+
+  // Handle search input keyboard events (Escape to clear)
+  const handleSearchKeyDown = useCallback((e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      setSearchTerm('');
+      // Keep focus on input after clearing
+    }
+  }, []);
 
   // Sync single-selection prop to store for compatibility
   useEffect(() => {
@@ -462,14 +489,56 @@ export default function GlobalViewMap({
     <div data-testid="globalview-map" className="h-full relative">
       <div ref={mapContainer} className="w-full h-full" />
 
-      {/* Fit to bounds button */}
-      <button
-        onClick={fitToBounds}
-        className="absolute top-2 left-2 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
-        title="Fit all systems in view"
-      >
-        Fit All
-      </button>
+      {/* Toolbar with Fit All button and search input */}
+      <div className="absolute top-2 left-2 flex items-center gap-2">
+        <button
+          onClick={fitToBounds}
+          className="bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
+          title="Fit all systems in view"
+        >
+          Fit All
+        </button>
+
+        {/* Search input */}
+        <div className="relative">
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={searchTerm}
+            onChange={handleSearchChange}
+            onKeyDown={handleSearchKeyDown}
+            placeholder="Search systems..."
+            className="bg-panel border border-border rounded px-2 py-1 text-sm w-48 pr-7 focus:outline-none focus:ring-1 focus:ring-accent"
+            data-testid="globalview-search-input"
+            aria-label="Search systems by name"
+          />
+          {/* Clear button (X) - only show when there's text */}
+          {searchTerm && (
+            <button
+              onClick={handleClearSearch}
+              className="absolute right-1 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text p-1"
+              title="Clear search (Escape)"
+              aria-label="Clear search"
+              data-testid="globalview-search-clear"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* Project count indicator */}
       <div className="absolute bottom-8 right-2 bg-panel/90 border border-border rounded px-2 py-1 text-xs">
