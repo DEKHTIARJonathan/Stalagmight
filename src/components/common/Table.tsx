@@ -8,6 +8,12 @@ interface Column<T> {
   align?: 'left' | 'center' | 'right';
   /** Get the value for a virtual column (not a direct property on the item) */
   getValue?: (item: T) => unknown;
+  /** Format the value for display (applied to input value and non-editable display) */
+  formatValue?: (value: unknown) => string;
+  /** Input type for editable cells (default: 'text') */
+  inputType?: 'text' | 'number';
+  /** Step for number inputs */
+  inputStep?: string;
 }
 
 interface TableProps<T> {
@@ -78,16 +84,25 @@ export function Table<T extends object>({
                   `}
                   onClick={() => onRowClick?.(item, index)}
                 >
-                  {columns.map((column) => (
-                    <td
-                      key={column.key}
-                      className={alignmentClasses[column.align ?? 'left']}
-                    >
-                      {column.render
-                        ? column.render(item, index)
-                        : String((item as Record<string, unknown>)[column.key] ?? '')}
-                    </td>
-                  ))}
+                  {columns.map((column) => {
+                    // Use getValue for virtual columns, otherwise access property directly
+                    const value = column.getValue
+                      ? column.getValue(item)
+                      : (item as Record<string, unknown>)[column.key];
+                    // Apply formatValue if provided, otherwise stringify
+                    const displayValue = column.formatValue
+                      ? column.formatValue(value)
+                      : String(value ?? '');
+
+                    return (
+                      <td
+                        key={column.key}
+                        className={alignmentClasses[column.align ?? 'left']}
+                      >
+                        {column.render ? column.render(item, index) : displayValue}
+                      </td>
+                    );
+                  })}
                 </tr>
               );
             })
@@ -330,6 +345,10 @@ export function EditableTable<T extends object>({
                       ? column.getValue(item)
                       : (item as Record<string, unknown>)[column.key];
                     const isFirstColumn = columnIndex === 0;
+                    // Apply formatValue if provided, otherwise stringify
+                    const displayValue = column.formatValue
+                      ? column.formatValue(value)
+                      : String(value ?? '');
 
                     return (
                       <td
@@ -340,8 +359,9 @@ export function EditableTable<T extends object>({
                           column.render(item, index)
                         ) : isEditable ? (
                           <input
-                            type="text"
-                            value={String(value ?? '')}
+                            type={column.inputType ?? 'text'}
+                            step={column.inputStep}
+                            value={displayValue}
                             onChange={(e) =>
                               handleInputChange(item, column.key, e.target.value, index)
                             }
@@ -351,7 +371,7 @@ export function EditableTable<T extends object>({
                           />
                         ) : (
                           <span className="px-2 py-1 inline-block">
-                            {String(value ?? '')}
+                            {displayValue}
                           </span>
                         )}
                       </td>

@@ -6,6 +6,7 @@ import { EditableTable } from '../common/Table';
 import { Select, type SelectOption } from '../common/Select';
 import type { ProjectWarning } from '../../types/commands';
 import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
+import { formatShotId } from '../../utils/formatters';
 
 interface DataTableProps {
   sections: Section[];
@@ -67,7 +68,12 @@ export default function DataTable({ sections }: DataTableProps) {
 
     // Handle virtual azimuth column with delta-offset behavior
     if (key === '_azimuth_avg') {
-      const newValue = value as number;
+      // Guard against invalid input - must be a finite number
+      const newValue = typeof value === 'number' ? value : parseFloat(String(value));
+      if (!Number.isFinite(newValue)) {
+        // Invalid input - ignore the edit
+        return;
+      }
       const currentMean = circularMeanDegrees(shot.azimuth_in, shot.azimuth_out);
       const delta = newValue - currentMean;
       const newIn = normalizeAngle(shot.azimuth_in + delta);
@@ -116,7 +122,13 @@ export default function DataTable({ sections }: DataTableProps) {
         );
       },
     },
-    { key: 'id', header: '#', width: '50px' },
+    {
+      key: 'id',
+      header: '#',
+      width: '60px',
+      render: (_shot: Shot, index: number) =>
+        selectedSectionId !== null ? formatShotId(selectedSectionId, index + 1) : '',
+    },
     { key: 'length', header: 'Length (m)', width: '80px', align: 'right' as const },
     {
       key: '_azimuth_avg',
@@ -125,6 +137,12 @@ export default function DataTable({ sections }: DataTableProps) {
       align: 'right' as const,
       getValue: (shot: Shot) =>
         circularMeanDegrees(shot.azimuth_in, shot.azimuth_out),
+      formatValue: (value: unknown) =>
+        typeof value === 'number' && Number.isFinite(value)
+          ? value.toFixed(1)
+          : '',
+      inputType: 'number' as const,
+      inputStep: '0.1',
     },
     { key: 'depth_in', header: 'Depth In', width: '80px', align: 'right' as const },
     { key: 'depth_out', header: 'Depth Out', width: '80px', align: 'right' as const },
