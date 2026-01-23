@@ -113,6 +113,8 @@ export default function MapCanvas() {
     detailPanelWidth,
     requestZoomToSection,
     clearZoomToSectionRequest,
+    requestPanToShot,
+    clearPanToShotRequest,
   } = useUIStore();
 
   // Snap-to-station detection
@@ -1261,6 +1263,53 @@ export default function MapCanvas() {
     [stations, config, gpsOrigin, sectionsPanelOpen, sectionsPanelWidth, detailPanelOpen, detailPanelWidth]
   );
 
+  // Pan to a shot's midpoint (used when double-clicking a row in DataTable)
+  const panToShotMidpoint = useCallback(
+    (sectionId: number, shotId: number) => {
+      if (!map.current || !config || !project) return;
+
+      // Find the section
+      const section = project.sections.find((s) => s.id === sectionId);
+      if (!section) return;
+
+      // Find the shot index (shot position - 1, since shots connect stations)
+      const shotIndex = section.shots.findIndex((s) => s.id === shotId);
+      if (shotIndex === -1) return;
+
+      // Shot at index N connects station_index N (from) to station_index N+1 (to)
+      const fromStationIndex = shotIndex;
+      const toStationIndex = shotIndex + 1;
+
+      // Find the two stations
+      const fromStation = stations.find(
+        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === fromStationIndex
+      );
+      const toStation = stations.find(
+        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === toStationIndex
+      );
+
+      if (!fromStation || !toStation) return;
+
+      // Calculate midpoint in project coordinates (meters)
+      const midpointX = (fromStation.coordinates.x + toStation.coordinates.x) / 2;
+      const midpointY = (fromStation.coordinates.y + toStation.coordinates.y) / 2;
+
+      // Convert to map coordinates
+      const mapCoords = metersToMapCoords(midpointX, midpointY, gpsOrigin);
+
+      // Get animation config
+      const animationConfig = config.map.animation;
+      const animationDuration = animationConfig.enabled ? animationConfig.duration : 0;
+
+      // Pan to the midpoint with smooth animation
+      map.current.easeTo({
+        center: mapCoords as [number, number],
+        duration: animationDuration,
+      });
+    },
+    [project, stations, config, gpsOrigin]
+  );
+
   // Fit to bounds when requested (e.g., after import)
   useEffect(() => {
     if (requestFitToBounds && mapLoaded && stations.length > 0) {
@@ -1295,6 +1344,20 @@ export default function MapCanvas() {
       fitToSection(sectionId);
     }
   }, [mapLoaded, fitToSection]);
+
+  // Pan to shot midpoint when requested (e.g., from DataTable double-click)
+  useEffect(() => {
+    if (requestPanToShot !== null) {
+      const { sectionId, shotId } = requestPanToShot;
+      clearPanToShotRequest();
+      // Only process if map is loaded
+      if (mapLoaded) {
+        panToShotMidpoint(sectionId, shotId);
+      }
+      // Note: Unlike section zoom, we don't store pending requests for shots
+      // since it's a minor interaction that doesn't need deferred handling
+    }
+  }, [requestPanToShot, mapLoaded, clearPanToShotRequest, panToShotMidpoint]);
 
   // Handle Escape key for placement mode
   useEffect(() => {
