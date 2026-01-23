@@ -78,3 +78,6 @@ User-controlled color strings in SVG/HTML must be validated (#RGB/#RRGGBB only) 
 
 ## 2026-01-22 manual [pitfall]
 When parsing SVG/XML attributes in tests, use dedicated parsers or well-structured string splitting rather than magic offsets that silently skip assertions on failure
+
+## 2026-01-23 manual [pitfall]
+React useEffect reading derived state (e.g., selectedSection) may see stale value during transitions - compute from source (e.g., sections.find) using the selection's own IDs
