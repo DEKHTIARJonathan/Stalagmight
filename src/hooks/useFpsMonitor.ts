@@ -9,6 +9,12 @@ const DEFAULT_FPS_THRESHOLD = 30;
 /** FPS threshold above which throttling deactivates (hysteresis to prevent oscillation) */
 const DEFAULT_FPS_RECOVERY_THRESHOLD = 45;
 
+/** Delta time above this threshold (ms) is considered a pause (tab switch, etc.) */
+const PAUSE_THRESHOLD_MS = 250;
+
+/** Minimum interval (ms) between FPS state updates to avoid excessive React work */
+const FPS_UPDATE_INTERVAL_MS = 250;
+
 /**
  * Configuration options for the FPS monitor.
  */
@@ -63,6 +69,8 @@ export function useFpsMonitor(
   const frameTimesRef = useRef<number[]>([]);
   const lastTimeRef = useRef<number>(0);
   const animationFrameIdRef = useRef<number>(0);
+  const lastFpsUpdateRef = useRef<number>(0);
+  const lastReportedFpsRef = useRef<number>(60);
 
   // Refs for callbacks to avoid effect dependency churn
   const onThrottleNeededRef = useRef(onThrottleNeeded);
@@ -81,14 +89,28 @@ export function useFpsMonitor(
   // Main animation frame loop
   useEffect(() => {
     if (!enabled) {
+      // When disabling, restore throttle if currently throttled
+      if (isThrottledRef.current) {
+        setIsThrottled(false);
+        isThrottledRef.current = false;
+        onThrottleRestoreRef.current();
+      }
       setFps(60);
-      setIsThrottled(false);
       return;
     }
 
     const measureFrame = (currentTime: number) => {
       if (lastTimeRef.current > 0) {
         const deltaTime = currentTime - lastTimeRef.current;
+
+        // Detect pauses (tab backgrounding, window drag, breakpoint)
+        // Reset rolling window instead of poisoning the average
+        if (deltaTime > PAUSE_THRESHOLD_MS) {
+          frameTimesRef.current = [];
+          lastTimeRef.current = currentTime;
+          animationFrameIdRef.current = requestAnimationFrame(measureFrame);
+          return;
+        }
 
         // Add to rolling window
         frameTimesRef.current.push(deltaTime);
@@ -107,10 +129,21 @@ export function useFpsMonitor(
           }
           const avgFrameTime = totalTime / ROLLING_WINDOW_SIZE;
           const currentFps = avgFrameTime > 0 ? 1000 / avgFrameTime : 60;
+          const roundedFps = Math.round(currentFps);
 
-          setFps(Math.round(currentFps));
+          // Throttle FPS state updates to avoid excessive React work
+          // Only update if enough time has passed AND the value meaningfully changed
+          const timeSinceLastUpdate = currentTime - lastFpsUpdateRef.current;
+          if (
+            timeSinceLastUpdate >= FPS_UPDATE_INTERVAL_MS &&
+            roundedFps !== lastReportedFpsRef.current
+          ) {
+            setFps(roundedFps);
+            lastFpsUpdateRef.current = currentTime;
+            lastReportedFpsRef.current = roundedFps;
+          }
 
-          // Check thresholds with hysteresis
+          // Check thresholds with hysteresis (always check, don't throttle)
           if (!isThrottledRef.current && currentFps < fpsThreshold) {
             setIsThrottled(true);
             isThrottledRef.current = true;

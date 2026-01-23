@@ -142,7 +142,7 @@ export default class GlobalSurveyLayer {
         type: 'FeatureCollection',
         features: [],
       },
-      tolerance: 0.5,
+      tolerance: this.currentTolerance,
       generateId: true,
     });
   }
@@ -564,9 +564,9 @@ export default class GlobalSurveyLayer {
    */
   setTolerance(tolerance: number): void {
     if (tolerance === this.currentTolerance) return;
-    if (this.cachedFeatures.length === 0) return;
 
-    this.currentTolerance = tolerance;
+    // Store old tolerance in case we need to revert on failure
+    const oldTolerance = this.currentTolerance;
 
     // MapLibre doesn't allow changing source options after creation,
     // so we need to remove and re-add the source with new tolerance.
@@ -578,7 +578,6 @@ export default class GlobalSurveyLayer {
       this.shotsHitboxLayerId,
     ];
 
-    // Store current layer state before removal
     try {
       // Remove layers in reverse order
       for (const layerId of layerIds) {
@@ -596,7 +595,7 @@ export default class GlobalSurveyLayer {
         type: 'geojson',
         data: {
           type: 'FeatureCollection',
-          features: this.cachedFeatures,
+          features: this.cachedFeatures, // May be empty, that's OK
         },
         tolerance,
         generateId: true,
@@ -609,8 +608,12 @@ export default class GlobalSurveyLayer {
       this.updateColorExpressions();
       this.updateVisualState();
       this.updateOpacityExpressions();
+
+      // Only update currentTolerance after successful rebuild
+      this.currentTolerance = tolerance;
     } catch {
-      // If anything fails, the map may be in a bad state - log but continue
+      // Revert internal state on failure
+      this.currentTolerance = oldTolerance;
       console.error('[GlobalSurveyLayer] Failed to update tolerance');
     }
   }
