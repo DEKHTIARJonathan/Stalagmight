@@ -128,11 +128,11 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     },
   }), []);
 
-  // Calculate bounds to fit all systems (max 500km x 500km)
-  const calculateBounds = useCallback(() => {
+  // Calculate raw bounds (no padding) for all systems
+  // Note: These are the actual bounds of all systems, without any span limiting
+  const calculateRawBounds = useCallback((): maplibregl.LngLatBounds | null => {
     if (gpsProjects.length === 0) {
-      // Default to world view if no GPS projects
-      return new maplibregl.LngLatBounds([-180, -85], [180, 85]);
+      return null;
     }
 
     // Use individual project bounds if available, otherwise use center points
@@ -156,23 +156,74 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       }
     }
 
-    // Check if bounds exceed 500km x 500km (approximately 4.5 degrees at mid-latitudes)
+    return new maplibregl.LngLatBounds([minLng, minLat], [maxLng, maxLat]);
+  }, [gpsProjects]);
+
+  // Calculate bounds with padding factor
+  const addPaddingToBounds = useCallback((bounds: maplibregl.LngLatBounds, paddingFactor: number): maplibregl.LngLatBounds => {
+    const sw = bounds.getSouthWest();
+    const ne = bounds.getNorthEast();
+    const lngSpan = ne.lng - sw.lng;
+    const latSpan = ne.lat - sw.lat;
+
+    // Add padding as percentage of span
+    const lngPadding = lngSpan * paddingFactor;
+    const latPadding = latSpan * paddingFactor;
+
+    return new maplibregl.LngLatBounds(
+      [sw.lng - lngPadding, Math.max(-85, sw.lat - latPadding)],
+      [ne.lng + lngPadding, Math.min(85, ne.lat + latPadding)]
+    );
+  }, []);
+
+  // Calculate bounds to fit all systems (for Fit All button and initial view)
+  // This applies a max span limit to avoid extremely zoomed-out initial views
+  const calculateBounds = useCallback(() => {
+    const rawBounds = calculateRawBounds();
+    if (!rawBounds) {
+      // Default to world view if no GPS projects
+      return new maplibregl.LngLatBounds([-180, -85], [180, 85]);
+    }
+
+    // Apply max span limit for fitting (500km ~ 4.5 degrees at mid-latitudes)
     const MAX_SPAN_DEGREES = 4.5;
-    const lngSpan = maxLng - minLng;
-    const latSpan = maxLat - minLat;
+    const sw = rawBounds.getSouthWest();
+    const ne = rawBounds.getNorthEast();
+    const lngSpan = ne.lng - sw.lng;
+    const latSpan = ne.lat - sw.lat;
 
     if (lngSpan > MAX_SPAN_DEGREES || latSpan > MAX_SPAN_DEGREES) {
       // Limit to max span, centered on the center of all projects
-      const centerLng = (minLng + maxLng) / 2;
-      const centerLat = (minLat + maxLat) / 2;
-      minLng = centerLng - MAX_SPAN_DEGREES / 2;
-      maxLng = centerLng + MAX_SPAN_DEGREES / 2;
-      minLat = centerLat - MAX_SPAN_DEGREES / 2;
-      maxLat = centerLat + MAX_SPAN_DEGREES / 2;
+      const centerLng = (sw.lng + ne.lng) / 2;
+      const centerLat = (sw.lat + ne.lat) / 2;
+      return new maplibregl.LngLatBounds(
+        [centerLng - MAX_SPAN_DEGREES / 2, centerLat - MAX_SPAN_DEGREES / 2],
+        [centerLng + MAX_SPAN_DEGREES / 2, centerLat + MAX_SPAN_DEGREES / 2]
+      );
     }
 
-    return new maplibregl.LngLatBounds([minLng, minLat], [maxLng, maxLat]);
-  }, [gpsProjects]);
+    return rawBounds;
+  }, [calculateRawBounds]);
+
+  // Soft bounds (20% padding) - animate back if user pans beyond this
+  const softBoundsRef = useRef<maplibregl.LngLatBounds | null>(null);
+
+  // Update bounds when projects change
+  useEffect(() => {
+    const rawBounds = calculateRawBounds();
+    if (rawBounds) {
+      softBoundsRef.current = addPaddingToBounds(rawBounds, 0.2);
+    } else {
+      softBoundsRef.current = null;
+    }
+  }, [calculateRawBounds, addPaddingToBounds]);
+
+  // Calculate hard bounds (50% padding) for maxBounds constraint
+  const calculateHardBounds = useCallback((): maplibregl.LngLatBounds | null => {
+    const rawBounds = calculateRawBounds();
+    if (!rawBounds) return null;
+    return addPaddingToBounds(rawBounds, 0.5);
+  }, [calculateRawBounds, addPaddingToBounds]);
 
   // Initialize map
   useEffect(() => {
@@ -180,8 +231,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
     const bounds = calculateBounds();
     const center = bounds.getCenter();
+    const hardBounds = calculateHardBounds();
 
-    map.current = new maplibregl.Map({
+    // Build map options - only include maxBounds if we have GPS projects
+    const mapOptions: maplibregl.MapOptions = {
       container: mapContainer.current,
       style: {
         version: 8,
@@ -206,7 +259,14 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       },
       center: [center.lng, center.lat],
       zoom: 10,
-    });
+    };
+
+    // Hard bounds (50% padding) - user cannot pan beyond this
+    if (hardBounds) {
+      mapOptions.maxBounds = hardBounds;
+    }
+
+    map.current = new maplibregl.Map(mapOptions);
 
     // Disable rotation
     map.current.dragRotate.disable();
@@ -284,7 +344,69 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       setMapLoaded(true);
     });
 
+    // Rubber-band effect: when user releases pan outside soft bounds, animate back
+    // This creates a natural "spring" feel without requiring internal MapLibre APIs
+    let isRubberBanding = false;
+    const handleMoveEndRubberBand = (e: maplibregl.MapLibreEvent & { originalEvent?: Event }) => {
+      if (!map.current || !softBoundsRef.current) return;
+
+      // Skip if we're already in a rubber-band animation (prevents infinite loop)
+      if (isRubberBanding) return;
+
+      // Only apply rubber-band effect for user-initiated moves (not programmatic moves)
+      // originalEvent is present when the move was user-initiated
+      if (!e.originalEvent) return;
+
+      const mapCenter = map.current.getCenter();
+      const softBounds = softBoundsRef.current;
+
+      // Check if center is outside soft bounds
+      let targetLng = mapCenter.lng;
+      let targetLat = mapCenter.lat;
+      let needsCorrection = false;
+
+      const sw = softBounds.getSouthWest();
+      const ne = softBounds.getNorthEast();
+
+      if (mapCenter.lng < sw.lng) {
+        targetLng = sw.lng;
+        needsCorrection = true;
+      } else if (mapCenter.lng > ne.lng) {
+        targetLng = ne.lng;
+        needsCorrection = true;
+      }
+
+      if (mapCenter.lat < sw.lat) {
+        targetLat = sw.lat;
+        needsCorrection = true;
+      } else if (mapCenter.lat > ne.lat) {
+        targetLat = ne.lat;
+        needsCorrection = true;
+      }
+
+      if (needsCorrection) {
+        // Set flag to prevent re-triggering during animation
+        isRubberBanding = true;
+
+        // Animate back to soft bounds with gentle easing
+        map.current.easeTo({
+          center: [targetLng, targetLat],
+          duration: 300,
+          easing: (t) => 1 - Math.pow(1 - t, 3), // Ease out cubic
+        });
+
+        // Clear flag after animation completes
+        // Use slightly longer timeout than animation duration to be safe
+        setTimeout(() => {
+          isRubberBanding = false;
+        }, 350);
+      }
+    };
+
+    map.current.on('moveend', handleMoveEndRubberBand);
+
     return () => {
+      map.current?.off('moveend', handleMoveEndRubberBand);
       // Clean up survey layer
       surveyLayerRef.current?.destroy();
       surveyLayerRef.current = null;
