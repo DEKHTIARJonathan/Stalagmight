@@ -97,16 +97,7 @@ export default function GlobalView() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [contextMenu.visible]);
 
-  // Close context menu on escape
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && contextMenu.visible) {
-        setContextMenu((prev) => ({ ...prev, visible: false }));
-      }
-    };
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [contextMenu.visible]);
+  // Note: Context menu escape is handled in the main keyboard handler below
 
   // Access global view store for lazy loading and selection
   const { geometryData, geometryStates, clearSelection, selectSystem, selectedSystemIds } = useGlobalViewStore();
@@ -122,10 +113,14 @@ export default function GlobalView() {
     const areDifferent = storeSet.size !== localSet.size ||
       [...storeSet].some(id => !localSet.has(id));
 
-    if (areDifferent && storeSet.size > 0) {
+    if (areDifferent) {
       setMultiSelectedIds(new Set(storeSet));
-      // Update primary selection to first in store set if current isn't in set
-      if (!storeSet.has(selectedProjectId ?? '')) {
+      // Update primary selection based on store
+      if (storeSet.size === 0) {
+        // Store cleared - clear primary selection too
+        setSelectedProjectId(null);
+      } else if (!storeSet.has(selectedProjectId ?? '')) {
+        // Primary selection not in store - update to first in store
         const firstId = [...storeSet][0];
         if (firstId) {
           setSelectedProjectId(firstId);
@@ -247,13 +242,20 @@ export default function GlobalView() {
     return unsubscribe;
   }, []);
 
-  // Global keyboard shortcuts for GlobalView (scoped to this view)
+  // Single keyboard handler for GlobalView (handles all shortcuts including context menu)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't handle if loading is active
       if (loadingRef.current.isLoading) return;
 
-      // Don't handle if context menu is visible (block all shortcuts except Escape which is handled separately)
+      // Handle context menu escape first (always allowed)
+      if (e.key === 'Escape' && contextMenuVisibleRef.current) {
+        e.preventDefault();
+        setContextMenu((prev) => ({ ...prev, visible: false }));
+        return;
+      }
+
+      // Block all other shortcuts if context menu is visible
       if (contextMenuVisibleRef.current) return;
 
       // Don't handle if focus is in an input element
