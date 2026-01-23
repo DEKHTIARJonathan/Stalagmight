@@ -618,7 +618,8 @@ await expect(liveRegion).toHaveText('Selected station 2:5');
 **Notes:**
 - The live region has `id="selection-announcer"` for unambiguous selection
 - Uses `role="status"`, `aria-live="polite"`, and `aria-atomic="true"`
-- Only hyperlink-triggered selection changes are announced (not map clicks)
+- Announcements triggered by: Detail Panel hyperlinks, Data Table shot selection
+- Map clicks do not trigger announcements
 - The region is visually hidden with the `sr-only` class
 
 ### Selector Priority
@@ -829,11 +830,11 @@ await browser.execute(() => {
     map.setCenter([center.lng + 0.001, center.lat + 0.001]);
   }
 });
-await waitForMapIdle(browser);
+await waitForMapIdle();
 
 // Now click center button and verify map moves back
 await $('[data-testid="center-station-button"]').click();
-await waitForMapIdle(browser);
+await waitForMapIdle();
 ```
 
 ### Missing Target Testing
