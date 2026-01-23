@@ -30,9 +30,8 @@ Add accessibility testing notes:
 - [ ] TESTING.md includes data-testid patterns for links and center buttons
 - [ ] TESTING.md includes accessibility testing guidance for live regions
 ## Done summary
-TBD
-
+Updated SPEC.md with Detail Panel hyperlinks specification (Section 6.2.1-6.2.3) documenting UI display ID format, Connected/Endpoints sections, center button behavior, and ARIA live announcements. Updated TESTING.md with data-testid patterns for detail links and center buttons, ARIA label patterns, live region testing guidance, and a dedicated Detail Panel testing section.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: b1e91e1, 33ea36d, dadda88, 5c9628f
+- Tests: pnpm tsc --noEmit
 - PRs:
