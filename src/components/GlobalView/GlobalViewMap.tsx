@@ -4,6 +4,7 @@ import type { ProjectMetadata } from '../../types/project';
 import GlobalSurveyLayer, { type SystemGeometry } from './GlobalSurveyLayer';
 import type { SurveyGeometry } from '../../types/survey';
 import { useGlobalViewStore, type SystemGeometryState } from '../../store/globalViewStore';
+import { ViewModeToggle, useViewMode, type ViewMode } from './ViewModeToggle';
 
 /**
  * Handle exposed by GlobalViewMap for parent components.
@@ -64,7 +65,14 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     selectedSystemIds,
     selectSystem,
     toggleSystemSelection,
+    clearGeometryCache,
   } = useGlobalViewStore();
+
+  // View mode state (persisted in localStorage)
+  const [viewMode, setViewMode] = useViewMode();
+  // Store viewMode in ref for callbacks that need current value without closure staleness
+  const viewModeRef = useRef<ViewMode>(viewMode);
+  viewModeRef.current = viewMode;
 
   // Filter to only projects with GPS coordinates (null check only, no sentinel)
   const gpsProjects = projects.filter((p) => p.gps_center !== null);
@@ -339,12 +347,37 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     selectSystem(selectedProjectId);
   }, [selectedProjectId, selectSystem]);
 
+  // Handle view mode changes - cancel pending loads and update visibility
+  const handleViewModeChange = useCallback((newMode: ViewMode) => {
+    setViewMode(newMode);
+
+    // Cancel any in-progress geometry loads when switching to markers mode
+    if (newMode === 'markers') {
+      clearGeometryCache();
+    }
+
+    // Update survey layer visibility
+    surveyLayerRef.current?.setVisible(newMode === 'survey');
+  }, [setViewMode, clearGeometryCache]);
+
+  // Sync view mode to survey layer when it becomes ready
+  useEffect(() => {
+    if (surveyLayerRef.current) {
+      surveyLayerRef.current.setVisible(viewMode === 'survey');
+    }
+  }, [mapLoaded, viewMode]);
+
   // Lazy load geometry for visible systems when map loads or moveend
+  // Only load when in survey mode
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
+    // Don't load geometry when in markers-only mode
+    if (viewMode !== 'survey') return;
 
     const loadVisibleSystems = () => {
       if (!map.current) return;
+      // Check ref for current mode (avoid stale closure)
+      if (viewModeRef.current !== 'survey') return;
 
       const bounds = map.current.getBounds();
       const center = bounds.getCenter();
@@ -381,7 +414,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     return () => {
       map.current?.off('moveend', handleMoveEnd);
     };
-  }, [mapLoaded, gpsProjects, loadGeometryBatch]);
+  }, [mapLoaded, gpsProjects, loadGeometryBatch, viewMode]);
 
   // Update markers when projects or selection changes
   useEffect(() => {
@@ -555,6 +588,14 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       >
         Fit All
       </button>
+
+      {/* View mode toggle - positioned below navigation controls */}
+      <div className="absolute top-24 right-2">
+        <ViewModeToggle
+          mode={viewMode}
+          onModeChange={handleViewModeChange}
+        />
+      </div>
 
       {/* Project count indicator */}
       <div className="absolute bottom-8 right-2 bg-panel/90 border border-border rounded px-2 py-1 text-xs">
