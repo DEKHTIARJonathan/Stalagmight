@@ -5,6 +5,8 @@ import GlobalSurveyLayer, { type SystemGeometry } from './GlobalSurveyLayer';
 import type { SurveyGeometry } from '../../types/survey';
 import { useGlobalViewStore, type SystemGeometryState } from '../../store/globalViewStore';
 import { ViewModeToggle, useViewMode, type ViewMode } from './ViewModeToggle';
+import { useFpsMonitor } from '../../hooks/useFpsMonitor';
+import { defaultConfig } from '../../types/config';
 
 /**
  * Handle exposed by GlobalViewMap for parent components.
@@ -73,6 +75,29 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   // Store viewMode in ref for callbacks that need current value without closure staleness
   const viewModeRef = useRef<ViewMode>(viewMode);
   viewModeRef.current = viewMode;
+
+  // Config values for FPS monitoring (using defaults for now, could be passed via props later)
+  const { fps_threshold, tolerance, throttle_tolerance } = defaultConfig.global_view;
+
+  // FPS monitoring callbacks - adjust tolerance when performance drops/recovers
+  const handleThrottleNeeded = useCallback(() => {
+    surveyLayerRef.current?.setTolerance(throttle_tolerance);
+  }, [throttle_tolerance]);
+
+  const handleThrottleRestore = useCallback(() => {
+    surveyLayerRef.current?.setTolerance(tolerance);
+  }, [tolerance]);
+
+  // FPS monitor - only active in survey mode when map is loaded
+  const { isThrottled } = useFpsMonitor(
+    handleThrottleNeeded,
+    handleThrottleRestore,
+    {
+      fpsThreshold: fps_threshold,
+      recoveryThreshold: 45, // Hysteresis: recover at higher FPS to prevent oscillation
+      enabled: viewMode === 'survey' && mapLoaded,
+    }
+  );
 
   // Filter to only projects with GPS coordinates (null check only, no sentinel)
   const gpsProjects = projects.filter((p) => p.gps_center !== null);
@@ -751,6 +776,11 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       {/* Project count indicator */}
       <div className="absolute bottom-8 right-2 bg-panel/90 border border-border rounded px-2 py-1 text-xs">
         {gpsProjects.length} system{gpsProjects.length !== 1 ? 's' : ''} on map
+        {isThrottled && (
+          <span className="ml-2 text-yellow-500" title="Detail reduced for performance">
+            (reduced detail)
+          </span>
+        )}
       </div>
     </div>
   );

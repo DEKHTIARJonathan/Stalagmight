@@ -22,6 +22,8 @@ pub struct Config {
     pub cache: CacheConfig,
     #[serde(default)]
     pub debug: DebugConfig,
+    #[serde(default)]
+    pub global_view: GlobalViewConfig,
 
     // Legacy fields for backwards compatibility (deserialize only, never serialize)
     // Uses alias to match old TOML key name while keeping internal field name distinct
@@ -303,6 +305,61 @@ fn default_tile_cache_max_mb() -> u32 {
 
 fn default_tile_ttl_days() -> u32 {
     30
+}
+
+/// Global view configuration for multi-system map rendering
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalViewConfig {
+    /// FPS threshold below which auto-throttle activates
+    #[serde(default = "default_fps_threshold")]
+    pub fps_threshold: u32,
+    /// GeoJSON simplification tolerance at normal FPS
+    #[serde(default = "default_tolerance")]
+    pub tolerance: f64,
+    /// GeoJSON simplification tolerance when throttled (higher = more simplification)
+    #[serde(default = "default_throttle_tolerance")]
+    pub throttle_tolerance: f64,
+}
+
+impl GlobalViewConfig {
+    /// Normalize values to valid ranges
+    pub fn normalize(&mut self) {
+        if !self.tolerance.is_finite() {
+            self.tolerance = default_tolerance();
+        }
+        if !self.throttle_tolerance.is_finite() {
+            self.throttle_tolerance = default_throttle_tolerance();
+        }
+        // Ensure tolerance values are positive
+        self.tolerance = self.tolerance.max(0.0);
+        self.throttle_tolerance = self.throttle_tolerance.max(0.0);
+        // Ensure throttle_tolerance >= tolerance
+        if self.throttle_tolerance < self.tolerance {
+            self.throttle_tolerance = self.tolerance;
+        }
+    }
+}
+
+impl Default for GlobalViewConfig {
+    fn default() -> Self {
+        Self {
+            fps_threshold: default_fps_threshold(),
+            tolerance: default_tolerance(),
+            throttle_tolerance: default_throttle_tolerance(),
+        }
+    }
+}
+
+fn default_fps_threshold() -> u32 {
+    30
+}
+
+fn default_tolerance() -> f64 {
+    0.5
+}
+
+fn default_throttle_tolerance() -> f64 {
+    1.0
 }
 
 /// Shortcut feedback preference for toast notifications
@@ -946,6 +1003,7 @@ impl Config {
     pub fn normalize(&mut self) {
         self.map.normalize();
         self.shortcuts.normalize();
+        self.global_view.normalize();
     }
 
     /// Migrate legacy config fields to new structure

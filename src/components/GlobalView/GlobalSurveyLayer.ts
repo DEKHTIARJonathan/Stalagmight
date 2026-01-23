@@ -102,6 +102,12 @@ export default class GlobalSurveyLayer {
   // Store system colors for match expressions
   private systemColors: Map<string, string> = new Map();
 
+  // Current GeoJSON tolerance (for simplification)
+  private currentTolerance = 0.5;
+
+  // Cached GeoJSON data for tolerance updates
+  private cachedFeatures: GeoJSON.Feature[] = [];
+
   // Tooltip element
   private tooltip: HTMLDivElement | null = null;
 
@@ -411,6 +417,9 @@ export default class GlobalSurveyLayer {
       }
     }
 
+    // Cache features for tolerance updates
+    this.cachedFeatures = features;
+
     // Update the single source with all features
     const source = this.map.getSource(this.sourceId);
     if (source && 'setData' in source) {
@@ -542,6 +551,75 @@ export default class GlobalSurveyLayer {
     if (this.map.getLayer(this.stationsHitboxLayerId)) {
       this.map.setLayoutProperty(this.stationsHitboxLayerId, 'visibility', visibility);
     }
+  }
+
+  /**
+   * Set the GeoJSON simplification tolerance.
+   * Higher values = more simplification = better performance but less detail.
+   *
+   * Note: MapLibre requires removing and re-adding the source to change tolerance,
+   * so this recreates the source with the cached feature data.
+   *
+   * @param tolerance - GeoJSON simplification tolerance (e.g., 0.5 for normal, 1.0 for throttled)
+   */
+  setTolerance(tolerance: number): void {
+    if (tolerance === this.currentTolerance) return;
+    if (this.cachedFeatures.length === 0) return;
+
+    this.currentTolerance = tolerance;
+
+    // MapLibre doesn't allow changing source options after creation,
+    // so we need to remove and re-add the source with new tolerance.
+    // First, remove layers that depend on the source
+    const layerIds = [
+      this.stationsLayerId,
+      this.shotsLayerId,
+      this.stationsHitboxLayerId,
+      this.shotsHitboxLayerId,
+    ];
+
+    // Store current layer state before removal
+    try {
+      // Remove layers in reverse order
+      for (const layerId of layerIds) {
+        if (this.map.getLayer(layerId)) {
+          this.map.removeLayer(layerId);
+        }
+      }
+
+      // Remove and re-add source with new tolerance
+      if (this.map.getSource(this.sourceId)) {
+        this.map.removeSource(this.sourceId);
+      }
+
+      this.map.addSource(this.sourceId, {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: this.cachedFeatures,
+        },
+        tolerance,
+        generateId: true,
+      });
+
+      // Re-add layers
+      this.initializeLayers();
+
+      // Re-apply color expressions and visual state
+      this.updateColorExpressions();
+      this.updateVisualState();
+      this.updateOpacityExpressions();
+    } catch {
+      // If anything fails, the map may be in a bad state - log but continue
+      console.error('[GlobalSurveyLayer] Failed to update tolerance');
+    }
+  }
+
+  /**
+   * Get the current tolerance value.
+   */
+  getTolerance(): number {
+    return this.currentTolerance;
   }
 
   /**

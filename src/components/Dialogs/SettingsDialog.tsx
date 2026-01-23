@@ -203,6 +203,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
     panels: { ...base.panels },
     cache: { ...base.cache },
     debug: { map: { ...base.debug.map } },
+    global_view: { ...base.global_view },
   };
 
   // Apply updates with deep merge for each key
@@ -273,6 +274,9 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
         ? { ...result.debug.map, ...updates.debug.map }
         : result.debug.map,
     };
+  }
+  if (updates.global_view) {
+    result.global_view = { ...result.global_view, ...updates.global_view };
   }
 
   return result;
