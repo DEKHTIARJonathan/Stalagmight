@@ -41,9 +41,40 @@ Add new async Tauri command `get_survey_geometry` that returns GPS-transformed s
 - [ ] Command registered in lib.rs generate_handler!
 
 ## Done summary
-TBD
+
+Implemented async Tauri command `get_survey_geometry` that returns GPS-transformed survey data for map display.
+
+### Changes
+- **src-tauri/src/commands/survey_geometry.rs** (new): Core command implementation
+  - `GeometryShot` struct with `from`, `to` ([lng, lat]), `is_virtual`, `section_id`
+  - `SurveyGeometry` response with `shots` array and `origin`
+  - `local_to_gps()` function with error handling for extreme latitudes (±89.4°)
+  - Computes coordinates relative to zero-datum station `(x0, y0)`
+  - Returns error (not silent skip) for missing stations
+  - `get_survey_geometry` async command using `spawn_blocking`
+  - 7 unit tests for coordinate transforms
+
+- **src-tauri/src/commands/mod.rs**: Added `pub mod survey_geometry`
+- **src-tauri/src/lib.rs**: Registered command in `generate_handler![]`
+
+- **src/types/survey.ts** (new): TypeScript types
+  - `GeometryShot`, `SurveyGeometry`, `SurveyGeometryError` interfaces
+  - `metersToMapCoords()` function (not exported from barrel to avoid collision)
+
+- **src/types/index.ts**: Exports types only (not utility function)
+
+- **tests/fixtures/coordinate_transform_vectors.json** (new): Shared test vectors
+- **src/types/__tests__/survey.test.ts** (new): 12 TypeScript tests (loads fixture)
+
+### Algorithm
+Coordinates computed relative to zero-datum station using linear approximation:
+- Find zero-datum station `(x0, y0)`, compute `east = x - x0`, `north = y - y0`
+- `lat = origin_lat + (north / 111320)`
+- `lng = origin_lng + (east / (111320 * cos(origin_lat_rad)))`
+
+Returns error if project has no GPS reference (zero datum) or latitude is too extreme.
 
 ## Evidence
-- Commits:
-- Tests:
-- PRs:
+- Commits: fa7b60f
+- Tests: Rust (7 passed), TypeScript (12 passed)
+- Review: SHIP verdict from codex impl-review
