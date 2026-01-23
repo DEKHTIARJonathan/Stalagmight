@@ -129,7 +129,7 @@ export default function DataTable({ sections }: DataTableProps) {
       render: (_shot: Shot, index: number) =>
         selectedSectionId !== null ? formatShotId(selectedSectionId, index + 1) : '',
     },
-    { key: 'length', header: 'Length (m)', width: '80px', align: 'right' as const },
+    { key: 'length', header: 'Length (m)', width: '100px', align: 'right' as const },
     {
       key: '_azimuth_avg',
       header: 'Azi',
@@ -145,7 +145,7 @@ export default function DataTable({ sections }: DataTableProps) {
       inputStep: '0.1',
     },
     { key: 'depth_in', header: 'Depth In', width: '80px', align: 'right' as const },
-    { key: 'depth_out', header: 'Depth Out', width: '80px', align: 'right' as const },
+    { key: 'depth_out', header: 'Depth Out', width: '95px', align: 'right' as const },
     { key: 'left', header: 'L', width: '50px', align: 'right' as const },
     { key: 'right', header: 'R', width: '50px', align: 'right' as const },
     { key: 'up', header: 'U', width: '50px', align: 'right' as const },
