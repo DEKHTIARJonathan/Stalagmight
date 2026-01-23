@@ -2426,7 +2426,7 @@ cavechef/
 | Deselect | Escape |
 | Zoom In | + / = |
 | Zoom Out | - |
-| Fit to View | Ctrl+0 |
+| Fit to View | F |
 | Toggle Sections Panel | Ctrl+1 |
 | Toggle Detail Panel | Ctrl+2 |
 | Toggle Data Table | Ctrl+3 |
@@ -2453,13 +2453,13 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 
 | Action | Shortcut |
 |--------|----------|
-| Zoom In | + / = |
-| Zoom Out | - |
-| Fit All Systems | F |
-| Focus Search | Ctrl+F |
-| Clear Search | Escape (when search focused) |
+| Open Selected | Enter |
+| Remove from Recent | Delete / Backspace |
+| Deselect All | Escape |
+| Select All | Ctrl+A |
+| Navigate to Nearest System | Arrow Keys (map view only) |
 
-**Note**: Global View has limited keyboard shortcuts since the map-based interface is primarily mouse-driven. The search filter supports keyboard navigation of results.
+**Note**: Global View has limited keyboard shortcuts since the map-based interface is primarily mouse-driven. Arrow key navigation finds the nearest system in the specified direction using Euclidean distance. Escape also closes the context menu if open.
 
 ---
 
