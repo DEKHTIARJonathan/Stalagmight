@@ -208,17 +208,18 @@ async function getAnnouncerText(page: Page): Promise<string> {
 }
 
 /**
- * Helper to add merged station data to the mock project.
- * Uses zustand's setState directly to update the stations array.
+ * Helper to set up merged station relationships in the store.
+ * This is needed because seedProjectWithSections creates new stations without merge data.
+ * The IPC mock's merged station setup only applies to the initial load, not dynamically created sections.
  */
-async function addMergedStationToProject(
+async function setupMergedStations(
   page: Page,
-  targetSectionId: number,
-  targetStationIndex: number,
-  mergedWith: Array<{ section_id: number; station_index: number }>
+  mainSectionId: number,
+  mainLastStationIndex: number,
+  sideSectionId: number
 ): Promise<void> {
   await page.evaluate(
-    ({ targetSecId, targetIdx, mergedRefs }) => {
+    ({ mainSecId, mainLastIdx, sideSecId }) => {
       const stores = (window as unknown as {
         __E2E_TEST__?: {
           projectStore: {
@@ -237,13 +238,24 @@ async function addMergedStationToProject(
 
       const state = stores.projectStore.getState();
       const updatedStations = state.stations.map((station) => {
+        // Last station of main section merges with first station of side section
         if (
-          station.station_ref.section_id === targetSecId &&
-          station.station_ref.station_index === targetIdx
+          station.station_ref.section_id === mainSecId &&
+          station.station_ref.station_index === mainLastIdx
         ) {
           return {
             ...station,
-            merged_with: mergedRefs,
+            merged_with: [{ section_id: sideSecId, station_index: 0 }],
+          };
+        }
+        // First station of side section merges back to last station of main section
+        if (
+          station.station_ref.section_id === sideSecId &&
+          station.station_ref.station_index === 0
+        ) {
+          return {
+            ...station,
+            merged_with: [{ section_id: mainSecId, station_index: mainLastIdx }],
           };
         }
         return station;
@@ -251,7 +263,7 @@ async function addMergedStationToProject(
 
       stores.projectStore.setState({ stations: updatedStations });
     },
-    { targetSecId: targetSectionId, targetIdx: targetStationIndex, mergedRefs: mergedWith }
+    { mainSecId: mainSectionId, mainLastIdx: mainLastStationIndex, sideSecId: sideSectionId }
   );
 }
 
@@ -342,11 +354,12 @@ test.describe('Detail Panel Links', () => {
   });
 
   test.describe('Station Detail Links', () => {
-    test('clicking Previous Shot link changes selection to shot', async ({ page }) => {
+    test('clicking Previous Shot link changes selection to correct shot', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
       const mainSectionId = sectionIds[0]!;
+      const shotIds = await getShotIdsForSection(page, mainSectionId);
 
       // Select station at index 2 (position 3) - has previous shot at index 1
       await selectStation(page, mainSectionId, 2);
@@ -357,17 +370,23 @@ test.describe('Detail Panel Links', () => {
       await expect(prevShotLink).toBeVisible();
       await prevShotLink.click();
 
-      // Selection should change to shot
-      const selection = await pollSelectionState(page, (sel) => sel?.type === 'shot');
+      // Selection should change to the correct shot (shots[1])
+      const expectedShotId = shotIds[1]!;
+      const selection = await pollSelectionState(
+        page,
+        (sel) => sel?.type === 'shot' && sel?.shotId === expectedShotId
+      );
       expect(selection?.type).toBe('shot');
       expect(selection?.sectionId).toBe(mainSectionId);
+      expect(selection?.shotId).toBe(expectedShotId);
     });
 
-    test('clicking Next Shot link changes selection to shot', async ({ page }) => {
+    test('clicking Next Shot link changes selection to correct shot', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
       const mainSectionId = sectionIds[0]!;
+      const shotIds = await getShotIdsForSection(page, mainSectionId);
 
       // Select station at index 1 (position 2) - has next shot at index 1
       await selectStation(page, mainSectionId, 1);
@@ -378,9 +397,41 @@ test.describe('Detail Panel Links', () => {
       await expect(nextShotLink).toBeVisible();
       await nextShotLink.click();
 
-      // Selection should change to shot
-      const selection = await pollSelectionState(page, (sel) => sel?.type === 'shot');
+      // Selection should change to the correct shot (shots[1])
+      const expectedShotId = shotIds[1]!;
+      const selection = await pollSelectionState(
+        page,
+        (sel) => sel?.type === 'shot' && sel?.shotId === expectedShotId
+      );
       expect(selection?.type).toBe('shot');
+      expect(selection?.sectionId).toBe(mainSectionId);
+      expect(selection?.shotId).toBe(expectedShotId);
+    });
+
+    test('clicking Section link from Station changes selection to section', async ({ page }) => {
+      await createProjectWithSections(page);
+
+      const sectionIds = await getSectionIds(page);
+      const mainSectionId = sectionIds[0]!;
+
+      // Select station at index 1
+      await selectStation(page, mainSectionId, 1);
+
+      // Station detail should be visible
+      const stationDetail = page.getByTestId('station-detail');
+      await expect(stationDetail).toBeVisible();
+
+      // Find and click the Section link
+      const sectionLink = page.getByTestId(`section-${mainSectionId}-link`);
+      await expect(sectionLink).toBeVisible();
+      await sectionLink.click();
+
+      // Selection should change to section
+      const selection = await pollSelectionState(
+        page,
+        (sel) => sel?.type === 'section' && sel?.sectionId === mainSectionId
+      );
+      expect(selection?.type).toBe('section');
       expect(selection?.sectionId).toBe(mainSectionId);
     });
 
@@ -436,20 +487,23 @@ test.describe('Detail Panel Links', () => {
       const mainSectionId = sectionIds[0]!;
       const sideSectionId = sectionIds[1]!;
 
-      // Add merged station reference to station at index 3 in main section
-      // Merge with station 0 in side section
-      await addMergedStationToProject(page, mainSectionId, 3, [
-        { section_id: sideSectionId, station_index: 0 },
-      ]);
+      // Set up bidirectional merged station relationships
+      // Main section has 3 shots, so 4 stations (indices 0-3)
+      // Last station is at index 3
+      await setupMergedStations(page, mainSectionId, 3, sideSectionId);
 
-      // Select the station with merge
+      // Select the last station of main section (which has merged_with reference)
       await selectStation(page, mainSectionId, 3);
 
       // Station detail should show merged station link
       const stationDetail = page.getByTestId('station-detail');
       await expect(stationDetail).toBeVisible();
 
+      // Verify the "Merged with" section is displayed
+      await expect(stationDetail.locator('text=Merged with')).toBeVisible();
+
       // Find and click the merged station link
+      // The merged station is at sideSectionId:0, displayed as position 1
       const mergedLink = page.getByTestId(`station-${sideSectionId}-1-link`);
       await expect(mergedLink).toBeVisible();
       await mergedLink.click();
@@ -465,6 +519,45 @@ test.describe('Detail Panel Links', () => {
       expect(selection?.type).toBe('station');
       expect(selection?.stationRef?.section_id).toBe(sideSectionId);
       expect(selection?.stationRef?.station_index).toBe(0);
+    });
+
+    test('merged station has bidirectional link back to original', async ({ page }) => {
+      await createProjectWithSections(page);
+
+      const sectionIds = await getSectionIds(page);
+      const mainSectionId = sectionIds[0]!;
+      const sideSectionId = sectionIds[1]!;
+
+      // Set up bidirectional merged station relationships
+      // Main section has 3 shots, so last station is at index 3
+      await setupMergedStations(page, mainSectionId, 3, sideSectionId);
+
+      // Select the first station of the second section (which should link back to main section)
+      await selectStation(page, sideSectionId, 0);
+
+      // Station detail should show merged station link
+      const stationDetail = page.getByTestId('station-detail');
+      await expect(stationDetail).toBeVisible();
+
+      // Verify the "Merged with" section is displayed
+      await expect(stationDetail.locator('text=Merged with')).toBeVisible();
+
+      // Main section has 3 shots, so last station is at index 3 (position 4)
+      const mergedLink = page.getByTestId(`station-${mainSectionId}-4-link`);
+      await expect(mergedLink).toBeVisible();
+      await mergedLink.click();
+
+      // Selection should change back to the original merged station
+      const selection = await pollSelectionState(
+        page,
+        (sel) =>
+          sel?.type === 'station' &&
+          sel?.stationRef?.section_id === mainSectionId &&
+          sel?.stationRef?.station_index === 3
+      );
+      expect(selection?.type).toBe('station');
+      expect(selection?.stationRef?.section_id).toBe(mainSectionId);
+      expect(selection?.stationRef?.station_index).toBe(3);
     });
   });
 
@@ -555,7 +648,7 @@ test.describe('Detail Panel Links', () => {
   });
 
   test.describe('Center Buttons', () => {
-    test('shot center button has correct aria-label', async ({ page }) => {
+    test('shot center button has correct aria-label and accessibility attributes', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
@@ -574,9 +667,13 @@ test.describe('Detail Panel Links', () => {
       const ariaLabel = await centerButton.getAttribute('aria-label');
       expect(ariaLabel).toContain('Center map on shot');
       expect(ariaLabel).toContain(`${mainSectionId}:1`);
+
+      // Verify button attributes for accessibility
+      await expect(centerButton).toHaveAttribute('type', 'button');
+      await expect(centerButton).toBeEnabled();
     });
 
-    test('station center button has correct aria-label', async ({ page }) => {
+    test('station center button has correct aria-label and accessibility attributes', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
@@ -593,9 +690,13 @@ test.describe('Detail Panel Links', () => {
       const ariaLabel = await centerButton.getAttribute('aria-label');
       expect(ariaLabel).toContain('Center map on station');
       expect(ariaLabel).toContain(`${mainSectionId}:1`);
+
+      // Verify button attributes for accessibility
+      await expect(centerButton).toHaveAttribute('type', 'button');
+      await expect(centerButton).toBeEnabled();
     });
 
-    test('section center button has correct aria-label', async ({ page }) => {
+    test('section center button has correct aria-label and accessibility attributes', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
@@ -612,9 +713,13 @@ test.describe('Detail Panel Links', () => {
       const ariaLabel = await centerButton.getAttribute('aria-label');
       expect(ariaLabel).toContain('Center map on section');
       expect(ariaLabel).toContain('Main Tunnel');
+
+      // Verify button attributes for accessibility
+      await expect(centerButton).toHaveAttribute('type', 'button');
+      await expect(centerButton).toBeEnabled();
     });
 
-    test('center button is keyboard accessible', async ({ page }) => {
+    test('center button is keyboard focusable and has proper semantics', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
@@ -631,7 +736,7 @@ test.describe('Detail Panel Links', () => {
       await centerButton.focus();
       await expect(centerButton).toBeFocused();
 
-      // Verify the button is not disabled and can be activated
+      // Verify the button is not disabled
       await expect(centerButton).toBeEnabled();
 
       // Verify the button has type="button" (proper keyboard semantics)
@@ -696,7 +801,7 @@ test.describe('Detail Panel Links', () => {
       expect(selection?.type).toBe('station');
     });
 
-    test('links have visible focus ring', async ({ page }) => {
+    test('links have visible focus ring when focused', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
@@ -710,14 +815,27 @@ test.describe('Detail Panel Links', () => {
       // Focus the Start Station link
       const startStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
       await startStationLink.focus();
+      await expect(startStationLink).toBeFocused();
 
-      // Check that the element has focus styles applied
-      // The component uses: focus:ring-2 focus:ring-accent focus:ring-inset
-      const hasRingClass = await startStationLink.evaluate((el) => {
-        const classes = el.className;
-        return classes.includes('focus:ring-2') || classes.includes('focus:ring-accent');
+      // Check that the element has a visible focus ring via computed styles
+      // Tailwind's focus:ring-* generates box-shadow for focus rings
+      const focusRingStyles = await startStationLink.evaluate((el) => {
+        const styles = window.getComputedStyle(el);
+        return {
+          boxShadow: styles.boxShadow,
+          outline: styles.outline,
+          outlineWidth: styles.outlineWidth,
+        };
       });
-      expect(hasRingClass).toBe(true);
+
+      // The focus ring should have a non-none box-shadow (Tailwind ring-* uses box-shadow)
+      // or a visible outline
+      const hasVisibleFocusIndicator =
+        (focusRingStyles.boxShadow && focusRingStyles.boxShadow !== 'none') ||
+        (focusRingStyles.outline && focusRingStyles.outline !== 'none') ||
+        (focusRingStyles.outlineWidth && focusRingStyles.outlineWidth !== '0px');
+
+      expect(hasVisibleFocusIndicator).toBe(true);
     });
   });
 

@@ -77,9 +77,8 @@ Example mock structure for merged station:
 - [ ] All tests pass: `pnpm test:ui --grep "detail-panel-links"`
 
 ## Done summary
-TBD
-
+Created comprehensive Playwright E2E test suite for detail panel hyperlinks and center buttons covering Shot, Station, and Section detail views with 24 tests for link navigation, keyboard accessibility, ARIA live announcements, and edge cases including merged stations.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: d7bb18b2f11a2430d92b88837675ee42ed561aee
+- Tests: pnpm test:ui --grep detail-panel-links (24 passed)
 - PRs:
