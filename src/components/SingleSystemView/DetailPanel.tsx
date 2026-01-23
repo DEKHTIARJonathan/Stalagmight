@@ -3,6 +3,7 @@ import { useUIStore, type Selection } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
+import { DetailLink } from '../common/DetailLink';
 import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId } from '../../utils/formatters';
@@ -131,7 +132,7 @@ function DetailsContent({ selection, project, stations }: DetailsContentProps) {
     const shot = section?.shots.find((s) => s.id === selection.shotId);
 
     if (section && shot) {
-      return <ShotDetail section={section} shot={shot} />;
+      return <ShotDetail section={section} shot={shot} stations={stations} />;
     }
   }
 
@@ -319,9 +320,30 @@ function StationDetail({ station }: { station: Station }) {
   );
 }
 
-function ShotDetail({ section, shot }: { section: Section; shot: Shot }) {
+function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
   const { setShotVirtual } = useProjectStore();
-  const { openDialog } = useUIStore();
+  const { openDialog, setSelection, triggerCenterOnShot, announceSelection } = useUIStore();
+
+  // Calculate shot index (0-indexed) and positions (1-indexed for display)
+  const shotIndex = section.shots.indexOf(shot);
+  const shotPosition = shotIndex + 1;
+
+  // Shot-to-Station mapping:
+  // Shot at array index i connects:
+  // - Start station: station_index = i (display position = i + 1)
+  // - End station: station_index = i + 1 (display position = i + 2)
+  const startStationIndex = shotIndex;
+  const endStationIndex = shotIndex + 1;
+  const startStationPosition = startStationIndex + 1;
+  const endStationPosition = endStationIndex + 1;
+
+  // Validate station targets exist
+  const startStationExists = stations.some(
+    (s) => s.station_ref.section_id === section.id && s.station_ref.station_index === startStationIndex
+  );
+  const endStationExists = stations.some(
+    (s) => s.station_ref.section_id === section.id && s.station_ref.station_index === endStationIndex
+  );
 
   const handleToggleVirtual = async () => {
     await setShotVirtual(section.id, shot.id, !shot.is_virtual);
@@ -336,11 +358,55 @@ function ShotDetail({ section, shot }: { section: Section; shot: Shot }) {
     });
   };
 
+  const handleSelectStartStation = () => {
+    setSelection({
+      type: 'station',
+      stationRef: { section_id: section.id, station_index: startStationIndex },
+    });
+  };
+
+  const handleSelectEndStation = () => {
+    setSelection({
+      type: 'station',
+      stationRef: { section_id: section.id, station_index: endStationIndex },
+    });
+  };
+
+  const handleSelectSection = () => {
+    setSelection({ type: 'section', sectionId: section.id });
+  };
+
+  const handleCenterOnShot = () => {
+    triggerCenterOnShot(section.id, shot.id);
+  };
+
+  const sectionDisplayText = `${section.id}: ${section.name ?? 'Unnamed'}`;
+
+  const centerButton = (
+    <button
+      type="button"
+      onClick={handleCenterOnShot}
+      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background/50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
+      aria-label={`Center map on shot ${section.id}:${shotPosition}`}
+      data-testid="center-shot-button"
+    >
+      <svg
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <circle cx="12" cy="12" r="3" strokeWidth={2} />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+      </svg>
+    </button>
+  );
+
   return (
     <div className="h-full bg-panel overflow-auto">
-      <Panel title="Shot">
+      <Panel title="Shot" headerActions={centerButton}>
         <div className="space-y-3">
-          <DetailRow label="ID" value={formatShotId(section.id, section.shots.indexOf(shot) + 1)} />
+          <DetailRow label="ID" value={formatShotId(section.id, shotPosition)} />
           <DetailRow label="Section" value={section.name ?? `Section ${section.id}`} />
           <DetailRow label="Length" value={`${shot.length.toFixed(2)} m`} />
           <DetailRow label="Azimuth In" value={`${shot.azimuth_in.toFixed(1)}°`} />
@@ -359,6 +425,45 @@ function ShotDetail({ section, shot }: { section: Section; shot: Shot }) {
               </div>
             </div>
           )}
+
+          {/* Connected section with hyperlinks */}
+          <div className="pt-2 border-t border-border">
+            <span className="text-sm text-text-secondary">Connected:</span>
+            <div className="mt-1 space-y-1 text-sm">
+              <div className="flex justify-between">
+                <span className="text-text-secondary">Start Station:</span>
+                <DetailLink
+                  type="station"
+                  target={{ sectionId: section.id, position: startStationPosition }}
+                  displayText={`${section.id}:${startStationPosition}`}
+                  onSelect={handleSelectStartStation}
+                  isMissing={!startStationExists}
+                  onAnnounce={announceSelection}
+                />
+              </div>
+              <div className="flex justify-between">
+                <span className="text-text-secondary">End Station:</span>
+                <DetailLink
+                  type="station"
+                  target={{ sectionId: section.id, position: endStationPosition }}
+                  displayText={`${section.id}:${endStationPosition}`}
+                  onSelect={handleSelectEndStation}
+                  isMissing={!endStationExists}
+                  onAnnounce={announceSelection}
+                />
+              </div>
+              <div className="flex justify-between">
+                <span className="text-text-secondary">Section:</span>
+                <DetailLink
+                  type="section"
+                  target={{ sectionId: section.id }}
+                  displayText={sectionDisplayText}
+                  onSelect={handleSelectSection}
+                  onAnnounce={announceSelection}
+                />
+              </div>
+            </div>
+          </div>
 
           {shot.is_virtual && (
             <div className="text-warning text-sm">Virtual shot</div>
