@@ -133,6 +133,8 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   // Store searchTerm in ref for access during map initialization (avoids stale closure)
   const searchTermRef = useRef(searchTerm);
   searchTermRef.current = searchTerm;
+  // Flag to suppress persistence for "Fit All" button (temporary override per spec)
+  const suppressNextPersistRef = useRef(false);
 
   // Access lazy loading functions and multi-select from store
   const {
@@ -538,14 +540,16 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
     map.current.on('moveend', handleMoveEndRubberBand);
 
-    // Persist map position/zoom to local storage on user-initiated moves only
-    // Programmatic moves (fitBounds, flyTo, easeTo from rubber-band) should not persist
-    // This ensures "Fit All" button overrides persisted position temporarily per spec
-    const handleMoveEndPersist = (e: maplibregl.MapLibreEvent & { originalEvent?: Event }) => {
+    // Persist map position/zoom to local storage on every moveend
+    // Exception: "Fit All" button sets suppressNextPersistRef to skip one persist
+    // This ensures state persists across sessions while Fit All overrides temporarily per spec
+    const handleMoveEndPersist = () => {
       if (!map.current) return;
-      // Only persist for user-initiated moves (drag, wheel zoom, etc.)
-      // originalEvent is present when the move was user-initiated
-      if (!e.originalEvent) return;
+      // Check and clear suppress flag (used by Fit All button)
+      if (suppressNextPersistRef.current) {
+        suppressNextPersistRef.current = false;
+        return;
+      }
       const center = map.current.getCenter();
       const zoom = map.current.getZoom();
       saveMapState([center.lng, center.lat], zoom);
@@ -903,8 +907,12 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   }, [selectedProjectId, geometryStates]);
 
   // Fit to bounds button handler
+  // Per spec: "Fit All button works regardless of persisted state" - it overrides temporarily
+  // so we suppress the next persist to avoid saving this programmatic camera change
   const fitToBounds = useCallback(() => {
     if (!map.current || gpsProjects.length === 0) return;
+    // Suppress next persist so Fit All doesn't overwrite user's persisted position
+    suppressNextPersistRef.current = true;
     const bounds = calculateBounds();
     map.current.fitBounds(bounds, { padding: 50, maxZoom: 15 });
   }, [calculateBounds, gpsProjects.length]);
