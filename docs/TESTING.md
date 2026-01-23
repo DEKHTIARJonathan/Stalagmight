@@ -602,9 +602,11 @@ The application uses an ARIA live region to announce selection changes triggered
 **Testing ARIA Live Announcements:**
 
 ```typescript
-// Verify live region exists
-const liveRegion = page.locator('[role="status"][aria-live="polite"]');
-await expect(liveRegion).toBeVisible({ visible: false }); // sr-only is visually hidden
+// Use the dedicated selection announcer ID (not generic role selector which could match toast)
+const liveRegion = page.locator('#selection-announcer');
+
+// Verify the live region is attached (it's visually hidden with sr-only)
+await expect(liveRegion).toBeAttached();
 
 // Click a detail link and verify announcement
 await page.click('[data-testid="station-2-5-link"]');
@@ -614,7 +616,8 @@ await expect(liveRegion).toHaveText('Selected station 2:5');
 ```
 
 **Notes:**
-- The live region uses `role="status"`, `aria-live="polite"`, and `aria-atomic="true"`
+- The live region has `id="selection-announcer"` for unambiguous selection
+- Uses `role="status"`, `aria-live="polite"`, and `aria-atomic="true"`
 - Only hyperlink-triggered selection changes are announced (not map clicks)
 - The region is visually hidden with the `sr-only` class
 
@@ -772,12 +775,14 @@ await page.click('[data-testid="station-2-5-link"]');
 // Verify selection changed (detail panel updates)
 await expect(page.locator('[data-testid="station-detail"]')).toBeVisible();
 
-// Verify ARIA announcement was made
-const liveRegion = page.locator('[role="status"][aria-live="polite"]');
+// Verify ARIA announcement was made (use dedicated ID, not generic role selector)
+const liveRegion = page.locator('#selection-announcer');
 await expect(liveRegion).toHaveText('Selected station 2:5');
 ```
 
 ### Center Button Testing
+
+**Playwright:**
 
 ```typescript
 // Click center button to pan/zoom map
@@ -795,9 +800,11 @@ const center = await page.evaluate(() => {
 
 **Important**: When testing map centering, first pan the map away from the target element before clicking the center button. Otherwise the test may pass/fail depending on initial map position.
 
+**Playwright example:**
+
 ```typescript
 // First pan map off-target to ensure center button actually moves the view
-await browser.execute(() => {
+await page.evaluate(() => {
   const map = (window as any).__cavechef_map__;
   if (map) {
     const center = map.getCenter();
@@ -809,6 +816,24 @@ await waitForMapIdle(page);
 // Now click center button and verify map moves back
 await page.click('[data-testid="center-station-button"]');
 await waitForMapIdle(page);
+```
+
+**WebdriverIO example:**
+
+```typescript
+// First pan map off-target to ensure center button actually moves the view
+await browser.execute(() => {
+  const map = (window as any).__cavechef_map__;
+  if (map) {
+    const center = map.getCenter();
+    map.setCenter([center.lng + 0.001, center.lat + 0.001]);
+  }
+});
+await waitForMapIdle(browser);
+
+// Now click center button and verify map moves back
+await $('[data-testid="center-station-button"]').click();
+await waitForMapIdle(browser);
 ```
 
 ### Missing Target Testing
