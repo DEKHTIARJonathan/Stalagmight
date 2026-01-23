@@ -22,9 +22,8 @@ Add context menu options for systems and error popup for failed loads.
 - [ ] Clicking red error marker shows popup with error details
 - [ ] Menu actions work correctly
 ## Done summary
-TBD
-
+Added right-click context menu for GlobalView map with Open, Zoom to System, Remove from Recent, and Show in Folder options. Context menu shows counts for multi-selection (e.g., "Remove 3 from Recent", "Merge N Projects"). Clicking red error markers now shows an error popup with details.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: eae40fbb47b9bc46fddb06aef0e5fdf87f5ba6d9, 5b9837c347b734aaa6156e30577611abd902af04
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
