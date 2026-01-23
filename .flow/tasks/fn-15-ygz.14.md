@@ -20,9 +20,8 @@ Persist and restore map position/zoom state across sessions using local storage.
 - [ ] Fit All button works regardless of persisted state
 - [ ] State persists across app restarts
 ## Done summary
-TBD
-
+Implemented map position/zoom persistence using localStorage. State is saved on every moveend event except when the Fit All button is pressed (which overrides temporarily per spec). Validation ensures corrupted storage with invalid coordinates won't crash MapLibre.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: d31c930, f87cea3, f8db9c8
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
