@@ -767,7 +767,8 @@ The Global View has several testable features for survey geometry rendering.
 | Map container | `globalview-map` | Main map container |
 | View mode toggle | `view-mode-toggle` | Survey/markers toggle button |
 | System marker | `system-marker-{filePath}` | Marker element for each system |
-| Search input | `globalview-search` | Search filter input |
+| Search input | `globalview-search-input` | Search filter input |
+| Search clear button | `globalview-search-clear` | Clear search button |
 
 ### View Mode Toggle Testing
 
@@ -850,10 +851,14 @@ await expect(page.locator('[data-testid="context-menu"]')).toBeVisible();
 
 ```typescript
 // Type in search to filter systems
-await page.fill('[data-testid="globalview-search"]', 'sistema');
+await page.fill('[data-testid="globalview-search-input"]', 'sistema');
 
 // Verify non-matching systems are dimmed (via filter expression)
 // This requires checking MapLibre layer paint properties
+
+// Clear search with button
+await page.click('[data-testid="globalview-search-clear"]');
+await expect(page.locator('[data-testid="globalview-search-input"]')).toHaveValue('');
 ```
 
 ## Troubleshooting
