@@ -6,7 +6,7 @@ import { useGlobalViewStore } from '../../store/globalViewStore';
 import { Button } from '../common/Button';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
-import GlobalViewMap from './GlobalViewMap';
+import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
 import type { ProjectMetadata } from '../../types/project';
 
@@ -69,6 +69,8 @@ export default function GlobalView() {
   // Search filter state (owned here, passed down to GlobalViewMap)
   const [searchTerm, setSearchTerm] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Ref to GlobalViewMap for spatial navigation
+  const mapRef = useRef<GlobalViewMapHandle>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -107,7 +109,7 @@ export default function GlobalView() {
   }, [contextMenu.visible]);
 
   // Access global view store for lazy loading
-  const { geometryData, geometryStates } = useGlobalViewStore();
+  const { geometryData, geometryStates, clearSelection, selectSystem } = useGlobalViewStore();
 
   // Check if there are any GPS-positioned projects (null check only, no sentinel)
   const hasGpsProjects = recentProjects.some((p) => p.gps_center !== null);
@@ -187,6 +189,205 @@ export default function GlobalView() {
       return newSet;
     });
   }, [removeFromRecentProjects, selectedProjectId]);
+
+  // Store values in refs for keydown handler to avoid stale closures
+  const multiSelectedIdsRef = useRef(multiSelectedIds);
+  const activeTabRef = useRef(activeTab);
+  const recentProjectsRef = useRef(recentProjects);
+  const loadingRef = useRef(loading);
+  const contextMenuVisibleRef = useRef(contextMenu.visible);
+  useEffect(() => {
+    multiSelectedIdsRef.current = multiSelectedIds;
+    activeTabRef.current = activeTab;
+    recentProjectsRef.current = recentProjects;
+    loadingRef.current = loading;
+    contextMenuVisibleRef.current = contextMenu.visible;
+  }, [multiSelectedIds, activeTab, recentProjects, loading, contextMenu.visible]);
+
+  // Store callbacks in refs to avoid stale closures
+  const handleProjectOpenRef = useRef(handleProjectOpen);
+  const handleRemoveFromRecentRef = useRef(handleRemoveFromRecent);
+  useEffect(() => {
+    handleProjectOpenRef.current = handleProjectOpen;
+    handleRemoveFromRecentRef.current = handleRemoveFromRecent;
+  }, [handleProjectOpen, handleRemoveFromRecent]);
+
+  // Global keyboard shortcuts for GlobalView (single listener at app root level per convention)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't handle if loading is active
+      if (loadingRef.current.isLoading) return;
+
+      // Don't handle if context menu is visible (separate handler handles escape)
+      if (contextMenuVisibleRef.current && e.key === 'Escape') return;
+
+      // Don't handle if focus is in an input element
+      const activeElement = document.activeElement;
+      if (activeElement && (
+        activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        (activeElement as HTMLElement).isContentEditable
+      )) {
+        return;
+      }
+
+      const gpsProjects = recentProjectsRef.current.filter((p) => p.gps_center !== null);
+
+      switch (e.key) {
+        case 'Enter': {
+          // Open selected project(s)
+          const selected = multiSelectedIdsRef.current;
+          if (selected.size > 0) {
+            e.preventDefault();
+            // Open first selected project (loadProject handles view switch)
+            for (const filePath of selected) {
+              handleProjectOpenRef.current(filePath);
+              break; // Only open first one since loadProject switches views
+            }
+          }
+          break;
+        }
+
+        case 'Delete':
+        case 'Backspace': {
+          // Remove selected from recent
+          const selected = multiSelectedIdsRef.current;
+          if (selected.size > 0) {
+            e.preventDefault();
+            for (const filePath of selected) {
+              handleRemoveFromRecentRef.current(filePath);
+            }
+          }
+          break;
+        }
+
+        case 'Escape': {
+          // Deselect all
+          e.preventDefault();
+          setSelectedProjectId(null);
+          setMultiSelectedIds(new Set());
+          clearSelection();
+          break;
+        }
+
+        case 'a':
+        case 'A': {
+          // Ctrl+A: select all systems (on map view, only GPS projects)
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            if (activeTabRef.current === 'map') {
+              // Select all GPS-positioned systems
+              const allIds = new Set(gpsProjects.map((p) => p.file_path));
+              setMultiSelectedIds(allIds);
+              const firstGps = gpsProjects[0];
+              if (firstGps) {
+                setSelectedProjectId(firstGps.file_path);
+              }
+            } else {
+              // List view: select all projects
+              const allIds = new Set(recentProjectsRef.current.map((p) => p.file_path));
+              setMultiSelectedIds(allIds);
+              const firstProject = recentProjectsRef.current[0];
+              if (firstProject) {
+                setSelectedProjectId(firstProject.file_path);
+              }
+            }
+          }
+          break;
+        }
+
+        case 'ArrowUp':
+        case 'ArrowDown':
+        case 'ArrowLeft':
+        case 'ArrowRight': {
+          // Arrow keys: navigate to nearest system in direction (map view only)
+          if (activeTabRef.current !== 'map') break;
+          if (gpsProjects.length === 0) break;
+
+          // Only navigate if there's a selection
+          const currentSelection = multiSelectedIdsRef.current;
+          if (currentSelection.size === 0) break;
+
+          e.preventDefault();
+
+          // Get system centroids from map
+          const centroids = mapRef.current?.getSystemCentroids();
+          if (!centroids || centroids.size === 0) break;
+
+          // Calculate centroid of current selection
+          let sumLng = 0;
+          let sumLat = 0;
+          let count = 0;
+          for (const filePath of currentSelection) {
+            const center = centroids.get(filePath);
+            if (center) {
+              sumLng += center[0];
+              sumLat += center[1];
+              count++;
+            }
+          }
+          if (count === 0) break;
+
+          const currentCentroid: [number, number] = [sumLng / count, sumLat / count];
+
+          // Define direction vectors (in map coordinates: lng increases right, lat increases up)
+          const directionVectors: Record<string, [number, number]> = {
+            ArrowUp: [0, 1],    // North (positive lat)
+            ArrowDown: [0, -1], // South (negative lat)
+            ArrowLeft: [-1, 0], // West (negative lng)
+            ArrowRight: [1, 0], // East (positive lng)
+          };
+          const direction = directionVectors[e.key];
+          if (!direction) break;
+
+          // Find nearest system in the specified direction
+          let bestCandidate: string | null = null;
+          let bestScore = Infinity;
+
+          for (const [filePath, center] of centroids) {
+            // Skip systems already in selection
+            if (currentSelection.has(filePath)) continue;
+
+            // Calculate vector from current centroid to this system
+            const dx = center[0] - currentCentroid[0];
+            const dy = center[1] - currentCentroid[1];
+
+            // Check if this system is in the specified direction
+            // Dot product with direction vector must be positive
+            const dotProduct = dx * direction[0] + dy * direction[1];
+            if (dotProduct <= 0) continue; // Not in the right direction
+
+            // Score: distance (prefer closer systems)
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            // Penalize systems that are far off-axis
+            // Use angle-weighted distance: prefer systems more directly in the direction
+            const magnitude = Math.sqrt(dx * dx + dy * dy);
+            if (magnitude === 0) continue;
+            const cosAngle = dotProduct / magnitude;
+            // Score favors closer systems and those more directly in the direction
+            const score = distance / (cosAngle * cosAngle);
+
+            if (score < bestScore) {
+              bestScore = score;
+              bestCandidate = filePath;
+            }
+          }
+
+          // If found, select that system
+          if (bestCandidate) {
+            setSelectedProjectId(bestCandidate);
+            setMultiSelectedIds(new Set([bestCandidate]));
+            selectSystem(bestCandidate);
+          }
+          break;
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [clearSelection, selectSystem]);
 
   // Handle merge projects
   const handleMergeProjects = useCallback(() => {
@@ -355,6 +556,7 @@ export default function GlobalView() {
             </div>
           ) : activeTab === 'map' ? (
             <GlobalViewMap
+              ref={mapRef}
               projects={recentProjects}
               selectedProjectId={selectedProjectId}
               onProjectSelect={(path) => handleProjectSelect(path, false)}

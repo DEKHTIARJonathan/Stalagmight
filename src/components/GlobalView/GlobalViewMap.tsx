@@ -1,9 +1,22 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
 import maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
 import GlobalSurveyLayer, { type SystemGeometry } from './GlobalSurveyLayer';
 import type { SurveyGeometry } from '../../types/survey';
 import { useGlobalViewStore, type SystemGeometryState } from '../../store/globalViewStore';
+
+/**
+ * Handle exposed by GlobalViewMap for parent components.
+ */
+export interface GlobalViewMapHandle {
+  /**
+   * Get centroids of all GPS-positioned systems.
+   * Returns a Map of file_path -> [lng, lat] centroid.
+   * For systems with geometry, uses the average of all station positions.
+   * For systems without geometry, uses gps_center.
+   */
+  getSystemCentroids: () => Map<string, [number, number]>;
+}
 
 interface GlobalViewMapProps {
   projects: ProjectMetadata[];
@@ -22,15 +35,18 @@ interface GlobalViewMapProps {
  * Map component for GlobalView showing all GPS-positioned systems.
  * Uses MapLibre GL JS with satellite tiles.
  */
-export default function GlobalViewMap({
-  projects,
-  selectedProjectId,
-  onProjectSelect,
-  onProjectOpen,
-  geometryData = new Map(),
-  geometryStates = new Map(),
-  searchTerm = '',
-}: GlobalViewMapProps) {
+const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(function GlobalViewMap(
+  {
+    projects,
+    selectedProjectId,
+    onProjectSelect,
+    onProjectOpen,
+    geometryData = new Map(),
+    geometryStates = new Map(),
+    searchTerm = '',
+  },
+  ref
+) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
@@ -52,6 +68,57 @@ export default function GlobalViewMap({
 
   // Filter to only projects with GPS coordinates (null check only, no sentinel)
   const gpsProjects = projects.filter((p) => p.gps_center !== null);
+
+  // Store gpsProjects and geometryData in refs for imperative handle
+  const gpsProjectsRef = useRef(gpsProjects);
+  const geometryDataRef = useRef(geometryData);
+  useEffect(() => {
+    gpsProjectsRef.current = gpsProjects;
+    geometryDataRef.current = geometryData;
+  }, [gpsProjects, geometryData]);
+
+  // Expose imperative handle for parent to get system centroids
+  useImperativeHandle(ref, () => ({
+    getSystemCentroids: () => {
+      const centroids = new Map<string, [number, number]>();
+
+      for (const project of gpsProjectsRef.current) {
+        const geometry = geometryDataRef.current.get(project.file_path);
+
+        if (geometry && geometry.shots.length > 0) {
+          // Calculate centroid from station positions
+          const stations = new Set<string>();
+          let sumLng = 0;
+          let sumLat = 0;
+
+          for (const shot of geometry.shots) {
+            const fromKey = `${shot.from[0]},${shot.from[1]}`;
+            const toKey = `${shot.to[0]},${shot.to[1]}`;
+
+            if (!stations.has(fromKey)) {
+              stations.add(fromKey);
+              sumLng += shot.from[0];
+              sumLat += shot.from[1];
+            }
+            if (!stations.has(toKey)) {
+              stations.add(toKey);
+              sumLng += shot.to[0];
+              sumLat += shot.to[1];
+            }
+          }
+
+          if (stations.size > 0) {
+            centroids.set(project.file_path, [sumLng / stations.size, sumLat / stations.size]);
+          }
+        } else if (project.gps_center) {
+          // Fall back to gps_center if no geometry loaded
+          centroids.set(project.file_path, project.gps_center);
+        }
+      }
+
+      return centroids;
+    },
+  }), []);
 
   // Calculate bounds to fit all systems (max 500km x 500km)
   const calculateBounds = useCallback(() => {
@@ -136,6 +203,10 @@ export default function GlobalViewMap({
     // Disable rotation
     map.current.dragRotate.disable();
     map.current.touchPitch.disable();
+
+    // Disable MapLibre's built-in keyboard handler to prevent conflicts with our shortcuts
+    // Per memory: disable the map library's built-in keyboard handler to prevent double-zoom
+    map.current.keyboard.disable();
 
     // Add navigation controls
     map.current.addControl(
@@ -491,4 +562,6 @@ export default function GlobalViewMap({
       </div>
     </div>
   );
-}
+});
+
+export default GlobalViewMap;
