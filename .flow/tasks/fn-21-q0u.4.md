@@ -69,9 +69,8 @@ Add inline SVG crosshairs button to Panel header using `headerActions` prop:
 - [ ] Clicking links updates selection correctly
 
 ## Done summary
-TBD
-
+Added hyperlinks and center button to StationDetail component: "Connected" section with Previous/Next Shot links (hidden at boundaries) and Section link, updated "Merged with" list to use clickable DetailLink components with missing target validation, and inline SVG crosshairs center button in header.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 2e69f629c2728dfe6fbfdb5d7addc0e98be1914c
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:

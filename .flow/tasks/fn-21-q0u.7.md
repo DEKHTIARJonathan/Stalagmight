@@ -1,5 +1,7 @@
 # fn-21-q0u.7 Playwright E2E tests for hyperlinks and center button
 
+<!-- Updated by plan-sync: fn-21-q0u.4 - ARIA live region selector is #selection-announcer in App.tsx -->
+
 ## Description
 Create comprehensive Playwright E2E tests for hyperlinks and center button functionality.
 
@@ -38,7 +40,7 @@ Create comprehensive Playwright E2E tests for hyperlinks and center button funct
 
 6. **Accessibility**
    - All links have aria-labels
-   - Live region announces selection changes
+   - Live region announces selection changes (target: `#selection-announcer` in App.tsx)
 
 ### Mock Updates - MUST include merged stations
 Update `tauri-ipc.ts` to return test data with:
@@ -69,7 +71,7 @@ Example mock structure for merged station:
 - [ ] Tests for Section Detail endpoint links
 - [ ] Tests for center button click behavior
 - [ ] Tests for keyboard navigation (Tab + Enter)
-- [ ] Tests verify ARIA live announcements
+- [ ] Tests verify ARIA live announcements (check `#selection-announcer` text content)
 - [ ] Tests verify edge cases (first/last station, single-station section)
 - [ ] Mock data includes station with `merged_with` references
 - [ ] All tests pass: `pnpm test:ui --grep "detail-panel-links"`
