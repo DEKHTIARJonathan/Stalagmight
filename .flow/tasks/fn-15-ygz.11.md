@@ -14,8 +14,16 @@ Update documentation to reflect all Global View changes.
 
 ## Approach
 
+<!-- Updated by plan-sync: fn-15-ygz.7 added view mode toggle with useViewMode hook -->
+
 - Update SPEC.md section 6.1.1 with survey rendering details
 - Add new keyboard shortcuts to Appendix A
+- Document view mode toggle feature:
+  - Toggle button in top-right corner (below navigation controls)
+  - `ViewMode` type: `'survey' | 'markers'`
+  - `useViewMode()` hook for localStorage persistence
+  - Local storage key: `globalViewMode`
+  - Switching to markers cancels pending geometry loads
 - Document config options in configuration.md:
   - `global_view.fps_threshold` (default 30)
   - `global_view.tolerance` (default 0.5)
@@ -27,6 +35,7 @@ Update documentation to reflect all Global View changes.
 ## Acceptance
 
 - [ ] SPEC.md section 6.1.1 updated with survey rendering behavior
+- [ ] View mode toggle documented (ViewMode type, useViewMode hook, localStorage key)
 - [ ] Keyboard shortcuts documented in SPEC.md Appendix A
 - [ ] Config options documented: fps_threshold, tolerance, throttle_tolerance
 - [ ] Test patterns added to TESTING.md
