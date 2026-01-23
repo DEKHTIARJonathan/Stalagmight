@@ -65,7 +65,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     selectedSystemIds,
     selectSystem,
     toggleSystemSelection,
-    clearGeometryCache,
+    cancelPendingLoads,
   } = useGlobalViewStore();
 
   // View mode state (persisted in localStorage)
@@ -260,7 +260,8 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         });
 
         // Apply any pending geometry that arrived before map was ready
-        if (pendingGeometryRef.current && pendingGeometryRef.current.size > 0) {
+        // Only apply if still in survey mode (user may have toggled to markers while map was loading)
+        if (pendingGeometryRef.current && pendingGeometryRef.current.size > 0 && viewModeRef.current === 'survey') {
           const systems: SystemGeometry[] = [];
           for (const project of gpsProjects) {
             const geometry = pendingGeometryRef.current.get(project.file_path);
@@ -271,8 +272,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           if (systems.length > 0) {
             surveyLayerRef.current.update(systems);
           }
-          pendingGeometryRef.current = null;
         }
+        // Always clear pending ref after processing (whether applied or not)
+        pendingGeometryRef.current = null;
 
         // Apply current search filter immediately after layer construction
         surveyLayerRef.current.setSearchFilter(searchTermRef.current || null);
@@ -352,13 +354,16 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     setViewMode(newMode);
 
     // Cancel any in-progress geometry loads when switching to markers mode
+    // (preserves already-loaded geometry so it's available when switching back)
     if (newMode === 'markers') {
-      clearGeometryCache();
+      cancelPendingLoads();
+      // Clear pending geometry buffer to prevent stale data from being applied
+      pendingGeometryRef.current = null;
     }
 
     // Update survey layer visibility
     surveyLayerRef.current?.setVisible(newMode === 'survey');
-  }, [setViewMode, clearGeometryCache]);
+  }, [setViewMode, cancelPendingLoads]);
 
   // Sync view mode to survey layer when it becomes ready
   useEffect(() => {
