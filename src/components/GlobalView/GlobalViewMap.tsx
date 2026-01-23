@@ -1,6 +1,8 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
+import GlobalSurveyLayer, { type SystemGeometry } from './GlobalSurveyLayer';
+import type { SurveyGeometry } from '../../types/survey';
 
 interface GlobalViewMapProps {
   projects: ProjectMetadata[];
@@ -22,11 +24,13 @@ export default function GlobalViewMap({
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
+  const surveyLayerRef = useRef<GlobalSurveyLayer | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [geometryData] = useState<Map<string, SurveyGeometry>>(new Map());
 
   // Filter to only projects with GPS coordinates
   const gpsProjects = projects.filter(
-    (p) => p.gps_center !== null && p.gps_center[0] !== 0 && p.gps_center[1] !== 0
+    (p) => p.gps_center !== null
   );
 
   // Calculate bounds to fit all systems (max 500km x 500km)
@@ -134,6 +138,9 @@ export default function GlobalViewMap({
     });
 
     return () => {
+      // Clean up survey layer
+      surveyLayerRef.current?.destroy();
+      surveyLayerRef.current = null;
       // Clean up markers
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current.clear();
@@ -141,6 +148,53 @@ export default function GlobalViewMap({
       map.current = null;
     };
   }, []);
+
+  // Initialize survey layer after map loads
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+
+    // Create survey layer if not exists
+    if (!surveyLayerRef.current) {
+      surveyLayerRef.current = new GlobalSurveyLayer(map.current, {
+        onSystemClick: (filePath) => {
+          onProjectSelect(filePath);
+        },
+        onSystemHover: () => {
+          // Hover handling could update metadata panel preview
+        },
+      });
+    }
+
+    return () => {
+      surveyLayerRef.current?.destroy();
+      surveyLayerRef.current = null;
+    };
+  }, [mapLoaded, onProjectSelect]);
+
+  // Note: Survey geometry fetching will be implemented in fn-15-ygz.3 (lazy loading).
+  // The get_survey_geometry command currently operates on the loaded project only.
+  // For now, the survey layer is initialized but populated later when loading is implemented.
+
+  // Update survey layer when geometry data changes
+  useEffect(() => {
+    if (!surveyLayerRef.current || geometryData.size === 0) return;
+
+    // Build system geometry array
+    const systems: SystemGeometry[] = [];
+    for (const project of gpsProjects) {
+      const geometry = geometryData.get(project.file_path);
+      if (geometry) {
+        systems.push({ metadata: project, geometry });
+      }
+    }
+
+    surveyLayerRef.current.update(systems);
+  }, [geometryData, gpsProjects]);
+
+  // Update survey layer selection when selected project changes
+  useEffect(() => {
+    surveyLayerRef.current?.setSelectedSystem(selectedProjectId);
+  }, [selectedProjectId]);
 
   // Update markers when projects or selection changes
   useEffect(() => {

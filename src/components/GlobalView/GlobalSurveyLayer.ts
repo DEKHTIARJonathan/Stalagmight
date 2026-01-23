@@ -1,0 +1,497 @@
+import type { Map as MaplibreMap } from 'maplibre-gl';
+import type maplibregl from 'maplibre-gl';
+import type { ProjectMetadata } from '../../types/project';
+import type { GeometryShot, SurveyGeometry } from '../../types/survey';
+
+/**
+ * System geometry data with associated metadata for the global view.
+ */
+export interface SystemGeometry {
+  /** Project metadata */
+  metadata: ProjectMetadata;
+  /** Survey geometry with GPS-transformed coordinates */
+  geometry: SurveyGeometry;
+}
+
+/**
+ * Callbacks for GlobalSurveyLayer interactions.
+ */
+export interface GlobalSurveyLayerCallbacks {
+  /** Called when a system is clicked */
+  onSystemClick?: (filePath: string, event: maplibregl.MapMouseEvent) => void;
+  /** Called when a system is hovered */
+  onSystemHover?: (filePath: string | null) => void;
+  /** Called when mouse enters/leaves any feature */
+  onFeatureHover?: (isHovering: boolean) => void;
+}
+
+/**
+ * Generate a deterministic color for a system based on its file_path.
+ * Uses HSL with hue derived from a hash of the path, saturation 70%, lightness 50%.
+ */
+function generateSystemColor(filePath: string): string {
+  // Simple hash function (djb2)
+  let hash = 5381;
+  for (let i = 0; i < filePath.length; i++) {
+    hash = ((hash << 5) + hash) + filePath.charCodeAt(i);
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  // Map hash to hue (0-360)
+  const hue = Math.abs(hash % 360);
+  return `hsl(${hue}, 70%, 50%)`;
+}
+
+/**
+ * Extract unique station positions from shots.
+ * Returns [lng, lat] coordinates for each unique station.
+ */
+function extractStations(shots: GeometryShot[]): [number, number][] {
+  const stationSet = new Map<string, [number, number]>();
+
+  for (const shot of shots) {
+    const fromKey = `${shot.from[0].toFixed(8)},${shot.from[1].toFixed(8)}`;
+    const toKey = `${shot.to[0].toFixed(8)},${shot.to[1].toFixed(8)}`;
+
+    if (!stationSet.has(fromKey)) {
+      stationSet.set(fromKey, shot.from);
+    }
+    if (!stationSet.has(toKey)) {
+      stationSet.set(toKey, shot.to);
+    }
+  }
+
+  return Array.from(stationSet.values());
+}
+
+/**
+ * GlobalSurveyLayer renders survey geometry for multiple systems on the global map.
+ *
+ * This is a read-only visualization layer that shows shots as lines and stations
+ * as circles. Each system has a distinct, stable color derived from its file path.
+ *
+ * Layer architecture:
+ * - Single GeoJSON source containing all systems
+ * - Shot lines layer (rendered first, below stations)
+ * - Station circles layer (rendered second, above shots)
+ * - Hitbox layers for click detection (invisible)
+ *
+ * Highlighting uses filter-based approach (not setFeatureState) for simplicity.
+ */
+export default class GlobalSurveyLayer {
+  private map: MaplibreMap;
+  private callbacks: GlobalSurveyLayerCallbacks;
+
+  // Source IDs
+  private shotsSourceId = 'global-survey-shots';
+  private stationsSourceId = 'global-survey-stations';
+
+  // Layer IDs
+  private shotsLayerId = 'global-survey-shots-layer';
+  private stationsLayerId = 'global-survey-stations-layer';
+  private shotsHitboxLayerId = 'global-survey-shots-hitbox';
+  private stationsHitboxLayerId = 'global-survey-stations-hitbox';
+
+  // Visual state
+  private hoveredSystemId: string | null = null;
+  private selectedSystemId: string | null = null;
+
+  // Store system colors for match expressions
+  private systemColors: Map<string, string> = new Map();
+
+  // Bound event handlers for cleanup
+  private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
+  private boundMapLeave: (() => void) | null = null;
+  private boundClick: ((e: maplibregl.MapMouseEvent) => void) | null = null;
+
+  constructor(map: MaplibreMap, callbacks: GlobalSurveyLayerCallbacks = {}) {
+    this.map = map;
+    this.callbacks = callbacks;
+    this.initializeSources();
+    this.initializeLayers();
+    this.initializeEventHandlers();
+  }
+
+  /**
+   * Update the callbacks (e.g., when props change).
+   */
+  setCallbacks(callbacks: GlobalSurveyLayerCallbacks): void {
+    this.callbacks = callbacks;
+  }
+
+  private initializeSources(): void {
+    // Shots line source
+    this.map.addSource(this.shotsSourceId, {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+      tolerance: 0.5,
+      generateId: true,
+    });
+
+    // Stations point source
+    this.map.addSource(this.stationsSourceId, {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+      tolerance: 0.5,
+      generateId: true,
+    });
+  }
+
+  private initializeLayers(): void {
+    // === HITBOX LAYERS (invisible, for click detection) ===
+    // Layer order: shots hitbox -> stations hitbox -> shots visual -> stations visual
+
+    // Shot hitbox layer - wider hit area for easier selection
+    // CRITICAL: Use opaque color with tiny opacity for queryRenderedFeatures
+    this.map.addLayer({
+      id: this.shotsHitboxLayerId,
+      type: 'line',
+      source: this.shotsSourceId,
+      layout: {
+        'line-cap': 'round',
+      },
+      paint: {
+        'line-width': 10, // Wide hit area
+        'line-color': '#000000',
+        'line-opacity': 0.001, // CRITICAL: non-zero for queryRenderedFeatures
+      },
+    });
+
+    // Station hitbox layer - larger hit area
+    this.map.addLayer({
+      id: this.stationsHitboxLayerId,
+      type: 'circle',
+      source: this.stationsSourceId,
+      paint: {
+        'circle-radius': 10, // Larger hit area
+        'circle-color': '#000000',
+        'circle-opacity': 0.001, // CRITICAL: non-zero for queryRenderedFeatures
+        'circle-stroke-width': 0,
+      },
+    });
+
+    // === VISUAL LAYERS ===
+
+    // Shots layer (lines) - rendered first (below stations)
+    this.map.addLayer({
+      id: this.shotsLayerId,
+      type: 'line',
+      source: this.shotsSourceId,
+      paint: {
+        'line-color': ['get', 'color'],
+        'line-width': [
+          'case',
+          ['boolean', ['get', 'isVirtual'], false],
+          1,
+          2,
+        ],
+        'line-opacity': [
+          'case',
+          ['boolean', ['get', 'isVirtual'], false],
+          0.5,
+          1,
+        ],
+      },
+    });
+
+    // Stations layer (circles) - rendered second (above shots)
+    this.map.addLayer({
+      id: this.stationsLayerId,
+      type: 'circle',
+      source: this.stationsSourceId,
+      paint: {
+        'circle-radius': 4,
+        'circle-color': ['get', 'color'],
+        'circle-stroke-width': 1,
+        'circle-stroke-color': '#000000',
+      },
+    });
+  }
+
+  private initializeEventHandlers(): void {
+    // Unified click handler
+    this.boundClick = (e: maplibregl.MapMouseEvent) => {
+      // Query both hitbox layers - stations have priority
+      const stationFeatures = this.map.queryRenderedFeatures(e.point, {
+        layers: [this.stationsHitboxLayerId],
+      });
+
+      if (stationFeatures.length > 0) {
+        const feature = stationFeatures[0];
+        const systemId = feature?.properties?.systemId as string | undefined;
+        if (systemId) {
+          this.callbacks.onSystemClick?.(systemId, e);
+          return;
+        }
+      }
+
+      const shotFeatures = this.map.queryRenderedFeatures(e.point, {
+        layers: [this.shotsHitboxLayerId],
+      });
+
+      if (shotFeatures.length > 0) {
+        const feature = shotFeatures[0];
+        const systemId = feature?.properties?.systemId as string | undefined;
+        if (systemId) {
+          this.callbacks.onSystemClick?.(systemId, e);
+        }
+      }
+    };
+    this.map.on('click', this.boundClick);
+
+    // Unified mousemove handler for hover detection
+    this.boundMouseMove = (e: maplibregl.MapMouseEvent) => {
+      // Query both hitbox layers - stations have priority
+      const stationFeatures = this.map.queryRenderedFeatures(e.point, {
+        layers: [this.stationsHitboxLayerId],
+      });
+      const shotFeatures = this.map.queryRenderedFeatures(e.point, {
+        layers: [this.shotsHitboxLayerId],
+      });
+
+      let newHoveredSystemId: string | null = null;
+
+      if (stationFeatures.length > 0) {
+        const feature = stationFeatures[0];
+        newHoveredSystemId = (feature?.properties?.systemId as string) || null;
+      } else if (shotFeatures.length > 0) {
+        const feature = shotFeatures[0];
+        newHoveredSystemId = (feature?.properties?.systemId as string) || null;
+      }
+
+      if (newHoveredSystemId !== this.hoveredSystemId) {
+        this.hoveredSystemId = newHoveredSystemId;
+
+        // Update cursor
+        if (newHoveredSystemId) {
+          this.map.getCanvas().style.cursor = 'pointer';
+          this.callbacks.onFeatureHover?.(true);
+        } else {
+          this.map.getCanvas().style.cursor = '';
+          this.callbacks.onFeatureHover?.(false);
+        }
+
+        this.callbacks.onSystemHover?.(newHoveredSystemId);
+        this.updateVisualState();
+      }
+    };
+    this.map.on('mousemove', this.boundMouseMove);
+
+    // Clear hover on mouse leave
+    this.boundMapLeave = () => {
+      if (this.hoveredSystemId) {
+        this.hoveredSystemId = null;
+        this.map.getCanvas().style.cursor = '';
+        this.callbacks.onFeatureHover?.(false);
+        this.callbacks.onSystemHover?.(null);
+        this.updateVisualState();
+      }
+    };
+    this.map.getCanvas().addEventListener('mouseleave', this.boundMapLeave);
+  }
+
+  /**
+   * Update the layer with new system geometry data.
+   */
+  update(systems: SystemGeometry[]): void {
+    // Build shot features
+    const shotFeatures: GeoJSON.Feature[] = [];
+    const stationFeatures: GeoJSON.Feature[] = [];
+
+    // Clear and rebuild system colors
+    this.systemColors.clear();
+
+    for (const system of systems) {
+      const color = generateSystemColor(system.metadata.file_path);
+      this.systemColors.set(system.metadata.file_path, color);
+
+      // Build shot features
+      for (const shot of system.geometry.shots) {
+        shotFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates: [shot.from, shot.to],
+          },
+          properties: {
+            systemId: system.metadata.file_path,
+            name: system.metadata.name,
+            totalLength: system.metadata.total_length,
+            stationCount: system.metadata.station_count,
+            color,
+            isVirtual: shot.is_virtual,
+          },
+        });
+      }
+
+      // Extract and build station features
+      const stations = extractStations(system.geometry.shots);
+      for (const [lng, lat] of stations) {
+        stationFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: [lng, lat],
+          },
+          properties: {
+            systemId: system.metadata.file_path,
+            name: system.metadata.name,
+            totalLength: system.metadata.total_length,
+            stationCount: system.metadata.station_count,
+            color,
+          },
+        });
+      }
+    }
+
+    // Update sources
+    const shotsSource = this.map.getSource(this.shotsSourceId);
+    if (shotsSource && 'setData' in shotsSource) {
+      (shotsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: shotFeatures,
+      });
+    }
+
+    const stationsSource = this.map.getSource(this.stationsSourceId);
+    if (stationsSource && 'setData' in stationsSource) {
+      (stationsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: stationFeatures,
+      });
+    }
+  }
+
+  /**
+   * Set the selected system for highlighting.
+   */
+  setSelectedSystem(filePath: string | null): void {
+    if (this.selectedSystemId === filePath) return;
+    this.selectedSystemId = filePath;
+    this.updateVisualState();
+  }
+
+  /**
+   * Set filter to hide virtual shots (or show all).
+   */
+  setShowVirtualShots(visible: boolean): void {
+    if (!this.map.getLayer(this.shotsLayerId)) return;
+
+    if (visible) {
+      this.map.setFilter(this.shotsLayerId, null);
+    } else {
+      this.map.setFilter(this.shotsLayerId, ['!=', ['get', 'isVirtual'], true]);
+    }
+  }
+
+  /**
+   * Update visual styling based on hover/selection state.
+   * Uses paint property expressions for filter-based highlighting.
+   */
+  private updateVisualState(): void {
+    // Shot line width: thicker for hovered/selected systems
+    const shotLineWidth: maplibregl.ExpressionSpecification = [
+      'case',
+      // Hovered system: thick lines
+      ['==', ['get', 'systemId'], this.hoveredSystemId ?? ''],
+      4,
+      // Selected system: medium-thick lines
+      ['==', ['get', 'systemId'], this.selectedSystemId ?? ''],
+      3,
+      // Virtual shots: thin
+      ['boolean', ['get', 'isVirtual'], false],
+      1,
+      // Default
+      2,
+    ];
+    this.map.setPaintProperty(this.shotsLayerId, 'line-width', shotLineWidth);
+
+    // Station radius: larger for hovered/selected systems
+    const stationRadius: maplibregl.ExpressionSpecification = [
+      'case',
+      ['==', ['get', 'systemId'], this.hoveredSystemId ?? ''],
+      6,
+      ['==', ['get', 'systemId'], this.selectedSystemId ?? ''],
+      5,
+      4,
+    ];
+    this.map.setPaintProperty(this.stationsLayerId, 'circle-radius', stationRadius);
+
+    // Station stroke width: thicker for hovered/selected
+    const stationStrokeWidth: maplibregl.ExpressionSpecification = [
+      'case',
+      ['==', ['get', 'systemId'], this.hoveredSystemId ?? ''],
+      2,
+      ['==', ['get', 'systemId'], this.selectedSystemId ?? ''],
+      2,
+      1,
+    ];
+    this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-width', stationStrokeWidth);
+  }
+
+  /**
+   * Get the color assigned to a system.
+   */
+  getSystemColor(filePath: string): string {
+    return this.systemColors.get(filePath) ?? generateSystemColor(filePath);
+  }
+
+  /**
+   * Check if the layer has any data loaded.
+   */
+  hasData(): boolean {
+    return this.systemColors.size > 0;
+  }
+
+  /**
+   * Destroy the layer, removing all sources and event handlers.
+   */
+  destroy(): void {
+    // Remove event handlers
+    if (this.boundClick) {
+      this.map.off('click', this.boundClick);
+    }
+    if (this.boundMouseMove) {
+      this.map.off('mousemove', this.boundMouseMove);
+    }
+    if (this.boundMapLeave) {
+      this.map.getCanvas().removeEventListener('mouseleave', this.boundMapLeave);
+    }
+
+    // Remove layers (in reverse order of addition)
+    try {
+      if (this.map.getLayer(this.stationsLayerId)) {
+        this.map.removeLayer(this.stationsLayerId);
+      }
+      if (this.map.getLayer(this.shotsLayerId)) {
+        this.map.removeLayer(this.shotsLayerId);
+      }
+      if (this.map.getLayer(this.stationsHitboxLayerId)) {
+        this.map.removeLayer(this.stationsHitboxLayerId);
+      }
+      if (this.map.getLayer(this.shotsHitboxLayerId)) {
+        this.map.removeLayer(this.shotsHitboxLayerId);
+      }
+
+      // Remove sources
+      if (this.map.getSource(this.stationsSourceId)) {
+        this.map.removeSource(this.stationsSourceId);
+      }
+      if (this.map.getSource(this.shotsSourceId)) {
+        this.map.removeSource(this.shotsSourceId);
+      }
+    } catch {
+      // Map may already be destroyed
+    }
+
+    // Clear bound handlers
+    this.boundClick = null;
+    this.boundMouseMove = null;
+    this.boundMapLeave = null;
+  }
+}
