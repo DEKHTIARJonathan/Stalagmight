@@ -20,9 +20,8 @@ Add `station_count` field to `ProjectMetadata` in both Rust backend and TypeScri
 - [ ] TypeScript `ProjectMetadata` interface updated
 - [ ] Existing tests pass
 ## Done summary
-TBD
-
+Added station_count field to ProjectMetadata in both Rust (src-tauri/src/models/project.rs) and TypeScript (src/types/project.ts), populated from ProjectStats during metadata() method calls.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 9f17a4fa0bcff6bbdb5df02eb7c2109d46068d94
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, pnpm tsc --noEmit
 - PRs:
