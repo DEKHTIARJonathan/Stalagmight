@@ -469,6 +469,8 @@ pub fn run() {
             commands::validation::get_project_warnings,
             commands::validation::resolve_warning,
             commands::validation::unresolve_warning,
+            // Survey geometry
+            commands::survey_geometry::get_survey_geometry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
