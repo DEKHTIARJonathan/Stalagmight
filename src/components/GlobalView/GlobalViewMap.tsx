@@ -36,8 +36,13 @@ export default function GlobalViewMap({
   // Buffer for geometry data that arrives before map is ready
   const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
 
-  // Access lazy loading functions from store
-  const { loadGeometryBatch } = useGlobalViewStore();
+  // Access lazy loading functions and multi-select from store
+  const {
+    loadGeometryBatch,
+    selectedSystemIds,
+    selectSystem,
+    toggleSystemSelection,
+  } = useGlobalViewStore();
 
   // Filter to only projects with GPS coordinates (null check only, no sentinel)
   const gpsProjects = projects.filter((p) => p.gps_center !== null);
@@ -147,8 +152,19 @@ export default function GlobalViewMap({
       // Initialize survey layer now that map is loaded
       if (!surveyLayerRef.current && map.current) {
         surveyLayerRef.current = new GlobalSurveyLayer(map.current, {
-          onSystemClick: (filePath) => {
+          onSystemClick: (filePath, _event, ctrlKey) => {
+            if (ctrlKey) {
+              // Ctrl+click: toggle selection (multi-select)
+              toggleSystemSelectionRef.current(filePath);
+            } else {
+              // Regular click: select single system
+              selectSystemRef.current(filePath);
+            }
+            // Also call the legacy onProjectSelect for compatibility
             onProjectSelectRef.current(filePath);
+          },
+          onSystemDoubleClick: (filePath) => {
+            onProjectOpenRef.current(filePath);
           },
           onSystemHover: () => {
             // Hover handling could update metadata panel preview
@@ -190,10 +206,14 @@ export default function GlobalViewMap({
   // Store callbacks in refs to avoid stale closures in map event handlers
   const onProjectSelectRef = useRef(onProjectSelect);
   const onProjectOpenRef = useRef(onProjectOpen);
+  const selectSystemRef = useRef(selectSystem);
+  const toggleSystemSelectionRef = useRef(toggleSystemSelection);
   useEffect(() => {
     onProjectSelectRef.current = onProjectSelect;
     onProjectOpenRef.current = onProjectOpen;
-  }, [onProjectSelect, onProjectOpen]);
+    selectSystemRef.current = selectSystem;
+    toggleSystemSelectionRef.current = toggleSystemSelection;
+  }, [onProjectSelect, onProjectOpen, selectSystem, toggleSystemSelection]);
 
   // Update survey layer when geometry data changes (from props)
   useEffect(() => {
@@ -218,10 +238,19 @@ export default function GlobalViewMap({
     }
   }, [geometryData, gpsProjects]);
 
-  // Update survey layer selection when selected project changes
+  // Update survey layer selection when selected systems change (from store)
   useEffect(() => {
-    surveyLayerRef.current?.setSelectedSystem(selectedProjectId);
-  }, [selectedProjectId]);
+    surveyLayerRef.current?.setSelectedSystems(selectedSystemIds);
+  }, [selectedSystemIds]);
+
+  // Sync single-selection prop to store for compatibility
+  useEffect(() => {
+    // If selectedProjectId from props changes, update the store
+    // This maintains backward compatibility with existing code
+    if (selectedProjectId) {
+      selectSystem(selectedProjectId);
+    }
+  }, [selectedProjectId, selectSystem]);
 
   // Lazy load geometry for visible systems when map loads or moveend
   useEffect(() => {

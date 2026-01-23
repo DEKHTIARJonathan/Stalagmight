@@ -17,8 +17,10 @@ export interface SystemGeometry {
  * Callbacks for GlobalSurveyLayer interactions.
  */
 export interface GlobalSurveyLayerCallbacks {
-  /** Called when a system is clicked */
-  onSystemClick?: (filePath: string, event: maplibregl.MapMouseEvent) => void;
+  /** Called when a system is clicked (with ctrlKey flag for multi-select) */
+  onSystemClick?: (filePath: string, event: maplibregl.MapMouseEvent, ctrlKey: boolean) => void;
+  /** Called when a system is double-clicked (to open the project) */
+  onSystemDoubleClick?: (filePath: string) => void;
   /** Called when a system is hovered */
   onSystemHover?: (filePath: string | null) => void;
   /** Called when mouse enters/leaves any feature */
@@ -94,15 +96,19 @@ export default class GlobalSurveyLayer {
 
   // Visual state
   private hoveredSystemId: string | null = null;
-  private selectedSystemId: string | null = null;
+  private selectedSystemIds: Set<string> = new Set();
 
   // Store system colors for match expressions
   private systemColors: Map<string, string> = new Map();
+
+  // Tooltip element
+  private tooltip: HTMLDivElement | null = null;
 
   // Bound event handlers for cleanup
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
   private boundMapLeave: (() => void) | null = null;
   private boundClick: ((e: maplibregl.MapMouseEvent) => void) | null = null;
+  private boundDoubleClick: ((e: maplibregl.MapMouseEvent) => void) | null = null;
 
   constructor(map: MaplibreMap, callbacks: GlobalSurveyLayerCallbacks = {}) {
     this.map = map;
@@ -110,6 +116,7 @@ export default class GlobalSurveyLayer {
     this.initializeSources();
     this.initializeLayers();
     this.initializeEventHandlers();
+    this.initializeTooltip();
   }
 
   /**
@@ -211,18 +218,20 @@ export default class GlobalSurveyLayer {
   }
 
   private initializeEventHandlers(): void {
-    // Unified click handler
+    // Unified click handler - passes ctrlKey for multi-select
     this.boundClick = (e: maplibregl.MapMouseEvent) => {
       // Query both hitbox layers - stations have priority
       const stationFeatures = this.map.queryRenderedFeatures(e.point, {
         layers: [this.stationsHitboxLayerId],
       });
 
+      const ctrlKey = e.originalEvent.ctrlKey || e.originalEvent.metaKey;
+
       if (stationFeatures.length > 0) {
         const feature = stationFeatures[0];
         const systemId = feature?.properties?.systemId as string | undefined;
         if (systemId) {
-          this.callbacks.onSystemClick?.(systemId, e);
+          this.callbacks.onSystemClick?.(systemId, e, ctrlKey);
           return;
         }
       }
@@ -235,13 +244,43 @@ export default class GlobalSurveyLayer {
         const feature = shotFeatures[0];
         const systemId = feature?.properties?.systemId as string | undefined;
         if (systemId) {
-          this.callbacks.onSystemClick?.(systemId, e);
+          this.callbacks.onSystemClick?.(systemId, e, ctrlKey);
         }
       }
     };
     this.map.on('click', this.boundClick);
 
-    // Unified mousemove handler for hover detection
+    // Double-click handler to open project
+    this.boundDoubleClick = (e: maplibregl.MapMouseEvent) => {
+      // Query both hitbox layers - stations have priority
+      const stationFeatures = this.map.queryRenderedFeatures(e.point, {
+        layers: [this.stationsHitboxLayerId],
+      });
+
+      if (stationFeatures.length > 0) {
+        const feature = stationFeatures[0];
+        const systemId = feature?.properties?.systemId as string | undefined;
+        if (systemId) {
+          this.callbacks.onSystemDoubleClick?.(systemId);
+          return;
+        }
+      }
+
+      const shotFeatures = this.map.queryRenderedFeatures(e.point, {
+        layers: [this.shotsHitboxLayerId],
+      });
+
+      if (shotFeatures.length > 0) {
+        const feature = shotFeatures[0];
+        const systemId = feature?.properties?.systemId as string | undefined;
+        if (systemId) {
+          this.callbacks.onSystemDoubleClick?.(systemId);
+        }
+      }
+    };
+    this.map.on('dblclick', this.boundDoubleClick);
+
+    // Unified mousemove handler for hover detection and tooltip
     this.boundMouseMove = (e: maplibregl.MapMouseEvent) => {
       // Query both hitbox layers - stations have priority
       const stationFeatures = this.map.queryRenderedFeatures(e.point, {
@@ -252,14 +291,39 @@ export default class GlobalSurveyLayer {
       });
 
       let newHoveredSystemId: string | null = null;
+      let featureProperties: {
+        name?: string;
+        totalLength?: number;
+        stationCount?: number;
+      } | null = null;
 
       if (stationFeatures.length > 0) {
         const feature = stationFeatures[0];
         newHoveredSystemId = (feature?.properties?.systemId as string) || null;
+        if (feature?.properties) {
+          featureProperties = feature.properties as {
+            name?: string;
+            totalLength?: number;
+            stationCount?: number;
+          };
+        }
       } else if (shotFeatures.length > 0) {
         const feature = shotFeatures[0];
         newHoveredSystemId = (feature?.properties?.systemId as string) || null;
+        if (feature?.properties) {
+          featureProperties = feature.properties as {
+            name?: string;
+            totalLength?: number;
+            stationCount?: number;
+          };
+        }
       }
+
+      // Update tooltip position and content
+      this.updateTooltip(
+        newHoveredSystemId ? e.originalEvent : null,
+        featureProperties
+      );
 
       if (newHoveredSystemId !== this.hoveredSystemId) {
         this.hoveredSystemId = newHoveredSystemId;
@@ -288,6 +352,7 @@ export default class GlobalSurveyLayer {
         this.callbacks.onSystemHover?.(null);
         this.updateVisualState();
       }
+      this.hideTooltip();
     };
     this.map.getCanvas().addEventListener('mouseleave', this.boundMapLeave);
   }
@@ -390,11 +455,26 @@ export default class GlobalSurveyLayer {
   }
 
   /**
-   * Set the selected system for highlighting.
+   * Set the selected system for highlighting (single selection).
+   * For backwards compatibility - calls setSelectedSystems internally.
    */
   setSelectedSystem(filePath: string | null): void {
-    if (this.selectedSystemId === filePath) return;
-    this.selectedSystemId = filePath;
+    const newSet = filePath ? new Set([filePath]) : new Set<string>();
+    this.setSelectedSystems(newSet);
+  }
+
+  /**
+   * Set the selected systems for highlighting (multi-select).
+   */
+  setSelectedSystems(systemIds: Set<string>): void {
+    // Check if actually changed (compare set contents)
+    if (
+      this.selectedSystemIds.size === systemIds.size &&
+      [...this.selectedSystemIds].every((id) => systemIds.has(id))
+    ) {
+      return;
+    }
+    this.selectedSystemIds = new Set(systemIds);
     this.updateVisualState();
   }
 
@@ -427,14 +507,23 @@ export default class GlobalSurveyLayer {
    * Uses paint property expressions for filter-based highlighting.
    */
   private updateVisualState(): void {
+    // Build selection check expression
+    // For empty set, use a never-matching condition
+    // For non-empty set, use 'in' expression: ['in', ['get', 'systemId'], ['literal', [...]]]
+    const selectedArray = [...this.selectedSystemIds];
+    const isSelectedExpr: maplibregl.ExpressionSpecification =
+      selectedArray.length === 0
+        ? ['==', 1, 0] // Never matches
+        : ['in', ['get', 'systemId'], ['literal', selectedArray]];
+
     // Shot line width: thicker for hovered/selected systems
     const shotLineWidth: maplibregl.ExpressionSpecification = [
       'case',
       // Hovered system: thick lines
       ['==', ['get', 'systemId'], this.hoveredSystemId ?? ''],
       4,
-      // Selected system: medium-thick lines
-      ['==', ['get', 'systemId'], this.selectedSystemId ?? ''],
+      // Selected systems: medium-thick lines
+      isSelectedExpr,
       3,
       // Virtual shots: thin
       ['boolean', ['get', 'isVirtual'], false],
@@ -449,7 +538,7 @@ export default class GlobalSurveyLayer {
       'case',
       ['==', ['get', 'systemId'], this.hoveredSystemId ?? ''],
       6,
-      ['==', ['get', 'systemId'], this.selectedSystemId ?? ''],
+      isSelectedExpr,
       5,
       4,
     ];
@@ -460,7 +549,7 @@ export default class GlobalSurveyLayer {
       'case',
       ['==', ['get', 'systemId'], this.hoveredSystemId ?? ''],
       2,
-      ['==', ['get', 'systemId'], this.selectedSystemId ?? ''],
+      isSelectedExpr,
       2,
       1,
     ];
@@ -482,6 +571,91 @@ export default class GlobalSurveyLayer {
   }
 
   /**
+   * Initialize the tooltip element.
+   */
+  private initializeTooltip(): void {
+    this.tooltip = document.createElement('div');
+    this.tooltip.className = 'globalview-survey-tooltip';
+    this.tooltip.style.cssText = `
+      position: absolute;
+      pointer-events: none;
+      background-color: rgba(26, 26, 46, 0.95);
+      color: white;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      line-height: 1.4;
+      z-index: 1000;
+      white-space: nowrap;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      display: none;
+    `;
+    // Append to map container
+    this.map.getContainer().appendChild(this.tooltip);
+  }
+
+  /**
+   * Update tooltip position and content.
+   */
+  private updateTooltip(
+    event: MouseEvent | null,
+    properties: {
+      name?: string;
+      totalLength?: number;
+      stationCount?: number;
+    } | null
+  ): void {
+    if (!this.tooltip) return;
+
+    if (!event || !properties) {
+      this.hideTooltip();
+      return;
+    }
+
+    // Format total length
+    const length = properties.totalLength ?? 0;
+    let lengthStr: string;
+    if (length >= 1000) {
+      lengthStr = `${(length / 1000).toFixed(2)} km`;
+    } else {
+      lengthStr = `${length.toFixed(1)} m`;
+    }
+
+    // Build tooltip content
+    const name = properties.name ?? 'Unknown';
+    const stationCount = properties.stationCount ?? 0;
+    this.tooltip.innerHTML = `
+      <div style="font-weight: 600; margin-bottom: 4px;">${name}</div>
+      <div style="color: #aaa;">Length: ${lengthStr}</div>
+      <div style="color: #aaa;">Stations: ${stationCount}</div>
+    `;
+
+    // Position tooltip near cursor (offset by 15px)
+    const container = this.map.getContainer();
+    const rect = container.getBoundingClientRect();
+    const x = event.clientX - rect.left + 15;
+    const y = event.clientY - rect.top + 15;
+
+    // Keep tooltip within container bounds
+    const tooltipRect = this.tooltip.getBoundingClientRect();
+    const maxX = container.clientWidth - tooltipRect.width - 10;
+    const maxY = container.clientHeight - tooltipRect.height - 10;
+
+    this.tooltip.style.left = `${Math.min(x, maxX)}px`;
+    this.tooltip.style.top = `${Math.min(y, maxY)}px`;
+    this.tooltip.style.display = 'block';
+  }
+
+  /**
+   * Hide the tooltip.
+   */
+  private hideTooltip(): void {
+    if (this.tooltip) {
+      this.tooltip.style.display = 'none';
+    }
+  }
+
+  /**
    * Destroy the layer, removing all sources and event handlers.
    */
   destroy(): void {
@@ -489,12 +663,21 @@ export default class GlobalSurveyLayer {
     if (this.boundClick) {
       this.map.off('click', this.boundClick);
     }
+    if (this.boundDoubleClick) {
+      this.map.off('dblclick', this.boundDoubleClick);
+    }
     if (this.boundMouseMove) {
       this.map.off('mousemove', this.boundMouseMove);
     }
     if (this.boundMapLeave) {
       this.map.getCanvas().removeEventListener('mouseleave', this.boundMapLeave);
     }
+
+    // Remove tooltip
+    if (this.tooltip && this.tooltip.parentNode) {
+      this.tooltip.parentNode.removeChild(this.tooltip);
+    }
+    this.tooltip = null;
 
     // Remove layers (in reverse order of addition)
     try {
@@ -521,6 +704,7 @@ export default class GlobalSurveyLayer {
 
     // Clear bound handlers
     this.boundClick = null;
+    this.boundDoubleClick = null;
     this.boundMouseMove = null;
     this.boundMapLeave = null;
   }
