@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useProject } from '../../hooks/useProject';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -66,6 +66,9 @@ export default function GlobalView() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
   const [metadataPanelCollapsed, setMetadataPanelCollapsed] = useState(false);
+  // Search filter state (owned here, passed down to GlobalViewMap)
+  const [searchTerm, setSearchTerm] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -196,6 +199,25 @@ export default function GlobalView() {
     }
   }, [multiSelectedIds, recentProjects, openDialog]);
 
+  // Handle search input changes (instant filtering)
+  const handleSearchChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    setSearchTerm(e.target.value);
+  }, []);
+
+  // Handle clearing search (X button)
+  const handleClearSearch = useCallback(() => {
+    setSearchTerm('');
+    searchInputRef.current?.focus();
+  }, []);
+
+  // Handle search input keyboard events (Escape to clear)
+  const handleSearchKeyDown = useCallback((e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      setSearchTerm('');
+      // Keep focus on input after clearing
+    }
+  }, []);
+
   // Get the selected project metadata
   const selectedProject = useMemo(() => {
     if (!selectedProjectId) return null;
@@ -228,29 +250,73 @@ export default function GlobalView() {
 
       {/* Tabs - only show if there are projects */}
       {recentProjects.length > 0 && (
-        <div className="flex border-b border-border px-4">
-          <button
-            data-testid="globalview-map-tab"
-            onClick={() => setActiveTab('map')}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 'map'
-                ? 'border-accent text-accent'
-                : 'border-transparent text-text-secondary hover:text-text'
-            }`}
-          >
-            Map {hasGpsProjects ? `(${recentProjects.filter(p => p.gps_center !== null).length})` : ''}
-          </button>
-          <button
-            data-testid="globalview-list-tab"
-            onClick={() => setActiveTab('list')}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 'list'
-                ? 'border-accent text-accent'
-                : 'border-transparent text-text-secondary hover:text-text'
-            }`}
-          >
-            List ({recentProjects.length})
-          </button>
+        <div className="flex items-center justify-between border-b border-border px-4">
+          <div className="flex">
+            <button
+              data-testid="globalview-map-tab"
+              onClick={() => setActiveTab('map')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'map'
+                  ? 'border-accent text-accent'
+                  : 'border-transparent text-text-secondary hover:text-text'
+              }`}
+            >
+              Map {hasGpsProjects ? `(${recentProjects.filter(p => p.gps_center !== null).length})` : ''}
+            </button>
+            <button
+              data-testid="globalview-list-tab"
+              onClick={() => setActiveTab('list')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'list'
+                  ? 'border-accent text-accent'
+                  : 'border-transparent text-text-secondary hover:text-text'
+              }`}
+            >
+              List ({recentProjects.length})
+            </button>
+          </div>
+
+          {/* Search input - only show when map tab is active */}
+          {activeTab === 'map' && hasGpsProjects && (
+            <div className="relative py-1">
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchTerm}
+                onChange={handleSearchChange}
+                onKeyDown={handleSearchKeyDown}
+                placeholder="Search systems..."
+                className="bg-panel border border-border rounded px-2 py-1 text-sm w-48 pr-7 focus:outline-none focus:ring-1 focus:ring-accent"
+                data-testid="globalview-search-input"
+                aria-label="Search systems by name"
+              />
+              {/* Clear button (X) - only show when there's text */}
+              {searchTerm && (
+                <button
+                  onClick={handleClearSearch}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text p-1"
+                  title="Clear search (Escape)"
+                  aria-label="Clear search"
+                  data-testid="globalview-search-clear"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -295,6 +361,7 @@ export default function GlobalView() {
               onProjectOpen={handleProjectOpen}
               geometryData={geometryData}
               geometryStates={geometryStates}
+              searchTerm={searchTerm}
             />
           ) : (
             <div className="h-full overflow-auto p-6">
