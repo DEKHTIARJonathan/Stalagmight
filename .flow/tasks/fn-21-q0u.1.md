@@ -35,9 +35,8 @@ Component accepts `testId` prop for explicit control, or generates from type + I
 - [ ] Vitest unit tests for helper functions (testId generation, aria-label formatting)
 
 ## Done summary
-TBD
-
+Created DetailLink reusable component for navigating between survey elements with button-styled-as-link pattern, discriminated union types for type-safe targets, and comprehensive unit tests.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: bf39da0e7a7f8e6ca78b9e2df4b8c5e5b9f3a1d2, e3396bbc8d0b9b5e45162e3bdc9497b41b185bbd
+- Tests: pnpm vitest run src/components/common/__tests__/DetailLink.test.ts, pnpm tsc --noEmit
 - PRs:

@@ -152,6 +152,12 @@ interface UIStore {
   requestPanToShot: { sectionId: SectionId; shotId: ShotId } | null;
   triggerPanToShot: (sectionId: SectionId, shotId: ShotId) => void;
   clearPanToShotRequest: () => void;
+  requestCenterOnStation: StationRef | null;
+  triggerCenterOnStation: (ref: StationRef) => void;
+  clearCenterOnStationRequest: () => void;
+  requestCenterOnShot: { sectionId: SectionId; shotId: ShotId } | null;
+  triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => void;
+  clearCenterOnShotRequest: () => void;
 
   // Display toggles
   showStations: boolean;
@@ -418,6 +424,12 @@ export const useUIStore = create<UIStore>((set) => ({
   requestPanToShot: null,
   triggerPanToShot: (sectionId: SectionId, shotId: ShotId) => set({ requestPanToShot: { sectionId, shotId } }),
   clearPanToShotRequest: () => set({ requestPanToShot: null }),
+  requestCenterOnStation: null,
+  triggerCenterOnStation: (ref: StationRef) => set({ requestCenterOnStation: ref }),
+  clearCenterOnStationRequest: () => set({ requestCenterOnStation: null }),
+  requestCenterOnShot: null,
+  triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => set({ requestCenterOnShot: { sectionId, shotId } }),
+  clearCenterOnShotRequest: () => set({ requestCenterOnShot: null }),
 
   // Display toggles (initial values from DISPLAY_DEFAULTS - single source of truth)
   showStations: DISPLAY_DEFAULTS.showStations,

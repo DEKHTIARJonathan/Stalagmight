@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import maplibregl from 'maplibre-gl';
-import type { SectionId, ShotId } from '../../types/project';
+import type { SectionId, ShotId, StationRef } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import {
@@ -61,6 +61,10 @@ export default function MapCanvas() {
   const pendingZoomToSectionRef = useRef<number | null>(null);
   // Pending pan-to-shot request (stored when map not loaded, processed when it loads)
   const pendingPanToShotRef = useRef<{ sectionId: number; shotId: number } | null>(null);
+  // Pending center-on-station request (stored when map not loaded, processed when it loads)
+  const pendingCenterOnStationRef = useRef<StationRef | null>(null);
+  // Pending center-on-shot request (stored when map not loaded, processed when it loads)
+  const pendingCenterOnShotRef = useRef<{ sectionId: number; shotId: number } | null>(null);
 
   const { project, stations, stats, config, moveSection, moveStation } = useProjectStore();
 
@@ -119,6 +123,10 @@ export default function MapCanvas() {
     clearZoomToSectionRequest,
     requestPanToShot,
     clearPanToShotRequest,
+    requestCenterOnStation,
+    clearCenterOnStationRequest,
+    requestCenterOnShot,
+    clearCenterOnShotRequest,
   } = useUIStore();
 
   // Snap-to-station detection
@@ -1324,6 +1332,102 @@ export default function MapCanvas() {
     [project, stations, config, gpsOrigin]
   );
 
+  // Center on a station (used by DetailLink)
+  // Returns true if centering was performed, false if prerequisites not met
+  const fitToStation = useCallback(
+    (stationRef: StationRef): boolean => {
+      if (!map.current || !config) return false;
+
+      // Find the station
+      const station = stations.find(
+        (s) =>
+          s.station_ref.section_id === stationRef.section_id &&
+          s.station_ref.station_index === stationRef.station_index
+      );
+      if (!station) return false;
+
+      // Stop any running animation before starting a new one
+      map.current.stop();
+
+      // Reset padding to avoid MapLibre accumulation bug (follows fitToSection pattern)
+      map.current.setPadding({ top: 0, right: 0, bottom: 0, left: 0 });
+
+      // Convert to map coordinates
+      const mapCoords = metersToMapCoords(station.coordinates.x, station.coordinates.y, gpsOrigin);
+
+      // Get animation config
+      const animationConfig = config.map.animation;
+      const animationDuration = animationConfig.enabled ? animationConfig.duration : 0;
+
+      // Center on the station using point_zoom (single point centering, no padding needed)
+      map.current.easeTo({
+        center: mapCoords as [number, number],
+        zoom: animationConfig.point_zoom,
+        duration: animationDuration,
+      });
+
+      return true;
+    },
+    [stations, config, gpsOrigin]
+  );
+
+  // Center on a shot's midpoint (used by DetailLink)
+  // Returns true if centering was performed, false if prerequisites not met
+  const fitToShot = useCallback(
+    (sectionId: SectionId, shotId: ShotId): boolean => {
+      if (!map.current || !config || !project) return false;
+
+      // Find the section
+      const section = project.sections.find((s) => s.id === sectionId);
+      if (!section) return false;
+
+      // Find the shot index
+      const shotIndex = section.shots.findIndex((s) => s.id === shotId);
+      if (shotIndex === -1) return false;
+
+      // Shot at index N connects station_index N (from) to station_index N+1 (to)
+      const fromStationIndex = shotIndex;
+      const toStationIndex = shotIndex + 1;
+
+      // Find the two stations
+      const fromStation = stations.find(
+        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === fromStationIndex
+      );
+      const toStation = stations.find(
+        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === toStationIndex
+      );
+
+      if (!fromStation || !toStation) return false;
+
+      // Stop any running animation before starting a new one
+      map.current.stop();
+
+      // Reset padding to avoid MapLibre accumulation bug (follows fitToSection pattern)
+      map.current.setPadding({ top: 0, right: 0, bottom: 0, left: 0 });
+
+      // Calculate midpoint in project coordinates (meters)
+      const midpointX = (fromStation.coordinates.x + toStation.coordinates.x) / 2;
+      const midpointY = (fromStation.coordinates.y + toStation.coordinates.y) / 2;
+
+      // Convert to map coordinates
+      const mapCoords = metersToMapCoords(midpointX, midpointY, gpsOrigin);
+
+      // Get animation config
+      const animationConfig = config.map.animation;
+      const animationDuration = animationConfig.enabled ? animationConfig.duration : 0;
+
+      // Center on the shot midpoint using point_zoom (single point centering, no padding needed)
+      map.current.easeTo({
+        center: mapCoords as [number, number],
+        zoom: animationConfig.point_zoom,
+        duration: animationDuration,
+      });
+
+      return true;
+    },
+    [project, stations, config, gpsOrigin]
+  );
+
   // Fit to bounds when requested (e.g., after import)
   useEffect(() => {
     if (requestFitToBounds && mapLoaded && stations.length > 0) {
@@ -1382,6 +1486,58 @@ export default function MapCanvas() {
       panToShotMidpoint(sectionId, shotId);
     }
   }, [mapLoaded, panToShotMidpoint]);
+
+  // Center on station when requested (e.g., from DetailLink click)
+  useEffect(() => {
+    // CRITICAL: Clear request immediately (before any early returns) to prevent stuck requests
+    if (requestCenterOnStation !== null) {
+      const stationRef = requestCenterOnStation;
+      clearCenterOnStationRequest();
+      // If map is loaded, process immediately; otherwise store for later
+      if (mapLoaded) {
+        fitToStation(stationRef);
+      } else {
+        pendingCenterOnStationRef.current = stationRef;
+      }
+    }
+  }, [requestCenterOnStation, mapLoaded, clearCenterOnStationRequest, fitToStation]);
+
+  // Process pending center-on-station request when map loads
+  useEffect(() => {
+    if (mapLoaded && pendingCenterOnStationRef.current !== null) {
+      const stationRef = pendingCenterOnStationRef.current;
+      // Only clear pending ref if centering was successful
+      if (fitToStation(stationRef)) {
+        pendingCenterOnStationRef.current = null;
+      }
+    }
+  }, [mapLoaded, fitToStation]);
+
+  // Center on shot when requested (e.g., from DetailLink click)
+  useEffect(() => {
+    // CRITICAL: Clear request immediately (before any early returns) to prevent stuck requests
+    if (requestCenterOnShot !== null) {
+      const { sectionId, shotId } = requestCenterOnShot;
+      clearCenterOnShotRequest();
+      // If map is loaded, process immediately; otherwise store for later
+      if (mapLoaded) {
+        fitToShot(sectionId, shotId);
+      } else {
+        pendingCenterOnShotRef.current = { sectionId, shotId };
+      }
+    }
+  }, [requestCenterOnShot, mapLoaded, clearCenterOnShotRequest, fitToShot]);
+
+  // Process pending center-on-shot request when map loads
+  useEffect(() => {
+    if (mapLoaded && pendingCenterOnShotRef.current !== null) {
+      const { sectionId, shotId } = pendingCenterOnShotRef.current;
+      // Only clear pending ref if centering was successful
+      if (fitToShot(sectionId, shotId)) {
+        pendingCenterOnShotRef.current = null;
+      }
+    }
+  }, [mapLoaded, fitToShot]);
 
   // Handle Escape key for placement mode
   useEffect(() => {
