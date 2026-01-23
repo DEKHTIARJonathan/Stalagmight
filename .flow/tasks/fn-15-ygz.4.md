@@ -1,35 +1,42 @@
 # fn-15-ygz.4 Add system-level selection and hover highlighting
 
+<!-- Updated by plan-sync: fn-15-ygz.2 already implemented base selection/hover in GlobalSurveyLayer -->
+
 ## Description
 
-Add system-level selection and hover highlighting.
+Extend existing selection and hover highlighting with multi-select and tooltip features.
 
 **Size:** M
 **Files:**
-- `src/components/GlobalView/GlobalSurveyLayer.ts` (selection/hover)
-- `src/components/GlobalView/GlobalViewMap.tsx` (event wiring)
-- `src/store/globalViewStore.ts` (selection state)
+- `src/components/GlobalView/GlobalSurveyLayer.ts` (multi-select, tooltip)
+- `src/components/GlobalView/GlobalViewMap.tsx` (event wiring for multi-select, double-click)
+- `src/store/globalViewStore.ts` (selection state for multi-select)
 
 ## Approach
 
-- Use filter-based highlighting (not setFeatureState)
-- Add highlight layer with filter `['==', ['get', 'systemId'], selectedSystemId]`
-- Selection style: thicker strokes (1.5x configurable), scaled stations
-- Multi-select with Ctrl+click
-- Double-click opens project
-- Tooltip follows cursor, shows name + totalLength + stationCount
+**Already implemented in fn-15-ygz.2:**
+- Single selection via `setSelectedSystem(filePath: string | null)` method
+- Hover highlighting via `onSystemHover` callback and `updateVisualState()`
+- Click detection via `onSystemClick` callback with hitbox layers (0.001 opacity)
+- Filter-based highlighting using paint property expressions (not setFeatureState)
+- Thicker strokes (4px hovered, 3px selected, 2px default) and larger stations (6px hovered, 5px selected, 4px default)
+
+**Remaining work:**
+- Multi-select with Ctrl+click (add `selectedSystemIds: Set<string>` state)
+- Double-click opens project (wire `onProjectOpen` to dblclick)
+- Tooltip follows cursor, shows name + totalLength + stationCount from feature properties
+- Update `updateVisualState()` to handle multiple selected IDs
 - Per memory: only fire hover(false) if no other feature type is hovered
-- Per memory: use opaque colors with tiny opacity for hitbox layers
-- Top system wins for overlapping clicks
+- Top system wins for overlapping clicks (already implemented - stations checked before shots)
 
 ## Acceptance
 
-- [ ] Clicking shot/station selects entire system
+- [ ] Clicking shot/station selects entire system (already works via onSystemClick)
 - [ ] Ctrl+click adds/removes from selection
-- [ ] Hovering highlights entire system with thicker strokes
+- [ ] Hovering highlights entire system with thicker strokes (already works)
 - [ ] Double-click opens project
 - [ ] Tooltip shows system name and stats from feature properties
-- [ ] Filter-based highlighting (not feature-state)
+- [ ] Filter-based highlighting (not feature-state) (already implemented)
 
 ## Done summary
 TBD

@@ -30,9 +30,8 @@ Create `GlobalSurveyLayer` class for read-only multi-system rendering on the glo
 - [ ] Layer integrates with GlobalViewMap
 
 ## Done summary
-TBD
-
+Created GlobalSurveyLayer class for multi-system survey rendering on the global map. Uses single GeoJSON source with featureType property to distinguish shots and stations, match expressions for per-system colors based on file_path hash, and filter-based virtual shot toggling. Integrated into GlobalViewMap with props-based geometry data and pending buffer for race condition handling.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 38c4a6e, b3c3a46, ed91f75, eaa9ad6
+- Tests: pnpm tsc --noEmit, cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:

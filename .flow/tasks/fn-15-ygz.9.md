@@ -14,9 +14,14 @@ Add FPS monitoring and auto-throttle that reduces detail when frame rate drops.
 
 ## Approach
 
+<!-- Updated by plan-sync: fn-15-ygz.2 source ID and initial tolerance value -->
+
 - Use `requestAnimationFrame` timing to calculate FPS (rolling 30-frame average)
 - When FPS < threshold: increase GeoJSON tolerance from 0.5 to 1.0 (primary throttle action)
 - When FPS recovers > 45: restore detail
+- Source ID is `global-survey-data` (private `sourceId` in GlobalSurveyLayer)
+- Add `setTolerance(value: number)` method to GlobalSurveyLayer that updates source options
+- Note: MapLibre requires removing/re-adding source to change tolerance, or use `map.getSource(sourceId).setData()` approach
 - Add config to both Rust and TypeScript:
   - `global_view.fps_threshold` (default 30)
   - `global_view.tolerance` (default 0.5)
