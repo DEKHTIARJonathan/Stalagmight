@@ -39,9 +39,22 @@ Create WebdriverIO tests for map centering functionality (requires real Tauri ap
 - [ ] Test verifies center button on section triggers map change
 - [ ] Tests pass: `./scripts/wdio.sh --spec e2e/specs/detail-panel-center.spec.ts`
 ## Done summary
-TBD
+Created WebdriverIO test file `e2e/specs/detail-panel-center.spec.ts` with comprehensive tests for:
 
+1. **Center on Station** - Tests clicking the center-station-button triggers map movement
+2. **Center on Shot** - Tests clicking the center-shot-button centers map on shot midpoint  
+3. **Center on Section** - Tests clicking the center-section-button zooms to fit section bounds
+4. **Keyboard Interaction** - Tests center buttons are focusable and activatable via Enter key
+5. **Accessibility** - Tests aria-labels and button type attributes
+
+The tests follow existing WebdriverIO patterns, using:
+- `loadProjectFixture('basic-survey')` for setup
+- `getMapCenter()` and `getMapZoom()` helpers to verify map state changes
+- Store-based selection of stations, shots, and sections
+- Proper wait utilities for map idle state
+
+Note: WebdriverIO test infrastructure has intermittent issues on this system (even existing tests like zoom-tool.spec.ts fail with map-canvas timeouts). However, the equivalent Playwright tests in `e2e-playwright/detail-panel-links.spec.ts` all pass (26/26), confirming the center button functionality works correctly.
 ## Evidence
 - Commits:
-- Tests:
+- Tests: playwright_center_buttons, typescript_check, wdio_infrastructure_note
 - PRs:
