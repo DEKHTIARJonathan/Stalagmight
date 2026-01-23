@@ -21,6 +21,12 @@ export interface SystemGeometryState {
 
 interface GlobalViewStore {
   /**
+   * Generation counter for cancellation.
+   * Incremented on clearGeometryCache to invalidate in-flight requests.
+   */
+  generation: number;
+
+  /**
    * Geometry state keyed by file_path.
    * Systems not in the map are in 'idle' state.
    */
@@ -33,28 +39,16 @@ interface GlobalViewStore {
   geometryData: Map<string, SurveyGeometry>;
 
   /**
-   * Set of file_paths with pending load cancellation.
-   * Used to cancel loads when a project is opened.
-   */
-  pendingCancellations: Set<string>;
-
-  /**
    * Load geometry for a system by file path.
    * Skips if already loading/loaded.
    */
   loadGeometry: (filePath: string) => Promise<void>;
 
   /**
-   * Load geometry for multiple systems, prioritized by distance from viewport center.
-   * Systems are loaded in order of priority.
+   * Load geometry for multiple systems sequentially.
+   * Stops if generation changes (cache cleared).
    */
   loadGeometryBatch: (filePaths: string[]) => Promise<void>;
-
-  /**
-   * Cancel pending loads for a system.
-   * Used when user opens a project to avoid race conditions.
-   */
-  cancelPendingLoads: (filePaths?: string[]) => void;
 
   /**
    * Get the loading state for a system.
@@ -62,17 +56,19 @@ interface GlobalViewStore {
   getLoadingState: (filePath: string) => GeometryLoadingState;
 
   /**
-   * Clear all cached geometry (call when entering single-system view).
+   * Clear all cached geometry and cancel pending loads.
+   * Call when entering single-system view.
    */
   clearGeometryCache: () => void;
 }
 
 export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
+  generation: 0,
   geometryStates: new Map(),
   geometryData: new Map(),
-  pendingCancellations: new Set(),
 
   loadGeometry: async (filePath: string) => {
+    const startGeneration = get().generation;
     const { geometryStates } = get();
 
     // Skip if already loading or loaded
@@ -93,21 +89,9 @@ export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
         path: filePath,
       });
 
-      // Check if load was cancelled while in flight
-      if (get().pendingCancellations.has(filePath)) {
-        // Remove from pending cancellations
-        set((state) => {
-          const newCancellations = new Set(state.pendingCancellations);
-          newCancellations.delete(filePath);
-          return { pendingCancellations: newCancellations };
-        });
-        // Reset to idle
-        set((state) => ({
-          geometryStates: new Map(state.geometryStates).set(filePath, {
-            state: 'idle',
-          }),
-        }));
-        return;
+      // Check if generation changed while in flight (cache was cleared)
+      if (get().generation !== startGeneration) {
+        return; // Discard result, don't update state
       }
 
       // Success - update state and cache geometry
@@ -119,19 +103,9 @@ export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
         geometryData: new Map(state.geometryData).set(filePath, geometry),
       }));
     } catch (e) {
-      // Check if load was cancelled while in flight
-      if (get().pendingCancellations.has(filePath)) {
-        set((state) => {
-          const newCancellations = new Set(state.pendingCancellations);
-          newCancellations.delete(filePath);
-          return { pendingCancellations: newCancellations };
-        });
-        set((state) => ({
-          geometryStates: new Map(state.geometryStates).set(filePath, {
-            state: 'idle',
-          }),
-        }));
-        return;
+      // Check if generation changed while in flight
+      if (get().generation !== startGeneration) {
+        return; // Discard error, don't update state
       }
 
       // Error - parse error message
@@ -157,7 +131,8 @@ export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
   },
 
   loadGeometryBatch: async (filePaths: string[]) => {
-    const { loadGeometry, getLoadingState } = get();
+    const startGeneration = get().generation;
+    const { getLoadingState } = get();
 
     // Filter out already loading/loaded systems
     const toLoad = filePaths.filter((fp) => {
@@ -165,34 +140,14 @@ export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
       return state === 'idle' || state === 'error';
     });
 
-    // Load in sequence (could be parallelized, but sequential prevents overwhelming backend)
+    // Load sequentially to prevent overwhelming backend
     for (const filePath of toLoad) {
-      await loadGeometry(filePath);
-    }
-  },
-
-  cancelPendingLoads: (filePaths?: string[]) => {
-    set((state) => {
-      const newCancellations = new Set(state.pendingCancellations);
-
-      if (filePaths) {
-        // Cancel specific file paths
-        for (const fp of filePaths) {
-          if (state.geometryStates.get(fp)?.state === 'loading') {
-            newCancellations.add(fp);
-          }
-        }
-      } else {
-        // Cancel all loading
-        for (const [fp, gs] of state.geometryStates) {
-          if (gs.state === 'loading') {
-            newCancellations.add(fp);
-          }
-        }
+      // Stop if generation changed (cache cleared)
+      if (get().generation !== startGeneration) {
+        return;
       }
-
-      return { pendingCancellations: newCancellations };
-    });
+      await get().loadGeometry(filePath);
+    }
   },
 
   getLoadingState: (filePath: string) => {
@@ -200,10 +155,10 @@ export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
   },
 
   clearGeometryCache: () => {
-    set({
+    set((state) => ({
+      generation: state.generation + 1,
       geometryStates: new Map(),
       geometryData: new Map(),
-      pendingCancellations: new Set(),
-    });
+    }));
   },
 }));

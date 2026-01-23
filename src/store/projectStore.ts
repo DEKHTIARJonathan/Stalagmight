@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { useUIStore } from './uiStore';
+import { useGlobalViewStore } from './globalViewStore';
 import type {
   Project,
   ProjectState,
@@ -301,6 +302,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   // Load project using the consolidated load_project_full command
   loadProject: async (path: string) => {
+    // Clear GlobalView geometry cache to cancel pending loads and free memory
+    useGlobalViewStore.getState().clearGeometryCache();
+
     // ALWAYS cancel first - NO isLoading guard
     // cancel_loading is idempotent on backend
     await get().cancelLoading();

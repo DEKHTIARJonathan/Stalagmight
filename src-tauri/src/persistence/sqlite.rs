@@ -80,6 +80,39 @@ impl Database {
         Ok(db)
     }
 
+    /// Open an existing database in read-only mode.
+    /// Does not create if missing, does not run migrations.
+    /// Used for lazy loading survey geometry without modifying files.
+    pub fn open_readonly(path: &Path) -> Result<Self> {
+        tracing::debug!("Opening database read-only at: {:?}", path);
+
+        if !path.exists() {
+            anyhow::bail!("File does not exist: {:?}", path);
+        }
+
+        // Validate it's a CaveChef project file by extension
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        if extension != "cvchef" && extension != "cvproj" {
+            anyhow::bail!("Not a CaveChef project file: {:?}", path);
+        }
+
+        // Open in read-only mode - no writes possible
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .context("Failed to open database read-only")?;
+
+        let db = Self { conn };
+
+        // Verify project data exists
+        if !db.has_project_data()? {
+            anyhow::bail!("File does not contain a valid CaveChef project");
+        }
+
+        Ok(db)
+    }
+
     /// Run lightweight schema migrations for tables added after initial release
     fn migrate_schema(&self) -> Result<()> {
         // Ensure display_settings table exists (added in v1.x for per-project display toggles)

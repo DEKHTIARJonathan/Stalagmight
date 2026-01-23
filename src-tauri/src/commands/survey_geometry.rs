@@ -136,8 +136,8 @@ pub async fn get_survey_geometry_for_file(
 
 /// Internal implementation for file-based geometry loading.
 fn get_survey_geometry_for_file_impl(path: &PathBuf) -> Result<SurveyGeometry, SurveyGeometryError> {
-    // Open database read-only
-    let db = Database::open(path).map_err(|e| SurveyGeometryError {
+    // Open database in read-only mode - never create or modify files
+    let db = Database::open_readonly(path).map_err(|e| SurveyGeometryError {
         message: format!("Failed to open project: {}", e),
     })?;
 

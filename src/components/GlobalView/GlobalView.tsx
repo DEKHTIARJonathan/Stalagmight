@@ -104,7 +104,7 @@ export default function GlobalView() {
   }, [contextMenu.visible]);
 
   // Access global view store for lazy loading
-  const { geometryData, geometryStates, cancelPendingLoads, clearGeometryCache } = useGlobalViewStore();
+  const { geometryData, geometryStates } = useGlobalViewStore();
 
   // Check if there are any GPS-positioned projects (null check only, no sentinel)
   const hasGpsProjects = recentProjects.some((p) => p.gps_center !== null);
@@ -149,13 +149,9 @@ export default function GlobalView() {
 
   // Handle project open (double-click on map or from metadata panel)
   const handleProjectOpen = useCallback(async (filePath: string) => {
-    // Cancel pending geometry loads to avoid race conditions
-    cancelPendingLoads();
-    // Clear geometry cache when entering single-system view
-    clearGeometryCache();
-    // loadProject handles view switching internally
+    // loadProject handles view switching and clears GlobalView geometry cache
     await loadProject(filePath);
-  }, [loadProject, cancelPendingLoads, clearGeometryCache]);
+  }, [loadProject]);
 
   // Handle cancel during loading
   const handleCancelLoading = useCallback(async () => {

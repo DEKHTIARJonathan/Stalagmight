@@ -37,7 +37,7 @@ export default function GlobalViewMap({
   const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
 
   // Access lazy loading functions from store
-  const { loadGeometry } = useGlobalViewStore();
+  const { loadGeometryBatch } = useGlobalViewStore();
 
   // Filter to only projects with GPS coordinates (null check only, no sentinel)
   const gpsProjects = projects.filter((p) => p.gps_center !== null);
@@ -250,13 +250,9 @@ export default function GlobalViewMap({
         .sort((a, b) => a.dist - b.dist)
         .map((item) => item.project.file_path);
 
-      // Load systems in priority order
-      for (const filePath of visibleSystems) {
-        const state = geometryStates.get(filePath)?.state ?? 'idle';
-        if (state === 'idle') {
-          loadGeometry(filePath);
-        }
-      }
+      // Load systems sequentially in priority order (loadGeometryBatch handles this)
+      // Don't await - let it run in background so map stays responsive
+      loadGeometryBatch(visibleSystems);
     };
 
     // Load visible systems now
@@ -269,7 +265,7 @@ export default function GlobalViewMap({
     return () => {
       map.current?.off('moveend', handleMoveEnd);
     };
-  }, [mapLoaded, gpsProjects, geometryStates, loadGeometry]);
+  }, [mapLoaded, gpsProjects, loadGeometryBatch]);
 
   // Update markers when projects or selection changes
   useEffect(() => {
