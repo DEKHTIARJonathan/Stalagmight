@@ -57,9 +57,8 @@ Add inline SVG crosshairs button to Panel header using `headerActions` prop:
 - [ ] Clicking links updates selection correctly
 
 ## Done summary
-TBD
-
+Added hyperlinks and center button to ShotDetail component. The "Connected" section shows Start Station, End Station, and Section links with proper target validation and ARIA support. A crosshairs center button in the panel header triggers map centering on the selected shot.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 500e64461ae4ec24b5a8114ad7250169cbcf4812
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
