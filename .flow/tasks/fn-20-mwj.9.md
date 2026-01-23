@@ -63,9 +63,8 @@ CSS sr-only class (typical implementation):
 - [ ] Type check passes: `pnpm tsc --noEmit`
 - [ ] Playwright tests pass: `pnpm test:ui`
 ## Done summary
-TBD
-
+Implemented deletion edge cases (auto-switch section on deletion, clear selection on shot deletion) and added ARIA live region with polite priority for shot selection announcements to screen readers.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 9bebe20, 720659b
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
