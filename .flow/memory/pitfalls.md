@@ -90,3 +90,6 @@ Database::open can create/mutate files - use open_readonly for read-only operati
 
 ## 2026-01-23 manual [pitfall]
 Tooltips using innerHTML with user data (names, paths) are XSS vectors in Tauri webview - use textContent or DOM building instead
+
+## 2026-01-23 manual [pitfall]
+Percentage-based bounds padding produces degenerate results when span is 0 (single point/line) - enforce a minimum span before applying padding factor
