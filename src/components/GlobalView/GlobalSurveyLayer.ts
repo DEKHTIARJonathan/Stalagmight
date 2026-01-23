@@ -178,12 +178,13 @@ export default class GlobalSurveyLayer {
     // === VISUAL LAYERS ===
 
     // Shots layer (lines) - rendered first (below stations)
+    // Initial color is fallback gray; updateColorExpressions() sets per-system match expression
     this.map.addLayer({
       id: this.shotsLayerId,
       type: 'line',
       source: this.shotsSourceId,
       paint: {
-        'line-color': ['get', 'color'],
+        'line-color': '#888888', // Fallback, replaced by match expression on update()
         'line-width': [
           'case',
           ['boolean', ['get', 'isVirtual'], false],
@@ -200,13 +201,14 @@ export default class GlobalSurveyLayer {
     });
 
     // Stations layer (circles) - rendered second (above shots)
+    // Initial color is fallback gray; updateColorExpressions() sets per-system match expression
     this.map.addLayer({
       id: this.stationsLayerId,
       type: 'circle',
       source: this.stationsSourceId,
       paint: {
         'circle-radius': 4,
-        'circle-color': ['get', 'color'],
+        'circle-color': '#888888', // Fallback, replaced by match expression on update()
         'circle-stroke-width': 1,
         'circle-stroke-color': '#000000',
       },
@@ -310,7 +312,7 @@ export default class GlobalSurveyLayer {
       const color = generateSystemColor(system.metadata.file_path);
       this.systemColors.set(system.metadata.file_path, color);
 
-      // Build shot features
+      // Build shot features - no per-feature color, use match expression instead
       for (const shot of system.geometry.shots) {
         shotFeatures.push({
           type: 'Feature',
@@ -323,13 +325,12 @@ export default class GlobalSurveyLayer {
             name: system.metadata.name,
             totalLength: system.metadata.total_length,
             stationCount: system.metadata.station_count,
-            color,
             isVirtual: shot.is_virtual,
           },
         });
       }
 
-      // Extract and build station features
+      // Extract and build station features - no per-feature color
       const stations = extractStations(system.geometry.shots);
       for (const [lng, lat] of stations) {
         stationFeatures.push({
@@ -343,7 +344,6 @@ export default class GlobalSurveyLayer {
             name: system.metadata.name,
             totalLength: system.metadata.total_length,
             stationCount: system.metadata.station_count,
-            color,
           },
         });
       }
@@ -365,6 +365,40 @@ export default class GlobalSurveyLayer {
         features: stationFeatures,
       });
     }
+
+    // Update color expressions using match on systemId
+    this.updateColorExpressions();
+  }
+
+  /**
+   * Build and apply match expressions for per-system colors.
+   * Uses systemColors map to generate efficient match expressions.
+   */
+  private updateColorExpressions(): void {
+    if (this.systemColors.size === 0) return;
+
+    // Build match expression: ['match', ['get', 'systemId'], 'path1', 'color1', 'path2', 'color2', ..., fallback]
+    const matchArgs: (string | maplibregl.ExpressionSpecification)[] = [
+      'match',
+      ['get', 'systemId'],
+    ];
+
+    for (const [systemId, color] of this.systemColors) {
+      matchArgs.push(systemId, color);
+    }
+
+    // Fallback color for unknown systems
+    matchArgs.push('#888888');
+
+    const colorExpr = matchArgs as maplibregl.ExpressionSpecification;
+
+    // Apply to visual layers
+    if (this.map.getLayer(this.shotsLayerId)) {
+      this.map.setPaintProperty(this.shotsLayerId, 'line-color', colorExpr);
+    }
+    if (this.map.getLayer(this.stationsLayerId)) {
+      this.map.setPaintProperty(this.stationsLayerId, 'circle-color', colorExpr);
+    }
   }
 
   /**
@@ -378,14 +412,21 @@ export default class GlobalSurveyLayer {
 
   /**
    * Set filter to hide virtual shots (or show all).
+   * Applies to both visual and hitbox layers to prevent hidden shots from being clickable.
    */
   setShowVirtualShots(visible: boolean): void {
-    if (!this.map.getLayer(this.shotsLayerId)) return;
+    const filter: maplibregl.FilterSpecification | null = visible
+      ? null
+      : ['!=', ['get', 'isVirtual'], true];
 
-    if (visible) {
-      this.map.setFilter(this.shotsLayerId, null);
-    } else {
-      this.map.setFilter(this.shotsLayerId, ['!=', ['get', 'isVirtual'], true]);
+    // Apply filter to visual layer
+    if (this.map.getLayer(this.shotsLayerId)) {
+      this.map.setFilter(this.shotsLayerId, filter);
+    }
+
+    // Also apply to hitbox layer to prevent hidden shots from being clickable
+    if (this.map.getLayer(this.shotsHitboxLayerId)) {
+      this.map.setFilter(this.shotsHitboxLayerId, filter);
     }
   }
 
