@@ -80,6 +80,12 @@ interface GlobalViewStore {
   toggleSystemSelection: (filePath: string) => void;
 
   /**
+   * Set multiple systems as selected (replaces existing selection).
+   * Used for Ctrl+A select all.
+   */
+  setSelectedSystems: (filePaths: Set<string>) => void;
+
+  /**
    * Clear all selection.
    */
   clearSelection: () => void;
@@ -204,6 +210,10 @@ export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
       }
       return { selectedSystemIds: newSelection };
     });
+  },
+
+  setSelectedSystems: (filePaths: Set<string>) => {
+    set({ selectedSystemIds: new Set(filePaths) });
   },
 
   clearSelection: () => {

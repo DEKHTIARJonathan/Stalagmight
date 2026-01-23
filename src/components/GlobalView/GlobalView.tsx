@@ -192,17 +192,19 @@ export default function GlobalView() {
 
   // Store values in refs for keydown handler to avoid stale closures
   const multiSelectedIdsRef = useRef(multiSelectedIds);
+  const selectedProjectIdRef = useRef(selectedProjectId);
   const activeTabRef = useRef(activeTab);
   const recentProjectsRef = useRef(recentProjects);
   const loadingRef = useRef(loading);
   const contextMenuVisibleRef = useRef(contextMenu.visible);
   useEffect(() => {
     multiSelectedIdsRef.current = multiSelectedIds;
+    selectedProjectIdRef.current = selectedProjectId;
     activeTabRef.current = activeTab;
     recentProjectsRef.current = recentProjects;
     loadingRef.current = loading;
     contextMenuVisibleRef.current = contextMenu.visible;
-  }, [multiSelectedIds, activeTab, recentProjects, loading, contextMenu.visible]);
+  }, [multiSelectedIds, selectedProjectId, activeTab, recentProjects, loading, contextMenu.visible]);
 
   // Store callbacks in refs to avoid stale closures
   const handleProjectOpenRef = useRef(handleProjectOpen);
@@ -212,14 +214,24 @@ export default function GlobalView() {
     handleRemoveFromRecentRef.current = handleRemoveFromRecent;
   }, [handleProjectOpen, handleRemoveFromRecent]);
 
-  // Global keyboard shortcuts for GlobalView (single listener at app root level per convention)
+  // Store ref for setSelectedSystems to avoid stale closure
+  const setSelectedSystemsRef = useRef(useGlobalViewStore.getState().setSelectedSystems);
+  useEffect(() => {
+    // Subscribe to store changes to keep ref updated
+    const unsubscribe = useGlobalViewStore.subscribe((state) => {
+      setSelectedSystemsRef.current = state.setSelectedSystems;
+    });
+    return unsubscribe;
+  }, []);
+
+  // Global keyboard shortcuts for GlobalView (scoped to this view)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't handle if loading is active
       if (loadingRef.current.isLoading) return;
 
-      // Don't handle if context menu is visible (separate handler handles escape)
-      if (contextMenuVisibleRef.current && e.key === 'Escape') return;
+      // Don't handle if context menu is visible (block all shortcuts except Escape which is handled separately)
+      if (contextMenuVisibleRef.current) return;
 
       // Don't handle if focus is in an input element
       const activeElement = document.activeElement;
@@ -235,28 +247,27 @@ export default function GlobalView() {
 
       switch (e.key) {
         case 'Enter': {
-          // Open selected project(s)
-          const selected = multiSelectedIdsRef.current;
-          if (selected.size > 0) {
+          // Open the primary selected project (selectedProjectId takes precedence)
+          const primarySelection = selectedProjectIdRef.current;
+          if (primarySelection) {
             e.preventDefault();
-            // Open first selected project (loadProject handles view switch)
-            for (const filePath of selected) {
-              handleProjectOpenRef.current(filePath);
-              break; // Only open first one since loadProject switches views
-            }
+            handleProjectOpenRef.current(primarySelection);
           }
           break;
         }
 
         case 'Delete':
         case 'Backspace': {
-          // Remove selected from recent
-          const selected = multiSelectedIdsRef.current;
-          if (selected.size > 0) {
+          // Remove selected from recent (batch to avoid multiple refreshes)
+          const selected = Array.from(multiSelectedIdsRef.current);
+          if (selected.length > 0) {
             e.preventDefault();
-            for (const filePath of selected) {
-              handleRemoveFromRecentRef.current(filePath);
-            }
+            // Remove sequentially with a single async function
+            (async () => {
+              for (const filePath of selected) {
+                await handleRemoveFromRecentRef.current(filePath);
+              }
+            })();
           }
           break;
         }
@@ -279,6 +290,8 @@ export default function GlobalView() {
               // Select all GPS-positioned systems
               const allIds = new Set(gpsProjects.map((p) => p.file_path));
               setMultiSelectedIds(allIds);
+              // Sync to store for map layer highlighting
+              setSelectedSystemsRef.current(allIds);
               const firstGps = gpsProjects[0];
               if (firstGps) {
                 setSelectedProjectId(firstGps.file_path);
@@ -307,8 +320,6 @@ export default function GlobalView() {
           // Only navigate if there's a selection
           const currentSelection = multiSelectedIdsRef.current;
           if (currentSelection.size === 0) break;
-
-          e.preventDefault();
 
           // Get system centroids from map
           const centroids = mapRef.current?.getSystemCentroids();
@@ -340,9 +351,9 @@ export default function GlobalView() {
           const direction = directionVectors[e.key];
           if (!direction) break;
 
-          // Find nearest system in the specified direction
+          // Find nearest system in the specified direction using Euclidean distance
           let bestCandidate: string | null = null;
-          let bestScore = Infinity;
+          let bestDistance = Infinity;
 
           for (const [filePath, center] of centroids) {
             // Skip systems already in selection
@@ -352,30 +363,23 @@ export default function GlobalView() {
             const dx = center[0] - currentCentroid[0];
             const dy = center[1] - currentCentroid[1];
 
-            // Check if this system is in the specified direction
+            // Check if this system is in the specified direction (half-plane filter)
             // Dot product with direction vector must be positive
             const dotProduct = dx * direction[0] + dy * direction[1];
             if (dotProduct <= 0) continue; // Not in the right direction
 
-            // Score: distance (prefer closer systems)
+            // Use Euclidean distance as the score (per spec)
             const distance = Math.sqrt(dx * dx + dy * dy);
 
-            // Penalize systems that are far off-axis
-            // Use angle-weighted distance: prefer systems more directly in the direction
-            const magnitude = Math.sqrt(dx * dx + dy * dy);
-            if (magnitude === 0) continue;
-            const cosAngle = dotProduct / magnitude;
-            // Score favors closer systems and those more directly in the direction
-            const score = distance / (cosAngle * cosAngle);
-
-            if (score < bestScore) {
-              bestScore = score;
+            if (distance < bestDistance) {
+              bestDistance = distance;
               bestCandidate = filePath;
             }
           }
 
-          // If found, select that system
+          // If found, select that system and preventDefault
           if (bestCandidate) {
+            e.preventDefault();
             setSelectedProjectId(bestCandidate);
             setMultiSelectedIds(new Set([bestCandidate]));
             selectSystem(bestCandidate);
