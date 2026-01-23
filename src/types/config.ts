@@ -24,6 +24,7 @@ export interface Config {
   panels: PanelsConfig;
   cache: CacheConfig;
   debug: DebugConfig;
+  global_view: GlobalViewConfig;
 }
 
 export interface GeneralConfig {
@@ -229,6 +230,16 @@ export interface CacheConfig {
   tile_ttl_days: number;
 }
 
+/** Global view (multi-system map) configuration */
+export interface GlobalViewConfig {
+  /** FPS threshold below which auto-throttle activates (default: 30) */
+  fps_threshold: number;
+  /** GeoJSON simplification tolerance at normal FPS (default: 0.5) */
+  tolerance: number;
+  /** GeoJSON simplification tolerance when throttled (default: 1.0) */
+  throttle_tolerance: number;
+}
+
 export const defaultConfig: Config = {
   general: {
     auto_save: true,
@@ -375,5 +386,10 @@ export const defaultConfig: Config = {
       show_hitboxes: false,
       log_hit_detection: false,
     },
+  },
+  global_view: {
+    fps_threshold: 30,
+    tolerance: 0.5,
+    throttle_tolerance: 1.0,
   },
 };
