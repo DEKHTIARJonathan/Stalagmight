@@ -9,6 +9,63 @@ import { ViewModeToggle, useViewMode, type ViewMode } from './ViewModeToggle';
 import { useFpsMonitor } from '../../hooks/useFpsMonitor';
 import { defaultConfig } from '../../types/config';
 
+/** Local storage key for persisting map position/zoom. */
+const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
+
+/** Shape of persisted map state. */
+interface PersistedMapState {
+  center: [number, number]; // [lng, lat]
+  zoom: number;
+}
+
+/**
+ * Load persisted map state from local storage.
+ * Returns null if no valid state is found.
+ */
+function loadPersistedMapState(): PersistedMapState | null {
+  try {
+    const stored = localStorage.getItem(MAP_STATE_STORAGE_KEY);
+    if (!stored) return null;
+
+    const parsed = JSON.parse(stored);
+    // Validate structure and types
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      Array.isArray(parsed.center) &&
+      parsed.center.length === 2 &&
+      typeof parsed.center[0] === 'number' &&
+      typeof parsed.center[1] === 'number' &&
+      typeof parsed.zoom === 'number' &&
+      Number.isFinite(parsed.center[0]) &&
+      Number.isFinite(parsed.center[1]) &&
+      Number.isFinite(parsed.zoom) &&
+      parsed.zoom >= 0 &&
+      parsed.zoom <= 22
+    ) {
+      return {
+        center: [parsed.center[0], parsed.center[1]],
+        zoom: parsed.zoom,
+      };
+    }
+  } catch {
+    // Invalid JSON or other error - ignore
+  }
+  return null;
+}
+
+/**
+ * Save map state to local storage.
+ */
+function saveMapState(center: [number, number], zoom: number): void {
+  try {
+    const state: PersistedMapState = { center, zoom };
+    localStorage.setItem(MAP_STATE_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Local storage may be full or disabled - ignore
+  }
+}
+
 /**
  * Handle exposed by GlobalViewMap for parent components.
  */
@@ -284,8 +341,16 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     if (!mapContainer.current || map.current) return;
 
     const bounds = calculateBounds();
-    const center = bounds.getCenter();
+    const defaultCenter = bounds.getCenter();
     const hardBounds = calculateHardBounds();
+
+    // Try to restore persisted map state
+    const persistedState = loadPersistedMapState();
+    // Use persisted state if available, otherwise use calculated bounds center
+    const initialCenter: [number, number] = persistedState
+      ? persistedState.center
+      : [defaultCenter.lng, defaultCenter.lat];
+    const initialZoom = persistedState?.zoom ?? 10;
 
     // Build map options - only include maxBounds if we have GPS projects
     const mapOptions: maplibregl.MapOptions = {
@@ -311,8 +376,8 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           },
         ],
       },
-      center: [center.lng, center.lat],
-      zoom: 10,
+      center: initialCenter,
+      zoom: initialZoom,
     };
 
     // Hard bounds (50% padding) - user cannot pan beyond this
@@ -343,8 +408,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     );
 
     map.current.on('load', () => {
-      // Fit to bounds after load
-      if (gpsProjects.length > 0 && map.current) {
+      // Fit to bounds after load only if no persisted state
+      // (persisted state is already applied via initial center/zoom)
+      if (gpsProjects.length > 0 && map.current && !persistedState) {
         map.current.fitBounds(bounds, { padding: 50, maxZoom: 15 });
       }
 
@@ -467,12 +533,23 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
     map.current.on('moveend', handleMoveEndRubberBand);
 
+    // Persist map position/zoom to local storage on any move
+    // This runs for all moves (programmatic and user-initiated)
+    const handleMoveEndPersist = () => {
+      if (!map.current) return;
+      const center = map.current.getCenter();
+      const zoom = map.current.getZoom();
+      saveMapState([center.lng, center.lat], zoom);
+    };
+    map.current.on('moveend', handleMoveEndPersist);
+
     return () => {
       // Clean up rubber-band handler and any pending idle listener
       if (rubberBandIdleHandler && map.current) {
         map.current.off('idle', rubberBandIdleHandler);
       }
       map.current?.off('moveend', handleMoveEndRubberBand);
+      map.current?.off('moveend', handleMoveEndPersist);
       // Clean up survey layer
       surveyLayerRef.current?.destroy();
       surveyLayerRef.current = null;
