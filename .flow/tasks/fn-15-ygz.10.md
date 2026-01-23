@@ -29,9 +29,14 @@ Update MetadataPanel to show aggregate statistics when multiple systems are sele
 - [ ] `formatGps` uses null check only (no sentinel check)
 
 ## Done summary
-TBD
-
+## Summary
+Updated MetadataPanel to show aggregate statistics when multiple systems are selected:
+- Added `selectedProjects` prop to MetadataPanel for multi-selection support
+- When multiple systems selected: shows count header ("N systems selected"), combined length, total sections, and list of selected system names
+- Single selection behavior unchanged
+- Fixed GPS filter: removed sentinel check `(center[0] === 0 && center[1] === 0)` - now uses null check only since backend uses null for missing GPS
+- Updated GlobalView to compute and pass `selectedProjects` array to MetadataPanel
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 157873f feat(globalview): add multi-selection aggregate stats to MetadataPanel
+- Tests: All 471 Playwright tests pass, all 80 Rust tests pass
 - PRs:

@@ -261,6 +261,11 @@ export default function GlobalView() {
     return recentProjects.find(p => p.file_path === selectedProjectId) || null;
   }, [selectedProjectId, recentProjects]);
 
+  // Get selected projects array for multi-selection support
+  const selectedProjects = useMemo(() => {
+    return recentProjects.filter(p => multiSelectedIds.has(p.file_path));
+  }, [recentProjects, multiSelectedIds]);
+
   // Get selected projects count
   const selectedCount = multiSelectedIds.size;
 
@@ -442,6 +447,7 @@ export default function GlobalView() {
         {recentProjects.length > 0 && (
           <MetadataPanel
             project={selectedProject}
+            selectedProjects={selectedProjects}
             onOpenProject={handleProjectOpen}
             onRemoveFromRecent={handleRemoveFromRecent}
             collapsed={metadataPanelCollapsed}

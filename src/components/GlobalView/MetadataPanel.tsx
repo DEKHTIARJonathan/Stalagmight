@@ -5,8 +5,10 @@ import { ResizablePanel } from '../common/Panel';
 import { Button } from '../common/Button';
 
 interface MetadataPanelProps {
-  /** The selected project metadata to display */
-  project: ProjectMetadata | null;
+  /** The selected project metadata to display (legacy single-selection) */
+  project?: ProjectMetadata | null;
+  /** Array of selected projects for multi-selection support */
+  selectedProjects?: ProjectMetadata[];
   /** Callback when the user clicks Open Project */
   onOpenProject: (filePath: string) => void;
   /** Callback when the user clicks Delete (remove from recent) */
@@ -23,12 +25,18 @@ interface MetadataPanelProps {
  */
 const MetadataPanel: FC<MetadataPanelProps> = ({
   project,
+  selectedProjects,
   onOpenProject,
   onRemoveFromRecent,
   collapsed = false,
   onCollapseChange,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(collapsed);
+
+  // Normalize selection: prefer selectedProjects if non-empty, fallback to project
+  const projects = selectedProjects?.length ? selectedProjects : (project ? [project] : []);
+  const isMultiSelection = projects.length > 1;
+  const singleProject = projects.length === 1 ? projects[0] : null;
 
   const handleCollapseToggle = useCallback(() => {
     const newState = !isCollapsed;
@@ -37,34 +45,34 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
   }, [isCollapsed, onCollapseChange]);
 
   const handleShowInFolder = useCallback(async () => {
-    if (!project?.file_path) return;
+    if (!singleProject?.file_path) return;
     try {
       // Use Tauri shell plugin to reveal in file explorer
       // Note: This command opens the parent folder with the file selected
-      await invoke('plugin:opener|reveal_item_in_dir', { path: project.file_path });
+      await invoke('plugin:opener|reveal_item_in_dir', { path: singleProject.file_path });
     } catch (error) {
       console.error('Failed to show in folder:', error);
       // Fallback: try to open the directory
       try {
-        const dirPath = project.file_path.substring(0, project.file_path.lastIndexOf('/'));
+        const dirPath = singleProject.file_path.substring(0, singleProject.file_path.lastIndexOf('/'));
         await invoke('plugin:opener|open_path', { path: dirPath });
       } catch (fallbackError) {
         console.error('Fallback also failed:', fallbackError);
       }
     }
-  }, [project?.file_path]);
+  }, [singleProject?.file_path]);
 
   const handleOpenProject = useCallback(() => {
-    if (project?.file_path) {
-      onOpenProject(project.file_path);
+    if (singleProject?.file_path) {
+      onOpenProject(singleProject.file_path);
     }
-  }, [project?.file_path, onOpenProject]);
+  }, [singleProject?.file_path, onOpenProject]);
 
   const handleRemoveFromRecent = useCallback(() => {
-    if (project?.file_path) {
-      onRemoveFromRecent(project.file_path);
+    if (singleProject?.file_path) {
+      onRemoveFromRecent(singleProject.file_path);
     }
-  }, [project?.file_path, onRemoveFromRecent]);
+  }, [singleProject?.file_path, onRemoveFromRecent]);
 
   // Format date for display
   const formatDate = (isoDate: string | null | undefined): string => {
@@ -85,7 +93,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
 
   // Format GPS coordinates for display
   const formatGps = (center: [number, number] | null): string => {
-    if (!center || (center[0] === 0 && center[1] === 0)) return 'Not set';
+    if (!center) return 'Not set';
     const [lng, lat] = center;
     const latDir = lat >= 0 ? 'N' : 'S';
     const lngDir = lng >= 0 ? 'E' : 'W';
@@ -177,28 +185,70 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
         </div>
 
         {/* Content */}
-        {project ? (
+        {isMultiSelection ? (
+          <div className="flex-1 overflow-auto" data-testid="metadata-multi-selection">
+            {/* Multi-selection aggregate stats */}
+            <div className="p-3 space-y-3" aria-labelledby="metadata-panel-title">
+              {/* Selection count header */}
+              <div className="text-lg font-semibold text-text-primary" data-testid="metadata-multi-count">
+                {projects.length} systems selected
+              </div>
+
+              {/* Aggregate stats */}
+              <MetadataField
+                label="Combined Length"
+                value={formatLength(projects.reduce((sum, p) => sum + (p.total_length ?? 0), 0))}
+                testId="metadata-multi-length"
+              />
+
+              <MetadataField
+                label="Total Stations"
+                value={String(projects.reduce((sum, p) => sum + (p.station_count ?? 0), 0))}
+                testId="metadata-multi-stations"
+              />
+
+              {/* List of selected systems */}
+              <div className="pt-2 border-t border-border">
+                <dt className="text-xs text-text-secondary font-medium mb-1">Selected Systems</dt>
+                <dd className="text-sm text-text-primary space-y-1">
+                  {projects.map((p) => (
+                    <div key={p.file_path} className="truncate" title={p.name}>
+                      {p.name}
+                    </div>
+                  ))}
+                </dd>
+              </div>
+            </div>
+
+            {/* Multi-selection actions */}
+            <div className="p-3 border-t border-border">
+              <p className="text-xs text-text-secondary text-center">
+                Right-click in the list view to merge selected systems
+              </p>
+            </div>
+          </div>
+        ) : singleProject ? (
           <div className="flex-1 overflow-auto">
             {/* Metadata fields */}
             <div className="p-3 space-y-3" aria-labelledby="metadata-panel-title">
               {/* Project Name */}
               <MetadataField
                 label="Name"
-                value={project.name}
+                value={singleProject.name}
                 testId="metadata-name"
               />
 
               {/* Location */}
               <MetadataField
                 label="Location"
-                value={project.location || 'Not specified'}
+                value={singleProject.location || 'Not specified'}
                 testId="metadata-location"
               />
 
               {/* File Path */}
               <MetadataField
                 label="File"
-                value={project.file_path}
+                value={singleProject.file_path}
                 testId="metadata-file-path"
                 truncate
               />
@@ -206,39 +256,39 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
               {/* Modified Date */}
               <MetadataField
                 label="Last Modified"
-                value={formatDate(project.modified_at)}
+                value={formatDate(singleProject.modified_at)}
                 testId="metadata-modified"
               />
 
               {/* Section Count */}
               <MetadataField
                 label="Sections"
-                value={String(project.section_count)}
+                value={String(singleProject.section_count)}
                 testId="metadata-sections"
               />
 
               {/* Total Length */}
               <MetadataField
                 label="Total Length"
-                value={formatLength(project.total_length)}
+                value={formatLength(singleProject.total_length)}
                 testId="metadata-length"
               />
 
               {/* GPS Center */}
               <MetadataField
                 label="GPS Center"
-                value={formatGps(project.gps_center)}
+                value={formatGps(singleProject.gps_center)}
                 testId="metadata-gps"
               />
 
               {/* GPS Bounds (if available) */}
-              {project.gps_bounds && (
+              {singleProject.gps_bounds && (
                 <div className="text-xs text-text-secondary">
                   <span className="font-medium">Bounds:</span>{' '}
-                  N{project.gps_bounds.north.toFixed(4)}{' '}
-                  S{project.gps_bounds.south.toFixed(4)}{' '}
-                  E{project.gps_bounds.east.toFixed(4)}{' '}
-                  W{project.gps_bounds.west.toFixed(4)}
+                  N{singleProject.gps_bounds.north.toFixed(4)}{' '}
+                  S{singleProject.gps_bounds.south.toFixed(4)}{' '}
+                  E{singleProject.gps_bounds.east.toFixed(4)}{' '}
+                  W{singleProject.gps_bounds.west.toFixed(4)}
                 </div>
               )}
             </div>
@@ -249,7 +299,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
                 onClick={handleOpenProject}
                 className="w-full"
                 data-testid="metadata-open-button"
-                aria-label={`Open project ${project.name}`}
+                aria-label={`Open project ${singleProject.name}`}
               >
                 Open Project
               </Button>
@@ -258,7 +308,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
                 variant="secondary"
                 className="w-full"
                 data-testid="metadata-show-folder-button"
-                aria-label={`Show ${project.name} in file explorer`}
+                aria-label={`Show ${singleProject.name} in file explorer`}
               >
                 Show in Folder
               </Button>
@@ -267,7 +317,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
                 variant="danger"
                 className="w-full"
                 data-testid="metadata-remove-button"
-                aria-label={`Remove ${project.name} from recent projects`}
+                aria-label={`Remove ${singleProject.name} from recent projects`}
               >
                 Remove from Recent
               </Button>
