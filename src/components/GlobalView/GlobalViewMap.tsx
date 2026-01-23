@@ -28,7 +28,8 @@ function loadPersistedMapState(): PersistedMapState | null {
     if (!stored) return null;
 
     const parsed = JSON.parse(stored);
-    // Validate structure and types
+    // Validate structure, types, and coordinate ranges
+    // MapLibre throws on latitude outside [-90, 90]
     if (
       typeof parsed === 'object' &&
       parsed !== null &&
@@ -40,6 +41,10 @@ function loadPersistedMapState(): PersistedMapState | null {
       Number.isFinite(parsed.center[0]) &&
       Number.isFinite(parsed.center[1]) &&
       Number.isFinite(parsed.zoom) &&
+      parsed.center[0] >= -180 &&
+      parsed.center[0] <= 180 &&
+      parsed.center[1] >= -90 &&
+      parsed.center[1] <= 90 &&
       parsed.zoom >= 0 &&
       parsed.zoom <= 22
     ) {
@@ -533,10 +538,14 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
     map.current.on('moveend', handleMoveEndRubberBand);
 
-    // Persist map position/zoom to local storage on any move
-    // This runs for all moves (programmatic and user-initiated)
-    const handleMoveEndPersist = () => {
+    // Persist map position/zoom to local storage on user-initiated moves only
+    // Programmatic moves (fitBounds, flyTo, easeTo from rubber-band) should not persist
+    // This ensures "Fit All" button overrides persisted position temporarily per spec
+    const handleMoveEndPersist = (e: maplibregl.MapLibreEvent & { originalEvent?: Event }) => {
       if (!map.current) return;
+      // Only persist for user-initiated moves (drag, wheel zoom, etc.)
+      // originalEvent is present when the move was user-initiated
+      if (!e.originalEvent) return;
       const center = map.current.getCenter();
       const zoom = map.current.getZoom();
       saveMapState([center.lng, center.lat], zoom);
