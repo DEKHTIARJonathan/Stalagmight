@@ -160,19 +160,28 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   }, [gpsProjects]);
 
   // Calculate bounds with padding factor
+  // MIN_SPAN_DEG ensures single-point or line cases get reasonable bounds (~1km)
+  const MIN_SPAN_DEG = 0.01;
   const addPaddingToBounds = useCallback((bounds: maplibregl.LngLatBounds, paddingFactor: number): maplibregl.LngLatBounds => {
     const sw = bounds.getSouthWest();
     const ne = bounds.getNorthEast();
-    const lngSpan = ne.lng - sw.lng;
-    const latSpan = ne.lat - sw.lat;
+    // Enforce minimum span to avoid degenerate bounds for single-point/line cases
+    const lngSpan = Math.max(ne.lng - sw.lng, MIN_SPAN_DEG);
+    const latSpan = Math.max(ne.lat - sw.lat, MIN_SPAN_DEG);
 
     // Add padding as percentage of span
     const lngPadding = lngSpan * paddingFactor;
     const latPadding = latSpan * paddingFactor;
 
+    // For single-point case, center the bounds on the point
+    const centerLng = (sw.lng + ne.lng) / 2;
+    const centerLat = (sw.lat + ne.lat) / 2;
+    const halfLngSpan = lngSpan / 2 + lngPadding;
+    const halfLatSpan = latSpan / 2 + latPadding;
+
     return new maplibregl.LngLatBounds(
-      [sw.lng - lngPadding, Math.max(-85, sw.lat - latPadding)],
-      [ne.lng + lngPadding, Math.min(85, ne.lat + latPadding)]
+      [centerLng - halfLngSpan, Math.max(-85, centerLat - halfLatSpan)],
+      [centerLng + halfLngSpan, Math.min(85, centerLat + halfLatSpan)]
     );
   }, []);
 
@@ -208,7 +217,15 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   // Soft bounds (20% padding) - animate back if user pans beyond this
   const softBoundsRef = useRef<maplibregl.LngLatBounds | null>(null);
 
-  // Update bounds when projects change
+  // Calculate hard bounds (50% padding) for maxBounds constraint
+  const calculateHardBounds = useCallback((): maplibregl.LngLatBounds | null => {
+    const rawBounds = calculateRawBounds();
+    if (!rawBounds) return null;
+    return addPaddingToBounds(rawBounds, 0.5);
+  }, [calculateRawBounds, addPaddingToBounds]);
+
+  // Update soft and hard bounds when projects change
+  // This ensures newly added/removed systems are reflected in pan constraints
   useEffect(() => {
     const rawBounds = calculateRawBounds();
     if (rawBounds) {
@@ -216,14 +233,13 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     } else {
       softBoundsRef.current = null;
     }
-  }, [calculateRawBounds, addPaddingToBounds]);
 
-  // Calculate hard bounds (50% padding) for maxBounds constraint
-  const calculateHardBounds = useCallback((): maplibregl.LngLatBounds | null => {
-    const rawBounds = calculateRawBounds();
-    if (!rawBounds) return null;
-    return addPaddingToBounds(rawBounds, 0.5);
-  }, [calculateRawBounds, addPaddingToBounds]);
+    // Update map's maxBounds if map is initialized
+    if (map.current) {
+      const hardBounds = calculateHardBounds();
+      map.current.setMaxBounds(hardBounds ?? undefined);
+    }
+  }, [calculateRawBounds, addPaddingToBounds, calculateHardBounds]);
 
   // Initialize map
   useEffect(() => {
@@ -347,6 +363,8 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     // Rubber-band effect: when user releases pan outside soft bounds, animate back
     // This creates a natural "spring" feel without requiring internal MapLibre APIs
     let isRubberBanding = false;
+    let rubberBandIdleHandler: (() => void) | null = null;
+
     const handleMoveEndRubberBand = (e: maplibregl.MapLibreEvent & { originalEvent?: Event }) => {
       if (!map.current || !softBoundsRef.current) return;
 
@@ -395,17 +413,23 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           easing: (t) => 1 - Math.pow(1 - t, 3), // Ease out cubic
         });
 
-        // Clear flag after animation completes
-        // Use slightly longer timeout than animation duration to be safe
-        setTimeout(() => {
+        // Clear flag when animation completes using one-shot idle event
+        // This is more reliable than setTimeout as it handles interrupted animations
+        rubberBandIdleHandler = () => {
           isRubberBanding = false;
-        }, 350);
+          rubberBandIdleHandler = null;
+        };
+        map.current.once('idle', rubberBandIdleHandler);
       }
     };
 
     map.current.on('moveend', handleMoveEndRubberBand);
 
     return () => {
+      // Clean up rubber-band handler and any pending idle listener
+      if (rubberBandIdleHandler && map.current) {
+        map.current.off('idle', rubberBandIdleHandler);
+      }
       map.current?.off('moveend', handleMoveEndRubberBand);
       // Clean up survey layer
       surveyLayerRef.current?.destroy();
