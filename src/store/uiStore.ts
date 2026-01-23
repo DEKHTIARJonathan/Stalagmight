@@ -149,6 +149,9 @@ interface UIStore {
   requestZoomToSection: SectionId | null;
   triggerZoomToSection: (sectionId: SectionId) => void;
   clearZoomToSectionRequest: () => void;
+  requestPanToShot: { sectionId: SectionId; shotId: ShotId } | null;
+  triggerPanToShot: (sectionId: SectionId, shotId: ShotId) => void;
+  clearPanToShotRequest: () => void;
 
   // Display toggles
   showStations: boolean;
@@ -408,6 +411,9 @@ export const useUIStore = create<UIStore>((set) => ({
   requestZoomToSection: null,
   triggerZoomToSection: (sectionId: SectionId) => set({ requestZoomToSection: sectionId }),
   clearZoomToSectionRequest: () => set({ requestZoomToSection: null }),
+  requestPanToShot: null,
+  triggerPanToShot: (sectionId: SectionId, shotId: ShotId) => set({ requestPanToShot: { sectionId, shotId } }),
+  clearPanToShotRequest: () => set({ requestPanToShot: null }),
 
   // Display toggles (initial values from DISPLAY_DEFAULTS - single source of truth)
   showStations: DISPLAY_DEFAULTS.showStations,

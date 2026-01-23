@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { type Section, type Shot } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -18,7 +18,16 @@ export default function DataTable({ sections }: DataTableProps) {
   );
 
   const { updateShot, warnings } = useProjectStore();
-  const { selection, setSelection, dataTableOpen, toggleDataTable, dataTableHeight } = useUIStore();
+  const {
+    selection,
+    setSelection,
+    setHoveredShot,
+    hoveredShot,
+    triggerPanToShot,
+    dataTableOpen,
+    toggleDataTable,
+    dataTableHeight,
+  } = useUIStore();
 
   // Create a map of shot warnings for quick lookup
   const shotWarningsMap = useMemo(() => {
@@ -66,6 +75,13 @@ export default function DataTable({ sections }: DataTableProps) {
   ) => {
     if (!selectedSection) return;
 
+    // When entering cell edit mode, set selection to this shot
+    setSelection({
+      type: 'shot',
+      sectionId: selectedSection.id,
+      shotId: shot.id,
+    });
+
     // Handle virtual azimuth column with delta-offset behavior
     if (key === '_azimuth_avg') {
       // Guard against invalid input - must be a finite number
@@ -88,16 +104,41 @@ export default function DataTable({ sections }: DataTableProps) {
     await updateShot(selectedSection.id, shot.id, { [key]: value });
   };
 
-  // Reserved for future use when row selection is enabled
-  void function handleRowClick(shot: Shot) {
-    if (selectedSection) {
-      setSelection({
-        type: 'shot',
-        sectionId: selectedSection.id,
-        shotId: shot.id,
-      });
-    }
-  };
+  // Row click selects the shot
+  const handleRowClick = useCallback(
+    (shot: Shot, _index: number) => {
+      if (selectedSection) {
+        setSelection({
+          type: 'shot',
+          sectionId: selectedSection.id,
+          shotId: shot.id,
+        });
+      }
+    },
+    [selectedSection, setSelection]
+  );
+
+  // Row double-click pans map to shot midpoint
+  const handleRowDoubleClick = useCallback(
+    (shot: Shot, _index: number) => {
+      if (selectedSection) {
+        triggerPanToShot(selectedSection.id, shot.id);
+      }
+    },
+    [selectedSection, triggerPanToShot]
+  );
+
+  // Row hover highlights shot on map
+  const handleRowHover = useCallback(
+    (shot: Shot | null, _index: number | null) => {
+      if (shot && selectedSection) {
+        setHoveredShot({ sectionId: selectedSection.id, shotId: shot.id });
+      } else {
+        setHoveredShot(null);
+      }
+    },
+    [selectedSection, setHoveredShot]
+  );
 
   const columns = [
     {
@@ -229,6 +270,14 @@ export default function DataTable({ sections }: DataTableProps) {
                   ? selection.shotId
                   : null
               }
+              hoveredKey={
+                hoveredShot?.sectionId === selectedSectionId
+                  ? hoveredShot.shotId
+                  : null
+              }
+              onRowClick={handleRowClick}
+              onRowDoubleClick={handleRowDoubleClick}
+              onRowHover={handleRowHover}
               emptyMessage="No shots in this section"
             />
           ) : (
