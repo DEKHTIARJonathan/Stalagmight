@@ -252,8 +252,8 @@ describe('Export Dialog Accessibility', () => {
         { timeout: 2000 }
       );
 
-      // Get all option buttons in the dropdown
-      const options = await select.$$('button:not([aria-haspopup])');
+      // Get all options in the dropdown (Select uses div[role="option"])
+      const options = await select.$$('[role="option"]');
       expect(options.length).toBeGreaterThanOrEqual(5); // thermal, ocean, terrain, grayscale, accessible
 
       // Check that options have descriptive text (including parenthetical descriptions)
@@ -487,8 +487,8 @@ describe('Export Dialog Accessibility', () => {
         { timeout: 2000 }
       );
 
-      // Get option texts
-      const options = await resolutionSelect.$$('button:not([aria-haspopup])');
+      // Get option texts (Select uses div[role="option"])
+      const options = await resolutionSelect.$$('[role="option"]');
       const optionTexts: string[] = [];
       for (const opt of options) {
         optionTexts.push(await opt.getText());

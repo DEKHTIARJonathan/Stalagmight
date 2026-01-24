@@ -274,8 +274,11 @@ export async function resetAppState(): Promise<void> {
  * Wait for the map to be loaded and ready for interaction.
  */
 export async function waitForMapReady(): Promise<void> {
+  // Longer timeout for parallel execution where resource contention may slow startup
+  const mapTimeout = 30000;
+
   const mapCanvas = await $('[data-testid="map-canvas"]');
-  await mapCanvas.waitForExist({ timeout: 15000 });
+  await mapCanvas.waitForExist({ timeout: mapTimeout });
 
   await browser.waitUntil(
     async () => {
@@ -292,8 +295,8 @@ export async function waitForMapReady(): Promise<void> {
       return loaded;
     },
     {
-      timeout: 15000,
-      timeoutMsg: 'Map did not load within 15 seconds',
+      timeout: mapTimeout,
+      timeoutMsg: `Map did not load within ${mapTimeout / 1000} seconds`,
     }
   );
 }

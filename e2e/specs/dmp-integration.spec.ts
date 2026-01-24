@@ -64,9 +64,9 @@ describe('DMP Integration', () => {
     const selectionDialog = await $('[data-testid="dmp-selection-dialog"]');
     await expect(selectionDialog).toBeDisplayed();
 
-    // Verify version is displayed
+    // Verify version is displayed (UI shows format like "(v2)")
     const dialogText = await selectionDialog.getText();
-    expect(dialogText.toLowerCase()).toMatch(/version:?\s*2/);
+    expect(dialogText.toLowerCase()).toMatch(/\(v2\)/);
 
     // Click Continue to proceed to Step 2
     const continueBtn = await selectionDialog.$('[data-testid="continue-button"]');
@@ -153,9 +153,9 @@ describe('DMP Integration', () => {
     const selectionDialog = await $('[data-testid="dmp-selection-dialog"]');
     await expect(selectionDialog).toBeDisplayed();
 
-    // Verify version 5 is shown
+    // Verify version 5 is shown (UI shows format like "(v5)")
     const dialogText = await selectionDialog.getText();
-    expect(dialogText.toLowerCase()).toMatch(/version:?\s*5/);
+    expect(dialogText.toLowerCase()).toMatch(/\(v5\)/);
 
     // Click Continue to proceed to Step 2
     const continueBtn = await selectionDialog.$('[data-testid="continue-button"]');
@@ -467,9 +467,9 @@ describe('DMP Integration', () => {
     const selectionDialog = await $('[data-testid="dmp-selection-dialog"]');
     await expect(selectionDialog).toBeDisplayed();
 
-    // Verify version 5 (buggy EOS is a v5 issue)
+    // Verify version 5 (buggy EOS is a v5 issue, UI shows format like "(v5)")
     const dialogText = await selectionDialog.getText();
-    expect(dialogText.toLowerCase()).toMatch(/version:?\s*5/);
+    expect(dialogText.toLowerCase()).toMatch(/\(v5\)/);
 
     // Verify section rows exist (proves data was parsed)
     const sectionRows = await selectionDialog.$$('[data-testid^="section-row-"]');

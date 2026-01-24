@@ -138,8 +138,8 @@ fn test_get_config_defaults_general_auto_save() {
 
 #[test]
 fn test_get_config_defaults_panels() {
-    let app = app_with_state();
-    let cfg = config::get_config(state(&app));
+    // Test the actual defaults, not user config which may differ
+    let cfg = crate::config::Config::default();
     assert_eq!(cfg.panels.sections_panel_width, 250);
     assert_eq!(cfg.panels.detail_panel_width, 300);
     assert_eq!(cfg.panels.data_table_height, 200);
