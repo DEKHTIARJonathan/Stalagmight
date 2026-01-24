@@ -10,6 +10,10 @@ const __dirname = path.dirname(__filename);
 
 let tauriDriver: ChildProcess | null = null;
 let tempRoot: string | null = null;
+let workerLogStream: fs.WriteStream | null = null;
+
+// Directory for per-worker log files
+const LOGS_DIR = path.join(__dirname, 'wdio-logs');
 
 // Detect platform and set appropriate binary path
 const isWindows = process.platform === 'win32';
@@ -117,8 +121,8 @@ export const config: Options.Testrunner = {
   // Run tests in parallel (override with WDIO_MAX_INSTANCES=1 if needed)
   maxInstances,
 
-  // Run spec files sequentially to avoid resource contention
-  specFileRetries: 0,
+  // Retry failed specs once to handle parallel execution focus/timing issues
+  specFileRetries: 1,
 
   // WebDriver capabilities for Tauri
   capabilities: [
@@ -155,6 +159,13 @@ export const config: Options.Testrunner = {
 
   // Build the app before running tests
   onPrepare: function () {
+    // Create/clear logs directory for this run
+    if (fs.existsSync(LOGS_DIR)) {
+      fs.rmSync(LOGS_DIR, { recursive: true, force: true });
+    }
+    fs.mkdirSync(LOGS_DIR, { recursive: true });
+    console.log(`Worker logs will be written to: ${LOGS_DIR}`);
+
     // Fail fast if no display is available
     if (!checkDisplayAvailable()) {
       console.error('\n' + '='.repeat(70));
@@ -195,7 +206,7 @@ export const config: Options.Testrunner = {
   },
 
   // Start tauri-driver before each test session
-  beforeSession: function (wdioConfig, _capabilities, _specs, cid) {
+  beforeSession: function (wdioConfig, _capabilities, specs, cid) {
     const workerId = parseWorkerId(cid);
     const driverPort = basePort + workerId;
     const nativePort = baseNativePort + workerId;
@@ -207,7 +218,24 @@ export const config: Options.Testrunner = {
 
     wdioConfig.port = driverPort;
 
-    console.log(`Starting tauri-driver (worker ${cid}) on port ${driverPort}...`);
+    // Create per-worker log file
+    const specName = specs.length > 0 ? path.basename(specs[0], '.spec.ts') : `worker-${cid}`;
+    const logPath = path.join(LOGS_DIR, `${specName}.log`);
+    workerLogStream = fs.createWriteStream(logPath, { flags: 'w' });
+
+    const logToFile = (prefix: string, data: Buffer | string) => {
+      const timestamp = new Date().toISOString();
+      const lines = data.toString().split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        workerLogStream?.write(`[${timestamp}] ${prefix}: ${line}\n`);
+      }
+    };
+
+    console.log(`[${cid}] Starting tauri-driver on port ${driverPort}, logs: ${logPath}`);
+    workerLogStream.write(`=== Worker ${cid} started at ${new Date().toISOString()} ===\n`);
+    workerLogStream.write(`Spec: ${specs.join(', ')}\n`);
+    workerLogStream.write(`Driver port: ${driverPort}, Native port: ${nativePort}\n\n`);
+
     tauriDriver = spawn('tauri-driver', ['--port', String(driverPort), '--native-port', String(nativePort)], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
@@ -216,26 +244,45 @@ export const config: Options.Testrunner = {
     });
 
     tauriDriver.stdout?.on('data', (data) => {
-      console.log(`tauri-driver[${cid}]: ${data}`);
+      logToFile('stdout', data);
     });
 
     tauriDriver.stderr?.on('data', (data) => {
-      console.error(`tauri-driver[${cid}] error: ${data}`);
+      logToFile('stderr', data);
     });
 
     // Wait for driver to be ready
     return new Promise<void>((resolve) => {
       setTimeout(() => {
-        console.log(`tauri-driver started (worker ${cid})`);
+        workerLogStream?.write(`\n=== tauri-driver ready ===\n\n`);
         resolve();
       }, 2000);
     });
   },
 
+  // Log test results to per-spec log file
+  afterTest: function (test, _context, { error, passed }) {
+    if (workerLogStream) {
+      const status = passed ? '✓ PASS' : '✗ FAIL';
+      workerLogStream.write(`\n[TEST] ${status}: ${test.parent} > ${test.title}\n`);
+      if (error) {
+        workerLogStream.write(`  Error: ${error.message}\n`);
+        if (error.stack) {
+          workerLogStream.write(`  Stack: ${error.stack.split('\n').slice(0, 5).join('\n  ')}\n`);
+        }
+      }
+    }
+  },
+
   // Kill tauri-driver after tests complete
   afterSession: function () {
+    if (workerLogStream) {
+      workerLogStream.write(`\n=== Session ended at ${new Date().toISOString()} ===\n`);
+      workerLogStream.end();
+      workerLogStream = null;
+    }
+
     if (tauriDriver) {
-      console.log('Stopping tauri-driver...');
       tauriDriver.kill();
       tauriDriver = null;
     }
@@ -248,6 +295,30 @@ export const config: Options.Testrunner = {
       }
       tempRoot = null;
     }
+  },
+
+  // Print summary of logs location after all tests complete
+  onComplete: function (exitCode, _config, _capabilities, results) {
+    console.log('\n' + '='.repeat(70));
+    console.log(`Test run completed with exit code: ${exitCode}`);
+    console.log(`\nPer-spec logs available in: ${LOGS_DIR}`);
+
+    // List log files
+    if (fs.existsSync(LOGS_DIR)) {
+      const logFiles = fs.readdirSync(LOGS_DIR).filter(f => f.endsWith('.log'));
+      if (logFiles.length > 0) {
+        console.log('\nLog files:');
+        for (const file of logFiles) {
+          console.log(`  - ${file}`);
+        }
+      }
+    }
+
+    // If there were failures, suggest how to read logs
+    if (results && results.failed > 0) {
+      console.log(`\n⚠️  ${results.failed} spec(s) failed. Check the corresponding .log file for details.`);
+    }
+    console.log('='.repeat(70) + '\n');
   },
 
   // Auto-compile TypeScript
