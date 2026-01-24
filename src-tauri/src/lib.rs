@@ -443,6 +443,10 @@ pub fn run() {
             commands::history::redo,
             commands::history::can_undo,
             commands::history::can_redo,
+            commands::history::get_undo_stack,
+            commands::history::get_redo_stack,
+            commands::history::undo_to,
+            commands::history::redo_to,
             // Import/Export
             commands::import::import_dmp,
             commands::import::calculate_file_hash,
@@ -465,6 +469,9 @@ pub fn run() {
             commands::validation::get_project_warnings,
             commands::validation::resolve_warning,
             commands::validation::unresolve_warning,
+            // Survey geometry
+            commands::survey_geometry::get_survey_geometry,
+            commands::survey_geometry::get_survey_geometry_for_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

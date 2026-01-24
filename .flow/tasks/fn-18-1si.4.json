@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-22T14:10:06.023513Z",
+  "depends_on": [],
+  "epic": "fn-18-1si",
+  "id": "fn-18-1si.4",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-18-1si.4.md",
+  "status": "todo",
+  "title": "Update documentation for stats feature",
+  "updated_at": "2026-01-22T14:10:53.781068Z"
+}

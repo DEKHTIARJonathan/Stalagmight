@@ -718,7 +718,7 @@ impl AppState {
                 }
             }
 
-            // For zero datum operations
+            // For zero datum operations - capture GPS and section offsets
             Command::SetZeroDatum { station_ref, .. } => {
                 // Find if there was a previous datum for this station
                 let previous_gps = project
@@ -727,9 +727,15 @@ impl AppState {
                     .find(|zd| zd.station_ref == *station_ref)
                     .map(|zd| zd.gps);
 
+                // Capture section offsets for all connected sections
+                // This allows undo to restore exact previous state
+                let previous_offsets =
+                    project.capture_connected_section_offsets(station_ref.section_id);
+
                 UndoData::ZeroDatumInfo {
                     station_ref: *station_ref,
                     previous_gps,
+                    previous_offsets,
                 }
             }
 
@@ -741,9 +747,15 @@ impl AppState {
                     .find(|zd| zd.station_ref == *station_ref)
                     .map(|zd| zd.gps);
 
+                // Capture section offsets for all connected sections
+                // RemoveZeroDatum doesn't change offsets, but we capture for consistency
+                let previous_offsets =
+                    project.capture_connected_section_offsets(station_ref.section_id);
+
                 UndoData::ZeroDatumInfo {
                     station_ref: *station_ref,
                     previous_gps,
+                    previous_offsets,
                 }
             }
 
@@ -891,11 +903,11 @@ impl AppState {
             *proj = Some(project);
         }
 
-        // Load undo stack from database before replacing database reference
-        let loaded_undo = db.load_undo_stack().unwrap_or_default();
+        // Load undo stack from database before replacing database reference (with timestamps)
+        let loaded_undo = db.load_undo_stack_with_timestamps().unwrap_or_default();
         let undo_entries: Vec<_> = loaded_undo
             .into_iter()
-            .map(|(_, cmd, undo)| (cmd, undo))
+            .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
             .collect();
 
         if let Ok(mut database) = self.database.lock() {
@@ -910,7 +922,7 @@ impl AppState {
             if undo_entries.is_empty() {
                 undo_stack.clear();
             } else {
-                undo_stack.load_from_persisted(undo_entries);
+                undo_stack.load_from_persisted_with_timestamps(undo_entries);
                 tracing::info!(count = undo_stack.len(), "Restored undo stack from database");
             }
         }
@@ -1032,7 +1044,7 @@ impl AppState {
             }
         };
 
-        // Persist undo stack to database
+        // Persist undo stack to database (with timestamps)
         let persist_limit = self
             .config
             .lock()
@@ -1042,10 +1054,10 @@ impl AppState {
         if let Ok(undo_stack) = self.undo_stack.lock() {
             let entries: Vec<_> = undo_stack
                 .entries_to_persist(persist_limit)
-                .filter_map(|e| UndoStack::serialize_entry(e))
+                .filter_map(|e| UndoStack::serialize_entry_with_timestamp(e))
                 .collect();
 
-            if let Err(e) = db.save_undo_stack(entries) {
+            if let Err(e) = db.save_undo_stack_with_timestamps(entries) {
                 tracing::warn!(error = %e, "Failed to persist undo stack (project was saved)");
             }
         }
@@ -1572,13 +1584,20 @@ impl AppState {
             }
 
             // Copy zero datums with remapped section IDs
+            // Use store_zero_datum_without_repositioning to preserve original offsets
+            // (section_offsets were already copied above with remapped IDs)
             for zd in &source_project.zero_datums {
                 if let Some(&new_section_id) =
                     section_id_map.get(&(proj_idx, zd.station_ref.section_id))
                 {
                     let new_station_ref = StationRef::new(new_section_id, zd.station_ref.station_index);
-                    // Use set_zero_datum to properly validate and add
-                    let _ = merged_project.set_zero_datum(new_station_ref, zd.gps);
+                    // Use store-only helper to avoid triggering repositioning during merge
+                    if let Err(e) = merged_project.store_zero_datum_without_repositioning(new_station_ref, zd.gps) {
+                        return CommandResult::failure(format!(
+                            "Failed to copy zero datum from source project {}: {}",
+                            source_project.name, e
+                        ));
+                    }
                 }
             }
 
@@ -1818,13 +1837,66 @@ impl AppState {
             UndoData::ZeroDatumInfo {
                 station_ref,
                 previous_gps,
+                previous_offsets,
             } => {
-                // Restore previous datum state
-                if let Some(gps) = previous_gps {
-                    self.set_zero_datum(*station_ref, *gps)
-                } else {
-                    self.remove_zero_datum(*station_ref)
+                // Restore previous datum state directly without recomputing offsets
+                // This is critical because set_zero_datum would compute new offsets
+                // instead of restoring the exact previous state
+                let mut proj_guard = match self.project.lock() {
+                    Ok(g) => g,
+                    Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+                };
+
+                let project = match proj_guard.as_mut() {
+                    Some(p) => p,
+                    None => return CommandResult::failure("No project open".to_string()),
+                };
+
+                // Restore section offsets directly
+                for (section_id, prev_offset) in previous_offsets {
+                    match prev_offset {
+                        Some(offset) => {
+                            // Restore to previous value
+                            project.section_offsets.insert(*section_id, *offset);
+                        }
+                        None => {
+                            // Key didn't exist before - remove it
+                            project.section_offsets.remove(section_id);
+                        }
+                    }
                 }
+
+                // Restore GPS datum state
+                // Note: If previous_gps is Some, the datum existed before SetZeroDatum
+                // was called (it was an update, not a create). In this case, we update
+                // in place to preserve datum ordering. The push fallback handles the
+                // unlikely edge case where the datum was removed by another operation
+                // after SetZeroDatum but before undo - in this case, ordering may change.
+                if let Some(gps) = previous_gps {
+                    // Update existing datum in place (preserves ordering)
+                    if let Some(existing) = project
+                        .zero_datums
+                        .iter_mut()
+                        .find(|zd| zd.station_ref == *station_ref)
+                    {
+                        existing.gps = *gps;
+                    } else {
+                        // Fallback: datum was removed by another operation - re-add at end
+                        // This may change datum ordering but shouldn't occur in normal undo flow
+                        project.zero_datums.push(crate::models::ZeroDatum {
+                            station_ref: *station_ref,
+                            gps: *gps,
+                        });
+                    }
+                } else {
+                    // Remove the datum (there was no previous datum - this was a create)
+                    project
+                        .zero_datums
+                        .retain(|zd| zd.station_ref != *station_ref);
+                }
+
+                project.touch();
+                CommandResult::success()
             }
 
             UndoData::ProjectSnapshot(json) => {
@@ -2186,6 +2258,110 @@ impl AppState {
             .unwrap_or(false)
     }
 
+    /// Get the undo stack as a list of history items for the UI
+    pub fn get_undo_stack(&self) -> Vec<crate::commands::history::UndoHistoryItem> {
+        self.undo_stack
+            .lock()
+            .map(|stack| {
+                stack
+                    .undo_entries()
+                    .enumerate()
+                    .map(|(idx, entry)| {
+                        crate::commands::history::entry_to_history_item(entry, idx)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get the redo stack as a list of history items for the UI
+    pub fn get_redo_stack(&self) -> Vec<crate::commands::history::UndoHistoryItem> {
+        self.undo_stack
+            .lock()
+            .map(|stack| {
+                stack
+                    .redo_entries()
+                    .enumerate()
+                    .map(|(idx, entry)| {
+                        crate::commands::history::entry_to_history_item(entry, idx)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Perform multiple undos to reach a specific history point
+    /// Index 0 = most recent action, so undo_to(N) executes (N+1) undos
+    pub fn undo_to(&self, index: usize) -> CommandResult {
+        // Validate index first
+        {
+            let stack = match self.undo_stack.lock() {
+                Ok(s) => s,
+                Err(_) => return CommandResult::failure("Failed to lock undo stack".to_string()),
+            };
+            if index >= stack.len() {
+                return CommandResult::failure(format!(
+                    "Invalid undo index: {} (stack has {} entries)",
+                    index,
+                    stack.len()
+                ));
+            }
+        }
+
+        // Execute (index + 1) undos to include the target index
+        let count = index + 1;
+        for i in 0..count {
+            let result = self.undo();
+            if !result.success {
+                return CommandResult::failure(format!(
+                    "Undo failed at step {} of {}: {}",
+                    i + 1,
+                    count,
+                    result.error.unwrap_or_else(|| "Unknown error".to_string())
+                ));
+            }
+        }
+
+        tracing::info!(index = index, count = count, "Undo to index completed");
+        CommandResult::success()
+    }
+
+    /// Perform multiple redos to reach a specific history point
+    /// Index 0 = most recent undone action, so redo_to(N) executes (N+1) redos
+    pub fn redo_to(&self, index: usize) -> CommandResult {
+        // Validate index first
+        {
+            let stack = match self.undo_stack.lock() {
+                Ok(s) => s,
+                Err(_) => return CommandResult::failure("Failed to lock undo stack".to_string()),
+            };
+            if index >= stack.redo_len() {
+                return CommandResult::failure(format!(
+                    "Invalid redo index: {} (stack has {} entries)",
+                    index,
+                    stack.redo_len()
+                ));
+            }
+        }
+
+        // Execute (index + 1) redos to include the target index
+        let count = index + 1;
+        for i in 0..count {
+            let result = self.redo();
+            if !result.success {
+                return CommandResult::failure(format!(
+                    "Redo failed at step {} of {}: {}",
+                    i + 1,
+                    count,
+                    result.error.unwrap_or_else(|| "Unknown error".to_string())
+                ));
+            }
+        }
+
+        tracing::info!(index = index, count = count, "Redo to index completed");
+        CommandResult::success()
+    }
+
     /// Load resolved warnings from database
     pub fn load_resolved_warnings(&self) -> Result<Vec<crate::persistence::ResolvedWarning>> {
         let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
@@ -2417,11 +2593,11 @@ impl AppState {
         // === PHASE 7: Finalizing (10%) - ALL STATE MUTATIONS GUARDED ===
         progress.start_phase(LoadingPhase::Finalizing);
 
-        // Load undo stack from database BEFORE storing db
-        let loaded_undo = db.load_undo_stack().unwrap_or_default();
+        // Load undo stack from database BEFORE storing db (with timestamps)
+        let loaded_undo = db.load_undo_stack_with_timestamps().unwrap_or_default();
         let undo_entries: Vec<_> = loaded_undo
             .into_iter()
-            .map(|(_, cmd, undo)| (cmd, undo))
+            .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
             .collect();
 
         // Guard 1: Project state mutation
@@ -2436,13 +2612,13 @@ impl AppState {
         check_cancelled!();
         self.clear_display_settings_cache();
 
-        // Guard 4: Undo stack restore
+        // Guard 4: Undo stack restore (with timestamps)
         check_cancelled!();
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
             if undo_entries.is_empty() {
                 undo_stack.clear();
             } else {
-                undo_stack.load_from_persisted(undo_entries);
+                undo_stack.load_from_persisted_with_timestamps(undo_entries);
                 tracing::info!(count = undo_stack.len(), "Restored undo stack from database");
             }
         }
@@ -2862,6 +3038,7 @@ mod tests {
                 before: "{}".to_string(),
                 after: "not-json".to_string(),
             },
+            timestamp: None,
         };
         stack.push_redo(entry);
         drop(stack);
@@ -2883,6 +3060,7 @@ mod tests {
                 archive_originals: false,
             },
             undo_data: UndoData::None,
+            timestamp: None,
         };
         stack.push_redo(entry);
         drop(stack);
@@ -3586,6 +3764,7 @@ mod tests {
         let entry = UndoEntry {
             command: Command::CloseProject,
             undo_data: UndoData::ProjectSnapshotPair { before, after },
+            timestamp: None,
         };
 
         let mut stack = state.undo_stack.lock().unwrap();
@@ -4301,6 +4480,131 @@ mod tests {
         assert!((datum.gps.latitude - 48.8584).abs() < 0.0001);
         assert!((datum.gps.longitude - 2.2945).abs() < 0.0001);
         assert!((datum.gps.depth_reference - 35.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_undo_set_zero_datum_restores_section_offsets() {
+        // Verify undo restores exact previous section_offsets, including
+        // removing keys that were newly created by the command
+        let state = AppState::new().unwrap();
+
+        state.execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        // Create two sections with shots
+        let result_a = state.execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(10.0)],
+        });
+        let section_a = result_a.section_id.unwrap();
+
+        let result_b = state.execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(10.0)],
+        });
+        let section_b = result_b.section_id.unwrap();
+
+        // Set an existing offset on section A only
+        // (section B has no offset - key doesn't exist)
+        {
+            let mut proj = state.project.lock().unwrap();
+            let project = proj.as_mut().unwrap();
+            project.section_offsets.insert(section_a, (100.0, 200.0));
+        }
+
+        // Merge the sections so they're connected
+        state.execute(Command::MergeStations {
+            station_a: StationRef::new(section_a, 1),
+            station_b: StationRef::new(section_b, 0),
+            closure_strategy: ClosureStrategy::KeepRaw,
+        });
+
+        // Clear undo stack to focus on SetZeroDatum
+        {
+            let mut stack = state.undo_stack.lock().unwrap();
+            stack.clear();
+        }
+
+        // Capture pre-command state
+        let (pre_offset_a, pre_offset_b, pre_datum_count) = {
+            let proj = state.project.lock().unwrap();
+            let project = proj.as_ref().unwrap();
+            (
+                project.section_offsets.get(&section_a).copied(),
+                project.section_offsets.get(&section_b).copied(),
+                project.zero_datums.len(),
+            )
+        };
+
+        // Set zero datum - this will create/modify offsets for both connected sections
+        let station_ref = StationRef::new(section_a, 0);
+        let gps = GpsCoordinates::new(45.0, -73.0, 100.0).unwrap();
+        let result = state.execute(Command::SetZeroDatum {
+            station_ref,
+            coordinates: gps,
+        });
+        assert!(result.success);
+
+        // Verify offsets changed after SetZeroDatum
+        let (post_offset_a, post_offset_b, post_datum_count) = {
+            let proj = state.project.lock().unwrap();
+            let project = proj.as_ref().unwrap();
+            (
+                project.section_offsets.get(&section_a).copied(),
+                project.section_offsets.get(&section_b).copied(),
+                project.zero_datums.len(),
+            )
+        };
+        assert_ne!(pre_offset_a, post_offset_a, "Section A offset should change");
+        assert!(post_offset_b.is_some(), "Section B should now have an offset");
+        assert_eq!(post_datum_count, pre_datum_count + 1, "Datum should be added");
+
+        // Undo the SetZeroDatum
+        let undo_result = state.undo();
+        assert!(undo_result.success, "Undo should succeed");
+
+        // Verify exact previous state is restored
+        let (restored_offset_a, restored_offset_b, restored_datum_count) = {
+            let proj = state.project.lock().unwrap();
+            let project = proj.as_ref().unwrap();
+            (
+                project.section_offsets.get(&section_a).copied(),
+                project.section_offsets.get(&section_b).copied(),
+                project.zero_datums.len(),
+            )
+        };
+
+        // Section A should have its original offset restored
+        assert_eq!(
+            restored_offset_a, pre_offset_a,
+            "Section A offset should be restored to original value"
+        );
+
+        // Section B key should be removed (it didn't exist before)
+        assert_eq!(
+            restored_offset_b, pre_offset_b,
+            "Section B offset key should be removed (was None before)"
+        );
+        assert!(
+            pre_offset_b.is_none() && restored_offset_b.is_none(),
+            "Section B offset key must not exist after undo"
+        );
+
+        // Datum should be removed
+        assert_eq!(
+            restored_datum_count, pre_datum_count,
+            "Datum should be removed after undo"
+        );
     }
 
     #[test]

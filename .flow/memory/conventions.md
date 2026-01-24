@@ -24,3 +24,15 @@ WebdriverIO: use closest('[data-testid]') to detect focus on elements inside con
 
 ## 2026-01-21 manual [convention]
 Only call event.preventDefault() when actually handling the event; no-op shortcuts should allow default browser behavior
+
+## 2026-01-22 manual [convention]
+For keyboard shortcut detection with modifiers, use event.key.toLowerCase() to handle Shift+Z producing uppercase 'Z'
+
+## 2026-01-22 manual [convention]
+Use specific data-testid selectors instead of generic CSS selectors (input[type=number]) in E2E tests to avoid order-dependent failures
+
+## 2026-01-23 manual [convention]
+Use generation counter pattern for async cancellation instead of per-item pending sets that can race with clear operations
+
+## 2026-01-23 manual [convention]
+In WebdriverIO E2E tests, throw explicit errors in browser.execute callbacks when required globals (__E2E_TEST__, __cavechef_map__) are missing to get clear failures instead of confusing timeouts

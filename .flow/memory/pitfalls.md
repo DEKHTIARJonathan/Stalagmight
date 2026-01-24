@@ -57,3 +57,45 @@ When clearing async requests in useEffect, always clear immediately before any e
 
 ## 2026-01-21 manual [pitfall]
 React event handlers in useEffect can have stale closures; use refs for values needed in keydown/keyup handlers
+
+## 2026-01-22 manual [pitfall]
+Hover dropdown: use a centralized hardClose helper that cancels all timers (hover/leave) and invalidates tokens, call from ALL close paths (click, escape, keyboard shortcuts)
+
+## 2026-01-22 manual [pitfall]
+Props used in setTimeout callbacks become stale closures - track them in a ref (e.g., disabledRef.current = disabled) and check the ref inside the callback
+
+## 2026-01-22 manual [pitfall]
+In E2E tests, wait for aria-activedescendant to be set before asserting on keyboard navigation (components often set it in setTimeout(0))
+
+## 2026-01-22 manual [pitfall]
+Wrapping non-labelable elements (div with role=switch) in <label> does not associate them - use aria-labelledby with an id on the label text instead
+
+## 2026-01-22 manual [pitfall]
+Replace waitForTimeout() with deterministic assertions (e.g., toHaveAttribute, toContainText) after UI state changes to prevent flaky E2E tests
+
+## 2026-01-22 manual [pitfall]
+User-controlled color strings in SVG/HTML must be validated (#RGB/#RRGGBB only) to prevent markup injection attacks
+
+## 2026-01-22 manual [pitfall]
+When parsing SVG/XML attributes in tests, use dedicated parsers or well-structured string splitting rather than magic offsets that silently skip assertions on failure
+
+## 2026-01-23 manual [pitfall]
+React useEffect reading derived state (e.g., selectedSection) may see stale value during transitions - compute from source (e.g., sections.find) using the selection's own IDs
+
+## 2026-01-23 manual [pitfall]
+React refs don't trigger re-renders - use state for mapLoaded flags so dependent effects re-run; buffer data arriving before async initialization completes
+
+## 2026-01-23 manual [pitfall]
+Database::open can create/mutate files - use open_readonly for read-only operations like lazy loading geometry
+
+## 2026-01-23 manual [pitfall]
+Tooltips using innerHTML with user data (names, paths) are XSS vectors in Tauri webview - use textContent or DOM building instead
+
+## 2026-01-23 manual [pitfall]
+Percentage-based bounds padding produces degenerate results when span is 0 (single point/line) - enforce a minimum span before applying padding factor
+
+## 2026-01-23 manual [pitfall]
+MapLibre easeTo() inherits current padding; call map.stop() and setPadding({0}) before easeTo() to ensure deterministic centering
+
+## 2026-01-23 manual [pitfall]
+When testing map centering in E2E tests, first pan the map off-target before clicking center buttons, otherwise the test may pass/fail depending on whether the map was already centered on the target

@@ -1,0 +1,23 @@
+{
+  "tests": {
+    "rust": "80 passed",
+    "typescript": "passes",
+    "ui": "464 passed"
+  },
+  "files_changed": [
+    "src-tauri/src/commands/survey_geometry.rs",
+    "src-tauri/src/lib.rs",
+    "src/store/globalViewStore.ts",
+    "src/components/GlobalView/GlobalView.tsx",
+    "src/components/GlobalView/GlobalViewMap.tsx",
+    "src/index.css"
+  ],
+  "acceptance": {
+    "gps_filter_fixed": true,
+    "spinner_on_loading": true,
+    "lazy_load_on_viewport": true,
+    "loading_state_tracking": true,
+    "red_marker_on_error": true,
+    "geometry_cached": true
+  }
+}

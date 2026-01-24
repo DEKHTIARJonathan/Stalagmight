@@ -2,7 +2,7 @@
 
 ## Specification Document v1.0
 
-**Last Updated**: 2026-01-18
+**Last Updated**: 2026-01-22
 **Status**: Implementation Phase B - DMP Import Refactoring
 **Target Version**: 1.0 (Beta Release)
 
@@ -241,6 +241,27 @@ Examples:
 - **Azimuth**: Degrees from magnetic north (0-360), support for declination correction
 - **Depth**: Positive values = below surface
 
+#### GPS-to-Local Coordinate Transformation
+
+When a zero datum is set with GPS coordinates, a coordinate transformation converts GPS (WGS84) to local ENU (East-North-Up) meters:
+
+1. **Geodetic to ECEF**: Convert (lat, lon) to Earth-Centered Earth-Fixed coordinates
+   - Uses WGS84 ellipsoid (semi-major axis a = 6,378,137m, eccentricity² = 0.00669437999014)
+   - Altitude is always 0 (depth_reference is meters below surface, not ellipsoid height)
+
+2. **ECEF to ENU**: Convert ECEF difference to local tangent plane coordinates
+   - Origin is the zero datum's GPS position
+   - East (+X) points east, North (+Y) points north
+   - Up component is discarded (cave surveys use depth measurements)
+
+3. **Result**: (east, north) offset in meters
+   - These become the local X, Y coordinates for positioning sections
+   - All other stations are computed relative to this origin
+
+The transformation is implemented in `src-tauri/src/models/geo.rs` with:
+- `geodetic_to_ecef(lat, lon, alt)` - WGS84 to ECEF
+- `gps_to_local(gps, origin)` - Main entry point returning (east, north) meters
+
 ### 4.4 Computed Values
 
 These are derived from shot data, not stored:
@@ -361,28 +382,65 @@ User Action → Command Dispatcher → Tauri IPC → Rust Executor
 
 #### 6.1.1 Global View
 
-Shows all cave systems the user has loaded.
+Shows all cave systems the user has loaded, with survey geometry rendering for GPS-positioned projects.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  [Import] [New Project] [Settings]                    CaveChef │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│                                                                 │
+│  [Fit All]                                    [Navigation]      │
+│                                                  [+][-]         │
 │                     Map showing all cave systems                │
+│                     Survey geometry: shots and stations         │
 │                     (positioned by GPS coordinates)             │
-│                                                                 │
+│                                               [View Toggle]     │
 │                     Click system → metadata in side panel       │
 │                     Double-click → open in Single System View   │
 │                                                                 │
-│                     Multi-select: Shift+click, Ctrl+click       │
-│                     Right-click → Merge Systems, Export, etc.   │
+│                     Multi-select: Ctrl+click                    │
+│                     Right-click → context menu                  │
 │                                                                 │
-│                                                                 │
+│  [Search: ____________]                  N systems on map       │
 ├─────────────────────────────────────────────────────────────────┤
 │  Systems: 5 | Total Length: 127.4 km | Status: Ready           │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**Survey Rendering:**
+- GPS-positioned projects render actual survey geometry (shots and stations)
+- Each system has a distinct auto-assigned color (stable across sessions)
+- System-level selection with hover highlighting
+- Lazy loading: markers with spinners show while geometry loads
+- Error states: red marker with popup on click
+
+**View Mode Toggle:**
+- Toggle button in top-right corner (below navigation controls)
+- Two modes: `survey` (default) shows geometry, `markers` shows simple pins
+- Mode persisted in localStorage (`globalViewMode` key)
+- Switching to markers cancels pending geometry loads
+
+**Map Position Persistence:**
+- Map position and zoom persisted to localStorage on every move
+- Restored on component mount
+- "Fit All" button temporarily overrides but does not persist
+- Validation prevents corrupted storage from crashing MapLibre
+
+**Soft Bounds:**
+- Systems constrained with rubber-band panning effect
+- Soft bounds (20% padding): animate back when user releases pan outside
+- Hard bounds (50% padding): cannot pan beyond this limit
+
+**Search Filter:**
+- Text input filters systems by name
+- Non-matching systems dimmed to 25% opacity
+- Uses MapLibre `index-of` + `downcase` expression
+
+**FPS Monitoring:**
+- Auto-throttle when FPS drops below threshold (default 30)
+- Increases GeoJSON simplification tolerance when throttled
+- "(reduced detail)" indicator shown when throttled
+- Hysteresis: recovers at 45 FPS to prevent oscillation
 
 #### 6.1.2 Single System View
 
@@ -423,7 +481,209 @@ Primary view for survey work.
 | Detail Panel | Open, 300px | Resizable, collapsible |
 | Data Table | Collapsed | Resizable (height), collapsible |
 
-### 6.3 Tools
+#### 6.2.1 Detail Panel Hyperlinks
+
+The Detail Panel provides interactive hyperlinks that enable quick navigation between related survey elements (shots, stations, sections).
+
+**UI Display ID Format:**
+Detail Panel display IDs (distinct from internal data model IDs) use the format `sectionId:position` where position is 1-indexed:
+- Station position = `station_index + 1`
+- Shot position = `shot array index + 1`
+- Section links show `sectionId: sectionName` (or `sectionId: Unnamed` if no name)
+
+**Shot Detail - Connected Section:**
+```
+┌─ Shot ─────────────────────────────────────────────┐
+│  ID: 2:3                                           │
+│  Length: 4.5m  Azimuth: 127.3 deg  Depth: 8.2m    │
+│                                                    │
+│  ┌─ Connected ───────────────────────────────────┐ │
+│  │  Start Station: 2:3 (link)                    │ │
+│  │  End Station: 2:4 (link)                      │ │
+│  │  Section: 2: Main Line (link)                 │ │
+│  └───────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────┘
+```
+
+**Station Detail - Connected Section:**
+```
+┌─ Station ──────────────────────────────────────────┐
+│  ID: 2:5                                           │
+│  Depth: 12.3m  Section: Main Line                  │
+│                                                    │
+│  ┌─ Connected ───────────────────────────────────┐ │
+│  │  Previous Shot: 2:4 (link)                    │ │
+│  │  Next Shot: 2:5 (link)                        │ │
+│  │  Section: 2: Main Line (link)                 │ │
+│  └───────────────────────────────────────────────┘ │
+│                                                    │
+│  (Previous/Next hidden at section boundaries)      │
+└────────────────────────────────────────────────────┘
+```
+
+**Section Detail - Endpoints Section:**
+```
+┌─ Section ──────────────────────────────────────────┐
+│  Name: Main Line                                   │
+│  Length: 127.4m  Shots: 42                         │
+│                                                    │
+│  ┌─ Endpoints ───────────────────────────────────┐ │
+│  │  First Station: 2:1 (link)                    │ │
+│  │  Last Station: 2:43 (link)                    │ │
+│  └───────────────────────────────────────────────┘ │
+│  (Single station sections show only "Station:")    │
+└────────────────────────────────────────────────────┘
+```
+
+**Link Behavior:**
+- Click changes selection and updates Detail Panel content
+- Section links also highlight the section in Sections Panel
+- Missing targets show warning indicator and are non-clickable
+- Full keyboard accessibility (Tab + Enter)
+- Links use accent color with underline styling
+
+**Shot-to-Station Mapping:**
+Shot at array index `i` (0-indexed) connects:
+- Start station: `station_index = i` (display position = `i + 1`)
+- End station: `station_index = i + 1` (display position = `i + 2`)
+
+Station at `station_index` has:
+- Previous shot: `section.shots[station_index - 1]` (hidden when `station_index === 0`)
+- Next shot: `section.shots[station_index]` (hidden when `station_index >= section.shots.length`)
+
+#### 6.2.2 Detail Panel Center Button
+
+Each detail view (Shot, Station, Section) includes a center button in the panel header that pans and zooms the map to the selected element.
+
+**Appearance:**
+- Inline SVG crosshairs icon in panel header
+- Uses `headerActions` prop pattern (same as other panel header buttons)
+- Not shown in Project Stats view
+
+**Behavior:**
+- Click pans and zooms map to fit the element
+- Stations/Shots: Uses `easeTo()` with configured `point_zoom` level
+- Sections: Uses `fitBounds()` with padding (fits all points)
+- Full keyboard accessibility (Tab + Enter)
+- Dynamic aria-label: "Center map on [type] [id]"
+
+**Example aria-labels:**
+- Station: "Center map on station 2:5"
+- Shot: "Center map on shot 2:3"
+- Section: "Center map on section 2: Main Line"
+
+#### 6.2.3 ARIA Live Announcements
+
+Selection changes are announced to screen readers via an ARIA live region.
+
+**Implementation:**
+- Single ARIA live region at App component root level (always mounted)
+- Uses `role="status" aria-live="polite" aria-atomic="true"`
+- Announcements triggered by: Detail Panel hyperlinks, Data Table shot selection
+- Map clicks do not trigger announcements (avoids excessive verbosity during exploration)
+- Visually hidden with `sr-only` class
+
+**Announcement Formats:**
+
+Detail Panel hyperlinks:
+```
+"Selected [type] [id]"
+```
+Examples: "Selected station 2:5", "Selected shot 2:3", "Selected section 2: Main Line"
+
+Data Table shot selection:
+```
+"Shot [id] selected"
+```
+Example: "Shot 2:3 selected"
+
+### 6.3 Undo/Redo History Dropdown
+
+The Undo and Redo toolbar buttons feature dropdown menus showing recent actions with timestamps and diff previews.
+
+#### Trigger Behavior
+
+- **Hover**: Dropdown opens after 300ms delay when hovering over Undo/Redo buttons
+- **Chevron Indicator**: A small `▾` chevron appears next to the button text when history is available
+- **Click**: Single click on button performs standard undo/redo (one step)
+- **Empty State**: No dropdown shown when stack is empty
+
+#### Dropdown Layout
+
+```
+┌─────────────────────────────────────────────┐
+│  UNDO HISTORY                               │
+├─────────────────────────────────────────────┤
+│  + Create section "Main Line"    2 min ago  │
+│  ✏ Update shot 3                 5 min ago  │
+│  ✕ Delete section "Test"         Jan 12...  │
+│  ⊕ Merge stations                Jan 12...  │
+│  ...                                        │
+└─────────────────────────────────────────────┘
+         │
+         ▼ (hover item)
+    ┌──────────────────────┐
+    │  length              │
+    │  5.0 → 10.5          │
+    │                      │
+    │  azimuth_in          │
+    │  45.0 → 52.3         │
+    │                      │
+    │  +1 more             │
+    └──────────────────────┘
+```
+
+#### Item Display
+
+Each item shows:
+- **Icon**: Text icon based on command type (matches toolbar style)
+  - `+` Create section/shot
+  - `✏` Update shot/section metadata
+  - `✕` Delete section/shot
+  - `⊕` Merge stations
+  - `⊖` Unmerge stations
+  - `◉` Set zero datum
+  - `○` Remove zero datum
+  - `↔` Move section/station
+  - `┄` Set shot virtual
+  - `▤` Batch operation
+  - `•` Default/other
+- **Description**: Truncated at ~40 characters with ellipsis
+- **Timestamp**: Smart hybrid format
+  - Less than 1 day: relative (e.g., "2 minutes ago")
+  - 1 day or older: absolute (e.g., "Jan 12, 3:45 PM")
+  - Legacy entries without timestamp: "Unknown"
+
+#### Detail Preview Popup
+
+Hovering an item shows a preview popup with diff information (where available):
+- Displays up to 3 field changes with old → new values
+- Shows count of additional changes beyond those displayed
+- Flips to left side if would overflow right viewport edge
+- Commands without preview data show "No details"
+
+#### Scrolling
+
+- Maximum height: 10 items visible (~440px)
+- Auto-hide scrollbar (appears on hover)
+- Smooth scroll behavior
+
+#### Index Semantics
+
+- **Index 0 = most recent action** (top of stack, first to undo/redo)
+- Clicking item at index N executes N+1 undo/redo operations
+- Example: `undo_to(3)` undos items at indices 0, 1, 2, 3 (4 total undos)
+
+#### Close Behavior
+
+- Dropdown closes on:
+  - Mouse leaving the button/dropdown area (100ms buffer)
+  - Pressing Escape key
+  - Global undo/redo shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
+  - Clicking outside the dropdown
+  - Clicking an item (after executing the action)
+
+### 6.4 Tools
 
 | Tool | Shortcut | Click Station | Click Shot | Click Empty | Drag |
 |------|----------|---------------|------------|-------------|------|
@@ -437,7 +697,7 @@ Primary view for survey work.
 | **Move Section** | V | - | - | - | Drag unanchored section |
 | **Move Station** | T | - | - | - | Drag unanchored station |
 
-### 6.4 Map Features
+### 6.5 Map Features
 
 #### Display Toggles (Right-click or menu)
 - Stations (dots)
@@ -459,7 +719,7 @@ Primary view for survey work.
 - Context menu: Right click
 - Snap to station: Automatic when within threshold (configurable)
 
-### 6.5 Visual Indicators
+### 6.6 Visual Indicators
 
 | Element | Appearance |
 |---------|------------|
@@ -472,7 +732,7 @@ Primary view for survey work.
 | Marked as resolved | Light red highlight |
 | Loop closure line | Dashed line with error percentage |
 
-### 6.6 Dialogs
+### 6.7 Dialogs
 
 #### DMP Import - Two-Step Flow
 
@@ -496,6 +756,8 @@ The DMP import workflow uses a two-step process for improved UX:
 │  │ [ ] ZZZ - Test Data (86 shots, 412.1m)           [Preview]  ││
 │  └──────────────────────────────────────────────────────────────┘│
 │                                                                  │
+│  70 shots | 281.8m | Depth: 2.1-15.4m                            │
+│                                                                  │
 │  ⚠ File may have been imported before (same hash detected)     │
 │                                                                  │
 │  [ Cancel ]                              [ Continue (2 of 3) ]   │
@@ -508,6 +770,17 @@ The DMP import workflow uses a two-step process for improved UX:
 - Surveyor remembered for session (not persisted)
 - File hash tracking detects duplicate imports
 - Preview button shows section outline in popup
+- Selection stats update in real-time when sections are checked/unchecked
+- Shows "0 shots | 0.0m | Depth: --" when no sections selected
+
+**Selection Stats Formatting:**
+- Format: `X shots | Y.Ym | Depth: A.A-B.Bm`
+- Units read from project config (length and depth independently)
+- Values converted to feet when config is set to feet (shows `ft` suffix)
+- 1 decimal place precision for length and depth
+- Pipe separators between stats
+- "Depth: --" shown when no depth data available
+- ARIA label provides screen reader description (e.g., "Selection statistics: 70 shots, 281.8m total length, depth range 2.1-15.4m")
 
 ##### Step 2: Section Configuration (DmpSectionConfigDialog)
 
@@ -517,12 +790,15 @@ The DMP import workflow uses a two-step process for improved UX:
 │  Section: 1 of 2                    [◀ Previous] [Next ▶]       │
 │                                                                  │
 │  ┌─ Parameters ─────────┐  ┌─ Preview ──────────────────────────┐│
-│  │ Name:    [Main Line] │  │                                    ││
-│  │ Surveyor:[J. Smith ] │  │        ●──●──●                     ││
-│  │ Date:    [2024-01-12]│  │           \                        ││
-│  │ Color:   [████ ▼]    │  │            ●──●                    ││
-│  │ Direction:[IN ▼]     │  │   (pan/zoom enabled)               ││
-│  └──────────────────────┘  └────────────────────────────────────┘│
+│  │ 42 shots | 187.3m |  │  │                                    ││
+│  │ Depth: 3.2-17.8m     │  │        ●──●──●                     ││
+│  │ ─────────────────────│  │           \                        ││
+│  │ Name:    [Main Line] │  │            ●──●                    ││
+│  │ Surveyor:[J. Smith ] │  │   (pan/zoom enabled)               ││
+│  │ Date:    [2024-01-12]│  └────────────────────────────────────┘│
+│  │ Color:   [████ ▼]    │                                        │
+│  │ Direction:[IN ▼]     │                                        │
+│  └──────────────────────┘                                        │
 │                                                                  │
 │  ┌─ Placement ───────────────────────────────────────────────────┐│
 │  │ (●) At Origin (0,0)                                          ││
@@ -550,6 +826,11 @@ The DMP import workflow uses a two-step process for improved UX:
 
 **Step 2 Behavior:**
 - Per-section editing with navigation between sections
+- Parameters panel with section stats at top:
+  - Shows shot count, total length, depth range for current section
+  - Stats reflect current shot table state (including edits and deletions)
+  - Grayed out when section is excluded
+  - Subtle separator line below stats
 - Parameters panel: name, surveyor (inherited), date, color, direction
 - Interactive preview with pan/zoom and click-to-select-station
 - 4 exclusive placement modes:
@@ -565,6 +846,16 @@ The DMP import workflow uses a two-step process for improved UX:
 - Local undo/redo within dialog
 - Section created on "Place Section" click
 - Warnings inform but don't block; errors block import
+
+**Section Stats Formatting:**
+- Format: `X shots | Y.Ym | Depth: A.A-B.Bm`
+- Units read from project config (length and depth independently)
+- Values converted to feet when config is set to feet (shows `ft` suffix)
+- 1 decimal place precision for length and depth
+- Pipe separators between stats
+- "Depth: --" shown when no depth data available
+- Stats exclude deleted shots (those marked with delete checkbox)
+- ARIA label provides screen reader description (e.g., "Section statistics: 42 shots, 187.3m total length, depth range 3.2-17.8m")
 
 **Design Decisions:**
 | Decision | Rationale |
@@ -774,6 +1065,47 @@ For manual entry (no DMP file), goes directly to Step 2 (DmpSectionConfigDialog)
 2. Individual stations can be moved with Move Station tool (if unanchored)
 3. This preserves zero datum integrity
 
+### 7.10 Setting a Zero Datum
+
+The zero datum establishes the coordinate system origin and enables GPS-accurate positioning:
+
+**Setting Zero Datum via Map:**
+1. Right-click on a station → "Set as Zero Datum"
+2. GPS Coordinates dialog appears:
+   - Enter latitude (degrees, -90 to 90)
+   - Enter longitude (degrees, -180 to 180)
+   - Optionally enter depth reference (meters below surface)
+3. Click "Set Zero Datum"
+4. Station marked with golden star icon
+5. Map auto-zooms to fit survey in new position
+6. All section offsets are recalculated
+
+**Setting Zero Datum during Import:**
+1. In Step 2 of DMP import, select "GPS Coordinates" placement mode
+2. Enter latitude and longitude
+3. Select which station to designate as zero datum
+4. Section is positioned using GPS-to-local transformation
+
+**What Happens Internally:**
+1. GPS coordinates (WGS84) are stored with the station
+2. Coordinates are converted to local ENU meters via geodetic transformation
+3. Section offsets are recalculated to maintain relative positions
+4. The zero datum station becomes the (0,0) origin of the local coordinate system
+5. Connected sections' positions are preserved through offset tracking
+
+**Updating an Existing Zero Datum:**
+1. Right-click on zero datum station → "Edit GPS Coordinates"
+2. Modify coordinates and confirm
+3. All section offsets are recalculated
+4. Undo restores previous GPS coordinates
+
+**Removing a Zero Datum:**
+1. Right-click on zero datum station → "Remove Zero Datum"
+2. Confirm removal
+3. Station loses golden star icon
+4. If this was the only datum, coordinate system reverts to (0,0) origin
+5. Undo restores the GPS coordinates
+
 ---
 
 ## 8. Command System
@@ -834,10 +1166,42 @@ pub enum Command {
     UnmergeStations {
         station_ref: StationRef,
     },
+    /// Set a station as the zero datum (coordinate system origin).
+    ///
+    /// # Parameters
+    /// - `station_ref`: The station to designate as zero datum (section_id:station_index)
+    /// - `coordinates`: GPS coordinates (WGS84 latitude, longitude, depth_reference)
+    ///
+    /// # Behavior
+    /// - Station becomes the origin (0,0) of the local coordinate system
+    /// - All other station coordinates are recalculated relative to this point
+    /// - GPS coordinates are converted to local ENU (East-North-Up) meters
+    /// - Section offsets are updated to maintain visual positions
+    /// - A golden star icon marks the zero datum on the map
+    /// - Triggers map fit-to-bounds to show the survey in its new position
+    ///
+    /// # Undo Behavior
+    /// Undo restores:
+    /// - Previous GPS coordinates (if station had a datum before)
+    /// - Previous section offsets
+    /// - Previous coordinate system origin
+    /// If the station had no prior datum, undo removes it entirely.
     SetZeroDatum {
         station_ref: StationRef,
         coordinates: GpsCoordinates,
     },
+    /// Remove the zero datum designation from a station.
+    ///
+    /// # Parameters
+    /// - `station_ref`: The station to remove zero datum from
+    ///
+    /// # Behavior
+    /// - Station loses its GPS coordinates
+    /// - If this was the only zero datum, coordinate system reverts to (0,0) origin
+    /// - Section offsets may be recalculated
+    ///
+    /// # Undo Behavior
+    /// Undo restores the GPS coordinates that were removed.
     RemoveZeroDatum {
         station_ref: StationRef,
     },
@@ -855,29 +1219,115 @@ pub enum Command {
 }
 ```
 
-### 8.2 Command Execution
+### 8.2 UndoEntry Structure
+
+Each entry in the undo/redo stack contains:
 
 ```rust
-pub struct CommandResult {
-    pub success: bool,
-    pub state_update: StateUpdate,
+pub struct UndoEntry {
+    /// The command that was executed
+    pub command: Command,
+    /// Data needed to undo this command
     pub undo_data: UndoData,
-    pub warnings: Vec<Warning>,
+    /// Timestamp when the command was executed (None for legacy entries)
+    pub timestamp: Option<DateTime<Utc>>,
 }
+```
 
+**Timestamp Handling:**
+- New entries automatically receive `Utc::now()` timestamp on creation
+- Timestamps persist across app restarts via the `executed_at` column in SQLite
+- Legacy entries (from before timestamps were added) have `None` and display as "Unknown" in UI
+- Format: ISO 8601 / RFC 3339 (e.g., `2024-01-12T14:32:15.123Z`)
+
+### 8.3 UndoData Variants
+
+```rust
 pub enum UndoData {
     /// Simple inverse command
     InverseCommand(Command),
 
-    /// State delta for complex operations
-    StateDelta {
-        affected_entities: Vec<EntitySnapshot>,
+    /// Previous values for updates (JSON serialized)
+    PreviousValues {
+        section_id: SectionId,
+        shot_id: Option<ShotId>,
+        values_json: String,
     },
 
-    /// Full state snapshot for destructive operations
-    Snapshot(ProjectSnapshot),
-}
+    /// Full section snapshot for deleted sections
+    SectionSnapshot {
+        section_id: SectionId,
+        section_data: SectionData,
+    },
 
+    /// Shot snapshot for deleted shots
+    ShotSnapshot {
+        section_id: SectionId,
+        shot_id: ShotId,
+        shot_data: ShotData,
+        position: usize,
+    },
+
+    /// Merge info for unmerging stations
+    MergeInfo {
+        station_a: StationRef,
+        station_b: StationRef,
+        strategy: ClosureStrategy,
+    },
+
+    /// Zero datum info for restoring previous GPS
+    ZeroDatumInfo {
+        station_ref: StationRef,
+        previous_gps: Option<GpsCoordinates>,
+    },
+
+    /// Full project snapshot for batch operations
+    ProjectSnapshot(String),
+
+    /// Before and after snapshots for operations with dynamic IDs
+    ProjectSnapshotPair {
+        before: String,
+        after: String,
+    },
+
+    /// No undo data
+    None,
+}
+```
+
+### 8.4 Stack Exposure Commands
+
+The undo/redo stacks are exposed to the frontend via Tauri IPC commands:
+
+| Command | Description | Returns |
+|---------|-------------|---------|
+| `get_undo_stack` | Get full undo stack with preview data | `Vec<UndoHistoryItem>` |
+| `get_redo_stack` | Get full redo stack with preview data | `Vec<UndoHistoryItem>` |
+| `undo_to` | Undo multiple steps to index N | `CommandResult` |
+| `redo_to` | Redo multiple steps to index N | `CommandResult` |
+
+**UndoHistoryItem DTO:**
+```typescript
+interface UndoHistoryItem {
+  index: number;           // Position in stack (0 = most recent)
+  description: string;     // Human-readable command description
+  timestamp: string | null; // ISO 8601 or null for legacy
+  commandType: string;     // For icon mapping: "create_section", etc.
+  previewData: {           // Diff preview (or null)
+    changes: Array<{ field: string; oldValue: string; newValue: string }>;
+    additionalChanges: number;
+  } | null;
+}
+```
+
+**Multi-step undo/redo:**
+- `undo_to(N)` executes N+1 undo operations (indices 0 through N)
+- Operations execute sequentially (not transactional)
+- Partial completion on failure is acceptable
+
+### 8.5 Command Execution
+
+```rust
 impl CommandExecutor {
     pub fn execute(&mut self, cmd: Command) -> Result<CommandResult> {
         // 1. Validate
@@ -886,8 +1336,8 @@ impl CommandExecutor {
         // 2. Execute
         let (state_update, undo_data) = self.apply(&cmd)?;
 
-        // 3. Push to undo stack
-        self.undo_stack.push(UndoEntry { cmd: cmd.clone(), undo_data: undo_data.clone() });
+        // 3. Push to undo stack (timestamp added automatically)
+        self.undo_stack.push_with_data(cmd.clone(), undo_data.clone());
         self.redo_stack.clear();
 
         // 4. Log
@@ -910,7 +1360,7 @@ impl CommandExecutor {
 
     pub fn redo(&mut self) -> Result<CommandResult> {
         let entry = self.redo_stack.pop().ok_or(Error::NothingToRedo)?;
-        let result = self.apply(&entry.cmd)?;
+        let result = self.apply(&entry.command)?;
         self.undo_stack.push(entry);
         info!("Redo performed");
         Ok(result)
@@ -918,7 +1368,7 @@ impl CommandExecutor {
 }
 ```
 
-### 8.3 Transient Operations
+### 8.6 Transient Operations
 
 These do NOT go through Command Executor:
 
@@ -1064,86 +1514,122 @@ announce_save_status = true
 
 ### 10.1 Dialog Structure
 
-Tabbed modal dialog accessible via Edit > Settings menu only (no keyboard shortcut).
+Modal dialog with sidebar navigation, accessible via the Settings button in the Global View header or the Cmd/Ctrl+, keyboard shortcut.
 
-```typescript
-interface SettingsDialogProps {
-  isOpen: boolean;
-  onClose: () => void;
-  initialTab?: 'general' | 'cache';
-}
+**Layout:**
+- Fixed size dialog (min 600px wide × 500px tall)
+- Left sidebar (150px) with category navigation
+- Right content area with scrollable settings
+- Footer with Save/Cancel buttons
+
+### 10.2 Categories
+
+The sidebar displays 9 settings categories, with a visual separator before the Advanced category:
+
+| Category | Contents |
+|----------|----------|
+| General | Auto-save toggle/interval, recent projects limit, undo history/persist limits, shortcut feedback preference |
+| Units | Length/depth/angle units, decimal precision |
+| Display | Background/grid/font colors, grid spacing, font size, depth gradient settings, section color palette |
+| Map | Satellite provider/toggle/GPS origin, zoom settings, pan/zoom controls, station/shot appearance, snap settings, animation settings |
+| Validation | Shot length min/max warnings, depth change warnings, azimuth deviation warnings, in/out difference thresholds |
+| Export | Default image format (PNG/SVG/PDF), default DPI, default layer includes (satellite, grid, labels) |
+| Shortcuts | Searchable shortcut editor with categories (Tools, Edit, View, Panels), primary/secondary binding slots, conflict detection, reserved shortcuts display |
+| Cache | Tile cache statistics, clear cache button, cache enable toggle, max size, TTL days |
+| Advanced | Debug settings (hitboxes, hit detection logging), logging level/max size, panel dimensions, reload config from disk |
+
+### 10.3 Navigation
+
+#### Keyboard Navigation
+
+The sidebar implements the WAI-ARIA vertical tab pattern with manual activation:
+
+| Key | Action |
+|-----|--------|
+| Arrow Up/Down | Move focus between categories (does not activate) |
+| Home | Focus first category |
+| End | Focus last category |
+| Enter / Space | Activate the focused category |
+| Escape | Close dialog (or close nested confirmation dialog if open) |
+
+Focus is indicated with a ring outline. Active category has highlighted background.
+
+#### Mouse Interaction
+
+- Click any category to activate it immediately
+- Focus follows click (roving tabindex pattern)
+
+### 10.4 Behavior
+
+- **Deferred save**: Changes are stored locally until Save button is clicked
+- **Dirty state tracking**: Tracks which fields have changed from original values
+- **Save button disabled** when no changes or validation errors exist
+- **Reset to Defaults**: Per-category reset button in content header; shows confirmation dialog
+- **Modal**: Blocks background interaction; backdrop does not close dialog
+- **Unsaved changes dialog**: When closing with unsaved changes, shows confirmation with Save/Discard/Cancel options
+
+#### Validation
+
+- Each category validates its fields on change
+- Invalid fields prevent saving (Save button disabled)
+- Categories with validation errors show a red error dot in the sidebar
+
+### 10.5 Accessibility
+
+#### ARIA Attributes
+
+```html
+<!-- Sidebar -->
+<div role="tablist" aria-orientation="vertical" aria-label="Settings categories">
+  <div role="tab" aria-selected="true|false" aria-controls="panel-id" tabindex="0|-1">
+    Category Name
+  </div>
+</div>
+
+<!-- Content -->
+<div role="tabpanel" id="panel-id" aria-labelledby="tab-id">
+  <!-- Category settings -->
+</div>
 ```
 
-### 10.2 Tabs
+#### Focus Management
 
-| Tab | Contents |
-|-----|----------|
-| Display | Color palette, font family/size, station size, line thickness |
-| Validation | Threshold inputs, severity levels, revalidate button |
-| Export | Default format, DPI, include options, presets |
-| About | Version, diagnostics, bug reporter link |
+- Tab cycles within dialog (focus trap)
+- Initial focus on first category tab
+- Roving tabindex on category tabs (only focused tab has tabindex=0)
+- Return focus to trigger element on close
 
-### 10.3 Behavior
+#### Screen Reader Support
 
-- **Apply immediately**: No Save/Apply buttons, changes take effect instantly
-- **Three-level reset**:
-  - Per-setting: Reset icon (↻) next to each setting
-  - Per-tab: "Reset Tab" button at bottom of each tab
-  - Full: "Reset All Settings" button in dialog footer
-- **Modal**: Blocks background interaction
-- **Draggable**: Can be repositioned
+- Live regions announce validation errors
+- Error dots have `aria-label="Has validation errors"`
+- All form controls have appropriate labels
 
-### 10.4 Display Tab
+### 10.6 Confirmation Dialogs
 
-#### Color Palettes (Presets Only)
-- Default (current colors)
-- Ocean (blues/teals)
-- Forest (greens/browns)
-- Desert (oranges/tans)
-- Colorblind-friendly
+Two nested confirmation dialogs may appear:
 
-#### Font Settings
-- Font family: System, Monospace, Sans-serif, Serif
-- Font size: Slider 10-24px (default 12)
+#### Unsaved Changes Dialog
 
-#### Size Settings
-- Station size: Slider 2-12px (default 6)
-- Line thickness: Slider 1-6px (default 2)
+Shown when closing the settings dialog with unsaved changes:
+- Title: "Unsaved Changes"
+- Message: "You have unsaved changes. What would you like to do?"
+- Buttons: Cancel (stay), Discard Changes (close without saving), Save (save and close)
+- Role: `alertdialog` with `aria-modal="true"`
 
-### 10.5 Validation Tab
+#### Reset to Defaults Dialog
 
-#### Thresholds
-- Minimum shot length (default 0.1m)
-- Maximum shot length (default 100m)
-- Maximum depth change per shot (default 50m)
-- Closure error threshold (default 5%)
+Shown when clicking "Reset to Defaults" button:
+- Title: "Reset to Defaults"
+- Message: "Reset all [Category] settings to their default values?"
+- Note: "This will only affect the current category. Changes are not saved until you click Save."
+- Buttons: Cancel, Reset (danger variant)
+- Role: `alertdialog` with `aria-modal="true"`
 
-#### Severity per Validation Type
-- Error: Blocks save/export
-- Warning: Allows proceed with notice
-- Configurable per validation rule
-
-#### Revalidate Button
-- "Revalidate Project" runs validation with current thresholds
-- Shows summary of results
-- Does NOT auto-revalidate on threshold change
-
-### 10.6 Export Tab
-
-#### Default Options
-- Format: csv, json, png, svg
-- DPI: 72, 150, 300
-- Include checkboxes: statistics, metadata, LRUD
-
-#### Built-in Presets
-- **Print**: PNG, 300 DPI, all includes
-- **Web**: PNG, 72 DPI, no metadata
-- **Archive**: JSON, all includes
-
-#### Custom Presets
-- Save current settings as named preset
-- Load/delete custom presets
-- Stored in config file
+Both dialogs:
+- Close on Escape key (captured before main dialog)
+- Have semi-transparent backdrop
+- Are centered in viewport
 
 ---
 
@@ -1714,6 +2200,46 @@ pub struct DmpShot {
 - SVG preserves vector quality
 - PDF includes metadata
 
+#### DPI Scaling
+
+The export system uses a scale factor to convert pixel values to SVG viewBox units:
+
+```
+viewBox_size = pixel_size / scale
+```
+
+where `scale = TARGET_SIZE / max(width, height)` with `TARGET_SIZE = 800px`.
+
+Higher DPI settings produce proportionally larger raster images:
+- 72 DPI: Base size (800px)
+- 150 DPI: ~1667px
+- 300 DPI: ~3333px
+- 600 DPI: ~6667px
+
+PNG exports are limited to 16384px maximum dimension to prevent out-of-memory errors.
+
+#### Element Size Specifications
+
+All SVG elements use pixel-stable sizing via the `px()` helper function. This ensures consistent visual appearance regardless of survey extent.
+
+| Element | Target Pixels | Notes |
+|---------|---------------|-------|
+| Station radius | 3px | Regular stations |
+| Station radius (Zero Datum) | 6px | Double size for visibility |
+| Station stroke-width | 1px | Black outline |
+| Shot stroke-width | 2px | Section or depth color |
+| Virtual shot dasharray | 4px, 2px | Dotted line pattern |
+| Grid stroke-width | 0.5px | Thin grid lines |
+| Shot-label font-size | 8px | Depth labels when enabled |
+| Shot-label dx/dy | 2px, -2px | Offset from midpoint |
+| ZD label dx/dy | 8px, 4px | Offset from zero datum |
+| Section-name dx/dy | 5px, -5px | Offset from midpoint |
+| Label font-size | 10px | Station labels |
+| Section-name font-size | 12px | Bold section names |
+| Legend bar width | 16px | Depth gradient bar |
+| Legend height | 100px | Depth gradient bar |
+| Legend font-size | 10px | Min/max depth labels |
+
 **Survey Data (CSV):**
 ```csv
 section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,is_virtual,comment
@@ -2016,12 +2542,40 @@ cavechef/
 | Deselect | Escape |
 | Zoom In | + / = |
 | Zoom Out | - |
-| Fit to View | Ctrl+0 |
+| Fit to View | F |
 | Toggle Sections Panel | Ctrl+1 |
 | Toggle Detail Panel | Ctrl+2 |
 | Toggle Data Table | Ctrl+3 |
+| Open Settings | Ctrl+, (Cmd+, on macOS) |
 
 **Note**: When Pan (P) or Zoom (Z) tools are active, selection-related shortcuts (Ctrl+A, Delete/Backspace) are disabled to prevent accidental modifications while navigating the map. Hover effects and click selection are also disabled.
+
+### Undo/Redo Dropdown Keyboard Navigation
+
+When the Undo or Redo dropdown is open:
+
+| Action | Shortcut |
+|--------|----------|
+| Open dropdown | Arrow Down (when button focused) |
+| Navigate items | Arrow Up / Arrow Down |
+| Jump to first item | Home |
+| Jump to last item | End |
+| Select item | Enter |
+| Close dropdown | Escape |
+
+The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortcuts), allowing quick keyboard-driven workflows.
+
+### Global View Keyboard Shortcuts
+
+| Action | Shortcut |
+|--------|----------|
+| Open Selected | Enter |
+| Remove from Recent | Delete / Backspace |
+| Deselect All | Escape |
+| Select All | Ctrl+A |
+| Navigate to Nearest System | Arrow Keys (map view only) |
+
+**Note**: Global View has limited keyboard shortcuts since the map-based interface is primarily mouse-driven. Arrow key navigation finds the nearest system in the specified direction using Euclidean distance. Escape also closes the context menu if open.
 
 ---
 

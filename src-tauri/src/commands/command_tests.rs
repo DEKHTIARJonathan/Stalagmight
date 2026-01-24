@@ -372,6 +372,135 @@ fn test_redo_restores_section() {
     assert_eq!(project_state.project.sections.len(), 1);
 }
 
+#[test]
+fn test_undo_to_fails_when_index_out_of_bounds() {
+    let app = app_with_state();
+    create_project(&app);
+    // Create one section - only 1 item in undo stack
+    create_section_with_shots(&app, vec![shot_data(1.0)]);
+
+    // Index 0 should work (1 item), but index 1 should fail
+    let result = history::undo_to(1, state(&app));
+    assert!(!result.success);
+    assert!(result.error.unwrap().contains("Invalid undo index"));
+}
+
+#[test]
+fn test_undo_to_index_0_undoes_one_operation() {
+    let app = app_with_state();
+    create_project(&app);
+    let section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+
+    // Undo to index 0 should undo just the most recent action
+    let result = history::undo_to(0, state(&app));
+    assert_success(&result);
+
+    // Section should be removed
+    let section = section::get_section(state(&app), section_id);
+    assert!(section.is_none());
+}
+
+#[test]
+fn test_undo_to_index_2_undoes_three_operations() {
+    let app = app_with_state();
+    create_project(&app);
+
+    // Create 3 sections (3 undo entries)
+    let _section_1 = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let _section_2 = create_section_with_shots(&app, vec![shot_data(2.0)]);
+    let _section_3 = create_section_with_shots(&app, vec![shot_data(3.0)]);
+
+    // Verify we have 3 sections
+    let project_state = project::get_project_state(state(&app)).expect("project state");
+    assert_eq!(project_state.project.sections.len(), 3);
+
+    // Undo to index 2 should undo all 3 sections (indices 0, 1, 2)
+    let result = history::undo_to(2, state(&app));
+    assert_success(&result);
+
+    // All sections should be removed
+    let project_state = project::get_project_state(state(&app)).expect("project state");
+    assert_eq!(project_state.project.sections.len(), 0);
+}
+
+#[test]
+fn test_redo_to_fails_when_index_out_of_bounds() {
+    let app = app_with_state();
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    // Undo to create a redo entry
+    let _ = history::undo(state(&app));
+
+    // Index 0 should work (1 item), but index 1 should fail
+    let result = history::redo_to(1, state(&app));
+    assert!(!result.success);
+    assert!(result.error.unwrap().contains("Invalid redo index"));
+}
+
+#[test]
+fn test_redo_to_index_0_redoes_one_operation() {
+    let app = app_with_state();
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let _ = history::undo(state(&app));
+
+    // Verify section is gone
+    let project_state = project::get_project_state(state(&app)).expect("project state");
+    assert_eq!(project_state.project.sections.len(), 0);
+
+    // Redo to index 0 should redo just the most recent undone action
+    let result = history::redo_to(0, state(&app));
+    assert_success(&result);
+
+    // Section should be restored
+    let project_state = project::get_project_state(state(&app)).expect("project state");
+    assert_eq!(project_state.project.sections.len(), 1);
+}
+
+#[test]
+fn test_redo_to_index_2_redoes_three_operations() {
+    let app = app_with_state();
+    create_project(&app);
+
+    // Create 3 sections
+    let _section_1 = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let _section_2 = create_section_with_shots(&app, vec![shot_data(2.0)]);
+    let _section_3 = create_section_with_shots(&app, vec![shot_data(3.0)]);
+
+    // Undo all 3
+    let _ = history::undo_to(2, state(&app));
+
+    // Verify all sections are gone
+    let project_state = project::get_project_state(state(&app)).expect("project state");
+    assert_eq!(project_state.project.sections.len(), 0);
+
+    // Redo to index 2 should redo all 3 sections (indices 0, 1, 2)
+    let result = history::redo_to(2, state(&app));
+    assert_success(&result);
+
+    // All sections should be restored
+    let project_state = project::get_project_state(state(&app)).expect("project state");
+    assert_eq!(project_state.project.sections.len(), 3);
+}
+
+#[test]
+fn test_undo_to_fails_when_stack_empty() {
+    let app = app_with_state();
+    // No project or actions
+    let result = history::undo_to(0, state(&app));
+    assert!(!result.success);
+    assert!(result.error.unwrap().contains("Invalid undo index"));
+}
+
+#[test]
+fn test_redo_to_fails_when_stack_empty() {
+    let app = app_with_state();
+    // No project or actions, so no redo available
+    let result = history::redo_to(0, state(&app));
+    assert!(!result.success);
+    assert!(result.error.unwrap().contains("Invalid redo index"));
+}
+
 // === Project commands ===
 
 #[test]

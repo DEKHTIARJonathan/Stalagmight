@@ -71,6 +71,26 @@ export type BatchCommand =
   | { type: 'move_section'; section_id: number; offset: Coordinates }
   | { type: 'set_zero_datum'; station_ref: StationRef; coordinates: { latitude: number; longitude: number; depth_reference: number } };
 
+// Undo history types (match backend UndoHistoryItem)
+export interface FieldChange {
+  field: string;
+  oldValue: string;
+  newValue: string;
+}
+
+export interface PreviewData {
+  changes: FieldChange[];
+  additionalChanges: number;
+}
+
+export interface UndoHistoryItem {
+  index: number;
+  description: string;
+  timestamp: string | null;
+  commandType: string;
+  previewData: PreviewData | null;
+}
+
 // Export types
 export type ImageFormat = 'png' | 'svg' | 'pdf';
 export type ColorMode = 'section' | 'depth';

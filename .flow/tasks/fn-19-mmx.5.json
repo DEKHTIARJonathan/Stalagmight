@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-22T15:09:58.758963Z",
+  "depends_on": [],
+  "epic": "fn-19-mmx",
+  "id": "fn-19-mmx.5",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-19-mmx.5.md",
+  "status": "todo",
+  "title": "Add validation for duplicate datum in connected group",
+  "updated_at": "2026-01-22T15:18:49.551155Z"
+}

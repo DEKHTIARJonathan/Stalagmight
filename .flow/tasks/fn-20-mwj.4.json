@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-22T17:13:02.089520Z",
+  "depends_on": [
+    "fn-20-mwj.1"
+  ],
+  "epic": "fn-20-mwj",
+  "id": "fn-20-mwj.4",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-20-mwj.4.md",
+  "status": "todo",
+  "title": "Implement single azimuth column with circular mean",
+  "updated_at": "2026-01-22T17:14:08.713639Z"
+}

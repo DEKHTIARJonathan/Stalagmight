@@ -10,7 +10,7 @@ use cavechef_lib::models::{
 };
 use cavechef_lib::persistence::Database;
 use chrono::Utc;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tempfile::NamedTempFile;
 
@@ -574,6 +574,7 @@ fn test_batch_command_structure() {
             shots: vec![],
         },
         undo_data: UndoData::ProjectSnapshot("{}".to_string()),
+        timestamp: None,
     };
 
     // Verify entry can be serialized
@@ -627,9 +628,12 @@ fn test_undo_persistence() {
 #[test]
 fn test_undo_zero_datum() {
     // This tests the data structure for undo datum
+    let mut offsets = HashMap::new();
+    offsets.insert(0, Some((10.0, 20.0)));
     let undo_data = UndoData::ZeroDatumInfo {
         station_ref: StationRef::new(0, 0),
         previous_gps: None,
+        previous_offsets: offsets,
     };
 
     // Verify serialization
@@ -640,9 +644,11 @@ fn test_undo_zero_datum() {
         UndoData::ZeroDatumInfo {
             station_ref,
             previous_gps,
+            previous_offsets,
         } => {
             assert_eq!(station_ref, StationRef::new(0, 0));
             assert!(previous_gps.is_none());
+            assert_eq!(previous_offsets.get(&0), Some(&Some((10.0, 20.0))));
         }
         _ => panic!("Wrong undo data type"),
     }
@@ -682,6 +688,7 @@ fn test_comprehensive_undo_types() {
                 longitude: -122.0,
                 depth_reference: 5.0,
             }),
+            previous_offsets: HashMap::new(),
         },
         UndoData::ProjectSnapshot("{}".to_string()),
     ];
@@ -1973,8 +1980,8 @@ fn test_gps_metadata_single_datum() {
 
     let metadata = project.metadata().unwrap();
 
-    // Center should be from first (and only) datum
-    let (lat, lng) = metadata.gps_center.unwrap();
+    // Center should be from first (and only) datum (lng, lat order for MapLibre)
+    let (lng, lat) = metadata.gps_center.unwrap();
     assert!((lat - 45.5).abs() < 0.0001);
     assert!((lng - (-122.7)).abs() < 0.0001);
 
@@ -2018,8 +2025,8 @@ fn test_gps_metadata_multiple_datums() {
 
     let metadata = project.metadata().unwrap();
 
-    // Center should be from first datum
-    let (lat, lng) = metadata.gps_center.unwrap();
+    // Center should be from first datum (lng, lat order for MapLibre)
+    let (lng, lat) = metadata.gps_center.unwrap();
     assert!((lat - 45.0).abs() < 0.0001);
     assert!((lng - (-122.0)).abs() < 0.0001);
 
@@ -2167,8 +2174,9 @@ fn test_gps_metadata_update_preserves_order() {
     project.set_zero_datum(StationRef::new(0, 0), gps_a_updated).unwrap();
 
     // Center should still be from first datum (now with updated values)
+    // (lng, lat order for MapLibre)
     let metadata = project.metadata().unwrap();
-    let (center_lat, center_lng) = metadata.gps_center.unwrap();
+    let (center_lng, center_lat) = metadata.gps_center.unwrap();
 
     // Verify center is the updated first datum, not the second
     assert!((center_lat - 45.5).abs() < 0.0001, "Center should be updated first datum lat");

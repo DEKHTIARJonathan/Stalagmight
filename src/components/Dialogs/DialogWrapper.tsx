@@ -21,6 +21,12 @@ interface DialogWrapperProps {
   size?: DialogSize;
   'data-testid'?: string;
   maxHeight?: string;
+  /** Whether clicking the backdrop closes the dialog. Defaults to true. */
+  closeOnBackdropClick?: boolean;
+  /** Override overflow behavior. Defaults to 'auto'. Use 'hidden' for fixed footer layouts. */
+  overflow?: 'auto' | 'hidden';
+  /** Additional className for the body content wrapper. */
+  bodyClassName?: string;
 }
 
 export function DialogWrapper({
@@ -31,6 +37,9 @@ export function DialogWrapper({
   size = '2xl',
   'data-testid': testId,
   maxHeight = 'max-h-[90vh]',
+  closeOnBackdropClick = true,
+  overflow = 'auto',
+  bodyClassName = 'p-4',
 }: DialogWrapperProps) {
   const titleId = useId();
   const [showConfirm, setShowConfirm] = useState(false);
@@ -74,15 +83,21 @@ export function DialogWrapper({
     return () => document.removeEventListener('keydown', handleEscape, true);
   }, [requestClose, showConfirm, handleCancelDiscard]);
 
+  const handleBackdropClick = useCallback(() => {
+    if (closeOnBackdropClick) {
+      requestClose();
+    }
+  }, [closeOnBackdropClick, requestClose]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={requestClose} />
+      <div className="absolute inset-0 bg-black/50" onClick={handleBackdropClick} />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         data-testid={testId}
-        className={`relative bg-panel border border-border rounded-lg shadow-xl ${sizeClasses[size]} w-full mx-4 ${maxHeight} overflow-auto`}
+        className={`relative bg-panel border border-border rounded-lg shadow-xl ${sizeClasses[size]} w-full mx-4 ${maxHeight} overflow-${overflow} ${overflow === 'hidden' ? 'flex flex-col' : ''}`}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <h2 id={titleId} className="text-lg font-medium">{title}</h2>
@@ -95,7 +110,7 @@ export function DialogWrapper({
             ×
           </button>
         </div>
-        <div className="p-4">
+        <div className={bodyClassName}>
           {typeof children === 'function' ? children({ requestClose }) : children}
         </div>
       </div>

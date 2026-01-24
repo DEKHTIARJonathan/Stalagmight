@@ -91,9 +91,13 @@ describe('RESERVED_SHORTCUTS', () => {
     expect(RESERVED_SHORTCUTS.has('Ctrl+A')).toBe(true);
   });
 
+  it('includes Ctrl+, (Open Settings)', () => {
+    expect(RESERVED_SHORTCUTS.has('Ctrl+,')).toBe(true);
+  });
+
   it('is immutable (ReadonlySet)', () => {
     // TypeScript would prevent .add() at compile time, but verify Set is frozen
-    expect(RESERVED_SHORTCUTS.size).toBe(6);
+    expect(RESERVED_SHORTCUTS.size).toBe(7);
   });
 });
 

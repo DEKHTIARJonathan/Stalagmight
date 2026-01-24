@@ -80,6 +80,39 @@ impl Database {
         Ok(db)
     }
 
+    /// Open an existing database in read-only mode.
+    /// Does not create if missing, does not run migrations.
+    /// Used for lazy loading survey geometry without modifying files.
+    pub fn open_readonly(path: &Path) -> Result<Self> {
+        tracing::debug!("Opening database read-only at: {:?}", path);
+
+        if !path.exists() {
+            anyhow::bail!("File does not exist: {:?}", path);
+        }
+
+        // Validate it's a CaveChef project file by extension
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        if extension != "cvchef" && extension != "cvproj" {
+            anyhow::bail!("Not a CaveChef project file: {:?}", path);
+        }
+
+        // Open in read-only mode - no writes possible
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .context("Failed to open database read-only")?;
+
+        let db = Self { conn };
+
+        // Verify project data exists
+        if !db.has_project_data()? {
+            anyhow::bail!("File does not contain a valid CaveChef project");
+        }
+
+        Ok(db)
+    }
+
     /// Run lightweight schema migrations for tables added after initial release
     fn migrate_schema(&self) -> Result<()> {
         // Ensure display_settings table exists (added in v1.x for per-project display toggles)
@@ -684,6 +717,22 @@ impl Database {
         Ok(entries)
     }
 
+    /// Load undo stack from database with timestamps
+    pub fn load_undo_stack_with_timestamps(&self) -> Result<Vec<(i64, String, String, Option<String>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT sequence, command_json, undo_data_json, executed_at FROM undo_stack ORDER BY sequence")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row?);
+        }
+        Ok(entries)
+    }
+
     /// Clear undo stack entries after a given sequence
     pub fn clear_undo_after(&self, sequence: i64) -> Result<()> {
         self.conn.execute(
@@ -707,6 +756,25 @@ impl Database {
         }
 
         tracing::info!(count = entries.len(), "Saved undo stack to database");
+        Ok(())
+    }
+
+    /// Save undo stack with timestamps (clear existing and save new entries)
+    pub fn save_undo_stack_with_timestamps(&self, entries: Vec<(String, String, Option<String>)>) -> Result<()> {
+        // Clear existing
+        self.conn.execute("DELETE FROM undo_stack", [])?;
+
+        // Save new entries
+        for (seq, (command_json, undo_data_json, timestamp_str)) in entries.iter().enumerate() {
+            // Use provided timestamp or fall back to current time
+            let executed_at = timestamp_str.clone().unwrap_or_else(|| Utc::now().to_rfc3339());
+            self.conn.execute(
+                "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) VALUES (?1, ?2, ?3, ?4)",
+                params![seq as i64, command_json, undo_data_json, executed_at],
+            )?;
+        }
+
+        tracing::info!(count = entries.len(), "Saved undo stack with timestamps to database");
         Ok(())
     }
 

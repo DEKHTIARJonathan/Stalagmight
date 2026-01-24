@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-22T15:09:58.803995Z",
+  "depends_on": [
+    "fn-19-mmx.2"
+  ],
+  "epic": "fn-19-mmx",
+  "id": "fn-19-mmx.6",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-19-mmx.6.md",
+  "status": "todo",
+  "title": "Update frontend to fit-to-bounds after datum set",
+  "updated_at": "2026-01-22T15:11:01.838935Z"
+}

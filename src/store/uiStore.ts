@@ -149,6 +149,15 @@ interface UIStore {
   requestZoomToSection: SectionId | null;
   triggerZoomToSection: (sectionId: SectionId) => void;
   clearZoomToSectionRequest: () => void;
+  requestPanToShot: { sectionId: SectionId; shotId: ShotId } | null;
+  triggerPanToShot: (sectionId: SectionId, shotId: ShotId) => void;
+  clearPanToShotRequest: () => void;
+  requestCenterOnStation: StationRef | null;
+  triggerCenterOnStation: (ref: StationRef) => void;
+  clearCenterOnStationRequest: () => void;
+  requestCenterOnShot: { sectionId: SectionId; shotId: ShotId } | null;
+  triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => void;
+  clearCenterOnShotRequest: () => void;
 
   // Display toggles
   showStations: boolean;
@@ -233,6 +242,10 @@ interface UIStore {
   mapViewportCenterProject: { x: number; y: number } | null;
   setMapViewportCenterProject: (center: { x: number; y: number } | null) => void;
   getMapViewportCenter: () => { x: number; y: number };
+
+  // ARIA selection announcements for screen readers
+  selectionAnnouncement: string;
+  announceSelection: (message: string) => void;
 }
 
 export type DisplayToggleKey =
@@ -408,6 +421,15 @@ export const useUIStore = create<UIStore>((set) => ({
   requestZoomToSection: null,
   triggerZoomToSection: (sectionId: SectionId) => set({ requestZoomToSection: sectionId }),
   clearZoomToSectionRequest: () => set({ requestZoomToSection: null }),
+  requestPanToShot: null,
+  triggerPanToShot: (sectionId: SectionId, shotId: ShotId) => set({ requestPanToShot: { sectionId, shotId } }),
+  clearPanToShotRequest: () => set({ requestPanToShot: null }),
+  requestCenterOnStation: null,
+  triggerCenterOnStation: (ref: StationRef) => set({ requestCenterOnStation: ref }),
+  clearCenterOnStationRequest: () => set({ requestCenterOnStation: null }),
+  requestCenterOnShot: null,
+  triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => set({ requestCenterOnShot: { sectionId, shotId } }),
+  clearCenterOnShotRequest: () => set({ requestCenterOnShot: null }),
 
   // Display toggles (initial values from DISPLAY_DEFAULTS - single source of truth)
   showStations: DISPLAY_DEFAULTS.showStations,
@@ -634,4 +656,8 @@ export const useUIStore = create<UIStore>((set) => ({
     const center = useUIStore.getState().mapViewportCenterProject;
     return center ?? { x: 0, y: 0 };
   },
+
+  // ARIA selection announcements for screen readers
+  selectionAnnouncement: '',
+  announceSelection: (message) => set({ selectionAnnouncement: message }),
 }));

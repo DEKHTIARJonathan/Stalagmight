@@ -30,17 +30,26 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 | `src-tauri/src/persistence/sqlite.rs` | Database schema and operations |
 | `src-tauri/src/parsers/dmp.rs` | mNemo DMP file parser |
 | `src-tauri/src/models/project.rs` | Project model with merge/offset logic |
+| `src-tauri/src/models/geo.rs` | GPS-to-local coordinate transformation (WGS84 → ENU) |
 | `src-tauri/src/cache/tiles.rs` | Satellite tile cache (SQLite-based) |
 | `src-tauri/src/commands/cache.rs` | Cache IPC commands (stats, clear, fetch) |
+| `src-tauri/src/commands/survey.rs` | Survey geometry IPC command (`get_survey_geometry`) |
 | `src/store/projectStore.ts` | Frontend state, Tauri IPC calls |
 | `src/store/uiStore.ts` | UI state (selection, tools, panels) |
+| `src/store/globalViewStore.ts` | Global View state (selection, geometry loading) |
 | `src/components/Map/MapCanvas.tsx` | MapLibre map initialization |
 | `src/components/Map/SurveyLayer.tsx` | Survey rendering on map |
+| `src/components/GlobalView/GlobalView.tsx` | Global View container component |
+| `src/components/GlobalView/GlobalViewMap.tsx` | MapLibre map for Global View |
+| `src/components/GlobalView/GlobalSurveyLayer.ts` | Multi-system survey geometry rendering |
+| `src/components/GlobalView/ViewModeToggle.tsx` | View mode toggle and `useViewMode` hook |
+| `src/components/GlobalView/MetadataPanel.tsx` | System metadata display with aggregate stats |
 | `src/utils/coordinates.ts` | Coordinate transforms (meters ↔ GPS) |
 | `src/utils/tileProtocol.ts` | MapLibre tile protocol for caching |
 | `src/hooks/useProject.ts` | Project file operations hook |
 | `src/hooks/useMapTools.ts` | Map tool handlers |
 | `src/hooks/useKeyboardShortcuts.ts` | Global keyboard shortcut handler |
+| `src/hooks/useFpsMonitor.ts` | FPS monitoring for auto-throttle |
 
 ## Rust Backend Patterns
 
@@ -86,3 +95,83 @@ When stations are merged, section positions are recalculated:
 - Use `Database::open_existing()` for reading (doesn't create files)
 - Use `Database::open()` for writing (creates if needed)
 - Shot IDs are generated on load: `section_id * 100000 + sequence`
+
+### Coordinate Transformation (Zero Datum)
+
+When a station is set as zero datum with GPS coordinates, the system converts GPS (WGS84) to local ENU (East-North-Up) meters:
+
+**Algorithm** (in `src-tauri/src/models/geo.rs`):
+1. **Geodetic → ECEF**: Convert lat/lon to Earth-Centered Earth-Fixed coordinates using WGS84 ellipsoid
+2. **ECEF → ENU**: Rotate ECEF difference to local tangent plane at origin
+3. **Result**: (east, north) offset in meters relative to zero datum
+
+**Key functions**:
+- `geodetic_to_ecef(lat, lon, alt)` - WGS84 to ECEF (public)
+- `ecef_to_enu(dx, dy, dz, lat0, lon0)` - ECEF diff to ENU (private)
+- `gps_to_local(gps, origin)` - Main entry point returning (east, north)
+
+**Important notes**:
+- Altitude is always 0; `depth_reference` is meters below surface, not ellipsoid height
+- The "Up" component is discarded; caves use depth measurements instead
+- Section offsets are tracked in `Project.section_offsets` to maintain visual positions after datum changes
+
+## Global View Data Flow
+
+The Global View renders survey geometry for multiple GPS-positioned systems:
+
+```
+User loads Global View
+    │
+    ▼
+GlobalView.tsx (container)
+    ├── Fetches ProjectMetadata[] via get_recent_projects
+    ├── Filters to GPS-positioned systems
+    └── Renders GlobalViewMap
+            │
+            ▼
+GlobalViewMap.tsx
+    ├── Initializes MapLibre with OSM tiles
+    ├── Restores persisted map position from localStorage
+    ├── Creates GlobalSurveyLayer for geometry rendering
+    └── On map moveend → loadGeometryBatch(visible systems)
+            │
+            ▼
+globalViewStore.ts (Zustand)
+    ├── loadGeometryBatch() sequences geometry fetches
+    ├── Calls get_survey_geometry IPC for each system
+    ├── Tracks loading/loaded/error state per system
+    └── Stores SurveyGeometry in Map<filePath, geometry>
+            │
+            ▼
+GlobalSurveyLayer.ts
+    ├── Receives geometry updates via update()
+    ├── Creates GeoJSON sources/layers for shots and stations
+    ├── Applies search filter via setSearchFilter()
+    └── Updates selection highlighting via setSelectedSystems()
+```
+
+### View Mode Toggle
+
+The `useViewMode` hook persists view mode (`survey` | `markers`) to localStorage:
+
+```typescript
+const [viewMode, setViewMode] = useViewMode();
+// - 'survey': shows geometry, markers as fallback while loading
+// - 'markers': shows only simple markers, no geometry
+```
+
+Switching to markers mode cancels pending geometry loads to save resources.
+
+### FPS Monitoring
+
+The `useFpsMonitor` hook tracks frame rate using `requestAnimationFrame`:
+
+```typescript
+const { isThrottled } = useFpsMonitor(
+  onThrottleNeeded,  // Called when FPS drops below threshold
+  onThrottleRestore, // Called when FPS recovers
+  { fpsThreshold: 30, recoveryThreshold: 45, enabled: true }
+);
+```
+
+When throttled, `GlobalSurveyLayer.setTolerance()` increases GeoJSON simplification.

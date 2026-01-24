@@ -161,6 +161,99 @@ test.describe('GlobalView Map', () => {
     });
   });
 
+  test.describe('Search Filter', () => {
+    test.beforeEach(async ({ page }) => {
+      const mapTab = page.locator('[data-testid="globalview-map-tab"]');
+      await mapTab.click();
+      await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
+    });
+
+    test('should display search input in toolbar', async ({ page }) => {
+      const searchInput = page.getByTestId('globalview-search-input');
+      await expect(searchInput).toBeVisible({ timeout: 5000 });
+      await expect(searchInput).toHaveAttribute('placeholder', 'Search systems...');
+    });
+
+    test('should accept text input', async ({ page }) => {
+      const searchInput = page.getByTestId('globalview-search-input');
+      await searchInput.fill('Alpha');
+      await expect(searchInput).toHaveValue('Alpha');
+    });
+
+    test('should show clear button when text is entered', async ({ page }) => {
+      const searchInput = page.getByTestId('globalview-search-input');
+      const clearButton = page.getByTestId('globalview-search-clear');
+
+      // Clear button should not be visible initially
+      await expect(clearButton).not.toBeVisible();
+
+      // Enter text
+      await searchInput.fill('test');
+
+      // Clear button should now be visible
+      await expect(clearButton).toBeVisible();
+    });
+
+    test('should clear search when X button is clicked', async ({ page }) => {
+      const searchInput = page.getByTestId('globalview-search-input');
+      const clearButton = page.getByTestId('globalview-search-clear');
+
+      // Enter text
+      await searchInput.fill('Alpha');
+      await expect(searchInput).toHaveValue('Alpha');
+
+      // Click clear button
+      await clearButton.click();
+
+      // Input should be empty
+      await expect(searchInput).toHaveValue('');
+      // Clear button should be hidden again
+      await expect(clearButton).not.toBeVisible();
+    });
+
+    test('should clear search when Escape is pressed', async ({ page }) => {
+      const searchInput = page.getByTestId('globalview-search-input');
+
+      // Enter text
+      await searchInput.fill('Beta');
+      await expect(searchInput).toHaveValue('Beta');
+
+      // Press Escape
+      await searchInput.press('Escape');
+
+      // Input should be empty
+      await expect(searchInput).toHaveValue('');
+    });
+
+    test('should maintain focus after Escape clear', async ({ page }) => {
+      const searchInput = page.getByTestId('globalview-search-input');
+
+      // Focus and enter text
+      await searchInput.focus();
+      await searchInput.fill('Gamma');
+
+      // Press Escape
+      await searchInput.press('Escape');
+
+      // Input should still be focused (can type again)
+      await expect(searchInput).toBeFocused();
+    });
+
+    test('should focus input after X button clear', async ({ page }) => {
+      const searchInput = page.getByTestId('globalview-search-input');
+      const clearButton = page.getByTestId('globalview-search-clear');
+
+      // Enter text
+      await searchInput.fill('test');
+
+      // Click clear button
+      await clearButton.click();
+
+      // Input should be focused
+      await expect(searchInput).toBeFocused();
+    });
+  });
+
   test.describe('List View Content', () => {
     test('should display all projects in List view', async ({ page }) => {
       // Should show all 4 projects (including one without GPS)
