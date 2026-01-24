@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-19-mmx",
+  "created_at": "2026-01-22T14:55:26.223357Z",
+  "depends_on_epics": [],
+  "id": "fn-19-mmx",
+  "next_task": 1,
+  "plan_review_status": "ship",
+  "plan_reviewed_at": "2026-01-22T15:22:35.135788Z",
+  "spec_path": ".flow/specs/fn-19-mmx.md",
+  "status": "done",
+  "title": "Zero datum positioning and connected section repositioning",
+  "updated_at": "2026-01-23T13:22:20.936988Z"
+}

@@ -1,6 +1,7 @@
 import { useUIStore, type ToolType } from '../../store/uiStore';
 import { Button, IconButton } from '../common/Button';
 import DisplayMenu from './DisplayMenu';
+import UndoHistoryDropdown from './UndoHistoryDropdown';
 
 interface ToolbarProps {
   projectName: string;
@@ -52,12 +53,28 @@ export default function Toolbar({
           Export
         </Button>
         <div className="w-px h-6 bg-border mx-2" />
-        <Button onClick={onUndo} size="sm" disabled={!canUndo} data-testid="toolbar-undo-button">
-          Undo
-        </Button>
-        <Button onClick={onRedo} size="sm" disabled={!canRedo} data-testid="toolbar-redo-button">
-          Redo
-        </Button>
+        <UndoHistoryDropdown
+          mode="undo"
+          disabled={!canUndo}
+          onSingleAction={onUndo}
+          testId="toolbar-undo-button"
+        >
+          <span className="inline-flex items-center gap-0.5">
+            Undo
+            {canUndo && <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="undo-chevron">{' '}▾</span>}
+          </span>
+        </UndoHistoryDropdown>
+        <UndoHistoryDropdown
+          mode="redo"
+          disabled={!canRedo}
+          onSingleAction={onRedo}
+          testId="toolbar-redo-button"
+        >
+          <span className="inline-flex items-center gap-0.5">
+            Redo
+            {canRedo && <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="redo-chevron">{' '}▾</span>}
+          </span>
+        </UndoHistoryDropdown>
       </div>
 
       {/* Center - project name */}

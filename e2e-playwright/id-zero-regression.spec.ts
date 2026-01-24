@@ -295,9 +295,10 @@ test.describe('ID=0 Bug Fixes', () => {
     // Wait for DataTable to be visible
     await page.waitForSelector('text=Data Table', { timeout: 3000 });
 
-    // Select the section with id=0 from the dropdown
-    const sectionSelect = page.locator('select').filter({ has: page.locator('option:has-text("Zero Section")') });
-    await sectionSelect.selectOption({ label: 'Zero Section' });
+    // Select the section with id=0 from the dropdown (custom Select component)
+    const sectionSelect = page.getByTestId('data-table-section-select');
+    await sectionSelect.click();
+    await sectionSelect.locator('[role="option"]:has-text("Zero Section")').click();
 
     // Verify the warning indicator is visible with the correct data-testid
     await expect(page.getByTestId('warning-0-0')).toBeVisible({ timeout: 3000 });

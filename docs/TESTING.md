@@ -255,13 +255,18 @@ e2e/
 
 CaveChef has two different import flows that serve different purposes:
 
-| Dialog Component | `activeDialog` Value | Opened By | Test File |
-|------------------|---------------------|-----------|-----------|
-| `DmpSelectionDialog` | `'dmp-selection'` | `Ctrl+I` keyboard shortcut | `import-dmp-dialog.spec.ts` |
-| `DmpSectionConfigDialog` | `'dmp-section-config'` | Continue from selection | `import-dmp-dialog.spec.ts` |
-| `ImportDialog` | `'import'` | SectionsPanel "+" button, E2E store | `import-section-dialog.spec.ts` |
+| Dialog Component | `activeDialog` Value | Opened By | Test File | Stats Feature |
+|------------------|---------------------|-----------|-----------|---------------|
+| `DmpSelectionDialog` | `'dmp-selection'` | `Ctrl+I` keyboard shortcut | `import-dmp-dialog.spec.ts` | Selection stats (shot count, total length, depth range) |
+| `DmpSectionConfigDialog` | `'dmp-section-config'` | Continue from selection | `import-dmp-dialog.spec.ts` | Section stats in Parameters panel |
+| `ImportDialog` | `'import'` | SectionsPanel "+" button, E2E store | `import-section-dialog.spec.ts` | N/A |
 
 **Important**: The `Ctrl+I` shortcut opens `DmpSelectionDialog` (Step 1), not `ImportDialog`. Tests that need to verify section name input should use `ImportDialog` via the store.
+
+**Stats Testing Notes:**
+- Step 1 stats update when sections are checked/unchecked - verify `[data-testid="selection-stats"]` content changes
+- Step 2 stats update when shots are edited/deleted - verify `[data-testid="section-stats"]` content changes
+- Use `aria-label` attribute for accessibility testing - contains full descriptive text
 
 ### Dialog Close Behaviors
 
@@ -528,6 +533,15 @@ All UI components must include proper attributes for tests to locate elements re
 | Dialogs | `<name>-dialog` | `data-testid="new-project-dialog"` |
 | Form inputs | `<field>-input` | `data-testid="project-name-input"` |
 | Statistics | `stats-<metric>` | `data-testid="stats-total-length"` |
+| Selection stats (Step 1) | `selection-stats`, `stats-<metric>` | `data-testid="selection-stats"`, `data-testid="stats-shot-count"`, `data-testid="stats-total-length"`, `data-testid="stats-depth-range"` |
+| Section stats (Step 2) | `section-stats`, `section-stats-<metric>` | `data-testid="section-stats"`, `data-testid="section-stats-shot-count"`, `data-testid="section-stats-total-length"`, `data-testid="section-stats-depth-range"` |
+| Detail panel links | `<type>-<sectionId>-<position>-link` | `data-testid="station-2-5-link"`, `data-testid="shot-2-3-link"` |
+| Section links | `section-<sectionId>-link` | `data-testid="section-2-link"` |
+| Center buttons | `center-<type>-button` | `data-testid="center-station-button"`, `data-testid="center-shot-button"`, `data-testid="center-section-button"` |
+| Detail panel | `detail-panel` | `data-testid="detail-panel"` |
+| Station detail | `station-detail` | `data-testid="station-detail"` |
+| Shot detail | `shot-detail` | `data-testid="shot-detail"` |
+| Section detail | `section-detail` | `data-testid="section-detail"` |
 
 ### ARIA Attributes Quick Reference
 
@@ -538,6 +552,75 @@ All UI components must include proper attributes for tests to locate elements re
 | `aria-labelledby` | Connect dialog to its title |
 | `aria-label` | Icon-only buttons |
 | `aria-expanded` | Collapsible panels |
+| `aria-label` (stats) | Statistics containers for screen readers |
+
+#### Statistics ARIA Labels
+
+The selection and section stats containers use descriptive `aria-label` attributes for accessibility:
+
+**Selection Stats (Step 1):**
+```
+aria-label="Selection statistics: 70 shots, 281.8m total length, depth range 2.1-15.4m"
+```
+
+**Section Stats (Step 2):**
+```
+aria-label="Section statistics: 42 shots, 187.3m total length, depth range 3.2-17.8m"
+```
+
+When no depth data is available, the label shows "--" for depth range:
+```
+aria-label="Selection statistics: 5 shots, 42.3m total length, depth range --"
+```
+
+#### Detail Link ARIA Labels
+
+Detail panel hyperlinks use descriptive `aria-label` attributes for screen readers:
+
+```
+aria-label="Select station 2:5"
+aria-label="Select shot 2:3"
+aria-label="Select section 2: Main Line"
+```
+
+Missing targets additionally have `aria-disabled="true"` and show a warning indicator.
+
+#### Center Button ARIA Labels
+
+Center buttons use dynamic `aria-label` attributes based on the element type and ID:
+
+```
+aria-label="Center map on station 2:5"
+aria-label="Center map on shot 2:3"
+aria-label="Center map on section 2: Main Line"
+```
+
+#### ARIA Live Region Testing
+
+The application uses an ARIA live region to announce selection changes triggered by Detail Panel hyperlinks and Data Table shot selection. The live region is at the App component root level (always mounted).
+
+**Testing ARIA Live Announcements:**
+
+```typescript
+// Use the dedicated selection announcer ID (not generic role selector which could match toast)
+const liveRegion = page.locator('#selection-announcer');
+
+// Verify the live region is attached (it's visually hidden with sr-only)
+await expect(liveRegion).toBeAttached();
+
+// Click a detail link and verify announcement
+await page.click('[data-testid="station-2-5-link"]');
+
+// Check the live region content (may require small delay for state update)
+await expect(liveRegion).toHaveText('Selected station 2:5');
+```
+
+**Notes:**
+- The live region has `id="selection-announcer"` for unambiguous selection
+- Uses `role="status"`, `aria-live="polite"`, and `aria-atomic="true"`
+- Announcements triggered by: Detail Panel hyperlinks, Data Table shot selection
+- Map clicks do not trigger announcements
+- The region is visually hidden with the `sr-only` class
 
 ### Selector Priority
 
@@ -553,6 +636,389 @@ All UI components must include proper attributes for tests to locate elements re
 - [ ] Primary buttons have `data-testid`
 - [ ] Form inputs have `data-testid`
 - [ ] Icon-only buttons have `aria-label`
+
+## Testing Dropdown Components
+
+### Undo/Redo History Dropdown
+
+The `UndoHistoryDropdown` component uses hover-triggered display with ARIA menu patterns.
+
+#### Test Identifiers
+
+| Element | data-testid | Notes |
+|---------|-------------|-------|
+| Undo button | `toolbar-undo-button` | Main trigger button |
+| Redo button | `toolbar-redo-button` | Main trigger button |
+| Undo dropdown | `toolbar-undo-button-dropdown` | Container with `role="menu"` |
+| Redo dropdown | `toolbar-redo-button-dropdown` | Container with `role="menu"` |
+| Undo item | `toolbar-undo-button-item-{index}` | Index matches item.index from stack |
+| Redo item | `toolbar-redo-button-item-{index}` | Index matches item.index from stack |
+| Detail preview | `detail-preview-popup` | Shows on item hover |
+| Undo chevron | `undo-chevron` | Visible when stack not empty |
+| Redo chevron | `redo-chevron` | Visible when stack not empty |
+
+#### Hover Trigger Testing
+
+The dropdown opens after a 300ms delay on hover. Tests should account for this:
+
+```typescript
+// Trigger hover and wait for dropdown
+await page.hover('[data-testid="toolbar-undo-button"]');
+await page.waitForSelector('[data-testid="toolbar-undo-button-dropdown"]', { timeout: 500 });
+
+// Verify dropdown is visible
+await expect(page.locator('[role="menu"]')).toBeVisible();
+```
+
+#### Keyboard Navigation Testing
+
+```typescript
+// Focus button and press Arrow Down to open
+await page.focus('[data-testid="toolbar-undo-button"]');
+await page.keyboard.press('ArrowDown');
+
+// Wait for aria-activedescendant to be set (may be async)
+await page.waitForFunction(() => {
+  const dropdown = document.querySelector('[role="menu"]');
+  return dropdown && dropdown.getAttribute('aria-activedescendant');
+});
+
+// Navigate and select
+await page.keyboard.press('ArrowDown');  // Move to second item
+await page.keyboard.press('Enter');       // Select
+```
+
+**Important**: The component sets `aria-activedescendant` in a `setTimeout(0)` callback after keyboard open. Always wait for this attribute before asserting on keyboard navigation state.
+
+#### Close Behavior Testing
+
+Test all close paths:
+
+```typescript
+// 1. Escape key
+await page.keyboard.press('Escape');
+await expect(page.locator('[role="menu"]')).not.toBeVisible();
+
+// 2. Click outside (mousedown)
+await page.click('body', { position: { x: 10, y: 10 } });
+
+// 3. Global undo/redo shortcut
+await page.keyboard.press('Control+z');
+
+// 4. Mouse leave (100ms buffer)
+await page.hover('[data-testid="map-canvas"]');
+await page.waitForTimeout(150);
+```
+
+#### Detail Preview Testing
+
+The preview popup appears on item hover without delay:
+
+```typescript
+// Hover an item to show preview
+const item = page.locator('[data-testid="toolbar-undo-button-item-0"]');
+await item.hover();
+
+// Preview should appear immediately (no delay)
+await expect(page.locator('[data-testid="detail-preview-popup"]')).toBeVisible();
+
+// Verify preview content
+await expect(page.locator('.detail-preview-popup')).toContainText('length');
+```
+
+#### Mock Requirements
+
+When testing with mocked IPC, ensure `get_undo_stack` and `get_redo_stack` return the correct structure:
+
+```typescript
+case 'get_undo_stack': {
+  return [
+    {
+      index: 0,
+      description: 'Create section "Main Line"',
+      timestamp: new Date().toISOString(),
+      commandType: 'create_section',
+      previewData: {
+        changes: [{ field: 'name', oldValue: '', newValue: 'Main Line' }],
+        additionalChanges: 0,
+      },
+    },
+    // ... more items
+  ];
+}
+```
+
+## Testing Detail Panel
+
+The Detail Panel provides navigation hyperlinks and center buttons for survey elements.
+
+### Test Identifiers
+
+| Element | data-testid | Notes |
+|---------|-------------|-------|
+| Detail panel container | `detail-panel` | Main panel container |
+| Station detail view | `station-detail` | Shown when station selected |
+| Shot detail view | `shot-detail` | Shown when shot selected |
+| Section detail view | `section-detail` | Shown when section selected |
+| Station link | `station-{sectionId}-{position}-link` | Position is 1-indexed |
+| Shot link | `shot-{sectionId}-{position}-link` | Position is 1-indexed |
+| Section link | `section-{sectionId}-link` | No position for sections |
+| Center station button | `center-station-button` | In station detail header |
+| Center shot button | `center-shot-button` | In shot detail header |
+| Center section button | `center-section-button` | In section detail header |
+
+### Hyperlink Testing
+
+```typescript
+// Click a station link to change selection
+await page.click('[data-testid="station-2-5-link"]');
+
+// Verify selection changed (detail panel updates)
+await expect(page.locator('[data-testid="station-detail"]')).toBeVisible();
+
+// Verify ARIA announcement was made (use dedicated ID, not generic role selector)
+const liveRegion = page.locator('#selection-announcer');
+await expect(liveRegion).toHaveText('Selected station 2:5');
+```
+
+### Center Button Testing
+
+**Playwright:**
+
+```typescript
+// Click center button to pan/zoom map
+await page.click('[data-testid="center-station-button"]');
+
+// Wait for map animation to complete
+await waitForMapIdle(page);
+
+// Verify map centered on element (check map state)
+const center = await page.evaluate(() => {
+  return (window as any).__cavechef_map__?.getCenter();
+});
+// Assert center is near expected coordinates
+```
+
+**Important**: When testing map centering, first pan the map away from the target element before clicking the center button. Otherwise the test may pass/fail depending on initial map position.
+
+**Playwright example:**
+
+```typescript
+// First pan map off-target to ensure center button actually moves the view
+await page.evaluate(() => {
+  const map = (window as any).__cavechef_map__;
+  if (map) {
+    const center = map.getCenter();
+    map.setCenter([center.lng + 0.001, center.lat + 0.001]);
+  }
+});
+await waitForMapIdle(page);
+
+// Now click center button and verify map moves back
+await page.click('[data-testid="center-station-button"]');
+await waitForMapIdle(page);
+```
+
+**WebdriverIO example:**
+
+```typescript
+// First pan map off-target to ensure center button actually moves the view
+await browser.execute(() => {
+  const map = (window as any).__cavechef_map__;
+  if (map) {
+    const center = map.getCenter();
+    map.setCenter([center.lng + 0.001, center.lat + 0.001]);
+  }
+});
+await waitForMapIdle();
+
+// Now click center button and verify map moves back
+await $('[data-testid="center-station-button"]').click();
+await waitForMapIdle();
+```
+
+### Missing Target Testing
+
+Links to missing targets show a warning indicator and are non-clickable:
+
+```typescript
+// Missing target links have aria-disabled
+const missingLink = page.locator('[data-testid="station-2-99-link"]');
+await expect(missingLink).toHaveAttribute('aria-disabled', 'true');
+
+// Clicking does not change selection
+await missingLink.click();
+// Verify selection did not change
+```
+
+## Export Testing
+
+### SVG/PNG Export Scaling
+
+The export system uses pixel-stable sizing to ensure consistent element appearance regardless of survey extent. Tests verify that SVG element sizes scale correctly.
+
+#### Key Scaling Formula
+
+```rust
+let px = |pixels: f64| -> f64 { pixels / scale };
+```
+
+where `scale = TARGET_SIZE / max(width, height)` with `TARGET_SIZE = 800px`.
+
+#### Verifying Element Sizes
+
+To verify an element has the correct pixel size, multiply its viewBox value by the scale factor:
+
+```rust
+// Scale for 100m survey with 20m padding = 140m total
+let scale = 800.0 / 140.0; // ≈ 5.714
+
+// Station radius in viewBox units
+let r = 0.525; // from SVG
+
+// Verify: r * scale ≈ 3px (target station radius)
+assert!((r * scale - 3.0).abs() < 0.1);
+```
+
+#### Target Element Sizes
+
+| Element | Target Pixels | Test Pattern |
+|---------|---------------|--------------|
+| Station radius | 3px | `r="..."` attribute |
+| Shot stroke-width | 2px | CSS `.shot { stroke-width: ... }` |
+| Grid stroke-width | 0.5px | `class="grid" ... stroke-width="..."` |
+| Virtual shot dash | 4px | `stroke-dasharray="X,Y"` |
+| Virtual shot gap | 2px | `stroke-dasharray="X,Y"` |
+| Label font-size | 10px | CSS `.label { font-size: ... }` |
+| Section-name font-size | 12px | CSS `.section-name { font-size: ... }` |
+
+#### Running Export Tests
+
+```bash
+# Run all Rust export tests
+cargo test --manifest-path src-tauri/Cargo.toml export
+
+# Run scaling regression tests specifically
+cargo test --manifest-path src-tauri/Cargo.toml scaling_regression
+
+# Run visual regression tests
+cargo test --manifest-path src-tauri/Cargo.toml scaling_consistent
+```
+
+#### PNG DPI Scaling Tests
+
+PNG exports scale dimensions based on DPI:
+
+```
+pixel_dimensions = svg_dimensions * (dpi / 72)
+```
+
+Tests verify that PNG dimensions match expected values at 72, 150, 300, and 600 DPI.
+
+## Global View Testing
+
+The Global View has several testable features for survey geometry rendering.
+
+### Test Identifiers
+
+| Element | data-testid | Notes |
+|---------|-------------|-------|
+| Map container | `globalview-map` | Main map container |
+| View mode toggle | `view-mode-toggle` | Survey/markers toggle button |
+| System marker | `system-marker-{filePath}` | Marker element for each system |
+| Search input | `globalview-search-input` | Search filter input |
+| Search clear button | `globalview-search-clear` | Clear search button |
+
+### View Mode Toggle Testing
+
+```typescript
+// Toggle between survey and markers mode
+await page.click('[data-testid="view-mode-toggle"]');
+
+// Verify mode change persists to localStorage
+const mode = await page.evaluate(() => localStorage.getItem('globalViewMode'));
+expect(mode).toBe('markers');
+```
+
+### Map Position Persistence Testing
+
+```typescript
+// Pan the map and verify state is saved
+const mapCanvas = page.locator('[data-testid="globalview-map"] canvas');
+await mapCanvas.hover();
+await page.mouse.down();
+await page.mouse.move(100, 100, { steps: 5 });
+await page.mouse.up();
+
+// Wait for moveend event to fire
+await page.waitForTimeout(100);
+
+// Verify localStorage was updated
+const mapState = await page.evaluate(() => localStorage.getItem('globalViewMapState'));
+expect(mapState).not.toBeNull();
+const parsed = JSON.parse(mapState!);
+expect(parsed).toHaveProperty('center');
+expect(parsed).toHaveProperty('zoom');
+```
+
+### Geometry Loading State Testing
+
+```typescript
+// Mock get_survey_geometry to control loading states
+// In tauri-ipc.ts:
+case 'get_survey_geometry': {
+  const filePath = args?.file_path as string;
+  // Return mock geometry or simulate error
+  if (filePath.includes('error')) {
+    throw new Error('Failed to load geometry');
+  }
+  return {
+    file_path: filePath,
+    name: 'Test System',
+    total_length: 100.0,
+    station_count: 10,
+    gps_origin: [-81.78, 24.55],
+    shots: [{ from: [-81.78, 24.55], to: [-81.77, 24.56], is_virtual: false }],
+    stations: [[-81.78, 24.55], [-81.77, 24.56]],
+  };
+}
+```
+
+### Multi-Select Testing
+
+```typescript
+// Ctrl+click to multi-select systems
+await page.click('[data-testid="system-marker-system1.cvproj"]');
+await page.click('[data-testid="system-marker-system2.cvproj"]', { modifiers: ['Control'] });
+
+// Verify multiple systems are selected in store
+const selected = await page.evaluate(() => {
+  return (window as any).__E2E_TEST__.globalViewStore.getState().selectedSystemIds;
+});
+expect(selected).toHaveLength(2);
+```
+
+### Context Menu Testing
+
+```typescript
+// Right-click to open context menu
+await page.click('[data-testid="system-marker-system1.cvproj"]', { button: 'right' });
+await expect(page.locator('[data-testid="context-menu"]')).toBeVisible();
+```
+
+### Search Filter Testing
+
+```typescript
+// Type in search to filter systems
+await page.fill('[data-testid="globalview-search-input"]', 'sistema');
+
+// Verify non-matching systems are dimmed (via filter expression)
+// This requires checking MapLibre layer paint properties
+
+// Clear search with button
+await page.click('[data-testid="globalview-search-clear"]');
+await expect(page.locator('[data-testid="globalview-search-input"]')).toHaveValue('');
+```
 
 ## Troubleshooting
 

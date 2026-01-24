@@ -341,8 +341,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               coordinates: { x: number; y: number; z: number };
               is_zero_datum: boolean;
               gps_coordinates: null;
-              merged_with: never[];
+              merged_with: Array<{ section_id: number; station_index: number }>;
             }> = [];
+
+            // Collect all section IDs for merged station setup
+            const sectionIds = (currentProject.sections as Array<{ id: number }>).map(s => s.id);
 
             for (const section of currentProject.sections as Array<{ id: number; shots: Array<{ depth_in?: number; depth_out?: number }> }>) {
               const shots = section.shots ?? [];
@@ -358,12 +361,31 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }
 
               for (let i = 0; i < depths.length; i++) {
+                // Set up merged_with for testing: last station of first section merges with first station of second section
+                // This enables E2E tests for merged station links without direct store manipulation
+                let mergedWith: Array<{ section_id: number; station_index: number }> = [];
+                const sectionIndex = sectionIds.indexOf(section.id);
+                const isLastStation = i === depths.length - 1;
+                const isFirstStation = i === 0;
+
+                // Last station of first section -> merge with first station of second section (if exists)
+                if (sectionIndex === 0 && isLastStation && sectionIds.length > 1) {
+                  mergedWith = [{ section_id: sectionIds[1]!, station_index: 0 }];
+                }
+                // First station of second section -> merge with last station of first section
+                if (sectionIndex === 1 && isFirstStation && sectionIds.length > 1) {
+                  // Find last station index of first section
+                  const firstSection = currentProject.sections[0] as { shots: unknown[] } | undefined;
+                  const firstSectionLastStationIndex = firstSection ? (firstSection.shots?.length ?? 0) : 0;
+                  mergedWith = [{ section_id: sectionIds[0]!, station_index: firstSectionLastStationIndex }];
+                }
+
                 mockStations.push({
                   station_ref: { section_id: section.id, station_index: i },
                   coordinates: { x: i * 10, y: 0, z: depths[i] ?? 0 },
-                  is_zero_datum: i === 0,
+                  is_zero_datum: i === 0 && sectionIndex === 0,
                   gps_coordinates: null,
-                  merged_with: [],
+                  merged_with: mergedWith,
                 });
               }
             }
@@ -481,29 +503,50 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'get_project':
           case 'get_project_state': {
-            // Generate mock stations from sections
+            // Generate mock stations from sections with merged_with data
             const mockStations: Array<{
               station_ref: { section_id: number; station_index: number };
               coordinates: { x: number; y: number; z: number };
               is_zero_datum: boolean;
               gps_coordinates: null;
-              merged_with: never[];
+              merged_with: Array<{ section_id: number; station_index: number }>;
             }> = [];
+
+            // Collect all section IDs for merged station setup
+            const sectionIdList = (currentProject?.sections as Array<{ id: number }> ?? []).map(s => s.id);
 
             if (currentProject?.sections) {
               for (const section of currentProject.sections as Array<{ id: number; shots: unknown[] }>) {
                 // Each section gets (shots.length + 1) stations
                 const shotCount = section.shots?.length ?? 0;
+                const sectionIndex = sectionIdList.indexOf(section.id);
+
                 for (let i = 0; i <= shotCount; i++) {
+                  // Set up merged_with: last station of first section merges with first station of second section
+                  let mergedWith: Array<{ section_id: number; station_index: number }> = [];
+                  const isLastStation = i === shotCount;
+                  const isFirstStation = i === 0;
+
+                  // Last station of first section -> merge with first station of second section (if exists)
+                  if (sectionIndex === 0 && isLastStation && sectionIdList.length > 1) {
+                    mergedWith = [{ section_id: sectionIdList[1]!, station_index: 0 }];
+                  }
+                  // First station of second section -> merge with last station of first section
+                  if (sectionIndex === 1 && isFirstStation && sectionIdList.length > 1) {
+                    const firstSection = currentProject.sections[0] as { shots?: unknown[] } | undefined;
+                    const firstSectionLastStationIndex = firstSection?.shots?.length ?? 0;
+                    mergedWith = [{ section_id: sectionIdList[0]!, station_index: firstSectionLastStationIndex }];
+                  }
+
                   mockStations.push({
                     station_ref: {
                       section_id: section.id,
                       station_index: i,
                     },
                     coordinates: { x: i * 10, y: 0, z: 0 },
-                    is_zero_datum: i === 0,
+                    is_zero_datum: i === 0 && sectionIndex === 0,
                     gps_coordinates: null,
-                    merged_with: [],
+                    merged_with: mergedWith,
                   });
                 }
               }

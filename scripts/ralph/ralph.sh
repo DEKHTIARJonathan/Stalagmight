@@ -694,9 +694,14 @@ PY
 }
 
 maybe_close_epics() {
-  [[ -z "$EPICS_FILE" ]] && return 0
   local epics json status all_done
-  epics="$(list_epics_from_file)"
+  if [[ -n "$EPICS_FILE" ]]; then
+    # Scoped mode: use epics from file
+    epics="$(list_epics_from_file)"
+  else
+    # Unscoped mode: get all open epics from flowctl
+    epics="$("$FLOWCTL" epics --json 2>/dev/null | "$PYTHON_BIN" -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(e["id"] for e in d.get("epics",[]) if e.get("status")!="done"))' 2>/dev/null || true)"
+  fi
   [[ -z "$epics" ]] && return 0
   for epic in $epics; do
     json="$("$FLOWCTL" show "$epic" --json 2>/dev/null || true)"

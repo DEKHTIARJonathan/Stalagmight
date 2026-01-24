@@ -310,7 +310,7 @@ test.describe('Export Preview', () => {
     // Open dropdown and select a different preset
     await depthPresetSelect.locator('button').first().click();
     const dropdown = depthPresetSelect.locator('.absolute');
-    await dropdown.locator('button:has-text("Ocean")').click();
+    await dropdown.locator('[role="option"]:has-text("Ocean")').click();
 
     // Wait for preset colors to be fetched and preview to update
     await page.waitForTimeout(600);

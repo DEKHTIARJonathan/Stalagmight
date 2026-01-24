@@ -244,3 +244,8 @@ tr:hover {
 .react-datepicker-popper {
   z-index: 100 !important;
 }
+
+/* GlobalView marker spinner animation */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

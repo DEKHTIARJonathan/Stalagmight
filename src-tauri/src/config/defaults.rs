@@ -15,6 +15,7 @@ impl Default for Config {
             panels: PanelsConfig::default(),
             cache: CacheConfig::default(),
             debug: DebugConfig::default(),
+            global_view: GlobalViewConfig::default(),
             legacy_snap: None,
         }
     }

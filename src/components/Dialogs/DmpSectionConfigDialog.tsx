@@ -10,6 +10,9 @@ import { Select, type SelectOptionGroup } from '../common/Select';
 import SectionPreview, { type MergePreviewConfig } from './SectionPreview';
 import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
+import { defaultConfig } from '../../types/config';
+import { formatLength, formatDepthRange } from '../../utils/formatStats';
 import {
   useImportState,
   type PlacementConfig,
@@ -66,6 +69,11 @@ export default function DmpSectionConfigDialog({
 }: DmpSectionConfigDialogProps) {
   // Get placement mode controls from UI store
   const { startPlacementMode, closeDialog, openDialog, dialogData, getMapViewportCenter } = useUIStore();
+
+  // Get config for unit conversion (fallback to defaults)
+  const config = useProjectStore((state) => state.config);
+  const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
+  const depthUnit = config?.units?.depth ?? defaultConfig.units.depth;
 
   // Check for saved state from dialogData (for restoring after placement mode)
   const savedSectionConfigs = dialogData.savedSectionConfigs as Array<[number, SectionConfig]> | undefined;
@@ -175,6 +183,42 @@ export default function DmpSectionConfigDialog({
   const currentShotCount = useMemo(() => {
     if (!currentConfig) return 0;
     return currentConfig.shots.filter((s) => !s.isDeleted).length;
+  }, [currentConfig]);
+
+  // Compute section stats for current section
+  // Note: currentConfig.shots already contains only Standard shots (filtered during import config creation)
+  const sectionStats = useMemo(() => {
+    if (!currentConfig) {
+      return { shotCount: 0, totalLength: 0, minDepth: null as number | null, maxDepth: null as number | null };
+    }
+
+    const visibleShots = currentConfig.shots.filter((s) => !s.isDeleted);
+    let totalLength = 0;
+    let minDepth: number | null = null;
+    let maxDepth: number | null = null;
+
+    for (const shot of visibleShots) {
+      // Exclude negative lengths from total (data corruption guard)
+      if (Number.isFinite(shot.length) && shot.length >= 0) {
+        totalLength += shot.length;
+      }
+
+      // Calculate depth range from depth_in and depth_out
+      // Use Number.isFinite() to exclude NaN/Infinity
+      for (const depth of [shot.depth_in, shot.depth_out]) {
+        if (Number.isFinite(depth)) {
+          if (minDepth === null || depth < minDepth) minDepth = depth;
+          if (maxDepth === null || depth > maxDepth) maxDepth = depth;
+        }
+      }
+    }
+
+    return {
+      shotCount: visibleShots.length,
+      totalLength,
+      minDepth,
+      maxDepth,
+    };
   }, [currentConfig]);
 
   // Generate station options (0 to shotCount, since station N is after shot N-1)
@@ -1129,6 +1173,20 @@ export default function DmpSectionConfigDialog({
                 {/* Parameters */}
                 <div className="mb-4">
                   <Panel title="Parameters">
+                    {/* Section stats display */}
+                    <div
+                      className={`text-sm text-text-secondary border-b border-border pb-3 mb-3 ${
+                        isCurrentExcluded ? 'opacity-50' : ''
+                      }`}
+                      data-testid="section-stats"
+                      aria-label={`Section statistics: ${sectionStats.shotCount} shots, ${formatLength(sectionStats.totalLength, lengthUnit)} total length, depth range ${formatDepthRange(sectionStats.minDepth, sectionStats.maxDepth, depthUnit)}`}
+                    >
+                      <span data-testid="section-stats-shot-count">{sectionStats.shotCount} shots</span>
+                      <span className="mx-2">|</span>
+                      <span data-testid="section-stats-total-length">{formatLength(sectionStats.totalLength, lengthUnit)}</span>
+                      <span className="mx-2">|</span>
+                      <span data-testid="section-stats-depth-range">Depth: {formatDepthRange(sectionStats.minDepth, sectionStats.maxDepth, depthUnit)}</span>
+                    </div>
                     <SectionMetadataForm
                       name={currentConfig.name}
                       surveyor={currentConfig.surveyor ?? ''}

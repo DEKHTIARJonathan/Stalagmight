@@ -3,6 +3,9 @@ import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
 import { useUIStore } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
+import { defaultConfig } from '../../types/config';
+import { formatLength, formatDepthRange } from '../../utils/formatStats';
 import type { DmpFile } from '../../types/commands';
 
 /**
@@ -30,29 +33,39 @@ interface DmpSelectionDialogProps {
 }
 
 /**
- * Calculate DMP file metadata for header display.
+ * Calculate DMP file metadata for header display based on selected sections.
  */
-function calculateMetadata(dmpFile: DmpFile) {
+function calculateMetadata(dmpFile: DmpFile, selectedIndices: Set<number>) {
   const sections = dmpFile.sections;
   const sectionCount = sections.length;
 
-  // Count only standard shots
+  // Count only standard shots from selected sections
   let totalShots = 0;
   let totalLength = 0;
-  let minDate: string | null = null;
-  let maxDate: string | null = null;
+  let minDepth: number | null = null;
+  let maxDepth: number | null = null;
 
-  for (const section of sections) {
+  for (let i = 0; i < sections.length; i++) {
+    if (!selectedIndices.has(i)) continue;
+
+    const section = sections[i];
+    if (!section) continue;
+
     const standardShots = section.shots.filter(s => s.shot_type === 'Standard');
     totalShots += standardShots.length;
-    totalLength += standardShots.reduce((sum, shot) => sum + shot.length, 0);
 
-    // Track date range
-    if (section.date) {
-      const dateStr = section.date.split(/[T ]/)[0];
-      if (dateStr) {
-        if (!minDate || dateStr < minDate) minDate = dateStr;
-        if (!maxDate || dateStr > maxDate) maxDate = dateStr;
+    for (const shot of standardShots) {
+      // Exclude negative lengths from total (data corruption guard)
+      if (Number.isFinite(shot.length) && shot.length >= 0) {
+        totalLength += shot.length;
+      }
+
+      // Calculate depth range from depth_in and depth_out
+      for (const depth of [shot.depth_in, shot.depth_out]) {
+        if (Number.isFinite(depth)) {
+          if (minDepth === null || depth < minDepth) minDepth = depth;
+          if (maxDepth === null || depth > maxDepth) maxDepth = depth;
+        }
       }
     }
   }
@@ -61,9 +74,8 @@ function calculateMetadata(dmpFile: DmpFile) {
     sectionCount,
     totalShots,
     totalLength,
-    dateRange: minDate && maxDate
-      ? (minDate === maxDate ? minDate : `${minDate} to ${maxDate}`)
-      : null,
+    minDepth,
+    maxDepth,
   };
 }
 
@@ -90,8 +102,10 @@ export default function DmpSelectionDialog({
     return parts[parts.length - 1] ?? filePath;
   }, [filePath]);
 
-  // Calculate metadata for header
-  const metadata = useMemo(() => calculateMetadata(dmpFile), [dmpFile]);
+  // Get config for unit conversion (fallback to defaults)
+  const config = useProjectStore((state) => state.config);
+  const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
+  const depthUnit = config?.units?.depth ?? defaultConfig.units.depth;
 
   // Get last used surveyor from session memory
   const lastUsedSurveyor = useUIStore((state) => state.lastUsedSurveyor);
@@ -143,6 +157,12 @@ export default function DmpSelectionDialog({
 
     return false;
   }, [defaultSurveyor, initialSurveyor, defaultDate, initialDate, selectedIndices, initialSelection]);
+
+  // Calculate metadata for header based on selected sections (updates in real-time)
+  const metadata = useMemo(
+    () => calculateMetadata(dmpFile, selectedIndices),
+    [dmpFile, selectedIndices]
+  );
 
   // Bulk selection handlers
   const handleSelectAll = useCallback(() => {
@@ -218,22 +238,18 @@ export default function DmpSelectionDialog({
         {/* File metadata header */}
         <div className="bg-background/50 rounded p-3 text-sm">
           <div className="font-medium text-text-primary mb-1" data-testid="dmp-filename">
-            File: {fileName}
+            File: {fileName} (v{dmpFile.version})
           </div>
-          <div className="text-text-secondary space-x-3" data-testid="dmp-metadata">
-            <span>Version: {dmpFile.version}</span>
-            <span>|</span>
-            <span>Sections: {metadata.sectionCount}</span>
-            <span>|</span>
-            <span>Shots: {metadata.totalShots}</span>
-            <span>|</span>
-            <span>Length: {metadata.totalLength.toFixed(1)}m</span>
-            {metadata.dateRange && (
-              <>
-                <span>|</span>
-                <span>Date: {metadata.dateRange}</span>
-              </>
-            )}
+          <div
+            className="text-text-secondary"
+            data-testid="selection-stats"
+            aria-label={`Selection statistics: ${metadata.totalShots} shots, ${formatLength(metadata.totalLength, lengthUnit)} total length, depth range ${formatDepthRange(metadata.minDepth, metadata.maxDepth, depthUnit)}`}
+          >
+            <span data-testid="stats-shot-count">{metadata.totalShots} shots</span>
+            <span className="mx-2">|</span>
+            <span data-testid="stats-total-length">{formatLength(metadata.totalLength, lengthUnit)}</span>
+            <span className="mx-2">|</span>
+            <span data-testid="stats-depth-range">Depth: {formatDepthRange(metadata.minDepth, metadata.maxDepth, depthUnit)}</span>
           </div>
         </div>
 

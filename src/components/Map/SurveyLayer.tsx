@@ -1186,6 +1186,20 @@ export default class SurveyLayer {
   }
 
   /**
+   * Set the hovered shot for visual highlighting (external hover, e.g. from DataTable).
+   * This allows external components to trigger shot hover highlighting without mouse interaction.
+   * @param sectionId - The SectionId of the shot, or null to clear
+   * @param shotId - The ShotId of the shot, or null to clear
+   */
+  setHoveredShot(sectionId: SectionId | null, shotId: ShotId | null): void {
+    // Convert to composite string ID format used internally
+    const stringId = sectionId !== null && shotId !== null ? `${sectionId}:${shotId}` : null;
+    if (this.hoveredShotId === stringId) return;
+    this.hoveredShotId = stringId;
+    this.updateVisualState();
+  }
+
+  /**
    * Set the selected section for visual highlighting.
    * Stores the section ID for use by updateVisualState() to apply selected styling
    * to all shots and stations in this section.

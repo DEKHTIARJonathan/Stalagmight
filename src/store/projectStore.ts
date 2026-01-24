@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { useUIStore } from './uiStore';
+import { useGlobalViewStore } from './globalViewStore';
 import type {
   Project,
   ProjectState,
@@ -19,7 +20,7 @@ import type {
   Coordinates,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand } from '../types/commands';
+import type { CommandResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
 /**
@@ -179,13 +180,17 @@ interface ProjectStore {
 
   mergeStations: (stationA: StationRef, stationB: StationRef, strategy: ClosureStrategy) => Promise<CommandResult>;
   unmergeStations: (stationRef: StationRef) => Promise<CommandResult>;
-  setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates) => Promise<CommandResult>;
+  setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
   moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
   moveStation: (stationRef: StationRef, newPosition: Coordinates) => Promise<CommandResult>;
 
   undo: () => Promise<CommandResult>;
   redo: () => Promise<CommandResult>;
+  undoTo: (index: number) => Promise<CommandResult>;
+  redoTo: (index: number) => Promise<CommandResult>;
+  getUndoStack: () => Promise<UndoHistoryItem[]>;
+  getRedoStack: () => Promise<UndoHistoryItem[]>;
   refreshUndoState: () => Promise<void>;
 
   // Batch execution - groups multiple commands into a single undo/redo unit
@@ -297,6 +302,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   // Load project using the consolidated load_project_full command
   loadProject: async (path: string) => {
+    // Clear GlobalView geometry cache to cancel pending loads and free memory
+    useGlobalViewStore.getState().clearGeometryCache();
+
     // ALWAYS cancel first - NO isLoading guard
     // cancel_loading is idempotent on backend
     await get().cancelLoading();
@@ -676,11 +684,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     return result;
   },
 
-  setZeroDatum: async (stationRef: StationRef, coordinates: GpsCoordinates) => {
+  setZeroDatum: async (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => {
     const result = await invoke<CommandResult>('set_zero_datum', { stationRef, coordinates });
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
+      if (options?.fitToBounds !== false) {
+        useUIStore.getState().triggerFitToBounds();
+      }
     }
     return result;
   },
@@ -729,6 +740,32 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       set({ isDirty: true });
     }
     return result;
+  },
+
+  undoTo: async (index: number) => {
+    const result = await invoke<CommandResult>('undo_to', { index });
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
+  },
+
+  redoTo: async (index: number) => {
+    const result = await invoke<CommandResult>('redo_to', { index });
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
+  },
+
+  getUndoStack: async () => {
+    return await invoke<UndoHistoryItem[]>('get_undo_stack');
+  },
+
+  getRedoStack: async () => {
+    return await invoke<UndoHistoryItem[]>('get_redo_stack');
   },
 
   refreshUndoState: async () => {

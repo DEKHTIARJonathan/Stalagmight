@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-18-1si",
+  "created_at": "2026-01-22T14:02:06.493062Z",
+  "depends_on_epics": [],
+  "id": "fn-18-1si",
+  "next_task": 1,
+  "plan_review_status": "ship",
+  "plan_reviewed_at": "2026-01-22T14:14:39.100994Z",
+  "spec_path": ".flow/specs/fn-18-1si.md",
+  "status": "done",
+  "title": "Import dialog statistics footer",
+  "updated_at": "2026-01-23T13:22:20.826749Z"
+}

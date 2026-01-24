@@ -1,11 +1,14 @@
-import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { useProject } from '../../hooks/useProject';
+import { useGlobalViewShortcuts } from '../../hooks/useGlobalViewShortcuts';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { useGlobalViewStore } from '../../store/globalViewStore';
 import { Button } from '../common/Button';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
-import GlobalViewMap from './GlobalViewMap';
+import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
 import type { ProjectMetadata } from '../../types/project';
 
@@ -65,6 +68,11 @@ export default function GlobalView() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
   const [metadataPanelCollapsed, setMetadataPanelCollapsed] = useState(false);
+  // Search filter state (owned here, passed down to GlobalViewMap)
+  const [searchTerm, setSearchTerm] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  // Ref to GlobalViewMap for spatial navigation
+  const mapRef = useRef<GlobalViewMapHandle>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -72,6 +80,8 @@ export default function GlobalView() {
     projectPath: null,
   });
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  // State for zoom to system trigger (used by context menu "Zoom to System" action)
+  const [zoomToSystem, setZoomToSystem] = useState<string | null>(null);
 
   useEffect(() => {
     loadRecentProjects();
@@ -91,21 +101,40 @@ export default function GlobalView() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [contextMenu.visible]);
 
-  // Close context menu on escape
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && contextMenu.visible) {
-        setContextMenu((prev) => ({ ...prev, visible: false }));
-      }
-    };
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [contextMenu.visible]);
+  // Note: Context menu escape is handled in the main keyboard handler below
 
-  // Check if there are any GPS-positioned projects
-  const hasGpsProjects = recentProjects.some(
-    (p) => p.gps_center !== null && p.gps_center[0] !== 0 && p.gps_center[1] !== 0
-  );
+  // Access global view store for lazy loading and selection
+  const { geometryData, geometryStates, selectedSystemIds } = useGlobalViewStore();
+
+  // Sync store selection to local state when map Ctrl+click changes store
+  // This ensures keyboard shortcuts work with map multi-selection
+  useEffect(() => {
+    // Only sync when there's an actual change to avoid loops
+    const storeSet = selectedSystemIds;
+    const localSet = multiSelectedIds;
+
+    // Check if sets are different
+    const areDifferent = storeSet.size !== localSet.size ||
+      [...storeSet].some(id => !localSet.has(id));
+
+    if (areDifferent) {
+      setMultiSelectedIds(new Set(storeSet));
+      // Update primary selection based on store
+      if (storeSet.size === 0) {
+        // Store cleared - clear primary selection too
+        setSelectedProjectId(null);
+      } else if (!storeSet.has(selectedProjectId ?? '')) {
+        // Primary selection not in store - update to first in store
+        const firstId = [...storeSet][0];
+        if (firstId) {
+          setSelectedProjectId(firstId);
+        }
+      }
+    }
+  }, [selectedSystemIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Check if there are any GPS-positioned projects (null check only, no sentinel)
+  const hasGpsProjects = recentProjects.some((p) => p.gps_center !== null);
 
   // Handle project selection (single click)
   const handleProjectSelect = useCallback((filePath: string, ctrlKey?: boolean) => {
@@ -129,7 +158,7 @@ export default function GlobalView() {
     }
   }, []);
 
-  // Handle right-click context menu
+  // Handle right-click context menu (from list view)
   const handleContextMenu = useCallback((e: MouseEvent, filePath: string) => {
     e.preventDefault();
     // If right-clicked project isn't selected, select it
@@ -145,9 +174,24 @@ export default function GlobalView() {
     });
   }, [multiSelectedIds]);
 
+  // Handle context menu from map (called with coordinates instead of MouseEvent)
+  const handleMapContextMenu = useCallback((filePath: string, x: number, y: number) => {
+    // If right-clicked project isn't selected, select it
+    if (!multiSelectedIds.has(filePath)) {
+      setSelectedProjectId(filePath);
+      setMultiSelectedIds(new Set([filePath]));
+    }
+    setContextMenu({
+      visible: true,
+      x,
+      y,
+      projectPath: filePath,
+    });
+  }, [multiSelectedIds]);
+
   // Handle project open (double-click on map or from metadata panel)
   const handleProjectOpen = useCallback(async (filePath: string) => {
-    // loadProject handles view switching internally
+    // loadProject handles view switching and clears GlobalView geometry cache
     await loadProject(filePath);
   }, [loadProject]);
 
@@ -183,6 +227,22 @@ export default function GlobalView() {
     });
   }, [removeFromRecentProjects, selectedProjectId]);
 
+  // Register GlobalView keyboard shortcuts via hook
+  useGlobalViewShortcuts({
+    selectedProjectId,
+    multiSelectedIds,
+    activeTab,
+    recentProjects,
+    loading,
+    contextMenu,
+    mapRef,
+    setSelectedProjectId,
+    setMultiSelectedIds,
+    setContextMenu,
+    handleProjectOpen,
+    handleRemoveFromRecent,
+  });
+
   // Handle merge projects
   const handleMergeProjects = useCallback(() => {
     setContextMenu((prev) => ({ ...prev, visible: false }));
@@ -194,11 +254,65 @@ export default function GlobalView() {
     }
   }, [multiSelectedIds, recentProjects, openDialog]);
 
+  // Handle zoom to system (context menu action)
+  const handleZoomToSystem = useCallback(() => {
+    if (contextMenu.projectPath) {
+      // Toggle to map tab if not already there
+      if (activeTab !== 'map') {
+        setActiveTab('map');
+      }
+      // Trigger zoom - use a counter pattern to ensure re-trigger even for same path
+      setZoomToSystem(contextMenu.projectPath);
+    }
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+  }, [contextMenu.projectPath, activeTab]);
+
+  // Callback for GlobalViewMap to signal zoom was handled
+  const handleZoomHandled = useCallback(() => {
+    setZoomToSystem(null);
+  }, []);
+
+  // Handle show in folder (context menu action)
+  const handleShowInFolder = useCallback(async () => {
+    if (contextMenu.projectPath) {
+      try {
+        await revealItemInDir(contextMenu.projectPath);
+      } catch (err) {
+        console.error('Failed to reveal in folder:', err);
+      }
+    }
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+  }, [contextMenu.projectPath]);
+
+  // Handle search input changes (instant filtering)
+  const handleSearchChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    setSearchTerm(e.target.value);
+  }, []);
+
+  // Handle clearing search (X button)
+  const handleClearSearch = useCallback(() => {
+    setSearchTerm('');
+    searchInputRef.current?.focus();
+  }, []);
+
+  // Handle search input keyboard events (Escape to clear)
+  const handleSearchKeyDown = useCallback((e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      setSearchTerm('');
+      // Keep focus on input after clearing
+    }
+  }, []);
+
   // Get the selected project metadata
   const selectedProject = useMemo(() => {
     if (!selectedProjectId) return null;
     return recentProjects.find(p => p.file_path === selectedProjectId) || null;
   }, [selectedProjectId, recentProjects]);
+
+  // Get selected projects array for multi-selection support
+  const selectedProjects = useMemo(() => {
+    return recentProjects.filter(p => multiSelectedIds.has(p.file_path));
+  }, [recentProjects, multiSelectedIds]);
 
   // Get selected projects count
   const selectedCount = multiSelectedIds.size;
@@ -226,29 +340,73 @@ export default function GlobalView() {
 
       {/* Tabs - only show if there are projects */}
       {recentProjects.length > 0 && (
-        <div className="flex border-b border-border px-4">
-          <button
-            data-testid="globalview-map-tab"
-            onClick={() => setActiveTab('map')}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 'map'
-                ? 'border-accent text-accent'
-                : 'border-transparent text-text-secondary hover:text-text'
-            }`}
-          >
-            Map {hasGpsProjects ? `(${recentProjects.filter(p => p.gps_center !== null && p.gps_center[0] !== 0 && p.gps_center[1] !== 0).length})` : ''}
-          </button>
-          <button
-            data-testid="globalview-list-tab"
-            onClick={() => setActiveTab('list')}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 'list'
-                ? 'border-accent text-accent'
-                : 'border-transparent text-text-secondary hover:text-text'
-            }`}
-          >
-            List ({recentProjects.length})
-          </button>
+        <div className="flex items-center justify-between border-b border-border px-4">
+          <div className="flex">
+            <button
+              data-testid="globalview-map-tab"
+              onClick={() => setActiveTab('map')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'map'
+                  ? 'border-accent text-accent'
+                  : 'border-transparent text-text-secondary hover:text-text'
+              }`}
+            >
+              Map {hasGpsProjects ? `(${recentProjects.filter(p => p.gps_center !== null).length})` : ''}
+            </button>
+            <button
+              data-testid="globalview-list-tab"
+              onClick={() => setActiveTab('list')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'list'
+                  ? 'border-accent text-accent'
+                  : 'border-transparent text-text-secondary hover:text-text'
+              }`}
+            >
+              List ({recentProjects.length})
+            </button>
+          </div>
+
+          {/* Search input - only show when map tab is active */}
+          {activeTab === 'map' && hasGpsProjects && (
+            <div className="relative py-1">
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchTerm}
+                onChange={handleSearchChange}
+                onKeyDown={handleSearchKeyDown}
+                placeholder="Search systems..."
+                className="bg-panel border border-border rounded px-2 py-1 text-sm w-48 pr-7 focus:outline-none focus:ring-1 focus:ring-accent"
+                data-testid="globalview-search-input"
+                aria-label="Search systems by name"
+              />
+              {/* Clear button (X) - only show when there's text */}
+              {searchTerm && (
+                <button
+                  onClick={handleClearSearch}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text p-1"
+                  title="Clear search (Escape)"
+                  aria-label="Clear search"
+                  data-testid="globalview-search-clear"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -287,10 +445,17 @@ export default function GlobalView() {
             </div>
           ) : activeTab === 'map' ? (
             <GlobalViewMap
+              ref={mapRef}
               projects={recentProjects}
               selectedProjectId={selectedProjectId}
               onProjectSelect={(path) => handleProjectSelect(path, false)}
               onProjectOpen={handleProjectOpen}
+              geometryData={geometryData}
+              geometryStates={geometryStates}
+              searchTerm={searchTerm}
+              onContextMenu={handleMapContextMenu}
+              zoomToSystem={zoomToSystem}
+              onZoomHandled={handleZoomHandled}
             />
           ) : (
             <div className="h-full overflow-auto p-6">
@@ -333,6 +498,7 @@ export default function GlobalView() {
         {recentProjects.length > 0 && (
           <MetadataPanel
             project={selectedProject}
+            selectedProjects={selectedProjects}
             onOpenProject={handleProjectOpen}
             onRemoveFromRecent={handleRemoveFromRecent}
             collapsed={metadataPanelCollapsed}
@@ -354,7 +520,7 @@ export default function GlobalView() {
       {contextMenu.visible && (
         <div
           ref={contextMenuRef}
-          className="fixed z-50 bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[160px]"
+          className="fixed z-50 bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[180px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           role="menu"
           aria-label="Project context menu"
@@ -371,7 +537,23 @@ export default function GlobalView() {
             role="menuitem"
             data-testid="context-menu-open"
           >
-            Open Project
+            Open
+          </button>
+          <button
+            className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 flex items-center gap-2"
+            onClick={handleZoomToSystem}
+            role="menuitem"
+            data-testid="context-menu-zoom"
+          >
+            Zoom to System
+          </button>
+          <button
+            className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 flex items-center gap-2"
+            onClick={handleShowInFolder}
+            role="menuitem"
+            data-testid="context-menu-show-in-folder"
+          >
+            Show in Folder
           </button>
           {selectedCount >= 2 && (
             <button
@@ -386,16 +568,26 @@ export default function GlobalView() {
           <div className="border-t border-border my-1" />
           <button
             className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 text-error flex items-center gap-2"
-            onClick={() => {
-              if (contextMenu.projectPath) {
-                handleRemoveFromRecent(contextMenu.projectPath);
+            onClick={async () => {
+              // Handle multi-selection remove with count
+              try {
+                if (selectedCount > 1) {
+                  // Remove all selected projects sequentially
+                  for (const id of multiSelectedIds) {
+                    await handleRemoveFromRecent(id);
+                  }
+                } else if (contextMenu.projectPath) {
+                  await handleRemoveFromRecent(contextMenu.projectPath);
+                }
+              } catch (err) {
+                console.error('Failed to remove from recent:', err);
               }
               setContextMenu((prev) => ({ ...prev, visible: false }));
             }}
             role="menuitem"
             data-testid="context-menu-remove"
           >
-            Remove from Recent
+            {selectedCount > 1 ? `Remove ${selectedCount} from Recent` : 'Remove from Recent'}
           </button>
         </div>
       )}

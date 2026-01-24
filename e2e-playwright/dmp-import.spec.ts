@@ -30,7 +30,8 @@ async function createProjectAndOpenImportDialog(page: Page): Promise<void> {
   const dialog = page.getByTestId('dmp-selection-dialog');
   await expect(dialog).toBeVisible();
   await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
-  await expect(dialog.getByTestId('dmp-metadata')).toContainText('Version: 5');
+  // Version is now shown in the filename line
+  await expect(dialog.getByTestId('dmp-filename')).toContainText('(v5)');
 }
 
 /**
@@ -81,11 +82,15 @@ test.describe('DMP Import Dialog', () => {
     await expect(checkbox0).toBeVisible();
     await expect(checkbox0).toBeChecked(); // Non-empty sections are selected by default
 
-    // Verify file metadata header
-    const metadata = dialog.locator('[data-testid="dmp-metadata"]');
-    await expect(metadata).toContainText('Version: 5');
-    await expect(metadata).toContainText('Sections:');
-    await expect(metadata).toContainText('Shots:');
+    // Verify file metadata header (version is in filename, stats are in selection-stats)
+    const filename = dialog.locator('[data-testid="dmp-filename"]');
+    await expect(filename).toContainText('(v5)');
+
+    // Selection stats show shot count, total length, and depth range
+    const stats = dialog.locator('[data-testid="selection-stats"]');
+    await expect(stats.locator('[data-testid="stats-shot-count"]')).toContainText('shots');
+    await expect(stats.locator('[data-testid="stats-total-length"]')).toBeVisible();
+    await expect(stats.locator('[data-testid="stats-depth-range"]')).toContainText('Depth:');
   });
 
   /**
