@@ -14,6 +14,7 @@ import SurveyLayer from './SurveyLayer';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
 import { DepthLegend } from './DepthLegend';
+import { MapDevStats } from './MapDevStats';
 
 // Tools that support Ctrl+drag for panning (excludes tools with their own drag behaviors)
 const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure'];
@@ -90,6 +91,7 @@ export default function MapCanvas() {
     showShots,
     showVirtualShots,
     showDepthGradient,
+    showDevStats,
     selection,
     mergeStationA,
     mergeStationB,
@@ -552,6 +554,18 @@ export default function MapCanvas() {
       attributionControl: false,
       // Disable built-in keyboard zoom (handled by useKeyboardShortcuts with config.map.zoom_step)
       keyboard: false,
+
+      // Performance optimizations
+      // See: https://deepwiki.com/maplibre/maplibre-gl-js/5.2-performance-optimization-techniques
+      maxTileCacheSize: 100, // Limit tile cache memory
+      maxTileCacheZoomLevels: 5, // Limit zoom range caching
+      fadeDuration: 0, // Disable fade animations for snappier response
+      renderWorldCopies: false, // Not needed for cave maps (saves render work)
+
+      // WebGL context optimizations (v4.x top-level, v5.0+ uses canvasContextAttributes)
+      antialias: false, // Disable AA for better performance
+      preserveDrawingBuffer: false, // Allow buffer discard
+      failIfMajorPerformanceCaveat: false, // Don't fail on software renderer
     });
 
     // Disable rotation (Ctrl+drag rotates by default, we want Ctrl+drag to pan)
@@ -1742,6 +1756,11 @@ export default function MapCanvas() {
           maxDepth={stats.max_depth}
           visible={showDepthGradient}
         />
+      )}
+
+      {/* Developer stats overlay */}
+      {showDevStats && mapLoaded && map.current && (
+        <MapDevStats map={map.current} />
       )}
 
       {/* Placement mode overlay */}

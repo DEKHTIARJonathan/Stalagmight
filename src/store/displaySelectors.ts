@@ -24,6 +24,7 @@ export const DISPLAY_DEFAULTS = {
   showScaleBar: true,
   showSatellite: false,
   showDepthGradient: false,
+  showDevStats: false,
   gridSpacing: 10,
 } as const;
 

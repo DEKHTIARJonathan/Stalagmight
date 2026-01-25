@@ -10,6 +10,56 @@ let protocolRefCount = 0;
 let isRegistered = false;
 
 /**
+ * Tile fetch statistics for developer monitoring.
+ */
+export interface TileFetchStats {
+  /** Number of tile requests currently in flight */
+  inFlight: number;
+  /** Average latency of recent tile fetches in ms */
+  avgLatencyMs: number;
+  /** Last tile fetch latency in ms */
+  lastLatencyMs: number;
+  /** Total tiles fetched since registration */
+  totalFetched: number;
+  /** Total fetch errors since registration */
+  totalErrors: number;
+}
+
+// Stats tracking state
+let inFlightCount = 0;
+let totalFetched = 0;
+let totalErrors = 0;
+const recentLatencies: number[] = [];
+const MAX_LATENCY_SAMPLES = 20;
+
+/**
+ * Get current tile fetch statistics.
+ */
+export function getTileFetchStats(): TileFetchStats {
+  const avgLatency = recentLatencies.length > 0
+    ? recentLatencies.reduce((a, b) => a + b, 0) / recentLatencies.length
+    : 0;
+
+  return {
+    inFlight: inFlightCount,
+    avgLatencyMs: Math.round(avgLatency * 10) / 10,
+    lastLatencyMs: recentLatencies.length > 0 ? recentLatencies[recentLatencies.length - 1]! : 0,
+    totalFetched,
+    totalErrors,
+  };
+}
+
+/**
+ * Reset tile fetch statistics.
+ */
+export function resetTileFetchStats(): void {
+  inFlightCount = 0;
+  totalFetched = 0;
+  totalErrors = 0;
+  recentLatencies.length = 0;
+}
+
+/**
  * Parse a cavechef-tiles:// URL to extract provider, z, y, x.
  * Supports both formats:
  * - cavechef-tiles://esri/{z}/{y}/{x}
@@ -86,6 +136,10 @@ export function registerTileProtocol(): void {
 
     const { provider, z, y, x } = parsed;
 
+    // Track in-flight requests
+    inFlightCount++;
+    const startTime = performance.now();
+
     try {
       // Check for abort before starting
       if (abortController.signal.aborted) {
@@ -100,6 +154,14 @@ export function registerTileProtocol(): void {
         throw new DOMException('Aborted', 'AbortError');
       }
 
+      // Record successful fetch latency
+      const latency = performance.now() - startTime;
+      recentLatencies.push(latency);
+      if (recentLatencies.length > MAX_LATENCY_SAMPLES) {
+        recentLatencies.shift();
+      }
+      totalFetched++;
+
       // Convert number array to ArrayBuffer
       const arrayBuffer = new Uint8Array(data).buffer;
       return { data: arrayBuffer };
@@ -109,9 +171,15 @@ export function registerTileProtocol(): void {
         throw error; // Let MapLibre handle abort
       }
 
+      // Track errors
+      totalErrors++;
+
       // Log other errors but don't spam (MapLibre will retry)
       console.debug('[tileProtocol] Tile fetch error:', error);
       throw error;
+    } finally {
+      // Always decrement in-flight count
+      inFlightCount--;
     }
   });
 
