@@ -102,6 +102,10 @@ export default class SurveyLayer {
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
   private boundMapLeave: (() => void) | null = null;
 
+  // Hover update batching - only process latest mouse position per frame
+  private pendingHoverEvent: maplibregl.MapMouseEvent | null = null;
+  private hoverRafId: number | null = null;
+
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
     this.callbacks = callbacks;
@@ -605,16 +609,9 @@ export default class SurveyLayer {
 
     // Note: Per-layer click handlers removed - unified handler handles all click logic
 
-    // Unified mousemove handler for hover detection
-    // Uses queryRenderedFeatures to find nearest station/shot at cursor position
-    // This replaces per-layer mouseenter/mouseleave which don't fire when moving
-    // between features on the same layer (e.g., station to nearby station)
-    // Throttled to ~60fps max for better performance
-    const mouseMoveHandler = (e: maplibregl.MapMouseEvent) => {
-      if (isNonInteractiveTool(this.activeTool)) return;
-
+    // Process hover update for a given mouse event
+    const processHoverUpdate = (e: maplibregl.MapMouseEvent) => {
       // Query both hitbox layers in a single call for better performance
-      // See: https://deepwiki.com/maplibre/maplibre-gl-js/5.2-performance-optimization-techniques
       const allFeatures = this.map.queryRenderedFeatures(e.point, {
         layers: [this.stationsHitboxLayerId, this.shotsHitboxLayerId],
       });
@@ -627,16 +624,14 @@ export default class SurveyLayer {
         (f) => f.layer.id === this.shotsHitboxLayerId
       );
 
-      // Resolve nearest of each type using existing resolution functions
+      // Resolve nearest of each type
       const nearestStation = this.resolveNearestStation(e, stationFeatures);
       const nearestShot = this.resolveNearestShot(e, shotFeatures);
 
-      // Calculate distances to determine which is closer
       // Determine what to highlight (stations always take priority)
       let newHoveredStationId: string | null = null;
       let newHoveredShotId: string | null = null;
 
-      // Stations always take priority when cursor is over one
       if (nearestStation) {
         const { sectionId, stationIndex } = nearestStation.properties ?? {};
         if (sectionId !== undefined && stationIndex !== undefined) {
@@ -649,7 +644,7 @@ export default class SurveyLayer {
         }
       }
 
-      // Update state only if changed (avoids unnecessary re-renders)
+      // Update state only if changed
       const stationChanged = newHoveredStationId !== this.hoveredStationId;
       const shotChanged = newHoveredShotId !== this.hoveredShotId;
 
@@ -658,41 +653,57 @@ export default class SurveyLayer {
         this.hoveredShotId = newHoveredShotId;
 
         // Update cursor
-        if (newHoveredStationId || newHoveredShotId) {
-          this.map.getCanvas().style.cursor = 'pointer';
-          this.callbacks.onFeatureHover?.(true);
-        } else {
-          this.map.getCanvas().style.cursor = '';
-          this.callbacks.onFeatureHover?.(false);
-        }
+        this.map.getCanvas().style.cursor = (newHoveredStationId || newHoveredShotId) ? 'pointer' : '';
 
-        // Notify callbacks for station changes
-        if (stationChanged) {
-          if (newHoveredStationId) {
-            const [secId, stIdx] = newHoveredStationId.split(':').map(Number);
-            this.callbacks.onStationHover?.({ section_id: secId!, station_index: stIdx! });
-          } else {
-            this.callbacks.onStationHover?.(null);
-          }
-        }
-
-        // Notify callbacks for shot changes
-        if (shotChanged) {
-          if (newHoveredShotId) {
-            const [secId, shId] = newHoveredShotId.split(':').map(Number);
-            this.callbacks.onShotHover?.({ sectionId: secId!, shotId: shId! });
-          } else {
-            this.callbacks.onShotHover?.(null);
-          }
-        }
-
+        // Update MapLibre visual state
         this.updateVisualState();
+
+        // Notify React callbacks (deferred)
+        queueMicrotask(() => {
+          this.callbacks.onFeatureHover?.(Boolean(newHoveredStationId || newHoveredShotId));
+
+          if (stationChanged) {
+            if (newHoveredStationId) {
+              const [secId, stIdx] = newHoveredStationId.split(':').map(Number);
+              this.callbacks.onStationHover?.({ section_id: secId!, station_index: stIdx! });
+            } else {
+              this.callbacks.onStationHover?.(null);
+            }
+          }
+
+          if (shotChanged) {
+            if (newHoveredShotId) {
+              const [secId, shId] = newHoveredShotId.split(':').map(Number);
+              this.callbacks.onShotHover?.({ sectionId: secId!, shotId: shId! });
+            } else {
+              this.callbacks.onShotHover?.(null);
+            }
+          }
+        });
       }
     };
 
-    // No throttle needed - handler has early-exit when state unchanged,
-    // and MapLibre handles efficient repaints internally
-    this.boundMouseMove = mouseMoveHandler;
+    // Mousemove handler with RAF batching
+    // Only processes the latest mouse position per animation frame,
+    // preventing event queue buildup when queryRenderedFeatures is slow
+    this.boundMouseMove = (e: maplibregl.MapMouseEvent) => {
+      if (isNonInteractiveTool(this.activeTool)) return;
+
+      // Store latest event (overwrites any pending)
+      this.pendingHoverEvent = e;
+
+      // Schedule processing if not already scheduled
+      if (this.hoverRafId === null) {
+        this.hoverRafId = requestAnimationFrame(() => {
+          this.hoverRafId = null;
+          if (this.pendingHoverEvent) {
+            const event = this.pendingHoverEvent;
+            this.pendingHoverEvent = null;
+            processHoverUpdate(event);
+          }
+        });
+      }
+    };
 
     // Clear all hover when cursor leaves the map canvas
     this.boundMapLeave = () => {
@@ -700,10 +711,14 @@ export default class SurveyLayer {
         this.hoveredStationId = null;
         this.hoveredShotId = null;
         this.map.getCanvas().style.cursor = '';
-        this.callbacks.onFeatureHover?.(false);
-        this.callbacks.onStationHover?.(null);
-        this.callbacks.onShotHover?.(null);
+        // Update visual state immediately
         this.updateVisualState();
+        // Defer React callbacks
+        queueMicrotask(() => {
+          this.callbacks.onFeatureHover?.(false);
+          this.callbacks.onStationHover?.(null);
+          this.callbacks.onShotHover?.(null);
+        });
       }
     };
 
@@ -1793,6 +1808,13 @@ export default class SurveyLayer {
   }
 
   destroy() {
+    // Cancel any pending hover RAF
+    if (this.hoverRafId !== null) {
+      cancelAnimationFrame(this.hoverRafId);
+      this.hoverRafId = null;
+    }
+    this.pendingHoverEvent = null;
+
     // Guard against map being destroyed (race condition on unmount)
     if (!hasLiveStyle(this.map)) {
       // Clear bound handler references even if map is destroyed
