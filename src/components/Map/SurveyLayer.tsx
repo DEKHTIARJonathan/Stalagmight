@@ -9,47 +9,6 @@ import { isNonInteractiveTool } from '../../utils/toolUtils';
 import type { ToolType } from '../../store/uiStore';
 import { buildPriorityExpression, compositeIdEquals, inSection } from '../../utils/maplibre-expressions';
 
-/**
- * Simple throttle function for performance-critical event handlers.
- * Limits function execution to at most once per `limit` milliseconds.
- */
-function throttle<T extends (...args: Parameters<T>) => void>(
-  fn: T,
-  limit: number
-): (...args: Parameters<T>) => void {
-  let lastCall = 0;
-  let lastArgs: Parameters<T> | null = null;
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-
-  return function (this: unknown, ...args: Parameters<T>) {
-    const now = Date.now();
-    const remaining = limit - (now - lastCall);
-
-    if (remaining <= 0) {
-      // Execute immediately
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-      lastCall = now;
-      fn.apply(this, args);
-    } else {
-      // Schedule trailing call
-      lastArgs = args;
-      if (!timeoutId) {
-        timeoutId = setTimeout(() => {
-          lastCall = Date.now();
-          timeoutId = null;
-          if (lastArgs) {
-            fn.apply(this, lastArgs);
-            lastArgs = null;
-          }
-        }, remaining);
-      }
-    }
-  };
-}
-
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
   onShotClick?: (sectionId: SectionId, shotId: ShotId, event: MapMouseEvent) => void;
@@ -731,8 +690,9 @@ export default class SurveyLayer {
       }
     };
 
-    // Wrap with throttle for ~60fps max (16ms limit)
-    this.boundMouseMove = throttle(mouseMoveHandler, 16);
+    // No throttle needed - handler has early-exit when state unchanged,
+    // and MapLibre handles efficient repaints internally
+    this.boundMouseMove = mouseMoveHandler;
 
     // Clear all hover when cursor leaves the map canvas
     this.boundMapLeave = () => {
