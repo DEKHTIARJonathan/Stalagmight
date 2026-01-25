@@ -29,9 +29,8 @@ Follow the pattern at `src/components/Map/SurveyLayer.tsx:1282-1300` (setHovered
 - [ ] Calling with same station twice doesn't re-render (early return on no change)
 - [ ] Works with existing map-based station hover (both paths set same internal state)
 ## Done summary
-TBD
-
+Added public setHoveredStation(ref: StationRef | null) method to SurveyLayer that allows external components to set the hovered station, mirroring existing setHoveredSection and setHoveredShot patterns.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: dfefe867e980c159cbc294b2c380c2717ae1c360
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:

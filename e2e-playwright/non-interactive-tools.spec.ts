@@ -157,29 +157,26 @@ test.describe('Non-interactive tools', () => {
 
   test('Switching to pan clears existing hover', async ({ page }) => {
     // This test verifies that switching to pan tool clears hoveredStation state.
-    // Since mouse hover hit detection is unreliable in E2E (depends on precise
-    // hitbox positioning), we simulate the hover by directly calling the
-    // SurveyLayer's mouseenter handler via map events.
+    // The clearing is done by uiStore.setActiveTool when switching to a non-interactive tool.
 
     // Ensure select tool is active first
     await page.keyboard.press('s');
     await page.waitForTimeout(100);
 
-    // Simulate hover by triggering the map's mouseenter event on a station feature
-    // This is equivalent to what happens when mouse moves over a station hitbox
+    // Set hover state directly via uiStore (simulating what the SurveyLayer callback would do).
+    // The MapCanvas useEffect syncs this to SurveyLayer.setHoveredStation automatically.
     const hoverSetup = await page.evaluate(() => {
       const map = (window as unknown as {
         __cavechef_map__?: {
           queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
             properties: { sectionId: number; stationIndex: number };
           }>;
-          fire: (type: string, data: unknown) => void;
         };
       }).__cavechef_map__;
 
       if (!map) return { success: false, error: 'No map' };
 
-      // Get first station feature from hitbox layer
+      // Get first station feature from hitbox layer to get a valid station ref
       const features = map.queryRenderedFeatures({ layers: ['survey-stations-hitbox'] });
       if (features.length === 0) {
         return { success: false, error: 'No station features in hitbox layer' };
@@ -193,8 +190,6 @@ test.describe('Non-interactive tools', () => {
         return { success: false, error: 'Feature missing properties' };
       }
 
-      // Manually set the hovered station via the uiStore (simulating what the
-      // SurveyLayer callback would do)
       const stores = (window as unknown as {
         __E2E_TEST__?: {
           uiStore: {
@@ -205,23 +200,8 @@ test.describe('Non-interactive tools', () => {
 
       if (!stores) return { success: false, error: 'No __E2E_TEST__' };
 
-      // Set hovered station
+      // Set hovered station in uiStore
       stores.uiStore.getState().setHoveredStation({ section_id: sectionId, station_index: stationIndex });
-
-      // Also set SurveyLayer's internal hover state by triggering a synthetic mouseenter
-      // This ensures the callback chain will fire when we switch to pan
-      // Note: We need to access SurveyLayer through the map container
-      const mapContainer = document.querySelector('.maplibregl-canvas-container');
-      if (mapContainer) {
-        // Dispatch a mousemove event at a point where a station exists
-        // The SurveyLayer will pick this up and set its internal hoveredStationId
-        const event = new MouseEvent('mousemove', {
-          bubbles: true,
-          clientX: 400,
-          clientY: 400,
-        });
-        mapContainer.dispatchEvent(event);
-      }
 
       return { success: true, sectionId, stationIndex };
     });

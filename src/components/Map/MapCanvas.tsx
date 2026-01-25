@@ -107,6 +107,7 @@ export default function MapCanvas() {
     clearFitToBoundsRequest,
     snappedStation,
     setSnappedStation,
+    hoveredStation,
     setHoveredStation,
     setHoveredShot,
     hoveredShot,
@@ -720,6 +721,13 @@ export default function MapCanvas() {
       hoveredShot?.shotId ?? null
     );
   }, [hoveredShot, mapLoaded]);
+
+  // Sync hoveredStation from uiStore to SurveyLayer (for DetailLink hover)
+  // Depends on mapLoaded to re-run when SurveyLayer becomes available
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setHoveredStation(hoveredStation);
+  }, [hoveredStation, mapLoaded]);
 
   // Sync highlight layer with snap/draw/merge state
   // Shows snapped/origin stations even when stations layer is hidden
