@@ -264,6 +264,38 @@ async function selectSectionById(page: Page, sectionId: number): Promise<void> {
   await pollSelectionState(page, (sel) => sel?.type === 'section' && sel?.sectionId === sectionId);
 }
 
+/**
+ * Helper to trigger mouse hover by dispatching mouseover/mouseout events with bubbling.
+ * React's synthetic event system listens for bubbling events at the document root,
+ * so we dispatch events that bubble up from the target element.
+ */
+async function triggerMouseHover(page: Page, testId: string): Promise<void> {
+  await page.evaluate((tid) => {
+    const el = document.querySelector(`[data-testid="${tid}"]`);
+    if (el) {
+      // Dispatch mouseover with bubbles: true so React's document-level listener catches it
+      el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true }));
+      // Also dispatch mouseenter for completeness (though React primarily uses mouseover)
+      el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false, cancelable: false }));
+    }
+  }, testId);
+}
+
+/**
+ * Helper to trigger mouse leave by dispatching mouseout/mouseleave events.
+ */
+async function triggerMouseLeave(page: Page, testId: string): Promise<void> {
+  await page.evaluate((tid) => {
+    const el = document.querySelector(`[data-testid="${tid}"]`);
+    if (el) {
+      // Dispatch mouseout with bubbles: true so React's document-level listener catches it
+      el.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, cancelable: true }));
+      // Also dispatch mouseleave for completeness
+      el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false, cancelable: false }));
+    }
+  }, testId);
+}
+
 test.describe('Detail Link Focus Highlighting', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
@@ -618,17 +650,141 @@ test.describe('Detail Link Focus Highlighting', () => {
   });
 
   test.describe('Mouse Hover Events', () => {
-    // Test mouse hover using Playwright's hover() method.
-    // This verifies the React onMouseEnter/onMouseLeave handlers are wired correctly.
-    //
-    // TECHNICAL NOTE: React's synthetic event system doesn't respond to programmatically
-    // dispatched mouseenter/mouseleave events (neither page.hover() nor dispatchEvent()).
-    // This is a known Playwright+React limitation. However:
-    // - Section row hover works with page.hover() (verified in section-highlighting.spec.ts)
-    // - Section link hover works with page.hover() (verified below)
-    // - Station/shot links use the same DetailLink component and same handler structure,
-    //   so the focus tests above (which use the same onHoverStart callback) verify the
-    //   wiring is correct for those elements.
+    // Test mouse hover using dispatched MouseEvents with bubbles: true.
+    // React's synthetic event system captures bubbling mouse events at the document root.
+    // We use triggerMouseHover/triggerMouseLeave helpers to dispatch proper events.
+
+    test('hover on station link sets hoveredStation', async ({ page }) => {
+      await createProjectWithSections(page);
+
+      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const firstShotId = shotIds[0]!;
+
+      // Select a shot to show its detail panel with station links
+      await selectShot(page, mainSectionId, firstShotId);
+
+      // Find the Start Station link (station index 0, position 1)
+      const stationLinkTestId = `station-${mainSectionId}-1-link`;
+      const startStationLink = page.getByTestId(stationLinkTestId);
+      await expect(startStationLink).toBeVisible();
+
+      // Check initial hover state
+      const initialState = await getHoverState(page);
+      expect(initialState.hoveredStation).toBeNull();
+
+      // Trigger hover via dispatched mouse events
+      await triggerMouseHover(page, stationLinkTestId);
+
+      // Verify hoveredStation is set correctly
+      const hoverState = await pollHoverState(
+        page,
+        (state) =>
+          state.hoveredStation !== null &&
+          state.hoveredStation.section_id === mainSectionId &&
+          state.hoveredStation.station_index === 0
+      );
+      expect(hoverState.hoveredStation?.section_id).toBe(mainSectionId);
+      expect(hoverState.hoveredStation?.station_index).toBe(0);
+    });
+
+    test('mouse leave on station link clears hoveredStation', async ({ page }) => {
+      await createProjectWithSections(page);
+
+      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const firstShotId = shotIds[0]!;
+
+      // Select a shot to show detail panel
+      await selectShot(page, mainSectionId, firstShotId);
+
+      const stationLinkTestId = `station-${mainSectionId}-1-link`;
+      const startStationLink = page.getByTestId(stationLinkTestId);
+      await expect(startStationLink).toBeVisible();
+
+      // Trigger hover to set state
+      await triggerMouseHover(page, stationLinkTestId);
+      await pollHoverState(
+        page,
+        (state) =>
+          state.hoveredStation !== null &&
+          state.hoveredStation.section_id === mainSectionId &&
+          state.hoveredStation.station_index === 0
+      );
+
+      // Trigger mouse leave to clear state
+      await triggerMouseLeave(page, stationLinkTestId);
+
+      // Verify hoveredStation is cleared
+      const clearedState = await pollHoverState(page, (state) => state.hoveredStation === null);
+      expect(clearedState.hoveredStation).toBeNull();
+    });
+
+    test('hover on shot link sets hoveredShot', async ({ page }) => {
+      await createProjectWithSections(page);
+
+      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForSection(page, mainSectionId);
+
+      // Select station at index 1 (has both Previous and Next shots)
+      await selectStation(page, mainSectionId, 1);
+
+      // Find the Next Shot link (shot at index 1, position 2)
+      const shotLinkTestId = `shot-${mainSectionId}-2-link`;
+      const nextShotLink = page.getByTestId(shotLinkTestId);
+      await expect(nextShotLink).toBeVisible();
+
+      // Check initial state
+      const initialState = await getHoverState(page);
+      expect(initialState.hoveredShot).toBeNull();
+
+      // Trigger hover via dispatched mouse events
+      await triggerMouseHover(page, shotLinkTestId);
+
+      // Verify hoveredShot is set correctly
+      const expectedShotId = shotIds[1]!;
+      const hoverState = await pollHoverState(
+        page,
+        (state) =>
+          state.hoveredShot !== null &&
+          state.hoveredShot.sectionId === mainSectionId &&
+          state.hoveredShot.shotId === expectedShotId
+      );
+      expect(hoverState.hoveredShot?.sectionId).toBe(mainSectionId);
+      expect(hoverState.hoveredShot?.shotId).toBe(expectedShotId);
+    });
+
+    test('mouse leave on shot link clears hoveredShot', async ({ page }) => {
+      await createProjectWithSections(page);
+
+      const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const expectedShotId = shotIds[1]!;
+
+      // Select station at index 1
+      await selectStation(page, mainSectionId, 1);
+
+      const shotLinkTestId = `shot-${mainSectionId}-2-link`;
+      const nextShotLink = page.getByTestId(shotLinkTestId);
+      await expect(nextShotLink).toBeVisible();
+
+      // Trigger hover to set state
+      await triggerMouseHover(page, shotLinkTestId);
+      await pollHoverState(
+        page,
+        (state) =>
+          state.hoveredShot !== null &&
+          state.hoveredShot.sectionId === mainSectionId &&
+          state.hoveredShot.shotId === expectedShotId
+      );
+
+      // Trigger mouse leave to clear state
+      await triggerMouseLeave(page, shotLinkTestId);
+
+      // Verify hoveredShot is cleared
+      const clearedState = await pollHoverState(page, (state) => state.hoveredShot === null);
+      expect(clearedState.hoveredShot).toBeNull();
+    });
 
     test('hover on section link sets hoveredSectionId', async ({ page }) => {
       await createProjectWithSections(page);
