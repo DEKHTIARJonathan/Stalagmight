@@ -1302,6 +1302,19 @@ export default class SurveyLayer {
   }
 
   /**
+   * Set the hovered station for visual highlighting (external hover, e.g. from DetailLink).
+   * This allows external components to trigger station hover highlighting without mouse interaction.
+   * @param ref - The StationRef of the station, or null to clear
+   */
+  setHoveredStation(ref: StationRef | null): void {
+    // Convert to composite string ID format used internally
+    const stringId = ref !== null ? `${ref.section_id}:${ref.station_index}` : null;
+    if (this.hoveredStationId === stringId) return;
+    this.hoveredStationId = stringId;
+    this.updateVisualState();
+  }
+
+  /**
    * Set the selected section for visual highlighting.
    * Stores the section ID for use by updateVisualState() to apply selected styling
    * to all shots and stations in this section.
