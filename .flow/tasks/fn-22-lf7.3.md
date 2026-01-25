@@ -49,9 +49,36 @@ Add onMouseEnter/onMouseLeave/onFocus/onBlur handlers to DetailLink that highlig
 - [ ] Shot position-to-shotId lookup is correct
 - [ ] Update DetailLink JSDoc to document hover behavior
 ## Done summary
-TBD
+## Summary
 
+Added hover/focus handlers to DetailLink component that highlight corresponding map elements when users hover or focus station, shot, and section links in the DetailPanel.
+
+### Changes made:
+
+**DetailLink.tsx:**
+- Added `onHoverStart` and `onHoverEnd` optional props to DetailLinkProps
+- Added `buttonRef` to track the button element
+- Added `handleMouseEnter` handler that calls `onHoverStart` (skipped if `isMissing`)
+- Added `handleMouseLeave` handler that calls `onHoverEnd` only if element is NOT focused (keyboard focus takes precedence)
+- Added `handleFocus` handler that calls `onHoverStart` (skipped if `isMissing`)
+- Added `handleBlur` handler that always calls `onHoverEnd`
+- Updated JSDoc to document hover behavior
+
+**DetailPanel.tsx:**
+- Added `setHoveredStation`, `setHoveredShot`, `setHoveredSectionId` from uiStore
+- StationDetail: Added hover callbacks to merged station links (station), prev/next shot links (shot), and section link
+- ShotDetail: Added hover callbacks to start/end station links and section link
+- SectionDetail: Added hover callbacks to first/last station endpoint links
+
+### Focus/hover interaction:
+- Both focus and hover set the highlight via `onHoverStart`
+- `onMouseLeave` only clears if element is NOT focused (using `document.activeElement` check)
+- `onBlur` clears unconditionally
+
+### Position handling:
+- Position is 1-indexed in DetailLink target, station_index is 0-indexed (conversion handled correctly)
+- Shot ID is looked up from section.shots array by shot index
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 9f8c306fd7f2de5f389cd1b39432c67ad5b2cb06
+- Tests: pnpm test:ui
 - PRs:

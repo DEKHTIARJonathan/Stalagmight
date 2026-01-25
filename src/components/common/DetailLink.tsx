@@ -8,9 +8,13 @@
  * - Warning indicator for missing targets
  * - Generates stable test IDs based on element type and position
  * - ARIA labels for accessibility
+ * - Hover/focus highlighting: optionally highlights corresponding map element on mouse
+ *   hover or keyboard focus via onHoverStart/onHoverEnd callbacks. Mouse leave only
+ *   clears highlight if the element is not keyboard-focused (prevents highlight loss
+ *   when user moves mouse away but keeps element focused).
  */
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 
 export type DetailLinkType = 'station' | 'shot' | 'section';
 
@@ -62,6 +66,10 @@ export interface DetailLinkProps {
   testId?: string;
   /** Additional CSS classes */
   className?: string;
+  /** Callback when hover/focus starts (for map highlighting). Ignored if isMissing. */
+  onHoverStart?: () => void;
+  /** Callback when hover/focus ends (for map highlighting). */
+  onHoverEnd?: () => void;
 }
 
 /**
@@ -111,7 +119,10 @@ export function DetailLink({
   onAnnounce,
   testId,
   className = '',
+  onHoverStart,
+  onHoverEnd,
 }: DetailLinkProps) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const computedTestId = testId ?? generateTestId(type, target);
   const ariaLabel = generateAriaLabel(type, displayText);
 
@@ -126,6 +137,32 @@ export function DetailLink({
     }
   }, [type, displayText, onSelect, onAnnounce, isMissing]);
 
+  const handleMouseEnter = useCallback(() => {
+    if (isMissing || !onHoverStart) return;
+    onHoverStart();
+  }, [isMissing, onHoverStart]);
+
+  const handleMouseLeave = useCallback(() => {
+    // Skip for missing links (they never started hover, so nothing to clear)
+    if (isMissing || !onHoverEnd) return;
+    // Only clear highlight if element is not focused (keyboard focus takes precedence)
+    const isFocused = typeof document !== 'undefined' && document.activeElement === buttonRef.current;
+    if (!isFocused) {
+      onHoverEnd();
+    }
+  }, [isMissing, onHoverEnd]);
+
+  const handleFocus = useCallback(() => {
+    if (isMissing || !onHoverStart) return;
+    onHoverStart();
+  }, [isMissing, onHoverStart]);
+
+  const handleBlur = useCallback(() => {
+    // Skip for missing links (they never started hover, so nothing to clear)
+    if (isMissing || !onHoverEnd) return;
+    onHoverEnd();
+  }, [isMissing, onHoverEnd]);
+
   // Build class list conditionally to avoid conflicting Tailwind utilities
   const baseClasses = 'underline focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset';
   const colorClass = isMissing ? 'text-yellow-400' : 'text-accent';
@@ -133,8 +170,13 @@ export function DetailLink({
 
   return (
     <button
+      ref={buttonRef}
       type="button"
       onClick={handleClick}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
       className={`${baseClasses} ${colorClass} ${cursorClass} ${className}`}
       aria-label={ariaLabel}
       aria-disabled={isMissing}
