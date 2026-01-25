@@ -120,6 +120,10 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   }, [map]);
 
   // FPS measurement using requestAnimationFrame
+  // Only update React state every 500ms to avoid triggering re-renders every frame
+  const lastStateUpdateRef = useRef(performance.now());
+  const STATE_UPDATE_INTERVAL = 500; // ms
+
   useEffect(() => {
     const measureFrame = () => {
       const now = performance.now();
@@ -132,11 +136,14 @@ export function MapDevStats({ map }: MapDevStatsProps) {
         frameTimesRef.current.shift();
       }
 
-      // Calculate average FPS
-      const avgFrameTime =
-        frameTimesRef.current.reduce((a, b) => a + b, 0) / frameTimesRef.current.length;
-      setFrameTime(Math.round(avgFrameTime * 100) / 100);
-      setFps(Math.round(1000 / avgFrameTime));
+      // Only update React state periodically to avoid re-render every frame
+      if (now - lastStateUpdateRef.current >= STATE_UPDATE_INTERVAL) {
+        lastStateUpdateRef.current = now;
+        const avgFrameTime =
+          frameTimesRef.current.reduce((a, b) => a + b, 0) / frameTimesRef.current.length;
+        setFrameTime(Math.round(avgFrameTime * 100) / 100);
+        setFps(Math.round(1000 / avgFrameTime));
+      }
 
       animationFrameRef.current = requestAnimationFrame(measureFrame);
     };
@@ -202,8 +209,14 @@ export function MapDevStats({ map }: MapDevStatsProps) {
       setMapLoaded(true);
     };
 
+    // Throttle sourcedata handler - it fires very frequently during tile loading
+    let sourcedataTimeout: ReturnType<typeof setTimeout> | null = null;
     const handleSourceData = () => {
-      setTilesLoaded(map.areTilesLoaded());
+      if (sourcedataTimeout) return; // Skip if already scheduled
+      sourcedataTimeout = setTimeout(() => {
+        sourcedataTimeout = null;
+        setTilesLoaded(map.areTilesLoaded());
+      }, 250);
     };
 
     const handleResize = () => {
@@ -221,10 +234,11 @@ export function MapDevStats({ map }: MapDevStatsProps) {
       map.off('load', handleLoad);
       map.off('sourcedata', handleSourceData);
       map.off('resize', handleResize);
+      if (sourcedataTimeout) clearTimeout(sourcedataTimeout);
     };
   }, [map]);
 
-  // Poll tile fetch stats frequently for responsive updates
+  // Poll tile fetch stats periodically
   useEffect(() => {
     const updateTileStats = () => {
       setTileFetchStats(getTileFetchStats());
@@ -233,8 +247,8 @@ export function MapDevStats({ map }: MapDevStatsProps) {
     // Initial fetch
     updateTileStats();
 
-    // Poll every 100ms for responsive in-flight updates
-    const interval = setInterval(updateTileStats, 100);
+    // Poll every 500ms (balances responsiveness vs re-render overhead)
+    const interval = setInterval(updateTileStats, 500);
 
     return () => clearInterval(interval);
   }, []);
