@@ -86,6 +86,35 @@ Runtime state (status, assignee, etc.) is stored in `.git/flow-state/`, shared a
 
 Migration is optional — existing repos work without changes.
 
+## CRITICAL: Spec Editing Pitfalls
+
+**`task set-spec` APPENDS, not replaces!**
+
+**Always use `--json` for programmatic access:**
+```bash
+# BAD - may crash or have formatting issues
+$FLOWCTL show fn-1
+
+# GOOD - stable output
+$FLOWCTL show fn-1 --json
+```
+
+**Use stdin heredocs to avoid temp files:**
+```bash
+# GOOD
+$FLOWCTL epic set-plan fn-1 --file - <<'EOF'
+# Epic Title
+## Overview
+...
+EOF
+
+# LESS GOOD (works but creates temp files)
+cat > /tmp/plan.md << 'EOF'
+...
+EOF
+$FLOWCTL epic set-plan fn-1 --file /tmp/plan.md
+```
+
 ## More Info
 
 - Human docs: https://github.com/gmickel/gmickel-claude-marketplace/blob/main/plugins/flow-next/docs/flowctl.md

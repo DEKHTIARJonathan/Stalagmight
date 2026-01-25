@@ -82,5 +82,9 @@ This project uses Flow-Next for task tracking. Use `.flow/bin/flowctl` instead o
 - Do NOT create markdown TODOs or use TodoWrite
 - Re-anchor (re-read spec + status) before every task
 
+**CRITICAL pitfalls (read `.flow/usage.md` for details):**
+- Always use `--json` flag for programmatic access
+- Use stdin heredocs (`--file -`) not temp files
+
 **More info:** `.flow/bin/flowctl --help` or read `.flow/usage.md`
 <!-- END FLOW-NEXT -->
