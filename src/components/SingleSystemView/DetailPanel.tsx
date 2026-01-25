@@ -256,7 +256,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
 
 function StationDetail({ station }: { station: Station }) {
   const { project, stations } = useProjectStore();
-  const { openDialog, setSelection, triggerCenterOnStation, announceSelection } = useUIStore();
+  const { openDialog, setSelection, triggerCenterOnStation, announceSelection, setHoveredStation, setHoveredShot, setHoveredSectionId } = useUIStore();
   const section = project?.sections.find(
     (s) => s.id === station.station_ref.section_id
   );
@@ -393,6 +393,8 @@ function StationDetail({ station }: { station: Station }) {
                       onSelect={() => handleSelectMergedStation(ref)}
                       isMissing={!mergedStationExists(ref)}
                       onAnnounce={announceSelection}
+                      onHoverStart={() => setHoveredStation({ section_id: ref.section_id, station_index: ref.station_index })}
+                      onHoverEnd={() => setHoveredStation(null)}
                     />
                   </li>
                 ))}
@@ -414,6 +416,11 @@ function StationDetail({ station }: { station: Station }) {
                     onSelect={handleSelectPrevShot}
                     isMissing={!prevShotExists}
                     onAnnounce={announceSelection}
+                    onHoverStart={() => {
+                      const shot = section?.shots[prevShotIndex];
+                      if (shot) setHoveredShot({ sectionId, shotId: shot.id });
+                    }}
+                    onHoverEnd={() => setHoveredShot(null)}
                   />
                 </div>
               )}
@@ -427,6 +434,11 @@ function StationDetail({ station }: { station: Station }) {
                     onSelect={handleSelectNextShot}
                     isMissing={!nextShotExists}
                     onAnnounce={announceSelection}
+                    onHoverStart={() => {
+                      const shot = section?.shots[nextShotIndex];
+                      if (shot) setHoveredShot({ sectionId, shotId: shot.id });
+                    }}
+                    onHoverEnd={() => setHoveredShot(null)}
                   />
                 </div>
               )}
@@ -438,6 +450,8 @@ function StationDetail({ station }: { station: Station }) {
                   displayText={sectionDisplayText}
                   onSelect={handleSelectSection}
                   onAnnounce={announceSelection}
+                  onHoverStart={() => setHoveredSectionId(sectionId)}
+                  onHoverEnd={() => setHoveredSectionId(null)}
                 />
               </div>
             </div>
@@ -456,7 +470,7 @@ function StationDetail({ station }: { station: Station }) {
 
 function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
   const { setShotVirtual } = useProjectStore();
-  const { openDialog, setSelection, triggerCenterOnShot, announceSelection } = useUIStore();
+  const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore();
 
   // Calculate shot index (0-indexed) and positions (1-indexed for display)
   const shotIndex = section.shots.indexOf(shot);
@@ -573,6 +587,8 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
                   onSelect={handleSelectStartStation}
                   isMissing={!startStationExists}
                   onAnnounce={announceSelection}
+                  onHoverStart={() => setHoveredStation({ section_id: section.id, station_index: startStationIndex })}
+                  onHoverEnd={() => setHoveredStation(null)}
                 />
               </div>
               <div className="flex justify-between">
@@ -584,6 +600,8 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
                   onSelect={handleSelectEndStation}
                   isMissing={!endStationExists}
                   onAnnounce={announceSelection}
+                  onHoverStart={() => setHoveredStation({ section_id: section.id, station_index: endStationIndex })}
+                  onHoverEnd={() => setHoveredStation(null)}
                 />
               </div>
               <div className="flex justify-between">
@@ -594,6 +612,8 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
                   displayText={sectionDisplayText}
                   onSelect={handleSelectSection}
                   onAnnounce={announceSelection}
+                  onHoverStart={() => setHoveredSectionId(section.id)}
+                  onHoverEnd={() => setHoveredSectionId(null)}
                 />
               </div>
             </div>
@@ -631,7 +651,7 @@ interface SectionDetailProps {
 }
 
 function SectionDetail({ section, stations, totalProjectLength }: SectionDetailProps) {
-  const { openDialog, setSelection, triggerZoomToSection, announceSelection } = useUIStore();
+  const { openDialog, setSelection, triggerZoomToSection, announceSelection, setHoveredStation } = useUIStore();
 
   // Calculate section statistics
   const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
@@ -779,6 +799,8 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                       onSelect={handleSelectFirstStation}
                       isMissing={!firstStationExists}
                       onAnnounce={announceSelection}
+                      onHoverStart={() => setHoveredStation({ section_id: section.id, station_index: firstStationIndex })}
+                      onHoverEnd={() => setHoveredStation(null)}
                     />
                   </div>
                 ) : (
@@ -793,6 +815,8 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                         onSelect={handleSelectFirstStation}
                         isMissing={!firstStationExists}
                         onAnnounce={announceSelection}
+                        onHoverStart={() => setHoveredStation({ section_id: section.id, station_index: firstStationIndex })}
+                        onHoverEnd={() => setHoveredStation(null)}
                       />
                     </div>
                     <div className="flex justify-between">
@@ -804,6 +828,8 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                         onSelect={handleSelectLastStation}
                         isMissing={!lastStationExists}
                         onAnnounce={announceSelection}
+                        onHoverStart={() => setHoveredStation({ section_id: section.id, station_index: lastStationIndex })}
+                        onHoverEnd={() => setHoveredStation(null)}
                       />
                     </div>
                   </>

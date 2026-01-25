@@ -28,9 +28,8 @@ Follow the pattern at `src/components/Map/MapCanvas.tsx:707-722`:
 - [ ] Calling uiStore.setHoveredStation(ref) results in station highlighting on map
 - [ ] Calling uiStore.setHoveredStation(null) clears station highlight
 ## Done summary
-TBD
-
+Added useEffect in MapCanvas to sync hoveredStation from uiStore to SurveyLayer.setHoveredStation, enabling external components like DetailLink to highlight stations on the map.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 6014da5a0c22873160b63898973268e3016503c2
+- Tests: pnpm test:ui
 - PRs:
