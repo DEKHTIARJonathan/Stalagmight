@@ -39,3 +39,5 @@ e2e-playwright/screenshots/
 
 # WebdriverIO test logs
 wdio-logs/
+
+.flow/.checkpoint-*
