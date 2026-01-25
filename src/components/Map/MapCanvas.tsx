@@ -562,10 +562,12 @@ export default function MapCanvas() {
       fadeDuration: 0, // Disable fade animations for snappier response
       renderWorldCopies: false, // Not needed for cave maps (saves render work)
 
-      // WebGL context optimizations (v4.x top-level, v5.0+ uses canvasContextAttributes)
-      antialias: false, // Disable AA for better performance
-      preserveDrawingBuffer: false, // Allow buffer discard
-      failIfMajorPerformanceCaveat: false, // Don't fail on software renderer
+      // WebGL context optimizations (MapLibre v5+)
+      canvasContextAttributes: {
+        antialias: false, // Disable AA for better performance
+        preserveDrawingBuffer: false, // Allow buffer discard
+        failIfMajorPerformanceCaveat: false, // Don't fail on software renderer
+      },
     });
 
     // Disable rotation (Ctrl+drag rotates by default, we want Ctrl+drag to pan)
