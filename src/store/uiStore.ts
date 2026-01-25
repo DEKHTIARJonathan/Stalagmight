@@ -171,6 +171,7 @@ interface UIStore {
   showScaleBar: boolean;
   showSatellite: boolean;
   showDepthGradient: boolean;
+  showDevStats: boolean;
   gridSpacing: number;
   toggleDisplay: (key: DisplayToggleKey) => void;
   setGridSpacing: (spacing: number) => void;
@@ -259,7 +260,8 @@ export type DisplayToggleKey =
   | 'showGrid'
   | 'showScaleBar'
   | 'showSatellite'
-  | 'showDepthGradient';
+  | 'showDepthGradient'
+  | 'showDevStats';
 
 export const useUIStore = create<UIStore>((set) => ({
   // View state
@@ -443,6 +445,7 @@ export const useUIStore = create<UIStore>((set) => ({
   showScaleBar: DISPLAY_DEFAULTS.showScaleBar,
   showSatellite: DISPLAY_DEFAULTS.showSatellite,
   showDepthGradient: DISPLAY_DEFAULTS.showDepthGradient,
+  showDevStats: DISPLAY_DEFAULTS.showDevStats,
   gridSpacing: DISPLAY_DEFAULTS.gridSpacing,
   toggleDisplay: (key) => {
     const state = useUIStore.getState();
@@ -508,6 +511,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showScaleBar: DISPLAY_DEFAULTS.showScaleBar,
       showSatellite: DISPLAY_DEFAULTS.showSatellite,
       showDepthGradient: DISPLAY_DEFAULTS.showDepthGradient,
+      showDevStats: DISPLAY_DEFAULTS.showDevStats,
       gridSpacing: DISPLAY_DEFAULTS.gridSpacing,
     });
   },

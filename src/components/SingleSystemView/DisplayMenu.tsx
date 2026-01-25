@@ -31,6 +31,12 @@ const displayOptions: { group: string; items: DisplayOption[] }[] = [
       { key: 'showDepthGradient', label: 'Depth Gradient', description: 'Color by depth' },
     ],
   },
+  {
+    group: 'Developer',
+    items: [
+      { key: 'showDevStats', label: 'Dev Stats', description: 'Show performance and cache metrics' },
+    ],
+  },
 ];
 
 export default function DisplayMenu() {
@@ -50,6 +56,7 @@ export default function DisplayMenu() {
     showScaleBar,
     showSatellite,
     showDepthGradient,
+    showDevStats,
     gridSpacing,
     toggleDisplay,
     setGridSpacing,
@@ -67,6 +74,7 @@ export default function DisplayMenu() {
     showScaleBar,
     showSatellite,
     showDepthGradient,
+    showDevStats,
   };
 
   const isDisabled = (item: DisplayOption) =>

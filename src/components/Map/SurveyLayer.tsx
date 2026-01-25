@@ -9,6 +9,47 @@ import { isNonInteractiveTool } from '../../utils/toolUtils';
 import type { ToolType } from '../../store/uiStore';
 import { buildPriorityExpression, compositeIdEquals, inSection } from '../../utils/maplibre-expressions';
 
+/**
+ * Simple throttle function for performance-critical event handlers.
+ * Limits function execution to at most once per `limit` milliseconds.
+ */
+function throttle<T extends (...args: Parameters<T>) => void>(
+  fn: T,
+  limit: number
+): (...args: Parameters<T>) => void {
+  let lastCall = 0;
+  let lastArgs: Parameters<T> | null = null;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  return function (this: unknown, ...args: Parameters<T>) {
+    const now = Date.now();
+    const remaining = limit - (now - lastCall);
+
+    if (remaining <= 0) {
+      // Execute immediately
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      lastCall = now;
+      fn.apply(this, args);
+    } else {
+      // Schedule trailing call
+      lastArgs = args;
+      if (!timeoutId) {
+        timeoutId = setTimeout(() => {
+          lastCall = Date.now();
+          timeoutId = null;
+          if (lastArgs) {
+            fn.apply(this, lastArgs);
+            lastArgs = null;
+          }
+        }, remaining);
+      }
+    }
+  };
+}
+
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
   onShotClick?: (sectionId: SectionId, shotId: ShotId, event: MapMouseEvent) => void;
@@ -469,6 +510,7 @@ export default class SurveyLayer {
       id: this.shotLabelsLayerId,
       type: 'symbol',
       source: this.sourceId + '-shot-labels',
+      minzoom: 14, // Performance: don't render at low zooms
       layout: {
         'text-field': ['get', 'label'],
         'text-font': ['Open Sans Regular'],
@@ -519,6 +561,7 @@ export default class SurveyLayer {
       id: this.labelsLayerId,
       type: 'symbol',
       source: this.sourceId + '-section-labels',
+      minzoom: 10, // Performance: don't render at very low zooms
       layout: {
         'text-field': ['get', 'name'],
         'text-font': ['Open Sans Regular'],
@@ -548,6 +591,7 @@ export default class SurveyLayer {
       id: this.stationLabelsLayerId,
       type: 'symbol',
       source: this.sourceId + '-station-labels',
+      minzoom: 14, // Performance: don't render at low zooms
       layout: {
         'text-field': ['get', 'label'],
         'text-font': ['Open Sans Regular'],
@@ -606,16 +650,23 @@ export default class SurveyLayer {
     // Uses queryRenderedFeatures to find nearest station/shot at cursor position
     // This replaces per-layer mouseenter/mouseleave which don't fire when moving
     // between features on the same layer (e.g., station to nearby station)
-    this.boundMouseMove = (e: maplibregl.MapMouseEvent) => {
+    // Throttled to ~60fps max for better performance
+    const mouseMoveHandler = (e: maplibregl.MapMouseEvent) => {
       if (isNonInteractiveTool(this.activeTool)) return;
 
-      // Query both hitbox layers at cursor position
-      const stationFeatures = this.map.queryRenderedFeatures(e.point, {
-        layers: [this.stationsHitboxLayerId],
+      // Query both hitbox layers in a single call for better performance
+      // See: https://deepwiki.com/maplibre/maplibre-gl-js/5.2-performance-optimization-techniques
+      const allFeatures = this.map.queryRenderedFeatures(e.point, {
+        layers: [this.stationsHitboxLayerId, this.shotsHitboxLayerId],
       });
-      const shotFeatures = this.map.queryRenderedFeatures(e.point, {
-        layers: [this.shotsHitboxLayerId],
-      });
+
+      // Filter results by layer type
+      const stationFeatures = allFeatures.filter(
+        (f) => f.layer.id === this.stationsHitboxLayerId
+      );
+      const shotFeatures = allFeatures.filter(
+        (f) => f.layer.id === this.shotsHitboxLayerId
+      );
 
       // Resolve nearest of each type using existing resolution functions
       const nearestStation = this.resolveNearestStation(e, stationFeatures);
@@ -680,6 +731,9 @@ export default class SurveyLayer {
       }
     };
 
+    // Wrap with throttle for ~60fps max (16ms limit)
+    this.boundMouseMove = throttle(mouseMoveHandler, 16);
+
     // Clear all hover when cursor leaves the map canvas
     this.boundMapLeave = () => {
       if (this.hoveredStationId || this.hoveredShotId) {
@@ -706,9 +760,12 @@ export default class SurveyLayer {
    * when multiple features overlap.
    */
   private handleMapClick = (e: MapMouseEvent): void => {
-    // Query both hitbox layers (NOT ghost layers - those are debug only)
-    const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsHitboxLayerId] });
-    const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsHitboxLayerId] });
+    // Query both hitbox layers in a single call for better performance
+    const allFeatures = this.map.queryRenderedFeatures(e.point, {
+      layers: [this.stationsHitboxLayerId, this.shotsHitboxLayerId],
+    });
+    const stationFeatures = allFeatures.filter((f) => f.layer.id === this.stationsHitboxLayerId);
+    const shotFeatures = allFeatures.filter((f) => f.layer.id === this.shotsHitboxLayerId);
 
     // Stations take priority - resolve nearest station first
     const nearestStation = this.resolveNearestStation(e, stationFeatures);
@@ -761,9 +818,12 @@ export default class SurveyLayer {
    * Same pattern as click handler: stations take priority, uses nearest resolution.
    */
   private handleContextMenu = (e: MapMouseEvent): void => {
-    // Query both hitbox layers (NOT ghost layers)
-    const stationFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.stationsHitboxLayerId] });
-    const shotFeatures = this.map.queryRenderedFeatures(e.point, { layers: [this.shotsHitboxLayerId] });
+    // Query both hitbox layers in a single call for better performance
+    const allFeatures = this.map.queryRenderedFeatures(e.point, {
+      layers: [this.stationsHitboxLayerId, this.shotsHitboxLayerId],
+    });
+    const stationFeatures = allFeatures.filter((f) => f.layer.id === this.stationsHitboxLayerId);
+    const shotFeatures = allFeatures.filter((f) => f.layer.id === this.shotsHitboxLayerId);
 
     // Stations take priority
     const nearestStation = this.resolveNearestStation(e, stationFeatures);
