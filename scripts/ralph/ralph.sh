@@ -693,14 +693,32 @@ print("1")
 PY
 }
 
+# Get list of open (non-done) epic IDs from flowctl epics --json
+list_open_epics() {
+  local tmpfile
+  tmpfile="$(mktemp)"
+  "$FLOWCTL" epics --json 2>/dev/null > "$tmpfile"
+  "$PYTHON_BIN" - "$tmpfile" <<'PY'
+import sys, json
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+    for e in data.get('epics', []):
+        if e.get('status') != 'done':
+            print(e.get('id', ''))
+except: pass
+PY
+  rm -f "$tmpfile"
+}
+
 maybe_close_epics() {
   local epics json status all_done
   if [[ -n "$EPICS_FILE" ]]; then
-    # Scoped mode: use epics from file
+    # Scoped run: use epic list from file
     epics="$(list_epics_from_file)"
   else
-    # Unscoped mode: get all open epics from flowctl
-    epics="$("$FLOWCTL" epics --json 2>/dev/null | "$PYTHON_BIN" -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(e["id"] for e in d.get("epics",[]) if e.get("status")!="done"))' 2>/dev/null || true)"
+    # Unscoped run: get all open epics from flowctl
+    epics="$(list_open_epics)"
   fi
   [[ -z "$epics" ]] && return 0
   for epic in $epics; do
@@ -732,6 +750,20 @@ if data.get("type") != kind:
 if data.get("id") != rid:
     sys.exit(1)
 sys.exit(0)
+PY
+}
+
+# Read verdict field from receipt file (returns empty string if not found/error)
+read_receipt_verdict() {
+  local path="$1"
+  [[ -f "$path" ]] || return 0
+  "$PYTHON_BIN" - "$path" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+    print(data.get("verdict", ""))
+except Exception:
+    pass
 PY
 }
 
@@ -933,6 +965,7 @@ Violations break automation and leave the user with incomplete work. Be precise,
     epic_json="$("$FLOWCTL" show "$epic_id" --json 2>/dev/null || true)"
     plan_review_status="$(json_get plan_review_status "$epic_json")"
   fi
+  receipt_verdict=""
   if [[ "$status" == "work" && ( "$WORK_REVIEW" == "rp" || "$WORK_REVIEW" == "codex" ) ]]; then
     if ! verify_receipt "$REVIEW_RECEIPT_PATH" "impl_review" "$task_id"; then
       echo "ralph: missing impl review receipt; forcing retry" >> "$iter_log"
@@ -941,6 +974,9 @@ Violations break automation and leave the user with incomplete work. Be precise,
       # Delete corrupted/partial receipt so next attempt starts clean
       rm -f "$REVIEW_RECEIPT_PATH" 2>/dev/null || true
       force_retry=1
+    else
+      # Receipt is valid - read the verdict field
+      receipt_verdict="$(read_receipt_verdict "$REVIEW_RECEIPT_PATH")"
     fi
   fi
 
@@ -978,11 +1014,29 @@ Violations break automation and leave the user with incomplete work. Be precise,
         fi
         force_retry=1
       else
-        ui_task_done "$task_id"
-        # Derive verdict from task completion for logging
-        [[ -z "$verdict" ]] && verdict="SHIP"
-        # If we timed out but can prove completion (done + receipt valid), don't retry
-        force_retry=0
+        # Receipt is structurally valid - now check the verdict
+        if [[ "$receipt_verdict" == "NEEDS_WORK" ]]; then
+          # Task marked done but review said NEEDS_WORK - must retry
+          echo "ralph: receipt verdict is NEEDS_WORK; resetting task to todo" >> "$iter_log"
+          log "task $task_id: receipt verdict=NEEDS_WORK despite done status; resetting"
+          if "$FLOWCTL" task reset "$task_id" --json >/dev/null 2>&1; then
+            task_status="todo"
+          else
+            echo "ralph: FATAL: failed to reset task $task_id; aborting" >> "$iter_log"
+            ui_fail "Failed to reset $task_id after NEEDS_WORK verdict; aborting"
+            write_completion_marker "FAILED"
+            exit 1
+          fi
+          verdict="NEEDS_WORK"
+          force_retry=1
+        else
+          ui_task_done "$task_id"
+          # Use receipt verdict if available, otherwise derive from task completion
+          [[ -n "$receipt_verdict" ]] && verdict="$receipt_verdict"
+          [[ -z "$verdict" ]] && verdict="SHIP"
+          # If we timed out but can prove completion (done + receipt valid + verdict OK), don't retry
+          force_retry=0
+        fi
       fi
     else
       echo "ralph: task not done; forcing retry" >> "$iter_log"
@@ -992,10 +1046,14 @@ Violations break automation and leave the user with incomplete work. Be precise,
   fi
   append_progress "$verdict" "$promise" "$plan_review_status" "$task_status"
 
+  # NEVER honor COMPLETE from worker output (GH-73: premature completion bug)
+  # Workers are single-task/single-epic scope. Completion detection happens via
+  # the selector returning status=none at the top of the loop. Workers should
+  # NEVER output COMPLETE (both prompt_work.md and prompt_plan.md forbid it).
+  # If Claude outputs COMPLETE anyway, log it and continue - let selector decide.
   if echo "$claude_text" | grep -q "<promise>COMPLETE</promise>"; then
-    ui_complete
-    write_completion_marker "DONE"
-    exit 0
+    echo "ralph: WARNING: COMPLETE promise ignored (invalid in $status context)" >> "$iter_log"
+    log "COMPLETE ignored (invalid in $status context) - letting selector decide"
   fi
 
   exit_code=0
