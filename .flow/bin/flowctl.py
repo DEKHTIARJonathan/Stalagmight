@@ -1502,8 +1502,8 @@ def find_dependents(task_id: str, same_epic: bool = False) -> list[str]:
         checked.add(checking)
 
         for task_file in tasks_dir.glob("fn-*.json"):
-            if "." not in task_file.stem:
-                continue
+            if not is_task_id(task_file.stem):
+                continue  # Skip non-task files (e.g., fn-1.2-review.json)
             try:
                 task_data = load_json(task_file)
                 tid = task_data.get("id", task_file.stem)
@@ -1732,10 +1732,9 @@ def cmd_status(args: argparse.Namespace) -> None:
 
         if tasks_dir.exists():
             for task_file in tasks_dir.glob("fn-*.json"):
-                # Skip non-task files (must have . before .json)
                 task_id = task_file.stem
-                if "." not in task_id:
-                    continue
+                if not is_task_id(task_id):
+                    continue  # Skip non-task files (e.g., fn-1.2-review.json)
                 try:
                     # Use merged state for accurate status counts
                     task_data = load_task_with_state(task_id, use_json=True)
@@ -2454,8 +2453,8 @@ def cmd_show(args: argparse.Namespace) -> None:
         if tasks_dir.exists():
             for task_file in sorted(tasks_dir.glob(f"{args.id}.*.json")):
                 task_id = task_file.stem
-                if "." not in task_id:
-                    continue  # Skip non-task files
+                if not is_task_id(task_id):
+                    continue  # Skip non-task files (e.g., fn-1.2-review.json)
                 task_data = load_task_with_state(task_id, use_json=args.json)
                 if "id" not in task_data:
                     continue  # Skip artifact files (GH-21)
@@ -2538,8 +2537,8 @@ def cmd_epics(args: argparse.Namespace) -> None:
             if tasks_dir.exists():
                 for task_file in tasks_dir.glob(f"{epic_data['id']}.*.json"):
                     task_id = task_file.stem
-                    if "." not in task_id:
-                        continue
+                    if not is_task_id(task_id):
+                        continue  # Skip non-task files (e.g., fn-1.2-review.json)
                     task_data = load_task_with_state(task_id, use_json=args.json)
                     task_count += 1
                     if task_data.get("status") == "done":
@@ -2590,10 +2589,9 @@ def cmd_tasks(args: argparse.Namespace) -> None:
     if tasks_dir.exists():
         pattern = f"{args.epic}.*.json" if args.epic else "fn-*.json"
         for task_file in sorted(tasks_dir.glob(pattern)):
-            # Skip if it's not a task file (must have . in the name before .json)
             task_id = task_file.stem
-            if "." not in task_id:
-                continue
+            if not is_task_id(task_id):
+                continue  # Skip non-task files (e.g., fn-1.2-review.json)
             # Load task with merged runtime state
             task_data = load_task_with_state(task_id, use_json=args.json)
             if "id" not in task_data:
@@ -2674,8 +2672,8 @@ def cmd_list(args: argparse.Namespace) -> None:
     if tasks_dir.exists():
         for task_file in sorted(tasks_dir.glob("fn-*.json")):
             task_id = task_file.stem
-            if "." not in task_id:
-                continue
+            if not is_task_id(task_id):
+                continue  # Skip non-task files (e.g., fn-1.2-review.json)
             task_data = load_task_with_state(task_id, use_json=args.json)
             if "id" not in task_data or "epic" not in task_data:
                 continue  # Skip artifact files (GH-21)
@@ -3314,8 +3312,8 @@ def cmd_ready(args: argparse.Namespace) -> None:
     tasks = {}
     for task_file in tasks_dir.glob(f"{args.epic}.*.json"):
         task_id = task_file.stem
-        if "." not in task_id:
-            continue
+        if not is_task_id(task_id):
+            continue  # Skip non-task files (e.g., fn-1.2-review.json)
         task_data = load_task_with_state(task_id, use_json=args.json)
         if "id" not in task_data:
             continue  # Skip artifact files (GH-21)
@@ -3508,8 +3506,8 @@ def cmd_next(args: argparse.Namespace) -> None:
         tasks: dict[str, dict] = {}
         for task_file in tasks_dir.glob(f"{epic_id}.*.json"):
             task_id = task_file.stem
-            if "." not in task_id:
-                continue
+            if not is_task_id(task_id):
+                continue  # Skip non-task files (e.g., fn-1.2-review.json)
             # Load task with merged runtime state
             task_data = load_task_with_state(task_id, use_json=args.json)
             if "id" not in task_data:
@@ -3917,8 +3915,8 @@ def cmd_migrate_state(args: argparse.Namespace) -> None:
 
     for task_file in tasks_dir.glob("fn-*.json"):
         task_id = task_file.stem
-        if "." not in task_id:
-            continue  # Skip non-task files
+        if not is_task_id(task_id):
+            continue  # Skip non-task files (e.g., fn-1.2-review.json)
 
         # Check if state file already exists
         if store.load_runtime(task_id) is not None:
@@ -3991,8 +3989,8 @@ def cmd_epic_close(args: argparse.Namespace) -> None:
     incomplete = []
     for task_file in tasks_dir.glob(f"{args.id}.*.json"):
         task_id = task_file.stem
-        if "." not in task_id:
-            continue
+        if not is_task_id(task_id):
+            continue  # Skip non-task files (e.g., fn-1.2-review.json)
         task_data = load_task_with_state(task_id, use_json=args.json)
         if task_data["status"] != "done":
             incomplete.append(f"{task_data['id']} ({task_data['status']})")
@@ -4091,8 +4089,8 @@ def validate_epic(
     if tasks_dir.exists():
         for task_file in tasks_dir.glob(f"{epic_id}.*.json"):
             task_id = task_file.stem
-            if "." not in task_id:
-                continue  # Skip non-task files
+            if not is_task_id(task_id):
+                continue  # Skip non-task files (e.g., fn-1.2-review.json)
             # Use merged state to get accurate status
             task_data = load_task_with_state(task_id, use_json=use_json)
             if "id" not in task_data:
@@ -4282,10 +4280,10 @@ def cmd_rp_builder(args: argparse.Namespace) -> None:
     summary = args.summary
     response_type = getattr(args, "response_type", None)
 
-    # Build builder command with optional response-type
+    # Build builder command with optional --type flag (shorthand for response_type)
     builder_expr = f"builder {json.dumps(summary)}"
     if response_type:
-        builder_expr += f" --response-type {response_type}"
+        builder_expr += f" --type {response_type}"
 
     cmd = [
         "-w",
@@ -4481,10 +4479,10 @@ def cmd_rp_setup_review(args: argparse.Namespace) -> None:
     state_file = Path(f"/tmp/.ralph-pick-window-{repo_hash}")
     state_file.write_text(f"{win_id}\n{repo_root}\n")
 
-    # Step 2: builder (with optional response-type for RP 1.6.0+)
+    # Step 2: builder (with optional --type flag for RP 1.6.0+)
     builder_expr = f"builder {json.dumps(summary)}"
     if response_type:
-        builder_expr += f" --response-type {response_type}"
+        builder_expr += f" --type {response_type}"
 
     builder_cmd = [
         "-w",
@@ -4905,8 +4903,8 @@ def cmd_checkpoint_save(args: argparse.Namespace) -> None:
     if tasks_dir.exists():
         for task_file in sorted(tasks_dir.glob(f"{epic_id}.*.json")):
             task_id = task_file.stem
-            if "." not in task_id:
-                continue  # Skip non-task files
+            if not is_task_id(task_id):
+                continue  # Skip non-task files (e.g., fn-1.2-review.json)
             task_data = load_json(task_file)
             task_spec_path = tasks_dir / f"{task_id}.md"
             task_spec = ""
@@ -5597,7 +5595,7 @@ def main() -> None:
     p_rp_builder.add_argument(
         "--response-type",
         dest="response_type",
-        choices=["review", "plan", "question"],
+        choices=["review", "plan", "question", "clarify"],
         help="Builder response type (requires RP 1.6.0+)",
     )
     p_rp_builder.add_argument("--json", action="store_true", help="JSON output")
