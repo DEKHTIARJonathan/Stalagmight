@@ -617,126 +617,93 @@ test.describe('Detail Link Focus Highlighting', () => {
     });
   });
 
-  test.describe('Hover Handler Wiring Verification', () => {
-    // NOTE ON HOVER TESTING:
-    // React uses a synthetic event system with event delegation at the document root.
-    // Native mouseenter/mouseleave events (which don't bubble by spec) do not trigger
-    // React's onMouseEnter/onMouseLeave handlers when dispatched programmatically.
-    // Playwright's hover() also doesn't reliably trigger React synthetic events.
+  test.describe('Mouse Hover Events', () => {
+    // Test actual mouse hover using Playwright's hover() method.
+    // This verifies the React onMouseEnter/onMouseLeave handlers are wired correctly.
     //
-    // To verify the hover handlers are wired correctly, we:
-    // 1. Use focus tests (Station/Shot/Section Link Focus tests above) - focus/blur
-    //    handlers call the same onHoverStart/onHoverEnd callbacks as mouse handlers
-    // 2. Verify the callbacks are passed correctly by checking that the props exist
-    // 3. Verify the store APIs work via direct store tests (below)
-    //
-    // The actual onMouseEnter/onMouseLeave handler logic is unit-testable with
-    // React Testing Library which can trigger synthetic events properly.
+    // NOTE: Station and shot link hover tests are covered via focus tests above because
+    // Playwright's hover() does not reliably trigger React's onMouseEnter for these
+    // elements in headless Chromium. The section link hover works, demonstrating
+    // the DetailLink component's onMouseEnter wiring is correct. Station/shot links
+    // use the same component with the same handler structure.
 
-    test('DetailLink components receive hover callbacks (verified via focus)', async ({ page }) => {
-      // This test verifies that the hover handler wiring works by using focus,
-      // which exercises the same onHoverStart/onHoverEnd callback path.
-      // The focus tests above already verify this comprehensively, but this
-      // test explicitly documents that hover functionality is tested via focus.
+    test('hover on section link sets hoveredSectionId', async ({ page }) => {
       await createProjectWithSections(page);
 
       const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
       const shotIds = await getShotIdsForSection(page, mainSectionId);
       const firstShotId = shotIds[0]!;
 
-      // Select a shot to show detail panel with all three link types
+      // Select a shot to show detail panel with section link
       await selectShot(page, mainSectionId, firstShotId);
 
-      // Verify station link hover works via focus
-      const stationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
-      await stationLink.focus();
-      await pollHoverState(
-        page,
-        (state) =>
-          state.hoveredStation !== null &&
-          state.hoveredStation.section_id === mainSectionId
-      );
-
-      // Blur and verify section link hover works via focus
+      // Find the section link
       const sectionLink = page.getByTestId(`section-${mainSectionId}-link`);
-      await sectionLink.focus();
-      await pollHoverState(page, (state) => state.hoveredSectionId === mainSectionId);
+      await expect(sectionLink).toBeVisible();
 
-      // The focus tests prove the onHoverStart/onHoverEnd callbacks are wired correctly.
-      // Since DetailLink's handleMouseEnter calls onHoverStart and handleFocus calls
-      // onHoverStart, testing via focus exercises the same code path.
+      // Check initial state
+      const initialState = await getHoverState(page);
+      expect(initialState.hoveredSectionId).toBeNull();
+
+      // Hover the section link
+      await sectionLink.hover();
+
+      // Verify hoveredSectionId is set
+      const hoverState = await pollHoverState(
+        page,
+        (state) => state.hoveredSectionId === mainSectionId
+      );
+      expect(hoverState.hoveredSectionId).toBe(mainSectionId);
     });
 
-    test('store setHoveredStation/Shot/SectionId APIs work correctly', async ({ page }) => {
-      // Direct store API tests verify the hover state management works,
-      // which is what the DetailLink handlers call internally.
+    test('mouse leave on section link clears hoveredSectionId', async ({ page }) => {
       await createProjectWithSections(page);
 
       const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
       const shotIds = await getShotIdsForSection(page, mainSectionId);
       const firstShotId = shotIds[0]!;
 
-      // Test setHoveredStation
-      await page.evaluate(({ secId }) => {
-        const stores = (window as unknown as {
-          __E2E_TEST__?: {
-            uiStore: {
-              getState: () => {
-                setHoveredStation: (ref: { section_id: number; station_index: number } | null) => void;
-              };
-            };
-          };
-        }).__E2E_TEST__;
-        if (stores) {
-          stores.uiStore.getState().setHoveredStation({ section_id: secId, station_index: 0 });
-        }
-      }, { secId: mainSectionId });
+      // Select a shot to show detail panel
+      await selectShot(page, mainSectionId, firstShotId);
 
-      let hoverState = await pollHoverState(page, (state) => state.hoveredStation !== null);
-      expect(hoverState.hoveredStation?.section_id).toBe(mainSectionId);
+      // Hover the section link
+      const sectionLink = page.getByTestId(`section-${mainSectionId}-link`);
+      await sectionLink.hover();
 
-      // Clear and test setHoveredShot
-      await page.evaluate(({ secId, shotId }) => {
-        const stores = (window as unknown as {
-          __E2E_TEST__?: {
-            uiStore: {
-              getState: () => {
-                setHoveredStation: (ref: null) => void;
-                setHoveredShot: (shot: { sectionId: number; shotId: number } | null) => void;
-              };
-            };
-          };
-        }).__E2E_TEST__;
-        if (stores) {
-          stores.uiStore.getState().setHoveredStation(null);
-          stores.uiStore.getState().setHoveredShot({ sectionId: secId, shotId: shotId });
-        }
-      }, { secId: mainSectionId, shotId: firstShotId });
+      // Wait for hover state to be set
+      await pollHoverState(page, (state) => state.hoveredSectionId === mainSectionId);
 
-      hoverState = await pollHoverState(page, (state) => state.hoveredShot !== null);
-      expect(hoverState.hoveredShot?.sectionId).toBe(mainSectionId);
-      expect(hoverState.hoveredShot?.shotId).toBe(firstShotId);
+      // Move mouse away to trigger mouse leave
+      const centerButton = page.getByTestId('center-shot-button');
+      await centerButton.hover();
 
-      // Clear and test setHoveredSectionId
-      await page.evaluate((secId) => {
-        const stores = (window as unknown as {
-          __E2E_TEST__?: {
-            uiStore: {
-              getState: () => {
-                setHoveredShot: (shot: null) => void;
-                setHoveredSectionId: (id: number | null) => void;
-              };
-            };
-          };
-        }).__E2E_TEST__;
-        if (stores) {
-          stores.uiStore.getState().setHoveredShot(null);
-          stores.uiStore.getState().setHoveredSectionId(secId);
-        }
-      }, mainSectionId);
+      // Verify hoveredSectionId is cleared
+      const clearedState = await pollHoverState(page, (state) => state.hoveredSectionId === null);
+      expect(clearedState.hoveredSectionId).toBeNull();
+    });
 
-      hoverState = await pollHoverState(page, (state) => state.hoveredSectionId !== null);
-      expect(hoverState.hoveredSectionId).toBe(mainSectionId);
+    test('section row hover works (verifies panel hover behavior)', async ({ page }) => {
+      // Verify that section row hover in SectionsPanel works with page.hover()
+      // This demonstrates that Playwright hover() does work for React elements
+      await createProjectWithSections(page);
+
+      const sideSectionId = await getSectionIdByName(page, 'Side Passage');
+
+      // Initially no hover state
+      const initialState = await getHoverState(page);
+      expect(initialState.hoveredSectionId).toBeNull();
+
+      // Hover over section row in Sections Panel
+      const sectionRow = page.locator(`[data-testid="section-row-${sideSectionId}"]`);
+      await expect(sectionRow).toBeVisible();
+      await sectionRow.hover();
+
+      // Verify hoveredSectionId is set
+      const hoverState = await pollHoverState(
+        page,
+        (state) => state.hoveredSectionId === sideSectionId
+      );
+      expect(hoverState.hoveredSectionId).toBe(sideSectionId);
     });
   });
 
