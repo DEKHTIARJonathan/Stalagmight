@@ -618,14 +618,17 @@ test.describe('Detail Link Focus Highlighting', () => {
   });
 
   test.describe('Mouse Hover Events', () => {
-    // Test actual mouse hover using Playwright's hover() method.
+    // Test mouse hover using Playwright's hover() method.
     // This verifies the React onMouseEnter/onMouseLeave handlers are wired correctly.
     //
-    // NOTE: Station and shot link hover tests are covered via focus tests above because
-    // Playwright's hover() does not reliably trigger React's onMouseEnter for these
-    // elements in headless Chromium. The section link hover works, demonstrating
-    // the DetailLink component's onMouseEnter wiring is correct. Station/shot links
-    // use the same component with the same handler structure.
+    // TECHNICAL NOTE: React's synthetic event system doesn't respond to programmatically
+    // dispatched mouseenter/mouseleave events (neither page.hover() nor dispatchEvent()).
+    // This is a known Playwright+React limitation. However:
+    // - Section row hover works with page.hover() (verified in section-highlighting.spec.ts)
+    // - Section link hover works with page.hover() (verified below)
+    // - Station/shot links use the same DetailLink component and same handler structure,
+    //   so the focus tests above (which use the same onHoverStart callback) verify the
+    //   wiring is correct for those elements.
 
     test('hover on section link sets hoveredSectionId', async ({ page }) => {
       await createProjectWithSections(page);
@@ -853,11 +856,17 @@ test.describe('Detail Link Focus Highlighting', () => {
       expect(newHoverState.hoveredSectionId).toBe(sideSectionId);
     });
 
-    test('map hover still works alongside DetailLink hover', async ({ page }) => {
-      // Verify that map hover (simulated via store, as MapLibre events are
-      // challenging to trigger in Playwright) still works and uses the same
-      // hover state as DetailLink. This ensures DetailLink hover doesn't
-      // break the existing map hover → panel highlight flow.
+    test('map-sourced hover coexists with DetailLink hover (bidirectional state)', async ({ page }) => {
+      // This test verifies that hover state can be set from either source (map or DetailLink)
+      // and uses the same uiStore state. The actual map hover pipeline (SurveyLayer mousemove
+      // -> queryRenderedFeatures -> onStationHover callback) is tested via the callbacks
+      // that call uiStore setters. We simulate the "map hover" by calling the same store
+      // setters that the SurveyLayer callbacks use.
+      //
+      // This matches the test approach in section-highlighting.spec.ts which documents:
+      // "simulating map hover via store manipulation, since MapLibre layer events are
+      // challenging to trigger reliably in Playwright. The actual MapLibre event handlers
+      // are covered by unit tests."
       await createProjectWithSections(page);
 
       const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
@@ -865,19 +874,19 @@ test.describe('Detail Link Focus Highlighting', () => {
       const shotIds = await getShotIdsForSection(page, mainSectionId);
       const firstShotId = shotIds[0]!;
 
-      // First, use DetailLink hover to set state
+      // First, use DetailLink focus to set state (same callback as hover)
       await selectShot(page, mainSectionId, firstShotId);
       const sectionLink = page.getByTestId(`section-${mainSectionId}-link`);
       await sectionLink.focus();
       await pollHoverState(page, (state) => state.hoveredSectionId === mainSectionId);
 
-      // Blur the link
+      // Clear via blur
       const centerButton = page.getByTestId('center-shot-button');
       await centerButton.focus();
       await pollHoverState(page, (state) => state.hoveredSectionId === null);
 
-      // Now simulate map hover by setting hoveredSectionId directly
-      // (this is how map hover works - SurveyLayer calls setHoveredSectionId)
+      // Now simulate map hover by calling the same setter that SurveyLayer uses
+      // in its onFeatureHover callback (SurveyLayer -> onSectionHover -> setHoveredSectionId)
       await page.evaluate((secId) => {
         const stores = (window as unknown as {
           __E2E_TEST__?: {
@@ -889,7 +898,7 @@ test.describe('Detail Link Focus Highlighting', () => {
         }
       }, sideSectionId);
 
-      // Verify map hover state is set
+      // Verify map-sourced hover state is set (proves same state path)
       const mapHoverState = await pollHoverState(
         page,
         (state) => state.hoveredSectionId === sideSectionId
@@ -908,19 +917,37 @@ test.describe('Detail Link Focus Highlighting', () => {
         }
       });
 
-      // Verify map hover clears
+      // Verify clears
       const clearedState = await pollHoverState(page, (state) => state.hoveredSectionId === null);
       expect(clearedState.hoveredSectionId).toBeNull();
     });
 
-    test('map station hover works alongside DetailLink station hover', async ({ page }) => {
-      // Verify map hover for stations (simulated via store) works
+    test('map-sourced station hover coexists with DetailLink station hover', async ({ page }) => {
+      // Same approach as above - verify bidirectional state sharing for station hover
       await createProjectWithSections(page);
 
       const mainSectionId = await getSectionIdByName(page, 'Main Tunnel');
+      const shotIds = await getShotIdsForSection(page, mainSectionId);
+      const firstShotId = shotIds[0]!;
 
-      // Simulate map hover on a station by setting hoveredStation directly
-      // (this is how map station hover works - SurveyLayer calls setHoveredStation)
+      // First test DetailLink station focus (same callback as hover)
+      await selectShot(page, mainSectionId, firstShotId);
+      const stationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      await stationLink.focus();
+      await pollHoverState(
+        page,
+        (state) =>
+          state.hoveredStation !== null &&
+          state.hoveredStation.section_id === mainSectionId &&
+          state.hoveredStation.station_index === 0
+      );
+
+      // Clear via blur
+      const centerButton = page.getByTestId('center-shot-button');
+      await centerButton.focus();
+      await pollHoverState(page, (state) => state.hoveredStation === null);
+
+      // Now simulate map station hover (what SurveyLayer's onStationHover callback calls)
       await page.evaluate(({ secId }) => {
         const stores = (window as unknown as {
           __E2E_TEST__?: {
@@ -936,7 +963,7 @@ test.describe('Detail Link Focus Highlighting', () => {
         }
       }, { secId: mainSectionId });
 
-      // Verify station hover state is set
+      // Verify map-sourced station hover is set
       const hoverState = await pollHoverState(
         page,
         (state) =>
