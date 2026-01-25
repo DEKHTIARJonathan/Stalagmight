@@ -78,9 +78,6 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   const zoomFrameTimesRef = useRef<number[]>([]);
   const worstFrameRef = useRef<number>(0);
 
-  // Hiccup detection - log frames over threshold
-  const HICCUP_THRESHOLD_MS = 50;
-
   // Get WebGL info on mount (cached - these don't change)
   useEffect(() => {
     const canvas = map.getCanvas();
@@ -160,40 +157,6 @@ export function MapDevStats({ map }: MapDevStatsProps) {
         }
       }
 
-      // Log hiccups (frames over threshold)
-      if (delta > HICCUP_THRESHOLD_MS) {
-        const tileStats = getTileFetchStats();
-        // Check memory if available (Chrome/WebKit)
-        const memory = (performance as unknown as { memory?: { usedJSHeapSize: number; totalJSHeapSize: number } }).memory;
-        const memInfo = memory
-          ? { heapMB: Math.round(memory.usedJSHeapSize / 1024 / 1024), totalMB: Math.round(memory.totalJSHeapSize / 1024 / 1024) }
-          : null;
-        // Count layers and sources for diagnostics
-        const style = map.getStyle();
-        const layerCount = style?.layers?.length ?? 0;
-        const sourceCount = Object.keys(style?.sources ?? {}).length;
-        // For severe hiccups, try to identify cause
-        const isSevere = delta > 500;
-        if (isSevere) {
-          console.error(`[Perf] SEVERE Hiccup: ${delta.toFixed(1)}ms frame`, {
-            isZooming: isZoomingRef.current,
-            zoom: map.getZoom().toFixed(2),
-            layers: layerCount,
-            sources: sourceCount,
-            ...(memInfo && { memory: memInfo }),
-            hint: 'Check WebKitGTK GPU driver or MapLibre symbol placement',
-          });
-        } else {
-          console.warn(`[Perf] Hiccup: ${delta.toFixed(1)}ms frame`, {
-            isZooming: isZoomingRef.current,
-            zoom: map.getZoom().toFixed(2),
-            tilesInFlight: tileStats.inFlight,
-            tilesLoaded: map.areTilesLoaded(),
-            layers: layerCount,
-            sources: sourceCount,
-          });
-        }
-      }
 
       // Only update React state periodically to avoid re-render every frame
       if (now - lastStateUpdateRef.current >= STATE_UPDATE_INTERVAL) {
@@ -278,6 +241,12 @@ export function MapDevStats({ map }: MapDevStatsProps) {
       }, 250);
     };
 
+    // Idle event fires when map finishes rendering - ensures we catch final state
+    const handleIdle = () => {
+      setMapLoaded(map.loaded());
+      setTilesLoaded(map.areTilesLoaded());
+    };
+
     const handleResize = () => {
       const canvas = map.getCanvas();
       setCanvasSize({ width: canvas.width, height: canvas.height });
@@ -329,6 +298,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
     map.on('resize', handleResize);
     map.on('zoomstart', handleZoomStart);
     map.on('zoomend', handleZoomEnd);
+    map.on('idle', handleIdle);
 
     return () => {
       map.off('move', handleMove);
@@ -337,6 +307,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
       map.off('resize', handleResize);
       map.off('zoomstart', handleZoomStart);
       map.off('zoomend', handleZoomEnd);
+      map.off('idle', handleIdle);
       if (sourcedataTimeout) clearTimeout(sourcedataTimeout);
     };
   }, [map]);
