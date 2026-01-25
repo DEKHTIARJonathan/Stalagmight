@@ -65,6 +65,21 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   const [showTileBoundaries, setShowTileBoundaries] = useState(map.showTileBoundaries);
   const [showCollisionBoxes, setShowCollisionBoxes] = useState(map.showCollisionBoxes);
   const [showOverdraw, setShowOverdraw] = useState(map.showOverdrawInspector);
+  const [hideSymbols, setHideSymbols] = useState(false);
+
+  // Zoom performance tracking
+  const [isZooming, setIsZooming] = useState(false);
+  const [zoomFps, setZoomFps] = useState<number | null>(null);
+  const [lastZoomDuration, setLastZoomDuration] = useState<number | null>(null);
+  const [lastZoomLevels, setLastZoomLevels] = useState<number | null>(null);
+  const [worstFrameTime, setWorstFrameTime] = useState<number | null>(null);
+  const zoomStartTimeRef = useRef<number | null>(null);
+  const zoomStartLevelRef = useRef<number | null>(null);
+  const zoomFrameTimesRef = useRef<number[]>([]);
+  const worstFrameRef = useRef<number>(0);
+
+  // Hiccup detection - log frames over threshold
+  const HICCUP_THRESHOLD_MS = 50;
 
   // Get WebGL info on mount (cached - these don't change)
   useEffect(() => {
@@ -123,6 +138,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   // Only update React state every 500ms to avoid triggering re-renders every frame
   const lastStateUpdateRef = useRef(performance.now());
   const STATE_UPDATE_INTERVAL = 500; // ms
+  const isZoomingRef = useRef(false); // Non-reactive ref for frame loop
 
   useEffect(() => {
     const measureFrame = () => {
@@ -134,6 +150,49 @@ export function MapDevStats({ map }: MapDevStatsProps) {
       frameTimesRef.current.push(delta);
       if (frameTimesRef.current.length > 60) {
         frameTimesRef.current.shift();
+      }
+
+      // Track frame times during zoom
+      if (isZoomingRef.current) {
+        zoomFrameTimesRef.current.push(delta);
+        if (delta > worstFrameRef.current) {
+          worstFrameRef.current = delta;
+        }
+      }
+
+      // Log hiccups (frames over threshold)
+      if (delta > HICCUP_THRESHOLD_MS) {
+        const tileStats = getTileFetchStats();
+        // Check memory if available (Chrome/WebKit)
+        const memory = (performance as unknown as { memory?: { usedJSHeapSize: number; totalJSHeapSize: number } }).memory;
+        const memInfo = memory
+          ? { heapMB: Math.round(memory.usedJSHeapSize / 1024 / 1024), totalMB: Math.round(memory.totalJSHeapSize / 1024 / 1024) }
+          : null;
+        // Count layers and sources for diagnostics
+        const style = map.getStyle();
+        const layerCount = style?.layers?.length ?? 0;
+        const sourceCount = Object.keys(style?.sources ?? {}).length;
+        // For severe hiccups, try to identify cause
+        const isSevere = delta > 500;
+        if (isSevere) {
+          console.error(`[Perf] SEVERE Hiccup: ${delta.toFixed(1)}ms frame`, {
+            isZooming: isZoomingRef.current,
+            zoom: map.getZoom().toFixed(2),
+            layers: layerCount,
+            sources: sourceCount,
+            ...(memInfo && { memory: memInfo }),
+            hint: 'Check WebKitGTK GPU driver or MapLibre symbol placement',
+          });
+        } else {
+          console.warn(`[Perf] Hiccup: ${delta.toFixed(1)}ms frame`, {
+            isZooming: isZoomingRef.current,
+            zoom: map.getZoom().toFixed(2),
+            tilesInFlight: tileStats.inFlight,
+            tilesLoaded: map.areTilesLoaded(),
+            layers: layerCount,
+            sources: sourceCount,
+          });
+        }
       }
 
       // Only update React state periodically to avoid re-render every frame
@@ -224,16 +283,60 @@ export function MapDevStats({ map }: MapDevStatsProps) {
       setCanvasSize({ width: canvas.width, height: canvas.height });
     };
 
+    // Zoom performance tracking
+    const handleZoomStart = () => {
+      zoomStartTimeRef.current = performance.now();
+      zoomStartLevelRef.current = map.getZoom();
+      zoomFrameTimesRef.current = [];
+      worstFrameRef.current = 0;
+      isZoomingRef.current = true;
+      setIsZooming(true);
+    };
+
+    const handleZoomEnd = () => {
+      isZoomingRef.current = false;
+      setIsZooming(false);
+
+      if (zoomStartTimeRef.current !== null) {
+        const duration = performance.now() - zoomStartTimeRef.current;
+        setLastZoomDuration(Math.round(duration));
+      }
+
+      if (zoomStartLevelRef.current !== null) {
+        const levels = Math.abs(map.getZoom() - zoomStartLevelRef.current);
+        setLastZoomLevels(Math.round(levels * 100) / 100);
+      }
+
+      // Calculate average FPS during zoom
+      if (zoomFrameTimesRef.current.length > 0) {
+        const avgFrameTime =
+          zoomFrameTimesRef.current.reduce((a, b) => a + b, 0) / zoomFrameTimesRef.current.length;
+        setZoomFps(Math.round(1000 / avgFrameTime));
+      }
+
+      // Record worst frame
+      if (worstFrameRef.current > 0) {
+        setWorstFrameTime(Math.round(worstFrameRef.current));
+      }
+
+      zoomStartTimeRef.current = null;
+      zoomStartLevelRef.current = null;
+    };
+
     map.on('move', handleMove);
     map.on('load', handleLoad);
     map.on('sourcedata', handleSourceData);
     map.on('resize', handleResize);
+    map.on('zoomstart', handleZoomStart);
+    map.on('zoomend', handleZoomEnd);
 
     return () => {
       map.off('move', handleMove);
       map.off('load', handleLoad);
       map.off('sourcedata', handleSourceData);
       map.off('resize', handleResize);
+      map.off('zoomstart', handleZoomStart);
+      map.off('zoomend', handleZoomEnd);
       if (sourcedataTimeout) clearTimeout(sourcedataTimeout);
     };
   }, [map]);
@@ -271,6 +374,35 @@ export function MapDevStats({ map }: MapDevStatsProps) {
     map.showOverdrawInspector = newValue;
     setShowOverdraw(newValue);
   }, [map]);
+
+  // Toggle visibility of all symbol layers (labels) for debugging
+  const toggleSymbols = useCallback(() => {
+    const newValue = !hideSymbols;
+    const style = map.getStyle();
+    if (style?.layers) {
+      for (const layer of style.layers) {
+        if (layer.type === 'symbol') {
+          map.setLayoutProperty(layer.id, 'visibility', newValue ? 'none' : 'visible');
+        }
+      }
+    }
+    setHideSymbols(newValue);
+  }, [map, hideSymbols]);
+
+  // Hide ALL layers except background for ultimate performance test
+  const [hideAllLayers, setHideAllLayers] = useState(false);
+  const toggleAllLayers = useCallback(() => {
+    const newValue = !hideAllLayers;
+    const style = map.getStyle();
+    if (style?.layers) {
+      for (const layer of style.layers) {
+        if (layer.id !== 'background') {
+          map.setLayoutProperty(layer.id, 'visibility', newValue ? 'none' : 'visible');
+        }
+      }
+    }
+    setHideAllLayers(newValue);
+  }, [map, hideAllLayers]);
 
   // Format bytes to human readable
   const formatBytes = useCallback((bytes: number): string => {
@@ -313,7 +445,32 @@ export function MapDevStats({ map }: MapDevStatsProps) {
         <span className="text-gray-400">FPS:</span>{' '}
         <span className={getFpsColor(fps)}>{fps}</span>
         <span className="text-gray-500 ml-2">({frameTime}ms)</span>
+        {isZooming && <span className="text-yellow-400 ml-2">ZOOMING</span>}
       </div>
+
+      {/* Zoom performance (show last zoom stats) */}
+      {(zoomFps !== null || lastZoomDuration !== null) && (
+        <div className="mb-1 text-[10px]">
+          <span className="text-gray-400">Last zoom:</span>{' '}
+          {zoomFps !== null && (
+            <>
+              <span className={getFpsColor(zoomFps)}>{zoomFps} fps</span>
+              <span className="text-gray-500 mx-1">|</span>
+            </>
+          )}
+          {lastZoomDuration !== null && (
+            <span className="text-white">{lastZoomDuration}ms</span>
+          )}
+          {lastZoomLevels !== null && (
+            <span className="text-gray-500 ml-1">({lastZoomLevels} lvls)</span>
+          )}
+          {worstFrameTime !== null && worstFrameTime > 20 && (
+            <span className={`ml-1 ${worstFrameTime > 50 ? 'text-red-400' : 'text-yellow-400'}`}>
+              worst: {worstFrameTime}ms
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Map state */}
       <div className="mb-1">
@@ -405,6 +562,28 @@ export function MapDevStats({ map }: MapDevStatsProps) {
             title="Show overdraw (fragment shader calls)"
           >
             Overdraw
+          </button>
+          <button
+            onClick={toggleSymbols}
+            className={`px-1.5 py-0.5 rounded text-[10px] border ${
+              hideSymbols
+                ? 'bg-red-500/30 border-red-500 text-red-400'
+                : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'
+            }`}
+            title="Hide all symbol layers (labels) for performance testing"
+          >
+            {hideSymbols ? 'Labels OFF' : 'Labels'}
+          </button>
+          <button
+            onClick={toggleAllLayers}
+            className={`px-1.5 py-0.5 rounded text-[10px] border ${
+              hideAllLayers
+                ? 'bg-red-500/30 border-red-500 text-red-400'
+                : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'
+            }`}
+            title="Hide ALL layers (background only) - tests if MapLibre/WebGL is the problem"
+          >
+            {hideAllLayers ? 'ALL OFF' : 'All Layers'}
           </button>
         </div>
       </div>
