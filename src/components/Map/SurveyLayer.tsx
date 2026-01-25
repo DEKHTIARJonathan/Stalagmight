@@ -7,7 +7,8 @@ import { getDepthColor } from '../../utils/colors';
 import { hasLiveStyle } from './mapUtils';
 import { isNonInteractiveTool } from '../../utils/toolUtils';
 import type { ToolType } from '../../store/uiStore';
-import { buildPriorityExpression, compositeIdEquals, inSection } from '../../utils/maplibre-expressions';
+// Note: buildPriorityExpression, compositeIdEquals, inSection no longer needed
+// after switching to setFeatureState for hover/selection highlighting
 
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
@@ -106,6 +107,12 @@ export default class SurveyLayer {
   private pendingHoverEvent: maplibregl.MapMouseEvent | null = null;
   private hoverRafId: number | null = null;
 
+  // Previous feature IDs for setFeatureState (to clear state when hover/selection changes)
+  private prevHoveredStationFeatureId: number | null = null;
+  private prevHoveredShotFeatureId: number | null = null;
+  private prevSelectedStationFeatureId: number | null = null;
+  private prevSelectedShotFeatureId: number | null = null;
+
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
     this.callbacks = callbacks;
@@ -188,18 +195,20 @@ export default class SurveyLayer {
   }
 
   private initializeSources() {
-    // Shots line source
+    // Shots line source - promoteId enables setFeatureState for hover/selection
     this.map.addSource(this.sourceId + '-shots', {
       type: 'geojson',
+      promoteId: 'featureId',
       data: {
         type: 'FeatureCollection',
         features: [],
       },
     });
 
-    // Stations point source
+    // Stations point source - promoteId enables setFeatureState for hover/selection
     this.map.addSource(this.sourceId + '-stations', {
       type: 'geojson',
+      promoteId: 'featureId',
       data: {
         type: 'FeatureCollection',
         features: [],
@@ -416,38 +425,64 @@ export default class SurveyLayer {
       },
     });
 
-    // Shots layer (lines) - solid lines, virtual shots handled by opacity
+    // Shots layer (lines) - uses feature-state for hover/selection
+    const baseWidth = this.getShotWidth();
+    const hoverWidth = this.getShotHoverWidth();
+    const selectionWidth = this.getShotSelectionWidth();
+
     this.map.addLayer({
       id: this.shotsLayerId,
       type: 'line',
       source: this.sourceId + '-shots',
       paint: {
         'line-color': ['get', 'color'],
-        'line-width': 2,
+        // Width: hover > selected > base (uses feature-state)
+        'line-width': [
+          'case',
+          ['boolean', ['feature-state', 'hover'], false], hoverWidth,
+          ['boolean', ['feature-state', 'selected'], false], selectionWidth,
+          baseWidth,
+        ],
         'line-opacity': ['case', ['get', 'isVirtual'], 0.5, 1],
       },
     });
 
     // Stations layer (circles)
-    // Fill color from feature property (handles both normal mode gold for zero datum and depth mode)
+    // Uses feature-state for efficient hover/selection highlighting
+    const baseRadius = this.getStationRadius();
+    const hoverRadius = this.getStationHoverRadius();
+    const selectionRadius = this.getStationSelectionRadius();
+
     this.map.addLayer({
       id: this.stationsLayerId,
       type: 'circle',
       source: this.sourceId + '-stations',
       paint: {
+        // Radius: hover > selected > zeroDatum > base (uses feature-state)
         'circle-radius': [
           'case',
-          ['get', 'isZeroDatum'],
-          8,
-          4,
+          ['boolean', ['feature-state', 'hover'], false], hoverRadius,
+          ['boolean', ['feature-state', 'selected'], false], selectionRadius,
+          ['get', 'isZeroDatum'], baseRadius * 2,
+          baseRadius,
         ],
-        // Color from feature property - computed in update() based on depth mode and zero datum status
+        // Color from feature property
         'circle-color': ['get', 'color'],
-        // Stroke width varies: 2 for zero datum (visibility), 1 for others
-        // Updated dynamically in updateVisualState() for selection/hover
-        'circle-stroke-width': ['case', ['get', 'isZeroDatum'], 2, 1],
-        // Stroke color from feature property (gold for zero datum in depth mode, black otherwise)
-        'circle-stroke-color': ['get', 'strokeColor'],
+        // Stroke width: hover/selected states get thicker strokes (uses feature-state)
+        'circle-stroke-width': [
+          'case',
+          ['boolean', ['feature-state', 'hover'], false], 4,
+          ['boolean', ['feature-state', 'selected'], false], 2.5,
+          ['get', 'isZeroDatum'], 2,
+          1,
+        ],
+        // Stroke color: hover=blue, selected=lightblue, else from property
+        'circle-stroke-color': [
+          'case',
+          ['boolean', ['feature-state', 'hover'], false], '#0066ff',
+          ['boolean', ['feature-state', 'selected'], false], '#00aaff',
+          ['get', 'strokeColor'],
+        ],
       },
     });
 
@@ -1010,75 +1045,99 @@ export default class SurveyLayer {
     return Math.sqrt((px - xx) ** 2 + (py - yy) ** 2);
   }
 
-  // Update visual state for selection/hover/snap highlighting with section-level support
-  // Uses expression builder utilities for clean, testable priority expressions
-  // Priority order: snap > individual hover > section hover > individual selected > section selected > zeroDatum > normal
+  // Convert "sectionId:index" string ID to numeric featureId for setFeatureState
+  private parseFeatureId(id: string | null): number | null {
+    if (!id) return null;
+    const [sectionId, index] = id.split(':').map(Number);
+    if (isNaN(sectionId!) || isNaN(index!)) return null;
+    return sectionId! * 100000 + index!;
+  }
+
+  // Update visual state using setFeatureState (much faster than setPaintProperty)
+  // Only updates the specific features that changed, not the entire layer
   private updateVisualState() {
-    const baseRadius = this.getStationRadius();
-    const hoverRadius = this.getStationHoverRadius();
-    const selectionRadius = this.getStationSelectionRadius();
-    const baseWidth = this.getShotWidth();
-    const hoverWidth = this.getShotHoverWidth();
-    const selectionWidth = this.getShotSelectionWidth();
+    const stationsSource = this.sourceId + '-stations';
+    const shotsSource = this.sourceId + '-shots';
 
-    // Station stroke width with section-level priorities
-    // Priority: snap > individual hover > section hover > individual selected > section selected > zeroDatum > normal
-    // Stroke width scales proportionally with hover/selection radius settings
-    const stationStrokeWidth = buildPriorityExpression([
-      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.snappedStationId), value: 5 },
-      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.hoveredStationId), value: 4 },
-      { condition: inSection(this.hoveredSectionId), value: 3 },
-      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.selectedStationId), value: 2.5 },
-      { condition: inSection(this.selectedSectionId), value: 2.5 },
-    ], 1);
-    // Wrap with zeroDatum check since buildPriorityExpression doesn't handle property-based fallbacks
-    this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-width', [
-      'case',
-      ['get', 'isZeroDatum'],
-      ['max', 2, stationStrokeWidth], // Zero datum: at least 2px for visibility
-      stationStrokeWidth,
-    ]);
+    // Update station hover state
+    const newHoveredStationFeatureId = this.parseFeatureId(this.hoveredStationId);
+    if (newHoveredStationFeatureId !== this.prevHoveredStationFeatureId) {
+      // Clear previous hover
+      if (this.prevHoveredStationFeatureId !== null) {
+        this.map.setFeatureState(
+          { source: stationsSource, id: this.prevHoveredStationFeatureId },
+          { hover: false }
+        );
+      }
+      // Set new hover
+      if (newHoveredStationFeatureId !== null) {
+        this.map.setFeatureState(
+          { source: stationsSource, id: newHoveredStationFeatureId },
+          { hover: true }
+        );
+      }
+      this.prevHoveredStationFeatureId = newHoveredStationFeatureId;
+    }
 
-    // Station stroke color with section-level priorities
-    // Priority: snapped > selected > section selected > hovered > section hover > fallback (#000000)
-    // Section hover uses #3388ff (lighter blue) to be visually distinct from individual hover (#0066ff)
-    const stationStrokeColor = buildPriorityExpression([
-      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.snappedStationId), value: '#00ffcc' },
-      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.selectedStationId), value: '#00aaff' },
-      { condition: inSection(this.selectedSectionId), value: '#00aaff' },
-      { condition: compositeIdEquals(['sectionId', 'stationIndex'], this.hoveredStationId), value: '#0066ff' },
-      { condition: inSection(this.hoveredSectionId), value: '#3388ff' },
-    ], '#000000');
-    this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-color', stationStrokeColor);
+    // Update shot hover state
+    const newHoveredShotFeatureId = this.parseFeatureId(this.hoveredShotId);
+    if (newHoveredShotFeatureId !== this.prevHoveredShotFeatureId) {
+      // Clear previous hover
+      if (this.prevHoveredShotFeatureId !== null) {
+        this.map.setFeatureState(
+          { source: shotsSource, id: this.prevHoveredShotFeatureId },
+          { hover: false }
+        );
+      }
+      // Set new hover
+      if (newHoveredShotFeatureId !== null) {
+        this.map.setFeatureState(
+          { source: shotsSource, id: newHoveredShotFeatureId },
+          { hover: true }
+        );
+      }
+      this.prevHoveredShotFeatureId = newHoveredShotFeatureId;
+    }
 
-    // Station radius - uses config values for hover/selection states
-    // Priority: snapped > zeroDatum > hovered > selected > base
-    const stationIdExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]];
-    this.map.setPaintProperty(this.stationsLayerId, 'circle-radius', [
-      'case',
-      ['==', stationIdExpr, this.snappedStationId ?? ''],
-      baseRadius + 3, // Snap uses offset from base
-      ['==', ['get', 'isZeroDatum'], true],
-      baseRadius * 2,
-      ['==', stationIdExpr, this.hoveredStationId ?? ''],
-      hoverRadius,
-      ['==', stationIdExpr, this.selectedStationId ?? ''],
-      selectionRadius,
-      baseRadius,
-    ]);
+    // Update station selection state
+    const newSelectedStationFeatureId = this.parseFeatureId(this.selectedStationId);
+    if (newSelectedStationFeatureId !== this.prevSelectedStationFeatureId) {
+      // Clear previous selection
+      if (this.prevSelectedStationFeatureId !== null) {
+        this.map.setFeatureState(
+          { source: stationsSource, id: this.prevSelectedStationFeatureId },
+          { selected: false }
+        );
+      }
+      // Set new selection
+      if (newSelectedStationFeatureId !== null) {
+        this.map.setFeatureState(
+          { source: stationsSource, id: newSelectedStationFeatureId },
+          { selected: true }
+        );
+      }
+      this.prevSelectedStationFeatureId = newSelectedStationFeatureId;
+    }
 
-    // Shot line width - uses config values for hover/selection states
-    // Priority: individual hover > section hover > individual selected > section selected > normal
-    const shotLineWidth = buildPriorityExpression([
-      { condition: compositeIdEquals(['sectionId', 'shotId'], this.hoveredShotId), value: hoverWidth },
-      { condition: inSection(this.hoveredSectionId), value: hoverWidth * 0.8 }, // Section hover slightly smaller
-      { condition: compositeIdEquals(['sectionId', 'shotId'], this.selectedShotId), value: selectionWidth },
-      { condition: inSection(this.selectedSectionId), value: selectionWidth * 0.9 }, // Section selection slightly smaller
-    ], baseWidth);
-    this.map.setPaintProperty(this.shotsLayerId, 'line-width', shotLineWidth);
-
-    // Update highlight layer radius to match snapped state (baseRadius + 3)
-    this.map.setPaintProperty(this.stationsHighlightLayerId, 'circle-radius', baseRadius + 3);
+    // Update shot selection state
+    const newSelectedShotFeatureId = this.parseFeatureId(this.selectedShotId);
+    if (newSelectedShotFeatureId !== this.prevSelectedShotFeatureId) {
+      // Clear previous selection
+      if (this.prevSelectedShotFeatureId !== null) {
+        this.map.setFeatureState(
+          { source: shotsSource, id: this.prevSelectedShotFeatureId },
+          { selected: false }
+        );
+      }
+      // Set new selection
+      if (newSelectedShotFeatureId !== null) {
+        this.map.setFeatureState(
+          { source: shotsSource, id: newSelectedShotFeatureId },
+          { selected: true }
+        );
+      }
+      this.prevSelectedShotFeatureId = newSelectedShotFeatureId;
+    }
   }
 
   // Update hitbox layer sizes from config
@@ -1202,7 +1261,15 @@ export default class SurveyLayer {
 
   // Set snapped station (called from outside for snap indicator)
   setSnappedStation(ref: StationRef | null) {
-    this.snappedStationId = ref ? `${ref.section_id}:${ref.station_index}` : null;
+    const newId = ref ? `${ref.section_id}:${ref.station_index}` : null;
+    if (this.snappedStationId === newId) return;
+    this.snappedStationId = newId;
+    // Update highlight layer for snapped station
+    if (newId !== null) {
+      this.setHighlightedStations([newId]);
+    } else {
+      this.setHighlightedStations([]);
+    }
     this.updateVisualState();
   }
 
@@ -1371,9 +1438,7 @@ export default class SurveyLayer {
 
   // Clear snapped station state
   clearSnappedStation(): void {
-    this.snappedStationId = null;
-    this.setHighlightedStations([]);
-    this.updateVisualState();
+    this.setSnappedStation(null);
   }
 
   // Clear all interaction state (hover, selection, snap, highlights)
@@ -1513,6 +1578,9 @@ export default class SurveyLayer {
             : null;
           const shotColor = depthColor ?? section.color;
 
+          // Generate unique featureId for setFeatureState
+          const shotFeatureId = section.id * 100000 + shot.id;
+
           shotFeatures.push({
             type: 'Feature',
             geometry: {
@@ -1523,6 +1591,7 @@ export default class SurveyLayer {
               ],
             },
             properties: {
+              featureId: shotFeatureId,
               sectionId: section.id,
               shotId: shot.id,
               color: shotColor,
@@ -1591,6 +1660,9 @@ export default class SurveyLayer {
       // black otherwise (normal mode keeps zero datum with gold fill + black stroke)
       const strokeColor = this.showDepthGradient && isZeroDatum ? '#ffd700' : '#000000';
 
+      // Generate unique featureId for setFeatureState (sectionId * 100000 + stationIndex)
+      const featureId = station.station_ref.section_id * 100000 + station.station_ref.station_index;
+
       return {
         type: 'Feature',
         geometry: {
@@ -1598,6 +1670,7 @@ export default class SurveyLayer {
           coordinates: metersToMapCoords(station.coordinates.x, station.coordinates.y, this.gpsOrigin),
         },
         properties: {
+          featureId,
           sectionId: station.station_ref.section_id,
           stationIndex: station.station_ref.station_index,
           isZeroDatum: station.is_zero_datum,
