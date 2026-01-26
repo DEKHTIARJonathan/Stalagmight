@@ -1,12 +1,30 @@
 import type { Map as MaplibreMap, MapMouseEvent } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
-import type { Section, SectionId, ShotId, Station, StationRef, StationMerge, LoopClosure } from '../../types/project';
+import type {
+  LoopClosure,
+  Section,
+  SectionId,
+  ShotId,
+  Station,
+  StationMerge,
+  StationRef,
+} from '../../types/project';
 import type { Config, GpsOrigin } from '../../types/config';
-import { metersToMapCoords } from '../../utils/coordinates';
-import { getDepthColor } from '../../utils/colors';
-import { hasLiveStyle } from './mapUtils';
 import { isNonInteractiveTool } from '../../utils/toolUtils';
 import type { ToolType } from '../../store/uiStore';
+import { hasLiveStyle } from './mapUtils';
+import {
+  buildGhostFeatures,
+  buildSurveyFeatures,
+  normalizeDepthRange,
+  type DepthRange,
+  type GhostSectionData,
+} from './surveyLayer/features';
+import {
+  distanceToLineSegment,
+  resolveNearestShot,
+  resolveNearestStation,
+} from './surveyLayer/hitTest';
 // Note: buildPriorityExpression, compositeIdEquals, inSection no longer needed
 // after switching to setFeatureState for hover/selection highlighting
 
@@ -34,19 +52,7 @@ export interface SurveyLayerCallbacks {
  * For better performance with large datasets, this could be
  * replaced with deck.gl layers.
  */
-/**
- * Ghost section data for merge preview visualization.
- */
-export interface GhostSectionData {
-  /** Shot line coordinates (pairs of [from, to] positions in meters) */
-  shots: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }>;
-  /** Station positions in meters */
-  stations: Array<{ x: number; y: number }>;
-  /** Section color */
-  color: string;
-  /** Merge station highlight position (the station being merged) */
-  mergeStation?: { x: number; y: number };
-}
+export type { GhostSectionData } from './surveyLayer/features';
 
 export default class SurveyLayer {
   private map: MaplibreMap;
@@ -97,7 +103,7 @@ export default class SurveyLayer {
 
   // Depth gradient mode state (used during update() for feature color calculation)
   private showDepthGradient: boolean = false;
-  private depthRange: { min: number; max: number } = { min: 0, max: 50 };
+  private depthRange: DepthRange = { min: 0, max: 50 };
 
   // Bound event handlers stored for proper cleanup in destroy()
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
@@ -660,8 +666,8 @@ export default class SurveyLayer {
       );
 
       // Resolve nearest of each type
-      const nearestStation = this.resolveNearestStation(e, stationFeatures);
-      const nearestShot = this.resolveNearestShot(e, shotFeatures);
+      const nearestStation = resolveNearestStation(this.map, e, stationFeatures);
+      const nearestShot = resolveNearestShot(this.map, e, shotFeatures);
 
       // Determine what to highlight (stations always take priority)
       let newHoveredStationId: string | null = null;
@@ -778,7 +784,7 @@ export default class SurveyLayer {
     const shotFeatures = allFeatures.filter((f) => f.layer.id === this.shotsHitboxLayerId);
 
     // Stations take priority - resolve nearest station first
-    const nearestStation = this.resolveNearestStation(e, stationFeatures);
+    const nearestStation = resolveNearestStation(this.map, e, stationFeatures);
     if (nearestStation) {
       const { sectionId, stationIndex } = nearestStation.properties ?? {};
       if (sectionId !== undefined && stationIndex !== undefined) {
@@ -801,7 +807,7 @@ export default class SurveyLayer {
     }
 
     // Then shots - resolve nearest shot
-    const nearestShot = this.resolveNearestShot(e, shotFeatures);
+    const nearestShot = resolveNearestShot(this.map, e, shotFeatures);
     if (nearestShot) {
       const { sectionId, shotId } = nearestShot.properties ?? {};
       if (sectionId !== undefined && shotId !== undefined) {
@@ -836,7 +842,7 @@ export default class SurveyLayer {
     const shotFeatures = allFeatures.filter((f) => f.layer.id === this.shotsHitboxLayerId);
 
     // Stations take priority
-    const nearestStation = this.resolveNearestStation(e, stationFeatures);
+    const nearestStation = resolveNearestStation(this.map, e, stationFeatures);
     if (nearestStation) {
       const { sectionId, stationIndex } = nearestStation.properties ?? {};
       if (sectionId !== undefined && stationIndex !== undefined) {
@@ -859,7 +865,7 @@ export default class SurveyLayer {
     }
 
     // Then shots
-    const nearestShot = this.resolveNearestShot(e, shotFeatures);
+    const nearestShot = resolveNearestShot(this.map, e, shotFeatures);
     if (nearestShot) {
       const { sectionId, shotId } = nearestShot.properties ?? {};
       if (sectionId !== undefined && shotId !== undefined) {
@@ -918,7 +924,7 @@ export default class SurveyLayer {
             if (!coord1 || !coord2) continue;
             const p1 = this.map.project(coord1);
             const p2 = this.map.project(coord2);
-            const dist = this.distanceToLineSegment(e.point.x, e.point.y, p1.x, p1.y, p2.x, p2.y);
+            const dist = distanceToLineSegment(e.point.x, e.point.y, p1.x, p1.y, p2.x, p2.y);
             if (dist < HIDDEN_CLICK_THRESHOLD_PX) {
               this.callbacks.onHiddenShotClick();
               return;
@@ -930,119 +936,6 @@ export default class SurveyLayer {
 
     // No hidden features nearby, fire empty click
     this.callbacks.onEmptyClick?.(e);
-  }
-
-  /**
-   * Resolve nearest station feature to click point.
-   * For multiple overlapping station hitboxes, returns the one whose center
-   * is closest to the click point.
-   */
-  private resolveNearestStation(
-    e: MapMouseEvent,
-    features: maplibregl.MapGeoJSONFeature[]
-  ): maplibregl.MapGeoJSONFeature | null {
-    if (features.length === 0) return null;
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- length check above ensures element exists
-    if (features.length === 1) return features[0]!;
-
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- length >= 2 ensures element exists
-    let nearest: maplibregl.MapGeoJSONFeature = features[0]!;
-    let nearestDist = Infinity;
-
-    for (const feature of features) {
-      const geom = feature.geometry;
-      if (geom.type === 'Point') {
-        const coords = geom.coordinates as [number, number];
-        const screenPos = this.map.project(coords);
-        const dist = Math.sqrt(
-          (screenPos.x - e.point.x) ** 2 + (screenPos.y - e.point.y) ** 2
-        );
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearest = feature;
-        }
-      }
-    }
-
-    return nearest;
-  }
-
-  /**
-   * Resolve nearest shot feature to click point.
-   * Uses perpendicular distance to line segment for accurate selection
-   * when multiple shot hitboxes overlap.
-   */
-  private resolveNearestShot(
-    e: MapMouseEvent,
-    features: maplibregl.MapGeoJSONFeature[]
-  ): maplibregl.MapGeoJSONFeature | null {
-    if (features.length === 0) return null;
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- length check above ensures element exists
-    if (features.length === 1) return features[0]!;
-
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- length >= 2 ensures element exists
-    let nearest: maplibregl.MapGeoJSONFeature = features[0]!;
-    let nearestDist = Infinity;
-
-    for (const feature of features) {
-      const geom = feature.geometry;
-      if (geom.type === 'LineString' && geom.coordinates.length >= 2) {
-        // Iterate all segments to find minimum distance
-        // (handles multi-segment lines if shot geometries ever become complex)
-        for (let i = 0; i < geom.coordinates.length - 1; i++) {
-          const coord1 = geom.coordinates[i] as [number, number] | undefined;
-          const coord2 = geom.coordinates[i + 1] as [number, number] | undefined;
-          if (!coord1 || !coord2) continue;
-
-          const p1 = this.map.project(coord1);
-          const p2 = this.map.project(coord2);
-
-          const dist = this.distanceToLineSegment(
-            e.point.x, e.point.y,
-            p1.x, p1.y, p2.x, p2.y
-          );
-
-          if (dist < nearestDist) {
-            nearestDist = dist;
-            nearest = feature;
-          }
-        }
-      }
-    }
-
-    return nearest;
-  }
-
-  /**
-   * Calculate distance from point (px, py) to line segment (x1,y1)-(x2,y2).
-   * Returns perpendicular distance if projection falls on segment,
-   * otherwise returns distance to nearest endpoint.
-   */
-  private distanceToLineSegment(
-    px: number, py: number,
-    x1: number, y1: number,
-    x2: number, y2: number
-  ): number {
-    const A = px - x1;
-    const B = py - y1;
-    const C = x2 - x1;
-    const D = y2 - y1;
-
-    const dot = A * C + B * D;
-    const lenSq = C * C + D * D;
-    let param = lenSq !== 0 ? dot / lenSq : -1;
-
-    let xx: number, yy: number;
-    if (param < 0) {
-      xx = x1; yy = y1;  // Closest to start
-    } else if (param > 1) {
-      xx = x2; yy = y2;  // Closest to end
-    } else {
-      xx = x1 + param * C;  // Perpendicular point on segment
-      yy = y1 + param * D;
-    }
-
-    return Math.sqrt((px - xx) ** 2 + (py - yy) ** 2);
   }
 
   // Convert "sectionId:index" string ID to numeric featureId for setFeatureState
@@ -1333,7 +1226,7 @@ export default class SurveyLayer {
     return this.showDepthGradient;
   }
 
-  getDepthRange(): { min: number; max: number } {
+  getDepthRange(): DepthRange {
     // Return a copy to prevent external mutation
     return { min: this.depthRange.min, max: this.depthRange.max };
   }
@@ -1475,51 +1368,10 @@ export default class SurveyLayer {
    * Pass null to clear the ghost section.
    */
   setGhostSection(data: GhostSectionData | null) {
-    // Build ghost shot features
-    const shotFeatures: GeoJSON.Feature[] = [];
-    const stationFeatures: GeoJSON.Feature[] = [];
-    const mergeFeatures: GeoJSON.Feature[] = [];
-
-    if (data) {
-      // Build shot lines
-      for (const shot of data.shots) {
-        shotFeatures.push({
-          type: 'Feature',
-          geometry: {
-            type: 'LineString',
-            coordinates: [
-              metersToMapCoords(shot.from.x, shot.from.y, this.gpsOrigin),
-              metersToMapCoords(shot.to.x, shot.to.y, this.gpsOrigin),
-            ],
-          },
-          properties: { color: data.color },
-        });
-      }
-
-      // Build station points
-      for (const station of data.stations) {
-        stationFeatures.push({
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: metersToMapCoords(station.x, station.y, this.gpsOrigin),
-          },
-          properties: { color: data.color },
-        });
-      }
-
-      // Build merge station highlight
-      if (data.mergeStation) {
-        mergeFeatures.push({
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: metersToMapCoords(data.mergeStation.x, data.mergeStation.y, this.gpsOrigin),
-          },
-          properties: {},
-        });
-      }
-    }
+    const { shotFeatures, stationFeatures, mergeFeatures } = buildGhostFeatures(
+      data,
+      this.gpsOrigin
+    );
 
     // Update sources
     const ghostShotsSource = this.map.getSource(this.sourceId + '-ghost-shots');
@@ -1554,245 +1406,31 @@ export default class SurveyLayer {
     loopClosures?: LoopClosure[],
     gpsOrigin?: GpsOrigin | null,
     showDepthGradient: boolean = false,
-    depthRange: { min: number; max: number } = { min: 0, max: 50 }
+    depthRange: DepthRange = { min: 0, max: 50 }
   ) {
     // Store gpsOrigin for coordinate transforms
     this.gpsOrigin = gpsOrigin ?? null;
     // Store depth mode parameters for use in feature color calculation
     this.showDepthGradient = showDepthGradient;
-    // Clone and normalize depth range (handle min > max, NaN)
-    // getDepthColor() handles min === max (flat cave) by returning shallowColor
-    const minD = Number.isFinite(depthRange.min) ? depthRange.min : 0;
-    const maxD = Number.isFinite(depthRange.max) ? depthRange.max : 50;
-    this.depthRange = {
-      min: Math.min(minD, maxD),
-      max: Math.max(minD, maxD),
-    };
-    // Build shot features and shot label features
-    const shotFeatures: GeoJSON.Feature[] = [];
-    const shotLabelFeatures: GeoJSON.Feature[] = [];
-    let globalShotIndex = 0;
+    this.depthRange = normalizeDepthRange(depthRange);
 
-    for (const section of sections) {
-      const sectionStations = stations
-        .filter((s) => s.station_ref.section_id === section.id)
-        .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index);
-
-      for (let i = 0; i < section.shots.length; i++) {
-        const shot = section.shots[i];
-        const fromStation = sectionStations[i];
-        const toStation = sectionStations[i + 1];
-
-        if (fromStation && toStation && shot) {
-          // Calculate shot color - use depth gradient if enabled, otherwise section color
-          const avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
-          const depthColor = this.showDepthGradient
-            ? getDepthColor(avgDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)
-            : null;
-          const shotColor = depthColor ?? section.color;
-
-          // Generate unique featureId for setFeatureState
-          const shotFeatureId = section.id * 100000 + shot.id;
-
-          shotFeatures.push({
-            type: 'Feature',
-            geometry: {
-              type: 'LineString',
-              coordinates: [
-                metersToMapCoords(fromStation.coordinates.x, fromStation.coordinates.y, this.gpsOrigin),
-                metersToMapCoords(toStation.coordinates.x, toStation.coordinates.y, this.gpsOrigin),
-              ],
-            },
-            properties: {
-              featureId: shotFeatureId,
-              sectionId: section.id,
-              shotId: shot.id,
-              color: shotColor,
-              isVirtual: shot.is_virtual,
-              length: shot.length,
-              azimuth: shot.azimuth_in,
-            },
-          });
-
-          // Generate shot label at midpoint
-          const midX = (fromStation.coordinates.x + toStation.coordinates.x) / 2;
-          const midY = (fromStation.coordinates.y + toStation.coordinates.y) / 2;
-          const labelDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
-
-          // Format: "45° 3.2m -12.5m" (azimuth, length, depth)
-          const label = `${shot.azimuth_in.toFixed(0)}° ${shot.length.toFixed(1)}m ${labelDepth.toFixed(1)}m`;
-
-          // Shot label color - use depth gradient if enabled, otherwise default white
-          // (labels default to white for readability, unlike shots which use section color)
-          const shotLabelDepthColor = this.showDepthGradient
-            ? getDepthColor(avgDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)
-            : null;
-          const shotLabelColor = shotLabelDepthColor ?? '#ffffff';
-
-          shotLabelFeatures.push({
-            type: 'Feature',
-            geometry: {
-              type: 'Point',
-              coordinates: metersToMapCoords(midX, midY, this.gpsOrigin),
-            },
-            properties: {
-              label,
-              index: globalShotIndex,
-              sectionId: section.id,
-              shotId: shot.id,
-              color: shotLabelColor,
-            },
-          });
-
-          globalShotIndex++;
-        }
-      }
-    }
-
-    // Build station features
-    const stationFeatures: GeoJSON.Feature[] = stations.map((station) => {
-      // Find section color for this station
-      const section = sections.find((s) => s.id === station.station_ref.section_id);
-      const sectionColor = section?.color ?? '#ffffff';
-
-      const isZeroDatum = station.is_zero_datum;
-      const stationDepth = station.coordinates.z;
-
-      // Calculate station fill color:
-      // - Depth mode: use depth-based color for all stations (including zero datum)
-      // - Normal mode: gold for zero datum, section color for others
-      let color: string;
-      if (this.showDepthGradient) {
-        // getDepthColor can return null for invalid inputs, fallback to section color
-        color = getDepthColor(stationDepth, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max) ?? sectionColor;
-      } else {
-        color = isZeroDatum ? '#ffd700' : sectionColor;
-      }
-
-      // Stroke color: gold for zero datum when depth gradient enabled (so entry points stand out),
-      // black otherwise (normal mode keeps zero datum with gold fill + black stroke)
-      const strokeColor = this.showDepthGradient && isZeroDatum ? '#ffd700' : '#000000';
-
-      // Generate unique featureId for setFeatureState (sectionId * 100000 + stationIndex)
-      const featureId = station.station_ref.section_id * 100000 + station.station_ref.station_index;
-
-      return {
-        type: 'Feature',
-        geometry: {
-          type: 'Point',
-          coordinates: metersToMapCoords(station.coordinates.x, station.coordinates.y, this.gpsOrigin),
-        },
-        properties: {
-          featureId,
-          sectionId: station.station_ref.section_id,
-          stationIndex: station.station_ref.station_index,
-          isZeroDatum: station.is_zero_datum,
-          isMerged: station.merged_with.length > 0,
-          depth: station.coordinates.z,
-          color,
-          strokeColor,
-        },
-      };
-    });
-
-    // Helper to find station coordinates (used by merges and loop closures)
-    const findStationCoords = (ref: StationRef) => {
-      const station = stations.find(
-        (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
-      );
-      return station?.coordinates;
-    };
-
-    // Build merge connection features
-    const mergeFeatures: GeoJSON.Feature[] = [];
-    if (stationMerges && stationMerges.length > 0) {
-      for (const merge of stationMerges) {
-        const coordsA = findStationCoords(merge.station_a);
-        const coordsB = findStationCoords(merge.station_b);
-
-        if (coordsA && coordsB) {
-          mergeFeatures.push({
-            type: 'Feature',
-            geometry: {
-              type: 'LineString',
-              coordinates: [
-                metersToMapCoords(coordsA.x, coordsA.y, this.gpsOrigin),
-                metersToMapCoords(coordsB.x, coordsB.y, this.gpsOrigin),
-              ],
-            },
-            properties: {
-              stationA: `${merge.station_a.section_id}:${merge.station_a.station_index}`,
-              stationB: `${merge.station_b.section_id}:${merge.station_b.station_index}`,
-            },
-          });
-        }
-      }
-    }
-
-    // Build section name label features (at first station of each section)
-    const sectionLabelFeatures: GeoJSON.Feature[] = [];
-    for (const section of sections) {
-      // Find the station with the minimum index for this section
-      // (don't assume index 0 exists - data may start at 1 or have gaps)
-      const sectionStations = stations.filter(
-        (s) => s.station_ref.section_id === section.id
-      );
-      if (sectionStations.length > 0) {
-        // Find station with minimum index using reduce for type safety
-        const firstStation = sectionStations.reduce((min, s) =>
-          s.station_ref.station_index < min.station_ref.station_index ? s : min
-        );
-        sectionLabelFeatures.push({
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: metersToMapCoords(firstStation.coordinates.x, firstStation.coordinates.y, this.gpsOrigin),
-          },
-          properties: {
-            name: section.name,
-            color: section.color,
-            sectionId: section.id,
-          },
-        });
-      }
-    }
-
-    // Build station index label features (at each station)
-    // Group stations by section to determine first station in each section
-    const sectionMinIndices = new Map<number, number>();
-    for (const station of stations) {
-      const sectionId = station.station_ref.section_id;
-      const currentMin = sectionMinIndices.get(sectionId);
-      if (currentMin === undefined || station.station_ref.station_index < currentMin) {
-        sectionMinIndices.set(sectionId, station.station_ref.station_index);
-      }
-    }
-
-    const stationLabelFeatures: GeoJSON.Feature[] = stations.map((station, globalOrdinal) => {
-      const isFirstInSection = station.station_ref.station_index === sectionMinIndices.get(station.station_ref.section_id);
-
-      // Calculate station label color - use depth gradient if enabled, otherwise default white
-      const stationLabelDepthColor = this.showDepthGradient
-        ? getDepthColor(station.coordinates.z, '#00bfff', '#ff4444', this.depthRange.min, this.depthRange.max)
-        : null;
-      const stationLabelColor = stationLabelDepthColor ?? '#ffffff';
-
-      return {
-        type: 'Feature',
-        geometry: {
-          type: 'Point',
-          coordinates: metersToMapCoords(station.coordinates.x, station.coordinates.y, this.gpsOrigin),
-        },
-        properties: {
-          label: String(station.station_ref.station_index),
-          stationIndex: station.station_ref.station_index,
-          sectionId: station.station_ref.section_id,
-          globalOrdinal, // Stable sequential index for filtering
-          isFirstInSection, // Always show first station in section
-          color: stationLabelColor,
-        },
-      };
-    });
+    const {
+      shotFeatures,
+      shotLabelFeatures,
+      stationFeatures,
+      mergeFeatures,
+      sectionLabelFeatures,
+      stationLabelFeatures,
+      loopClosureFeatures,
+    } = buildSurveyFeatures(
+      sections,
+      stations,
+      stationMerges,
+      loopClosures,
+      this.gpsOrigin,
+      this.showDepthGradient,
+      this.depthRange
+    );
 
     // Update sources
     const shotsSource = this.map.getSource(this.sourceId + '-shots');
@@ -1844,44 +1482,6 @@ export default class SurveyLayer {
         type: 'FeatureCollection',
         features: stationLabelFeatures,
       });
-    }
-
-    // Build loop closure features with severity-based colors
-    const loopClosureFeatures: GeoJSON.Feature[] = [];
-    if (loopClosures && loopClosures.length > 0) {
-      // Helper function to get color based on error percentage
-      const getErrorColor = (errorPct: number): string => {
-        if (errorPct < 1) return '#22c55e'; // Green - excellent
-        if (errorPct < 3) return '#eab308'; // Yellow - acceptable
-        if (errorPct < 5) return '#f97316'; // Orange - marginal
-        return '#ef4444'; // Red - poor
-      };
-
-      for (const closure of loopClosures) {
-        const coordsA = findStationCoords(closure.station_a);
-        const coordsB = findStationCoords(closure.station_b);
-
-        if (coordsA && coordsB) {
-          loopClosureFeatures.push({
-            type: 'Feature',
-            geometry: {
-              type: 'LineString',
-              coordinates: [
-                metersToMapCoords(coordsA.x, coordsA.y, this.gpsOrigin),
-                metersToMapCoords(coordsB.x, coordsB.y, this.gpsOrigin),
-              ],
-            },
-            properties: {
-              stationA: `${closure.station_a.section_id}:${closure.station_a.station_index}`,
-              stationB: `${closure.station_b.section_id}:${closure.station_b.station_index}`,
-              errorPercentage: closure.error_percentage,
-              misclosureDistance: closure.misclosure_distance,
-              pathLength: closure.path_length,
-              color: getErrorColor(closure.error_percentage),
-            },
-          });
-        }
-      }
     }
 
     const loopClosuresSource = this.map.getSource(this.sourceId + '-loop-closures');
