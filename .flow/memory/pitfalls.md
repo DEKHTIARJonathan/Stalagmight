@@ -99,3 +99,6 @@ MapLibre easeTo() inherits current padding; call map.stop() and setPadding({0}) 
 
 ## 2026-01-23 manual [pitfall]
 When testing map centering in E2E tests, first pan the map off-target before clicking center buttons, otherwise the test may pass/fail depending on whether the map was already centered on the target
+
+## 2026-01-25 manual [pitfall]
+React onMouseEnter/Leave requires dispatching mouseover/mouseout with bubbles:true, not mouseenter/mouseleave

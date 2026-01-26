@@ -43,9 +43,8 @@ Add Playwright E2E tests verifying that hovering/focusing DetailLink elements in
 - [ ] Test: existing table row hover still works
 - [ ] All tests pass with `pnpm test:ui`
 ## Done summary
-TBD
-
+Implemented comprehensive E2E tests for DetailLink hover/focus highlighting that verify hovering station/shot/section links highlights corresponding map elements via uiStore state changes. Tests cover hover, mouse leave, focus, blur, keyboard navigation, and coexistence with existing section row and map hover behaviors.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: dac04c97add2c67cb7be77ca9d9a4aecd347b260
+- Tests: pnpm test:ui -- detail-link-hover.spec.ts (24 passed), pnpm test:ui (521 passed)
 - PRs:
