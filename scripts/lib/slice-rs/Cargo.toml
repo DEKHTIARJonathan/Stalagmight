@@ -1,0 +1,17 @@
+[package]
+name = "slice-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+syn = { version = "2", features = ["full", "parsing"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+
+[[bin]]
+name = "slice-rs"
+path = "main.rs"
+
+[profile.release]
+opt-level = 1
+strip = true
