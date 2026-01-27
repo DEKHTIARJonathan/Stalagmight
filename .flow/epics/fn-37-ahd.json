@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-37-ahd",
+  "created_at": "2026-01-27T16:14:50.836170Z",
+  "depends_on_epics": [],
+  "id": "fn-37-ahd",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-37-ahd.md",
+  "status": "open",
+  "title": "Fix warning display format and warning-click selection",
+  "updated_at": "2026-01-27T16:15:15.574650Z"
+}

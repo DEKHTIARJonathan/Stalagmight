@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-25-itw",
+  "created_at": "2026-01-27T08:24:01.978769Z",
+  "depends_on_epics": [],
+  "id": "fn-25-itw",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-25-itw.md",
+  "status": "open",
+  "title": "Undo/redo dropdown stays open on action",
+  "updated_at": "2026-01-27T08:24:35.518152Z"
+}

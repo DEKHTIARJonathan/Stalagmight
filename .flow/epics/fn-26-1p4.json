@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-26-1p4",
+  "created_at": "2026-01-27T10:00:10.703691Z",
+  "depends_on_epics": [],
+  "id": "fn-26-1p4",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-26-1p4.md",
+  "status": "open",
+  "title": "Hide markers in survey mode, show only in markers mode",
+  "updated_at": "2026-01-27T10:00:32.236944Z"
+}
