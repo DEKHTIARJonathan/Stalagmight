@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { formatDistanceToNow, isValid, parseISO, differenceInDays, format } from 'date-fns';
 import { useProjectStore } from '../../store/projectStore';
-import type { UndoHistoryItem, PreviewData } from '../../types/commands';
+import { useUIStore } from '../../store/uiStore';
+import type { CommandResult, UndoHistoryItem, PreviewData } from '../../types/commands';
 
 interface UndoHistoryDropdownProps {
   /** 'undo' for undo button, 'redo' for redo button */
@@ -184,7 +185,9 @@ export default function UndoHistoryDropdown({
   // Action queue state for sequential execution
   const [isActionInProgress, setIsActionInProgress] = useState(false);
   const isActionInProgressRef = useRef(false);
-  const actionQueueRef = useRef<Array<() => Promise<void>>>([]);
+  const actionQueueRef = useRef<Array<() => Promise<CommandResult>>>([]);
+  // aria-live announcement for remaining action count
+  const [announcement, setAnnouncement] = useState('');
   // Flag to track if dropdown was opened via keyboard (for focus management)
   const keyboardNavActiveRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -206,6 +209,7 @@ export default function UndoHistoryDropdown({
   const menuId = useId();
 
   const { getUndoStack, getRedoStack, undoTo, redoTo, undo, redo } = useProjectStore();
+  const { openDialog } = useUIStore();
 
   // Clear preview/hover state without closing the dropdown (reusable helper)
   const clearPreviewState = useCallback(() => {
@@ -274,13 +278,44 @@ export default function UndoHistoryDropdown({
       const nextAction = actionQueueRef.current.shift()!;
       isActionInProgressRef.current = true;
       setIsActionInProgress(true);
+
+      let result: CommandResult | undefined;
       try {
-        await nextAction();
+        result = await nextAction();
       } catch (error) {
+        // Secondary safety net: unexpected thrown exceptions
         console.error(`Failed to execute queued ${mode} action:`, error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorStack = error instanceof Error ? error.stack : undefined;
+
+        // Clear loading state, keep dropdown open, show error dialog
+        isActionInProgressRef.current = false;
+        setIsActionInProgress(false);
+        actionQueueRef.current = [];
+        openDialog('error', {
+          title: `${mode === 'undo' ? 'Undo' : 'Redo'} Failed`,
+          message: errorMessage,
+          stackTrace: errorStack,
+        });
+        return;
       }
 
-      // After action completes, refresh the stack
+      // Primary error path: check CommandResult.success
+      if (result && !result.success) {
+        console.error(`${mode} action failed:`, result.error);
+
+        // Clear loading state, keep dropdown open, show error dialog
+        isActionInProgressRef.current = false;
+        setIsActionInProgress(false);
+        actionQueueRef.current = [];
+        openDialog('error', {
+          title: `${mode === 'undo' ? 'Undo' : 'Redo'} Failed`,
+          message: result.error ?? 'An unknown error occurred.',
+        });
+        return;
+      }
+
+      // After action completes successfully, refresh the stack
       const refreshedStack = await fetchStack();
 
       // Reset navigation and scroll to top
@@ -295,17 +330,22 @@ export default function UndoHistoryDropdown({
         actionQueueRef.current = [];
         isActionInProgressRef.current = false;
         setIsActionInProgress(false);
+        setAnnouncement('No actions remaining');
         hardClose();
         return;
       }
+
+      // Announce remaining item count for screen readers
+      const count = refreshedStack.length;
+      setAnnouncement(`${count} ${count === 1 ? 'action' : 'actions'} remaining`);
     }
 
     isActionInProgressRef.current = false;
     setIsActionInProgress(false);
-  }, [mode, fetchStack, hardClose]);
+  }, [mode, fetchStack, hardClose, openDialog]);
 
   // Enqueue an action and start processing if idle
-  const enqueueAction = useCallback((action: () => Promise<void>) => {
+  const enqueueAction = useCallback((action: () => Promise<CommandResult>) => {
     // Immediately dismiss detail preview popup
     clearPreviewState();
 
@@ -434,7 +474,7 @@ export default function UndoHistoryDropdown({
       return;
     }
     const action = mode === 'undo' ? undoTo : redoTo;
-    enqueueAction(() => action(index).then(() => {}));
+    enqueueAction(() => action(index));
   }, [mode, undoTo, redoTo, enqueueAction]);
 
   // Handle keyboard navigation on trigger button
@@ -517,7 +557,7 @@ export default function UndoHistoryDropdown({
     if (isOpenRef.current) {
       // Dropdown is open: perform single undo/redo and refresh (stay open)
       const action = mode === 'undo' ? undo : redo;
-      enqueueAction(() => action().then(() => {}));
+      enqueueAction(() => action());
     } else {
       // Dropdown is not open: delegate to parent via onSingleAction (closed-only path)
       hardClose();
@@ -572,7 +612,7 @@ export default function UndoHistoryDropdown({
 
         // Perform the appropriate action based on the key pressed
         const action = isUndoKey ? undo : redo;
-        enqueueAction(() => action().then(() => {}));
+        enqueueAction(() => action());
       }
     };
 
@@ -761,6 +801,17 @@ export default function UndoHistoryDropdown({
           dropdownRect={dropdownRect}
         />
       )}
+
+      {/* ARIA live region for announcing remaining action count */}
+      <span
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        data-testid={`${testId}-announcement`}
+      >
+        {announcement}
+      </span>
 
       {/* CSS for auto-hide scrollbar and preview animation */}
       <style>{`

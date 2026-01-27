@@ -58,7 +58,8 @@ Use existing `data-testid` values documented in TESTING.md:
 - `error-dialog` (from ErrorDialog.tsx)
 
 New test IDs to expect (from tasks 1 and 2):
-- Loading indicator element (TBD by task 1)
+<!-- Updated by plan-sync: fn-25-itw.1 used ${testId}-loading for loading indicator -->
+- Loading indicator: `${testId}-loading` (e.g., `toolbar-undo-button-loading`, `toolbar-redo-button-loading`)
 - aria-live announcer span (TBD by task 2)
 
 ## Key context
@@ -67,6 +68,11 @@ New test IDs to expect (from tasks 1 and 2):
 - Replace `waitForTimeout()` with deterministic assertions (`toHaveAttribute`, `toContainText`) to prevent flaky tests (from project memory)
 - Use specific `data-testid` selectors, not generic CSS selectors (from project memory)
 - Hover trigger test pattern: `await page.hover('[data-testid="toolbar-undo-button"]')` then `waitForSelector` (from TESTING.md:664-671)
+<!-- Updated by plan-sync: fn-25-itw.1 added input focus guard and changed dropdown height -->
+- fn-25-itw.1 added an input focus guard: when focus is in a text input/textarea/select/contentEditable, Ctrl+Z/Y is NOT intercepted by the dropdown (native undo/redo is allowed). E2E tests for Ctrl+Z/Y should ensure focus is NOT in a text input.
+- The dropdown container uses `height: '220px'` (inline style, not a CSS class) with `overflow-y: auto`. Test fixed height with style assertion, not class assertion.
+- The loading indicator uses a spinner (`animate-spin`) with "Processing..." text, at `data-testid="${testId}-loading"`.
+- Navigation reset after action sets `activeIndex` to `0` (not `-1`), so `aria-activedescendant` will point to the first item after refresh.
 
 ## Acceptance
 

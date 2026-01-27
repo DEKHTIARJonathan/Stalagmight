@@ -29,6 +29,13 @@ The undo/redo store functions (`undo()`, `redo()`, `undoTo()`, `redoTo()`) retur
 3. Also wrap calls in try/catch to handle unexpected thrown exceptions as a secondary safety net
 4. On either error path: set `isActionInProgress` to false (clear loading state), show ErrorDialog, keep dropdown open (do NOT close on error)
 
+<!-- Updated by plan-sync: fn-25-itw.1 implemented action queue pattern that discards CommandResult -->
+**Implementation note (from fn-25-itw.1):** The action queue currently discards `CommandResult` objects. Action calls use `.then(() => {})` which strips the return value (see `enqueueAction(() => action().then(() => {}))` in `handleItemClick`, `handleButtonClick`, and the Ctrl+Z/Y handler). To wire error handling:
+- Modify the action lambdas to return or capture the `CommandResult` instead of discarding it (remove `.then(() => {})`)
+- Error handling logic should be added inside `processQueue()` (lines 269-305), which centrally manages `isActionInProgress` state and the refresh cycle
+- The existing `catch` in `processQueue` (line 280) only logs to console — enhance it to show ErrorDialog
+- A `clearPreviewState()` helper already exists (lines 211-215) for dismissing the detail preview
+
 ### aria-live region
 
 Add a visually-hidden `<span>` with `role="status" aria-live="polite" aria-atomic="true"` to the dropdown. Follow the pattern at `ShortcutRecorder.tsx:326-333` and the `sr-only` CSS class.
@@ -44,6 +51,10 @@ Existing precedent: `docs/TESTING.md:600-624` documents `#selection-announcer` w
 - aria-live with `aria-atomic="true"` announces the entire region content, not just changes — correct for count announcements
 - Use `aria-live="polite"` (not "assertive") per WAI-ARIA best practices
 - **Critical**: undo/redo functions return `CommandResult`, NOT throw on failure. Must check `result.success === false` as primary error detection, with try/catch as secondary safety net.
+<!-- Updated by plan-sync: fn-25-itw.1 used enqueueAction/processQueue pattern -->
+- The action queue is managed by `enqueueAction()` and `processQueue()` in `UndoHistoryDropdown.tsx`. `processQueue()` (lines 269-305) is the central loop that executes actions sequentially, calls `fetchStack()` after each, resets `activeIndex` to 0, and handles close-on-empty. All action paths (item click, button click, Ctrl+Z/Y) go through `enqueueAction()`.
+- `ShortcutRecorder.tsx` aria-live pattern is at `src/components/Settings/ShortcutRecorder.tsx:326-333` (not `src/components/ShortcutRecorder/`)
+- An input focus guard exists (lines 555-562) that skips Ctrl+Z/Y interception when focus is in text inputs — aria-live announcements should still work regardless of focus location
 
 ## Acceptance
 
