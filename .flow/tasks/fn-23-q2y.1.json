@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-27T20:56:11.779384Z",
+  "depends_on": [],
+  "epic": "fn-23-q2y",
+  "id": "fn-23-q2y.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-23-q2y.1.md",
+  "status": "todo",
+  "title": "Create shared tile config utility and refactor MapCanvas",
+  "updated_at": "2026-01-27T20:56:59.454357Z"
+}

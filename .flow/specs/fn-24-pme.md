@@ -1,82 +1,119 @@
 # Rust tile provider registry with IPC and dynamic Settings UI
 
-## Problem
+## Overview
 
-The Rust backend has tile provider logic scattered across hardcoded constants and match statements in `src-tauri/src/lib.rs`. The `SUPPORTED_PROVIDERS` array, `fetch_tile_from_network()` URL routing, and provider validation are all tightly coupled. The frontend Settings UI (`MapSettings.tsx`) maintains a separate hardcoded `SATELLITE_PROVIDER_OPTIONS` array that must be manually kept in sync with the backend.
-
-This makes adding new tile providers error-prone and requires changes in multiple files across both Rust and TypeScript.
-
-## Key Decisions
-
-1. **Config-driven provider struct**: Define providers as a Rust struct with fields: `name`, `display_label`, `url_template`, `attribution`, `tile_size`, `min_zoom`, `max_zoom`, `content_type_hint`, plus optional auth fields (`api_key_env`, `auth_header`).
-
-2. **Hardcoded in binary**: Providers are compiled into the app as a static registry. Users select from a fixed list in Settings — they cannot define custom tile server URLs.
-
-3. **Auth support fields**: Include `api_key_env` (environment variable name for API key) and `auth_header` (HTTP header name) in the struct. ESRI doesn't use these, but the fields exist for future providers like Mapbox.
-
-4. **`get_tile_providers` IPC command**: New Tauri command that returns all registered providers with an `available` flag indicating whether the provider is configured and ready (e.g., has required API key). Frontend uses this to populate the Settings UI dynamically.
-
-5. **Return all providers**: The IPC command returns every registered provider, not just usable ones. The frontend can show unavailable providers as disabled with a "requires API key" hint.
-
-6. **ESRI only initially**: Ship with ESRI as the only provider in the registry. Auth fields exist in the struct but no provider uses them yet.
-
-7. **Replace hardcoded constants**: Remove `SUPPORTED_PROVIDERS` array, `ESRI_TILE_URL` constant, and the match statement in `fetch_tile_from_network()`. Replace with registry lookups.
-
-8. **Frontend dynamic Settings UI**: Remove hardcoded `SATELLITE_PROVIDER_OPTIONS` from `MapSettings.tsx`. Instead, fetch providers via `get_tile_providers` on mount and populate the dropdown dynamically.
-
-9. **Frontend utility integration**: Update `src/utils/tileConfig.ts` (created in fn-23-q2y) to optionally consume provider metadata from the IPC command rather than maintaining a separate frontend provider map.
-
-10. **Comprehensive testing**: Unit tests for the Rust provider registry, IPC command serialization, and frontend Settings UI population.
-
-## Dependencies
-
-- **Depends on fn-23-q2y**: The shared tile config utility (`src/utils/tileConfig.ts`) and config defaults fix are created in that epic. This epic builds on top of it.
+Replace scattered hardcoded tile provider logic (constants, match statements, separate frontend arrays) with a centralized Rust registry and IPC command. The frontend Settings UI will dynamically populate providers from the backend instead of maintaining a parallel hardcoded list.
 
 ## Scope
 
 ### In scope
-- Rust `TileProvider` struct with all fields (name, display_label, url_template, attribution, tile_size, min_zoom, max_zoom, content_type_hint, api_key_env, auth_header)
-- Static provider registry (e.g., `lazy_static` or `const` array)
-- Refactor `fetch_tile_from_network()` to use registry lookup instead of match statement
-- Refactor `handle_tile_request()` provider validation to use registry
-- New `get_tile_providers` IPC command returning serialized provider list with availability flags
-- Update `MapSettings.tsx` to fetch and render providers dynamically
-- Remove hardcoded `SATELLITE_PROVIDER_OPTIONS` from `MapSettings.tsx`
-- Update `src/utils/tileConfig.ts` to consume backend provider metadata
-- Rust unit tests for registry, URL template expansion, provider lookup
-- TypeScript tests for Settings UI provider population
-- Integration test for IPC command
+- Rust `TileProvider` struct with all fields from spec
+- `TileProviderInfo` response DTO (TileProvider fields + computed `available: bool`)
+- Static provider registry module (new file) with ESRI as sole provider
+- URL template expansion using `{z}/{y}/{x}` placeholders
+- Refactor `fetch_tile_from_network()`, `handle_tile_request()`, `tile_fetch_impl()` to use registry
+- Remove `SUPPORTED_PROVIDERS`, `ESRI_TILE_URL` constants
+- New `get_tile_providers` IPC command returning `Vec<TileProviderInfo>`
+- Dynamic `MapSettings.tsx` provider dropdown
+- `tileConfig.ts` integration with backend provider metadata
+- Rust unit tests, frontend tests, E2E mock
+- Doc updates (SPEC.md, architecture.md, configuration.md)
 
 ### Out of scope
-- Adding additional providers beyond ESRI (future work)
-- Runtime plugin system for custom providers
-- User-defined custom tile server URLs in config
-- API key management UI (future, when auth-requiring providers are added)
+- Additional providers beyond ESRI
+- Runtime plugin system / custom URLs
+- API key management UI
+- `get_network_status` / `useNetworkStatus` ESRI endpoint hardcoding (separate concern — network health checks use a specific test URL, not the tile URL template)
 
-## Edge Cases
+## Approach
 
-- **Empty registry**: Should never happen (ESRI is always present), but handle gracefully — return empty list from IPC, show "No providers available" in Settings
-- **Provider removed between versions**: If a user's config references a provider that no longer exists in the registry, fall back to ESRI and log a warning
-- **URL template expansion failure**: If a provider's URL template is malformed, return a clear error from `fetch_tile_from_network()`
-- **IPC command called before app fully initialized**: Ensure the registry is available immediately (static/const, not async-initialized)
-- **Concurrent provider queries**: Registry is read-only after initialization — no locking needed
+### Resolved open questions
+- **URL template format**: Use `{z}/{y}/{x}` placeholders with `str::replace()` chains (standard slippy map convention)
+- **Registry pattern**: Use `std::sync::OnceLock` with `HashMap` lookup (not `lazy_static` — deprecated). Practice-scout confirmed `OnceLock`/`LazyLock` are the 2025-2026 standard.
+- **`available` flag**: Computed at call time in a separate `TileProviderInfo` response DTO. ESRI always `true` (no auth). Future auth providers: check `std::env::var(api_key_env).is_ok()` on each `get_tile_providers` call.
+- **Module location**: New module `src-tauri/src/tile_providers.rs`, declared as `pub mod tile_providers;` in `src-tauri/src/lib.rs` (NOT main.rs — main.rs only calls `cavechef_lib::run()`).
+- **Error vs fallback strategy**: Two distinct behaviors depending on call site:
+  - **Config normalization** (app startup / config load): If `satellite_provider` references an unknown provider, silently normalize to `"esri"` and log a warning. This prevents broken state from persisting.
+  - **Tile fetch API** (`fetch_tile_from_network`, `handle_tile_request`): Return a descriptive error for unknown providers. These are internal calls that should never receive an invalid provider after config normalization.
+- **TypeScript types**: New `src/types/tile.ts` for `TileProviderInfo` interface
+- **MapSettings error handling**: If `get_tile_providers` IPC fails, fall back to showing ESRI entry
+- **Thread safety**: Registry is read-only static data via `OnceLock` — no locking needed
 
-## Open Questions
+### Key patterns to follow
+- Command pattern: `src-tauri/src/commands/cache.rs` (struct serialization, `#[tauri::command]`)
+- Frontend invoke: `src/components/Dialogs/settings/CacheSettings.tsx:93-115` (invoke + type parameter)
+- Struct pattern: derive `Debug, Clone, Serialize, Deserialize`, use `#[serde(default)]` for optional fields
+- Config struct: `src-tauri/src/config/types.rs:468-494` for `MapConfig` reference
+- E2E mock: `e2e-playwright/mocks/tauri-ipc.ts` (add case for `get_tile_providers`)
 
-- Should the `url_template` use `{z}/{y}/{x}` placeholders or a different format? (Most tile servers use this convention)
-- Should provider metadata include a `test_tile_url` for connectivity checks (used by `get_network_status`)?
-- Should the availability check for auth-requiring providers verify the env var exists at startup or on each `get_tile_providers` call?
+### Provider validation consolidation
+Currently validated in TWO places:
+- `handle_tile_request()` at `lib.rs:185-191`
+- `tile_fetch_impl()` at `lib.rs:266-271`
+
+Both will be replaced with a single `registry.get(provider_name)` lookup that returns `Err` for unknown providers.
+
+### Two-type design: TileProvider vs TileProviderInfo
+- `TileProvider`: Internal Rust struct representing a registered provider (name, url_template, auth fields, etc.). Used by registry internals and tile fetch logic.
+- `TileProviderInfo`: Serializable response DTO for the IPC command. Contains all `TileProvider` fields plus a computed `available: bool` field. Constructed from `TileProvider` at call time by checking auth requirements.
+
+## Risks & dependencies
+
+| Risk | Mitigation |
+|------|------------|
+| fn-23-q2y not complete (creates `tileConfig.ts`) | Epic dependency set. Task 3 blocked until fn-23-q2y delivers tileConfig.ts |
+| fn-29-2bf also modifies MapSettings.tsx | Changes are in different sections (label rename vs dropdown population). Low conflict risk |
+| Existing tests rely on hardcoded ESRI URLs | Update test assertions to use registry lookups. Existing behavior unchanged (ESRI only) |
+| E2E settings tests skip map tab | Known issue (MapLibre render). No regression risk from this change |
+
+## Quick commands
+
+```bash
+# Rust tests (includes new registry tests)
+cargo test --manifest-path src-tauri/Cargo.toml
+
+# Type check frontend
+pnpm tsc --noEmit
+
+# E2E tests
+pnpm test:ui
+```
+
+## Task summary
+
+| # | Title | Size | Depends |
+|---|-------|------|---------|
+| 1 | TileProvider struct + registry module | M | — |
+| 2 | Refactor tile fetch + IPC command | M | T1 |
+| 3 | Dynamic Settings UI + frontend integration | M | T2, fn-23-q2y |
 
 ## Acceptance
 
-- [ ] `TileProvider` Rust struct with all fields: name, display_label, url_template, attribution, tile_size, min_zoom, max_zoom, content_type_hint, api_key_env, auth_header
-- [ ] Static provider registry with ESRI as the sole provider
+- [ ] `TileProvider` Rust struct with all spec fields
+- [ ] `TileProviderInfo` response DTO with computed `available` flag
+- [ ] Static provider registry with ESRI as sole provider
 - [ ] `fetch_tile_from_network()` uses registry lookup (no hardcoded URL/match)
-- [ ] `handle_tile_request()` validates against registry (no `SUPPORTED_PROVIDERS` array)
-- [ ] `get_tile_providers` IPC command returns all providers with `available` flag
-- [ ] `MapSettings.tsx` populates provider dropdown from IPC (no hardcoded list)
-- [ ] `src/utils/tileConfig.ts` updated to use backend provider metadata
-- [ ] Rust unit tests for: registry lookup, URL template expansion, unknown provider handling, provider struct serialization
-- [ ] Frontend test for Settings UI dynamic provider loading
+- [ ] Provider validation consolidated (single registry lookup, returns error for unknown)
+- [ ] Config normalization falls back to "esri" for unknown provider names (logged)
+- [ ] `get_tile_providers` IPC command returns `Vec<TileProviderInfo>`
+- [ ] `MapSettings.tsx` populates dropdown from IPC (no hardcoded list)
+- [ ] `tileConfig.ts` updated to use backend provider metadata
+- [ ] Rust unit tests pass (registry, URL expansion, unknown provider, serialization, TileProviderInfo construction)
+- [ ] Frontend tests pass (Settings dynamic loading)
+- [ ] E2E mock updated for `get_tile_providers`
 - [ ] All existing tile-related tests pass
-- [ ] Provider fallback works when config references unknown provider name
+- [ ] Provider fallback works for unknown config values
+- [ ] Docs updated (SPEC.md, architecture.md, configuration.md)
+
+## References
+
+- Existing command pattern: `src-tauri/src/commands/cache.rs:14-77`
+- Config types: `src-tauri/src/config/types.rs:468-494`
+- Frontend invoke: `src/components/Dialogs/settings/CacheSettings.tsx:93-115`
+- Tile constants: `src-tauri/src/lib.rs:20-32`
+- Tile fetch: `src-tauri/src/lib.rs:35-69`
+- Provider validation: `src-tauri/src/lib.rs:185-191`, `src-tauri/src/lib.rs:266-271`
+- Settings UI: `src/components/Dialogs/settings/MapSettings.tsx:10-14`
+- E2E mocks: `e2e-playwright/mocks/tauri-ipc.ts`
+- Tauri v2 commands: https://v2.tauri.app/develop/calling-rust/
+- Tauri v2 state: https://v2.tauri.app/develop/state-management/
