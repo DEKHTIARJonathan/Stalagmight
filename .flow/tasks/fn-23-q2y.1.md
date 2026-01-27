@@ -34,9 +34,8 @@ Create a shared tile configuration utility and refactor MapCanvas to use it inst
 - [ ] All existing satellite E2E tests pass
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Created shared tile configuration utility (src/utils/tileConfig.ts) exporting getTileConfig(provider?) that returns tiles, attribution, tileSize, minZoom, maxZoom for a given provider (default 'esri'). Refactored MapCanvas getSatelliteTileConfig to delegate to the shared utility while preserving the useCallback wrapper. Added comprehensive unit tests covering valid provider, unknown provider throws, default parameter, returned shape, and immutability.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: fa61ba5af8b7353c2a47f8f5334fc8e58035c312
+- Tests: pnpm test -- --run src/utils/tileConfig.test.ts (5 passed), pnpm tsc --noEmit (only pre-existing MapCanvas canvasContextAttributes error)
 - PRs:

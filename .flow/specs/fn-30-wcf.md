@@ -2,44 +2,47 @@
 
 ## Problem
 
-When updating the GPS coordinates of an existing zero datum station via the EditStationDialog, the undo stack shows **two separate entries**: "Remove zero datum from X:Y" followed by "Set zero datum at X:Y". The user expects a single undoable action.
+When updating GPS coordinates of an existing zero datum station via EditStationDialog, the undo stack shows **two separate entries** instead of one. The `wasZeroDatum && willBeZeroDatum` branch at `src/components/Dialogs/EditStationDialog.tsx:81-116` calls `removeZeroDatum()` then `setZeroDatum()` as two separate IPC calls, each pushing its own undo entry.
 
-**Root cause**: In `src/components/Dialogs/EditStationDialog.tsx:98-115`, the `wasZeroDatum && willBeZeroDatum` branch calls `removeZeroDatum()` then `setZeroDatum()` as two separate IPC calls, each pushing its own undo entry.
+The backend's `set_zero_datum()` at `src-tauri/src/models/project.rs:667-676` already supports in-place updates — the `removeZeroDatum()` call is unnecessary.
 
-**Key insight**: The backend's `set_zero_datum()` method (`src-tauri/src/models/project.rs:667-676`) already supports in-place updates — if a zero datum already exists for the station, it updates the GPS coordinates directly. The `removeZeroDatum()` call is unnecessary.
+## Fix
 
-## Key Decisions
+Remove the `removeZeroDatum()` call in the `wasZeroDatum && willBeZeroDatum` branch. Call only `setZeroDatum()`, which updates in place. This also eliminates a partial-failure state where remove succeeds but set fails.
 
-- **Frontend-only fix**: Remove the `removeZeroDatum()` call; just call `setZeroDatum()` which updates in place
-- **Keep current undo label**: "Set zero datum at X:Y" is accurate enough (no need for "Update" variant)
-- **Keep the no-change guard**: Skip the command entirely if lat/lon haven't changed (check lat/lon only, not depth_reference)
-- **Testing**: Both a Rust unit test (verify undo data correctness for update case) AND an E2E Playwright test (verify single undo dropdown entry)
-- **E2E fixture**: Use an existing test project file, set zero datum via UI as part of setup
+## Quick commands
 
-## Additional Benefit
+```bash
+# Type check
+pnpm tsc --noEmit
+# Rust tests
+cargo test --manifest-path src-tauri/Cargo.toml
+# E2E tests
+pnpm test:ui
+```
 
-The fix eliminates a partial-failure state: previously, if `removeZeroDatum()` succeeded but `setZeroDatum()` failed, the datum was left removed with no way to recover except manual undo. With the single-call fix, `setZeroDatum()` either succeeds or fails atomically — the datum is never inadvertently removed.
+## Key context
+
+- Backend in-place update: `src-tauri/src/models/project.rs:667-676`
+- Undo data capture (correct as-is): `src-tauri/src/core/state/undo.rs:186-205`
+- IPC commands: `src-tauri/src/commands/station.rs:40-69`
+- Existing Rust undo test: `src-tauri/src/core/state/tests.rs:1641-1750`
+- Existing E2E tests: `e2e-playwright/undo-redo-dropdown.spec.ts`, `e2e-playwright/id-zero-regression.spec.ts`
+- UI test IDs: `toolbar-undo-button-dropdown`, `toolbar-undo-button-item-{index}`, `edit-station-dialog`
+- UndoData type: `src-tauri/src/core/undo.rs:74-84` — `ZeroDatumInfo { station_ref, previous_gps: Option<GpsCoordinates>, previous_offsets }`
+- No documentation updates needed
+- No hard epic dependencies; fn-25-itw benefits from this landing first
 
 ## Scope
 
-- **In scope**: Fix the `wasZeroDatum && willBeZeroDatum` branch in EditStationDialog, verify undo data capture path, add Rust test, add E2E test
-- **Out of scope**: Changing undo labels, batch command infrastructure, other dialogs
-
-## Verification Required During Planning
-
-Confirm that when `SetZeroDatum` runs on a station that already has a zero datum, the undo data capture correctly stores `previous_gps: Some(old_gps)` and `previous_offsets` (the section offsets before recomputation). Read the undo data capture code in `src-tauri/src/core/state/undo.rs` to verify.
-
-## Edge Cases
-
-- User unchecks "Set as Zero Datum" then re-checks with new coordinates in the same dialog session → `wasZeroDatum=true, willBeZeroDatum=true` → handled correctly by the fix
-- GPS coordinates unchanged → no-change guard skips the command entirely (no undo entry)
-- Station has no existing zero datum → `!wasZeroDatum && willBeZeroDatum` branch, unaffected by fix
+- **In scope**: Fix the frontend branch, add Rust unit test for update case, add E2E Playwright test
+- **Out of scope**: Changing undo labels, preview data format, batch command infrastructure, other dialogs
 
 ## Acceptance
 
-- [ ] Updating GPS coordinates on an existing zero datum produces exactly ONE undo entry
-- [ ] Undo restores the previous GPS coordinates and section offsets correctly
-- [ ] No-change guard: saving without modifying lat/lon does not create an undo entry
-- [ ] Rust unit test: SetZeroDatum on existing datum captures correct undo data (previous_gps = Some(old), previous_offsets preserved)
+- [ ] Updating GPS on existing zero datum produces exactly ONE undo entry
+- [ ] Undo restores previous GPS coordinates and section offsets correctly
+- [ ] No-change guard: saving without modifying lat/lon creates no undo entry
+- [ ] Rust unit test: SetZeroDatum on existing datum captures correct undo data (previous_gps = Some(old))
 - [ ] E2E Playwright test: undo dropdown shows exactly one new entry after GPS update
 - [ ] Partial-failure state eliminated (no remove+set sequence)
