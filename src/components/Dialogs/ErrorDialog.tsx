@@ -6,9 +6,13 @@ import { DialogWrapper } from './DialogWrapper';
 export default function ErrorDialog() {
   const { closeDialog, dialogData } = useUIStore();
 
-  const message = dialogData.message as string | undefined;
-  const title = (dialogData.title as string | undefined) ?? 'Error';
-  const stackTrace = dialogData.stackTrace as string | undefined;
+  // Normalize dialogData values to strings to guard against non-string callers
+  const rawMessage = dialogData.message;
+  const message = typeof rawMessage === 'string' ? rawMessage : rawMessage ? String(rawMessage) : undefined;
+  const rawTitle = dialogData.title;
+  const title = (typeof rawTitle === 'string' ? rawTitle : rawTitle ? String(rawTitle) : undefined) ?? 'Error';
+  const rawStack = dialogData.stackTrace;
+  const stackTrace = typeof rawStack === 'string' ? rawStack : rawStack ? String(rawStack) : undefined;
 
   const [copyFeedback, setCopyFeedback] = useState<'idle' | 'copied' | 'failed'>('idle');
   const feedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -60,7 +64,9 @@ export default function ErrorDialog() {
         )}
 
         <p className="text-xs text-text-tertiary">
-          If this error persists, please report it as a bug and include the error details above.
+          {stackTrace
+            ? 'If this error persists, please report it as a bug and include the error message and stack trace above.'
+            : 'If this error persists, please report it as a bug and include this error message.'}
         </p>
 
         <div className="flex justify-between items-center pt-4 border-t border-border">

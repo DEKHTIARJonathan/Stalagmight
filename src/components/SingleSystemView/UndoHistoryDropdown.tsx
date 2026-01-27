@@ -288,6 +288,9 @@ export default function UndoHistoryDropdown({
         const errorMessage = error instanceof Error ? error.message : String(error);
         const errorStack = error instanceof Error ? error.stack : undefined;
 
+        // Refresh stack so dropdown reflects actual backend state even after error
+        await fetchStack();
+
         // Clear loading state, keep dropdown open, show error dialog
         isActionInProgressRef.current = false;
         setIsActionInProgress(false);
@@ -300,9 +303,12 @@ export default function UndoHistoryDropdown({
         return;
       }
 
-      // Primary error path: check CommandResult.success
-      if (result && !result.success) {
-        console.error(`${mode} action failed:`, result.error);
+      // Primary error path: check CommandResult.success (fail closed: treat missing result as error)
+      if (!result?.success) {
+        console.error(`${mode} action failed:`, result?.error);
+
+        // Refresh stack so dropdown reflects actual backend state even after error
+        await fetchStack();
 
         // Clear loading state, keep dropdown open, show error dialog
         isActionInProgressRef.current = false;
@@ -310,7 +316,7 @@ export default function UndoHistoryDropdown({
         actionQueueRef.current = [];
         openDialog('error', {
           title: `${mode === 'undo' ? 'Undo' : 'Redo'} Failed`,
-          message: result.error ?? 'An unknown error occurred.',
+          message: result?.error ?? 'An unknown error occurred.',
         });
         return;
       }
