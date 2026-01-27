@@ -91,7 +91,7 @@ impl Default for SectionColorsConfig {
 impl Default for MapConfig {
     fn default() -> Self {
         Self {
-            satellite_provider: "openstreetmap".to_string(),
+            satellite_provider: "esri".to_string(),
             satellite_enabled: false,
             satellite_gps_origin: GpsOrigin {
                 latitude: 24.55,

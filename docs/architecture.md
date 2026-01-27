@@ -130,7 +130,7 @@ GlobalView.tsx (container)
             │
             ▼
 GlobalViewMap.tsx
-    ├── Initializes MapLibre with OSM tiles
+    ├── Initializes MapLibre with ESRI satellite tiles
     ├── Restores persisted map position from localStorage
     ├── Creates GlobalSurveyLayer for geometry rendering
     └── On map moveend → loadGeometryBatch(visible systems)

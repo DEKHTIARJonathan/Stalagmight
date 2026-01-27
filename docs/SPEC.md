@@ -1430,7 +1430,7 @@ palette = [
 ]
 
 [map]
-satellite_provider = "openstreetmap"  # "openstreetmap" | "mapbox" | "bing"
+satellite_provider = "esri"  # "esri" | "mapbox" | "bing"
 satellite_enabled = false
 # GPS origin for satellite tile alignment (default: Florida Keys)
 satellite_gps_origin = { latitude = 24.55, longitude = -81.78 }

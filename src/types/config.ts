@@ -282,7 +282,7 @@ export const defaultConfig: Config = {
     ],
   },
   map: {
-    satellite_provider: 'openstreetmap',
+    satellite_provider: 'esri',
     satellite_enabled: false,
     // Default to Florida Keys area - popular cave diving location
     satellite_gps_origin: { latitude: 24.55, longitude: -81.78 },
