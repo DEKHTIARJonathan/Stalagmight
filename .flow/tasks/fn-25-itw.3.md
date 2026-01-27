@@ -101,9 +101,8 @@ New test IDs to expect (from tasks 1 and 2):
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-
-<!-- filled on completion -->
-
+Updated SPEC.md (section 6.3 close behavior, scrolling, new Action Behavior subsection; section 11.3 aria-live announcement events), TESTING.md (new test IDs, stay-open test patterns with open-dropdown prerequisites), and E2E test suite (updated 4 existing tests that expected close-on-action to expect stay-open; added 11 new tests for button-click-stays-open, item-click-stays-open, ctrl+z-stays-open, detail-preview-dismiss, loading-indicator, navigation-reset, aria-live-announcement, fixed-height, empty-stack-close, error-dialog, and rapid-click-queuing). All 32 E2E tests pass.
 ## Evidence
-
-<!-- filled on completion -->
+- Commits: edd4768, 41ad465
+- Tests: pnpm test:ui -- --grep undo (32 passed), pnpm tsc --noEmit (pre-existing error only)
+- PRs:
