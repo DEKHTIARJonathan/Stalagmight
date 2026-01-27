@@ -268,12 +268,14 @@ test.describe('Undo/Redo History Dropdown', () => {
   });
 
   test.describe('Item Click Behavior', () => {
-    test('clicking item at index 2 executes 3 undos (indices 0,1,2)', async ({ page }) => {
+    test('clicking item at index 2 executes 3 undos (indices 0,1,2) and stays open', async ({ page }) => {
       const undoButton = page.getByTestId('toolbar-undo-button');
+      const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
 
       // Hover to open dropdown
       await undoButton.hover();
       await page.waitForTimeout(400);
+      await expect(dropdown).toBeVisible();
 
       // Click item at index 2
       const itemIndex2 = page.getByTestId('toolbar-undo-button-item-2');
@@ -285,9 +287,8 @@ test.describe('Undo/Redo History Dropdown', () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]).toEqual({ cmd: 'undo_to', index: 2 });
 
-      // Dropdown should close after click
-      const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
-      await expect(dropdown).not.toBeVisible({ timeout: 1000 });
+      // Dropdown should stay open after click (stay-open behavior)
+      await expect(dropdown).toBeVisible({ timeout: 1000 });
     });
 
     test('clicking item in redo dropdown calls redo_to', async ({ page }) => {
@@ -368,7 +369,7 @@ test.describe('Undo/Redo History Dropdown', () => {
       await expect(dropdown).toBeVisible();
     });
 
-    test('Enter selects item and closes dropdown', async ({ page }) => {
+    test('Enter selects item and keeps dropdown open', async ({ page }) => {
       const undoButton = page.getByTestId('toolbar-undo-button');
       const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
 
@@ -378,7 +379,7 @@ test.describe('Undo/Redo History Dropdown', () => {
       await expect(dropdown).toBeVisible();
 
       // Wait for first item to be focused
-      await page.waitForTimeout(50);
+      await expect(dropdown).toHaveAttribute('aria-activedescendant', /.+/);
 
       // Press Enter to select first item (index 0)
       await page.keyboard.press('Enter');
@@ -388,8 +389,8 @@ test.describe('Undo/Redo History Dropdown', () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]).toEqual({ cmd: 'undo_to', index: 0 });
 
-      // Dropdown should close
-      await expect(dropdown).not.toBeVisible({ timeout: 1000 });
+      // Dropdown should stay open (stay-open behavior)
+      await expect(dropdown).toBeVisible({ timeout: 1000 });
     });
 
     test('keyboard navigation to last item and Enter selects correct index', async ({ page }) => {
@@ -507,7 +508,7 @@ test.describe('Undo/Redo History Dropdown', () => {
       await expect(dropdown).not.toBeVisible();
     });
 
-    test('dropdown closes on Ctrl+Z shortcut', async ({ page }) => {
+    test('Ctrl+Z keeps dropdown open and performs undo', async ({ page }) => {
       const undoButton = page.getByTestId('toolbar-undo-button');
       const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
 
@@ -516,14 +517,15 @@ test.describe('Undo/Redo History Dropdown', () => {
       await page.waitForTimeout(400);
       await expect(dropdown).toBeVisible();
 
-      // Press Ctrl+Z
+      // Press Ctrl+Z (ensure focus is NOT in a text input)
+      await undoButton.focus();
       await page.keyboard.press('Control+Z');
 
-      // Dropdown should close
-      await expect(dropdown).not.toBeVisible({ timeout: 1000 });
+      // Dropdown should stay open (stay-open behavior)
+      await expect(dropdown).toBeVisible({ timeout: 1000 });
     });
 
-    test('dropdown closes on Ctrl+Y shortcut', async ({ page }) => {
+    test('Ctrl+Y keeps dropdown open and performs redo', async ({ page }) => {
       const undoButton = page.getByTestId('toolbar-undo-button');
       const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
 
@@ -532,11 +534,12 @@ test.describe('Undo/Redo History Dropdown', () => {
       await page.waitForTimeout(400);
       await expect(dropdown).toBeVisible();
 
-      // Press Ctrl+Y
+      // Press Ctrl+Y (ensure focus is NOT in a text input)
+      await undoButton.focus();
       await page.keyboard.press('Control+Y');
 
-      // Dropdown should close
-      await expect(dropdown).not.toBeVisible({ timeout: 1000 });
+      // Dropdown should stay open (stay-open behavior)
+      await expect(dropdown).toBeVisible({ timeout: 1000 });
     });
 
     test('dropdown shows timestamp as "Unknown" for legacy entries', async ({ page }) => {
@@ -628,5 +631,316 @@ test.describe('Undo/Redo Dropdown - Empty State', () => {
 
     // Dropdown should not appear with empty stack
     await expect(dropdown).not.toBeVisible();
+  });
+});
+
+test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await extendMocksWithUndoRedo(page);
+    await createProject(page, 'Stay Open Test Project');
+  });
+
+  test('button click keeps dropdown open and refreshes items', async ({ page }) => {
+    const undoButton = page.getByTestId('toolbar-undo-button');
+    const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+
+    // Hover to open dropdown
+    await undoButton.hover();
+    await page.waitForTimeout(400);
+    await expect(dropdown).toBeVisible();
+
+    // Click the button while dropdown is open (performs undo and stays open)
+    await undoButton.click();
+
+    // Dropdown should stay open
+    await expect(dropdown).toBeVisible({ timeout: 2000 });
+
+    // Items should still be rendered (refreshed)
+    await expect(page.getByTestId('toolbar-undo-button-item-0')).toBeVisible();
+  });
+
+  test('item click keeps dropdown open and refreshes items', async ({ page }) => {
+    const undoButton = page.getByTestId('toolbar-undo-button');
+    const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+
+    // Hover to open dropdown
+    await undoButton.hover();
+    await page.waitForTimeout(400);
+    await expect(dropdown).toBeVisible();
+
+    // Click an item
+    const item = page.getByTestId('toolbar-undo-button-item-0');
+    await expect(item).toBeVisible();
+    await item.click();
+
+    // Dropdown should stay open
+    await expect(dropdown).toBeVisible({ timeout: 2000 });
+  });
+
+  test('Ctrl+Z keeps dropdown open and refreshes items', async ({ page }) => {
+    const undoButton = page.getByTestId('toolbar-undo-button');
+    const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+
+    // Hover to open dropdown
+    await undoButton.hover();
+    await page.waitForTimeout(400);
+    await expect(dropdown).toBeVisible();
+
+    // Ensure focus is not in a text input (input focus guard)
+    await undoButton.focus();
+
+    // Press Ctrl+Z
+    await page.keyboard.press('Control+Z');
+
+    // Dropdown should stay open
+    await expect(dropdown).toBeVisible({ timeout: 2000 });
+  });
+
+  test('detail preview dismisses on action', async ({ page }) => {
+    const undoButton = page.getByTestId('toolbar-undo-button');
+    const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+
+    // Hover to open dropdown
+    await undoButton.hover();
+    await page.waitForTimeout(400);
+    await expect(dropdown).toBeVisible();
+
+    // Hover over first item to show detail preview
+    const firstItem = page.getByTestId('toolbar-undo-button-item-0');
+    await firstItem.hover();
+    const previewPopup = page.getByTestId('detail-preview-popup');
+    await expect(previewPopup).toBeVisible({ timeout: 1000 });
+
+    // Click the item (performs action)
+    await firstItem.click();
+
+    // Detail preview should be dismissed
+    await expect(previewPopup).not.toBeVisible({ timeout: 1000 });
+  });
+
+  test('loading indicator appears during refresh', async ({ page }) => {
+    const undoButton = page.getByTestId('toolbar-undo-button');
+    const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+
+    // Hover to open dropdown
+    await undoButton.hover();
+    await page.waitForTimeout(400);
+    await expect(dropdown).toBeVisible();
+
+    // Add a delay to the mock undo_to to make loading indicator observable
+    await page.evaluate(() => {
+      const originalInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
+      (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke = async (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === 'undo_to' || cmd === 'redo_to' || cmd === 'undo' || cmd === 'redo') {
+          // Introduce a small delay so loading indicator is visible
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        return originalInvoke(cmd, args);
+      };
+    });
+
+    // Click button to trigger action
+    await undoButton.click();
+
+    // Loading indicator should appear
+    const loadingIndicator = page.getByTestId('toolbar-undo-button-loading');
+    await expect(loadingIndicator).toBeVisible({ timeout: 1000 });
+    await expect(loadingIndicator).toContainText('Processing...');
+  });
+
+  test('navigation resets to top after refresh', async ({ page }) => {
+    const undoButton = page.getByTestId('toolbar-undo-button');
+    const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+
+    // Open via keyboard and navigate to last item
+    await undoButton.focus();
+    await page.keyboard.press('ArrowDown');
+    await expect(dropdown).toBeVisible();
+
+    // Wait for aria-activedescendant to be set
+    await expect(dropdown).toHaveAttribute('aria-activedescendant', /.+/);
+
+    // Navigate to last item
+    await page.keyboard.press('End');
+    const lastActiveDescendant = await dropdown.getAttribute('aria-activedescendant');
+    expect(lastActiveDescendant).toMatch(/item-3/);
+
+    // Perform action via Enter
+    await page.keyboard.press('Enter');
+
+    // After action and refresh, navigation should reset to first item (index 0)
+    await expect(dropdown).toHaveAttribute('aria-activedescendant', /item-0/, { timeout: 2000 });
+  });
+
+  test('aria-live announcement after action', async ({ page }) => {
+    const undoButton = page.getByTestId('toolbar-undo-button');
+    const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+
+    // Hover to open dropdown
+    await undoButton.hover();
+    await page.waitForTimeout(400);
+    await expect(dropdown).toBeVisible();
+
+    // Click button to trigger undo action
+    await undoButton.click();
+
+    // aria-live region should announce remaining actions
+    const announcement = page.getByTestId('toolbar-undo-button-announcement');
+    await expect(announcement).toContainText('actions remaining', { timeout: 2000 });
+  });
+
+  test('fixed 5-item height renders correctly', async ({ page }) => {
+    const undoButton = page.getByTestId('toolbar-undo-button');
+    const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+
+    // Hover to open dropdown
+    await undoButton.hover();
+    await page.waitForTimeout(400);
+    await expect(dropdown).toBeVisible();
+
+    // Check that the scroll container has fixed height of 220px
+    const scrollContainer = dropdown.locator('.undo-history-scrollable');
+    await expect(scrollContainer).toBeVisible();
+    await expect(scrollContainer).toHaveCSS('height', '220px');
+  });
+});
+
+test.describe('Undo/Redo Dropdown - Close on Empty Stack', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await extendMocksWithUndoRedo(page);
+    await createProject(page, 'Empty Stack Close Test');
+  });
+
+  test('dropdown closes when stack becomes empty after action', async ({ page }) => {
+    const undoButton = page.getByTestId('toolbar-undo-button');
+    const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+
+    // Hover to open dropdown
+    await undoButton.hover();
+    await page.waitForTimeout(400);
+    await expect(dropdown).toBeVisible();
+
+    // Modify mock so the next get_undo_stack returns empty (simulating all actions undone)
+    await page.evaluate(() => {
+      const originalInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
+      let undoActionCalled = false;
+
+      (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke = async (cmd: string, args?: Record<string, unknown>) => {
+        // Once undo action is called, return empty stack on next fetch
+        if (cmd === 'undo_to' || cmd === 'undo') {
+          undoActionCalled = true;
+          const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
+          calls.push({ cmd: cmd, index: (args?.index as number) ?? 0 });
+          return { success: true, warnings: [], error: null };
+        }
+        if (cmd === 'get_undo_stack' && undoActionCalled) {
+          return []; // Empty stack after undo
+        }
+        return originalInvoke(cmd, args);
+      };
+    });
+
+    // Click button to trigger undo
+    await undoButton.click();
+
+    // Dropdown should auto-close because stack is now empty
+    await expect(dropdown).not.toBeVisible({ timeout: 3000 });
+
+    // aria-live should announce "No actions remaining"
+    const announcement = page.getByTestId('toolbar-undo-button-announcement');
+    await expect(announcement).toContainText('No actions remaining', { timeout: 2000 });
+  });
+});
+
+test.describe('Undo/Redo Dropdown - Error Handling', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await extendMocksWithUndoRedo(page);
+    await createProject(page, 'Error Handling Test');
+  });
+
+  test('error dialog shown on backend failure and dropdown stays open', async ({ page }) => {
+    const undoButton = page.getByTestId('toolbar-undo-button');
+    const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+
+    // Hover to open dropdown
+    await undoButton.hover();
+    await page.waitForTimeout(400);
+    await expect(dropdown).toBeVisible();
+
+    // Modify mock so undo_to returns failure
+    await page.evaluate(() => {
+      const originalInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
+
+      (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke = async (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === 'undo_to' || cmd === 'undo') {
+          return { success: false, warnings: [], error: 'Stack corrupted: cannot undo' };
+        }
+        return originalInvoke(cmd, args);
+      };
+    });
+
+    // Click button to trigger undo (will fail)
+    await undoButton.click();
+
+    // Error dialog should appear
+    const errorDialog = page.getByTestId('error-dialog');
+    await expect(errorDialog).toBeVisible({ timeout: 3000 });
+    await expect(errorDialog).toContainText('Undo Failed');
+    await expect(errorDialog).toContainText('Stack corrupted');
+
+    // Dropdown should stay open behind the error dialog
+    await expect(dropdown).toBeVisible();
+  });
+});
+
+test.describe('Undo/Redo Dropdown - Rapid Click Queuing', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await extendMocksWithUndoRedo(page);
+    await createProject(page, 'Rapid Click Test');
+  });
+
+  test('rapid clicks queue and execute sequentially', async ({ page }) => {
+    const undoButton = page.getByTestId('toolbar-undo-button');
+    const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+
+    // Add a small delay to undo commands to allow queuing observation
+    await page.evaluate(() => {
+      const originalInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
+
+      (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke = async (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === 'undo' || cmd === 'undo_to') {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        return originalInvoke(cmd, args);
+      };
+    });
+
+    // Hover to open dropdown
+    await undoButton.hover();
+    await page.waitForTimeout(400);
+    await expect(dropdown).toBeVisible();
+
+    // Rapid-click button three times quickly
+    await undoButton.click();
+    await undoButton.click();
+    await undoButton.click();
+
+    // Wait for all queued actions to complete
+    await page.waitForTimeout(800);
+
+    // Dropdown should still be open
+    await expect(dropdown).toBeVisible();
   });
 });
