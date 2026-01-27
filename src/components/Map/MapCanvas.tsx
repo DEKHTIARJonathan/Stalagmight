@@ -9,6 +9,7 @@ import {
 } from '../../store/displaySelectors';
 import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
+import { getTileConfig } from '../../utils/tileConfig';
 import { useMapTools } from '../../hooks/useMapTools';
 import SurveyLayer from './SurveyLayer';
 import PlacementOverlay from './PlacementOverlay';
@@ -1140,11 +1141,7 @@ export default function MapCanvas() {
   // Get satellite tile URL based on provider config
   // Uses custom cavechef-tiles:// protocol for offline caching
   const getSatelliteTileConfig = useCallback(() => {
-    return {
-      tiles: ['cavechef-tiles://esri/{z}/{y}/{x}'],
-      attribution: '&copy; Esri, Maxar, Earthstar Geographics',
-      tileSize: 256,
-    };
+    return getTileConfig();
   }, []);
 
   // Handle satellite toggle
