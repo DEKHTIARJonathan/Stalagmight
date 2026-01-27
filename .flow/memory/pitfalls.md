@@ -105,3 +105,9 @@ React onMouseEnter/Leave requires dispatching mouseover/mouseout with bubbles:tr
 
 ## 2026-01-27 manual [pitfall]
 When clamping a value, do not also reject out-of-range values in the validation guard - the guard makes the clamp unreachable for the values it is supposed to handle
+
+## 2026-01-27 manual [pitfall]
+Async action queues (ref-based) must be cleared on all close/teardown paths to prevent stale closures from executing against changed state after reopen
+
+## 2026-01-27 manual [pitfall]
+Capture-phase keyboard shortcut interceptors must guard against input/textarea/select/contentEditable focus to avoid breaking native text editing undo/redo

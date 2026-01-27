@@ -15,7 +15,7 @@ Replace the thin 2px solid left border on selected data table rows with an 8px-w
 **Out of scope:**
 - SectionsPanel selection indicator (uses same `border-l-2` but in DmpSectionConfigDialog.tsx — different component)
 - Animation/transitions
-- Hover behavior changes on selected rows
+- Row-level hover behavior changes (existing `hover:bg-accent/10` on all rows remains unchanged)
 - Other table consumers besides DataTable
 
 ## Approach
@@ -75,7 +75,7 @@ pnpm test:ui
 - [ ] Gradient is implemented as a `::before` pseudo-element, not a border
 - [ ] No layout shift when selection changes
 - [ ] Gradient bar spans full row height with sharp edges
-- [ ] Hover does not change the appearance of a selected row
+- [ ] The gradient indicator itself is static — it does not animate or change on hover (existing row background hover behavior is unmodified)
 - [ ] Unselected rows show no indicator at all
 - [ ] The old 2px border-left is completely removed
 - [ ] `data-selected` attribute added for testability
@@ -86,6 +86,7 @@ pnpm test:ui
 
 - `src/components/common/Table.tsx:293-299` — current `getFirstCellBorderClass()`
 - `src/components/common/Table.tsx:368` — first `<td>` className application
+- `src/components/common/Table.tsx:269-289` — `getRowClassName()` with hover logic (unchanged)
 - `src/index.css:105-127` — existing pseudo-element pattern (checkbox/radio)
 - `tailwind.config.js:23` — accent color `#4ecdc4`
 - `src/components/SingleSystemView/DataTable.tsx:454` — EditableTable consumer

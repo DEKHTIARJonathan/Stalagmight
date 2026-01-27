@@ -82,9 +82,8 @@ On action trigger (before async call), clear `hoveredItem` state to dismiss the 
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-
-<!-- filled on completion -->
-
+Implemented stay-open behavior for the undo/redo history dropdown with sequential action queue, loading indicator, fixed 5-item height, auto-close on empty stack, keyboard shortcut coordination (stopPropagation to prevent double-undo), and navigation/scroll reset after refresh. Fixed stale queue clearing on all close paths and added input focus guard for Ctrl+Z/Y handler.
 ## Evidence
-
-<!-- filled on completion -->
+- Commits: 4e1117c, 6825120
+- Tests: pnpm tsc --noEmit
+- PRs:

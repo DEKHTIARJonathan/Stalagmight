@@ -66,7 +66,7 @@ At `src/components/common/Table.tsx:368`, add `data-selected={isSelected ? 'true
 - [ ] No layout shift when selection changes (visual verification)
 - [ ] Gradient bar spans full cell height with sharp edges
 - [ ] `pointer-events: none` on pseudo-element (clicks pass through)
-- [ ] Hover behavior on selected rows unchanged
+- [ ] The gradient indicator is static — does not animate or change on hover (existing row background hover via `getRowClassName()` is unmodified)
 - [ ] `pnpm tsc --noEmit` passes
 - [ ] `pnpm test:ui` passes
 ## Done summary
