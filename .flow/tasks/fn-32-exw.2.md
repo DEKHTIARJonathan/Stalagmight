@@ -1,65 +1,67 @@
 ## Description
 
-Audit DmpImportDialog and DmpSelectionDialog for any remaining numeric alignment gaps, then add a Playwright E2E test verifying `text-align: right` on numeric columns across testable table contexts.
+Audit DmpImportDialog and DmpSelectionDialog for any remaining numeric alignment gaps (add `tabular-nums` if missing), then add a Playwright E2E test verifying `text-align: right` on numeric columns across data tables.
 
 **Size:** M
 **Files:** `src/components/Dialogs/DmpImportDialog.tsx`, `src/components/Dialogs/DmpSelectionDialog.tsx`, `e2e-playwright/table-alignment.spec.ts` (new)
 
 ## Approach
 
-### DmpImportDialog audit (`DmpImportDialog.tsx`) — code audit only, no Playwright test
+### DmpImportDialog audit (`DmpImportDialog.tsx`)
 
-DmpImportDialog is not directly mountable via App.tsx UI (no standard navigation path), so it cannot be tested via Playwright. Audit by reading the code:
-- Verify all numeric headers have `text-right` (nested shot table L/R/U/D/Pitch at lines 886-894)
-- Verify all numeric cells have `text-right` (lines 920-959)
-- Verify non-numeric columns (Name, Date, Dir, Index, Comment) remain left-aligned
-- Fix any gaps found in the code
+Per repo-scout findings, the nested shot table already has `text-right` on L/R/U/D/Pitch headers (lines 890-894) and cells (lines 921-945). Section selection table has Shots column right-aligned (lines 826, 879). Verify:
+- All numeric headers have `text-right`
+- All numeric cells have `text-right`
+- Add `tabular-nums` to numeric cells if missing
+- Non-numeric columns (Name, Date, Dir, Index, Comment) remain left-aligned
+- Check if Azi In, Azi Out, Length columns in shot detail table also need alignment
+- Fix any gaps found
 
 ### DmpSelectionDialog audit (`DmpSelectionDialog.tsx`)
 
-Per repo-scout findings, Shots column is already right-aligned (header line 325, cell line 359). Verify completeness. May need no changes.
+Per repo-scout findings, Shots column is already right-aligned (header line 325, cell line 359). Verify completeness:
+- Add `tabular-nums` if missing
+- May need no other changes
 
 ### Playwright E2E test
 
-Create `e2e-playwright/table-alignment.spec.ts` covering alignment across **three testable table contexts** (DmpImportDialog excluded — audit-only):
+Create `e2e-playwright/table-alignment.spec.ts` verifying numeric column alignment. Use `toHaveCSS('text-align', 'right')` assertion pattern.
 
-**Test setup**: Use existing helpers (e.g., `seedProjectWithSections`) to seed shot data before opening tables. Without seeded data, DataTable may be empty.
+Test should verify:
+- `<th>` headers for numeric columns have `text-align: right`
+- `<td>` cells for numeric columns have `text-align: right`
+- `<input>` elements inside editable numeric cells have `text-align: right`
+- At least one representative table (ShotTableEditor via Edit Section dialog)
+- Negative test: text/ID columns still have `text-align: left`
+- Negative test: checkbox/icon columns (Virtual, Warnings) remain centered
 
-1. **DataTable (EditableTable)**: Seed data, open data table panel (Ctrl+3), verify numeric input has `text-align: right`. Use `data-testid="table-cell-{rowKey}-{columnKey}"` for inputs; navigate to ancestor `td` for cell assertion.
-2. **ShotTableEditor**: Seed data, open Edit Section dialog, verify numeric `<th>` and `<td>`/`<input>` have `text-align: right`. Use `getByRole('columnheader', { name: 'Length' })` scoped to dialog.
-3. **ImportDialog**: Open Import/Create Section dialog, verify numeric `<th>` and `<input>` have `text-align: right`. Use `getByRole('columnheader', { name: 'Depth In' })` scoped to `data-testid="import-section-dialog"`.
-
-Also verify at least one text/index column has `text-align: left` (negative test).
-
-**Note on index columns**: Row index (#) columns are ordinal identifiers, not comparative numeric data. They stay left-aligned across all tables. This is consistent with the epic's scope ("only numeric data columns — length, azimuth, depths, LRUD").
-
-**Selector strategy**:
-- **EditableTable**: `data-testid="table-cell-{rowKey}-{columnKey}"` for inputs
-- **Manual tables**: `getByRole('columnheader', { name: '...' })` scoped to dialog `data-testid`
-- **Headers**: role-based selectors (`columnheader`) scoped to table container
-- **Cells**: role-based or nth-child selectors scoped to table
+Follow existing test patterns in `e2e-playwright/` directory:
+- Use `setupMockedPage()`, `createProject()`, `seedProjectWithSections()` helpers
+- Use existing data-testid selectors: `shot-length-{index}`, `shot-azimuth-{index}`, `shot-depth-in-{index}`, etc.
+- Follow timeout patterns from existing specs
 
 ## Key context
 
-- DmpImportDialog is not mountable via standard App.tsx navigation — audit-only
-- DmpImportDialog nested shot table headers at lines 886-894: L/R/U/D/Pitch already `text-right`
-- DmpImportDialog nested shot table cells at lines 920-959: already `text-right`
-- DmpSelectionDialog Shots column at lines 321-325, 359: already `text-right`
+- DmpImportDialog nested shot table headers at lines 890-894: L/R/U/D/Pitch already `text-right`
+- DmpImportDialog nested shot table cells at lines 921-945: already `text-right`
+- DmpImportDialog section table Shots column at lines 826, 879: already `text-right`
+- DmpSelectionDialog Shots column at lines 325, 359: already `text-right`
 - Playwright assertion: `await expect(locator).toHaveCSS('text-align', 'right')`
-- EditableTable test selectors: `data-testid="table-cell-{rowKey}-{columnKey}"` on `<input>`
-- ImportDialog container: `data-testid="import-section-dialog"`
-- DataTable container: `data-testid="data-table"`
-- Use `seedProjectWithSections` or similar helpers to seed data before testing
+- For tabular-nums: `await expect(locator).toHaveCSS('font-variant-numeric', 'tabular-nums')`
+- Test selectors: `data-testid="shot-length-{index}"`, `data-testid="shot-azimuth-{index}"`, etc.
+- Test helpers in `e2e-playwright/helpers/app.ts`: `setupMockedPage()`, `createProject()`, `seedProjectWithSections()`
+- Existing test patterns in `e2e-playwright/section-shot-editing.spec.ts` for dialog interaction
 
 ## Acceptance
 
-- [ ] DmpImportDialog numeric columns verified right-aligned via code audit (fix if any gaps)
+- [ ] DmpImportDialog numeric columns verified right-aligned (fix any gaps)
+- [ ] DmpImportDialog numeric columns have `tabular-nums`
 - [ ] DmpSelectionDialog numeric columns verified right-aligned
-- [ ] Playwright test seeds data using existing helpers
-- [ ] Playwright test covers DataTable (EditableTable) numeric input and cell alignment
-- [ ] Playwright test covers ShotTableEditor numeric header, cell, and input alignment
-- [ ] Playwright test covers ImportDialog numeric header, cell, and input alignment
-- [ ] Playwright test verifies text/index column stays left-aligned (negative test)
+- [ ] DmpSelectionDialog numeric columns have `tabular-nums`
+- [ ] New Playwright test file verifies `text-align: right` on numeric column headers
+- [ ] New Playwright test file verifies `text-align: right` on numeric column cells
+- [ ] New Playwright test file verifies `text-align: right` on numeric input elements
+- [ ] Test verifies text/ID columns remain left-aligned
 - [ ] `pnpm tsc --noEmit` passes
 - [ ] `pnpm test:ui` passes
 
