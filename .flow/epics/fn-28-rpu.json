@@ -1,13 +1,16 @@
 {
   "branch_name": "fn-28-rpu",
   "created_at": "2026-01-27T13:46:54.593138Z",
+  "default_impl": null,
+  "default_review": null,
+  "default_sync": null,
   "depends_on_epics": [],
   "id": "fn-28-rpu",
   "next_task": 1,
-  "plan_review_status": "unknown",
-  "plan_reviewed_at": null,
+  "plan_review_status": "ship",
+  "plan_reviewed_at": "2026-01-27T22:08:03.089311Z",
   "spec_path": ".flow/specs/fn-28-rpu.md",
   "status": "open",
   "title": "Fix undo/redo entry loss when operation fails",
-  "updated_at": "2026-01-27T21:51:25.997109Z"
+  "updated_at": "2026-01-27T22:08:03.089342Z"
 }

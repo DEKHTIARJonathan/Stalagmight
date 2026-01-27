@@ -1,38 +1,98 @@
 # Right-align numeric columns in all data tables
 
-## Problem
+## Overview
 
-Numeric columns in data tables are inconsistently aligned. The main DataTable (shot data grid) already right-aligns numbers via the `align: 'right'` column prop, but other tables in the app — ShotTableEditor, ImportDialog, and DMP import dialogs — display numbers left-aligned. This looks unprofessional compared to spreadsheet applications like Excel, where numbers always float right.
+Numeric columns in data tables are inconsistently aligned. The main DataTable already right-aligns via the `align: 'right'` column prop, but ShotTableEditor (manual table), ImportDialog (manual table), and EditableTable inputs lack alignment. DmpImportDialog and DmpSelectionDialog are already mostly/fully done. This epic brings all tables to consistent Excel-like right-alignment.
 
-Additionally, the EditableTable component's input elements inside right-aligned columns may not have `text-align: right` applied, meaning the typed text and cursor are left-aligned even though the cell data displays right-aligned.
+## Scope
 
-## Key Decisions
+**In scope:**
+- EditableTable input element alignment fix (`Table.tsx`)
+- ShotTableEditor numeric headers + inputs (`ShotTableEditor.tsx`)
+- ImportDialog numeric headers + inputs (`ImportDialog.tsx`)
+- DmpImportDialog audit — verify existing alignment is complete (`DmpImportDialog.tsx`)
+- DmpSelectionDialog audit — verify existing alignment is complete (`DmpSelectionDialog.tsx`)
+- Playwright E2E test for numeric column alignment
 
-- **Scope: all shot data tables** — DataTable, ShotTableEditor, ImportDialog, DmpImportDialog, DmpSelectionDialog. Does NOT include stats panels or non-table displays.
-- **Headers right-aligned too** — Column headers for numeric columns should be right-aligned to match the data below them (Excel behavior).
-- **Text/ID columns stay left-aligned** — Shot IDs, station names, and other text remain left-aligned. Only numeric data columns (length, azimuth, depths, LRUD) get right-aligned.
-- **Input fields always right-aligned** — Number inputs inside editable cells should have `text-align: right` at all times (while typing and when idle), matching Excel.
-- **Keep global CSS default** — The `th, td { text-align: left }` rule in index.css stays. Override per-component with Tailwind `text-right` classes.
-- **Negative numbers: plain** — No special color or formatting for negative numbers. Just right-aligned with a minus sign.
-- **E2E test** — Add a Playwright test verifying CSS text-align on numeric cells to prevent regression.
+**Out of scope:**
+- Stats panels, non-table displays
+- Form dialogs (EditShotDialog is a form, not a table)
+- Column resizing or responsive behavior
+- RTL language support
+- Negative number coloring
 
-## Components to Fix
+## Approach
 
-1. **EditableTable input styling** (`src/components/common/Table.tsx`) — Verify and fix that inputs in `align: 'right'` columns have `text-align: right`
-2. **ShotTableEditor** (`src/components/common/ShotTableEditor.tsx`) — Add `text-right` to numeric column headers and cells (Length, Azimuth, Depth In, Depth Out, L, R, U, D)
-3. **ImportDialog** (`src/components/Dialogs/ImportDialog.tsx`) — Add `text-right` to numeric column headers and cells (Length, Azi In, Azi Out, Depth In, Depth Out)
-4. **DmpImportDialog** (`src/components/Dialogs/DmpImportDialog.tsx`) — Audit nested shot tables; fix any numeric columns missing `text-right` (Length, Azimuth already may be missing)
-5. **DmpSelectionDialog** (`src/components/Dialogs/DmpSelectionDialog.tsx`) — Verify Shots column is right-aligned (partially done)
+### EditableTable input fix (shared component)
 
-## Edge Cases
+The `Column<T>` interface at `Table.tsx:3-17` already has `align?: 'left' | 'center' | 'right'`. Headers and cells already get alignment classes via `alignmentClasses` mapping (`Table.tsx:144-148`). The **input element** at `Table.tsx:373-383` does NOT get the alignment class. Fix: add `${alignmentClasses[column.align ?? 'left']}` to the input's className. This automatically fixes DataTable's editable cells.
 
-- Empty numeric cells (no value entered yet) — right-alignment still applies to the empty cell/input
-- Very long numbers (e.g., 6+ decimal places) — right-alignment handles this naturally; column width is the constraining factor
-- Mixed content columns (unlikely but possible) — if a column has both text and numbers, follow the column's declared type
+### Manual tables (ShotTableEditor, ImportDialog)
 
-## Open Questions
+These tables don't use EditableTable — they have inline `<table>` with manually coded `<th>` and `<td>/<input>` elements. Add `text-right` class to:
+- Header `<th>` elements for numeric columns
+- Input elements and display `<td>` cells for numeric columns
 
-- Verify exactly which columns in DmpImportDialog are already right-aligned and which are missing (need code audit during planning)
+Numeric columns by component:
+- **ShotTableEditor**: Length, Azimuth, Depth In, Depth Out, L, R, U, D
+- **ImportDialog**: Length, Azi In, Azi Out, Depth In, Depth Out
+
+### DmpImportDialog / DmpSelectionDialog (audit only)
+
+Per repo-scout findings:
+- DmpImportDialog nested shot table already has `text-right` on L/R/U/D/Pitch headers and cells (lines 886-959). Section table has Shots column right-aligned.
+- DmpSelectionDialog already has Shots column right-aligned (lines 321-325, 359).
+- Audit these for completeness — may need no changes.
+
+### Playwright test
+
+Add E2E test verifying `text-align: right` computed style on numeric cells using `toHaveCSS('text-align', 'right')`. Test should cover:
+- `<th>` headers for numeric columns
+- `<td>` cells for numeric columns
+- `<input>` elements inside editable numeric cells
+
+## Risks / Dependencies
+
+- **fn-31-mhl** (open) touches Table.tsx sticky header z-index — different code section, low conflict risk.
+- **fn-33-i3r** (open) touches Table.tsx first-cell border styling at line 368 — same area as alignment classes. **Moderate conflict risk** if both in flight. They modify disjoint concerns (border vs text-align) but same className string.
+- **Tailwind JIT**: `text-right` is a standard utility, already used in 12+ files — no purge risk.
+
+## Test Notes
+
+- Use `await expect(cell).toHaveCSS('text-align', 'right')` for Playwright assertions
+- Test both `<td>` cells AND `<input>` elements inside editable cells
+- Verify headers `<th>` match data cell alignment
+- Test at least one representative table (DataTable or ShotTableEditor)
+- Tests live in `e2e-playwright/` directory
+
+## Key Context
+
+- `alignmentClasses` at `Table.tsx:144-148` — maps `'right'` → `'text-right'`
+- Column interface at `Table.tsx:3-17` — `align?: 'left' | 'center' | 'right'`
+- Header alignment at `Table.tsx:306-312` — `${alignmentClasses[column.align ?? 'left']}`
+- Cell alignment at `Table.tsx:366-368` — `${alignmentClasses[column.align ?? 'left']}`
+- Input element at `Table.tsx:373-383` — missing alignment class (the bug)
+- ShotTableEditor headers at `ShotTableEditor.tsx:312-321` — all `text-left`
+- ShotTableEditor inputs — `className="w-16 text-xs px-1 py-0.5"` or `"w-10 text-xs px-1 py-0.5"` (no alignment)
+- ImportDialog headers at `ImportDialog.tsx:118-128` — no alignment classes
+- ImportDialog inputs at `ImportDialog.tsx:134-177` — no alignment classes
+- DmpImportDialog nested shot table at `DmpImportDialog.tsx:886-959` — already has `text-right`
+- DmpSelectionDialog at `DmpSelectionDialog.tsx:321-325, 359` — already has `text-right`
+- Global CSS at `index.css:179-182` — `th, td { text-align: left }` (keep unchanged)
+- Practice scout recommends also adding `tabular-nums` for numeric columns
+
+## Quick commands
+
+```bash
+# Dev server
+./scripts/dev.sh
+
+# Type check
+pnpm tsc --noEmit
+
+# Playwright tests
+pnpm test:ui
+```
 
 ## Acceptance
 

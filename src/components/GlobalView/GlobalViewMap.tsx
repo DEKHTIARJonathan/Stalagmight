@@ -47,9 +47,7 @@ function loadPersistedMapState(): PersistedMapState | null {
       parsed.center[0] >= -180 &&
       parsed.center[0] <= 180 &&
       parsed.center[1] >= -90 &&
-      parsed.center[1] <= 90 &&
-      parsed.zoom >= tileConfig.minZoom &&
-      parsed.zoom <= tileConfig.maxZoom
+      parsed.center[1] <= 90
     ) {
       return {
         center: [parsed.center[0], parsed.center[1]],
@@ -392,6 +390,8 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       },
       center: initialCenter,
       zoom: initialZoom,
+      minZoom: tileConfig.minZoom,
+      maxZoom: tileConfig.maxZoom,
     };
 
     // Hard bounds (50% padding) - user cannot pan beyond this
