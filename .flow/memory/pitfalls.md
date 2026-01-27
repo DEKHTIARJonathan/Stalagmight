@@ -114,3 +114,6 @@ Capture-phase keyboard shortcut interceptors must guard against input/textarea/s
 
 ## 2026-01-27 manual [pitfall]
 After an error in an action queue, still refresh the UI state from the backend (fetchStack) before showing the error dialog - backend may have partially mutated state
+
+## 2026-01-27 manual [pitfall]
+E2E tests for async action queues must assert observable post-action effects (call counts, announcement text) not just DOM state that was already true before the action
