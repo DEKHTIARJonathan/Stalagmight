@@ -86,15 +86,25 @@ test.describe('GlobalView Map', () => {
       await expect(mapContainer).toBeVisible();
     });
 
-    test('should show system markers on the map', async ({ page }) => {
-      // Check for marker elements
+    test('should show system markers on the map in markers mode', async ({ page }) => {
+      // Switch to markers mode so all markers are visible
+      const toggle = page.getByTestId('view-mode-toggle');
+      await expect(toggle).toBeVisible({ timeout: 5000 });
+      await toggle.click();
+
+      // Check for marker elements - all 3 GPS projects should have visible markers
       const markers = page.locator('.globalview-system-marker');
       await expect(markers).toHaveCount(3, { timeout: 5000 }); // 3 GPS projects in mock data
     });
 
     test('should have data-testid on system markers', async ({ page }) => {
+      // Switch to markers mode so markers are visible
+      const toggle = page.getByTestId('view-mode-toggle');
+      await expect(toggle).toBeVisible({ timeout: 5000 });
+      await toggle.click();
+
       // Check for specific project marker
-      const alphaMarker = page.locator('[data-testid=\"system-marker-/projects/cave-alpha.cvproj\"]');
+      const alphaMarker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
       await expect(alphaMarker).toBeVisible({ timeout: 5000 });
     });
 
@@ -114,6 +124,12 @@ test.describe('GlobalView Map', () => {
       const mapTab = page.locator('[data-testid="globalview-map-tab"]');
       await mapTab.click();
       await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
+
+      // Switch to markers mode so all markers are visible for interaction tests
+      const toggle = page.getByTestId('view-mode-toggle');
+      await expect(toggle).toBeVisible({ timeout: 5000 });
+      await toggle.click();
+
       await expect(page.locator('.globalview-system-marker')).toHaveCount(3, { timeout: 5000 });
 
       // Click "Fit All" to ensure markers are in viewport
@@ -158,6 +174,167 @@ test.describe('GlobalView Map', () => {
 
       // Should transition to SingleSystemView (map canvas)
       await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
+    });
+  });
+
+  test.describe('Marker Visibility', () => {
+    /**
+     * Helper to trigger geometry loading for all GPS systems via the store.
+     * The automatic loading depends on viewport bounds, so we manually
+     * invoke loadGeometryBatch to ensure all systems load their geometry.
+     */
+    async function loadAllGeometry(page: import('@playwright/test').Page): Promise<void> {
+      await page.evaluate(async () => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            globalViewStore?: {
+              getState: () => {
+                loadGeometryBatch: (paths: string[]) => Promise<void>;
+                geometryStates: Map<string, { state: string }>;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+
+        if (!e2e?.globalViewStore) {
+          throw new Error('globalViewStore not available on window.__E2E_TEST__');
+        }
+
+        const store = e2e.globalViewStore.getState();
+        await store.loadGeometryBatch([
+          '/projects/cave-alpha.cvproj',
+          '/projects/cave-beta.cvproj',
+          '/projects/cave-gamma.cvproj',
+        ]);
+      });
+    }
+
+    test.beforeEach(async ({ page }) => {
+      const mapTab = page.locator('[data-testid="globalview-map-tab"]');
+      await mapTab.click();
+      await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
+
+      // Wait for markers to appear in DOM
+      await expect(page.locator('.globalview-system-marker')).toHaveCount(3, { timeout: 10000 });
+    });
+
+    test('should hide markers in survey mode after geometry loads', async ({ page }) => {
+      // In survey mode (default), markers should be hidden once geometry loads successfully.
+      // Manually trigger geometry loading via the store since viewport may not contain all markers.
+      await loadAllGeometry(page);
+
+      // All markers should now be hidden (display: none) because we're in survey mode
+      // and geometry loaded successfully for all systems.
+      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      await expect(marker).toHaveCSS('display', 'none', { timeout: 10000 });
+    });
+
+    test('should show spinner markers during geometry loading', async ({ page }) => {
+      // Configure a long delay for the alpha system's geometry loading
+      await page.evaluate(() => {
+        (window as unknown as Record<string, (path: string, delay: number) => void>).__MOCK_SET_GEOMETRY_DELAY__(
+          '/projects/cave-alpha.cvproj', 60000
+        );
+      });
+
+      // Trigger geometry loading for alpha (it will stay in 'loading' state due to delay)
+      // Don't await since the delayed promise won't resolve
+      await page.evaluate(() => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            globalViewStore?: {
+              getState: () => {
+                loadGeometry: (path: string) => Promise<void>;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+        if (!e2e?.globalViewStore) throw new Error('globalViewStore not available');
+        // Fire and forget - the promise will be pending for 60s
+        e2e.globalViewStore.getState().loadGeometry('/projects/cave-alpha.cvproj');
+      });
+
+      // Wait for marker to update to loading state (spinner visible, marker visible)
+      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      await expect(marker).toHaveCSS('display', 'flex', { timeout: 10000 });
+
+      // Spinner element should be present inside the marker
+      const spinner = marker.locator('.marker-spinner');
+      await expect(spinner).toBeAttached({ timeout: 5000 });
+    });
+
+    test('should show error markers in survey mode', async ({ page }) => {
+      // Configure one system to fail geometry loading
+      await page.evaluate(() => {
+        (window as unknown as Record<string, (path: string) => void>).__MOCK_SET_GEOMETRY_ERROR__(
+          '/projects/cave-alpha.cvproj'
+        );
+      });
+
+      // Trigger geometry loading for the error system
+      await page.evaluate(async () => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            globalViewStore?: {
+              getState: () => {
+                loadGeometry: (path: string) => Promise<void>;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+        if (!e2e?.globalViewStore) throw new Error('globalViewStore not available');
+        await e2e.globalViewStore.getState().loadGeometry('/projects/cave-alpha.cvproj');
+      });
+
+      // The error marker should remain visible in survey mode (error markers are not hidden)
+      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      await expect(marker).toHaveCSS('display', 'flex', { timeout: 10000 });
+
+      // Error marker should be red
+      await expect(marker).toHaveCSS('background-color', 'rgb(239, 68, 68)', { timeout: 10000 }); // #ef4444
+    });
+
+    test('should show all markers in markers mode', async ({ page }) => {
+      // Load geometry for all systems (hides markers in survey mode)
+      await loadAllGeometry(page);
+
+      // Verify markers are hidden in survey mode
+      const alphaMarker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      await expect(alphaMarker).toHaveCSS('display', 'none', { timeout: 10000 });
+
+      // Switch to markers mode
+      const toggle = page.getByTestId('view-mode-toggle');
+      await expect(toggle).toBeVisible({ timeout: 5000 });
+      await toggle.click();
+
+      // All markers should now be visible regardless of geometry state
+      await expect(alphaMarker).toHaveCSS('display', 'flex', { timeout: 5000 });
+      await expect(
+        page.locator('[data-testid="system-marker-/projects/cave-beta.cvproj"]')
+      ).toHaveCSS('display', 'flex', { timeout: 5000 });
+      await expect(
+        page.locator('[data-testid="system-marker-/projects/cave-gamma.cvproj"]')
+      ).toHaveCSS('display', 'flex', { timeout: 5000 });
+    });
+
+    test('should toggle marker visibility instantly on mode switch', async ({ page }) => {
+      // Load geometry for all systems (hides markers in survey mode)
+      await loadAllGeometry(page);
+
+      // Wait for marker to be hidden
+      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      await expect(marker).toHaveCSS('display', 'none', { timeout: 10000 });
+
+      const toggle = page.getByTestId('view-mode-toggle');
+      await expect(toggle).toBeVisible({ timeout: 5000 });
+
+      // Switch to markers mode - markers should appear
+      await toggle.click();
+      await expect(marker).toHaveCSS('display', 'flex', { timeout: 2000 });
+
+      // Switch back to survey mode - markers should hide again
+      await toggle.click();
+      await expect(marker).toHaveCSS('display', 'none', { timeout: 2000 });
     });
   });
 
