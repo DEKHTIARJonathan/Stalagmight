@@ -108,6 +108,16 @@ async function extendMocksWithUndoRedo(page: Page, config: Partial<MockUndoRedoC
           return config.undoStack;
         case 'get_redo_stack':
           return config.redoStack;
+        case 'undo': {
+          const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
+          calls.push({ cmd: 'undo', index: 0 });
+          return { success: true, warnings: [], error: null };
+        }
+        case 'redo': {
+          const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
+          calls.push({ cmd: 'redo', index: 0 });
+          return { success: true, warnings: [], error: null };
+        }
         case 'undo_to': {
           const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
           calls.push({ cmd: 'undo_to', index: args?.index as number });
@@ -649,8 +659,7 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
 
     // Hover to open dropdown
     await undoButton.hover();
-    await page.waitForTimeout(400);
-    await expect(dropdown).toBeVisible();
+    await expect(dropdown).toBeVisible({ timeout: 1000 });
 
     // Click the button while dropdown is open (performs undo and stays open)
     await undoButton.click();
@@ -658,8 +667,14 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
     // Dropdown should stay open
     await expect(dropdown).toBeVisible({ timeout: 2000 });
 
-    // Items should still be rendered (refreshed)
-    await expect(page.getByTestId('toolbar-undo-button-item-0')).toBeVisible();
+    // Verify undo was actually called
+    const calls = await getUndoRedoCalls(page);
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls.some(c => c.cmd === 'undo')).toBe(true);
+
+    // aria-live announcement should update with remaining count (proves refresh happened)
+    const announcement = page.getByTestId('toolbar-undo-button-announcement');
+    await expect(announcement).toContainText('actions remaining', { timeout: 2000 });
   });
 
   test('item click keeps dropdown open and refreshes items', async ({ page }) => {
@@ -668,8 +683,7 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
 
     // Hover to open dropdown
     await undoButton.hover();
-    await page.waitForTimeout(400);
-    await expect(dropdown).toBeVisible();
+    await expect(dropdown).toBeVisible({ timeout: 1000 });
 
     // Click an item
     const item = page.getByTestId('toolbar-undo-button-item-0');
@@ -678,6 +692,15 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
 
     // Dropdown should stay open
     await expect(dropdown).toBeVisible({ timeout: 2000 });
+
+    // Verify undo_to was called
+    const calls = await getUndoRedoCalls(page);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({ cmd: 'undo_to', index: 0 });
+
+    // aria-live announcement should update (proves refresh happened)
+    const announcement = page.getByTestId('toolbar-undo-button-announcement');
+    await expect(announcement).toContainText('actions remaining', { timeout: 2000 });
   });
 
   test('Ctrl+Z keeps dropdown open and refreshes items', async ({ page }) => {
@@ -686,8 +709,7 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
 
     // Hover to open dropdown
     await undoButton.hover();
-    await page.waitForTimeout(400);
-    await expect(dropdown).toBeVisible();
+    await expect(dropdown).toBeVisible({ timeout: 1000 });
 
     // Ensure focus is not in a text input (input focus guard)
     await undoButton.focus();
@@ -697,6 +719,15 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
 
     // Dropdown should stay open
     await expect(dropdown).toBeVisible({ timeout: 2000 });
+
+    // Verify undo was called (proves keyboard shortcut was intercepted by dropdown)
+    const calls = await getUndoRedoCalls(page);
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls.some(c => c.cmd === 'undo')).toBe(true);
+
+    // aria-live announcement should update (proves refresh happened)
+    const announcement = page.getByTestId('toolbar-undo-button-announcement');
+    await expect(announcement).toContainText('actions remaining', { timeout: 2000 });
   });
 
   test('detail preview dismisses on action', async ({ page }) => {
@@ -705,8 +736,7 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
 
     // Hover to open dropdown
     await undoButton.hover();
-    await page.waitForTimeout(400);
-    await expect(dropdown).toBeVisible();
+    await expect(dropdown).toBeVisible({ timeout: 1000 });
 
     // Hover over first item to show detail preview
     const firstItem = page.getByTestId('toolbar-undo-button-item-0');
@@ -727,8 +757,7 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
 
     // Hover to open dropdown
     await undoButton.hover();
-    await page.waitForTimeout(400);
-    await expect(dropdown).toBeVisible();
+    await expect(dropdown).toBeVisible({ timeout: 1000 });
 
     // Add a delay to the mock undo_to to make loading indicator observable
     await page.evaluate(() => {
@@ -781,8 +810,7 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
 
     // Hover to open dropdown
     await undoButton.hover();
-    await page.waitForTimeout(400);
-    await expect(dropdown).toBeVisible();
+    await expect(dropdown).toBeVisible({ timeout: 1000 });
 
     // Click button to trigger undo action
     await undoButton.click();
@@ -798,8 +826,7 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
 
     // Hover to open dropdown
     await undoButton.hover();
-    await page.waitForTimeout(400);
-    await expect(dropdown).toBeVisible();
+    await expect(dropdown).toBeVisible({ timeout: 1000 });
 
     // Check that the scroll container has fixed height of 220px
     const scrollContainer = dropdown.locator('.undo-history-scrollable');
@@ -823,8 +850,7 @@ test.describe('Undo/Redo Dropdown - Close on Empty Stack', () => {
 
     // Hover to open dropdown
     await undoButton.hover();
-    await page.waitForTimeout(400);
-    await expect(dropdown).toBeVisible();
+    await expect(dropdown).toBeVisible({ timeout: 1000 });
 
     // Modify mock so the next get_undo_stack returns empty (simulating all actions undone)
     await page.evaluate(() => {
@@ -873,8 +899,7 @@ test.describe('Undo/Redo Dropdown - Error Handling', () => {
 
     // Hover to open dropdown
     await undoButton.hover();
-    await page.waitForTimeout(400);
-    await expect(dropdown).toBeVisible();
+    await expect(dropdown).toBeVisible({ timeout: 1000 });
 
     // Modify mock so undo_to returns failure
     await page.evaluate(() => {
@@ -914,6 +939,7 @@ test.describe('Undo/Redo Dropdown - Rapid Click Queuing', () => {
   test('rapid clicks queue and execute sequentially', async ({ page }) => {
     const undoButton = page.getByTestId('toolbar-undo-button');
     const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+    const announcement = page.getByTestId('toolbar-undo-button-announcement');
 
     // Add a small delay to undo commands to allow queuing observation
     await page.evaluate(() => {
@@ -929,16 +955,29 @@ test.describe('Undo/Redo Dropdown - Rapid Click Queuing', () => {
 
     // Hover to open dropdown
     await undoButton.hover();
-    await page.waitForTimeout(400);
-    await expect(dropdown).toBeVisible();
+    await expect(dropdown).toBeVisible({ timeout: 1000 });
 
-    // Rapid-click button three times quickly
+    // Rapid-click button three times quickly (Playwright click dispatches event, doesn't await async)
     await undoButton.click();
     await undoButton.click();
     await undoButton.click();
 
-    // Wait for all queued actions to complete
-    await page.waitForTimeout(800);
+    // Wait for all 3 queued actions to complete by polling the call count
+    // Each action has 100ms delay + fetch overhead, so 3 actions take ~400-600ms
+    await page.waitForFunction(
+      () => {
+        const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string }> }).__UNDO_REDO_CALLS__ || [];
+        return calls.filter(c => c.cmd === 'undo').length >= 3;
+      },
+      { timeout: 5000 }
+    );
+
+    // Verify all 3 undo calls were actually executed
+    const calls = await getUndoRedoCalls(page);
+    expect(calls.filter(c => c.cmd === 'undo').length).toBe(3);
+
+    // aria-live announcement should reflect remaining count after all actions
+    await expect(announcement).toContainText('actions remaining', { timeout: 2000 });
 
     // Dropdown should still be open
     await expect(dropdown).toBeVisible();

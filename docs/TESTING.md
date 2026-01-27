@@ -714,9 +714,13 @@ await page.hover('[data-testid="map-canvas"]');
 await page.waitForTimeout(150);
 ```
 
-Test stay-open behavior:
+Test stay-open behavior (dropdown must be open first via hover or keyboard):
 
 ```typescript
+// Open dropdown first
+await page.hover('[data-testid="toolbar-undo-button"]');
+await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible({ timeout: 1000 });
+
 // Button click keeps dropdown open and shows loading indicator
 await page.click('[data-testid="toolbar-undo-button"]');
 await expect(page.getByTestId('toolbar-undo-button-loading')).toBeVisible();
@@ -726,44 +730,54 @@ await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible();
 await page.click('[data-testid="toolbar-undo-button-item-0"]');
 await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible();
 
-// Ctrl+Z keeps dropdown open and refreshes
+// Ctrl+Z keeps dropdown open and refreshes (ensure focus is NOT in a text input)
 await page.keyboard.press('Control+z');
 await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible();
 ```
 
-Test empty stack auto-close:
+Test empty stack auto-close (dropdown must be open first):
 
 ```typescript
-// After action empties the stack, dropdown closes automatically
-// Update mock to return empty stack after next action
-await page.click('[data-testid="toolbar-undo-button-item-0"]');
+// Open dropdown, then update mock to return empty stack after next action
+await page.hover('[data-testid="toolbar-undo-button"]');
+await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible({ timeout: 1000 });
+// ... modify mock to return empty stack on next get_undo_stack ...
+await page.click('[data-testid="toolbar-undo-button"]');
 await expect(page.getByTestId('toolbar-undo-button-dropdown')).not.toBeVisible();
 ```
 
-Test aria-live announcement:
+Test aria-live announcement (dropdown must be open first):
 
 ```typescript
-// After action, screen reader announcement updates with remaining count
+// Open dropdown, then trigger action
+await page.hover('[data-testid="toolbar-undo-button"]');
+await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible({ timeout: 1000 });
 await page.click('[data-testid="toolbar-undo-button"]');
 await expect(page.getByTestId('toolbar-undo-button-announcement'))
   .toContainText('actions remaining');
 ```
 
-Test navigation reset after action:
+Test navigation reset after action (dropdown must be open first):
 
 ```typescript
-// After action, activeIndex resets to 0 (first item)
-await page.click('[data-testid="toolbar-undo-button"]');
+// Open via keyboard, navigate, then trigger action
+await page.focus('[data-testid="toolbar-undo-button"]');
+await page.keyboard.press('ArrowDown');
 const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+await expect(dropdown).toBeVisible();
+await page.keyboard.press('End'); // Navigate to last item
+await page.keyboard.press('Enter'); // Perform action
 await expect(dropdown).toHaveAttribute('aria-activedescendant', /item-0/);
 ```
 
-Test error dialog on failure:
+Test error dialog on failure (dropdown must be open first):
 
 ```typescript
-// When action fails (CommandResult.success === false), error dialog appears
-// Mock undo_to to return { success: false, error: 'Stack corrupted' }
-await page.click('[data-testid="toolbar-undo-button-item-0"]');
+// Open dropdown, then modify mock to return failure
+await page.hover('[data-testid="toolbar-undo-button"]');
+await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible({ timeout: 1000 });
+// ... modify mock so undo returns { success: false, error: 'Stack corrupted' } ...
+await page.click('[data-testid="toolbar-undo-button"]');
 await expect(page.getByTestId('error-dialog')).toBeVisible();
 await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible(); // stays open
 ```
