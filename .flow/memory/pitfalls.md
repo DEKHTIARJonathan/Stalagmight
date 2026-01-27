@@ -102,3 +102,6 @@ When testing map centering in E2E tests, first pan the map off-target before cli
 
 ## 2026-01-25 manual [pitfall]
 React onMouseEnter/Leave requires dispatching mouseover/mouseout with bubbles:true, not mouseenter/mouseleave
+
+## 2026-01-27 manual [pitfall]
+When clamping a value, do not also reject out-of-range values in the validation guard - the guard makes the clamp unreachable for the values it is supposed to handle

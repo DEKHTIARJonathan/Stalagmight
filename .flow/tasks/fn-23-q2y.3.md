@@ -28,9 +28,8 @@ Fix incorrect config defaults from "openstreetmap" to "esri" in both Rust and Ty
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Fixed satellite_provider default from "openstreetmap" to "esri" in both Rust (defaults.rs) and TypeScript (config.ts), updated unit test assertion to match, and improved documentation accuracy in architecture.md and SPEC.md.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 0e55e8c, 42d174a
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, pnpm tsc --noEmit
 - PRs:

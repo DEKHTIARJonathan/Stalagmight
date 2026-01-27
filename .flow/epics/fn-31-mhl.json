@@ -1,13 +1,16 @@
 {
   "branch_name": "fn-31-mhl",
   "created_at": "2026-01-27T15:04:13.515390Z",
+  "default_impl": null,
+  "default_review": null,
+  "default_sync": null,
   "depends_on_epics": [],
   "id": "fn-31-mhl",
   "next_task": 1,
-  "plan_review_status": "unknown",
-  "plan_reviewed_at": null,
+  "plan_review_status": "ship",
+  "plan_reviewed_at": "2026-01-27T22:16:10.894956Z",
   "spec_path": ".flow/specs/fn-31-mhl.md",
   "status": "open",
   "title": "Fix Select dropdown z-index behind sticky table header",
-  "updated_at": "2026-01-27T22:08:09.930939Z"
+  "updated_at": "2026-01-27T22:16:10.894971Z"
 }
