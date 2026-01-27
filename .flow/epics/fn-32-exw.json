@@ -1,13 +1,16 @@
 {
   "branch_name": "fn-32-exw",
   "created_at": "2026-01-27T15:09:51.229332Z",
+  "default_impl": null,
+  "default_review": null,
+  "default_sync": null,
   "depends_on_epics": [],
   "id": "fn-32-exw",
   "next_task": 1,
-  "plan_review_status": "unknown",
-  "plan_reviewed_at": null,
+  "plan_review_status": "ship",
+  "plan_reviewed_at": "2026-01-27T22:21:18.738588Z",
   "spec_path": ".flow/specs/fn-32-exw.md",
   "status": "open",
   "title": "Right-align numeric columns in all data tables",
-  "updated_at": "2026-01-27T22:20:00.392408Z"
+  "updated_at": "2026-01-27T22:21:18.738603Z"
 }
