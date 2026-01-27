@@ -860,6 +860,12 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         onContextMenuRef.current?.(project.file_path, e.clientX, e.clientY);
       });
 
+      // Set initial visibility based on current view mode (via ref, not dep)
+      // In survey mode, hide markers for systems whose geometry has loaded successfully
+      if (viewModeRef.current === 'survey' && loadingState === 'loaded') {
+        el.style.display = 'none';
+      }
+
       // Create and add marker
       const marker = new maplibregl.Marker({ element: el })
         .setLngLat([lng, lat])
@@ -912,6 +918,25 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       }
     });
   }, [selectedProjectId, geometryStates]);
+
+  // Sync marker visibility when view mode or geometry states change
+  // In survey mode, hide markers for systems whose geometry has loaded successfully.
+  // In markers mode, all markers are visible.
+  // This effect only toggles display; colors and spinners are handled by creation/styles effects.
+  useEffect(() => {
+    if (!mapLoaded) return;
+
+    markersRef.current.forEach((marker, filePath) => {
+      const el = marker.getElement();
+      const loadingState = geometryStates.get(filePath)?.state ?? 'idle';
+
+      if (viewMode === 'survey' && loadingState === 'loaded') {
+        el.style.display = 'none';
+      } else {
+        el.style.display = 'flex';
+      }
+    });
+  }, [viewMode, geometryStates, mapLoaded]);
 
   // Fit to bounds button handler
   // Per spec: "Fit All button works regardless of persisted state" - it overrides temporarily
