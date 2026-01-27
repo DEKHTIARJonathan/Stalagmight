@@ -656,6 +656,11 @@ The `UndoHistoryDropdown` component uses hover-triggered display with ARIA menu 
 | Detail preview | `detail-preview-popup` | Shows on item hover |
 | Undo chevron | `undo-chevron` | Visible when stack not empty |
 | Redo chevron | `redo-chevron` | Visible when stack not empty |
+| Loading indicator | `toolbar-undo-button-loading` / `toolbar-redo-button-loading` | Spinner shown during action processing |
+| Aria-live announcer | `toolbar-undo-button-announcement` / `toolbar-redo-button-announcement` | Screen reader announcement of remaining actions |
+| Error dialog | `error-dialog` | Shown on action failure |
+| Error stack trace | `error-dialog-stack-trace` | Scrollable `<pre>` block with exception stack |
+| Error copy button | `error-dialog-copy-btn` | States: "Copy to clipboard" / "Copied!" / "Failed" |
 
 #### Hover Trigger Testing
 
@@ -692,7 +697,9 @@ await page.keyboard.press('Enter');       // Select
 
 #### Close Behavior Testing
 
-Test all close paths:
+The dropdown stays open on action (button click, item click, Ctrl+Z/Y) and refreshes its items. It closes only on mouse leave, Escape, click outside, and empty stack.
+
+Test close paths:
 
 ```typescript
 // 1. Escape key
@@ -702,12 +709,63 @@ await expect(page.locator('[role="menu"]')).not.toBeVisible();
 // 2. Click outside (mousedown)
 await page.click('body', { position: { x: 10, y: 10 } });
 
-// 3. Global undo/redo shortcut
-await page.keyboard.press('Control+z');
-
-// 4. Mouse leave (100ms buffer)
+// 3. Mouse leave (100ms buffer)
 await page.hover('[data-testid="map-canvas"]');
 await page.waitForTimeout(150);
+```
+
+Test stay-open behavior:
+
+```typescript
+// Button click keeps dropdown open and shows loading indicator
+await page.click('[data-testid="toolbar-undo-button"]');
+await expect(page.getByTestId('toolbar-undo-button-loading')).toBeVisible();
+await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible();
+
+// Item click keeps dropdown open and refreshes
+await page.click('[data-testid="toolbar-undo-button-item-0"]');
+await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible();
+
+// Ctrl+Z keeps dropdown open and refreshes
+await page.keyboard.press('Control+z');
+await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible();
+```
+
+Test empty stack auto-close:
+
+```typescript
+// After action empties the stack, dropdown closes automatically
+// Update mock to return empty stack after next action
+await page.click('[data-testid="toolbar-undo-button-item-0"]');
+await expect(page.getByTestId('toolbar-undo-button-dropdown')).not.toBeVisible();
+```
+
+Test aria-live announcement:
+
+```typescript
+// After action, screen reader announcement updates with remaining count
+await page.click('[data-testid="toolbar-undo-button"]');
+await expect(page.getByTestId('toolbar-undo-button-announcement'))
+  .toContainText('actions remaining');
+```
+
+Test navigation reset after action:
+
+```typescript
+// After action, activeIndex resets to 0 (first item)
+await page.click('[data-testid="toolbar-undo-button"]');
+const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+await expect(dropdown).toHaveAttribute('aria-activedescendant', /item-0/);
+```
+
+Test error dialog on failure:
+
+```typescript
+// When action fails (CommandResult.success === false), error dialog appears
+// Mock undo_to to return { success: false, error: 'Stack corrupted' }
+await page.click('[data-testid="toolbar-undo-button-item-0"]');
+await expect(page.getByTestId('error-dialog')).toBeVisible();
+await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible(); // stays open
 ```
 
 #### Detail Preview Testing

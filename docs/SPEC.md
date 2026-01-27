@@ -664,7 +664,8 @@ Hovering an item shows a preview popup with diff information (where available):
 
 #### Scrolling
 
-- Maximum height: 10 items visible (~440px)
+- Fixed height: 5 items visible (~220px)
+- Uses `height` (not `maxHeight`) to maintain consistent container size regardless of item count
 - Auto-hide scrollbar (appears on hover)
 - Smooth scroll behavior
 
@@ -676,12 +677,30 @@ Hovering an item shows a preview popup with diff information (where available):
 
 #### Close Behavior
 
-- Dropdown closes on:
+The dropdown stays open when performing actions (button click, item click, keyboard shortcut) to allow rapid sequential operations with visual feedback.
+
+- Dropdown **stays open** on:
+  - Clicking the undo/redo button (performs action and refreshes item list)
+  - Clicking a dropdown item (performs action and refreshes item list)
+  - Global undo/redo shortcuts while open (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
+- Dropdown **closes** on:
   - Mouse leaving the button/dropdown area (100ms buffer)
   - Pressing Escape key
-  - Global undo/redo shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
   - Clicking outside the dropdown
-  - Clicking an item (after executing the action)
+  - Stack becoming empty after an action (auto-close)
+
+#### Action Behavior
+
+When an action is performed while the dropdown is open:
+- A loading indicator (spinner with "Processing..." text) appears at the top of the dropdown
+- The item list refreshes after the action completes
+- Keyboard navigation and scroll position reset to the top (first item)
+- Detail preview popup is dismissed immediately on any action
+- Rapid clicks are queued and executed sequentially with a refresh after each
+- If the stack becomes empty after an action, remaining queued actions are discarded and the dropdown closes
+- On error, the dropdown stays open, the stack is refreshed to reflect backend state, and an error dialog is shown with title, message, and stack trace (if available from a caught exception)
+- Ctrl+Z/Y/Shift+Z keyboard shortcuts are intercepted by the dropdown (capture phase) to prevent the global handler from causing a double-undo/redo
+- Keyboard shortcuts are NOT intercepted when focus is in a text input, textarea, select, or contentEditable element (native text editing undo/redo is preserved)
 
 ### 6.4 Tools
 
@@ -1691,6 +1710,7 @@ All shortcuts configurable and disableable:
 - Validation results
 - Dialog open/close
 - Error messages (assertive)
+- Undo/redo dropdown refresh (announces remaining action count, e.g., "3 actions remaining", "1 action remaining", or "No actions remaining" when stack empties)
 
 ### 11.4 Visual Accessibility
 
