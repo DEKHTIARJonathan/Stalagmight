@@ -9,5 +9,5 @@
   "spec_path": ".flow/specs/fn-30-wcf.md",
   "status": "open",
   "title": "Bugfix: Zero datum update creates two undo entries instead of one",
-  "updated_at": "2026-01-27T22:02:12.824946Z"
+  "updated_at": "2026-01-27T22:08:10.208372Z"
 }
