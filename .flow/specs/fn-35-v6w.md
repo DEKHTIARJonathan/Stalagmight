@@ -1,79 +1,92 @@
 # Style MapLibre Controls to Match App Dark Theme
 
-## Problem
-The MapLibre GL JS built-in controls (NavigationControl zoom +/- buttons, ScaleControl scale bar) use MapLibre's default light theme (white backgrounds, dark text, light borders) which visually clashes with CaveChef's dark theme. This affects both the single-system MapCanvas view and the GlobalView map.
-
-## Key Decisions
-
-- **Match existing Fit to View button style**: The zoom +/- buttons should use the same `bg-panel`, `border-border`, `rounded` treatment as the existing Fit to View (⊞) button in MapCanvas.
-- **Hover/active states follow app convention**: Use existing design convention for hover/active states on buttons.
-- **Icon colors follow app convention**: SVG +/- icons should use whatever color treatment matches existing interactive elements.
-- **Divider between + and - buttons**: The separator line between zoom-in and zoom-out should use the border color (#0f3460).
-- **Box shadow follows app convention**: Match whatever shadow treatment other panels/buttons in the app use.
-- **Scale bar: transparent with themed colors**: No background panel; just change the scale line to border color and text to text-primary. Keep the standard cartographic L-shaped bar.
-- **Scale bar font**: Match the application's font-family.
-- **Button size**: Resize zoom buttons to match the Fit to View button's padding/dimensions.
-- **Button position**: Zoom buttons stay at top-right, Fit to View stays at top-left — no repositioning.
-- **Broad selectors for future-proofing**: Style all `.maplibregl-ctrl` elements so any future MapLibre controls automatically inherit the dark theme.
-- **All MapLibre controls**: Restyle any MapLibre built-in control that appears (current or future), not just zoom and scale.
-- **CSS location**: Add overrides in `src/index.css` using Tailwind `@apply` with design tokens.
-- **Transitions**: Match existing app button transition conventions.
-- **Focus ring**: Accent teal (#4ecdc4) outline/ring on keyboard focus for accessibility.
-- **Testing**: Add visual checks (screenshot comparison or computed style assertions) to verify the dark theme styling is applied correctly.
+## Overview
+Restyle MapLibre GL JS built-in controls (NavigationControl zoom +/-, ScaleControl scale bar) to match CaveChef's dark theme. Both MapCanvas (single-system view) and GlobalViewMap (global view) are affected. All controls currently use MapLibre's default light theme (white backgrounds, dark text) which clashes with the dark UI.
 
 ## Scope
+- **CSS overrides** in `src/index.css` for all `.maplibregl-ctrl` elements
+- **Both map views**: MapCanvas and GlobalViewMap (CSS-only, no component code changes)
+- **Controls**: NavigationControl (zoom +/-), ScaleControl (scale bar), broad selectors for future controls
+- **E2E tests**: Computed style assertions verifying dark theme colors
 
-### Both Map Views Affected
-1. **MapCanvas** (`src/components/Map/MapCanvas.tsx`) — single system view, NavigationControl at top-right, ScaleControl toggled via Display menu at bottom-left
-2. **GlobalViewMap** (`src/components/GlobalView/GlobalViewMap.tsx`) — global view, NavigationControl at top-right, ScaleControl always visible at bottom-left
+## Approach
 
-### Controls to Style
-- `.maplibregl-ctrl-group` — zoom button wrapper
-- `.maplibregl-ctrl-group button` — individual zoom buttons (+/-)
-- `.maplibregl-ctrl-zoom-in` / `.maplibregl-ctrl-zoom-out` — specific zoom buttons
-- `.maplibregl-ctrl-scale` — scale bar
-- `.maplibregl-ctrl` — broad selector for all current and future controls
-- SVG icons inside buttons (fill color)
-- Button separator/divider line
+### CSS Strategy
+Follow the **React DatePicker override pattern** already established at `src/index.css:194-246`:
+- Raw CSS with hardcoded hex values matching design tokens
+- Use `!important` where needed to override MapLibre defaults (MapLibre CSS has moderate specificity)
+- Add a new `/* MapLibre controls - dark theme */` section after the DatePicker section
+- **Do NOT use `@apply`** — existing codebase convention uses raw CSS for third-party overrides
 
-### Theme Colors (Design Tokens)
-- Panel background: `bg-panel` (#16213e)
-- Border: `border` (#0f3460)
-- Text: `text-primary` (#f5f5f5)
-- Accent: `accent` (#4ecdc4)
-- Background: `background` (#1a1a2e)
+### Design Token Reference
+| Token | Hex | Usage |
+|-------|-----|-------|
+| panel | #16213e | Control backgrounds |
+| border | #0f3460 | Borders, dividers, hover bg |
+| text-primary | #f5f5f5 | Text, icon fills |
+| accent | #4ecdc4 | Focus ring (already global) |
+| background | #1a1a2e | Active state bg |
 
-### Reference: Existing Fit to View Button Style
+### Key MapLibre Selectors
+- `.maplibregl-ctrl-group` — zoom button wrapper (override: background, border-radius, box-shadow)
+- `.maplibregl-ctrl-group button` — individual buttons (override: background on hover/active)
+- `.maplibregl-ctrl-group button + button` — divider between buttons (override: border-top color)
+- `.maplibregl-ctrl-icon` — SVG icons (override: filter to invert for dark bg)
+- `.maplibregl-ctrl-scale` — scale bar (override: background transparent, border/text colors)
+- `.maplibregl-ctrl` — broad catch-all for future controls
+
+### Icon Handling
+MapLibre icons use embedded SVG data URLs with `#333` fill. Use `filter: brightness(0) invert(1)` on `.maplibregl-ctrl-icon` to make them white — this is the standard approach used by multiple production MapLibre dark theme implementations (meshtastic, electricitymaps, openindoormaps).
+
+### Focus Ring
+Already handled by global `*:focus-visible` rule at `src/index.css:38-41` (2px solid #4ecdc4, offset 2px). No additional focus styling needed for MapLibre controls — the global rule applies.
+
+### Testing
+Use WebdriverIO `browser.execute(getComputedStyle)` pattern consistent with existing tests:
+- `section-highlighting-a11y.spec.ts:301-304` — backgroundColor assertion pattern
+- `shortcuts-accessibility.spec.ts:766-772` — multi-property style collection pattern
+- `export-accessibility.spec.ts:388-397` — focus indicator verification pattern
+No screenshot/visual regression tests (none exist in codebase).
+
+## Risks
+- **MapLibre CSS specificity**: May need `!important` — mitigated by following DatePicker pattern
+- **SVG icon data URLs**: MapLibre may change icon format in upgrades — mitigated by using `filter` instead of replacing data URLs
+- **Scale bar dynamic insertion**: MapCanvas toggles ScaleControl on/off — CSS applies to class selectors so works regardless of DOM timing
+
+## Quick commands
+```bash
+# Dev server
+./scripts/dev.sh
+
+# Type check
+pnpm tsc --noEmit
+
+# E2E tests
+pnpm test:ui
 ```
-className="absolute top-2 left-2 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
-```
-
-## Edge Cases
-- Scale bar text must remain readable over any map background (dark satellite imagery, light terrain, etc.)
-- SVG icon fill must override MapLibre's default black fill
-- MapLibre control CSS has moderate specificity — overrides may need sufficient specificity or `!important` in limited cases
-- The scale bar is dynamically added/removed in MapCanvas based on `showScaleBar` state — CSS must work when the element is re-added to the DOM
-- Future MapLibre controls (attribution, geolocate, etc.) should automatically inherit the dark theme via broad selectors
-- The MapLibre CSS is loaded from the npm package — overrides must come after it in the cascade
-
-## Open Questions
-- Exact computed dimensions of the Fit to View button to match zoom button sizing
-- Whether `@layer components` provides enough specificity to override MapLibre defaults or if specificity needs to be boosted
-- What visual check approach to use for E2E tests (screenshot comparison vs computed style assertions)
 
 ## Acceptance
-- [ ] Zoom +/- buttons in both MapCanvas and GlobalViewMap use dark theme colors (bg-panel, border-border, text-primary)
-- [ ] Zoom buttons match the Fit to View button's visual style (colors, border, rounded corners, sizing)
-- [ ] Hover/active/focus states on zoom buttons follow app conventions
-- [ ] Focus ring uses accent teal color for keyboard accessibility
-- [ ] Divider between + and - buttons uses border color
-- [ ] Scale bar line uses border color, text uses text-primary, no background
-- [ ] Scale bar keeps L-shaped cartographic style
+- [ ] Zoom +/- buttons use dark theme colors (bg-panel, border-border, text-primary) in both views
+- [ ] Zoom buttons visually match Fit to View button style (colors, border, rounded corners)
+- [ ] Hover/active states on zoom buttons use themed colors
+- [ ] Focus ring uses accent teal via existing global :focus-visible rule
+- [ ] Divider between + and - buttons uses border color (#0f3460)
+- [ ] Scale bar: transparent background, border color line, text-primary text, L-shaped style preserved
 - [ ] Scale bar font matches application font-family
-- [ ] SVG icons in zoom buttons use themed colors
-- [ ] All CSS overrides live in src/index.css using @apply with Tailwind tokens
+- [ ] SVG icons in zoom buttons are light-colored on dark background
+- [ ] All CSS overrides in src/index.css following React DatePicker pattern (raw CSS + !important)
 - [ ] Broad .maplibregl-ctrl selectors ensure future controls inherit dark theme
-- [ ] Box shadow and transition behavior match app conventions
-- [ ] E2E tests include visual checks verifying dark theme styling
-- [ ] Existing functional E2E tests continue to pass
-- [ ] No MapLibre control functionality is broken (buttons remain clickable, scale bar updates correctly)
+- [ ] E2E tests verify computed styles for key control properties
+- [ ] Existing E2E tests continue to pass
+- [ ] No MapLibre control functionality broken (buttons clickable, scale bar updates)
+
+## References
+- Existing DatePicker pattern: `src/index.css:194-246`
+- Fit to View button: `src/components/Map/MapCanvas.tsx:1784-1792`
+- MapCanvas NavigationControl: `src/components/Map/MapCanvas.tsx:582-585`
+- GlobalViewMap NavigationControl: `src/components/GlobalView/GlobalViewMap.tsx:413-416`
+- MapCanvas ScaleControl: `src/components/Map/MapCanvas.tsx:588-589`
+- GlobalViewMap ScaleControl: `src/components/GlobalView/GlobalViewMap.tsx:419-422`
+- Global focus-visible rule: `src/index.css:38-41`
+- Design tokens: `tailwind.config.js:16-26`
+- GitHub examples: meshtastic/network-management-client, electricitymaps/electricitymaps-contrib, openindoormaps

@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-27T22:42:29.932968Z",
+  "depends_on": [],
+  "epic": "fn-35-v6w",
+  "id": "fn-35-v6w.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-35-v6w.1.md",
+  "status": "todo",
+  "title": "Add MapLibre control dark theme CSS overrides",
+  "updated_at": "2026-01-27T22:43:12.831780Z"
+}
