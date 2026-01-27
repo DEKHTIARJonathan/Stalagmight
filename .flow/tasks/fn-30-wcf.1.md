@@ -16,7 +16,7 @@ In `EditStationDialog.tsx:81-116`, remove the `removeZeroDatum(stationRef)` call
 Follow existing pattern at `src-tauri/src/core/state/tests.rs:1641-1750` (`test_undo_set_zero_datum_restores_section_offsets`).
 - Test 1 (update + undo data): Set initial zero datum with GPS-A, then call `set_zero_datum` again with GPS-B. Verify `previous_gps` is `Some(GPS-A)` and `previous_offsets` are captured.
 - Test 2 (update + undo restoration): After update, perform undo. Assert the datum GPS is restored to GPS-A and section offsets are restored to pre-update values.
-- Test 3 (no-change guard): Verify that the no-change guard works correctly — either the backend skips a no-op SetZeroDatum, or confirm the guard is frontend-only and add an E2E test for it.
+- Test 3 (no-change guard): Verify that the no-change guard works correctly — either the backend skips a no-op SetZeroDatum, or confirm the guard is frontend-only and add an E2E test for it. Must be a concrete test, not documentation-only.
 
 ### E2E Playwright test
 Follow existing patterns in `e2e-playwright/undo-redo-dropdown.spec.ts`.
@@ -33,44 +33,7 @@ Follow existing patterns in `e2e-playwright/undo-redo-dropdown.spec.ts`.
 - E2E helpers: `e2e-playwright/helpers/app.ts`.
 - Use deterministic assertions instead of `waitForTimeout()`.
 - Use specific `data-testid` selectors: `toolbar-undo-button-dropdown`, `toolbar-undo-button-item-{index}`, `edit-station-dialog`.
-## Approach
 
-### Frontend fix
-- In `EditStationDialog.tsx:81-116`, remove the `removeZeroDatum(stationRef)` call and its error handling in the `wasZeroDatum && willBeZeroDatum` branch. Keep only the `setZeroDatum()` call with the updated GPS coordinates. The no-change guard (lat/lon comparison) stays as-is.
-
-### Rust unit test
-- Follow existing pattern at `src-tauri/src/core/state/tests.rs:1641-1750` (`test_undo_set_zero_datum_restores_section_offsets`).
-- Test 1 (update + undo data): Set initial zero datum with GPS-A, then call `set_zero_datum` again with GPS-B. Verify `previous_gps` is `Some(GPS-A)` and `previous_offsets` are captured.
-- Test 2 (update + undo restoration): After update, perform undo. Assert the datum GPS is restored to GPS-A and section offsets are restored to pre-update values.
-- Test 3 (no-change guard): Verify that calling `set_zero_datum` with identical GPS coordinates does not push an undo entry (if the backend has a no-op guard), OR document that the no-change guard is frontend-only (lat/lon comparison in the dialog).
-
-### E2E Playwright test
-- Follow existing patterns in `e2e-playwright/undo-redo-dropdown.spec.ts`.
-- Extend `setupTauriMocks` (or add test-local mock extension) to handle `set_zero_datum` and `remove_zero_datum` IPC commands by updating the mock undo stack.
-- Inject initial zero datum state via `__E2E_TEST__` store state or mock project injection so the dialog opens in the `wasZeroDatum && willBeZeroDatum` path.
-- After GPS update via dialog, assert the undo stack count delta is exactly 1 (not the absolute count, since baseline may vary).
-- Also verify no-change case: open dialog, save without changing lat/lon, assert no new undo entry.
-
-## Key context
-
-- Backend `set_zero_datum()` already handles in-place updates at `src-tauri/src/models/project.rs:667-676` — no backend changes needed.
-- Undo data capture at `src-tauri/src/core/state/undo.rs:186-205` already correctly captures `previous_gps: Some(old_gps)` when a datum exists.
-- E2E memory pitfall: use `waitForFunction(__cavechef_map__)` after canvas appears; use deterministic assertions instead of `waitForTimeout()`.
-- Use specific `data-testid` selectors, not generic CSS selectors.
-- E2E mock system: `setupTauriMocks` in `e2e-playwright/helpers/` — must handle `set_zero_datum` and `remove_zero_datum`.
-- Undo dropdown test IDs: `toolbar-undo-button-dropdown`, `toolbar-undo-button-item-{index}`.
-## Approach
-
-- In `EditStationDialog.tsx:81-116`, remove the `removeZeroDatum(stationRef)` call and its error handling in the `wasZeroDatum && willBeZeroDatum` branch. Keep only the `setZeroDatum()` call with the updated GPS coordinates. The no-change guard (lat/lon comparison) stays as-is.
-- Follow existing Rust test pattern at `src-tauri/src/core/state/tests.rs:1641-1750` (`test_undo_set_zero_datum_restores_section_offsets`). Add a new test that: (1) sets an initial zero datum, (2) calls `set_zero_datum` again with different GPS, (3) verifies `previous_gps` is `Some(old_gps)` and `previous_offsets` are captured.
-- Follow existing E2E test patterns in `e2e-playwright/undo-redo-dropdown.spec.ts`. Add a test that: (1) opens a project with a zero datum, (2) edits GPS via EditStationDialog, (3) verifies undo dropdown has exactly one new entry (use `toolbar-undo-button-item-{index}` test IDs).
-
-## Key context
-
-- Backend `set_zero_datum()` already handles in-place updates at `src-tauri/src/models/project.rs:667-676` — no backend changes needed.
-- Undo data capture at `src-tauri/src/core/state/undo.rs:186-205` already correctly captures `previous_gps: Some(old_gps)` when a datum exists — verified by repo-scout.
-- E2E memory pitfall: use `waitForFunction(__cavechef_map__)` after canvas appears; use deterministic assertions instead of `waitForTimeout()`.
-- Use specific `data-testid` selectors, not generic CSS selectors.
 ## Acceptance
 - [ ] `wasZeroDatum && willBeZeroDatum` branch calls only `setZeroDatum()` (no `removeZeroDatum()`)
 - [ ] Updating GPS on existing zero datum produces exactly ONE undo entry
@@ -84,6 +47,7 @@ Follow existing patterns in `e2e-playwright/undo-redo-dropdown.spec.ts`.
 - [ ] `pnpm tsc --noEmit` passes
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 - [ ] `pnpm test:ui` passes
+
 ## Done summary
 TBD
 

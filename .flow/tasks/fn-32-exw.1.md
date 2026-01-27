@@ -1,6 +1,6 @@
 ## Description
 
-Fix numeric column alignment in three components: (1) EditableTable's input element that doesn't inherit column alignment, (2) ShotTableEditor's manually coded table, and (3) ImportDialog's manually coded table. All numeric headers and cells/inputs should get `text-right`.
+Fix numeric column alignment in three components: (1) EditableTable's input element that doesn't inherit column alignment, (2) ShotTableEditor's manually coded table, and (3) ImportDialog's manually coded table. All numeric headers, `<td>` cells, and inputs should get `text-right`.
 
 **Size:** M
 **Files:** `src/components/common/Table.tsx`, `src/components/common/ShotTableEditor.tsx`, `src/components/Dialogs/ImportDialog.tsx`
@@ -15,15 +15,17 @@ The input element at `Table.tsx:373-383` has className `"w-full px-2 py-1 bg-tra
 
 Manual table — not using EditableTable. Fix:
 - Headers at lines 312-321: change numeric column `<th>` elements from `text-left` to `text-right` (Length, Azimuth, Depth In, Depth Out, L, R, U, D)
-- Input elements at lines 348-485: add `text-right` class to each numeric input's className (these use `"w-16 text-xs px-1 py-0.5"` or `"w-10 text-xs px-1 py-0.5"`)
-- Keep text/ID columns left-aligned (Shot ID, From, To)
+- `<td>` cell wrappers: add `text-right` to each numeric column's `<td>` so the input element is right-aligned within the cell (inputs use `w-16` or `w-10` which may be narrower than the column)
+- Input elements at lines 348-485: add `text-right` to each numeric input's className
+- Keep text/index columns left-aligned: row index (#), From, To
 
 ### ImportDialog (`ImportDialog.tsx`)
 
 Manual table — not using EditableTable. Fix:
 - Headers at lines 118-128: add `text-right` to numeric column `<th>` elements (Length, Azi In, Azi Out, Depth In, Depth Out)
+- `<td>` cell wrappers: add `text-right` to numeric column `<td>` elements
 - Input elements at lines 134-177: add `text-right` to numeric input classNames
-- Keep Shot ID column left-aligned
+- Keep row index (#) column left-aligned
 
 ## Key context
 
@@ -31,7 +33,7 @@ Manual table — not using EditableTable. Fix:
 - Column interface at `Table.tsx:3-17`: `align?: 'left' | 'center' | 'right'`
 - Header alignment pattern at `Table.tsx:306-312`: `${alignmentClasses[column.align ?? 'left']}`
 - Cell alignment pattern at `Table.tsx:366-368`: `${alignmentClasses[column.align ?? 'left']}`
-- ShotTableEditor numeric inputs: `className="w-16 text-xs px-1 py-0.5"` (Length, Azimuth, Depths) and `"w-10 text-xs px-1 py-0.5"` (LRUD)
+- ShotTableEditor numeric inputs: `className="w-16 text-xs px-1 py-0.5"` (Length, Azimuth, Depths) and `"w-10 text-xs px-1 py-0.5"` (LRUD) — narrower than column, need `text-right` on `<td>` too
 - ImportDialog numeric inputs: similar pattern, no alignment class
 - Global CSS `th, td { text-align: left }` at `index.css:179-182` — do NOT change
 
@@ -39,10 +41,12 @@ Manual table — not using EditableTable. Fix:
 
 - [ ] EditableTable input elements in right-aligned columns have `text-right` class
 - [ ] ShotTableEditor numeric column headers are right-aligned
+- [ ] ShotTableEditor numeric `<td>` cells are right-aligned
 - [ ] ShotTableEditor numeric inputs are right-aligned
 - [ ] ImportDialog numeric column headers are right-aligned
+- [ ] ImportDialog numeric `<td>` cells are right-aligned
 - [ ] ImportDialog numeric inputs are right-aligned
-- [ ] Text/ID columns remain left-aligned in all three components
+- [ ] Text/index columns remain left-aligned in all three components
 - [ ] Global CSS default unchanged
 - [ ] `pnpm tsc --noEmit` passes
 

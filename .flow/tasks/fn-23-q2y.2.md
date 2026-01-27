@@ -41,9 +41,8 @@ Replace GlobalViewMap's hardcoded OpenStreetMap tile source with ESRI satellite 
 - [ ] All E2E tests pass; broken assertions updated
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Switched GlobalViewMap from hardcoded OSM tiles to ESRI satellite tiles via the shared getTileConfig utility, using the cavechef-tiles:// protocol with SQLite caching. Zoom is clamped to the provider's supported range when restoring persisted map state, and map-level minZoom/maxZoom are set to prevent zooming beyond tile coverage.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 4b6d9646bc5c2b80bdd9f24f53bbc7b8a06bb5eb, 428c54856d6039f6af221565a05bdbe36d3eed30
+- Tests: pnpm tsc --noEmit (only pre-existing MapCanvas error), pnpm test:ui (521 passed), pnpm vitest run src/utils/tileConfig.test.ts (5 passed)
 - PRs:
