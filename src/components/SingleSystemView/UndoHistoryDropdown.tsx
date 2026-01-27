@@ -11,7 +11,8 @@ interface UndoHistoryDropdownProps {
   disabled: boolean;
   /** Trigger button content */
   children: React.ReactNode;
-  /** Callback when single undo/redo is triggered */
+  /** Callback when single undo/redo is triggered (only used when dropdown is closed;
+   *  when open, the dropdown calls store undo/redo directly to enable stay-open + refresh) */
   onSingleAction: () => void;
   /** Test ID prefix for data-testid attributes */
   testId: string;
@@ -239,6 +240,10 @@ export default function UndoHistoryDropdown({
     // Clear hovered item state
     clearPreviewState();
 
+    // Cancel any pending queued actions to prevent stale actions from executing
+    // against a different undo/redo stack after reopen
+    actionQueueRef.current = [];
+
     // Reset keyboard navigation state
     setActiveIndex(-1);
     setHoverIndex(-1);
@@ -285,8 +290,9 @@ export default function UndoHistoryDropdown({
         scrollContainerRef.current.scrollTo({ top: 0 });
       }
 
-      // Close-on-empty: if stack is now empty, hard close
+      // Close-on-empty: if stack is now empty, discard remaining queued actions and hard close
       if (refreshedStack.length === 0) {
+        actionQueueRef.current = [];
         isActionInProgressRef.current = false;
         setIsActionInProgress(false);
         hardClose();
@@ -502,7 +508,9 @@ export default function UndoHistoryDropdown({
     }
   }, [isOpen, items, activeIndex, handleItemClick, hardClose, scrollActiveItemIntoView]);
 
-  // Handle button click - when dropdown is open, perform action and stay open; when closed, just fire action
+  // Handle button click - when dropdown is open, perform action and stay open; when closed, delegate to parent
+  // Note: when open, we call store undo/redo directly (not onSingleAction) because we need the Promise
+  // to chain refresh logic. onSingleAction is fire-and-forget and used only for the closed-dropdown path.
   const handleButtonClick = useCallback(() => {
     if (disabledRef.current) return;
 
@@ -511,7 +519,7 @@ export default function UndoHistoryDropdown({
       const action = mode === 'undo' ? undo : redo;
       enqueueAction(() => action().then(() => {}));
     } else {
-      // Dropdown is not open: original behavior - close and fire single action
+      // Dropdown is not open: delegate to parent via onSingleAction (closed-only path)
       hardClose();
       onSingleAction();
     }
@@ -543,6 +551,16 @@ export default function UndoHistoryDropdown({
     if (!isOpen) return;
 
     const handleShortcut = (event: KeyboardEvent) => {
+      // Don't intercept when focus is in a text input — let native text undo/redo work
+      if (
+        event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement ||
+        event.target instanceof HTMLSelectElement ||
+        (event.target instanceof HTMLElement && event.target.isContentEditable)
+      ) {
+        return;
+      }
+
       const key = event.key.toLowerCase();
       const isUndoKey = (event.ctrlKey || event.metaKey) && key === 'z' && !event.shiftKey;
       const isRedoKey = (event.ctrlKey || event.metaKey) && (key === 'y' || (key === 'z' && event.shiftKey));
