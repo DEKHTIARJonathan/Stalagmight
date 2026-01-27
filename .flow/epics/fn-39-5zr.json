@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-39-5zr",
+  "created_at": "2026-01-27T17:00:07.819769Z",
+  "depends_on_epics": [],
+  "id": "fn-39-5zr",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-39-5zr.md",
+  "status": "open",
+  "title": "Bugfix: Section highlighting not working for hover and selection",
+  "updated_at": "2026-01-27T17:00:40.226207Z"
+}

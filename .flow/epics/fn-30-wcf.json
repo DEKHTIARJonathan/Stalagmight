@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-30-wcf",
+  "created_at": "2026-01-27T14:31:13.626816Z",
+  "depends_on_epics": [],
+  "id": "fn-30-wcf",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-30-wcf.md",
+  "status": "open",
+  "title": "Bugfix: Zero datum update creates two undo entries instead of one",
+  "updated_at": "2026-01-27T14:31:38.423193Z"
+}
