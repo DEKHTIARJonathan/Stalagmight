@@ -8,6 +8,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { ViewModeToggle, useViewMode, type ViewMode } from './ViewModeToggle';
 import { useFpsMonitor } from '../../hooks/useFpsMonitor';
 import { defaultConfig } from '../../types/config';
+import { getTileConfig } from '../../utils/tileConfig';
 
 /** Local storage key for persisting map position/zoom. */
 const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
@@ -21,6 +22,7 @@ interface PersistedMapState {
 /**
  * Load persisted map state from local storage.
  * Returns null if no valid state is found.
+ * Clamps restored zoom to the tile provider's supported range.
  */
 function loadPersistedMapState(): PersistedMapState | null {
   try {
@@ -28,6 +30,7 @@ function loadPersistedMapState(): PersistedMapState | null {
     if (!stored) return null;
 
     const parsed = JSON.parse(stored);
+    const tileConfig = getTileConfig();
     // Validate structure, types, and coordinate ranges
     // MapLibre throws on latitude outside [-90, 90]
     if (
@@ -45,12 +48,13 @@ function loadPersistedMapState(): PersistedMapState | null {
       parsed.center[0] <= 180 &&
       parsed.center[1] >= -90 &&
       parsed.center[1] <= 90 &&
-      parsed.zoom >= 0 &&
-      parsed.zoom <= 22
+      parsed.zoom >= tileConfig.minZoom &&
+      parsed.zoom <= tileConfig.maxZoom
     ) {
       return {
         center: [parsed.center[0], parsed.center[1]],
-        zoom: parsed.zoom,
+        // Clamp zoom to provider's supported range
+        zoom: Math.max(tileConfig.minZoom, Math.min(tileConfig.maxZoom, parsed.zoom)),
       };
     }
   } catch {
@@ -360,23 +364,26 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     const initialZoom = persistedState?.zoom ?? 10;
 
     // Build map options - only include maxBounds if we have GPS projects
+    const tileConfig = getTileConfig();
     const mapOptions: maplibregl.MapOptions = {
       container: mapContainer.current,
       style: {
         version: 8,
         sources: {
-          'osm-tiles': {
+          'satellite-tiles': {
             type: 'raster',
-            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-            tileSize: 256,
-            attribution: '&copy; OpenStreetMap contributors',
+            tiles: tileConfig.tiles,
+            tileSize: tileConfig.tileSize,
+            attribution: tileConfig.attribution,
+            minzoom: tileConfig.minZoom,
+            maxzoom: tileConfig.maxZoom,
           },
         },
         layers: [
           {
-            id: 'osm-tiles',
+            id: 'satellite-tiles',
             type: 'raster',
-            source: 'osm-tiles',
+            source: 'satellite-tiles',
             paint: {
               'raster-opacity': 1,
             },
