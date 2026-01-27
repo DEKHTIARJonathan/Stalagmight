@@ -78,7 +78,7 @@ function truncateDescription(description: string, maxLength = 40): string {
   if (description.length <= maxLength) {
     return description;
   }
-  return description.slice(0, maxLength - 1) + '…';
+  return description.slice(0, maxLength - 1) + '\u2026';
 }
 
 interface DetailPreviewPopupProps {
@@ -143,7 +143,7 @@ function DetailPreviewPopup({ previewData, anchorRect, dropdownRect }: DetailPre
                   <span className="text-text-primary truncate max-w-[70px]" title={change.oldValue}>
                     {change.oldValue || '(empty)'}
                   </span>
-                  <span className="text-text-secondary shrink-0">→</span>
+                  <span className="text-text-secondary shrink-0">&rarr;</span>
                   <span className="text-text-primary truncate max-w-[70px]" title={change.newValue}>
                     {change.newValue || '(empty)'}
                   </span>
@@ -180,6 +180,10 @@ export default function UndoHistoryDropdown({
   const [activeIndex, setActiveIndex] = useState(-1);
   // Separate hover highlight index (does not trigger focus stealing)
   const [hoverIndex, setHoverIndex] = useState(-1);
+  // Action queue state for sequential execution
+  const [isActionInProgress, setIsActionInProgress] = useState(false);
+  const isActionInProgressRef = useRef(false);
+  const actionQueueRef = useRef<Array<() => Promise<void>>>([]);
   // Flag to track if dropdown was opened via keyboard (for focus management)
   const keyboardNavActiveRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -194,10 +198,20 @@ export default function UndoHistoryDropdown({
   // Track disabled in a ref to avoid closure issues
   const disabledRef = useRef(disabled);
   disabledRef.current = disabled;
+  // Track isOpen in a ref for use in async callbacks / event listeners
+  const isOpenRef = useRef(isOpen);
+  isOpenRef.current = isOpen;
   // Unique ID for ARIA attributes
   const menuId = useId();
 
-  const { getUndoStack, getRedoStack, undoTo, redoTo } = useProjectStore();
+  const { getUndoStack, getRedoStack, undoTo, redoTo, undo, redo } = useProjectStore();
+
+  // Clear preview/hover state without closing the dropdown (reusable helper)
+  const clearPreviewState = useCallback(() => {
+    setHoveredItem(null);
+    setHoveredItemRect(null);
+    setDropdownRect(null);
+  }, []);
 
   // Centralized "hard close" helper that cancels all timers and closes
   const hardClose = useCallback(() => {
@@ -223,9 +237,7 @@ export default function UndoHistoryDropdown({
     }
 
     // Clear hovered item state
-    setHoveredItem(null);
-    setHoveredItemRect(null);
-    setDropdownRect(null);
+    clearPreviewState();
 
     // Reset keyboard navigation state
     setActiveIndex(-1);
@@ -233,7 +245,7 @@ export default function UndoHistoryDropdown({
     keyboardNavActiveRef.current = false;
 
     setIsOpen(false);
-  }, []);
+  }, [clearPreviewState]);
 
   // Fetch stack data and return it (single fetch, no double call)
   const fetchStack = useCallback(async (): Promise<UndoHistoryItem[]> => {
@@ -247,6 +259,53 @@ export default function UndoHistoryDropdown({
       return [];
     }
   }, [mode, getUndoStack, getRedoStack]);
+
+  // Process the action queue sequentially
+  const processQueue = useCallback(async () => {
+    // Already processing - the current processor will pick up new items
+    if (isActionInProgressRef.current) return;
+
+    while (actionQueueRef.current.length > 0) {
+      const nextAction = actionQueueRef.current.shift()!;
+      isActionInProgressRef.current = true;
+      setIsActionInProgress(true);
+      try {
+        await nextAction();
+      } catch (error) {
+        console.error(`Failed to execute queued ${mode} action:`, error);
+      }
+
+      // After action completes, refresh the stack
+      const refreshedStack = await fetchStack();
+
+      // Reset navigation and scroll to top
+      setActiveIndex(0);
+      setHoverIndex(-1);
+      if (scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTo({ top: 0 });
+      }
+
+      // Close-on-empty: if stack is now empty, hard close
+      if (refreshedStack.length === 0) {
+        isActionInProgressRef.current = false;
+        setIsActionInProgress(false);
+        hardClose();
+        return;
+      }
+    }
+
+    isActionInProgressRef.current = false;
+    setIsActionInProgress(false);
+  }, [mode, fetchStack, hardClose]);
+
+  // Enqueue an action and start processing if idle
+  const enqueueAction = useCallback((action: () => Promise<void>) => {
+    // Immediately dismiss detail preview popup
+    clearPreviewState();
+
+    actionQueueRef.current.push(action);
+    processQueue();
+  }, [clearPreviewState, processQueue]);
 
   // Open dropdown with delay
   const openDropdown = useCallback(() => {
@@ -314,6 +373,7 @@ export default function UndoHistoryDropdown({
     }
 
     // Small delay before closing to allow moving within component
+    // Mouse leave still closes even during an action in flight (per spec)
     leaveTimeoutRef.current = setTimeout(() => {
       // Reset all navigation state on close
       setActiveIndex(-1);
@@ -360,18 +420,16 @@ export default function UndoHistoryDropdown({
     }
   }, [menuId]);
 
-  // Handle item click with index validation (defined before keyboard handlers that use it)
+  // Handle item click with index validation - stays open and refreshes
   const handleItemClick = useCallback(async (index: number) => {
     // Validate index before sending to backend
     if (!Number.isInteger(index) || index < 0) {
       console.error('Invalid undo/redo index:', index);
       return;
     }
-    // Hard close before action to prevent any race conditions
-    hardClose();
     const action = mode === 'undo' ? undoTo : redoTo;
-    await action(index);
-  }, [mode, undoTo, redoTo, hardClose]);
+    enqueueAction(() => action(index).then(() => {}));
+  }, [mode, undoTo, redoTo, enqueueAction]);
 
   // Handle keyboard navigation on trigger button
   const handleButtonKeyDown = useCallback(async (event: React.KeyboardEvent) => {
@@ -444,14 +502,20 @@ export default function UndoHistoryDropdown({
     }
   }, [isOpen, items, activeIndex, handleItemClick, hardClose, scrollActiveItemIntoView]);
 
-  // Handle button click (single undo/redo) - cancel pending hover and close
+  // Handle button click - when dropdown is open, perform action and stay open; when closed, just fire action
   const handleButtonClick = useCallback(() => {
-    if (!disabledRef.current) {
-      // Hard close to cancel any pending hover timer and close dropdown
+    if (disabledRef.current) return;
+
+    if (isOpenRef.current) {
+      // Dropdown is open: perform single undo/redo and refresh (stay open)
+      const action = mode === 'undo' ? undo : redo;
+      enqueueAction(() => action().then(() => {}));
+    } else {
+      // Dropdown is not open: original behavior - close and fire single action
       hardClose();
       onSingleAction();
     }
-  }, [onSingleAction, hardClose]);
+  }, [mode, undo, redo, enqueueAction, onSingleAction, hardClose]);
 
   // Close on Escape - use hardClose and return focus to button
   useEffect(() => {
@@ -472,25 +536,34 @@ export default function UndoHistoryDropdown({
     };
   }, [isOpen, hardClose]);
 
-  // Close on Ctrl+Z/Y keyboard shortcuts (only when open) - use hardClose
+  // Handle Ctrl+Z/Y keyboard shortcuts when dropdown is open - perform action and stay open
+  // Uses stopPropagation + preventDefault to prevent the global useKeyboardShortcuts handler
+  // from also executing the action (which would cause double-undo/redo)
   useEffect(() => {
     if (!isOpen) return;
 
     const handleShortcut = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
-      const isUndo = (event.ctrlKey || event.metaKey) && key === 'z' && !event.shiftKey;
-      const isRedo = (event.ctrlKey || event.metaKey) && (key === 'y' || (key === 'z' && event.shiftKey));
+      const isUndoKey = (event.ctrlKey || event.metaKey) && key === 'z' && !event.shiftKey;
+      const isRedoKey = (event.ctrlKey || event.metaKey) && (key === 'y' || (key === 'z' && event.shiftKey));
 
-      if (isUndo || isRedo) {
-        hardClose();
+      if (isUndoKey || isRedoKey) {
+        // Prevent global keyboard shortcut handler from also firing (double-undo/redo)
+        event.stopPropagation();
+        event.preventDefault();
+
+        // Perform the appropriate action based on the key pressed
+        const action = isUndoKey ? undo : redo;
+        enqueueAction(() => action().then(() => {}));
       }
     };
 
-    document.addEventListener('keydown', handleShortcut);
+    // Use capture phase to intercept before global handler
+    document.addEventListener('keydown', handleShortcut, true);
     return () => {
-      document.removeEventListener('keydown', handleShortcut);
+      document.removeEventListener('keydown', handleShortcut, true);
     };
-  }, [isOpen, hardClose]);
+  }, [isOpen, undo, redo, enqueueAction]);
 
   // Close on click outside - use hardClose
   useEffect(() => {
@@ -584,13 +657,24 @@ export default function UndoHistoryDropdown({
             {mode === 'undo' ? 'Undo History' : 'Redo History'}
           </div>
 
+          {/* Loading indicator shown at top of dropdown during action */}
+          {isActionInProgress && (
+            <div
+              className="flex items-center justify-center gap-2 px-3 py-1.5 border-b border-border"
+              data-testid={`${testId}-loading`}
+            >
+              <div className="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+              <span className="text-xs text-text-secondary">Processing...</span>
+            </div>
+          )}
+
           <div
             ref={scrollContainerRef}
             className="overflow-y-auto undo-history-scrollable"
             style={{
-              // Each item is ~44px (py-1.5 = 6px*2 + line-height ~20px*2 = ~52px, but flex shrinks it)
-              // 10 items * ~44px = 440px; add some buffer
-              maxHeight: '440px',
+              // Fixed height for 5 items (~44px each = 220px)
+              // Uses height (not maxHeight) to maintain size even with fewer items
+              height: '220px',
             }}
           >
             {items.length === 0 ? (
@@ -621,6 +705,7 @@ export default function UndoHistoryDropdown({
                     className={`
                       w-full px-3 py-1.5 flex items-center gap-2 transition-colors text-left
                       ${isHighlighted ? 'bg-background/50' : 'hover:bg-background/50'}
+                      ${isActionInProgress ? 'opacity-50' : ''}
                     `}
                     data-testid={`${testId}-item-${item.index}`}
                     tabIndex={-1}
