@@ -111,3 +111,6 @@ Async action queues (ref-based) must be cleared on all close/teardown paths to p
 
 ## 2026-01-27 manual [pitfall]
 Capture-phase keyboard shortcut interceptors must guard against input/textarea/select/contentEditable focus to avoid breaking native text editing undo/redo
+
+## 2026-01-27 manual [pitfall]
+After an error in an action queue, still refresh the UI state from the backend (fetchStack) before showing the error dialog - backend may have partially mutated state

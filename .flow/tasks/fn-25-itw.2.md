@@ -74,9 +74,8 @@ Existing precedent: `docs/TESTING.md:600-624` documents `#selection-announcer` w
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-
-<!-- filled on completion -->
-
+Enhanced ErrorDialog with stack trace display, copy-to-clipboard button, and contextual bug report guidance. Wired CommandResult error handling in UndoHistoryDropdown's processQueue (check result.success, catch thrown exceptions, refresh stack on error, fail closed on missing result). Added aria-live region announcing remaining action count after each undo/redo action.
 ## Evidence
-
-<!-- filled on completion -->
+- Commits: e452b9b, 0855cca
+- Tests: pnpm tsc --noEmit
+- PRs:
