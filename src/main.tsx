@@ -4,6 +4,7 @@ import App from './App';
 import './index.css';
 import { useUIStore } from './store/uiStore';
 import { useProjectStore, type LoadingState } from './store/projectStore';
+import { useGlobalViewStore } from './store/globalViewStore';
 
 // Expose stores for E2E testing
 declare global {
@@ -11,6 +12,7 @@ declare global {
     __E2E_TEST__?: {
       uiStore?: typeof useUIStore;
       projectStore?: typeof useProjectStore;
+      globalViewStore?: typeof useGlobalViewStore;
       // Loading progress E2E hooks
       getLoadingId?: () => number;
       getBackendLoadingId?: () => number;
@@ -28,6 +30,7 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
   const testAPI = window.__E2E_TEST__ || {};
   testAPI.uiStore = useUIStore;
   testAPI.projectStore = useProjectStore;
+  testAPI.globalViewStore = useGlobalViewStore;
   window.__E2E_TEST__ = testAPI;
 }
 

@@ -156,9 +156,15 @@ The `useViewMode` hook persists view mode (`survey` | `markers`) to localStorage
 
 ```typescript
 const [viewMode, setViewMode] = useViewMode();
-// - 'survey': shows geometry, markers as fallback while loading
-// - 'markers': shows only simple markers, no geometry
+// - 'survey': shows geometry; markers hidden when geometry loaded,
+//   visible with spinner during loading, visible (red) on error
+// - 'markers': shows all markers (no geometry), all interactions preserved
 ```
+
+Marker visibility is controlled by three effects:
+1. **Creation effect** - sets initial `el.style.display` based on `viewModeRef.current` and geometry state
+2. **Styles effect** - updates marker colors (selection, error) without recreating markers
+3. **Visibility-sync effect** - toggles `el.style.display` (`'none'` / `'flex'`) on `viewMode` and `geometryStates` changes
 
 Switching to markers mode cancels pending geometry loads to save resources.
 

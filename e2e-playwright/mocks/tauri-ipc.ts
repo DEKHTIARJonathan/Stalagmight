@@ -169,6 +169,25 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_CACHE_STATS__ = () => mockCacheStats;
 
+      // Geometry loading mock control
+      // Paths listed here will fail geometry loading (throw error instead of returning data)
+      const geometryErrorPaths = new Set<string>();
+      // Paths listed here will delay geometry loading (resolve after delay ms)
+      const geometryDelayPaths = new Map<string, number>();
+
+      (window as unknown as Record<string, unknown>).__MOCK_SET_GEOMETRY_ERROR__ = (path: string) => {
+        geometryErrorPaths.add(path);
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_CLEAR_GEOMETRY_ERROR__ = (path: string) => {
+        geometryErrorPaths.delete(path);
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_SET_GEOMETRY_DELAY__ = (path: string, delayMs: number) => {
+        geometryDelayPaths.set(path, delayMs);
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_CLEAR_GEOMETRY_DELAY__ = (path: string) => {
+        geometryDelayPaths.delete(path);
+      };
+
       // Expose config override for testing config reload
       (window as unknown as Record<string, unknown>).__MOCK_SET_CONFIG_OVERRIDES__ = (overrides: MockConfigOverrides) => {
         mockConfigOverrides = overrides;
@@ -1610,6 +1629,36 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] plugin:event|emit', event, payload);
             emitEvent(event, payload);
             return undefined;
+          }
+
+          case 'get_survey_geometry_for_file': {
+            const filePath = args?.path as string;
+            console.log('[Mock IPC] get_survey_geometry_for_file called for:', filePath);
+
+            // Check if this path should simulate an error
+            if (geometryErrorPaths.has(filePath)) {
+              throw new Error(`Failed to load geometry for ${filePath}`);
+            }
+
+            // Check if this path should be delayed
+            const delay = geometryDelayPaths.get(filePath);
+            const mockGeometry = {
+              shots: [
+                { from: [0, 0, 0], to: [10, 5, -2] },
+                { from: [10, 5, -2], to: [20, 10, -5] },
+              ],
+              stations: [
+                { coords: [0, 0, 0], name: 'S0' },
+                { coords: [10, 5, -2], name: 'S1' },
+                { coords: [20, 10, -5], name: 'S2' },
+              ],
+            };
+
+            if (delay && delay > 0) {
+              return new Promise((resolve) => setTimeout(() => resolve(mockGeometry), delay));
+            }
+
+            return mockGeometry;
           }
 
           default:

@@ -411,14 +411,18 @@ Shows all cave systems the user has loaded, with survey geometry rendering for G
 - GPS-positioned projects render actual survey geometry (shots and stations)
 - Each system has a distinct auto-assigned color (stable across sessions)
 - System-level selection with hover highlighting
-- Lazy loading: markers with spinners show while geometry loads
-- Error states: red marker with popup on click
+- Lazy loading: markers with spinners show while geometry loads; markers hidden once geometry loads successfully
+- Error states: red marker remains visible with popup on click
+- In survey mode, only loading-spinner and error markers are visible; loaded-geometry markers are hidden
 
 **View Mode Toggle:**
 - Toggle button in top-right corner (below navigation controls)
-- Two modes: `survey` (default) shows geometry, `markers` shows simple pins
+- Two modes: `survey` (default) shows geometry with conditional marker visibility, `markers` shows all markers
+- Survey mode: markers visible during loading (with spinner) and on error (red); hidden once geometry loads
+- Markers mode: all GPS-positioned system markers visible regardless of geometry state
 - Mode persisted in localStorage (`globalViewMode` key)
 - Switching to markers cancels pending geometry loads
+- Toggling between modes changes marker visibility instantly (no fade transition)
 
 **Map Position Persistence:**
 - Map position and zoom persisted to localStorage on every move
