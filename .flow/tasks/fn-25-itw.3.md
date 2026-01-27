@@ -60,7 +60,10 @@ Use existing `data-testid` values documented in TESTING.md:
 New test IDs to expect (from tasks 1 and 2):
 <!-- Updated by plan-sync: fn-25-itw.1 used ${testId}-loading for loading indicator -->
 - Loading indicator: `${testId}-loading` (e.g., `toolbar-undo-button-loading`, `toolbar-redo-button-loading`)
-- aria-live announcer span (TBD by task 2)
+<!-- Updated by plan-sync: fn-25-itw.2 used ${testId}-announcement for aria-live region -->
+- aria-live announcer: `${testId}-announcement` (e.g., `toolbar-undo-button-announcement`, `toolbar-redo-button-announcement`)
+- Error dialog stack trace: `error-dialog-stack-trace` (scrollable `<pre>` block)
+- Error dialog copy button: `error-dialog-copy-btn` (states: "Copy to clipboard" / "Copied!" / "Failed")
 
 ## Key context
 
@@ -73,6 +76,10 @@ New test IDs to expect (from tasks 1 and 2):
 - The dropdown container uses `height: '220px'` (inline style, not a CSS class) with `overflow-y: auto`. Test fixed height with style assertion, not class assertion.
 - The loading indicator uses a spinner (`animate-spin`) with "Processing..." text, at `data-testid="${testId}-loading"`.
 - Navigation reset after action sets `activeIndex` to `0` (not `-1`), so `aria-activedescendant` will point to the first item after refresh.
+<!-- Updated by plan-sync: fn-25-itw.2 implemented aria-live and error dialog details -->
+- The aria-live announcement text format is `"N actions remaining"` (plural) or `"1 action remaining"` (singular), and `"No actions remaining"` when the stack is empty (close-on-empty case). The announcer span is at `data-testid="${testId}-announcement"` with `role="status"`, `aria-live="polite"`, `aria-atomic="true"`, and class `sr-only`.
+- The error dialog is opened via `openDialog('error', { title, message, stackTrace })` from `useUIStore`. The `ErrorDialog` component reads `dialogData.message`, `dialogData.title`, and `dialogData.stackTrace`. Stack trace only comes from caught exceptions (try/catch path), not from `CommandResult.error` (which provides only the message string).
+- The copy-to-clipboard button in ErrorDialog has three feedback states: idle ("Copy to clipboard"), success ("Copied!"), and failure ("Failed"), with a 2-second timeout to reset.
 
 ## Acceptance
 
