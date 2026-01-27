@@ -1,83 +1,110 @@
 # Undo/Redo Dropdown Stays Open on Action
 
-## Problem
+## Overview
 
-Currently, clicking the undo or redo button (or a dropdown item, or pressing Ctrl+Z/Y) while the undo/redo history dropdown is open causes the dropdown to close immediately via `hardClose()`. The user loses visibility of the remaining undo/redo stack. The dropdown should instead stay open and refresh its contents, closing only when the stack becomes empty.
+When the undo/redo history dropdown is open, performing an action (button click, item click, or Ctrl+Z/Y) currently calls `hardClose()` which closes the dropdown. Instead, the dropdown should stay open, show a loading indicator, refresh its content, and only close when the stack empties or the user explicitly dismisses it.
 
-## Key Decisions
+## Scope
 
-1. **Scope**: Both the main undo/redo button click AND clicking items within the dropdown list keep the dropdown open and refresh it.
-2. **Keyboard shortcuts**: Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z while dropdown is open should also keep it open and refresh (consistent with click behavior).
-3. **Empty stack closes**: When the last action is undone/redone and the stack becomes empty, the dropdown closes automatically.
-4. **Navigation reset**: After any action, keyboard navigation index resets to top (index 0) and scroll position resets to top.
-5. **Detail preview**: The hover detail preview popup is dismissed when any action fires; it reappears only when the user hovers a new item after refresh.
-6. **Loading indicator**: A small loading indicator appears at the top of the dropdown while fetching the updated stack from the backend. Items remain visible (possibly dimmed) beneath it.
-7. **Rapid clicks**: Clicks are allowed to queue up freely (button stays enabled). Each queued action executes sequentially, and the dropdown refreshes after each.
-8. **Dropdown fixed height**: The dropdown is always exactly 5 items tall (~220px), with scrollable content for longer lists. This replaces the previous spec of 10 items / ~440px max height. Auto-hide scrollbar behavior is preserved.
-9. **Error handling**: Undo/redo should never fail in normal operation. If it does fail, show a modal dialog with full error details and stack trace, recommending the user report the bug. Check for an existing error dialog component in the codebase before creating a new one.
-10. **Accessibility**: Use an aria-live region to announce both the refresh and the remaining item count (e.g., "3 actions remaining") after each action.
-11. **Cross-stack behavior**: Out of scope. Each dropdown (undo/redo) is independent; when undo stack empties, the undo dropdown closes and the redo button updates its chevron independently.
+**In scope:**
+- Stay-open behavior for button click, item click, and keyboard shortcuts
+- Loading indicator during refresh
+- Sequential action queue for rapid clicks
+- Auto-close on empty stack
+- Navigation and scroll reset after refresh
+- Detail preview dismissal on action
+- Fixed 5-item dropdown height (was 10)
+- Enhanced error dialog with stack trace and copy-to-clipboard
+- aria-live announcements for accessibility
+- SPEC.md and TESTING.md updates
+- E2E test updates and additions
 
-## Close Behavior (Updated)
+**Out of scope:**
+- Cross-stack behavior (undo/redo dropdowns are independent)
+- Backend changes (commands already support the needed operations)
 
-The dropdown closes ONLY on:
-- Mouse leaving the button/dropdown area (100ms buffer) — even during an action in flight
-- Pressing Escape key
-- Clicking outside the dropdown — even during an action in flight
-- Stack becomes empty after an action
+## Approach
 
-The dropdown stays OPEN on:
-- Clicking the main undo/redo button (single-step action)
-- Clicking a dropdown item (multi-step undo/redo to index N)
-- Pressing Ctrl+Z, Ctrl+Y, or Ctrl+Shift+Z while dropdown is open
+Modify `UndoHistoryDropdown.tsx` to replace `hardClose()` calls in action paths with an action-then-refresh pattern. Add `isActionInProgress` state for loading indication and queue management. The dropdown's `fetchStack()` is called after each action completes to refresh content.
 
-## Edge Cases
+### Keyboard shortcut coordination
 
-- **Last action undone/redone**: Stack empties → dropdown closes automatically
-- **Rapid clicking**: Actions queue sequentially; dropdown refreshes after each completes
-- **Mouse leave during action**: Dropdown closes immediately (mouse leave is not suppressed)
-- **Click outside during action**: Dropdown closes immediately (not pinned open)
-- **Backend error**: Show modal dialog with full error details, stack trace, and copy-to-clipboard for bug reporting
-- **Hover + button click**: If user is hovering an item with detail preview visible, clicking the main button resets highlight and dismisses preview immediately; after refresh, navigation is at top
-- **Multi-step batch action**: Single loading indicator for the entire `undo_to(N)` / `redo_to(N)` operation, then one refresh when complete
-- **Dropdown height with few items**: Dropdown maintains fixed 5-item height even when fewer items are present
+There is a global `useKeyboardShortcuts` handler that fires on Ctrl+Z/Y. When the dropdown is open and intercepts Ctrl+Z/Y, it must call `stopPropagation()` and `preventDefault()` to prevent the global handler from also executing the action (which would cause a double-undo/redo). The dropdown handles the action itself (calling the correct undo or redo based on the key pressed) and then refreshes its contents.
 
-## Spec Updates Required
+### Error handling via CommandResult
 
-- Update SPEC.md section 6.3 "Close Behavior" to reflect the new rules
-- Update SPEC.md section 6.3 "Scrolling" to reflect fixed 5-item height instead of 10-item max
-- Update TESTING.md section on UndoHistoryDropdown if affected
+The undo/redo store functions (`undo()`, `redo()`, `undoTo()`, `redoTo()`) return `CommandResult` objects and do **not** throw on failure. Error handling must check `result.success === false` and populate the ErrorDialog from `result.error` (and any available details). A try/catch should also wrap the calls to handle unexpected thrown exceptions, but the primary error path is the `CommandResult` check.
 
-## Test Requirements
+### Fixed dropdown height
 
-- Update existing e2e tests in `undo-redo-dropdown.spec.ts` that may break
-- Add new tests for:
-  - Button click keeps dropdown open and refreshes items
-  - Item click keeps dropdown open and refreshes items
-  - Ctrl+Z/Y keeps dropdown open and refreshes items
-  - Dropdown closes when stack becomes empty after action
-  - Loading indicator appears during refresh
-  - Navigation resets to top after refresh
-  - Detail preview dismisses on action
-  - Error dialog on backend failure (if testable)
-  - Accessibility announcements after refresh
+The dropdown must use a fixed `height` (not just `maxHeight`) of ~220px to maintain the 5-item container size even when fewer items are present. Use `height: '220px'` with `overflow-y: auto` to achieve consistent sizing regardless of item count.
+
+Key reuse points:
+- `hardClose()` helper (`UndoHistoryDropdown.tsx:203-236`) — keep for Escape/click-outside/mouse-leave; remove from action handlers
+- `fetchStack()` (`UndoHistoryDropdown.tsx:239-249`) — call after each action to refresh
+- `refreshUndoState()` (`projectStore.ts:771-781`) — already called by undo/redo actions
+- `ErrorDialog` (`ErrorDialog.tsx`) — enhance for stack trace display
+- `DialogWrapper` (`DialogWrapper.tsx`) — wrap error dialog
+- aria-live pattern (`ShortcutRecorder.tsx:326-333`) — reuse for announcements
+- `LoadingProgress.tsx:85-156` — reference copy-to-clipboard pattern
+
+## Risks / Dependencies
+
+- **Epic dependencies**: fn-28-rsu (undo entry loss on failure), fn-30-wcf (zero datum two entries), fn-40-tub (merge/closure undo bug) — all modify undo/redo stack behavior. These should ideally land first to avoid conflicting stack semantics. However, fn-25-itw's changes are primarily UI-level (dropdown behavior) and don't modify backend stack logic, so they can proceed independently.
+- **Test breakage**: Existing e2e tests expect dropdown to close after actions. These must be updated.
+- **Race conditions**: Rapid clicks could cause stale state if not properly queued. Use sequential await chain.
+- **Double-undo risk**: Global keyboard shortcut handler must be prevented from firing when dropdown handles Ctrl+Z/Y via `stopPropagation`/`preventDefault`.
+
+## Quick commands
+
+```bash
+# Type check
+pnpm tsc --noEmit
+
+# E2E tests (undo-redo dropdown specific)
+pnpm test:ui -- --grep "undo"
+
+# All E2E tests
+pnpm test:ui
+
+# Rust tests (backend unchanged, sanity check)
+cargo test --manifest-path src-tauri/Cargo.toml
+```
 
 ## Acceptance
 
 - [ ] Clicking undo/redo button while dropdown is open keeps dropdown open and refreshes item list
 - [ ] Clicking a dropdown item performs the action and refreshes the dropdown (stays open)
 - [ ] Ctrl+Z/Y/Shift+Z while dropdown is open performs action and refreshes dropdown
+- [ ] No double-undo/redo when using keyboard shortcuts while dropdown is open
 - [ ] Dropdown closes automatically when stack becomes empty
 - [ ] Small loading indicator shown at top of dropdown during async refresh
 - [ ] Keyboard navigation and scroll position reset to top after refresh
 - [ ] Detail preview popup dismissed on any action
 - [ ] Rapid clicks queue and execute sequentially with refresh after each
-- [ ] Dropdown fixed at 5-item height with scrollable content
+- [ ] Dropdown fixed at 5-item height with scrollable content (fixed height, not just maxHeight)
 - [ ] Auto-hide scrollbar preserved
-- [ ] Critical error shown in modal dialog with full details
+- [ ] Critical error shown in modal dialog with full details, stack trace, and copy-to-clipboard
+- [ ] Error detected via CommandResult.success === false (not just try/catch)
 - [ ] aria-live region announces refresh and remaining item count
 - [ ] Mouse leave and click-outside still close dropdown even during action
 - [ ] Escape key still closes dropdown
-- [ ] SPEC.md section 6.3 updated
-- [ ] TESTING.md updated if affected
+- [ ] SPEC.md section 6.3 updated (close behavior + scrolling height)
+- [ ] SPEC.md section 11.3 updated (ARIA live regions)
+- [ ] TESTING.md updated
 - [ ] Existing e2e tests updated, new tests added for all new behaviors
+
+## References
+
+- Epic spec: `.flow/specs/fn-25-itw.md`
+- Main component: `src/components/SingleSystemView/UndoHistoryDropdown.tsx`
+- Store actions: `src/store/projectStore.ts:727-781`
+- Backend commands: `src-tauri/src/commands/history.rs:44-126`
+- Toolbar integration: `src/components/SingleSystemView/Toolbar.tsx:56-77`
+- Error dialog: `src/components/Dialogs/ErrorDialog.tsx`
+- Dialog wrapper: `src/components/Dialogs/DialogWrapper.tsx`
+- aria-live pattern: `src/components/ShortcutRecorder/ShortcutRecorder.tsx:326-333`
+- Copy-to-clipboard pattern: `src/components/LoadingProgress/LoadingProgress.tsx:85-156`
+- E2E tests: `e2e-playwright/undo-redo-dropdown.spec.ts`
+- SPEC.md section 6.3: `docs/SPEC.md`
+- TESTING.md: `docs/TESTING.md`

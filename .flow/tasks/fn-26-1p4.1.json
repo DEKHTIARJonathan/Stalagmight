@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-27T21:26:20.555118Z",
+  "depends_on": [],
+  "epic": "fn-26-1p4",
+  "id": "fn-26-1p4.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-26-1p4.1.md",
+  "status": "todo",
+  "title": "Implement marker visibility toggling based on view mode and geometry state",
+  "updated_at": "2026-01-27T21:43:23.948769Z"
+}
