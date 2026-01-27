@@ -110,7 +110,7 @@ describe('defaultConfig structure', () => {
     });
 
     it('has correct satellite defaults', () => {
-      expect(defaultConfig.map.satellite_provider).toBe('openstreetmap');
+      expect(defaultConfig.map.satellite_provider).toBe('esri');
       expect(defaultConfig.map.satellite_enabled).toBe(false);
     });
   });
