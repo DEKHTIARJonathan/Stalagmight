@@ -130,7 +130,7 @@ GlobalView.tsx (container)
             │
             ▼
 GlobalViewMap.tsx
-    ├── Initializes MapLibre with ESRI satellite tiles
+    ├── Initializes MapLibre with Esri World Imagery via cavechef-tiles:// protocol
     ├── Restores persisted map position from localStorage
     ├── Creates GlobalSurveyLayer for geometry rendering
     └── On map moveend → loadGeometryBatch(visible systems)
