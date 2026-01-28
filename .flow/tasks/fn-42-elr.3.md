@@ -24,9 +24,8 @@ Add a new "File" category to SHORTCUT_CATEGORIES containing `import_dmp` and `ex
 - [ ] Import DMP and Export shortcuts are recordable/configurable
 - [ ] Reset button works for Import DMP and Export
 ## Done summary
-TBD
-
+Added "File" category as the first item in SHORTCUT_CATEGORIES with import_dmp and export actions, making Import DMP and Export shortcuts configurable in the settings UI. Also removed Ctrl+I and Ctrl+E from RESERVED_SHORTCUT_DESCRIPTIONS since they are now user-configurable.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: b9676f740a6852285c803fbf75e5fe26f8321d69
+- Tests: pnpm tsc --noEmit, cargo test --manifest-path src-tauri/Cargo.toml, pnpm test:ui -- --grep shortcuts
 - PRs:
