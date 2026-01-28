@@ -191,6 +191,22 @@ tr:hover {
   background-color: rgba(78, 205, 196, 0.1);
 }
 
+/* Selection indicator gradient bar */
+.selected-cell-indicator {
+  position: relative;
+}
+
+.selected-cell-indicator::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 8px;
+  background: linear-gradient(to right, rgba(78, 205, 196, 0.3), transparent);
+  pointer-events: none;
+}
+
 /* React DatePicker dark theme styles */
 .react-datepicker {
   background-color: #1a1a2e !important;

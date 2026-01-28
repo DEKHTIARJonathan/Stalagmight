@@ -289,13 +289,12 @@ export function EditableTable<T extends object>({
     return classes.join(' ');
   };
 
-  // Get first cell class for accent left border indicator (borders don't work reliably on <tr>)
-  const getFirstCellBorderClass = (isSelected: boolean): string => {
+  // Get first cell class for selection indicator (gradient pseudo-element bar)
+  const getFirstCellSelectionClass = (isSelected: boolean): string => {
     if (isSelected) {
-      return 'border-l-2 border-accent';
+      return 'selected-cell-indicator';
     }
-    // Reserve space for border to prevent layout shift
-    return 'border-l-2 border-transparent';
+    return '';
   };
 
   return (
@@ -365,7 +364,8 @@ export function EditableTable<T extends object>({
                     return (
                       <td
                         key={column.key}
-                        className={`p-0 ${alignmentClasses[column.align ?? 'left']} ${isFirstColumn ? getFirstCellBorderClass(isSelected) : ''}`}
+                        className={`p-0 ${alignmentClasses[column.align ?? 'left']} ${isFirstColumn ? getFirstCellSelectionClass(isSelected) : ''}`}
+                        data-selected={isFirstColumn && isSelected ? 'true' : undefined}
                       >
                         {column.render ? (
                           column.render(item, index)
