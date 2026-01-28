@@ -32,9 +32,20 @@ if project.sections.iter().any(|s| s.id == section_id) {
 - [ ] Undo via InverseCommand works correctly
 
 ## Done summary
-TBD
+Implemented MoveSection command to actually modify project.section_offsets HashMap.
 
+Changes:
+- Replaced stub in src-tauri/src/core/state/commands.rs:581-602 that only logged Section move requested with actual implementation
+- Now reads current offset (or defaults to (0.0, 0.0)), adds the delta, and inserts the new accumulated offset
+- Calls project.touch() to mark the project as modified
+- Undo already correctly configured via InverseCommand at undo.rs:242-248 (no changes needed)
+
+All acceptance criteria met:
+- MoveSection updates project.section_offsets HashMap
+- Multiple moves accumulate (don't overwrite)
+- project.touch() called to mark as modified
+- Undo via InverseCommand works correctly (pre-existing, verified)
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 841d7fe
+- Tests: All 728+80 Rust tests pass, TypeScript type check passes
 - PRs:
