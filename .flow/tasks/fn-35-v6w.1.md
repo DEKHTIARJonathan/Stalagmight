@@ -60,9 +60,8 @@ Match Fit to View button dimensions. Fit to View uses `px-2 py-1 text-sm` (see `
 - [ ] Zoom buttons are visually clickable and functional in both MapCanvas and GlobalViewMap
 - [ ] Scale bar updates correctly when zooming in both views
 ## Done summary
-TBD
-
+Added MapLibre control dark theme CSS overrides in src/index.css. Styled NavigationControl (zoom +/-) with panel background, themed borders, hover/active states, and inverted SVG icons. Styled ScaleControl with transparent background, themed border/text colors, and preserved L-shaped cartographic style. Added broad .maplibregl-ctrl base selector for future controls.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: a97a9be250ac49c0e77897a891a935642554f8ff
+- Tests: pnpm tsc --noEmit (pre-existing error confirmed unrelated)
 - PRs:

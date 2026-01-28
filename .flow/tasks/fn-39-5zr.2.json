@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-28T05:42:13.768910Z",
+  "depends_on": [
+    "fn-39-5zr.1"
+  ],
+  "epic": "fn-39-5zr",
+  "id": "fn-39-5zr.2",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-39-5zr.2.md",
+  "status": "todo",
+  "title": "Add Playwright tests verifying section feature-state on map",
+  "updated_at": "2026-01-28T05:42:34.243798Z"
+}
