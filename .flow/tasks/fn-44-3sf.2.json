@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-28T16:35:55.691237Z",
+  "depends_on": [
+    "fn-44-3sf.1"
+  ],
+  "epic": "fn-44-3sf",
+  "id": "fn-44-3sf.2",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-44-3sf.2.md",
+  "status": "todo",
+  "title": "Fix CreateShot undo/redo ID preservation",
+  "updated_at": "2026-01-28T16:39:55.940715Z"
+}
