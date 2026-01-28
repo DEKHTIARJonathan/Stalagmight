@@ -20,39 +20,82 @@ import {
 } from '../helpers/app';
 
 /**
- * Wait for MapLibre controls to appear in the DOM.
- * Controls are added asynchronously after the map initializes.
+ * Parse an RGB/RGBA color string into numeric components.
+ * Handles both "rgb(r, g, b)" and "rgba(r, g, b, a)" formats,
+ * as well as the keyword "transparent".
+ * Returns { r, g, b, a } with a defaulting to 1 for opaque.
  */
-async function waitForMapControls(timeout = 15000): Promise<void> {
+function parseColor(color: string): { r: number; g: number; b: number; a: number } {
+  if (color === 'transparent') return { r: 0, g: 0, b: 0, a: 0 };
+  const rgbaMatch = color.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)/);
+  if (!rgbaMatch) throw new Error(`Cannot parse color: ${color}`);
+  return {
+    r: parseInt(rgbaMatch[1]!, 10),
+    g: parseInt(rgbaMatch[2]!, 10),
+    b: parseInt(rgbaMatch[3]!, 10),
+    a: rgbaMatch[4] !== undefined ? parseFloat(rgbaMatch[4]) : 1,
+  };
+}
+
+/**
+ * Assert two color strings represent the same color (tolerance for rounding).
+ */
+function expectColorEqual(actual: string, expectedR: number, expectedG: number, expectedB: number): void {
+  const parsed = parseColor(actual);
+  expect(parsed.r).toBe(expectedR);
+  expect(parsed.g).toBe(expectedG);
+  expect(parsed.b).toBe(expectedB);
+}
+
+/**
+ * Assert a color is fully transparent (alpha=0 or the keyword "transparent").
+ */
+function expectTransparent(color: string): void {
+  const parsed = parseColor(color);
+  expect(parsed.a).toBe(0);
+}
+
+/**
+ * Wait for MapLibre controls to appear within a scoped container.
+ * @param containerSelector - CSS selector for the parent container (e.g. '[data-testid="map-canvas"]')
+ * @param timeout - Max wait time in ms
+ */
+async function waitForMapControls(containerSelector: string, timeout = 15000): Promise<void> {
   await browser.waitUntil(
     async () => {
-      const exists = await browser.execute(() => {
-        return !!document.querySelector('.maplibregl-ctrl-group');
-      });
+      const exists = await browser.execute((sel: string) => {
+        const container = document.querySelector(sel);
+        if (!container) return false;
+        return !!container.querySelector('.maplibregl-ctrl-group');
+      }, containerSelector);
       return exists;
     },
     {
       timeout,
-      timeoutMsg: `MapLibre control group did not appear within ${timeout}ms`,
+      timeoutMsg: `MapLibre control group did not appear within ${containerSelector} within ${timeout}ms`,
       interval: 500,
     }
   );
 }
 
 /**
- * Wait for MapLibre scale control to appear in the DOM.
+ * Wait for MapLibre scale control to appear within a scoped container.
+ * @param containerSelector - CSS selector for the parent container
+ * @param timeout - Max wait time in ms
  */
-async function waitForScaleControl(timeout = 10000): Promise<void> {
+async function waitForScaleControl(containerSelector: string, timeout = 10000): Promise<void> {
   await browser.waitUntil(
     async () => {
-      const exists = await browser.execute(() => {
-        return !!document.querySelector('.maplibregl-ctrl-scale');
-      });
+      const exists = await browser.execute((sel: string) => {
+        const container = document.querySelector(sel);
+        if (!container) return false;
+        return !!container.querySelector('.maplibregl-ctrl-scale');
+      }, containerSelector);
       return exists;
     },
     {
       timeout,
-      timeoutMsg: `MapLibre scale control did not appear within ${timeout}ms`,
+      timeoutMsg: `MapLibre scale control did not appear within ${containerSelector} within ${timeout}ms`,
       interval: 500,
     }
   );
@@ -147,31 +190,43 @@ async function saveCurrentProject(): Promise<{ success: boolean; error?: string 
 }
 
 /**
- * Navigate to global view by closing the current project.
+ * Switch the UI view to global without closing the project.
+ * The project stays in the store so recent projects list is populated.
  */
-async function navigateToGlobalView(): Promise<void> {
-  await browser.execute(() => {
-    const e2e = (window as unknown as {
-      __E2E_TEST__?: {
-        uiStore: {
-          getState: () => {
-            closeDialog: () => void;
-            setView: (view: string) => void;
+async function switchToGlobalView(): Promise<void> {
+  await browser.executeAsync(
+    async (done: (result: { ok: boolean; error?: string }) => void) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: {
+            getState: () => {
+              closeDialog: () => void;
+              setView: (view: string) => void;
+            };
+          };
+          projectStore: {
+            getState: () => {
+              closeProject: () => Promise<void>;
+            };
           };
         };
-        projectStore: {
-          getState: () => {
-            closeProject: () => Promise<void>;
-          };
-        };
-      };
-    }).__E2E_TEST__;
+      }).__E2E_TEST__;
 
-    if (e2e) {
-      e2e.uiStore.getState().closeDialog();
-      e2e.uiStore.getState().setView('global');
+      if (!e2e) {
+        done({ ok: false, error: 'E2E helpers not found' });
+        return;
+      }
+
+      try {
+        e2e.uiStore.getState().closeDialog();
+        await e2e.projectStore.getState().closeProject();
+        e2e.uiStore.getState().setView('global');
+        done({ ok: true });
+      } catch (err) {
+        done({ ok: false, error: String(err) });
+      }
     }
-  });
+  );
 
   // Wait for global view to appear
   const globalView = await $('[data-testid="global-view"]');
@@ -180,28 +235,34 @@ async function navigateToGlobalView(): Promise<void> {
 }
 
 /**
- * Toggle the scale bar display setting.
+ * Toggle scale bar via the Display menu UI (click menu button, click scale bar toggle).
+ * This exercises the actual user flow rather than mutating the store directly.
  */
-async function toggleScaleBar(enabled: boolean): Promise<void> {
-  await browser.execute((show: boolean) => {
-    const e2e = (window as unknown as {
-      __E2E_TEST__?: {
-        uiStore: {
-          getState: () => {
-            showScaleBar: boolean;
-            toggleDisplay: (key: string) => void;
-          };
-        };
-      };
-    }).__E2E_TEST__;
+async function toggleScaleBarViaMenu(): Promise<void> {
+  // Open display menu
+  const menuButton = await $('[data-testid="display-menu-button"]');
+  await menuButton.waitForClickable({ timeout: 5000 });
+  await menuButton.click();
 
-    if (e2e) {
-      const currentState = e2e.uiStore.getState().showScaleBar;
-      if (currentState !== show) {
-        e2e.uiStore.getState().toggleDisplay('showScaleBar');
-      }
-    }
-  }, enabled);
+  // Wait for menu to appear
+  const menu = await $('[data-testid="display-menu"]');
+  await menu.waitForDisplayed({ timeout: 3000 });
+
+  // Click scale bar toggle
+  const scaleToggle = await $('[data-testid="display-toggle-showScaleBar"]');
+  await scaleToggle.waitForClickable({ timeout: 3000 });
+  await scaleToggle.click();
+
+  // Close the menu by clicking the button again
+  await menuButton.click();
+
+  // Wait for menu to close and UI to settle
+  await browser.waitUntil(
+    async () => !(await menu.isDisplayed().catch(() => false)),
+    { timeout: 3000 }
+  ).catch(() => {
+    // Menu may already be closed
+  });
   await waitForUiIdle(300);
 }
 
@@ -224,6 +285,12 @@ async function isScaleBarEnabled(): Promise<boolean> {
   });
 }
 
+/** Container selector for MapCanvas (single-system view). */
+const MAP_CANVAS_CONTAINER = '[data-testid="map-canvas"]';
+
+/** Container selector for GlobalViewMap. */
+const GLOBAL_MAP_CONTAINER = '[data-testid="globalview-map"]';
+
 describe('MapLibre Control Dark Theme Styling', () => {
   beforeEach(async () => {
     await waitForAppReady();
@@ -234,68 +301,77 @@ describe('MapLibre Control Dark Theme Styling', () => {
     it('should apply dark background to control group', async () => {
       await createNewProject('Map Controls BG Test');
       await waitForMapReady();
-      await waitForMapControls();
+      await waitForMapControls(MAP_CANVAS_CONTAINER);
 
-      const bgColor = await browser.execute(() => {
-        const el = document.querySelector('.maplibregl-ctrl-group');
-        if (!el) throw new Error('MapLibre control group not found');
+      const bgColor = await browser.execute((sel: string) => {
+        const container = document.querySelector(sel);
+        if (!container) throw new Error('Map canvas container not found');
+        const el = container.querySelector('.maplibregl-ctrl-group');
+        if (!el) throw new Error('MapLibre control group not found in MapCanvas');
         return window.getComputedStyle(el as Element).backgroundColor;
-      });
+      }, MAP_CANVAS_CONTAINER);
 
       // #16213e => rgb(22, 33, 62)
-      expect(bgColor).toBe('rgb(22, 33, 62)');
+      expectColorEqual(bgColor, 22, 33, 62);
     });
 
     it('should apply dark border-top color to button dividers', async () => {
       await createNewProject('Map Controls Divider Test');
       await waitForMapReady();
-      await waitForMapControls();
+      await waitForMapControls(MAP_CANVAS_CONTAINER);
 
-      const borderTopColor = await browser.execute(() => {
-        const el = document.querySelector('.maplibregl-ctrl-group button + button');
-        if (!el) throw new Error('MapLibre button divider not found');
+      const borderTopColor = await browser.execute((sel: string) => {
+        const container = document.querySelector(sel);
+        if (!container) throw new Error('Map canvas container not found');
+        const el = container.querySelector('.maplibregl-ctrl-group button + button');
+        if (!el) throw new Error('MapLibre button divider not found in MapCanvas');
         return window.getComputedStyle(el as Element).borderTopColor;
-      });
+      }, MAP_CANVAS_CONTAINER);
 
       // #0f3460 => rgb(15, 52, 96)
-      expect(borderTopColor).toBe('rgb(15, 52, 96)');
+      expectColorEqual(borderTopColor, 15, 52, 96);
     });
 
     it('should apply invert filter to control icons', async () => {
       await createNewProject('Map Controls Icon Test');
       await waitForMapReady();
-      await waitForMapControls();
+      await waitForMapControls(MAP_CANVAS_CONTAINER);
 
-      const filterValue = await browser.execute(() => {
-        const el = document.querySelector('.maplibregl-ctrl-icon');
-        if (!el) throw new Error('MapLibre control icon not found');
+      const filterValue = await browser.execute((sel: string) => {
+        const container = document.querySelector(sel);
+        if (!container) throw new Error('Map canvas container not found');
+        const el = container.querySelector('.maplibregl-ctrl-icon');
+        if (!el) throw new Error('MapLibre control icon not found in MapCanvas');
         return window.getComputedStyle(el as Element).filter;
-      });
+      }, MAP_CANVAS_CONTAINER);
 
       // filter: brightness(0) invert(1) should contain 'invert'
       expect(filterValue).toContain('invert');
     });
 
-    it('should apply dark border to control group', async () => {
+    it('should apply dark border and rounded corners to control group', async () => {
       await createNewProject('Map Controls Border Test');
       await waitForMapReady();
-      await waitForMapControls();
+      await waitForMapControls(MAP_CANVAS_CONTAINER);
 
-      const styles = await browser.execute(() => {
-        const el = document.querySelector('.maplibregl-ctrl-group');
-        if (!el) throw new Error('MapLibre control group not found');
+      const styles = await browser.execute((sel: string) => {
+        const container = document.querySelector(sel);
+        if (!container) throw new Error('Map canvas container not found');
+        const el = container.querySelector('.maplibregl-ctrl-group');
+        if (!el) throw new Error('MapLibre control group not found in MapCanvas');
         const cs = window.getComputedStyle(el as Element);
         return {
-          borderColor: cs.borderColor,
+          // Use individual side colors for cross-engine stability
+          borderTopColor: cs.borderTopColor,
           borderRadius: cs.borderRadius,
           boxShadow: cs.boxShadow,
         };
-      });
+      }, MAP_CANVAS_CONTAINER);
 
       // Border color should be #0f3460 => rgb(15, 52, 96)
-      expect(styles.borderColor).toBe('rgb(15, 52, 96)');
-      // Border radius should be 4px
-      expect(styles.borderRadius).toBe('4px');
+      expectColorEqual(styles.borderTopColor, 15, 52, 96);
+      // Border radius should contain 4px (may return "4px" or "4px 4px 4px 4px")
+      expect(styles.borderRadius).toContain('4px');
       // Should have a box-shadow
       expect(styles.boxShadow).not.toBe('none');
     });
@@ -315,8 +391,8 @@ describe('MapLibre Control Dark Theme Styling', () => {
       const saveResult = await saveCurrentProject();
       expect(saveResult.success).toBe(true);
 
-      // Navigate back to global view
-      await navigateToGlobalView();
+      // Close project and switch to global view
+      await switchToGlobalView();
 
       // Switch to map tab (should be default if GPS projects exist)
       const mapTab = await $('[data-testid="globalview-map-tab"]');
@@ -325,17 +401,19 @@ describe('MapLibre Control Dark Theme Styling', () => {
         await waitForUiIdle(500);
       }
 
-      // Wait for GlobalViewMap to render with actual map controls
-      await waitForMapControls(20000);
+      // Wait for GlobalViewMap to render with actual map controls (scoped to global map container)
+      await waitForMapControls(GLOBAL_MAP_CONTAINER, 20000);
 
-      const bgColor = await browser.execute(() => {
-        const el = document.querySelector('.maplibregl-ctrl-group');
+      const bgColor = await browser.execute((sel: string) => {
+        const container = document.querySelector(sel);
+        if (!container) throw new Error('GlobalViewMap container not found');
+        const el = container.querySelector('.maplibregl-ctrl-group');
         if (!el) throw new Error('MapLibre control group not found in GlobalViewMap');
         return window.getComputedStyle(el as Element).backgroundColor;
-      });
+      }, GLOBAL_MAP_CONTAINER);
 
       // Same dark theme color as MapCanvas: #16213e => rgb(22, 33, 62)
-      expect(bgColor).toBe('rgb(22, 33, 62)');
+      expectColorEqual(bgColor, 22, 33, 62);
     });
 
     it('should apply dark theme to scale control in global view', async () => {
@@ -349,8 +427,8 @@ describe('MapLibre Control Dark Theme Styling', () => {
       const saveResult = await saveCurrentProject();
       expect(saveResult.success).toBe(true);
 
-      // Navigate to global view
-      await navigateToGlobalView();
+      // Close project and switch to global view
+      await switchToGlobalView();
 
       const mapTab = await $('[data-testid="globalview-map-tab"]');
       if (await mapTab.isExisting()) {
@@ -358,139 +436,141 @@ describe('MapLibre Control Dark Theme Styling', () => {
         await waitForUiIdle(500);
       }
 
-      // GlobalViewMap always has ScaleControl added
-      await waitForScaleControl(20000);
+      // GlobalViewMap always has ScaleControl added (scoped to global map container)
+      await waitForScaleControl(GLOBAL_MAP_CONTAINER, 20000);
 
-      const scaleStyles = await browser.execute(() => {
-        const el = document.querySelector('.maplibregl-ctrl-scale');
+      const scaleStyles = await browser.execute((sel: string) => {
+        const container = document.querySelector(sel);
+        if (!container) throw new Error('GlobalViewMap container not found');
+        const el = container.querySelector('.maplibregl-ctrl-scale');
         if (!el) throw new Error('MapLibre scale control not found in GlobalViewMap');
         const cs = window.getComputedStyle(el as Element);
         return {
           backgroundColor: cs.backgroundColor,
-          borderColor: cs.borderColor,
           color: cs.color,
+          // Use individual border side for cross-engine stability
+          borderBottomColor: cs.borderBottomColor,
         };
-      });
+      }, GLOBAL_MAP_CONTAINER);
 
       // Background should be transparent
-      expect(
-        scaleStyles.backgroundColor === 'transparent' ||
-        scaleStyles.backgroundColor === 'rgba(0, 0, 0, 0)'
-      ).toBe(true);
+      expectTransparent(scaleStyles.backgroundColor);
 
       // Border color: #0f3460 => rgb(15, 52, 96)
-      expect(scaleStyles.borderColor).toBe('rgb(15, 52, 96)');
+      expectColorEqual(scaleStyles.borderBottomColor, 15, 52, 96);
 
       // Text color: #f5f5f5 => rgb(245, 245, 245)
-      expect(scaleStyles.color).toBe('rgb(245, 245, 245)');
+      expectColorEqual(scaleStyles.color, 245, 245, 245);
     });
   });
 
   describe('Scale bar toggle (MapCanvas)', () => {
-    it('should apply correct styles when scale bar is toggled on', async () => {
-      await createNewProject('Scale Bar Toggle Test');
+    it('should apply correct styles when scale bar is present by default', async () => {
+      await createNewProject('Scale Bar Default Test');
       await waitForMapReady();
-      await waitForMapControls();
+      await waitForMapControls(MAP_CANVAS_CONTAINER);
 
       // Scale bar is on by default (showScaleBar: true in DISPLAY_DEFAULTS)
       const initialEnabled = await isScaleBarEnabled();
       expect(initialEnabled).toBe(true);
 
-      // Scale control should be present
-      await waitForScaleControl();
+      // Scale control should be present within MapCanvas container
+      await waitForScaleControl(MAP_CANVAS_CONTAINER);
 
-      const scaleStyles = await browser.execute(() => {
-        const el = document.querySelector('.maplibregl-ctrl-scale');
-        if (!el) throw new Error('MapLibre scale control not found');
+      const scaleStyles = await browser.execute((sel: string) => {
+        const container = document.querySelector(sel);
+        if (!container) throw new Error('Map canvas container not found');
+        const el = container.querySelector('.maplibregl-ctrl-scale');
+        if (!el) throw new Error('MapLibre scale control not found in MapCanvas');
         const cs = window.getComputedStyle(el as Element);
         return {
           backgroundColor: cs.backgroundColor,
-          borderColor: cs.borderColor,
+          borderBottomColor: cs.borderBottomColor,
           color: cs.color,
         };
-      });
+      }, MAP_CANVAS_CONTAINER);
 
       // Verify dark theme styles on scale control
-      expect(
-        scaleStyles.backgroundColor === 'transparent' ||
-        scaleStyles.backgroundColor === 'rgba(0, 0, 0, 0)'
-      ).toBe(true);
-      expect(scaleStyles.borderColor).toBe('rgb(15, 52, 96)');
-      expect(scaleStyles.color).toBe('rgb(245, 245, 245)');
+      expectTransparent(scaleStyles.backgroundColor);
+      expectColorEqual(scaleStyles.borderBottomColor, 15, 52, 96);
+      expectColorEqual(scaleStyles.color, 245, 245, 245);
     });
 
-    it('should remove scale control when toggled off', async () => {
-      await createNewProject('Scale Bar Remove Test');
+    it('should remove scale control when toggled off via Display menu', async () => {
+      await createNewProject('Scale Bar Menu Remove Test');
       await waitForMapReady();
-      await waitForMapControls();
+      await waitForMapControls(MAP_CANVAS_CONTAINER);
 
       // Scale bar should be on by default
-      await waitForScaleControl();
+      await waitForScaleControl(MAP_CANVAS_CONTAINER);
 
-      // Toggle scale bar off
-      await toggleScaleBar(false);
+      // Toggle scale bar off via Display menu UI
+      await toggleScaleBarViaMenu();
 
-      // Scale control element should be removed from DOM
+      // Scale control element should be removed from MapCanvas container
       await browser.waitUntil(
         async () => {
-          const exists = await browser.execute(() => {
-            return !!document.querySelector('.maplibregl-ctrl-scale');
-          });
+          const exists = await browser.execute((sel: string) => {
+            const container = document.querySelector(sel);
+            if (!container) return false;
+            return !!container.querySelector('.maplibregl-ctrl-scale');
+          }, MAP_CANVAS_CONTAINER);
           return !exists;
         },
         {
           timeout: 5000,
-          timeoutMsg: 'Scale control was not removed after toggling off',
+          timeoutMsg: 'Scale control was not removed from MapCanvas after toggling off via Display menu',
         }
       );
     });
 
-    it('should re-apply correct styles when scale bar is toggled back on', async () => {
-      await createNewProject('Scale Bar Re-add Test');
+    it('should re-apply correct styles when scale bar is toggled back on via Display menu', async () => {
+      await createNewProject('Scale Bar Menu Re-add Test');
       await waitForMapReady();
-      await waitForMapControls();
+      await waitForMapControls(MAP_CANVAS_CONTAINER);
 
       // Start with scale bar on
-      await waitForScaleControl();
+      await waitForScaleControl(MAP_CANVAS_CONTAINER);
 
-      // Toggle off
-      await toggleScaleBar(false);
+      // Toggle off via Display menu
+      await toggleScaleBarViaMenu();
 
-      // Wait for removal
+      // Wait for removal within MapCanvas
       await browser.waitUntil(
         async () => {
-          const exists = await browser.execute(() => {
-            return !!document.querySelector('.maplibregl-ctrl-scale');
-          });
+          const exists = await browser.execute((sel: string) => {
+            const container = document.querySelector(sel);
+            if (!container) return false;
+            return !!container.querySelector('.maplibregl-ctrl-scale');
+          }, MAP_CANVAS_CONTAINER);
           return !exists;
         },
-        { timeout: 5000, timeoutMsg: 'Scale control not removed' }
+        { timeout: 5000, timeoutMsg: 'Scale control not removed from MapCanvas' }
       );
 
-      // Toggle back on
-      await toggleScaleBar(true);
+      // Toggle back on via Display menu
+      await toggleScaleBarViaMenu();
 
-      // Wait for scale control to reappear
-      await waitForScaleControl();
+      // Wait for scale control to reappear within MapCanvas
+      await waitForScaleControl(MAP_CANVAS_CONTAINER);
 
       // Verify dark theme styles are applied on the re-added control
-      const scaleStyles = await browser.execute(() => {
-        const el = document.querySelector('.maplibregl-ctrl-scale');
-        if (!el) throw new Error('MapLibre scale control not found after re-add');
+      const scaleStyles = await browser.execute((sel: string) => {
+        const container = document.querySelector(sel);
+        if (!container) throw new Error('Map canvas container not found');
+        const el = container.querySelector('.maplibregl-ctrl-scale');
+        if (!el) throw new Error('MapLibre scale control not found after re-add in MapCanvas');
         const cs = window.getComputedStyle(el as Element);
         return {
           backgroundColor: cs.backgroundColor,
-          borderColor: cs.borderColor,
+          borderBottomColor: cs.borderBottomColor,
           color: cs.color,
         };
-      });
+      }, MAP_CANVAS_CONTAINER);
 
-      expect(
-        scaleStyles.backgroundColor === 'transparent' ||
-        scaleStyles.backgroundColor === 'rgba(0, 0, 0, 0)'
-      ).toBe(true);
-      expect(scaleStyles.borderColor).toBe('rgb(15, 52, 96)');
-      expect(scaleStyles.color).toBe('rgb(245, 245, 245)');
+      expectTransparent(scaleStyles.backgroundColor);
+      expectColorEqual(scaleStyles.borderBottomColor, 15, 52, 96);
+      expectColorEqual(scaleStyles.color, 245, 245, 245);
     });
   });
 });

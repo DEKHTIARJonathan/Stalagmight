@@ -8,7 +8,7 @@ Investigate and fix the root cause of clicking a warning showing "Selection not 
 **Files:**
 - `src-tauri/src/core/state/warnings.rs` — verify/fix `shot_id` stored in warnings matches actual `shot.id`
 - `src/components/SingleSystemView/DetailPanel.tsx` — verify `onWarningClick` and `DetailsContent` lookup
-- `tests/*.spec.ts` (new or existing) — E2E Playwright tests for warning click
+- `e2e-playwright/warning-click.spec.ts` (new) — E2E Playwright tests for warning click navigation
 
 ## Approach
 
@@ -26,10 +26,11 @@ Investigate and fix the root cause of clicking a warning showing "Selection not 
    - Data table highlights and scrolls to the row
    - Map canvas highlights the shot
 
-4. **Add E2E Playwright tests:**
+4. **Add E2E Playwright tests** in `e2e-playwright/warning-click.spec.ts`:
    - Test: click a warning → verify Details tab shows shot details (not "Selection not found")
    - Test: click a warning on a DMP-imported project → verify navigation works
    - Follow existing test patterns and `data-testid` selectors from `docs/TESTING.md`
+   - Reference existing E2E patterns in `e2e-playwright/detail-panel-links.spec.ts` and `e2e-playwright/dmp-import.spec.ts`
 
 ## Key context
 
@@ -38,22 +39,18 @@ Investigate and fix the root cause of clicking a warning showing "Selection not 
 - The `ProjectWarning` struct at `src-tauri/src/models/warning.rs:15-23` has `section_id`, `shot_id`, and `shot_index` fields
 - `formatShotId()` at `src/utils/formatters.ts:16-18` is the frontend formatting utility
 - Existing warnings tab tests and data-testid patterns documented in `docs/TESTING.md`
+- E2E tests live in `e2e-playwright/` directory (not `tests/`)
+
 ## Acceptance
+
 - [ ] Root cause of "Selection not found" identified and fixed at the source (Rust backend)
 - [ ] `warning.shot_id` matches actual `shot.id` in project state for all code paths (new project, DMP import, DB reload)
 - [ ] Clicking any warning selects the shot — Details tab shows shot info
 - [ ] Warning click highlights shot in data table and scrolls to it
 - [ ] Warning click highlights shot on map canvas
-- [ ] E2E Playwright test: click warning → Details tab shows shot details
+- [ ] E2E Playwright test in `e2e-playwright/warning-click.spec.ts`: click warning → Details tab shows shot details
 - [ ] E2E Playwright test: DMP import project → click warning → navigation works
 - [ ] No frontend fallback lookups added (fix is at root cause)
 - [ ] `pnpm test:ui` passes (all Playwright tests)
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 - [ ] `pnpm tsc --noEmit` passes
-## Done summary
-TBD
-
-## Evidence
-- Commits:
-- Tests:
-- PRs:

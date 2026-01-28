@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-28T05:56:53.833108Z",
+  "depends_on": [
+    "fn-38-4ja.1"
+  ],
+  "epic": "fn-38-4ja",
+  "id": "fn-38-4ja.2",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-38-4ja.2.md",
+  "status": "todo",
+  "title": "Add Playwright E2E test for section zoom margin",
+  "updated_at": "2026-01-28T06:05:23.952293Z"
+}

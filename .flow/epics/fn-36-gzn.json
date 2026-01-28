@@ -1,13 +1,16 @@
 {
   "branch_name": "fn-36-gzn",
   "created_at": "2026-01-27T15:56:52.061282Z",
+  "default_impl": null,
+  "default_review": null,
+  "default_sync": null,
   "depends_on_epics": [],
   "id": "fn-36-gzn",
   "next_task": 1,
-  "plan_review_status": "unknown",
-  "plan_reviewed_at": null,
+  "plan_review_status": "ship",
+  "plan_reviewed_at": "2026-01-28T06:00:05.406017Z",
   "spec_path": ".flow/specs/fn-36-gzn.md",
   "status": "open",
   "title": "Bugfix: Station IDs should display 0-indexed",
-  "updated_at": "2026-01-28T05:51:45.184009Z"
+  "updated_at": "2026-01-28T06:00:05.406043Z"
 }

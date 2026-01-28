@@ -9,6 +9,14 @@ Extend the existing `section-highlighting.spec.ts` Playwright tests to verify th
 - After task fn-39-5zr.1, `updateVisualState()` will set `hover: true` / `selected: true` feature-state on all features in a section
 - We need tests that verify the feature-state is actually applied on the map
 
+## Important: Source names vs layer names
+
+MapLibre distinguishes between **source** names and **layer** names:
+- **Source names** (for `querySourceFeatures`, `getFeatureState`): `'survey-data-shots'`, `'survey-data-stations'`
+- **Layer names** (for `queryRenderedFeatures`): `'survey-shots'`, `'survey-stations'`
+
+The helpers in this task use `querySourceFeatures` and `getFeatureState`, so they must use **source names** (`survey-data-shots`, `survey-data-stations`), NOT layer names.
+
 ## Implementation
 
 ### 1. Add a helper to check feature-state on map features
@@ -38,8 +46,8 @@ async function getSectionFeatureStates(
     };
 
     return {
-      shots: checkSource('survey-shots'),
-      stations: checkSource('survey-stations'),
+      shots: checkSource('survey-data-shots'),
+      stations: checkSource('survey-data-stations'),
     };
   }, { secId: sectionId, key: stateKey });
 }
@@ -59,7 +67,12 @@ expect(states.stations.withState).toBe(states.stations.total);
 
 **"clicking section row selects section and applies map styling"** — add feature-state check for `selected`.
 
-**"hoveredSectionId clears when mouse leaves section row"** — verify feature-state is removed after unhover.
+**"hoveredSectionId clears when mouse leaves section row"** — verify feature-state is removed after unhover:
+```typescript
+const statesAfterUnhover = await getSectionFeatureStates(page, firstSectionId, 'hover');
+expect(statesAfterUnhover.shots.withState).toBe(0);
+expect(statesAfterUnhover.stations.withState).toBe(0);
+```
 
 ### 3. Add new test: section selection + different section hover coexist
 
@@ -73,6 +86,15 @@ Add a test verifying both feature-states are visible simultaneously:
 ### 4. Add new test: section feature-state clears on Escape
 
 Verify that pressing Escape removes `selected` feature-state from all section features.
+
+### 5. Add new test: section highlighting survives data update (review finding)
+
+Task fn-39-5zr.1 adds logic to re-apply feature-state after `update()` calls `setData()`. This test should verify:
+- Select a section (verify feature-state is applied)
+- Trigger a data update (e.g., toggle depth gradient via store, which causes `update()` to re-run)
+- Verify section features STILL have `selected: true` feature-state after the data update
+
+This covers the review finding that `setData()` clears all feature-state and the re-apply logic in `update()` must work correctly.
 
 ## Files changed
 
