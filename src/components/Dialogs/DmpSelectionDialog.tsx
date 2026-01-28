@@ -356,7 +356,7 @@ export default function DmpSelectionDialog({
                       <td className="px-3 py-2">{section.name}</td>
                       <td className="px-3 py-2">{dateStr}</td>
                       <td className="px-3 py-2 capitalize">{section.direction}</td>
-                      <td className="px-3 py-2 text-right">
+                      <td className="px-3 py-2 text-right tabular-nums">
                         {isEmpty ? (
                           <span className="text-text-secondary">(empty)</span>
                         ) : (
