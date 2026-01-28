@@ -123,3 +123,6 @@ E2E tests that click map markers must switch to markers mode first; survey mode 
 
 ## 2026-01-28 manual [pitfall]
 When using CSS inline style width/height on elements that also have Tailwind w-full and mx-N classes, the margins can push total size beyond viewport - move margin classes inside the non-fixedSize branch or bake margins into the CSS calc
+
+## 2026-01-28 manual [pitfall]
+Mock data must use correct runtime types (e.g. numeric IDs not strings) to match TypeScript type aliases - string 'section-1' vs number 1 for SectionId
