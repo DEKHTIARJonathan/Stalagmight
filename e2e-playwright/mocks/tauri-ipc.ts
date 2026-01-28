@@ -1004,6 +1004,21 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] merge_stations called with:', args);
             return { success: true };
 
+          case 'check_merge_connectivity': {
+            // Mock connectivity check
+            // Default: not connected (opens merge dialog)
+            // Tests can override via __MOCK_SET_CONNECTIVITY__
+            console.log('[Mock IPC] check_merge_connectivity called with:', args);
+            const mockConnectivity = (window as unknown as Record<string, unknown>).__MOCK_CONNECTIVITY_RESULT__ as {
+              connected: boolean;
+              preview: unknown | null;
+            } | undefined;
+            if (mockConnectivity) {
+              return mockConnectivity;
+            }
+            return { connected: false, preview: null };
+          }
+
           case 'create_loop_closure':
             // Mock create loop closure - return success
             console.log('[Mock IPC] create_loop_closure called with:', args);

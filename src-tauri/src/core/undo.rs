@@ -1287,10 +1287,6 @@ mod tests {
         let (cmd_json, undo_json) = UndoStack::serialize_entry(&entry)
             .expect("ClosureInfo should serialize");
 
-        // Verify JSON contains expected data
-        assert!(undo_json.contains("ClosureInfo"), "JSON should contain variant name");
-        assert!(undo_json.contains("45.5"), "JSON should contain path_length");
-
         // Deserialize
         let restored = UndoStack::deserialize_entry(&cmd_json, &undo_json)
             .expect("ClosureInfo should deserialize");

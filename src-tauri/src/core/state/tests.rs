@@ -3317,22 +3317,29 @@ fn test_undo_unmerge_restores_removed_closures() {
         station_b: merge_station_b,
     });
 
-    // Create a closure between A.0 and B.1 (connected but not directly merged)
-    let closure_a = StationRef::new(section_a, 0);
-    let closure_b = StationRef::new(section_b, 1);
-    let closure_result = state.execute(Command::CreateLoopClosure {
-        station_a: closure_a,
-        station_b: closure_b,
-        closure_strategy: crate::models::ClosureStrategy::default(),
-    });
-    assert!(closure_result.success, "CreateLoopClosure should succeed");
+    // Inject a closure matching the merge pair directly into project state.
+    // (create_loop_closure won't let us create one for merged-pair stations,
+    // so we simulate legacy data by injecting directly.)
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        project.loop_closures.push(crate::models::LoopClosure {
+            station_a: merge_station_a,
+            station_b: merge_station_b,
+            path_length: 15.0,
+            misclosure_distance: 0.3,
+            error_percentage: 2.0,
+            horizontal_misclosure: 0.2,
+            vertical_misclosure: 0.1,
+        });
+    }
 
     {
         let project = state.get_project_state().unwrap();
         assert_eq!(project.loop_closures.len(), 1, "Should have 1 closure before unmerge");
     }
 
-    // Unmerge the stations - unmerge also removes closures matching the merge pair
+    // Unmerge the stations - should remove closures matching the merge pair (A.1, B.0)
     let unmerge_result = state.execute(Command::UnmergeStations {
         station_ref: merge_station_a,
     });
@@ -3341,17 +3348,26 @@ fn test_undo_unmerge_restores_removed_closures() {
     {
         let project = state.get_project_state().unwrap();
         assert!(project.station_merges.is_empty(), "Merge should be removed");
-        // Note: unmerge_stations removes closures matching the specific merge pair (A.1, B.0),
-        // not the closure pair (A.0, B.1). Closure may or may not be removed depending
-        // on the implementation's pair matching. Check actual state.
+        assert_eq!(
+            project.loop_closures.len(), 0,
+            "Closure matching merge pair should be removed by unmerge"
+        );
     }
 
-    // Undo the unmerge - should restore the merge and any removed closures
+    // Undo the unmerge - should restore both the merge AND the removed closure
     let undo_result = state.undo();
     assert!(undo_result.success, "Undo unmerge should succeed");
 
     {
         let project = state.get_project_state().unwrap();
         assert_eq!(project.station_merges.len(), 1, "Merge should be restored");
+        assert_eq!(
+            project.loop_closures.len(), 1,
+            "Closure should be restored after undo of unmerge"
+        );
+        let restored_closure = &project.loop_closures[0];
+        assert_eq!(restored_closure.station_a, merge_station_a);
+        assert_eq!(restored_closure.station_b, merge_station_b);
+        assert!((restored_closure.path_length - 15.0).abs() < 1e-6);
     }
 }
