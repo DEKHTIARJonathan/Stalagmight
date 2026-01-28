@@ -674,6 +674,7 @@ fn test_save_load_loop_closures() {
 
     assert_eq!(loaded.loop_closures.len(), 1);
     let lc = &loaded.loop_closures[0];
+    assert_eq!(lc.id, 1);
     assert_eq!(lc.path_length, 50.0);
     assert_eq!(lc.misclosure_distance, 0.5);
     assert_eq!(lc.error_percentage, 1.0);

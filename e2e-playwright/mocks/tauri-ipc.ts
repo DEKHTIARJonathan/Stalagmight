@@ -1016,7 +1016,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (mockConnectivity) {
               return mockConnectivity;
             }
-            return { connected: false, preview: null };
+            return { connected: false, preview: null, can_merge: false, reason: null };
           }
 
           case 'create_loop_closure':

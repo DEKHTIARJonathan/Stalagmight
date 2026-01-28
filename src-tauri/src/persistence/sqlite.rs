@@ -891,7 +891,7 @@ impl Database {
 
             let rows = stmt.query_map([], |row| {
                 Ok(LoopClosure {
-                    id: row.get::<_, i64>(9).unwrap_or(0) as u64,
+                    id: row.get::<_, i64>(9).unwrap_or(0).max(0) as u64,
                     station_a: StationRef::new(row.get(0)?, row.get(1)?),
                     station_b: StationRef::new(row.get(2)?, row.get(3)?),
                     path_length: row.get(4)?,

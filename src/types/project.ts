@@ -126,7 +126,7 @@ export interface Station {
   is_zero_datum: boolean;
   gps_coordinates: GpsCoordinates | null;
   merged_with: StationRef[];
-  closures_with: ClosureRef[];
+  closures_with?: ClosureRef[];
 }
 
 export interface StationMerge {
