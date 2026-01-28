@@ -12,10 +12,11 @@ Add "Loop Closures" section to DetailPanel showing direct and transitive closure
 
 ## Approach
 
+<!-- Updated by plan-sync: fn-45-n3z.1 confirmed line references and TypeScript types -->
 1. Add "Loop Closures" section in `DetailPanel.tsx` after merged stations (line 403):
-   - Section placement: after "Merged with", before action buttons
+   - Section placement: after "Merged with" (lines 383-403), before "Connected" section (line 405)
    - Use collapsible pattern (useState with boolean, default expanded)
-   - Hide section entirely when `station.closures_with.length === 0`
+   - Hide section entirely when `!station.closures_with?.length` (field is optional in TypeScript: `closures_with?: ClosureRef[]`)
 
 2. Display format:
    - Group closures by `closure_id` (all stations with same closure_id grouped together)
@@ -45,7 +46,7 @@ Add "Loop Closures" section to DetailPanel showing direct and transitive closure
 
 ## Key Context
 
-- Follow merged_with display pattern at `DetailPanel.tsx:383-403`
+- Follow merged_with display pattern at `DetailPanel.tsx:383-403` (uses `DetailLink` with `handleSelectMergedStation`, `mergedStationExists`, `formatStationId`)
 - DetailLink component at `src/components/common/DetailLink.tsx`
 - formatStationId helper for display text
 - Collapsible pattern: useState boolean, conditional rendering

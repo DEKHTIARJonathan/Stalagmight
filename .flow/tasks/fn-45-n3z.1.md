@@ -66,6 +66,7 @@ Add `id: u64` field to LoopClosure struct and create new ClosureRef struct. Upda
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
+Added closure ID and ClosureRef data structures across Rust backend, SQLite persistence, and TypeScript frontend. Includes monotonic ID allocation with next_closure_id counter, undo/redo preservation, closures_with computation on stations, merge connectivity validation (can_merge/reason), and legacy project migration.
 ## Summary
 
 Added closure ID and ClosureRef data structures across Rust backend, SQLite persistence, and TypeScript frontend.
@@ -97,6 +98,6 @@ Added closure ID and ClosureRef data structures across Rust backend, SQLite pers
 
 **Tests:** Updated all 6 test files constructing `LoopClosure` to include `id` field.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: c29f011, 8ddcf16, 48141e4, 63fe56f, afcd336
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, pnpm tsc --noEmit
 - PRs:
