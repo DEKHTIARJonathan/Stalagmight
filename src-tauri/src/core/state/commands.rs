@@ -102,7 +102,7 @@ impl AppState {
 
         // Push to undo stack if successful and undoable
         if result.success && Self::is_undoable(&cmd) {
-            // For CreateSection and CreateShot, we need to capture the new ID for the inverse command
+            // For create commands, finalize undo data with snapshot-based ID preservation
             let final_undo_data = self.finalize_undo_data(&cmd, undo_data);
 
             if let Ok(mut undo_stack) = self.undo_stack.lock() {
