@@ -159,3 +159,6 @@ When validating data in commands that create entities, compute the correct conte
 
 ## 2026-01-28 manual [pitfall]
 When checking if content fits in a viewport with padding/panels, compute ratios against usable dimensions (container minus padding) not raw container dimensions, to avoid clipping behind panels
+
+## 2026-01-28 manual [pitfall]
+Mock IPC config in tauri-ipc.ts must include all config fields used by MapCanvas (e.g., map.animation); missing fields cause React component crash on first use
