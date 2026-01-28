@@ -880,6 +880,43 @@ await page.keyboard.press('Enter');  // Selects
 await page.keyboard.press('Escape');  // Closes
 ```
 
+#### Select Hover Callback Testing
+
+The `Select` component accepts an `onOptionHover` callback that fires when options are highlighted via mouse or keyboard. DataTable uses this to set `hoveredSectionId` in uiStore, which drives map highlighting.
+
+**Verifying `onOptionHover` fires via store state:**
+
+```typescript
+// Get hoveredSectionId from uiStore
+async function getHoveredSectionId(page: Page): Promise<number | null> {
+  return page.evaluate(() => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        uiStore: { getState: () => { hoveredSectionId: number | null } };
+      };
+    }).__E2E_TEST__;
+    return stores?.uiStore.getState().hoveredSectionId ?? null;
+  });
+}
+```
+
+**Polling for hover state changes:**
+
+```typescript
+// Use expect.poll for async state verification
+await expect.poll(
+  async () => {
+    const id = await getHoveredSectionId(page);
+    return id === expectedSectionId;
+  },
+  { timeout: 5000 },
+).toBe(true);
+```
+
+**Playwright `hover()` reliability note:** Playwright's `hover()` method works for React `onMouseEnter` on Select option `<div>` elements. However, for components that use delegated event listeners, you may need `triggerMouseHover()` which dispatches `mouseover` with `bubbles: true` (see `detail-link-hover.spec.ts:272-282`). The Select component uses direct `onMouseEnter` handlers on each option, so standard `hover()` works reliably.
+
+**Close-path verification pattern:** All 8 Select close paths (handleSelect, outside-click, Escape, Tab, trigger-toggle-to-close, component unmount, external scroll, window resize) fire `onOptionHover(null)`. Tests verify each by opening the dropdown, hovering an option to set `hoveredSectionId`, triggering the close path, then polling for `hoveredSectionId === null`.
+
 ## Testing Detail Panel
 
 The Detail Panel provides navigation hyperlinks and center buttons for survey elements.
