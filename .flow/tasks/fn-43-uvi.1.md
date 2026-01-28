@@ -32,15 +32,8 @@ if project.sections.iter().any(|s| s.id == section_id) {
 - [x] Undo via InverseCommand works correctly
 
 ## Done summary
-Implemented MoveSection command to actually modify project.section_offsets HashMap and fixed undo support.
-
-Changes:
-- Replaced stub in `src-tauri/src/core/state/commands.rs:592-598` that only logged "Section move requested" with actual implementation that accumulates offsets
-- Added MoveSection to `execute_without_undo` match in `src-tauri/src/core/state/undo.rs:746` so InverseCommand undo/redo works
-- Enhanced `test_move_section` to verify offset values and accumulation
-- Added `test_move_section_undo_redo` to verify undo restores offset and redo re-applies
-
+Implemented MoveSection command to modify project.section_offsets HashMap with undo support. Replaced stub in commands.rs with actual implementation that accumulates offsets. Added MoveSection to execute_without_undo match in undo.rs for InverseCommand support. Enhanced tests for offset verification and undo/redo. Review: SHIP verdict (iteration 9).
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 841d7fe, bc281eb, f70cc30, f64441c
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:

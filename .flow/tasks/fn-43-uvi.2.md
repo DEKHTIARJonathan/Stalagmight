@@ -25,6 +25,8 @@ Properly implement MoveStation command with delta-based offset (matching MoveSec
 
 5. **Update undo** (`src-tauri/src/core/state/undo.rs:250-259`):
    - Change from ProjectSnapshot to InverseCommand with negated offset
+   - Also add MoveStation to `execute_without_undo` match (~undo.rs:746-747), following the MoveSection pattern at line 746: `Command::MoveStation { station_ref, offset } => self.move_station(*station_ref, *offset),`
+   <!-- Updated by plan-sync: fn-43-uvi.1 required adding MoveSection to execute_without_undo for InverseCommand to work; MoveStation will need the same -->
 
 6. **Add persistence** (`src-tauri/src/persistence/sqlite.rs`):
    - Add station_offsets table (follow section_offsets pattern)
