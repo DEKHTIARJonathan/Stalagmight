@@ -276,13 +276,13 @@ test.describe('ID=0 Bug Fixes', () => {
     await page.evaluate(() => {
       (window as any).__E2E_TEST__.projectStore.setState({
         warnings: [{
-          section_id: 0,
-          shot_id: 0,
-          shot_index: 0,
+          sectionId: 0,
+          shotId: 0,
+          shotIndex: 0,
           code: 'TEST_WARNING',
           message: 'Test warning for shot 0',
           severity: 'warning',
-          is_resolved: false,
+          isResolved: false,
         }]
       });
     });

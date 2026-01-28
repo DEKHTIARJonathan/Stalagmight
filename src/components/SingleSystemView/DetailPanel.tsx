@@ -52,8 +52,8 @@ export default function DetailPanel() {
             onWarningClick={(warning) => {
               setSelection({
                 type: 'shot',
-                sectionId: warning.section_id,
-                shotId: warning.shot_id,
+                sectionId: warning.sectionId,
+                shotId: warning.shotId,
               });
               setDetailPanelTab('details');
             }}
@@ -167,9 +167,9 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
   const { resolveWarning, unresolveWarning } = useProjectStore();
   const [showResolved, setShowResolved] = useState(false);
 
-  const unresolvedCount = warnings.filter((w) => !w.is_resolved).length;
-  const resolvedCount = warnings.filter((w) => w.is_resolved).length;
-  const displayedWarnings = showResolved ? warnings : warnings.filter((w) => !w.is_resolved);
+  const unresolvedCount = warnings.filter((w) => !w.isResolved).length;
+  const resolvedCount = warnings.filter((w) => w.isResolved).length;
+  const displayedWarnings = showResolved ? warnings : warnings.filter((w) => !w.isResolved);
 
   if (warnings.length === 0) {
     return (
@@ -187,10 +187,10 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
 
   const handleToggleResolved = (e: React.MouseEvent, warning: ProjectWarning) => {
     e.stopPropagation();
-    if (warning.is_resolved) {
-      unresolveWarning(warning.section_id, warning.shot_id, warning.code);
+    if (warning.isResolved) {
+      unresolveWarning(warning.sectionId, warning.shotId, warning.code);
     } else {
-      resolveWarning(warning.section_id, warning.shot_id, warning.code);
+      resolveWarning(warning.sectionId, warning.shotId, warning.code);
     }
   };
 
@@ -213,10 +213,10 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
       <div className="space-y-1">
         {displayedWarnings.map((warning, index) => (
           <div
-            key={`${warning.section_id}-${warning.shot_id}-${warning.code}-${index}`}
+            key={`${warning.sectionId}-${warning.shotId}-${warning.code}-${index}`}
             className={`
               p-2 rounded transition-colors
-              ${warning.is_resolved ? 'opacity-50' : ''}
+              ${warning.isResolved ? 'opacity-50' : ''}
               hover:bg-background/50
             `}
           >
@@ -227,14 +227,14 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               >
                 <div className="flex items-start gap-2">
                   <span className={warning.severity === 'error' ? 'text-red-400' : 'text-yellow-400'}>
-                    {warning.is_resolved ? '✓' : (warning.severity === 'error' ? '⛔' : '⚠️')}
+                    {warning.isResolved ? '✓' : (warning.severity === 'error' ? '⛔' : '⚠️')}
                   </span>
                   <div className="flex-1 min-w-0">
-                    <div className={`text-sm ${warning.is_resolved ? 'line-through' : ''}`}>
+                    <div className={`text-sm ${warning.isResolved ? 'line-through' : ''}`}>
                       {warning.message}
                     </div>
                     <div className="text-xs text-text-secondary mt-0.5">
-                      {getSectionName(warning.section_id)} • Shot {formatShotId(warning.section_id, warning.shot_index + 1)}
+                      {getSectionName(warning.sectionId)} • Shot {formatShotId(warning.sectionId, warning.shotIndex + 1)}
                     </div>
                   </div>
                 </div>
@@ -242,9 +242,9 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               <button
                 onClick={(e) => handleToggleResolved(e, warning)}
                 className="text-xs px-2 py-1 rounded bg-background/50 hover:bg-background text-text-secondary"
-                title={warning.is_resolved ? 'Mark as unresolved' : 'Mark as resolved'}
+                title={warning.isResolved ? 'Mark as unresolved' : 'Mark as resolved'}
               >
-                {warning.is_resolved ? 'Undo' : 'Resolve'}
+                {warning.isResolved ? 'Undo' : 'Resolve'}
               </button>
             </div>
           </div>

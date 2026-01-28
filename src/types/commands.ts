@@ -19,13 +19,13 @@ export interface ValidationWarning {
 }
 
 export interface ProjectWarning {
-  section_id: number;
-  shot_id: number;
-  shot_index: number;
+  sectionId: number;
+  shotId: number;
+  shotIndex: number;
   code: string;
   message: string;
   severity: 'warning' | 'error';
-  is_resolved: boolean;
+  isResolved: boolean;
 }
 
 // DMP import types

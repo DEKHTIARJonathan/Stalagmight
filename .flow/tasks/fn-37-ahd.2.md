@@ -54,3 +54,24 @@ Investigate and fix the root cause of clicking a warning showing "Selection not 
 - [ ] `pnpm test:ui` passes (all Playwright tests)
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 - [ ] `pnpm tsc --noEmit` passes
+
+## Done summary
+## Summary
+
+Fixed the root cause of "Selection not found" when clicking warnings: the Rust `ProjectWarning` struct uses `#[serde(rename_all = "camelCase")]` but the TypeScript `ProjectWarning` interface used `snake_case` field names (`section_id`, `shot_id`, `shot_index`, `is_resolved`). This mismatch meant all warning field accesses on the frontend returned `undefined`, causing the shot lookup to fail.
+
+### Changes
+
+1. **`src/types/commands.ts`** — Updated `ProjectWarning` interface from `snake_case` to `camelCase` field names (`sectionId`, `shotId`, `shotIndex`, `isResolved`) to match Rust serialization
+2. **`src/components/SingleSystemView/DetailPanel.tsx`** — Updated all references to `ProjectWarning` fields in `onWarningClick`, `WarningsContent` component (resolve/unresolve, display, filtering)
+3. **`src/components/SingleSystemView/DataTable.tsx`** — Updated warning map key generation to use camelCase fields
+4. **`e2e-playwright/warning-click.spec.ts`** (new) — Two E2E tests: basic warning click navigation, and DMP-import-style multi-section warning click
+5. **`e2e-playwright/id-zero-regression.spec.ts`** — Updated mock warning injection to use camelCase field names
+
+### Root cause
+
+The `ProjectWarning` Rust struct at `src-tauri/src/models/warning.rs:14` has `#[serde(rename_all = "camelCase")]`, serializing fields as `sectionId`, `shotId`, etc. But the TypeScript interface declared `section_id`, `shot_id`, etc. This caused `warning.section_id` to be `undefined` at runtime, so `setSelection({ type: 'shot', sectionId: undefined, shotId: undefined })` could never match any shot.
+## Evidence
+- Commits:
+- Tests:
+- PRs:
