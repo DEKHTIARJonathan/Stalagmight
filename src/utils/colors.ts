@@ -1,4 +1,15 @@
 /**
+ * Get color for closure error percentage severity.
+ * Green (<1%), Yellow (1-3%), Orange (3-5%), Red (>5%)
+ */
+export function getErrorColor(errorPct: number): string {
+  if (errorPct < 1) return '#22c55e';
+  if (errorPct < 3) return '#eab308';
+  if (errorPct < 5) return '#f97316';
+  return '#ef4444';
+}
+
+/**
  * Parse a hex color to RGB values
  */
 export function hexToRgb(hex: string): [number, number, number] {

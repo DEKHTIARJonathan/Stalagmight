@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useUIStore, type Selection } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { isNonInteractiveTool } from '../utils/toolUtils';
@@ -45,6 +45,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   const { stations, project, checkMergeConnectivity } = useProjectStore();
 
   const [isCheckingConnectivity, setIsCheckingConnectivity] = useState(false);
+  // Ref-based guard prevents re-entrancy from fast successive clicks
+  const connectivityInFlightRef = useRef(false);
+  // Monotonic request ID for staleness detection
+  const connectivityRequestIdRef = useRef(0);
 
   // Get station coordinates by ref
   const getStationCoordinates = useCallback(
@@ -80,31 +84,50 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   // Check connectivity and open appropriate merge/closure dialog
   const checkAndOpenMergeDialog = useCallback(
     async (stationA: StationRef, stationB: StationRef) => {
+      // Immediate ref-based guard prevents re-entrancy from fast clicks
+      if (connectivityInFlightRef.current) return;
+      connectivityInFlightRef.current = true;
+
+      // Staleness: capture request ID so we can discard stale results
+      connectivityRequestIdRef.current += 1;
+      const requestId = connectivityRequestIdRef.current;
+
       setIsCheckingConnectivity(true);
       setMergeStationB(stationB);
+      showToast('Checking connectivity...', 'merge-connectivity-check');
       try {
         const result = await checkMergeConnectivity(stationA, stationB);
+        // Discard result if a newer request was started or merge was cancelled
+        if (requestId !== connectivityRequestIdRef.current) return;
+        // Verify merge tool is still active (user may have switched tools)
+        const currentTool = useUIStore.getState().activeTool;
+        const currentA = useUIStore.getState().mergeStationA;
+        if (currentTool !== 'merge' || !currentA) {
+          clearMergeStations();
+          return;
+        }
         if (result.connected) {
-          // Stations are connected - open closure dialog with preview
           openDialog('closure', {
             stationA,
             stationB,
             preview: result.preview,
           });
         } else {
-          // Stations not connected - open merge dialog
           openDialog('merge', {
             stationA,
             stationB,
           });
         }
       } catch (e) {
-        // Error from backend (e.g., duplicate merge/closure)
+        if (requestId !== connectivityRequestIdRef.current) return;
         const message = e instanceof Error ? e.message : String(e);
         showToast(message, 'merge-error');
         clearMergeStations();
       } finally {
-        setIsCheckingConnectivity(false);
+        if (requestId === connectivityRequestIdRef.current) {
+          connectivityInFlightRef.current = false;
+          setIsCheckingConnectivity(false);
+        }
       }
     },
     [checkMergeConnectivity, clearMergeStations, openDialog, setMergeStationB, showToast]
@@ -329,7 +352,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           break;
 
         case 'merge':
-          clearMergeStations();
+          // Don't clear during connectivity check - the staleness guard handles cancellation
+          if (!isCheckingConnectivity) {
+            clearMergeStations();
+          }
           break;
 
         case 'measure':
