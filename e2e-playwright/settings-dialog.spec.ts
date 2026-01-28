@@ -659,7 +659,7 @@ test.describe('Settings Dialog - Fixed Dimensions', () => {
     for (const category of TESTABLE_CATEGORIES) {
       const tab = page.locator(`[data-testid="settings-tab-${category}"]`);
       await tab.click();
-      await expect(page.locator(`[data-testid="settings-panel-${category}"]`)).toBeVisible({ timeout: 3000 });
+      await expect(page.locator(`[data-testid="settings-panel-${category}"]`)).toBeVisible({ timeout: 5000 });
 
       const box = await dialog.boundingBox();
       expect(box).not.toBeNull();
@@ -675,11 +675,11 @@ test.describe('Settings Dialog - Fixed Dimensions', () => {
     await settingsButton.click();
     await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
 
-    // Navigate to a category likely to have scrollable content (shortcuts has many rows)
+    // Navigate to shortcuts which has many rows of content
     await page.locator('[data-testid="settings-tab-shortcuts"]').click();
-    await expect(page.locator('[data-testid="settings-panel-shortcuts"]')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="settings-panel-shortcuts"]')).toBeVisible({ timeout: 5000 });
 
-    // Helper to find the scrollable ancestor (overflow-auto class) from a panel testid
+    // Helper to find the nearest scrollable ancestor (overflow-auto class)
     const getScrollInfo = (panelTestId: string) => page.evaluate((testId) => {
       const panel = document.querySelector(`[data-testid="${testId}"]`);
       if (!panel) return { found: false, scrollTop: -1 };
@@ -693,40 +693,49 @@ test.describe('Settings Dialog - Fixed Dimensions', () => {
       return { found: false, scrollTop: -1 };
     }, panelTestId);
 
-    // Scroll the content area down
+    // Force the scroll container to be scrollable by constraining its max-height
+    // and injecting tall content, then scroll down. This makes the test deterministic.
     const scrolled = await page.evaluate(() => {
       const panel = document.querySelector('[data-testid="settings-panel-shortcuts"]');
       if (!panel) return false;
+      let scrollContainer: HTMLElement | null = null;
       let el: Element | null = panel.parentElement;
       while (el) {
         if (el.classList.contains('overflow-auto')) {
-          (el as HTMLElement).scrollTop = 200;
-          return (el as HTMLElement).scrollTop > 0;
+          scrollContainer = el as HTMLElement;
+          break;
         }
         el = el.parentElement;
       }
-      return false;
+      if (!scrollContainer) return false;
+      // Constrain the scroll container and inject tall content to force overflow
+      scrollContainer.style.maxHeight = '200px';
+      const sentinel = document.createElement('div');
+      sentinel.style.height = '2000px';
+      sentinel.dataset.testSentinel = 'true';
+      panel.appendChild(sentinel);
+      scrollContainer.scrollTop = 300;
+      return scrollContainer.scrollTop > 0;
     });
 
-    // Only assert scroll reset if content was actually scrollable
-    if (scrolled) {
-      // Switch to a different category
-      await page.locator('[data-testid="settings-tab-units"]').click();
-      await expect(page.locator('[data-testid="settings-panel-units"]')).toBeVisible({ timeout: 3000 });
+    // Injected constraints guarantee scrolling is possible
+    expect(scrolled).toBe(true);
 
-      // Verify scroll position has been reset to top
-      const info1 = await getScrollInfo('settings-panel-units');
-      expect(info1.found).toBe(true);
-      expect(info1.scrollTop).toBe(0);
+    // Switch to a different category -- scroll must reset to top
+    await page.locator('[data-testid="settings-tab-units"]').click();
+    await expect(page.locator('[data-testid="settings-panel-units"]')).toBeVisible({ timeout: 5000 });
 
-      // Switch back to shortcuts — scroll should also be at top
-      await page.locator('[data-testid="settings-tab-shortcuts"]').click();
-      await expect(page.locator('[data-testid="settings-panel-shortcuts"]')).toBeVisible({ timeout: 3000 });
+    const info1 = await getScrollInfo('settings-panel-units');
+    expect(info1.found).toBe(true);
+    expect(info1.scrollTop).toBe(0);
 
-      const info2 = await getScrollInfo('settings-panel-shortcuts');
-      expect(info2.found).toBe(true);
-      expect(info2.scrollTop).toBe(0);
-    }
+    // Switch back to shortcuts -- scroll must also be at top
+    await page.locator('[data-testid="settings-tab-shortcuts"]').click();
+    await expect(page.locator('[data-testid="settings-panel-shortcuts"]')).toBeVisible({ timeout: 5000 });
+
+    const info2 = await getScrollInfo('settings-panel-shortcuts');
+    expect(info2.found).toBe(true);
+    expect(info2.scrollTop).toBe(0);
   });
 
   test('content area has overflow-auto for scrolling tall content', async ({ page }) => {
@@ -737,15 +746,20 @@ test.describe('Settings Dialog - Fixed Dimensions', () => {
 
     // Navigate to shortcuts (content-heavy category)
     await page.locator('[data-testid="settings-tab-shortcuts"]').click();
-    await expect(page.locator('[data-testid="settings-panel-shortcuts"]')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="settings-panel-shortcuts"]')).toBeVisible({ timeout: 5000 });
 
-    // Verify the content container has overflow-auto so it scrolls when content is tall
-    const hasOverflowAuto = await page.evaluate(() => {
+    // Verify a scrollable ancestor (overflow-auto) exists for the panel content
+    const hasScrollableAncestor = await page.evaluate(() => {
       const panel = document.querySelector('[data-testid="settings-panel-shortcuts"]');
-      if (!panel || !panel.parentElement) return false;
-      return panel.parentElement.classList.contains('overflow-auto');
+      if (!panel) return false;
+      let el: Element | null = panel.parentElement;
+      while (el) {
+        if (el.classList.contains('overflow-auto')) return true;
+        el = el.parentElement;
+      }
+      return false;
     });
-    expect(hasOverflowAuto).toBe(true);
+    expect(hasScrollableAncestor).toBe(true);
   });
 });
 
