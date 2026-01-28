@@ -8,9 +8,11 @@
  *
  * Key pitfalls addressed:
  * - Pan map off-target before each zoom trigger to avoid false passes
+ * - Assert precondition that margins are invalid before triggering zoom
  * - Wait for __cavechef_map__ after canvas appears
  * - Use map.project() for screen-space assertions
- * - Use expect.poll() for state change assertions (no waitForTimeout)
+ * - Use expect.poll() for all state change assertions
+ * - Read zoom_max from config instead of hard-coding
  */
 
 import { test, expect, Page } from '@playwright/test';
@@ -46,14 +48,19 @@ const sectionSeeds: SectionSeed[] = [
   },
 ];
 
+/** Minimum margin percentage for all assertions. */
+const MIN_MARGIN_PCT = 5;
+
 /**
  * Margin check result from page.evaluate().
+ * Points are retained for debugging in failure messages.
  */
 interface MarginResult {
   points: Array<{ x: number; y: number }>;
   containerWidth: number;
   containerHeight: number;
   zoom: number;
+  zoomMax: number;
   minMarginLeftPct: number;
   minMarginRightPct: number;
   minMarginTopPct: number;
@@ -92,7 +99,11 @@ async function getSectionIdByName(page: Page, name: string): Promise<number> {
 }
 
 /**
- * Pan the map far off-target to avoid false passes from pre-centered state.
+ * Pan the map far off-target so the section is provably outside the viewport.
+ * Uses a high zoom level (15) at a far-away center to ensure that a small
+ * section near the GPS origin is completely off-screen rather than simply
+ * tiny at a low zoom level.
+ *
  * Memory pitfall: tests may pass falsely if map is already centered on the target section.
  */
 async function panMapOffTarget(page: Page): Promise<void> {
@@ -104,13 +115,43 @@ async function panMapOffTarget(page: Page): Promise<void> {
       };
     }).__cavechef_map__;
     if (map) {
-      // Stop any running animation, then instantly jump to a far-away location
+      // Stop any running animation, then instantly jump far away at a zoom
+      // level high enough that the target section is off-screen
       map.stop();
-      map.jumpTo({ center: [0, 0], zoom: 2 });
+      map.jumpTo({ center: [0, 0], zoom: 15 });
     }
   });
-  // jumpTo is synchronous, but wait a tick for render
-  await page.waitForTimeout(200);
+  // Poll until map has settled (jumpTo is synchronous but render may lag)
+  await expect.poll(
+    async () => {
+      return page.evaluate(() => {
+        const m = (window as unknown as {
+          __cavechef_map__?: { isMoving: () => boolean };
+        }).__cavechef_map__;
+        return m ? !m.isMoving() : false;
+      });
+    },
+    { timeout: 5000 },
+  ).toBe(true);
+}
+
+/**
+ * Assert precondition: after panMapOffTarget, the section must NOT satisfy
+ * the margin requirement. This prevents false passes where the section was
+ * already visible before the zoom action was triggered.
+ */
+async function assertSectionOffScreen(page: Page, sectionId: number): Promise<void> {
+  const result = await getStationScreenMargins(page, sectionId);
+  // Either null (map moving or data unavailable) or margins are violated
+  if (result) {
+    const allMarginsOk =
+      result.minMarginLeftPct >= MIN_MARGIN_PCT &&
+      result.minMarginRightPct >= MIN_MARGIN_PCT &&
+      result.minMarginTopPct >= MIN_MARGIN_PCT &&
+      result.minMarginBottomPct >= MIN_MARGIN_PCT;
+    expect(allMarginsOk, 'Precondition failed: section should be off-screen after panMapOffTarget').toBe(false);
+  }
+  // null result also satisfies precondition (section data not visible)
 }
 
 /**
@@ -119,6 +160,7 @@ async function panMapOffTarget(page: Page): Promise<void> {
  * Returns null if data is not yet available or map is still moving (for use in polling).
  *
  * GPS origin comes from config.map.satellite_gps_origin in the project store.
+ * zoom_max comes from config.map.zoom_max in the project store.
  */
 async function getStationScreenMargins(page: Page, sectionId: number): Promise<MarginResult | null> {
   return page.evaluate((secId) => {
@@ -136,6 +178,7 @@ async function getStationScreenMargins(page: Page, sectionId: number): Promise<M
             config: {
               map: {
                 satellite_gps_origin: { latitude: number; longitude: number };
+                zoom_max: number;
               };
             } | null;
           };
@@ -167,6 +210,9 @@ async function getStationScreenMargins(page: Page, sectionId: number): Promise<M
     // Get GPS origin from config (same source as MapCanvas.tsx line 74)
     const gpsOrigin = state.config?.map.satellite_gps_origin;
     if (!gpsOrigin) return null;
+
+    // Read zoom_max from config instead of hard-coding
+    const zoomMax = state.config?.map.zoom_max ?? 22;
 
     // Replicate metersToMapCoords inline (same algorithm as utils/coordinates.ts)
     const METERS_PER_DEG_LAT = 111_320;
@@ -212,10 +258,11 @@ async function getStationScreenMargins(page: Page, sectionId: number): Promise<M
     }
 
     return {
-      points: points.map((p) => ({ x: p.x, y: p.y })),
+      points: points.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
       containerWidth,
       containerHeight,
       zoom,
+      zoomMax,
       minMarginLeftPct: (minLeft / containerWidth) * 100,
       minMarginRightPct: (minRight / containerWidth) * 100,
       minMarginTopPct: (minTop / containerHeight) * 100,
@@ -228,12 +275,13 @@ async function getStationScreenMargins(page: Page, sectionId: number): Promise<M
  * Poll until map is idle and station screen positions satisfy margin requirements.
  * Combines idle wait + margin check in a single poll to avoid separate
  * waitForMapIdle that can hang if the map animation never fully settles.
+ *
+ * Uses config-derived zoom_max instead of hard-coded value.
  */
 async function pollForMarginsSettled(
   page: Page,
   sectionId: number,
   minPct: number,
-  maxZoom: number,
   timeout = 15000,
 ): Promise<MarginResult> {
   let lastResult: MarginResult | null = null;
@@ -247,12 +295,21 @@ async function pollForMarginsSettled(
         result.minMarginRightPct >= minPct &&
         result.minMarginTopPct >= minPct &&
         result.minMarginBottomPct >= minPct &&
-        result.zoom <= maxZoom
+        result.zoom <= result.zoomMax
       );
     },
     {
       timeout,
-      message: `Station screen positions did not settle with >= ${minPct}% margin and zoom <= ${maxZoom}`,
+      message: () => {
+        if (!lastResult) return `No margin data available after ${timeout}ms (map still moving or no stations)`;
+        return [
+          `Station screen positions did not settle with >= ${minPct}% margin and zoom <= ${lastResult.zoomMax}`,
+          `  Container: ${lastResult.containerWidth}x${lastResult.containerHeight}`,
+          `  Zoom: ${lastResult.zoom.toFixed(2)} (max: ${lastResult.zoomMax})`,
+          `  Margins: L=${lastResult.minMarginLeftPct.toFixed(1)}% R=${lastResult.minMarginRightPct.toFixed(1)}% T=${lastResult.minMarginTopPct.toFixed(1)}% B=${lastResult.minMarginBottomPct.toFixed(1)}%`,
+          `  Points: ${JSON.stringify(lastResult.points)}`,
+        ].join('\n');
+      },
     },
   ).toBe(true);
   return lastResult!;
@@ -260,14 +317,14 @@ async function pollForMarginsSettled(
 
 /**
  * Assert that all station screen positions have at least minPct% margin from
- * every viewport edge and zoom is within range.
+ * every viewport edge and zoom is within the config-derived zoom_max.
  */
-function assertMargins(result: MarginResult, minPct: number, maxZoom: number): void {
+function assertMargins(result: MarginResult, minPct: number): void {
   expect(result.minMarginLeftPct).toBeGreaterThanOrEqual(minPct);
   expect(result.minMarginRightPct).toBeGreaterThanOrEqual(minPct);
   expect(result.minMarginTopPct).toBeGreaterThanOrEqual(minPct);
   expect(result.minMarginBottomPct).toBeGreaterThanOrEqual(minPct);
-  expect(result.zoom).toBeLessThanOrEqual(maxZoom);
+  expect(result.zoom).toBeLessThanOrEqual(result.zoomMax);
 }
 
 test.describe('Section zoom margin', () => {
@@ -282,14 +339,17 @@ test.describe('Section zoom margin', () => {
     // Pan off-target first (memory pitfall: avoid false passes from pre-centered state)
     await panMapOffTarget(page);
 
+    // Precondition: section must NOT satisfy margins after panning off-target
+    await assertSectionOffScreen(page, sectionId);
+
     // Find the section row and double-click it to trigger zoom-to-section
     const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
     await expect(sectionRow).toBeVisible();
     await sectionRow.dblclick();
 
     // Poll until map is idle and margins are correct (combined to avoid hanging)
-    const result = await pollForMarginsSettled(page, sectionId, 5, 22);
-    assertMargins(result, 5, 22);
+    const result = await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
+    assertMargins(result, MIN_MARGIN_PCT);
   });
 
   test('center button zooms with margin from viewport edges', async ({ page }) => {
@@ -311,12 +371,15 @@ test.describe('Section zoom margin', () => {
     // Pan off-target first (memory pitfall: avoid false passes from pre-centered state)
     await panMapOffTarget(page);
 
+    // Precondition: section must NOT satisfy margins after panning off-target
+    await assertSectionOffScreen(page, sectionId);
+
     // Click the center button to trigger zoom-to-section
     await centerButton.click();
 
     // Poll until map is idle and margins are correct
-    const result = await pollForMarginsSettled(page, sectionId, 5, 22);
-    assertMargins(result, 5, 22);
+    const result = await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
+    assertMargins(result, MIN_MARGIN_PCT);
   });
 
   test('skip zoom-in when section already visible keeps section in viewport with margin', async ({ page }) => {
@@ -328,7 +391,7 @@ test.describe('Section zoom margin', () => {
     await sectionRow.dblclick();
 
     // Wait for initial zoom to settle with margins
-    await pollForMarginsSettled(page, sectionId, 5, 22);
+    await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
 
     // Get the zoom level after first zoom
     const zoomBefore = await page.evaluate(() => {
@@ -366,6 +429,6 @@ test.describe('Section zoom margin', () => {
     // Section should still be within viewport with margin
     const finalResult = await getStationScreenMargins(page, sectionId);
     expect(finalResult).not.toBeNull();
-    assertMargins(finalResult!, 5, 22);
+    assertMargins(finalResult!, MIN_MARGIN_PCT);
   });
 });
