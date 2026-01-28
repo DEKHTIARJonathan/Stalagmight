@@ -163,6 +163,7 @@ The following shortcuts are reserved and cannot be reassigned:
 | `Escape` | Close dialogs, clear selection, cancel operations |
 | `Delete` / `Backspace` | Delete selected item (with confirmation) |
 | `Ctrl+A` | Select all stations |
+| `Ctrl+,` (`Cmd+,` on macOS) | Open Settings |
 
 ### Shortcut Feedback
 
