@@ -151,7 +151,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Config override for testing config reload effects
       interface MockConfigOverrides {
         debug?: { map?: { show_hitboxes?: boolean; log_hit_detection?: boolean } };
-        map?: { station?: { hit_area?: number }; shot?: { hit_area?: number } };
+        map?: {
+          station?: { hit_area?: number };
+          shot?: { hit_area?: number };
+          animation?: { enabled?: boolean; duration?: number; point_zoom?: number };
+        };
       }
       let mockConfigOverrides: MockConfigOverrides = {};
 
@@ -1277,9 +1281,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   enabled_measure: true,
                 },
                 animation: {
-                  enabled: true,
-                  duration: 300,
-                  point_zoom: 18,
+                  enabled: mockConfigOverrides.map?.animation?.enabled ?? true,
+                  duration: mockConfigOverrides.map?.animation?.duration ?? 300,
+                  point_zoom: mockConfigOverrides.map?.animation?.point_zoom ?? 18,
                 },
               },
               validation: {
