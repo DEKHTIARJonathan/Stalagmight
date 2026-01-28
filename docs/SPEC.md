@@ -1540,9 +1540,14 @@ announce_save_status = true
 Modal dialog with sidebar navigation, accessible via the Settings button in the Global View header or the Cmd/Ctrl+, keyboard shortcut.
 
 **Layout:**
-- Fixed size dialog (min 600px wide × 500px tall)
+- Fixed size dialog: `min(800px, 95vw)` wide × `clamp(500px, 80vh, 800px)` tall
+- Dimensions remain constant across category switches (no height/width shifts)
+- DialogWrapper `fixedSize` prop overrides `size` and `maxHeight` when provided
 - Left sidebar (150px) with category navigation
-- Right content area with scrollable settings
+- Right content area with scrollable settings (overflow-auto)
+- Scroll position resets to top on category switch
+- Short-content categories show content top-aligned with empty space below
+- Inner container minimum width: `min(500px, 100%)`
 - Footer with Save/Cancel buttons
 
 ### 10.2 Categories

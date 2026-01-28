@@ -635,6 +635,120 @@ test.describe('Settings Dialog - Error Indicators', () => {
   // This is a pre-existing bug that should be fixed separately
 });
 
+test.describe('Settings Dialog - Fixed Dimensions', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    // Open from GlobalView directly — no project needed
+  });
+
+  test('dialog dimensions remain constant across category switches', async ({ page }) => {
+    const settingsButton = page.locator('[data-testid="settings-button"]');
+    await expect(settingsButton).toBeVisible({ timeout: 5000 });
+    await settingsButton.click();
+
+    const dialog = page.locator('[data-testid="settings-dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+
+    // Capture initial bounding box on the General tab
+    const initialBox = await dialog.boundingBox();
+    expect(initialBox).not.toBeNull();
+
+    // Switch through testable categories and verify dimensions stay the same
+    for (const category of TESTABLE_CATEGORIES) {
+      const tab = page.locator(`[data-testid="settings-tab-${category}"]`);
+      await tab.click();
+      await expect(page.locator(`[data-testid="settings-panel-${category}"]`)).toBeVisible({ timeout: 3000 });
+
+      const box = await dialog.boundingBox();
+      expect(box).not.toBeNull();
+      // Allow 1px tolerance for sub-pixel rendering differences
+      expect(Math.abs(box!.width - initialBox!.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(box!.height - initialBox!.height)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  test('scroll position resets to top on category change', async ({ page }) => {
+    const settingsButton = page.locator('[data-testid="settings-button"]');
+    await expect(settingsButton).toBeVisible({ timeout: 5000 });
+    await settingsButton.click();
+    await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
+
+    // Navigate to a category likely to have scrollable content (shortcuts has many rows)
+    await page.locator('[data-testid="settings-tab-shortcuts"]').click();
+    await expect(page.locator('[data-testid="settings-panel-shortcuts"]')).toBeVisible({ timeout: 3000 });
+
+    // Helper to find the scrollable ancestor (overflow-auto class) from a panel testid
+    const getScrollInfo = (panelTestId: string) => page.evaluate((testId) => {
+      const panel = document.querySelector(`[data-testid="${testId}"]`);
+      if (!panel) return { found: false, scrollTop: -1 };
+      let el: Element | null = panel.parentElement;
+      while (el) {
+        if (el.classList.contains('overflow-auto')) {
+          return { found: true, scrollTop: (el as HTMLElement).scrollTop };
+        }
+        el = el.parentElement;
+      }
+      return { found: false, scrollTop: -1 };
+    }, panelTestId);
+
+    // Scroll the content area down
+    const scrolled = await page.evaluate(() => {
+      const panel = document.querySelector('[data-testid="settings-panel-shortcuts"]');
+      if (!panel) return false;
+      let el: Element | null = panel.parentElement;
+      while (el) {
+        if (el.classList.contains('overflow-auto')) {
+          (el as HTMLElement).scrollTop = 200;
+          return (el as HTMLElement).scrollTop > 0;
+        }
+        el = el.parentElement;
+      }
+      return false;
+    });
+
+    // Only assert scroll reset if content was actually scrollable
+    if (scrolled) {
+      // Switch to a different category
+      await page.locator('[data-testid="settings-tab-units"]').click();
+      await expect(page.locator('[data-testid="settings-panel-units"]')).toBeVisible({ timeout: 3000 });
+
+      // Verify scroll position has been reset to top
+      const info1 = await getScrollInfo('settings-panel-units');
+      expect(info1.found).toBe(true);
+      expect(info1.scrollTop).toBe(0);
+
+      // Switch back to shortcuts — scroll should also be at top
+      await page.locator('[data-testid="settings-tab-shortcuts"]').click();
+      await expect(page.locator('[data-testid="settings-panel-shortcuts"]')).toBeVisible({ timeout: 3000 });
+
+      const info2 = await getScrollInfo('settings-panel-shortcuts');
+      expect(info2.found).toBe(true);
+      expect(info2.scrollTop).toBe(0);
+    }
+  });
+
+  test('content area has overflow-auto for scrolling tall content', async ({ page }) => {
+    const settingsButton = page.locator('[data-testid="settings-button"]');
+    await expect(settingsButton).toBeVisible({ timeout: 5000 });
+    await settingsButton.click();
+    await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
+
+    // Navigate to shortcuts (content-heavy category)
+    await page.locator('[data-testid="settings-tab-shortcuts"]').click();
+    await expect(page.locator('[data-testid="settings-panel-shortcuts"]')).toBeVisible({ timeout: 3000 });
+
+    // Verify the content container has overflow-auto so it scrolls when content is tall
+    const hasOverflowAuto = await page.evaluate(() => {
+      const panel = document.querySelector('[data-testid="settings-panel-shortcuts"]');
+      if (!panel || !panel.parentElement) return false;
+      return panel.parentElement.classList.contains('overflow-auto');
+    });
+    expect(hasOverflowAuto).toBe(true);
+  });
+});
+
 test.describe('Settings Dialog - All panels have testids', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
