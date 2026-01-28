@@ -33,7 +33,7 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 | `src-tauri/src/models/geo.rs` | GPS-to-local coordinate transformation (WGS84 → ENU) |
 | `src-tauri/src/cache/tiles.rs` | Satellite tile cache (SQLite-based) |
 | `src-tauri/src/commands/cache.rs` | Cache IPC commands (stats, clear, fetch) |
-| `src-tauri/src/commands/survey.rs` | Survey geometry IPC command (`get_survey_geometry`) |
+| `src-tauri/src/commands/survey.rs` | Survey geometry IPC command (`get_survey_geometry_for_file`) |
 | `src/store/projectStore.ts` | Frontend state, Tauri IPC calls |
 | `src/store/uiStore.ts` | UI state (selection, tools, panels) |
 | `src/store/globalViewStore.ts` | Global View state (selection, geometry loading) |
@@ -138,7 +138,7 @@ GlobalViewMap.tsx
             ▼
 globalViewStore.ts (Zustand)
     ├── loadGeometryBatch() sequences geometry fetches
-    ├── Calls get_survey_geometry IPC for each system
+    ├── Calls get_survey_geometry_for_file IPC for each system
     ├── Tracks loading/loaded/error state per system
     └── Stores SurveyGeometry in Map<filePath, geometry>
             │

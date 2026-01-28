@@ -95,6 +95,14 @@ test.describe('GlobalView Map', () => {
       // Check for marker elements - all 3 GPS projects should have visible markers
       const markers = page.locator('.globalview-system-marker');
       await expect(markers).toHaveCount(3, { timeout: 5000 }); // 3 GPS projects in mock data
+
+      // Verify markers are actually visible (not just counted in DOM)
+      const alphaMarker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      const betaMarker = page.locator('[data-testid="system-marker-/projects/cave-beta.cvproj"]');
+      const gammaMarker = page.locator('[data-testid="system-marker-/projects/cave-gamma.cvproj"]');
+      await expect(alphaMarker).toHaveCSS('display', 'flex', { timeout: 5000 });
+      await expect(betaMarker).toHaveCSS('display', 'flex', { timeout: 5000 });
+      await expect(gammaMarker).toHaveCSS('display', 'flex', { timeout: 5000 });
     });
 
     test('should have data-testid on system markers', async ({ page }) => {
@@ -230,6 +238,21 @@ test.describe('GlobalView Map', () => {
     });
 
     test('should show spinner markers during geometry loading', async ({ page }) => {
+      // Clear geometry cache to reset all states to idle (prevents race with auto-loading)
+      await page.evaluate(() => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            globalViewStore?: {
+              getState: () => {
+                clearGeometryCache: () => void;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+        if (!e2e?.globalViewStore) throw new Error('globalViewStore not available');
+        e2e.globalViewStore.getState().clearGeometryCache();
+      });
+
       // Configure a long delay for the alpha system's geometry loading
       await page.evaluate(() => {
         (window as unknown as Record<string, (path: string, delay: number) => void>).__MOCK_SET_GEOMETRY_DELAY__(
@@ -238,7 +261,7 @@ test.describe('GlobalView Map', () => {
       });
 
       // Trigger geometry loading for alpha (it will stay in 'loading' state due to delay)
-      // Don't await since the delayed promise won't resolve
+      // Fire and forget - the promise will be pending for 60s
       await page.evaluate(() => {
         const e2e = (window as unknown as {
           __E2E_TEST__?: {
@@ -250,7 +273,6 @@ test.describe('GlobalView Map', () => {
           };
         }).__E2E_TEST__;
         if (!e2e?.globalViewStore) throw new Error('globalViewStore not available');
-        // Fire and forget - the promise will be pending for 60s
         e2e.globalViewStore.getState().loadGeometry('/projects/cave-alpha.cvproj');
       });
 
@@ -264,6 +286,21 @@ test.describe('GlobalView Map', () => {
     });
 
     test('should show error markers in survey mode', async ({ page }) => {
+      // Clear geometry cache to reset all states to idle (prevents race with auto-loading)
+      await page.evaluate(() => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            globalViewStore?: {
+              getState: () => {
+                clearGeometryCache: () => void;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+        if (!e2e?.globalViewStore) throw new Error('globalViewStore not available');
+        e2e.globalViewStore.getState().clearGeometryCache();
+      });
+
       // Configure one system to fail geometry loading
       await page.evaluate(() => {
         (window as unknown as Record<string, (path: string) => void>).__MOCK_SET_GEOMETRY_ERROR__(
