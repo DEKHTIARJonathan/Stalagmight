@@ -678,6 +678,14 @@ impl AppState {
             .as_ref()
             .ok_or_else(|| "No project open".to_string())?;
 
+        // Validate stations exist
+        if !project.station_exists(station_a) {
+            return Err("Station A does not exist.".to_string());
+        }
+        if !project.station_exists(station_b) {
+            return Err("Station B does not exist.".to_string());
+        }
+
         // Check if stations already merged
         if project.are_stations_merged(station_a, station_b) {
             return Err("These stations are already merged.".to_string());

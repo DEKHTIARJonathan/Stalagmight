@@ -73,6 +73,15 @@ pub enum UndoData {
         removed_closures: Vec<LoopClosure>,
     },
 
+    /// Unmerge info for re-merging stations on undo (opposite of MergeInfo)
+    UnmergeInfo {
+        station_a: StationRef,
+        station_b: StationRef,
+        /// Closures removed during unmerge (for restoring on undo)
+        #[serde(default)]
+        removed_closures: Vec<LoopClosure>,
+    },
+
     /// Loop closure info for undoing CreateLoopClosure
     ClosureInfo {
         /// The full loop closure data to remove on undo
@@ -116,6 +125,7 @@ impl UndoData {
             UndoData::SectionSnapshot { .. } => "SectionSnapshot",
             UndoData::ShotSnapshot { .. } => "ShotSnapshot",
             UndoData::MergeInfo { .. } => "MergeInfo",
+            UndoData::UnmergeInfo { .. } => "UnmergeInfo",
             UndoData::ClosureInfo { .. } => "ClosureInfo",
             UndoData::ZeroDatumInfo { .. } => "ZeroDatumInfo",
             UndoData::ProjectSnapshot(_) => "ProjectSnapshot",
