@@ -66,8 +66,8 @@ Follow existing test patterns in `e2e-playwright/` directory:
 - [ ] `pnpm test:ui` passes
 
 ## Done summary
-Added tabular-nums to DmpImportDialog (Shots count, L/R/U/D/Pitch cells) and DmpSelectionDialog (Shots column). Created Playwright E2E test with 4 cases verifying text-align: right on numeric headers/inputs, tabular-nums font variant, and left/center alignment on text/icon columns. All 552 tests pass.
+Added tabular-nums to DmpImportDialog (Shots count, L/R/U/D/Pitch cells) and DmpSelectionDialog (Shots column). Created Playwright E2E test (table-alignment.spec.ts) with 4 cases verifying text-align: right on numeric headers/inputs, tabular-nums font variant, and left/center alignment on text/icon columns. All 552 tests pass.
 ## Evidence
 - Commits: 0258870
-- Tests: 552 passed
+- Tests: e2e-playwright/table-alignment.spec.ts: 4 test cases, all passing
 - PRs:
