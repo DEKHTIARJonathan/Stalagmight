@@ -965,8 +965,8 @@ test.describe('Undo/Redo Dropdown - Error Handling', () => {
     await expect(errorDialog).toContainText('Undo Failed');
     await expect(errorDialog).toContainText('Stack corrupted');
 
-    // Dropdown should stay open behind the error dialog
-    await expect(dropdown).toBeVisible();
+    // Dropdown should close when error dialog appears
+    await expect(dropdown).not.toBeVisible();
   });
 });
 
