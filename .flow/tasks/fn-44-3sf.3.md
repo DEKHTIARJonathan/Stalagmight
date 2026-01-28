@@ -33,13 +33,13 @@ Audit remaining creation commands and compound operations to verify ID preservat
 - Restoration from snapshot inherently preserves IDs
 - No code changes expected - just verification and documentation
 ## Acceptance
-- [ ] CreateLoopClosure audited - document if affected
-- [ ] create_section_and_merge verified - IDs preserved via snapshot
-- [ ] Batch command verified - IDs preserved via snapshot  
-- [ ] Findings documented in commit message
-- [ ] Epic spec updated with audit results
+- [x] CreateLoopClosure audited - document if affected
+- [x] create_section_and_merge verified - IDs preserved via snapshot
+- [x] Batch command verified - IDs preserved via snapshot
+- [x] Findings documented in commit message
+- [x] Epic spec updated with audit results
 ## Done summary
-Audited CreateLoopClosure, create_section_and_merge, and Batch command for undo/redo ID preservation. CreateLoopClosure is not affected (identity is station pairs, not monotonic IDs). create_section_and_merge preserves IDs via ProjectSnapshotPair. Batch command preserves IDs on undo via ProjectSnapshot but redo re-executes (pre-existing limitation documented). Updated epic spec with findings.
+Audited CreateLoopClosure, create_section_and_merge, and Batch command for undo/redo ID preservation. CreateLoopClosure is not affected (identity is station pairs, not monotonic IDs). create_section_and_merge preserves IDs via ProjectSnapshotPair. Batch command preserves IDs on undo via ProjectSnapshot but redo currently fails (no Batch arm in execute_without_undo; pre-existing limitation documented). Updated epic spec with findings.
 ## Evidence
 - Commits: 2bc7895, 41be5de
 - Tests: cargo test --manifest-path src-tauri/Cargo.toml undo

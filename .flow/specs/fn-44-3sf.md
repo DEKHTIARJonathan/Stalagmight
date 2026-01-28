@@ -91,7 +91,7 @@ Loop closures are identified by station pairs (StationRef, StationRef), not by m
 - Redo restores `after` snapshot (complete project state with original IDs).
 - Snapshot approach inherently preserves all entity IDs.
 
-### Batch command - UNDO preserved via ProjectSnapshot; REDO re-executes (ID caveat)
+### Batch command - UNDO preserved via ProjectSnapshot; REDO currently fails (ID caveat)
 - `generate_undo_data` captures `ProjectSnapshot` of entire project before execution.
 - Undo restores full project state from snapshot, preserving all entity IDs.
 - Redo falls through to `execute_without_undo`, which has no `Batch` arm and
