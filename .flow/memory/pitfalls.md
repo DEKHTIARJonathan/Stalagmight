@@ -195,3 +195,9 @@ When adding InverseCommand undo for a command, also add that command to execute_
 
 ## 2026-01-28 manual [pitfall]
 MapLibre drag deltas are in lng/lat degrees; always convert to meters via mapCoordsToMeters before passing to backend commands that expect meter offsets
+
+## 2026-01-28 manual [pitfall]
+When applying per-item offsets in a coordinate accumulator loop, use a local copy for display coordinates -- never mutate the running accumulator or all downstream items shift
+
+## 2026-01-28 manual [pitfall]
+HashMap<StructKey, V> in a serde Serialize/Deserialize struct will fail JSON serialization because serde_json requires string map keys -- use custom serialize_with/deserialize_with converting to Vec<(K, V)>
