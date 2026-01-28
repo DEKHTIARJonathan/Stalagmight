@@ -164,6 +164,33 @@ test.describe('Select Dropdown (Portal)', () => {
     await expect(trigger).toContainText('Side Tunnel');
   });
 
+  test('internal scroll does not close dropdown', async ({ page }) => {
+    // Open data table
+    await openDataTable(page);
+
+    // Open the section selector dropdown
+    const sectionSelect = page.getByTestId('data-table-section-select');
+    const trigger = sectionSelect.locator('button').first();
+    await trigger.click();
+
+    const listbox = await getSelectListbox(page, trigger);
+    await expect(listbox).toBeVisible();
+
+    // Dispatch a scroll event originating from inside the listbox.
+    // Select.tsx ignores scroll events where event.target is inside dropdownRef
+    // (covers user scrolling through options and scrollIntoView from keyboard nav).
+    await listbox.evaluate((el) => {
+      el.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+
+    // Dropdown should remain open -- internal scroll is not treated as external
+    await expect(listbox).toBeVisible();
+
+    // Verify we can still interact with the dropdown (select an option)
+    const firstOption = listbox.locator('[role="option"]').first();
+    await expect(firstOption).toBeVisible();
+  });
+
   test('click outside closes dropdown', async ({ page }) => {
     // Open data table
     await openDataTable(page);
