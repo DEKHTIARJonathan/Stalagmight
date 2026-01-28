@@ -8,7 +8,7 @@ Add/update tests for the new merge/closure separation and update SPEC.md documen
 **Files:**
 - `src-tauri/src/models/project/tests.rs` — tests for `create_loop_closure()`, connectivity check, duplicate prevention, same-section closure
 - `src-tauri/src/core/state/tests.rs` — undo/redo tests for `CreateLoopClosure`
-- `src-tauri/src/core/undo.rs` (test section) — update serialization tests for new `ClosureInfo` variant, update `MergeInfo` tests (strategy removed, removed_closures added)
+- `src-tauri/src/core/undo.rs` (test section) — add serialization test for new `ClosureInfo` variant (MergeInfo test already updated by fn-40-tub.1)
 - `e2e-playwright/` — E2E tests for dialog flows
 - `docs/SPEC.md` — update command enum, dialog descriptions, workflow, UndoData variants
 
@@ -31,9 +31,9 @@ Add/update tests for the new merge/closure separation and update SPEC.md documen
 - Test UnmergeStations undo restores both the merge and the removed closures
 
 **Serialization tests** (`src-tauri/src/core/undo.rs` test section):
-- Update `test_undo_data_merge_info` to reflect removed `strategy` field and added `removed_closures` field
+<!-- Updated by plan-sync: fn-40-tub.3 — test_undo_data_merge_info was already updated by fn-40-tub.1 (strategy removed, removed_closures added). No integration fixtures reference closure_strategy for MergeStations. -->
+- `test_undo_data_merge_info` already reflects removed `strategy` field and added `removed_closures` field (done in fn-40-tub.1) — no update needed
 - Add test for `UndoData::ClosureInfo` serialization/deserialization
-- Update any integration test fixtures that reference `MergeStations` with `closure_strategy`
 
 ### 2. Playwright E2E tests (in `e2e-playwright/`)
 
@@ -49,7 +49,8 @@ Update these sections in `docs/SPEC.md`:
 - **UndoData section**: Remove `strategy` from `MergeInfo`, add `removed_closures` to `MergeInfo`, add `ClosureInfo` variant
 - **Dialog section**: Update MergeDialog description (simpler), add ClosureDialog description
 - **Workflow section**: Update merge/closure user flow to reflect connectivity check → appropriate dialog → appropriate command
-- **Visual indicators**: Remove any reference to merge lines / survey-merges layer
+- **Visual indicators**: Remove any reference to merge lines / survey-merges layer (note: SPEC.md has no such references as of fn-40-tub.3 — verify and skip if confirmed)
+<!-- Updated by plan-sync: fn-40-tub.3 removed the survey-merges layer from code; SPEC.md never referenced it -->
 - **Component list**: Add `ClosureDialog.tsx`
 
 ## Acceptance
@@ -62,7 +63,7 @@ Update these sections in `docs/SPEC.md`:
 - [ ] Rust tests: CreateLoopClosure undo/redo works correctly
 - [ ] Rust tests: UnmergeStations undo restores removed closures
 - [ ] Rust tests: ClosureInfo serialization/deserialization
-- [ ] Rust tests: MergeInfo without strategy, with removed_closures
+- [ ] Rust tests: MergeInfo without strategy, with removed_closures (already done by fn-40-tub.1 — verify existing test at undo.rs:778 is correct)
 - [ ] E2E tests in `e2e-playwright/`: merge flow (unconnected stations → MergeDialog → merge)
 - [ ] E2E tests in `e2e-playwright/`: closure flow (connected stations → ClosureDialog → closure)
 - [ ] SPEC.md Command enum updated (MergeStations without strategy, CreateLoopClosure added)

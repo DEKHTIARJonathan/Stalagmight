@@ -45,9 +45,8 @@ Remove the `survey-merges` map layer entirely. Merged stations always perfectly 
 - [ ] `survey-loop-closures` layer still works correctly
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Removed the survey-merges map layer, source, feature builder, and all references. Renamed ghost mergeFeatures to mergeStationFeatures to fully eliminate the mergeFeatures symbol. Fixed pre-existing tsc error with canvasContextAttributes type assertion.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 488c9fd, 3b8bedb
+- Tests: pnpm tsc --noEmit, cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:
