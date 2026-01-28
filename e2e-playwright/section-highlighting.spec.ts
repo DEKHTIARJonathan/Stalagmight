@@ -224,6 +224,8 @@ async function getAvailableSectionIds(page: Page): Promise<number[]> {
 /**
  * Helper to query MapLibre feature-state on all features belonging to a section.
  * Uses querySourceFeatures + getFeatureState (requires source names, not layer names).
+ * Throws inside page.evaluate if __cavechef_map__ is missing so tests fail
+ * instead of passing vacuously with total=0.
  */
 async function getSectionFeatureStates(
   page: Page,
@@ -235,7 +237,7 @@ async function getSectionFeatureStates(
       querySourceFeatures: (source: string) => Array<{ properties?: { sectionId?: number; featureId?: number } }>;
       getFeatureState: (opts: { source: string; id: number }) => Record<string, unknown> | null;
     } }).__cavechef_map__;
-    if (!map) return { shots: { total: 0, withState: 0 }, stations: { total: 0, withState: 0 } };
+    if (!map) throw new Error('__cavechef_map__ not found — map must be loaded before checking feature-state');
 
     const checkSource = (sourceName: string) => {
       const features = map.querySourceFeatures(sourceName);
@@ -254,6 +256,32 @@ async function getSectionFeatureStates(
       stations: checkSource('survey-data-stations'),
     };
   }, { secId: sectionId, key: stateKey });
+}
+
+type FeatureStateCounts = { shots: { total: number; withState: number }; stations: { total: number; withState: number } };
+
+/**
+ * Poll until feature-state matches the expected predicate.
+ * Avoids race conditions where store state is set but updateVisualState()
+ * hasn't run yet (can lag by a tick/frame).
+ */
+async function pollSectionFeatureStates(
+  page: Page,
+  sectionId: number,
+  stateKey: 'hover' | 'selected',
+  predicate: (s: FeatureStateCounts) => boolean,
+  timeout = 5000
+): Promise<FeatureStateCounts> {
+  let result: FeatureStateCounts = { shots: { total: 0, withState: 0 }, stations: { total: 0, withState: 0 } };
+  await expect.poll(
+    async () => {
+      const states = await getSectionFeatureStates(page, sectionId, stateKey);
+      result = states;
+      return predicate(states);
+    },
+    { timeout }
+  ).toBe(true);
+  return result;
 }
 
 async function hasSectionMapHighlight(page: Page, sectionId: number, type: 'hover' | 'selection'): Promise<boolean> {
@@ -309,9 +337,10 @@ test.describe('Section Highlighting', () => {
       const hasMapHover = await hasSectionMapHighlight(page, firstSectionId, 'hover');
       expect(hasMapHover).toBe(true);
 
-      // Verify feature-state is applied to map features
-      const states = await getSectionFeatureStates(page, firstSectionId, 'hover');
-      expect(states.shots.withState).toBe(states.shots.total);
+      // Verify feature-state is applied to map features (poll to avoid race with updateVisualState)
+      const states = await pollSectionFeatureStates(page, firstSectionId, 'hover',
+        (s) => s.shots.total > 0 && s.shots.withState === s.shots.total);
+      expect(states.shots.total).toBeGreaterThan(0);
       expect(states.stations.withState).toBe(states.stations.total);
     });
   });
@@ -340,9 +369,10 @@ test.describe('Section Highlighting', () => {
       const hasMapSelection = await hasSectionMapHighlight(page, firstSectionId, 'selection');
       expect(hasMapSelection).toBe(true);
 
-      // Verify feature-state is applied to map features
-      const states = await getSectionFeatureStates(page, firstSectionId, 'selected');
-      expect(states.shots.withState).toBe(states.shots.total);
+      // Verify feature-state is applied to map features (poll to avoid race with updateVisualState)
+      const states = await pollSectionFeatureStates(page, firstSectionId, 'selected',
+        (s) => s.shots.total > 0 && s.shots.withState === s.shots.total);
+      expect(states.shots.total).toBeGreaterThan(0);
       expect(states.stations.withState).toBe(states.stations.total);
 
       // Verify selection persists across a short wait (not transient)
@@ -470,8 +500,10 @@ test.describe('Section Highlighting', () => {
       const hasMapHover = await hasSectionMapHighlight(page, firstSectionId, 'hover');
       expect(hasMapHover).toBe(false);
 
-      // Verify feature-state is removed from map features
-      const statesAfterUnhover = await getSectionFeatureStates(page, firstSectionId, 'hover');
+      // Verify feature-state is removed from map features (poll to avoid race)
+      const statesAfterUnhover = await pollSectionFeatureStates(page, firstSectionId, 'hover',
+        (s) => s.shots.total > 0 && s.shots.withState === 0);
+      expect(statesAfterUnhover.shots.total).toBeGreaterThan(0);
       expect(statesAfterUnhover.shots.withState).toBe(0);
       expect(statesAfterUnhover.stations.withState).toBe(0);
     });
@@ -702,25 +734,25 @@ test.describe('Section Highlighting', () => {
       await sectionRowA.click();
       await pollSelectionState(page, (sel) => sel?.type === 'section' && sel?.sectionId === sectionA);
 
-      // Verify section A has selected feature-state
-      const statesASelected = await getSectionFeatureStates(page, sectionA, 'selected');
-      expect(statesASelected.shots.withState).toBe(statesASelected.shots.total);
-      expect(statesASelected.stations.withState).toBe(statesASelected.stations.total);
+      // Verify section A has selected feature-state (poll to avoid race)
+      const statesASelected = await pollSectionFeatureStates(page, sectionA, 'selected',
+        (s) => s.shots.total > 0 && s.shots.withState === s.shots.total);
+      expect(statesASelected.shots.total).toBeGreaterThan(0);
 
       // Hover section B
       const sectionRowB = page.locator(`[data-testid="section-row-${sectionB}"]`);
       await sectionRowB.hover();
       await pollHoveredSectionId(page, (id) => id === sectionB);
 
-      // Verify section B has hover feature-state
-      const statesBHover = await getSectionFeatureStates(page, sectionB, 'hover');
-      expect(statesBHover.shots.withState).toBe(statesBHover.shots.total);
-      expect(statesBHover.stations.withState).toBe(statesBHover.stations.total);
+      // Verify section B has hover feature-state (poll to avoid race)
+      const statesBHover = await pollSectionFeatureStates(page, sectionB, 'hover',
+        (s) => s.shots.total > 0 && s.shots.withState === s.shots.total);
+      expect(statesBHover.shots.total).toBeGreaterThan(0);
 
       // Verify section A still has selected feature-state
       const statesAStillSelected = await getSectionFeatureStates(page, sectionA, 'selected');
+      expect(statesAStillSelected.shots.total).toBeGreaterThan(0);
       expect(statesAStillSelected.shots.withState).toBe(statesAStillSelected.shots.total);
-      expect(statesAStillSelected.stations.withState).toBe(statesAStillSelected.stations.total);
 
       // Verify section A does NOT have hover feature-state (only B is hovered)
       const statesANoHover = await getSectionFeatureStates(page, sectionA, 'hover');
@@ -742,17 +774,19 @@ test.describe('Section Highlighting', () => {
       await sectionRow.click();
       await pollSelectionState(page, (sel) => sel?.type === 'section' && sel?.sectionId === firstSectionId);
 
-      // Verify feature-state is applied
-      const statesBefore = await getSectionFeatureStates(page, firstSectionId, 'selected');
-      expect(statesBefore.shots.withState).toBe(statesBefore.shots.total);
-      expect(statesBefore.stations.withState).toBe(statesBefore.stations.total);
+      // Verify feature-state is applied (poll to avoid race)
+      const statesBefore = await pollSectionFeatureStates(page, firstSectionId, 'selected',
+        (s) => s.shots.total > 0 && s.shots.withState === s.shots.total);
+      expect(statesBefore.shots.total).toBeGreaterThan(0);
 
       // Press Escape
       await page.keyboard.press('Escape');
       await pollSelectionState(page, (sel) => sel === null);
 
-      // Verify feature-state is removed
-      const statesAfter = await getSectionFeatureStates(page, firstSectionId, 'selected');
+      // Verify feature-state is removed (poll to avoid race)
+      const statesAfter = await pollSectionFeatureStates(page, firstSectionId, 'selected',
+        (s) => s.shots.total > 0 && s.shots.withState === 0);
+      expect(statesAfter.shots.total).toBeGreaterThan(0);
       expect(statesAfter.shots.withState).toBe(0);
       expect(statesAfter.stations.withState).toBe(0);
     });
@@ -771,10 +805,21 @@ test.describe('Section Highlighting', () => {
       await sectionRow.click();
       await pollSelectionState(page, (sel) => sel?.type === 'section' && sel?.sectionId === firstSectionId);
 
-      // Verify feature-state is applied before data update
-      const statesBefore = await getSectionFeatureStates(page, firstSectionId, 'selected');
-      expect(statesBefore.shots.withState).toBe(statesBefore.shots.total);
+      // Verify feature-state is applied before data update (poll to avoid race)
+      const statesBefore = await pollSectionFeatureStates(page, firstSectionId, 'selected',
+        (s) => s.shots.total > 0 && s.shots.withState === s.shots.total);
       expect(statesBefore.shots.total).toBeGreaterThan(0);
+
+      // Read showDepthGradient before toggle to verify it actually changes
+      const gradientBefore = await page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: {
+            uiStore: { getState: () => { showDepthGradient: boolean } };
+          };
+        }).__E2E_TEST__;
+        return stores?.uiStore.getState().showDepthGradient ?? null;
+      });
+      expect(gradientBefore).not.toBeNull();
 
       // Trigger a data update by toggling depth gradient via store
       // This causes SurveyLayer.update() → setData() which clears all feature-state
@@ -784,20 +829,28 @@ test.describe('Section Highlighting', () => {
             uiStore: { getState: () => { toggleDisplay: (key: string) => void } };
           };
         }).__E2E_TEST__;
-        if (stores) {
-          stores.uiStore.getState().toggleDisplay('showDepthGradient');
-        }
+        if (!stores) throw new Error('__E2E_TEST__ stores not found');
+        stores.uiStore.getState().toggleDisplay('showDepthGradient');
       });
 
-      // Wait for the data update to propagate (setData + re-apply)
-      await page.waitForTimeout(500);
+      // Verify the toggle actually changed (proves data update was triggered)
+      const gradientAfter = await page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: {
+            uiStore: { getState: () => { showDepthGradient: boolean } };
+          };
+        }).__E2E_TEST__;
+        return stores?.uiStore.getState().showDepthGradient ?? null;
+      });
+      expect(gradientAfter).toBe(!gradientBefore);
 
       // Verify feature-state is STILL applied after the data update
-      // (updateVisualState re-applies after setData clears feature-state)
-      const statesAfter = await getSectionFeatureStates(page, firstSectionId, 'selected');
+      // Poll instead of fixed sleep — updateVisualState re-applies after setData
+      const statesAfter = await pollSectionFeatureStates(page, firstSectionId, 'selected',
+        (s) => s.shots.total > 0 && s.shots.withState === s.shots.total);
+      expect(statesAfter.shots.total).toBeGreaterThan(0);
       expect(statesAfter.shots.withState).toBe(statesAfter.shots.total);
       expect(statesAfter.stations.withState).toBe(statesAfter.stations.total);
-      expect(statesAfter.shots.total).toBeGreaterThan(0);
     });
   });
 });

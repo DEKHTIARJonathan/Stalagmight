@@ -119,9 +119,5 @@ Added Playwright tests verifying section feature-state on map:
    - section selection and different section hover coexist on map
    - pressing Escape removes selected feature-state from section features
    - section highlighting persists after data update (setData re-apply)
-## Summary
 
 ## Evidence
-- Commits:
-- Tests:
-- PRs:
