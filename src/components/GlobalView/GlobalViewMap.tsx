@@ -338,10 +338,22 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       softBoundsRef.current = null;
     }
 
-    // Update map's maxBounds if map is initialized
+    // Update map's maxBounds and minZoom if map is initialized
     if (map.current) {
       const hardBounds = calculateHardBounds();
       map.current.setMaxBounds(hardBounds ?? undefined);
+
+      // Set dynamic minZoom: allow zooming out until all systems fit with 20% margin
+      // If no systems, allow unlimited zoom out (minZoom = 0)
+      if (hardBounds) {
+        const camera = map.current.cameraForBounds(hardBounds, { padding: 20 });
+        if (camera?.zoom !== undefined) {
+          // Allow zooming out 1 level beyond what fits all systems
+          map.current.setMinZoom(Math.max(0, camera.zoom - 1));
+        }
+      } else {
+        map.current.setMinZoom(0);
+      }
     }
   }, [calculateRawBounds, addPaddingToBounds, calculateHardBounds]);
 
@@ -390,7 +402,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       },
       center: initialCenter,
       zoom: initialZoom,
-      minZoom: tileConfig.minZoom,
+      minZoom: 0, // Dynamic minZoom set after load based on system bounds
       maxZoom: tileConfig.maxZoom,
     };
 
