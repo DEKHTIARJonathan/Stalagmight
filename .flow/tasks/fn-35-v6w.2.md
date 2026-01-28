@@ -51,9 +51,8 @@ Follow existing CSS assertion patterns:
 - [ ] Tests wait for `__cavechef_map__` before style assertions
 - [ ] All existing E2E tests continue to pass (`pnpm test:ui`)
 ## Done summary
-TBD
-
+Added WebdriverIO E2E test file `e2e/specs/map-controls-styling.spec.ts` verifying MapLibre control dark theme CSS in both MapCanvas and GlobalViewMap views. Tests cover control group background/border colors, button divider styling, icon invert filter, scale control transparency/colors, and scale bar toggle on/off/re-add via the Display menu UI.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 31c9a6f, 6e0a84d
+- Tests: pnpm test:ui
 - PRs:

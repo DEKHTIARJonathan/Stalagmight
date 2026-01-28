@@ -48,3 +48,6 @@ IPC mocks that mutate project state (e.g. set_zero_datum updating zero_datums) m
 
 ## 2026-01-28 manual [convention]
 Use [id="..."] attribute selector instead of #id CSS selector when targeting elements with React useId()-generated IDs (which contain colons) in Playwright tests
+
+## 2026-01-28 manual [convention]
+E2E tests querying third-party library DOM elements (e.g. .maplibregl-ctrl-group) must scope selectors to a data-testid container to avoid false positives when multiple instances exist

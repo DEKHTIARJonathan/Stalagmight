@@ -147,3 +147,6 @@ Select.tsx has 8+ close paths (6 explicit + scroll + resize). When adding callba
 
 ## 2026-01-28 manual [pitfall]
 Playwright keyboard nav tests on React Select are flaky under parallel load due to React state batching; use mouse hover positioning + dispatchEvent instead of sequential keyboard presses for multi-step navigation
+
+## 2026-01-28 manual [pitfall]
+E2E computed style assertions must parse colors numerically (not exact string match) and use individual border side properties (borderTopColor) instead of shorthand (borderColor) for cross-engine stability
