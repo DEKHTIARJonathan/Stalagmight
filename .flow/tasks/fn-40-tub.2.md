@@ -75,9 +75,16 @@ Update the frontend merge tool flow: call `check_merge_connectivity` before open
 - [ ] Loading state shown during connectivity check
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
+Updated the frontend merge tool flow:
 
+1. **useMapTools.ts**: Merge tool now calls `checkMergeConnectivity` before opening any dialog. If stations are not connected, opens MergeDialog. If connected, opens ClosureDialog with preview data. Added loading guard to prevent duplicate clicks during async connectivity check.
+
+2. **MergeDialog.tsx**: Simplified to confirmation-only dialog showing station names with section context and confirm/cancel buttons. Removed distance calculations, loop detection logic, and closure error estimation.
+
+3. **ClosureDialog.tsx** (new): Full closure dialog with preview data panel (error %, path length, misclosure distances), color-coded error percentage, strategy selector with all 4 options.
+
+4. **App.tsx + index.ts**: Registered ClosureDialog in dialog rendering and exports.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 98b4638
+- Tests: cargo test: 80 passed, pnpm tsc --noEmit: only pre-existing MapCanvas error
 - PRs:
