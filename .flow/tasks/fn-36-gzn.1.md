@@ -48,17 +48,24 @@ Create a `formatStationId` utility and replace all 1-indexed station display log
 
 ## Acceptance
 
-- [ ] `formatStationId(sectionId, stationIndex)` exists in `src/utils/formatters.ts` with JSDoc and examples
-- [ ] Unit tests for `formatStationId` pass in `src/utils/__tests__/formatters.test.ts`
-- [ ] All `+ 1` station display patterns removed from `DetailPanel.tsx`
-- [ ] `formatStationId` used for all station ID formatting in DetailPanel
-- [ ] First station in any section displays as `sectionId:0`
-- [ ] ARIA labels use 0-indexed station IDs
-- [ ] `DetailLink.tsx` position JSDoc clarifies: stations 0-indexed, shots 1-indexed
-- [ ] `DetailLink.test.ts` station position expectations updated
-- [ ] `detail-panel-links.spec.ts` station assertions updated to 0-indexed
-- [ ] `detail-link-hover.spec.ts` station assertions updated to 0-indexed
-- [ ] Shot ID display is NOT changed (shots still use existing 1-indexed convention)
-- [ ] `pnpm tsc --noEmit` passes
-- [ ] `pnpm test:ui` passes
-- [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
+- [x] `formatStationId(sectionId, stationIndex)` exists in `src/utils/formatters.ts` with JSDoc and examples
+- [x] Unit tests for `formatStationId` pass in `src/utils/__tests__/formatters.test.ts`
+- [x] All `+ 1` station display patterns removed from `DetailPanel.tsx`
+- [x] `formatStationId` used for all station ID formatting in DetailPanel
+- [x] First station in any section displays as `sectionId:0`
+- [x] ARIA labels use 0-indexed station IDs
+- [x] `DetailLink.tsx` position JSDoc clarifies: stations 0-indexed, shots 1-indexed
+- [x] `DetailLink.test.ts` station position expectations updated
+- [x] `detail-panel-links.spec.ts` station assertions updated to 0-indexed
+- [x] `detail-link-hover.spec.ts` station assertions updated to 0-indexed
+- [x] Shot ID display is NOT changed (shots still use existing 1-indexed convention)
+- [x] `pnpm tsc --noEmit` passes
+- [x] `pnpm test:ui` passes
+- [x] `cargo test --manifest-path src-tauri/Cargo.toml` passes
+
+## Done summary
+Added formatStationId utility and switched to 0-indexed station display in DetailPanel. Updated all related tests.
+## Evidence
+- Commits:
+- Tests:
+- PRs:
