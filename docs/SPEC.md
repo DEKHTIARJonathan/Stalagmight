@@ -567,7 +567,7 @@ Each detail view (Shot, Station, Section) includes a center button in the panel 
 **Behavior:**
 - Click pans and zooms map to fit the element
 - Stations/Shots: Uses `easeTo()` with configured `point_zoom` level
-- Sections: Uses `fitBounds()` with padding (fits all points)
+- Sections: Applies 10% margin on all sides plus panel offsets. If the section already fits within the viewport and occupies ≥30% in at least one axis, uses `easeTo()` to center/pan only (skip-zoom-in). Otherwise uses `fitBounds()` to zoom out or in as needed
 - Full keyboard accessibility (Tab + Enter)
 - Dynamic aria-label: "Center map on [type] [id]"
 
