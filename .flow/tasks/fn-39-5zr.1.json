@@ -1,7 +1,4 @@
 {
-  "assignee": null,
-  "claim_note": "",
-  "claimed_at": null,
   "created_at": "2026-01-28T05:41:56.679081Z",
   "depends_on": [],
   "epic": "fn-39-5zr",
@@ -10,5 +7,5 @@
   "spec_path": ".flow/tasks/fn-39-5zr.1.md",
   "status": "todo",
   "title": "Add section-level feature-state handling to updateVisualState()",
-  "updated_at": "2026-01-28T06:00:26.211529Z"
+  "updated_at": "2026-01-28T08:06:07.560188Z"
 }
