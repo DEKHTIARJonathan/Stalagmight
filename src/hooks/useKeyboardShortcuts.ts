@@ -39,7 +39,10 @@ type ShortcutAction =
   // Panels
   | 'toggle_sections_panel'
   | 'toggle_detail_panel'
-  | 'toggle_data_table';
+  | 'toggle_data_table'
+  // File
+  | 'import_dmp'
+  | 'export';
 
 /**
  * Map of action names to the corresponding tool types.
@@ -114,6 +117,8 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   toggle_sections_panel: 'Sections panel',
   toggle_detail_panel: 'Detail panel',
   toggle_data_table: 'Data table',
+  import_dmp: 'Import DMP',
+  export: 'Export',
 };
 
 /**
@@ -162,6 +167,9 @@ function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutActio
     'toggle_sections_panel',
     'toggle_detail_panel',
     'toggle_data_table',
+    // File
+    'import_dmp',
+    'export',
   ];
 
   for (const action of actions) {
@@ -348,73 +356,6 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // Handle Ctrl+I - Import DMP (reserved)
-      if (isCtrlOrCmd && event.key.toLowerCase() === 'i') {
-        event.preventDefault();
-        // Context-aware DMP import
-        (async () => {
-          try {
-            const selected = await open({
-              multiple: false,
-              filters: [{ name: 'mNemo DMP', extensions: ['dmp'] }],
-            });
-
-            if (!selected || typeof selected !== 'string') {
-              return;
-            }
-
-            // Check for duplicate import (existing project only)
-            if (project && hasImportedDmpPath(selected)) {
-              // Show confirmation dialog for duplicate import
-              openDialog('confirm-duplicate-import', {
-                filePath: selected,
-              });
-              return;
-            }
-
-            const dmpFile = await importDmp(selected);
-            if (!dmpFile) return;
-
-            // Track this file as imported
-            addImportedDmpPath(selected);
-
-            // Determine context: are we creating a new project or adding to existing?
-            if (project) {
-              // Existing project: open Step 1 (selection) directly
-              setImportContext('existing-project');
-              openDialog('dmp-selection', {
-                dmpFile,
-                filePath: selected,
-              });
-            } else {
-              // No project: show NewProjectDialog for import
-              setImportContext('new-project');
-              const fileName = selected.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
-              openDialog('new-project-for-import', {
-                dmpFile,
-                filePath: selected,
-                defaultName: fileName,
-              });
-            }
-          } catch (e) {
-            openDialog('error', {
-              title: 'Import Failed',
-              message: e instanceof Error ? e.message : 'Failed to parse DMP file',
-            });
-          }
-        })();
-        return;
-      }
-
-      // Handle Ctrl+E - Export (reserved)
-      if (isCtrlOrCmd && event.key.toLowerCase() === 'e') {
-        event.preventDefault();
-        if (project) {
-          openDialog('export');
-        }
-        return;
-      }
-
       // Handle Ctrl+A - Select all (reserved)
       if (isCtrlOrCmd && event.key.toLowerCase() === 'a') {
         // ALWAYS prevent browser select-all
@@ -575,6 +516,74 @@ export function useKeyboardShortcuts() {
           const dataTableOpen = useUIStore.getState().dataTableOpen;
           toggleDataTable();
           maybeShowToast(action, dataTableOpen ? 'Hidden' : 'Visible');
+          break;
+        }
+
+        // File actions
+        case 'import_dmp': {
+          event.preventDefault();
+          // Context-aware DMP import
+          (async () => {
+            try {
+              const selected = await open({
+                multiple: false,
+                filters: [{ name: 'mNemo DMP', extensions: ['dmp'] }],
+              });
+
+              if (!selected || typeof selected !== 'string') {
+                return;
+              }
+
+              // Check for duplicate import (existing project only)
+              const currentProject = useProjectStore.getState().project;
+              if (currentProject && hasImportedDmpPath(selected)) {
+                // Show confirmation dialog for duplicate import
+                openDialog('confirm-duplicate-import', {
+                  filePath: selected,
+                });
+                return;
+              }
+
+              const dmpFile = await importDmp(selected);
+              if (!dmpFile) return;
+
+              // Track this file as imported
+              addImportedDmpPath(selected);
+
+              // Determine context: are we creating a new project or adding to existing?
+              if (currentProject) {
+                // Existing project: open Step 1 (selection) directly
+                setImportContext('existing-project');
+                openDialog('dmp-selection', {
+                  dmpFile,
+                  filePath: selected,
+                });
+              } else {
+                // No project: show NewProjectDialog for import
+                setImportContext('new-project');
+                const fileName = selected.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
+                openDialog('new-project-for-import', {
+                  dmpFile,
+                  filePath: selected,
+                  defaultName: fileName,
+                });
+              }
+            } catch (e) {
+              openDialog('error', {
+                title: 'Import Failed',
+                message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+              });
+            }
+          })();
+          break;
+        }
+
+        case 'export': {
+          event.preventDefault();
+          const currentProject = useProjectStore.getState().project;
+          if (currentProject) {
+            openDialog('export');
+          }
           break;
         }
       }
