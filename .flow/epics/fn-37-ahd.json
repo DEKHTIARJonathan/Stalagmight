@@ -10,7 +10,7 @@
   "plan_review_status": "ship",
   "plan_reviewed_at": "2026-01-28T06:05:05.431521Z",
   "spec_path": ".flow/specs/fn-37-ahd.md",
-  "status": "open",
+  "status": "done",
   "title": "Fix warning display format and warning-click selection",
-  "updated_at": "2026-01-28T06:05:05.431543Z"
+  "updated_at": "2026-01-28T10:39:06.699503Z"
 }

@@ -10,7 +10,7 @@
   "plan_review_status": "ship",
   "plan_reviewed_at": "2026-01-27T22:11:05.971440Z",
   "spec_path": ".flow/specs/fn-30-wcf.md",
-  "status": "open",
+  "status": "done",
   "title": "Bugfix: Zero datum update creates two undo entries instead of one",
-  "updated_at": "2026-01-27T22:11:05.971457Z"
+  "updated_at": "2026-01-28T10:39:05.915075Z"
 }

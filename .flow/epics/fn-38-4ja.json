@@ -10,7 +10,7 @@
   "plan_review_status": "ship",
   "plan_reviewed_at": "2026-01-28T06:05:24.833520Z",
   "spec_path": ".flow/specs/fn-38-4ja.md",
-  "status": "open",
+  "status": "done",
   "title": "Fix section zoom to leave 10% margin",
-  "updated_at": "2026-01-28T06:05:24.833534Z"
+  "updated_at": "2026-01-28T10:39:06.805017Z"
 }
