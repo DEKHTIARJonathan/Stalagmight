@@ -3444,3 +3444,210 @@ fn test_undo_unmerge_restores_removed_closures() {
         assert!((restored_closure.path_length - 15.0).abs() < 1e-6);
     }
 }
+
+// === Move Station Tests ===
+
+#[test]
+fn test_move_station_updates_offsets() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+
+    let section_id = create_result.section_id.unwrap();
+    let station_ref = StationRef::new(section_id, 1);
+
+    // First move
+    let result = state.execute(Command::MoveStation {
+        station_ref,
+        offset: Coordinates::new(10.0, 20.0, 5.0),
+    });
+    assert!(result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.station_offsets.get(&station_ref),
+        Some(&(10.0, 20.0, 5.0)),
+        "First move should set offset to (10, 20, 5)"
+    );
+
+    // Second move should accumulate
+    let result = state.execute(Command::MoveStation {
+        station_ref,
+        offset: Coordinates::new(5.0, -10.0, 3.0),
+    });
+    assert!(result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.station_offsets.get(&station_ref),
+        Some(&(15.0, 10.0, 8.0)),
+        "Second move should accumulate to (15, 10, 8)"
+    );
+}
+
+#[test]
+fn test_move_station_undo() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+
+    let section_id = create_result.section_id.unwrap();
+    let station_ref = StationRef::new(section_id, 0);
+
+    // Move station
+    state.execute(Command::MoveStation {
+        station_ref,
+        offset: Coordinates::new(10.0, 20.0, 5.0),
+    });
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.station_offsets.get(&station_ref), Some(&(10.0, 20.0, 5.0)));
+
+    // Undo should reverse the move
+    let undo_result = state.undo();
+    assert!(undo_result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0)),
+        (0.0, 0.0, 0.0),
+        "Undo should restore offset to origin"
+    );
+}
+
+#[test]
+fn test_move_station_redo() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+
+    let section_id = create_result.section_id.unwrap();
+    let station_ref = StationRef::new(section_id, 1);
+
+    // Move station
+    state.execute(Command::MoveStation {
+        station_ref,
+        offset: Coordinates::new(10.0, 20.0, 5.0),
+    });
+
+    // Undo
+    let undo_result = state.undo();
+    assert!(undo_result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0)),
+        (0.0, 0.0, 0.0),
+        "Undo should restore offset to origin"
+    );
+
+    // Redo should re-apply the move
+    let redo_result = state.redo();
+    assert!(redo_result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.station_offsets.get(&station_ref),
+        Some(&(10.0, 20.0, 5.0)),
+        "Redo should re-apply the move"
+    );
+}
+
+#[test]
+fn test_station_offset_applied_in_coordinates() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+
+    let section_id = create_result.section_id.unwrap();
+    let station_ref = StationRef::new(section_id, 1); // end station of the shot
+
+    // Compute coordinates before any move
+    let coords_before = {
+        let project = state.get_project_state().unwrap();
+        project.compute_station_raw_coords(station_ref).unwrap()
+    };
+
+    // Move the station
+    let move_offset = Coordinates::new(100.0, 200.0, 50.0);
+    let result = state.execute(Command::MoveStation {
+        station_ref,
+        offset: move_offset,
+    });
+    assert!(result.success);
+
+    // Compute coordinates after move
+    let coords_after = {
+        let project = state.get_project_state().unwrap();
+        project.compute_station_raw_coords(station_ref).unwrap()
+    };
+
+    // The station coordinates should differ by exactly the move offset
+    let dx = coords_after.x - coords_before.x;
+    let dy = coords_after.y - coords_before.y;
+    let dz = coords_after.z - coords_before.z;
+
+    assert!(
+        (dx - 100.0).abs() < 1e-6,
+        "X coordinate should shift by 100.0, got delta {}",
+        dx
+    );
+    assert!(
+        (dy - 200.0).abs() < 1e-6,
+        "Y coordinate should shift by 200.0, got delta {}",
+        dy
+    );
+    assert!(
+        (dz - 50.0).abs() < 1e-6,
+        "Z coordinate should shift by 50.0, got delta {}",
+        dz
+    );
+}
