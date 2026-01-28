@@ -90,7 +90,8 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       // Verify reserved shortcuts section exists
       await expect(page.locator('[data-testid="reserved-shortcuts"]')).toBeVisible();
 
-      // Verify at least one category is visible
+      // Verify categories are visible (File is now the first category)
+      await expect(page.locator('[data-testid="shortcut-category-file"]')).toBeVisible();
       await expect(page.locator('[data-testid="shortcut-category-tools"]')).toBeVisible();
     });
   });
@@ -498,9 +499,115 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       const reserved = page.locator('[data-testid="reserved-shortcuts"]');
       await expect(reserved).toBeVisible();
 
-      // Verify some reserved shortcuts are shown
+      // Verify reserved shortcuts are shown (Ctrl+I and Ctrl+E are no longer reserved)
       await expect(reserved).toContainText('Escape');
       await expect(reserved).toContainText('Delete');
+      await expect(reserved).toContainText('Ctrl+A');
+
+      // Ctrl+I and Ctrl+E should NOT be in reserved section (they are now configurable)
+      await expect(reserved).not.toContainText('Ctrl+I');
+      await expect(reserved).not.toContainText('Ctrl+E');
+    });
+
+    test('reserved shortcuts section is positioned above search bar', async ({ page }) => {
+      await openSettingsDialog(page);
+      await navigateToShortcutsCategory(page);
+
+      const reserved = page.locator('[data-testid="reserved-shortcuts"]');
+      const search = page.locator('[data-testid="shortcuts-search"]');
+
+      await expect(reserved).toBeVisible();
+      await expect(search).toBeVisible();
+
+      // Verify reserved section is above search bar by comparing bounding boxes
+      const reservedBox = await reserved.boundingBox();
+      const searchBox = await search.boundingBox();
+      expect(reservedBox).toBeTruthy();
+      expect(searchBox).toBeTruthy();
+      // Reserved section's bottom should be above search bar's top
+      expect(reservedBox!.y + reservedBox!.height).toBeLessThan(searchBox!.y + 10);
+    });
+  });
+
+  test.describe('File Category Shortcuts', () => {
+    test('File category with Import DMP and Export shortcuts is visible', async ({ page }) => {
+      await openSettingsDialog(page);
+      await navigateToShortcutsCategory(page);
+
+      // Verify File category exists
+      await expect(page.locator('[data-testid="shortcut-category-file"]')).toBeVisible();
+
+      // Verify Import DMP and Export rows exist
+      await expect(page.locator('[data-testid="shortcut-row-import_dmp"]')).toBeVisible();
+      await expect(page.locator('[data-testid="shortcut-row-export"]')).toBeVisible();
+
+      // Verify default bindings
+      const importRecorder = page.locator('[data-testid="shortcut-primary-import_dmp"]');
+      await expect(importRecorder).toContainText('Ctrl');
+      await expect(importRecorder).toContainText('I');
+
+      const exportRecorder = page.locator('[data-testid="shortcut-primary-export"]');
+      await expect(exportRecorder).toContainText('Ctrl');
+      await expect(exportRecorder).toContainText('E');
+    });
+
+    test('Ctrl+I and Ctrl+E can be reassigned without conflict error', async ({ page }) => {
+      await openSettingsDialog(page);
+      await navigateToShortcutsCategory(page);
+
+      // Reassign Import DMP from Ctrl+I to Ctrl+Shift+I
+      const importRecorder = page.locator('[data-testid="shortcut-primary-import_dmp"]');
+      await importRecorder.click();
+      await waitForRecording(page, 'shortcut-primary-import_dmp', true);
+      await page.keyboard.press('Control+Shift+I');
+      await waitForRecording(page, 'shortcut-primary-import_dmp', false);
+
+      // Verify new binding is shown
+      await expect(importRecorder).toContainText('Ctrl');
+      await expect(importRecorder).toContainText('Shift');
+      await expect(importRecorder).toContainText('I');
+
+      // No error should appear
+      await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
+
+      // Now assign Ctrl+I to a different action (select) - should NOT conflict since it was freed
+      const selectRecorder = page.locator('[data-testid="shortcut-primary-select"]');
+      await selectRecorder.click();
+      await waitForRecording(page, 'shortcut-primary-select', true);
+      await page.keyboard.press('Control+I');
+      await waitForRecording(page, 'shortcut-primary-select', false);
+
+      // Should show Ctrl+I without error (it's no longer reserved or taken)
+      await expect(selectRecorder).toContainText('Ctrl');
+      await expect(selectRecorder).toContainText('I');
+      await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
+    });
+
+    test('customized Import DMP shortcut triggers import dialog', async ({ page }) => {
+      // We start in project view from beforeEach
+      await openSettingsDialog(page);
+      await navigateToShortcutsCategory(page);
+
+      // Change Import DMP shortcut from Ctrl+I to Ctrl+Shift+M
+      const importRecorder = page.locator('[data-testid="shortcut-primary-import_dmp"]');
+      await importRecorder.click();
+      await waitForRecording(page, 'shortcut-primary-import_dmp', true);
+      await page.keyboard.press('Control+Shift+M');
+      await waitForRecording(page, 'shortcut-primary-import_dmp', false);
+
+      // Save settings
+      await page.locator('[data-testid="settings-save-button"]').click();
+      await expect(page.locator('[data-testid="settings-dialog"]')).not.toBeVisible({ timeout: 3000 });
+
+      // Navigate to a project so import shortcut is handled
+      await createProject(page, 'Import Shortcut Test');
+
+      // Press the customized shortcut (Ctrl+Shift+M)
+      await page.keyboard.press('Control+Shift+M');
+
+      // The import flow should trigger - in mock context, the file dialog returns
+      // a mock path and the dmp-selection dialog should appear
+      await expect(page.locator('[data-testid="dmp-selection-dialog"]')).toBeVisible({ timeout: 5000 });
     });
   });
 
