@@ -48,9 +48,8 @@ Update the frontend to handle undo/redo failures: show toast notifications with 
 
 <!-- Updated by plan-sync: fn-28-rpu.2 shifted line numbers in projectStore.ts (refreshProjectState 488-508 not 488-504), useKeyboardShortcuts.ts (500-510 not 501-509), and undo-redo-dropdown.spec.ts (extendMocksWithUndoRedo 78-138 not 78-128) -->
 ## Done summary
-TBD
-
+Updated undo/redo/undoTo/redoTo store actions with try/finally for refreshProjectState on both success and failure, toast notifications on failure with null-guarded error messages and distinct throttle keys, and isDirty marking on partial multi-step failures. Extended extendMocksWithUndoRedo with a mutating option and added happy-path E2E test. Updated docs/SPEC.md section 8.4 with failure behavior and fixed ZeroDatumInfo in section 8.3 to include previous_offsets field.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 0ef5b26, 733bd7c
+- Tests: pnpm tsc --noEmit, pnpm test:ui, cargo test --manifest-path src-tauri/Cargo.toml -- undo
 - PRs:

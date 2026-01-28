@@ -126,3 +126,6 @@ When using CSS inline style width/height on elements that also have Tailwind w-f
 
 ## 2026-01-28 manual [pitfall]
 Mock data must use correct runtime types (e.g. numeric IDs not strings) to match TypeScript type aliases - string 'section-1' vs number 1 for SectionId
+
+## 2026-01-28 manual [pitfall]
+Multi-step operations (undo_to/redo_to) that can partially fail must set isDirty when some steps applied before failure - not just on full success - to prevent users closing without the unsaved changes guard

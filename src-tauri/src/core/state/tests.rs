@@ -2891,3 +2891,256 @@ fn test_redo_failure_with_project_lock_preserves_entry() {
     assert_eq!(stack.redo_len(), 1, "Entry must be preserved on redo stack after project lock failure");
     assert!(!stack.can_undo(), "Entry must not appear on undo stack");
 }
+
+#[test]
+fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
+    // Verify that calling SetZeroDatum on an existing datum captures previous_gps = Some(old)
+    // and previous_offsets correctly in the undo data.
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Create a section with shots
+    let result_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(10.0)],
+    });
+    let section_a = result_a.section_id.unwrap();
+
+    let station_ref = StationRef::new(section_a, 0);
+
+    // Set initial zero datum with GPS-A
+    let gps_a = GpsCoordinates::new(25.0, -80.0, 50.0).unwrap();
+    let result = state.execute(Command::SetZeroDatum {
+        station_ref,
+        coordinates: gps_a,
+    });
+    assert!(result.success, "Initial SetZeroDatum should succeed");
+
+    // Clear undo stack to focus on the update
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.clear();
+    }
+
+    // Now update the datum with GPS-B
+    let gps_b = GpsCoordinates::new(26.0, -81.0, 55.0).unwrap();
+    let result = state.execute(Command::SetZeroDatum {
+        station_ref,
+        coordinates: gps_b,
+    });
+    assert!(result.success, "Update SetZeroDatum should succeed");
+
+    // Inspect the undo entry's undo_data
+    let stack = state.undo_stack.lock().unwrap();
+    assert!(stack.can_undo(), "Should have an undo entry");
+
+    let undo_data = stack.peek_undo_data().expect("Should have undo data");
+    match undo_data {
+        UndoData::ZeroDatumInfo {
+            station_ref: ref_in_entry,
+            previous_gps,
+            previous_offsets,
+        } => {
+            assert_eq!(*ref_in_entry, station_ref, "Station ref should match");
+            assert!(
+                previous_gps.is_some(),
+                "previous_gps must be Some(old) when updating existing datum"
+            );
+            let prev = previous_gps.unwrap();
+            assert!(
+                (prev.latitude - 25.0).abs() < f64::EPSILON,
+                "previous_gps latitude should be GPS-A's latitude (25.0), got {}",
+                prev.latitude
+            );
+            assert!(
+                (prev.longitude - (-80.0)).abs() < f64::EPSILON,
+                "previous_gps longitude should be GPS-A's longitude (-80.0), got {}",
+                prev.longitude
+            );
+            assert!(
+                !previous_offsets.is_empty(),
+                "previous_offsets should capture at least the datum section"
+            );
+        }
+        other => panic!(
+            "Expected UndoData::ZeroDatumInfo, got {:?}",
+            std::mem::discriminant(other)
+        ),
+    }
+}
+
+#[test]
+fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
+    // After updating a zero datum, undo should restore the previous GPS and section offsets.
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let result_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(10.0)],
+    });
+    let section_a = result_a.section_id.unwrap();
+
+    let station_ref = StationRef::new(section_a, 0);
+
+    // Set initial zero datum with GPS-A
+    let gps_a = GpsCoordinates::new(25.0, -80.0, 50.0).unwrap();
+    state.execute(Command::SetZeroDatum {
+        station_ref,
+        coordinates: gps_a,
+    });
+
+    // Capture state after initial set (GPS-A applied)
+    let (offsets_after_a, gps_after_a) = {
+        let proj = state.project.lock().unwrap();
+        let project = proj.as_ref().unwrap();
+        let offsets = project.section_offsets.clone();
+        let gps = project
+            .zero_datums
+            .iter()
+            .find(|zd| zd.station_ref == station_ref)
+            .map(|zd| zd.gps);
+        (offsets, gps)
+    };
+    assert!(gps_after_a.is_some(), "GPS-A should be set");
+    assert!(
+        (gps_after_a.unwrap().latitude - 25.0).abs() < f64::EPSILON,
+        "GPS should be A"
+    );
+
+    // Clear undo stack so we only track the update
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.clear();
+    }
+
+    // Update datum with GPS-B
+    let gps_b = GpsCoordinates::new(26.0, -81.0, 55.0).unwrap();
+    let result = state.execute(Command::SetZeroDatum {
+        station_ref,
+        coordinates: gps_b,
+    });
+    assert!(result.success);
+
+    // Verify GPS-B is now active
+    {
+        let proj = state.project.lock().unwrap();
+        let project = proj.as_ref().unwrap();
+        let current_gps = project
+            .zero_datums
+            .iter()
+            .find(|zd| zd.station_ref == station_ref)
+            .map(|zd| zd.gps)
+            .unwrap();
+        assert!(
+            (current_gps.latitude - 26.0).abs() < f64::EPSILON,
+            "GPS should now be B"
+        );
+    }
+
+    // Undo the update
+    let undo_result = state.undo();
+    assert!(undo_result.success, "Undo should succeed");
+
+    // Verify GPS is restored to A
+    let (restored_offsets, restored_gps) = {
+        let proj = state.project.lock().unwrap();
+        let project = proj.as_ref().unwrap();
+        let offsets = project.section_offsets.clone();
+        let gps = project
+            .zero_datums
+            .iter()
+            .find(|zd| zd.station_ref == station_ref)
+            .map(|zd| zd.gps);
+        (offsets, gps)
+    };
+
+    assert!(restored_gps.is_some(), "GPS should be restored after undo");
+    assert!(
+        (restored_gps.unwrap().latitude - 25.0).abs() < f64::EPSILON,
+        "GPS latitude should be restored to GPS-A (25.0), got {}",
+        restored_gps.unwrap().latitude
+    );
+    assert!(
+        (restored_gps.unwrap().longitude - (-80.0)).abs() < f64::EPSILON,
+        "GPS longitude should be restored to GPS-A (-80.0), got {}",
+        restored_gps.unwrap().longitude
+    );
+
+    // Verify section offsets are restored
+    assert_eq!(
+        restored_offsets, offsets_after_a,
+        "Section offsets should be restored to pre-update values"
+    );
+}
+
+#[test]
+fn test_set_zero_datum_no_change_still_creates_undo_entry() {
+    // The no-change guard is frontend-only (lat/lon comparison in EditStationDialog).
+    // The backend always executes SetZeroDatum and always creates an undo entry.
+    // This test confirms that calling SetZeroDatum with the same GPS coordinates
+    // still produces an undo entry (the guard must be tested in E2E).
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let result_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(10.0)],
+    });
+    let section_a = result_a.section_id.unwrap();
+
+    let station_ref = StationRef::new(section_a, 0);
+    let gps = GpsCoordinates::new(25.0, -80.0, 50.0).unwrap();
+
+    // Set initial datum
+    state.execute(Command::SetZeroDatum {
+        station_ref,
+        coordinates: gps,
+    });
+
+    // Clear undo stack
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.clear();
+    }
+
+    // Call SetZeroDatum again with identical GPS
+    let same_gps = GpsCoordinates::new(25.0, -80.0, 50.0).unwrap();
+    let result = state.execute(Command::SetZeroDatum {
+        station_ref,
+        coordinates: same_gps,
+    });
+    assert!(result.success, "SetZeroDatum with same GPS should succeed");
+
+    // Backend still creates an undo entry (no backend-level no-change guard)
+    let stack = state.undo_stack.lock().unwrap();
+    assert!(
+        stack.can_undo(),
+        "Backend should still create an undo entry even with identical GPS; \
+         the no-change guard is frontend-only"
+    );
+}
