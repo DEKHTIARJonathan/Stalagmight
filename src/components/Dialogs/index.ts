@@ -6,6 +6,7 @@ export { default as DmpSelectionDialog } from './DmpSelectionDialog';
 export { default as DmpSectionConfigDialog } from './DmpSectionConfigDialog';
 export { default as ConfirmDialog } from './ConfirmDialog';
 export { default as MergeDialog } from './MergeDialog';
+export { default as ClosureDialog } from './ClosureDialog';
 export { default as MergeProjectsDialog } from './MergeProjectsDialog';
 export { default as DrawShotDialog } from './DrawShotDialog';
 export { default as EditSectionDialog } from './EditSectionDialog';

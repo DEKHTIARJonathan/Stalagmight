@@ -7,7 +7,7 @@ import { useUIStore } from './store/uiStore';
 import { useBeforeUnload, useLoadingProgress } from './hooks';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, DuplicateImportDialog, SettingsDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, DuplicateImportDialog, SettingsDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
 import type { SectionData, ShotData } from './types/project';
@@ -550,6 +550,7 @@ function App() {
       ) : null}
       {activeDialog === 'confirm-delete' && <ConfirmDialog />}
       {activeDialog === 'merge' && <MergeDialog />}
+      {activeDialog === 'closure' && <ClosureDialog />}
       {activeDialog === 'merge-projects' && <MergeProjectsDialog />}
       {activeDialog === 'draw-shot' && <DrawShotDialog />}
       {activeDialog === 'edit-section' && <EditSectionDialog />}
