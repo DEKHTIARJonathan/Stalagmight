@@ -1,7 +1,4 @@
 {
-  "assignee": null,
-  "claim_note": "",
-  "claimed_at": null,
   "created_at": "2026-01-27T22:08:03.337242Z",
   "depends_on": [],
   "epic": "fn-32-exw",
@@ -10,5 +7,5 @@
   "spec_path": ".flow/tasks/fn-32-exw.1.md",
   "status": "todo",
   "title": "Fix alignment in EditableTable inputs, ShotTableEditor, and ImportDialog",
-  "updated_at": "2026-01-27T22:28:44.118504Z"
+  "updated_at": "2026-01-28T03:33:38.353417Z"
 }
