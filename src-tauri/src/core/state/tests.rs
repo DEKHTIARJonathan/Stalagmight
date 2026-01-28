@@ -2924,6 +2924,13 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
     });
     assert!(result.success, "Initial SetZeroDatum should succeed");
 
+    // Capture the section offsets before the update for later assertion
+    let offsets_before_update = {
+        let proj = state.project.lock().unwrap();
+        let project = proj.as_ref().unwrap();
+        project.section_offsets.clone()
+    };
+
     // Clear undo stack to focus on the update
     {
         let mut stack = state.undo_stack.lock().unwrap();
@@ -2965,9 +2972,17 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
                 "previous_gps longitude should be GPS-A's longitude (-80.0), got {}",
                 prev.longitude
             );
+            // Assert previous_offsets contains the datum section and matches the pre-update value
             assert!(
-                !previous_offsets.is_empty(),
-                "previous_offsets should capture at least the datum section"
+                previous_offsets.contains_key(&section_a),
+                "previous_offsets must contain the datum section ({})",
+                section_a
+            );
+            let captured_offset = previous_offsets.get(&section_a).unwrap();
+            let expected_offset = offsets_before_update.get(&section_a).copied();
+            assert_eq!(
+                *captured_offset, expected_offset,
+                "previous_offsets for datum section should match pre-update offset"
             );
         }
         other => panic!(
@@ -3071,16 +3086,16 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
         (offsets, gps)
     };
 
-    assert!(restored_gps.is_some(), "GPS should be restored after undo");
+    let restored = restored_gps.expect("GPS should be restored after undo");
     assert!(
-        (restored_gps.unwrap().latitude - 25.0).abs() < f64::EPSILON,
+        (restored.latitude - 25.0).abs() < f64::EPSILON,
         "GPS latitude should be restored to GPS-A (25.0), got {}",
-        restored_gps.unwrap().latitude
+        restored.latitude
     );
     assert!(
-        (restored_gps.unwrap().longitude - (-80.0)).abs() < f64::EPSILON,
+        (restored.longitude - (-80.0)).abs() < f64::EPSILON,
         "GPS longitude should be restored to GPS-A (-80.0), got {}",
-        restored_gps.unwrap().longitude
+        restored.longitude
     );
 
     // Verify section offsets are restored
