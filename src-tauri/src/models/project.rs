@@ -249,7 +249,7 @@ impl Project {
     }
 
     /// Compute raw station coordinates for a single station (without global zero datum offset)
-    pub fn compute_station_raw_coords(&self, station_ref: StationRef) -> Option<Coordinates> {
+    pub(crate) fn compute_station_raw_coords(&self, station_ref: StationRef) -> Option<Coordinates> {
         let section = self.sections.iter().find(|s| s.id == station_ref.section_id)?;
 
         // Get section offset
@@ -276,7 +276,7 @@ impl Project {
 
     /// Calculate the path length between two stations through the survey
     /// This finds the shortest path through shots and existing merges
-    pub fn calculate_path_length_between(&self, station_a: StationRef, station_b: StationRef) -> f64 {
+    pub(crate) fn calculate_path_length_between(&self, station_a: StationRef, station_b: StationRef) -> f64 {
         // Use BFS to find path between stations
         use std::collections::VecDeque;
 
@@ -442,6 +442,11 @@ impl Project {
         // Check that both stations exist
         if !self.station_exists(station_a) || !self.station_exists(station_b) {
             return Err("One or both stations do not exist".to_string());
+        }
+
+        // Reject already-merged station pairs
+        if self.are_stations_merged(station_a, station_b) {
+            return Err("These stations are already merged. Closures are for unmerged station pairs.".to_string());
         }
 
         // Check stations are connected

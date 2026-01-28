@@ -183,7 +183,7 @@ impl AppState {
                         .cloned()
                         .collect();
 
-                    UndoData::MergeInfo {
+                    UndoData::UnmergeInfo {
                         station_a: *a,
                         station_b: *b,
                         removed_closures: closures_to_remove,
@@ -445,6 +445,53 @@ impl AppState {
                         None => CommandResult::failure("No project open".to_string()),
                     },
                     Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                }
+            }
+
+            UndoData::UnmergeInfo {
+                station_a,
+                station_b,
+                removed_closures,
+            } => {
+                // Re-merge the stations to undo the unmerge
+                let merge_result = self.merge_stations(*station_a, *station_b);
+                if !merge_result.success {
+                    // If re-merge fails (e.g., stations now connected), try direct restoration
+                    match self.project.lock() {
+                        Ok(mut proj_guard) => match proj_guard.as_mut() {
+                            Some(project) => {
+                                project.station_merges.push(crate::models::StationMerge {
+                                    station_a: *station_a,
+                                    station_b: *station_b,
+                                    merged_at: chrono::Utc::now(),
+                                });
+                                // Restore removed closures
+                                for closure in removed_closures {
+                                    project.loop_closures.push(closure.clone());
+                                }
+                                project.touch();
+                                CommandResult::success()
+                            }
+                            None => CommandResult::failure("No project open".to_string()),
+                        },
+                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                    }
+                } else {
+                    // Merge succeeded, now restore removed closures
+                    if !removed_closures.is_empty() {
+                        match self.project.lock() {
+                            Ok(mut proj_guard) => {
+                                if let Some(project) = proj_guard.as_mut() {
+                                    for closure in removed_closures {
+                                        project.loop_closures.push(closure.clone());
+                                    }
+                                    project.touch();
+                                }
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                    merge_result
                 }
             }
 
