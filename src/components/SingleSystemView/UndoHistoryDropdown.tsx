@@ -217,7 +217,7 @@ export default function UndoHistoryDropdown({
   // Unique ID for ARIA attributes
   const menuId = useId();
 
-  const { getUndoStack, getRedoStack, undoTo, redoTo, undo, redo } = useProjectStore();
+  const { getUndoStack, getRedoStack, undoTo, redoTo, undo, redo, canUndo, canRedo } = useProjectStore();
   const { openDialog } = useUIStore();
 
   // Clear preview/hover state without closing the dropdown (reusable helper)
@@ -721,6 +721,16 @@ export default function UndoHistoryDropdown({
       keyboardNavActiveRef.current = false;
     }
   }, [isOpen]);
+
+  // Refetch stack when undo/redo availability changes (from external edits, etc.)
+  // This ensures the dropdown stays in sync with the actual undo stack state
+  const canUndoOrRedo = mode === 'undo' ? canUndo : canRedo;
+  useEffect(() => {
+    if (isOpen && !isActionInProgressRef.current) {
+      // Refetch to sync with current backend state
+      fetchStack();
+    }
+  }, [isOpen, canUndoOrRedo, fetchStack]);
 
   // Get the active item ID for aria-activedescendant
   const activeItemId = activeIndex >= 0 && items[activeIndex]
