@@ -49,9 +49,8 @@ Follow existing patterns in `e2e-playwright/undo-redo-dropdown.spec.ts`.
 - [ ] `pnpm test:ui` passes
 
 ## Done summary
-TBD
-
+Fixed EditStationDialog to call only setZeroDatum (not removeZeroDatum+setZeroDatum) when updating GPS coordinates on an existing zero datum, producing exactly one undo entry. Added 3 Rust unit tests validating undo data capture, undo restore, and no-change behavior, plus 2 E2E Playwright tests with real mutating undo stack mock and undo dropdown UI assertions. Improved IPC mocks to derive is_zero_datum/gps_coordinates from project.zero_datums for internal consistency.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: e2d7cda, 26fa55b, 9bac4d9
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, pnpm test:ui
 - PRs:

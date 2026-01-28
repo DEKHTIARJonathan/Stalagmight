@@ -42,3 +42,6 @@ Mock IPC handlers must return data matching the exact TypeScript interface (incl
 
 ## 2026-01-28 manual [convention]
 E2E test helpers on window.__E2E_TEST__ must be gated behind import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VITE_E2E === '1' to avoid leaking in production
+
+## 2026-01-28 manual [convention]
+IPC mocks that mutate project state (e.g. set_zero_datum updating zero_datums) must keep derived fields in get_project_state consistent -- derive station.is_zero_datum and station.gps_coordinates from project.zero_datums rather than hardcoding null
