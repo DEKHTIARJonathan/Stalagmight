@@ -794,7 +794,7 @@ impl AppState {
         }
 
         tracing::info!(section_id = original_id, "Section restored");
-        CommandResult::success()
+        CommandResult::success_with_section_id(original_id)
     }
 
     /// Restore a deleted shot at its original position with its original ID
