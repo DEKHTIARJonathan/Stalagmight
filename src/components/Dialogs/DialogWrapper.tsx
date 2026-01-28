@@ -13,6 +13,12 @@ const sizeClasses: Record<DialogSize, string> = {
   '5xl': 'max-w-5xl',
 };
 
+/** Fixed dimensions for dialogs that need constant size regardless of content. */
+export interface FixedSize {
+  width: string;
+  height: string;
+}
+
 interface DialogWrapperProps {
   title: string;
   onClose: () => void;
@@ -27,6 +33,8 @@ interface DialogWrapperProps {
   overflow?: 'auto' | 'hidden';
   /** Additional className for the body content wrapper. */
   bodyClassName?: string;
+  /** Fixed dimensions that override size and maxHeight. Uses CSS min()/clamp() for responsive fallback. */
+  fixedSize?: FixedSize;
 }
 
 export function DialogWrapper({
@@ -40,6 +48,7 @@ export function DialogWrapper({
   closeOnBackdropClick = true,
   overflow = 'auto',
   bodyClassName = 'p-4',
+  fixedSize,
 }: DialogWrapperProps) {
   const titleId = useId();
   const [showConfirm, setShowConfirm] = useState(false);
@@ -97,7 +106,8 @@ export function DialogWrapper({
         aria-modal="true"
         aria-labelledby={titleId}
         data-testid={testId}
-        className={`relative bg-panel border border-border rounded-lg shadow-xl ${sizeClasses[size]} w-full mx-4 ${maxHeight} overflow-${overflow} ${overflow === 'hidden' ? 'flex flex-col' : ''}`}
+        className={`relative bg-panel border border-border rounded-lg shadow-xl ${fixedSize ? '' : `${sizeClasses[size]} ${maxHeight}`} w-full mx-4 overflow-${overflow} ${overflow === 'hidden' ? 'flex flex-col' : ''}`}
+        style={fixedSize ? { width: fixedSize.width, height: fixedSize.height } : undefined}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <h2 id={titleId} className="text-lg font-medium">{title}</h2>
