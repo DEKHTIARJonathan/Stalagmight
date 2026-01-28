@@ -9,6 +9,9 @@ interface MoveDragStartData {
   type: 'section' | 'station';
   sectionId?: number;
   stationRef?: StationRef;
+  /** Screen coordinates of the click that initiated the drag */
+  screenX?: number;
+  screenY?: number;
 }
 
 interface MapToolsOptions {
@@ -215,7 +218,12 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         case 'move_station': {
           // Start drag operation - handled by MapCanvas
           setSelection({ type: 'station', stationRef: ref });
-          options.onMoveDragStart?.({ type: 'station', stationRef: ref });
+          options.onMoveDragStart?.({
+            type: 'station',
+            stationRef: ref,
+            screenX: mouseEvent.clientX,
+            screenY: mouseEvent.clientY,
+          });
           break;
         }
 
@@ -224,7 +232,12 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           const section = project?.sections.find((s) => s.id === ref.section_id);
           if (section) {
             setSelection({ type: 'section', sectionId: ref.section_id });
-            options.onMoveDragStart?.({ type: 'section', sectionId: ref.section_id });
+            options.onMoveDragStart?.({
+              type: 'section',
+              sectionId: ref.section_id,
+              screenX: mouseEvent.clientX,
+              screenY: mouseEvent.clientY,
+            });
           }
           break;
         }
