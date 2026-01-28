@@ -75,6 +75,8 @@ export type BatchCommand =
 export interface ConnectivityResult {
   connected: boolean;
   preview: ClosurePreview | null;
+  can_merge: boolean;
+  reason: string | null;
 }
 
 export interface ClosurePreview {

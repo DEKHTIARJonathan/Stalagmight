@@ -19,7 +19,7 @@ pub(crate) fn check_merge_connectivity_impl(
     station_b: StationRef,
 ) -> Result<ConnectivityResult, String> {
     let (connected, preview) = state.check_merge_connectivity(station_a, station_b)?;
-    Ok(ConnectivityResult { connected, preview })
+    Ok(ConnectivityResult { connected, preview, can_merge: false, reason: None })
 }
 
 /// Create a loop closure between two connected stations

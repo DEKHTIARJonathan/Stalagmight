@@ -154,6 +154,33 @@ impl Database {
             [],
         )?;
 
+        // Add closure_id column to loop_closures table if it doesn't exist (added for closure ID tracking)
+        let has_closure_id: bool = self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='closure_id'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_closure_id {
+            // Table may not exist in very old projects, check first
+            let loop_table_exists: bool = self.conn.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='loop_closures'",
+                [],
+                |row| row.get::<_, i64>(0),
+            ).map(|c| c > 0).unwrap_or(false);
+
+            if loop_table_exists {
+                self.conn.execute(
+                    "ALTER TABLE loop_closures ADD COLUMN closure_id INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+                tracing::info!("Added closure_id column to loop_closures table");
+            }
+        }
+
         tracing::debug!("Schema migration complete");
         Ok(())
     }
@@ -472,10 +499,26 @@ impl Database {
             )?;
         }
 
-        // Save loop closures
+        // Save loop closures (with closure_id column)
+        // Ensure closure_id column exists
+        let has_closure_id: bool = tx
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='closure_id'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_closure_id {
+            tx.execute(
+                "ALTER TABLE loop_closures ADD COLUMN closure_id INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+
         for lc in &project.loop_closures {
             tx.execute(
-                "INSERT INTO loop_closures (station_a_section, station_a_index, station_b_section, station_b_index, path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO loop_closures (station_a_section, station_a_index, station_b_section, station_b_index, path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure, closure_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     lc.station_a.section_id,
                     lc.station_a.station_index,
@@ -485,7 +528,8 @@ impl Database {
                     lc.misclosure_distance,
                     lc.error_percentage,
                     lc.horizontal_misclosure,
-                    lc.vertical_misclosure
+                    lc.vertical_misclosure,
+                    lc.id as i64
                 ],
             )?;
         }
@@ -827,26 +871,63 @@ impl Database {
             return Ok(closures);
         }
 
-        let mut stmt = self.conn.prepare(
-            "SELECT station_a_section, station_a_index, station_b_section, station_b_index, \
-             path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure \
-             FROM loop_closures",
-        )?;
+        // Check if closure_id column exists (added for closure ID tracking)
+        let has_closure_id: bool = self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='closure_id'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
 
-        let rows = stmt.query_map([], |row| {
-            Ok(LoopClosure {
-                station_a: StationRef::new(row.get(0)?, row.get(1)?),
-                station_b: StationRef::new(row.get(2)?, row.get(3)?),
-                path_length: row.get(4)?,
-                misclosure_distance: row.get(5)?,
-                error_percentage: row.get(6)?,
-                horizontal_misclosure: row.get(7)?,
-                vertical_misclosure: row.get(8)?,
-            })
-        })?;
+        if has_closure_id {
+            let mut stmt = self.conn.prepare(
+                "SELECT station_a_section, station_a_index, station_b_section, station_b_index, \
+                 path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure, \
+                 closure_id \
+                 FROM loop_closures",
+            )?;
 
-        for row in rows {
-            closures.push(row?);
+            let rows = stmt.query_map([], |row| {
+                Ok(LoopClosure {
+                    id: row.get::<_, i64>(9).unwrap_or(0) as u64,
+                    station_a: StationRef::new(row.get(0)?, row.get(1)?),
+                    station_b: StationRef::new(row.get(2)?, row.get(3)?),
+                    path_length: row.get(4)?,
+                    misclosure_distance: row.get(5)?,
+                    error_percentage: row.get(6)?,
+                    horizontal_misclosure: row.get(7)?,
+                    vertical_misclosure: row.get(8)?,
+                })
+            })?;
+
+            for row in rows {
+                closures.push(row?);
+            }
+        } else {
+            let mut stmt = self.conn.prepare(
+                "SELECT station_a_section, station_a_index, station_b_section, station_b_index, \
+                 path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure \
+                 FROM loop_closures",
+            )?;
+
+            let rows = stmt.query_map([], |row| {
+                Ok(LoopClosure {
+                    id: 0,
+                    station_a: StationRef::new(row.get(0)?, row.get(1)?),
+                    station_b: StationRef::new(row.get(2)?, row.get(3)?),
+                    path_length: row.get(4)?,
+                    misclosure_distance: row.get(5)?,
+                    error_percentage: row.get(6)?,
+                    horizontal_misclosure: row.get(7)?,
+                    vertical_misclosure: row.get(8)?,
+                })
+            })?;
+
+            for row in rows {
+                closures.push(row?);
+            }
         }
 
         Ok(closures)

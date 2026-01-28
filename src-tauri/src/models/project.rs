@@ -115,6 +115,19 @@ impl Project {
         }
     }
 
+    /// Assign sequential IDs to any loop closures that have id=0 (legacy projects).
+    /// IDs start from max(existing_ids) + 1.
+    pub fn assign_closure_ids(&mut self) {
+        let max_id = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
+        let mut next_id = max_id + 1;
+        for lc in &mut self.loop_closures {
+            if lc.id == 0 {
+                lc.id = next_id;
+                next_id += 1;
+            }
+        }
+    }
+
     /// Mark the project as modified
     pub fn touch(&mut self) {
         self.modified_at = Utc::now();
@@ -528,7 +541,11 @@ impl Project {
         // Compute closure values using shared helper
         let metrics = self.compute_closure_metrics(station_a, station_b)?;
 
+        // Assign next closure ID: max of existing IDs + 1
+        let next_id = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0) + 1;
+
         let closure = LoopClosure {
+            id: next_id,
             station_a,
             station_b,
             path_length: metrics.path_length,

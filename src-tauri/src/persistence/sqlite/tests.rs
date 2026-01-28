@@ -653,6 +653,7 @@ fn test_save_load_loop_closures() {
 
     // Add loop closure data
     project.loop_closures.push(LoopClosure {
+        id: 1,
         station_a: StationRef::new(0, 0),
         station_b: StationRef::new(0, 1),
         path_length: 50.0,
