@@ -490,8 +490,8 @@ Primary view for survey work.
 The Detail Panel provides interactive hyperlinks that enable quick navigation between related survey elements (shots, stations, sections).
 
 **UI Display ID Format:**
-Detail Panel display IDs (distinct from internal data model IDs) use the format `sectionId:position` where position is 1-indexed:
-- Station position = `station_index + 1`
+Detail Panel display IDs (distinct from internal data model IDs) use the format `sectionId:position` where station position is 0-indexed:
+- Station position = `station_index`
 - Shot position = `shot array index + 1`
 - Section links show `sectionId: sectionName` (or `sectionId: Unnamed` if no name)
 
@@ -502,8 +502,8 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 │  Length: 4.5m  Azimuth: 127.3 deg  Depth: 8.2m    │
 │                                                    │
 │  ┌─ Connected ───────────────────────────────────┐ │
-│  │  Start Station: 2:3 (link)                    │ │
-│  │  End Station: 2:4 (link)                      │ │
+│  │  Start Station: 2:2 (link)                    │ │
+│  │  End Station: 2:3 (link)                      │ │
 │  │  Section: 2: Main Line (link)                 │ │
 │  └───────────────────────────────────────────────┘ │
 └────────────────────────────────────────────────────┘
@@ -516,8 +516,8 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 │  Depth: 12.3m  Section: Main Line                  │
 │                                                    │
 │  ┌─ Connected ───────────────────────────────────┐ │
-│  │  Previous Shot: 2:4 (link)                    │ │
-│  │  Next Shot: 2:5 (link)                        │ │
+│  │  Previous Shot: 2:5 (link)                    │ │
+│  │  Next Shot: 2:6 (link)                        │ │
 │  │  Section: 2: Main Line (link)                 │ │
 │  └───────────────────────────────────────────────┘ │
 │                                                    │
@@ -532,8 +532,8 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 │  Length: 127.4m  Shots: 42                         │
 │                                                    │
 │  ┌─ Endpoints ───────────────────────────────────┐ │
-│  │  First Station: 2:1 (link)                    │ │
-│  │  Last Station: 2:43 (link)                    │ │
+│  │  First Station: 2:0 (link)                    │ │
+│  │  Last Station: 2:42 (link)                    │ │
 │  └───────────────────────────────────────────────┘ │
 │  (Single station sections show only "Station:")    │
 └────────────────────────────────────────────────────┘
@@ -548,8 +548,8 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 
 **Shot-to-Station Mapping:**
 Shot at array index `i` (0-indexed) connects:
-- Start station: `station_index = i` (display position = `i + 1`)
-- End station: `station_index = i + 1` (display position = `i + 2`)
+- Start station: `station_index = i` (display position = `i`)
+- End station: `station_index = i + 1` (display position = `i + 1`)
 
 Station at `station_index` has:
 - Previous shot: `section.shots[station_index - 1]` (hidden when `station_index === 0`)
@@ -898,8 +898,8 @@ For manual entry (no DMP file), goes directly to Step 2 (DmpSectionConfigDialog)
 ```
 ┌─ Merge Stations ─────────────────────────────────────────────────┐
 │                                                                  │
-│  Station A: Section "Main Line" #15 (depth: 12.3m)              │
-│  Station B: Section "Side Passage" #1 (depth: 12.8m)            │
+│  Station A: Section "Main Line" #14 (depth: 12.3m)              │
+│  Station B: Section "Side Passage" #0 (depth: 12.8m)            │
 │                                                                  │
 │  Distance between: 2.4m                                          │
 │  Depth difference: 0.5m                                          │
