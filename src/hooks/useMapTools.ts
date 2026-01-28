@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { useUIStore, type Selection } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { isNonInteractiveTool } from '../utils/toolUtils';
@@ -42,7 +42,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     showToast,
   } = useUIStore();
 
-  const { stations, project } = useProjectStore();
+  const { stations, project, checkMergeConnectivity } = useProjectStore();
+
+  const [isCheckingConnectivity, setIsCheckingConnectivity] = useState(false);
 
   // Get station coordinates by ref
   const getStationCoordinates = useCallback(
@@ -73,6 +75,39 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       };
     },
     [getStationCoordinates]
+  );
+
+  // Check connectivity and open appropriate merge/closure dialog
+  const checkAndOpenMergeDialog = useCallback(
+    async (stationA: StationRef, stationB: StationRef) => {
+      setIsCheckingConnectivity(true);
+      setMergeStationB(stationB);
+      try {
+        const result = await checkMergeConnectivity(stationA, stationB);
+        if (result.connected) {
+          // Stations are connected - open closure dialog with preview
+          openDialog('closure', {
+            stationA,
+            stationB,
+            preview: result.preview,
+          });
+        } else {
+          // Stations not connected - open merge dialog
+          openDialog('merge', {
+            stationA,
+            stationB,
+          });
+        }
+      } catch (e) {
+        // Error from backend (e.g., duplicate merge/closure)
+        const message = e instanceof Error ? e.message : String(e);
+        showToast(message, 'merge-error');
+        clearMergeStations();
+      } finally {
+        setIsCheckingConnectivity(false);
+      }
+    },
+    [checkMergeConnectivity, clearMergeStations, openDialog, setMergeStationB, showToast]
   );
 
   // Handle station click based on active tool
@@ -114,6 +149,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'merge': {
+          if (isCheckingConnectivity) break;
           if (!mergeStationA) {
             setMergeStationA(ref);
           } else {
@@ -125,12 +161,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
               // Clear selection
               clearMergeStations();
             } else {
-              // Set station B and open merge dialog
-              setMergeStationB(ref);
-              openDialog('merge', {
-                stationA: mergeStationA,
-                stationB: ref,
-              });
+              // Check connectivity and open appropriate dialog
+              checkAndOpenMergeDialog(mergeStationA, ref);
             }
           }
           break;
@@ -179,7 +211,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       activeTool,
       addToSelection,
       calculateDistance,
+      checkAndOpenMergeDialog,
       clearMergeStations,
+      isCheckingConnectivity,
       measureStart,
       mergeStationA,
       openDialog,
@@ -189,7 +223,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       setMeasureEnd,
       setMeasureStart,
       setMergeStationA,
-      setMergeStationB,
       setSelection,
       showStations,
       showToast,
@@ -258,6 +291,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
               showToast("Enable 'Stations' in Display menu to merge", 'stations-hidden');
               return;
             }
+            if (isCheckingConnectivity) return;
             if (!mergeStationA) {
               setMergeStationA(snappedStation);
             } else {
@@ -268,11 +302,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
               ) {
                 clearMergeStations();
               } else {
-                setMergeStationB(snappedStation);
-                openDialog('merge', {
-                  stationA: mergeStationA,
-                  stationB: snappedStation,
-                });
+                // Check connectivity and open appropriate dialog
+                checkAndOpenMergeDialog(mergeStationA, snappedStation);
               }
             }
             return;
@@ -308,7 +339,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     },
     [
       activeTool,
+      checkAndOpenMergeDialog,
       snappedStation,
+      isCheckingConnectivity,
       mergeStationA,
       measureStart,
       calculateDistance,
@@ -321,7 +354,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       setMeasureEnd,
       setMeasureStart,
       setMergeStationA,
-      setMergeStationB,
       showStations,
       showToast,
     ]

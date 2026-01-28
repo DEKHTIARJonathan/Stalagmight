@@ -7,28 +7,13 @@ import type { StationRef } from '../../types/project';
 
 export default function MergeDialog() {
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
-  const { mergeStations, project, stations } = useProjectStore();
+  const { mergeStations, project } = useProjectStore();
 
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Get station data
-  const stationAData = useMemo(() => {
-    if (!stationA) return null;
-    return stations.find(
-      (s) => s.station_ref.section_id === stationA.section_id && s.station_ref.station_index === stationA.station_index
-    );
-  }, [stationA, stations]);
-
-  const stationBData = useMemo(() => {
-    if (!stationB) return null;
-    return stations.find(
-      (s) => s.station_ref.section_id === stationB.section_id && s.station_ref.station_index === stationB.station_index
-    );
-  }, [stationB, stations]);
 
   // Get section names
   const sectionAName = useMemo(() => {
@@ -40,48 +25,6 @@ export default function MergeDialog() {
     if (!stationB) return 'Unknown';
     return project?.sections.find((s) => s.id === stationB.section_id)?.name ?? `Section ${stationB.section_id}`;
   }, [stationB, project]);
-
-  // Calculate distance and depth difference
-  const { distance, depthDiff, horizontalDistance } = useMemo(() => {
-    if (!stationAData || !stationBData) return { distance: 0, depthDiff: 0, horizontalDistance: 0 };
-
-    const dx = stationBData.coordinates.x - stationAData.coordinates.x;
-    const dy = stationBData.coordinates.y - stationAData.coordinates.y;
-    const dz = stationBData.coordinates.z - stationAData.coordinates.z;
-
-    return {
-      distance: Math.sqrt(dx * dx + dy * dy + dz * dz),
-      depthDiff: Math.abs(dz),
-      horizontalDistance: Math.sqrt(dx * dx + dy * dy),
-    };
-  }, [stationAData, stationBData]);
-
-  // Check if this creates a loop (both stations already connected to zero datum)
-  const createsLoop = useMemo(() => {
-    // Simple check: if both stations have coordinates calculated (not at origin), they're connected
-    // A more accurate check would trace paths back to zero datum
-    if (!stationAData || !stationBData) return false;
-
-    // If they're from the same section, they're already connected (not a new loop)
-    if (stationA?.section_id === stationB?.section_id) return false;
-
-    // Check if both are already part of merged networks
-    const aHasMerges = stationAData.merged_with.length > 0;
-    const bHasMerges = stationBData.merged_with.length > 0;
-
-    // If both have merges or one is zero datum, this could create a loop
-    return aHasMerges || bHasMerges || stationAData.is_zero_datum || stationBData.is_zero_datum;
-  }, [stationA, stationB, stationAData, stationBData]);
-
-  // Estimate closure error (simplified - actual calculation needs path traversal)
-  const closureErrorPercent = useMemo(() => {
-    if (!createsLoop || distance === 0) return null;
-
-    // Simplified: assume typical survey precision
-    // Real calculation would sum all shot lengths in the loop
-    // For now, just show the distance as an indicator
-    return distance > 0.5 ? `~${((distance / 100) * 100).toFixed(1)}` : null;
-  }, [createsLoop, distance]);
 
   const handleClose = () => {
     clearMergeStations();
@@ -124,56 +67,13 @@ export default function MergeDialog() {
         <div className="space-y-2">
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station A:</span>
-            <span>
-              {sectionAName} #{stationA.station_index}
-              <span className="text-text-secondary ml-2">
-                (depth: {stationAData?.coordinates.z.toFixed(1) ?? '?'}m)
-              </span>
-            </span>
+            <span>{sectionAName} #{stationA.station_index}</span>
           </div>
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station B:</span>
-            <span>
-              {sectionBName} #{stationB.station_index}
-              <span className="text-text-secondary ml-2">
-                (depth: {stationBData?.coordinates.z.toFixed(1) ?? '?'}m)
-              </span>
-            </span>
+            <span>{sectionBName} #{stationB.station_index}</span>
           </div>
         </div>
-
-        {/* Distance info */}
-        <div className="p-3 bg-background rounded space-y-1">
-          <div className="flex justify-between">
-            <span className="text-text-secondary">Distance between:</span>
-            <span className="font-medium">{distance.toFixed(2)}m</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-text-secondary">Horizontal distance:</span>
-            <span>{horizontalDistance.toFixed(2)}m</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-text-secondary">Depth difference:</span>
-            <span>{depthDiff.toFixed(2)}m</span>
-          </div>
-        </div>
-
-        {/* Loop closure warning */}
-        {createsLoop && (
-          <div className="p-3 bg-warning/10 border border-warning/20 rounded">
-            <div className="flex items-start gap-2">
-              <span className="text-warning text-lg">⚠</span>
-              <div>
-                <p className="text-warning font-medium">This creates a loop</p>
-                {closureErrorPercent && (
-                  <p className="text-text-secondary text-sm mt-1">
-                    Closure error: {closureErrorPercent}% (distance / path length)
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
