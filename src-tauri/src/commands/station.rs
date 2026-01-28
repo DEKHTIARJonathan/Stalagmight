@@ -1,25 +1,7 @@
-use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
-use crate::models::{ClosureStrategy, Coordinates, GpsCoordinates, StationRef};
-
-/// Result of a connectivity check between two stations
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConnectivityResult {
-    pub connected: bool,
-    pub preview: Option<ClosurePreview>,
-}
-
-/// Preview data for a potential loop closure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClosurePreview {
-    pub path_length: f64,
-    pub misclosure_distance: f64,
-    pub error_percentage: f64,
-    pub horizontal_misclosure: f64,
-    pub vertical_misclosure: f64,
-}
+use crate::models::{ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates, StationRef};
 
 /// Check merge connectivity between two stations (read-only, NOT a Command)
 #[tauri::command]

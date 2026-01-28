@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use tracing::{debug, info};
 
 use super::{
-    gps_to_local, ClosureStrategy, Coordinates, GpsBounds, GpsCoordinates, LoopClosure, Section,
-    SectionData, SectionId, SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station,
-    StationMerge, StationRef, ZeroDatum,
+    gps_to_local, ClosurePreview, ClosureStrategy, Coordinates, GpsBounds, GpsCoordinates,
+    LoopClosure, Section, SectionData, SectionId, SectionUpdates, Shot, ShotData, ShotId,
+    ShotUpdates, Station, StationMerge, StationRef, ZeroDatum,
 };
 
 /// A complete cave survey project
@@ -379,7 +379,7 @@ impl Project {
         let b_has_zd = self.section_has_zero_datum(station_b.section_id);
 
         if a_has_zd && b_has_zd {
-            return Err("Both stations are connected to zero datums. Use Create Loop Closure instead to handle survey loops.".to_string());
+            return Err("Both stations are connected to zero datums. Remove one zero datum before merging, or create a loop closure if the sections are connected.".to_string());
         }
 
         // Compute current coordinates (includes existing section offsets)
@@ -431,6 +431,38 @@ impl Project {
         Ok(true)
     }
 
+    /// Compute closure metrics between two stations without mutation.
+    /// Both stations must exist and have computable coordinates.
+    pub(crate) fn compute_closure_metrics(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+    ) -> Result<ClosurePreview, String> {
+        let coords_a = self.compute_station_raw_coords(station_a)
+            .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
+        let coords_b = self.compute_station_raw_coords(station_b)
+            .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
+
+        let horizontal_misclosure = coords_a.horizontal_distance_to(&coords_b);
+        let vertical_misclosure = (coords_a.z - coords_b.z).abs();
+        let misclosure_distance = coords_a.distance_to(&coords_b);
+        let path_length = self.calculate_path_length_between(station_a, station_b);
+
+        let error_percentage = if path_length > 0.0 {
+            (misclosure_distance / path_length) * 100.0
+        } else {
+            0.0
+        };
+
+        Ok(ClosurePreview {
+            path_length,
+            misclosure_distance,
+            error_percentage,
+            horizontal_misclosure,
+            vertical_misclosure,
+        })
+    }
+
     /// Create a loop closure between two connected stations
     /// Returns the created LoopClosure on success
     pub fn create_loop_closure(
@@ -464,31 +496,17 @@ impl Project {
             return Err("A loop closure already exists between these stations.".to_string());
         }
 
-        // Compute closure values
-        let coords_a = self.compute_station_raw_coords(station_a)
-            .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
-        let coords_b = self.compute_station_raw_coords(station_b)
-            .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
-
-        let horizontal_misclosure = coords_a.horizontal_distance_to(&coords_b);
-        let vertical_misclosure = (coords_a.z - coords_b.z).abs();
-        let misclosure_distance = coords_a.distance_to(&coords_b);
-        let path_length = self.calculate_path_length_between(station_a, station_b);
-
-        let error_percentage = if path_length > 0.0 {
-            (misclosure_distance / path_length) * 100.0
-        } else {
-            0.0
-        };
+        // Compute closure values using shared helper
+        let metrics = self.compute_closure_metrics(station_a, station_b)?;
 
         let closure = LoopClosure {
             station_a,
             station_b,
-            path_length,
-            misclosure_distance,
-            error_percentage,
-            horizontal_misclosure,
-            vertical_misclosure,
+            path_length: metrics.path_length,
+            misclosure_distance: metrics.misclosure_distance,
+            error_percentage: metrics.error_percentage,
+            horizontal_misclosure: metrics.horizontal_misclosure,
+            vertical_misclosure: metrics.vertical_misclosure,
         };
 
         self.loop_closures.push(closure.clone());

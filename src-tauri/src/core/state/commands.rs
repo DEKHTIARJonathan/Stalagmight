@@ -1,7 +1,7 @@
 use crate::core::{Command, CommandResult, UndoData, Validator};
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, SectionData, SectionId, SectionUpdates, ShotData,
-    ShotId, ShotUpdates, StationRef,
+    ClosurePreview, ClosureStrategy, Coordinates, GpsCoordinates, SectionData, SectionId,
+    SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef,
 };
 
 use super::AppState;
@@ -669,7 +669,7 @@ impl AppState {
         &self,
         station_a: StationRef,
         station_b: StationRef,
-    ) -> Result<(bool, Option<crate::commands::station::ClosurePreview>), String> {
+    ) -> Result<(bool, Option<ClosurePreview>), String> {
         let proj_guard = self
             .project
             .lock()
@@ -707,35 +707,9 @@ impl AppState {
         let connected = connected_a.contains(&station_b.section_id);
 
         if connected {
-            // Compute preview data
-            let coords_a = project
-                .compute_station_raw_coords(station_a)
-                .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
-            let coords_b = project
-                .compute_station_raw_coords(station_b)
-                .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
-
-            let horizontal_misclosure = coords_a.horizontal_distance_to(&coords_b);
-            let vertical_misclosure = (coords_a.z - coords_b.z).abs();
-            let misclosure_distance = coords_a.distance_to(&coords_b);
-            let path_length = project.calculate_path_length_between(station_a, station_b);
-
-            let error_percentage = if path_length > 0.0 {
-                (misclosure_distance / path_length) * 100.0
-            } else {
-                0.0
-            };
-
-            Ok((
-                true,
-                Some(crate::commands::station::ClosurePreview {
-                    path_length,
-                    misclosure_distance,
-                    error_percentage,
-                    horizontal_misclosure,
-                    vertical_misclosure,
-                }),
-            ))
+            // Compute preview data using shared helper
+            let preview = project.compute_closure_metrics(station_a, station_b)?;
+            Ok((true, Some(preview)))
         } else {
             Ok((false, None))
         }
