@@ -36,3 +36,6 @@ Use generation counter pattern for async cancellation instead of per-item pendin
 
 ## 2026-01-23 manual [convention]
 In WebdriverIO E2E tests, throw explicit errors in browser.execute callbacks when required globals (__E2E_TEST__, __cavechef_map__) are missing to get clear failures instead of confusing timeouts
+
+## 2026-01-28 manual [convention]
+Mock IPC handlers must return data matching the exact TypeScript interface (including all required fields); returning partial data silently reduces test fidelity

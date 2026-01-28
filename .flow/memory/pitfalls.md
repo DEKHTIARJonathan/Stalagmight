@@ -117,3 +117,6 @@ After an error in an action queue, still refresh the UI state from the backend (
 
 ## 2026-01-27 manual [pitfall]
 E2E tests for async action queues must assert observable post-action effects (call counts, announcement text) not just DOM state that was already true before the action
+
+## 2026-01-28 manual [pitfall]
+E2E tests that click map markers must switch to markers mode first; survey mode hides markers after geometry loads, causing flaky click failures
