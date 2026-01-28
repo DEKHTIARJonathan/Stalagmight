@@ -38,9 +38,8 @@ Update E2E tests for the new shortcuts behavior, regenerate visual regression ba
 - [ ] `docs/SPEC.md` keyboard shortcuts appendix updated
 - [ ] All E2E tests pass: `pnpm test:ui`
 ## Done summary
-TBD
-
+Added E2E tests for File category shortcuts (Import DMP, Export), Ctrl+I/E reassignment, and import dialog triggering. Updated reserved shortcuts display test and position assertion. Regenerated visual baselines. Updated docs/configuration.md and docs/SPEC.md to reflect configurable Import/Export shortcuts and complete reserved shortcuts table.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: daf50f6, 99bc7ea, 2f4720c
+- Tests: pnpm exec playwright test --grep 'shortcuts|Shortcuts' (34 passed), pnpm tsc --noEmit, cargo test --manifest-path src-tauri/Cargo.toml (80 passed)
 - PRs:
