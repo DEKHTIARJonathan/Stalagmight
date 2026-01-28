@@ -310,16 +310,16 @@ export function ShotTableEditor({
           <thead className="bg-background sticky top-0 z-10">
             <tr className="border-b border-border">
               <th className="px-2 py-1 text-left w-12">#</th>
-              <th className="px-2 py-1 text-right">Length</th>
-              <th className="px-2 py-1 text-right">Azimuth</th>
-              <th className="px-2 py-1 text-right">Depth In</th>
-              <th className="px-2 py-1 text-right">Depth Out</th>
-              <th className="px-2 py-1 text-right w-12">L</th>
-              <th className="px-2 py-1 text-right w-12">R</th>
-              <th className="px-2 py-1 text-right w-12">U</th>
-              <th className="px-2 py-1 text-right w-12">D</th>
+              <th className="px-2 py-1 !text-right">Length</th>
+              <th className="px-2 py-1 !text-right">Azimuth</th>
+              <th className="px-2 py-1 !text-right">Depth In</th>
+              <th className="px-2 py-1 !text-right">Depth Out</th>
+              <th className="px-2 py-1 !text-right w-12">L</th>
+              <th className="px-2 py-1 !text-right w-12">R</th>
+              <th className="px-2 py-1 !text-right w-12">U</th>
+              <th className="px-2 py-1 !text-right w-12">D</th>
               <th className="px-2 py-1 text-left">Comment</th>
-              <th className="px-2 py-1 text-center w-8" title="Warnings"></th>
+              <th className="px-2 py-1 !text-center w-8" title="Warnings"></th>
               <th className="px-2 py-1 w-10"></th>
             </tr>
           </thead>
