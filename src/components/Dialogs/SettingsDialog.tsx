@@ -573,7 +573,7 @@ export default function SettingsDialog() {
                 </div>
 
                 {/* Scrollable content - tabpanel semantics owned by category components */}
-                <div ref={contentRef} className="flex-1 overflow-auto p-4">
+                <div ref={contentRef} className="flex-1 overflow-auto min-h-0 p-4">
                   {renderCategoryContent()}
                 </div>
               </div>
