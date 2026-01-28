@@ -1646,8 +1646,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const mockGeometry = {
               origin: [-82.46, 24.93] as [number, number],
               shots: [
-                { from: [-82.46, 24.93] as [number, number], to: [-82.4599, 24.9301] as [number, number], is_virtual: false, section_id: 'section-1' },
-                { from: [-82.4599, 24.9301] as [number, number], to: [-82.4598, 24.9302] as [number, number], is_virtual: false, section_id: 'section-1' },
+                { from: [-82.46, 24.93] as [number, number], to: [-82.4599, 24.9301] as [number, number], is_virtual: false, section_id: 1 },
+                { from: [-82.4599, 24.9301] as [number, number], to: [-82.4598, 24.9302] as [number, number], is_virtual: false, section_id: 1 },
               ],
             };
 

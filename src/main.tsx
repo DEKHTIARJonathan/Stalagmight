@@ -34,23 +34,24 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
   window.__E2E_TEST__ = testAPI;
 }
 
-// ALWAYS expose loading hooks for E2E tests (NOT gated by import.meta.env.DEV)
-// Playwright may run against production builds
+// Expose loading hooks for E2E tests (dev/test mode or explicit E2E build flag)
 // IMPORTANT: Extend existing hooks, don't overwrite
-const existingHooks = window.__E2E_TEST__ || {};
-window.__E2E_TEST__ = {
-  ...existingHooks, // PRESERVE existing uiStore, projectStore, etc.
-  // Use clientOpId for reliable tracking - loadingId may be 0 until first event
-  getLoadingId: () => useProjectStore.getState().loading.clientOpId,
-  getBackendLoadingId: () => useProjectStore.getState().loading.loadingId,
-  simulateLoadingProgress: (payload: Partial<LoadingState>) => {
-    useProjectStore.getState().setLoadingProgress(payload);
-  },
-  simulateLoadingError: (message: string, details?: string) => {
-    useProjectStore.getState().setLoadingError(message, details);
-  },
-  resetLoading: () => useProjectStore.getState().resetLoading(),
-};
+if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VITE_E2E === '1') {
+  const existingHooks = window.__E2E_TEST__ || {};
+  window.__E2E_TEST__ = {
+    ...existingHooks, // PRESERVE existing uiStore, projectStore, etc.
+    // Use clientOpId for reliable tracking - loadingId may be 0 until first event
+    getLoadingId: () => useProjectStore.getState().loading.clientOpId,
+    getBackendLoadingId: () => useProjectStore.getState().loading.loadingId,
+    simulateLoadingProgress: (payload: Partial<LoadingState>) => {
+      useProjectStore.getState().setLoadingProgress(payload);
+    },
+    simulateLoadingError: (message: string, details?: string) => {
+      useProjectStore.getState().setLoadingError(message, details);
+    },
+    resetLoading: () => useProjectStore.getState().resetLoading(),
+  };
+}
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
