@@ -86,6 +86,10 @@ Shortcuts use the format `Modifier+Modifier+Key`, where:
 
 ```toml
 [shortcuts]
+# File - import/export operations (user-configurable)
+import_dmp = ["Ctrl+I"]
+export = ["Ctrl+E"]
+
 # Tools - single letter keys for quick access
 select = ["S"]
 pan = ["P"]
@@ -123,6 +127,8 @@ toggle_data_table = ["Ctrl+3"]
 
 | Category | Action | Default | Description |
 |----------|--------|---------|-------------|
+| **File** | `import_dmp` | `Ctrl+I` | Import DMP file |
+| | `export` | `Ctrl+E` | Export project |
 | **Tools** | `select` | `S` | Select tool |
 | | `pan` | `P` | Pan/hand tool |
 | | `zoom` | `Z` | Zoom tool |
@@ -156,8 +162,6 @@ The following shortcuts are reserved and cannot be reassigned:
 |----------|--------|
 | `Escape` | Close dialogs, clear selection, cancel operations |
 | `Delete` / `Backspace` | Delete selected item (with confirmation) |
-| `Ctrl+I` | Import DMP file |
-| `Ctrl+E` | Export project |
 | `Ctrl+A` | Select all stations |
 
 ### Shortcut Feedback

@@ -1184,6 +1184,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 max_directory_size_mb: 128,
               },
               shortcuts: {
+                // File
+                import_dmp: ['Ctrl+I'],
+                export: ['Ctrl+E'],
                 // Tools
                 select: ['S'],
                 pan: ['P'],
@@ -1331,6 +1334,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 max_directory_size_mb: 128,
               },
               shortcuts: {
+                // File
+                import_dmp: ['Ctrl+I'],
+                export: ['Ctrl+E'],
                 // Tools
                 select: ['S'],
                 pan: ['P'],

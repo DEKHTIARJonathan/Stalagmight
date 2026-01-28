@@ -2632,8 +2632,8 @@ cavechef/
 | Undo | Ctrl+Z |
 | Redo | Ctrl+Y / Ctrl+Shift+Z |
 | Save | Ctrl+S |
-| Import | Ctrl+I |
-| Export | Ctrl+E |
+| Import DMP | Ctrl+I (configurable) |
+| Export | Ctrl+E (configurable) |
 | Delete Selected | Delete / Backspace |
 | Select All | Ctrl+A |
 | Deselect | Escape |
@@ -2644,6 +2644,8 @@ cavechef/
 | Toggle Detail Panel | Ctrl+2 |
 | Toggle Data Table | Ctrl+3 |
 | Open Settings | Ctrl+, (Cmd+, on macOS) |
+
+**Note**: Import DMP (Ctrl+I) and Export (Ctrl+E) shortcuts are user-configurable via the Settings dialog. The defaults shown above can be reassigned to any available key combination.
 
 **Note**: When Pan (P) or Zoom (Z) tools are active, selection-related shortcuts (Ctrl+A, Delete/Backspace) are disabled to prevent accidental modifications while navigating the map. Hover effects and click selection are also disabled.
 
