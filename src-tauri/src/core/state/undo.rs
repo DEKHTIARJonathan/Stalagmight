@@ -248,14 +248,14 @@ impl AppState {
             }
 
             Command::MoveStation {
-                station_ref: _,
-                new_position: _,
+                station_ref,
+                offset,
             } => {
-                // For undo, we'd need to capture the original position
-                // For now, use project snapshot since this is complex
-                UndoData::ProjectSnapshot(
-                    serde_json::to_string(project).unwrap_or_default(),
-                )
+                // Inverse is moving back by negative offset
+                UndoData::InverseCommand(Command::MoveStation {
+                    station_ref: *station_ref,
+                    offset: Coordinates::new(-offset.x, -offset.y, -offset.z),
+                })
             }
 
             // For batch, snapshot the entire project
@@ -744,6 +744,7 @@ impl AppState {
             } => self.set_zero_datum(*station_ref, *coordinates),
             Command::RemoveZeroDatum { station_ref } => self.remove_zero_datum(*station_ref),
             Command::MoveSection { section_id, offset } => self.move_section(*section_id, *offset),
+            Command::MoveStation { station_ref, offset } => self.move_station(*station_ref, *offset),
             _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),
         }
     }

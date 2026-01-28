@@ -431,6 +431,14 @@ impl AppState {
                 }
             }
 
+            // Copy station offsets with remapped section IDs
+            for (old_station_ref, offset) in &source_project.station_offsets {
+                if let Some(&new_section_id) = section_id_map.get(&(proj_idx, old_station_ref.section_id)) {
+                    let new_station_ref = StationRef::new(new_section_id, old_station_ref.station_index);
+                    merged_project.station_offsets.insert(new_station_ref, *offset);
+                }
+            }
+
             // Copy zero datums with remapped section IDs
             // Use store_zero_datum_without_repositioning to preserve original offsets
             // (section_offsets were already copied above with remapped IDs)

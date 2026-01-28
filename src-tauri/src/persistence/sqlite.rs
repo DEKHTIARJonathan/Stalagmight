@@ -141,6 +141,19 @@ impl Database {
             tracing::info!("Added direction column to sections table");
         }
 
+        // Ensure station_offsets table exists (added for individual station moves)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS station_offsets (
+                section_id INTEGER NOT NULL,
+                station_index INTEGER NOT NULL,
+                offset_x REAL NOT NULL,
+                offset_y REAL NOT NULL,
+                offset_z REAL NOT NULL,
+                PRIMARY KEY (section_id, station_index)
+            )",
+            [],
+        )?;
+
         tracing::debug!("Schema migration complete");
         Ok(())
     }
@@ -257,6 +270,16 @@ impl Database {
                 offset_y REAL NOT NULL
             );
 
+            -- Station offsets (for individually moved stations)
+            CREATE TABLE IF NOT EXISTS station_offsets (
+                section_id INTEGER NOT NULL,
+                station_index INTEGER NOT NULL,
+                offset_x REAL NOT NULL,
+                offset_y REAL NOT NULL,
+                offset_z REAL NOT NULL,
+                PRIMARY KEY (section_id, station_index)
+            );
+
             -- Undo/redo stack
             CREATE TABLE IF NOT EXISTS undo_stack (
                 id INTEGER PRIMARY KEY,
@@ -336,6 +359,7 @@ impl Database {
             DELETE FROM station_merges;
             DELETE FROM zero_datums;
             DELETE FROM section_offsets;
+            DELETE FROM station_offsets;
             DELETE FROM loop_closures;
             DELETE FROM imported_file_hashes;
             DELETE FROM project;
@@ -437,6 +461,14 @@ impl Database {
             tx.execute(
                 "INSERT INTO section_offsets (section_id, offset_x, offset_y) VALUES (?1, ?2, ?3)",
                 params![section_id, offset_x, offset_y],
+            )?;
+        }
+
+        // Save station offsets
+        for (station_ref, (offset_x, offset_y, offset_z)) in &project.station_offsets {
+            tx.execute(
+                "INSERT INTO station_offsets (section_id, station_index, offset_x, offset_y, offset_z) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![station_ref.section_id, station_ref.station_index, offset_x, offset_y, offset_z],
             )?;
         }
 
@@ -663,6 +695,9 @@ impl Database {
             }
         }
 
+        // Load station offsets
+        let station_offsets = self.load_station_offsets()?;
+
         // Load loop closures
         let loop_closures = self.load_loop_closures()?;
 
@@ -679,6 +714,7 @@ impl Database {
             zero_datums,
             loop_closures,
             section_offsets,
+            station_offsets,
             file_path: None,
             next_section_id,
             imported_file_hashes,
@@ -814,6 +850,46 @@ impl Database {
         }
 
         Ok(closures)
+    }
+
+    /// Load station offsets from database
+    fn load_station_offsets(&self) -> Result<HashMap<StationRef, (f64, f64, f64)>> {
+        let mut offsets = HashMap::new();
+
+        // Check if table exists (for backwards compatibility with older files)
+        let table_exists: bool = self.conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='station_offsets'",
+            [],
+            |row| row.get::<_, i64>(0),
+        ).map(|c| c > 0).unwrap_or(false);
+
+        if !table_exists {
+            return Ok(offsets);
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT section_id, station_index, offset_x, offset_y, offset_z FROM station_offsets",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, u32>(0)?,
+                row.get::<_, u32>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+                row.get::<_, f64>(4)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (section_id, station_index, offset_x, offset_y, offset_z) = row?;
+            offsets.insert(
+                StationRef::new(section_id, station_index),
+                (offset_x, offset_y, offset_z),
+            );
+        }
+
+        Ok(offsets)
     }
 
     /// Load imported file hashes from database

@@ -37,6 +37,9 @@ pub struct Project {
     /// Section offsets (x, y) applied when sections are merged/aligned
     #[serde(default)]
     pub section_offsets: HashMap<SectionId, (f64, f64)>,
+    /// Station offsets (x, y, z) applied when individual stations are moved
+    #[serde(default)]
+    pub station_offsets: HashMap<StationRef, (f64, f64, f64)>,
     /// SHA256 hashes of imported DMP files (for duplicate detection)
     #[serde(default)]
     pub imported_file_hashes: Vec<String>,
@@ -89,6 +92,7 @@ impl Project {
             file_path: None,
             next_section_id: 0,
             section_offsets: HashMap::new(),
+            station_offsets: HashMap::new(),
             imported_file_hashes: Vec::new(),
         }
     }
@@ -845,6 +849,14 @@ impl Project {
 
             // First station of section
             let first_station_ref = StationRef::new(section.id, 0);
+            // Apply station offset if exists
+            if let Some(&(ox, oy, oz)) = self.station_offsets.get(&first_station_ref) {
+                current_coords = Coordinates::new(
+                    current_coords.x + ox,
+                    current_coords.y + oy,
+                    current_coords.z + oz,
+                );
+            }
             stations.push(Station::with_coordinates(first_station_ref, current_coords));
             station_count += 1;
 
@@ -870,7 +882,16 @@ impl Project {
                 );
 
                 let station_ref = StationRef::new(section.id, (i + 1) as u32);
-                stations.push(Station::with_coordinates(station_ref, current_coords));
+                // Apply station offset if exists
+                let mut station_coords = current_coords;
+                if let Some(&(ox, oy, oz)) = self.station_offsets.get(&station_ref) {
+                    station_coords = Coordinates::new(
+                        station_coords.x + ox,
+                        station_coords.y + oy,
+                        station_coords.z + oz,
+                    );
+                }
+                stations.push(Station::with_coordinates(station_ref, station_coords));
                 station_count += 1;
 
                 // Report progress after each station
