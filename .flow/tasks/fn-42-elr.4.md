@@ -31,9 +31,8 @@ Refactor the hardcoded Ctrl+I (import) and Ctrl+E (export) handlers in useKeyboa
 - [ ] Custom shortcuts (user-configured) trigger correct actions
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Refactored hardcoded Ctrl+I (import DMP) and Ctrl+E (export) handlers in useKeyboardShortcuts.ts to use the configurable shortcut system via buildShortcutMap(). Removed ~68 lines of hardcoded key handling and added import_dmp and export actions to the configurable actions array with proper handler functions. Shortcuts now resolve through the same config-driven path as all other configurable shortcuts.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 6d9ea78
+- Tests: pnpm tsc --noEmit passes
 - PRs:
