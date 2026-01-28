@@ -135,3 +135,6 @@ Portal dropdowns with visibility:hidden must have final width set during hidden 
 
 ## 2026-01-28 manual [pitfall]
 Capture-phase scroll event.target can be window or document (not a Node) - guard with instanceof Node before calling .contains() to prevent TypeError
+
+## 2026-01-28 manual [pitfall]
+When reading aria-controls in Playwright tests after opening a portal-rendered dropdown, always await expect(trigger).toHaveAttribute('aria-controls', /.+/) before getAttribute to avoid React render cycle race conditions
