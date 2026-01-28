@@ -63,6 +63,48 @@ const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
 ];
 
 /**
+ * Action name label with hover tooltip for truncated names.
+ * Uses a custom tooltip (not native title) for keyboard accessibility and consistent styling.
+ */
+function ShortcutNameLabel({ name }: { name: string }) {
+  const [showTooltip, setShowTooltip] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isTruncated, setIsTruncated] = useState(false);
+
+  // Check if text is actually truncated
+  const checkTruncation = useCallback(() => {
+    const el = containerRef.current;
+    if (el) {
+      setIsTruncated(el.scrollWidth > el.clientWidth);
+    }
+  }, []);
+
+  return (
+    <div className="relative flex-1 min-w-[8rem]">
+      <div
+        ref={containerRef}
+        className="text-sm truncate"
+        onMouseEnter={() => { checkTruncation(); setShowTooltip(true); }}
+        onMouseLeave={() => setShowTooltip(false)}
+        onFocus={() => { checkTruncation(); setShowTooltip(true); }}
+        onBlur={() => setShowTooltip(false)}
+        tabIndex={-1}
+      >
+        {name}
+      </div>
+      {showTooltip && isTruncated && (
+        <div
+          className="absolute left-0 bottom-full mb-1 bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap pointer-events-none z-10"
+          role="tooltip"
+        >
+          {name}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Reserved shortcut descriptions for display.
  */
 const RESERVED_SHORTCUT_DESCRIPTIONS: Record<string, string> = {
@@ -355,27 +397,23 @@ export function ShortcutsSettings({
                 {/* Category content */}
                 {!isCollapsed && (
                   <div className="space-y-0.5 pl-6">
-                    {filteredActions.map((action) => {
+                    {filteredActions.map((action, idx) => {
                       const bindings = config.shortcuts[action] || [];
                       const primary = bindings[0] || null;
                       const secondary = bindings[1] || null;
                       const full = formatActionName(action);
                       const hasChanges =
                         JSON.stringify(bindings) !== JSON.stringify(defaultConfig.shortcuts[action]);
+                      const isOdd = idx % 2 === 1;
 
                       return (
                         <div
                           key={action}
-                          className="flex items-center gap-3 py-0.5 rounded odd:bg-muted/30 even:bg-transparent dark:odd:bg-muted/20"
+                          className={`flex items-center gap-3 py-0.5 rounded ${isOdd ? 'bg-panel/20' : 'bg-transparent'}`}
                           data-testid={`shortcut-row-${action}`}
                         >
                           {/* Action name */}
-                          <div
-                            className="flex-1 min-w-32 text-sm truncate"
-                            title={full}
-                          >
-                            {full}
-                          </div>
+                          <ShortcutNameLabel name={full} />
 
                           {/* Primary slot */}
                           <ShortcutRecorder
