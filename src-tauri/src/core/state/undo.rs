@@ -428,18 +428,15 @@ impl AppState {
             UndoData::MergeInfo {
                 station_a,
                 station_b,
-                removed_closures,
+                ..
             } => {
-                // Unmerge the stations (and ignore any closures removed during unmerge)
-                // Then restore any closures that were captured during generate_undo_data
+                // Undo a merge by unmerging the stations.
+                // Note: removed_closures is always empty for MergeInfo (merges don't remove closures);
+                // closure restoration is handled by UnmergeInfo instead.
                 match self.project.lock() {
                     Ok(mut proj_guard) => match proj_guard.as_mut() {
                         Some(project) => {
                             project.unmerge_stations(*station_a, *station_b);
-                            // Restore closures that were removed during the original unmerge
-                            for closure in removed_closures {
-                                project.loop_closures.push(closure.clone());
-                            }
                             CommandResult::success()
                         }
                         None => CommandResult::failure("No project open".to_string()),
@@ -496,16 +493,19 @@ impl AppState {
             }
 
             UndoData::ClosureInfo { closure } => {
-                // Remove the closure from project.loop_closures matching the stored station pair
+                // Remove the specific closure instance (match by exact station pair, not all matching)
                 match self.project.lock() {
                     Ok(mut proj_guard) => match proj_guard.as_mut() {
                         Some(project) => {
-                            project.loop_closures.retain(|lc| {
-                                !((lc.station_a == closure.station_a
+                            // Find and remove only the first matching closure for this exact pair
+                            if let Some(pos) = project.loop_closures.iter().position(|lc| {
+                                (lc.station_a == closure.station_a
                                     && lc.station_b == closure.station_b)
                                     || (lc.station_a == closure.station_b
-                                        && lc.station_b == closure.station_a))
-                            });
+                                        && lc.station_b == closure.station_a)
+                            }) {
+                                project.loop_closures.remove(pos);
+                            }
                             project.touch();
                             CommandResult::success()
                         }

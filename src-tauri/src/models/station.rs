@@ -269,3 +269,20 @@ pub struct LoopClosure {
     /// Vertical misclosure component (meters)
     pub vertical_misclosure: f64,
 }
+
+/// Preview data for a potential loop closure (read-only metrics, no mutation)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClosurePreview {
+    pub path_length: f64,
+    pub misclosure_distance: f64,
+    pub error_percentage: f64,
+    pub horizontal_misclosure: f64,
+    pub vertical_misclosure: f64,
+}
+
+/// Result of a connectivity check between two stations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectivityResult {
+    pub connected: bool,
+    pub preview: Option<ClosurePreview>,
+}
