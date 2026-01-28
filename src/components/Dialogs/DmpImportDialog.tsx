@@ -876,7 +876,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                                 <option value="out">Out</option>
                               </select>
                             </td>
-                            <td className="text-right">{standardShots.length}</td>
+                            <td className="text-right tabular-nums">{standardShots.length}</td>
                           </tr>
                           {isExpanded && hasShots && (
                             <tr>
@@ -918,31 +918,31 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
                                           </td>
                                           <td className="py-0.5 px-1">{shotIndex + 1}</td>
                                           <td
-                                            className={`text-right py-0.5 px-1 ${lrudHighlight}`}
+                                            className={`text-right tabular-nums py-0.5 px-1 ${lrudHighlight}`}
                                             data-testid={`lrud-left-${index}-${shotIndex}`}
                                           >
                                             {shot.left ? shot.left.toFixed(1) : '-'}
                                           </td>
                                           <td
-                                            className={`text-right py-0.5 px-1 ${lrudHighlight}`}
+                                            className={`text-right tabular-nums py-0.5 px-1 ${lrudHighlight}`}
                                             data-testid={`lrud-right-${index}-${shotIndex}`}
                                           >
                                             {shot.right ? shot.right.toFixed(1) : '-'}
                                           </td>
                                           <td
-                                            className={`text-right py-0.5 px-1 ${lrudHighlight}`}
+                                            className={`text-right tabular-nums py-0.5 px-1 ${lrudHighlight}`}
                                             data-testid={`lrud-up-${index}-${shotIndex}`}
                                           >
                                             {shot.up ? shot.up.toFixed(1) : '-'}
                                           </td>
                                           <td
-                                            className={`text-right py-0.5 px-1 ${lrudHighlight}`}
+                                            className={`text-right tabular-nums py-0.5 px-1 ${lrudHighlight}`}
                                             data-testid={`lrud-down-${index}-${shotIndex}`}
                                           >
                                             {shot.down ? shot.down.toFixed(1) : '-'}
                                           </td>
                                           <td
-                                            className="text-right py-0.5 px-1"
+                                            className="text-right tabular-nums py-0.5 px-1"
                                             data-testid={`pitch-${index}-${shotIndex}`}
                                           >
                                             {formatPitch(shot)}
