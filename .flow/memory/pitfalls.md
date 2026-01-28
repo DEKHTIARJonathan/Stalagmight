@@ -129,3 +129,9 @@ Mock data must use correct runtime types (e.g. numeric IDs not strings) to match
 
 ## 2026-01-28 manual [pitfall]
 Multi-step operations (undo_to/redo_to) that can partially fail must set isDirty when some steps applied before failure - not just on full success - to prevent users closing without the unsaved changes guard
+
+## 2026-01-28 manual [pitfall]
+Portal dropdowns with visibility:hidden must have final width set during hidden pass so height measurement accounts for text wrapping - shrink-to-fit at auto width produces incorrect flip detection
+
+## 2026-01-28 manual [pitfall]
+Capture-phase scroll event.target can be window or document (not a Node) - guard with instanceof Node before calling .contains() to prevent TypeError
