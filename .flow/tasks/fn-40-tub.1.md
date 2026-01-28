@@ -80,6 +80,7 @@ Implement backend changes for merge/closure separation: a new read-only connecti
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 
 ## Done summary
+Split MergeStations into merge + CreateLoopClosure. MergeStations rejects connected stations. CreateLoopClosure creates loop closures with misclosure stats. UnmergeStations removes pair-specific closures. Full undo/redo support. New check_merge_connectivity invoke. All 778 tests pass. Codex impl-review: SHIP.
 ## Summary
 
 Split `MergeStations` command into two distinct operations:
@@ -102,10 +103,11 @@ Split `MergeStations` command into two distinct operations:
 - All callers updated (App.tsx, MergeDialog, DmpImportDialog, e2e helpers)
 
 ### Evidence
-- `cargo test` — 778 tests pass (698 unit + 80 integration)
-- `pnpm tsc --noEmit` — only pre-existing MapCanvas error
-- `pnpm test:ui` — 574 Playwright tests pass
-## Evidence
 - Commits:
 - Tests:
+- PRs:
+
+## Evidence
+- Commits: 9f250c5, 52b6dda, ed2311d
+- Tests: cargo test 778/778 pass
 - PRs:
