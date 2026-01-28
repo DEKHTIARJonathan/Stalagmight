@@ -32,8 +32,9 @@ if project.sections.iter().any(|s| s.id == section_id) {
 - [x] Undo via InverseCommand works correctly
 
 ## Done summary
-Implemented MoveSection command to modify project.section_offsets HashMap with undo support. Replaced stub in commands.rs with actual implementation that accumulates offsets. Added MoveSection to execute_without_undo match in undo.rs for InverseCommand support. Enhanced tests for offset verification and undo/redo. Review: SHIP verdict (iteration 9).
+Implemented MoveSection command to modify project.section_offsets HashMap with undo support. Replaced stub in commands.rs with actual implementation that accumulates offsets. Added MoveSection to execute_without_undo match in undo.rs for InverseCommand support. Enhanced tests for offset verification and undo/redo. Fixed frontend MapCanvas drag handler to convert lng/lat deltas to meters via mapCoordsToMeters before passing to moveSection/moveStation commands.
+
 ## Evidence
 - Commits: 841d7fe, bc281eb, f70cc30, f64441c
-- Tests: cargo test --manifest-path src-tauri/Cargo.toml
+- Tests: cargo test (80 passed), pnpm tsc --noEmit (clean)
 - PRs:

@@ -497,12 +497,14 @@ export default function MapCanvas() {
       return;
     }
 
-    // Calculate offset (delta from start to current)
-    const dx = moveDrag.currentLngLat.lng - moveDrag.startLngLat.lng;
-    const dy = moveDrag.currentLngLat.lat - moveDrag.startLngLat.lat;
+    // Convert drag start/end from map lng/lat to meters, then compute delta
+    const startMeters = mapCoordsToMeters(moveDrag.startLngLat.lng, moveDrag.startLngLat.lat, gpsOrigin);
+    const endMeters = mapCoordsToMeters(moveDrag.currentLngLat.lng, moveDrag.currentLngLat.lat, gpsOrigin);
+    const dx = endMeters.x - startMeters.x;
+    const dy = endMeters.y - startMeters.y;
 
-    // Only process if there's a meaningful movement
-    if (Math.abs(dx) > 0.0001 || Math.abs(dy) > 0.0001) {
+    // Only process if there's a meaningful movement (1mm threshold)
+    if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
       const offset = { x: dx, y: dy, z: 0 };
 
       if (moveDrag.type === 'section' && moveDrag.sectionId !== undefined) {
@@ -527,7 +529,7 @@ export default function MapCanvas() {
     }
 
     setMoveDrag(null);
-  }, [moveDrag, moveSection, moveStation, stations]);
+  }, [moveDrag, moveSection, moveStation, stations, gpsOrigin]);
 
   // Initialize map
   useEffect(() => {
