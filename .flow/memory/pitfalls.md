@@ -162,3 +162,12 @@ When checking if content fits in a viewport with padding/panels, compute ratios 
 
 ## 2026-01-28 manual [pitfall]
 Mock IPC config in tauri-ipc.ts must include all config fields used by MapCanvas (e.g., map.animation); missing fields cause React component crash on first use
+
+## 2026-01-28 manual [pitfall]
+When sharing feature-state keys (hover/selected) between individual and section-level highlights, individual clear must restore section state using Math.floor(featureId/encodingFactor) to check membership without querying
+
+## 2026-01-28 manual [pitfall]
+Cache querySourceFeatures results when the same query runs on high-frequency paths (mousemove/RAF); invalidate cache on data changes (setData) and section ID changes
+
+## 2026-01-28 manual [pitfall]
+After setData() on GeoJSON sources, guard re-apply calls with hasLiveStyle(map) to prevent crashes during teardown races
