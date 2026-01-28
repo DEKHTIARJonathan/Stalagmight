@@ -11,7 +11,8 @@ Audit remaining creation commands and compound operations to verify ID preservat
 
 ## Approach
 
-1. **Audit CreateLoopClosure** (undo.rs:333-347, command.rs:74-82):
+<!-- Updated by plan-sync: fn-44-3sf.2 shifted line numbers in undo.rs due to CreatedShotSnapshot insertion -->
+1. **Audit CreateLoopClosure** (undo.rs:325-341, commands.rs:72-76):
    - Verify if it has ID preservation issues
    - Uses `ClosureInfo` undo data, not InverseCommand
    - Closures reference stations, not IDs - likely not affected
@@ -20,7 +21,7 @@ Audit remaining creation commands and compound operations to verify ID preservat
    - Already uses `ProjectSnapshotPair` (lines 226-229)
    - Snapshot approach should preserve IDs - verify with test
 
-3. **Verify Batch command** (undo.rs:262-267):
+3. **Verify Batch command** (undo.rs:255-262):
    - Uses `ProjectSnapshot` for undo
    - Snapshot approach should preserve IDs
 
