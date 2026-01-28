@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, useId } from 'react'
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
-import { DialogWrapper } from './DialogWrapper';
+import { DialogWrapper, type FixedSize } from './DialogWrapper';
 import {
   SettingsSidebar,
   CATEGORIES,
@@ -302,6 +302,15 @@ export default function SettingsDialog() {
   // Category error states
   const [categoryErrors, setCategoryErrors] = useState<Partial<Record<SettingsCategory, boolean>>>({});
 
+  // Fixed size for settings dialog — constant from first render through all category switches
+  const settingsFixedSize: FixedSize = useMemo(() => ({
+    width: 'min(800px, 95vw)',
+    height: 'clamp(500px, 80vh, 800px)',
+  }), []);
+
+  // Ref for scrollable content area — used to reset scroll on category change
+  const contentRef = useRef<HTMLDivElement>(null);
+
   // Custom unsaved changes dialog state
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   // Reset confirmation dialog state
@@ -363,6 +372,10 @@ export default function SettingsDialog() {
     const index = CATEGORIES.findIndex((c) => c.id === category);
     if (index >= 0) {
       setFocusedIndex(index);
+    }
+    // Reset scroll position to top on category switch
+    if (contentRef.current) {
+      contentRef.current.scrollTop = 0;
     }
   }, []);
 
@@ -471,9 +484,11 @@ export default function SettingsDialog() {
         onClose={closeDialog}
         size="4xl"
         closeOnBackdropClick={false}
+        fixedSize={settingsFixedSize}
+        overflow="hidden"
         data-testid="settings-dialog"
       >
-        <div className="min-h-[500px] flex items-center justify-center">
+        <div className="flex items-center justify-center flex-1">
           <p className="text-text-secondary">Loading configuration...</p>
         </div>
       </DialogWrapper>
@@ -524,11 +539,12 @@ export default function SettingsDialog() {
         closeOnBackdropClick={false}
         maxHeight="max-h-[90vh]"
         overflow="hidden"
+        fixedSize={settingsFixedSize}
         bodyClassName="flex-1 flex flex-col overflow-hidden"
         data-testid="settings-dialog"
       >
         {({ requestClose }) => (
-          <div className="flex flex-col min-h-[500px] min-w-[600px] flex-1">
+          <div className="flex flex-col min-w-[500px] flex-1">
             {/* Main content area with sidebar and content */}
             <div className="flex flex-1 overflow-hidden">
               {/* Sidebar */}
@@ -558,7 +574,7 @@ export default function SettingsDialog() {
                 </div>
 
                 {/* Scrollable content - tabpanel semantics owned by category components */}
-                <div className="flex-1 overflow-auto p-4">
+                <div ref={contentRef} className="flex-1 overflow-auto p-4">
                   {renderCategoryContent()}
                 </div>
               </div>
