@@ -24,7 +24,7 @@ export type DetailLinkType = 'station' | 'shot' | 'section';
  */
 export interface StationOrShotTarget {
   sectionId: number;
-  /** 1-indexed position within section (required for stations and shots) */
+  /** Position within section: 0-indexed for stations, 1-indexed for shots */
   position: number;
 }
 

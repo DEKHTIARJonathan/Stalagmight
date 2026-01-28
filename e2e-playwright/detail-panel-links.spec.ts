@@ -285,8 +285,8 @@ test.describe('Detail Panel Links', () => {
       await selectShot(page, mainSectionId, firstShotId);
 
       // Find and click the Start Station link
-      // Shot at index 0 has Start Station at index 0 (position 1)
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      // Shot at index 0 has Start Station at index 0 (position 0, 0-indexed)
+      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await expect(startStationLink).toBeVisible();
       await startStationLink.click();
 
@@ -312,8 +312,8 @@ test.describe('Detail Panel Links', () => {
       await selectShot(page, mainSectionId, firstShotId);
 
       // Find and click the End Station link
-      // Shot at index 0 has End Station at index 1 (position 2)
-      const endStationLink = page.getByTestId(`station-${mainSectionId}-2-link`);
+      // Shot at index 0 has End Station at index 1 (position 1, 0-indexed)
+      const endStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
       await expect(endStationLink).toBeVisible();
       await endStationLink.click();
 
@@ -507,8 +507,8 @@ test.describe('Detail Panel Links', () => {
       await expect(stationDetail.locator('text=Merged with')).toBeVisible();
 
       // Find and click the merged station link
-      // The merged station is at sideSectionId:0, displayed as position 1
-      const mergedLink = page.getByTestId(`station-${sideSectionId}-1-link`);
+      // The merged station is at sideSectionId:0, displayed as position 0 (0-indexed)
+      const mergedLink = page.getByTestId(`station-${sideSectionId}-0-link`);
       await expect(mergedLink).toBeVisible();
       await mergedLink.click();
 
@@ -546,8 +546,8 @@ test.describe('Detail Panel Links', () => {
       // Verify the "Merged with" section is displayed
       await expect(stationDetail.locator('text=Merged with')).toBeVisible();
 
-      // Main section has 3 shots, so last station is at index 3 (position 4)
-      const mergedLink = page.getByTestId(`station-${mainSectionId}-4-link`);
+      // Main section has 3 shots, so last station is at index 3 (position 3, 0-indexed)
+      const mergedLink = page.getByTestId(`station-${mainSectionId}-3-link`);
       await expect(mergedLink).toBeVisible();
       await mergedLink.click();
 
@@ -579,8 +579,8 @@ test.describe('Detail Panel Links', () => {
       const sectionDetail = page.getByTestId('section-detail');
       await expect(sectionDetail).toBeVisible();
 
-      // Find and click the First Station link
-      const firstStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      // Find and click the First Station link (0-indexed, position 0)
+      const firstStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await expect(firstStationLink).toBeVisible();
       await firstStationLink.click();
 
@@ -609,8 +609,8 @@ test.describe('Detail Panel Links', () => {
       const sectionDetail = page.getByTestId('section-detail');
       await expect(sectionDetail).toBeVisible();
 
-      // Main section has 3 shots, so last station is at index 3 (position 4)
-      const lastStationLink = page.getByTestId(`station-${mainSectionId}-4-link`);
+      // Main section has 3 shots, so last station is at index 3 (position 3, 0-indexed)
+      const lastStationLink = page.getByTestId(`station-${mainSectionId}-3-link`);
       await expect(lastStationLink).toBeVisible();
       await lastStationLink.click();
 
@@ -730,7 +730,7 @@ test.describe('Detail Panel Links', () => {
       // Verify aria-label
       const ariaLabel = await centerButton.getAttribute('aria-label');
       expect(ariaLabel).toContain('Center map on station');
-      expect(ariaLabel).toContain(`${mainSectionId}:1`);
+      expect(ariaLabel).toContain(`${mainSectionId}:0`);
 
       // Verify button attributes for accessibility
       await expect(centerButton).toHaveAttribute('type', 'button');
@@ -896,14 +896,14 @@ test.describe('Detail Panel Links', () => {
       await selectShot(page, mainSectionId, firstShotId);
 
       // Focus the Start Station link first
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await startStationLink.focus();
       await expect(startStationLink).toBeFocused();
 
       // Tab to next element (End Station link)
       await page.keyboard.press('Tab');
 
-      const endStationLink = page.getByTestId(`station-${mainSectionId}-2-link`);
+      const endStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
       await expect(endStationLink).toBeFocused();
 
       // Tab to next element (Section link)
@@ -925,7 +925,7 @@ test.describe('Detail Panel Links', () => {
       await selectShot(page, mainSectionId, firstShotId);
 
       // Focus the Start Station link
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await startStationLink.focus();
       await expect(startStationLink).toBeFocused();
 
@@ -952,7 +952,7 @@ test.describe('Detail Panel Links', () => {
       await selectShot(page, mainSectionId, firstShotId);
 
       // Focus the Start Station link
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await startStationLink.focus();
       await expect(startStationLink).toBeFocused();
 
@@ -991,12 +991,12 @@ test.describe('Detail Panel Links', () => {
       await selectShot(page, mainSectionId, firstShotId);
 
       // Check Start Station link aria-label
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       const startAriaLabel = await startStationLink.getAttribute('aria-label');
       expect(startAriaLabel).toMatch(/Select station/i);
 
       // Check End Station link aria-label
-      const endStationLink = page.getByTestId(`station-${mainSectionId}-2-link`);
+      const endStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
       const endAriaLabel = await endStationLink.getAttribute('aria-label');
       expect(endAriaLabel).toMatch(/Select station/i);
 
@@ -1018,7 +1018,7 @@ test.describe('Detail Panel Links', () => {
       await selectShot(page, mainSectionId, firstShotId);
 
       // Click the Start Station link
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await startStationLink.click();
 
       // Check the ARIA live region for the announcement
@@ -1056,15 +1056,15 @@ test.describe('Detail Panel Links', () => {
       // Select shot at index 0
       await selectShot(page, mainSectionId, firstShotId);
 
-      // Verify Start Station link shows position 1
-      const startLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      // Verify Start Station link shows position 0 (0-indexed)
+      const startLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await expect(startLink).toBeVisible();
-      await expect(startLink).toHaveText(`${mainSectionId}:1`);
+      await expect(startLink).toHaveText(`${mainSectionId}:0`);
 
-      // Verify End Station link shows position 2
-      const endLink = page.getByTestId(`station-${mainSectionId}-2-link`);
+      // Verify End Station link shows position 1 (0-indexed)
+      const endLink = page.getByTestId(`station-${mainSectionId}-1-link`);
       await expect(endLink).toBeVisible();
-      await expect(endLink).toHaveText(`${mainSectionId}:2`);
+      await expect(endLink).toHaveText(`${mainSectionId}:1`);
     });
 
     test('verifies station at index 0 has no previous shot', async ({ page }) => {
@@ -1083,7 +1083,7 @@ test.describe('Detail Panel Links', () => {
       // Should not have Previous Shot
       await expect(stationDetail.locator('text=Previous Shot')).toBeHidden();
 
-      // Should have Next Shot with position 1
+      // Should have Next Shot with position 1 (shots are 1-indexed)
       await expect(stationDetail.locator('text=Next Shot')).toBeVisible();
       const nextShotLink = page.getByTestId(`shot-${mainSectionId}-1-link`);
       await expect(nextShotLink).toBeVisible();
@@ -1091,6 +1091,7 @@ test.describe('Detail Panel Links', () => {
 
     test('verifies station at middle index has both prev and next shots', async ({ page }) => {
       // Station index 1: Previous shot = shots[0] (display "1"), Next shot = shots[1] (display "2")
+      // Note: shot positions are still 1-indexed
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);
@@ -1102,12 +1103,12 @@ test.describe('Detail Panel Links', () => {
       const stationDetail = page.getByTestId('station-detail');
       await expect(stationDetail).toBeVisible();
 
-      // Should have Previous Shot with position 1
+      // Should have Previous Shot with position 1 (shots are 1-indexed)
       await expect(stationDetail.locator('text=Previous Shot')).toBeVisible();
       const prevShotLink = page.getByTestId(`shot-${mainSectionId}-1-link`);
       await expect(prevShotLink).toBeVisible();
 
-      // Should have Next Shot with position 2
+      // Should have Next Shot with position 2 (shots are 1-indexed)
       await expect(stationDetail.locator('text=Next Shot')).toBeVisible();
       const nextShotLink = page.getByTestId(`shot-${mainSectionId}-2-link`);
       await expect(nextShotLink).toBeVisible();

@@ -1,13 +1,16 @@
 {
   "branch_name": "fn-40-tub",
   "created_at": "2026-01-27T17:16:31.776000Z",
+  "default_impl": null,
+  "default_review": null,
+  "default_sync": null,
   "depends_on_epics": [],
   "id": "fn-40-tub",
   "next_task": 1,
-  "plan_review_status": "unknown",
-  "plan_reviewed_at": null,
+  "plan_review_status": "ship",
+  "plan_reviewed_at": "2026-01-28T06:17:11.991319Z",
   "spec_path": ".flow/specs/fn-40-tub.md",
   "status": "open",
   "title": "Fix merge/closure separation: undo bug, remove merge line, new dialogs",
-  "updated_at": "2026-01-28T05:50:12.645132Z"
+  "updated_at": "2026-01-28T06:17:11.991343Z"
 }

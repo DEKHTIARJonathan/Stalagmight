@@ -10,7 +10,7 @@ This epic separates the two operations entirely:
 
 ### Scope
 
-1. **Rust backend**: New `check_merge_connectivity` read-only invoke, new `CreateLoopClosure` command with undo/redo, fix `MergeStations` to reject connected stations, fix `UnmergeStations` to clean up closures
+1. **Rust backend**: New `check_merge_connectivity` read-only invoke, new `CreateLoopClosure` command with undo/redo, fix `MergeStations` to reject connected stations, fix `UnmergeStations` to clean up closures for the unmerged pair
 2. **Frontend**: Replace current MergeDialog with simple confirmation, add new ClosureDialog with preview data, update merge tool flow to call connectivity check first
 3. **Map**: Remove `survey-merges` layer entirely (merged stations always overlap — the cyan line is useless)
 4. **Docs**: Update SPEC.md sections for commands, dialogs, and workflow
@@ -35,8 +35,9 @@ This epic separates the two operations entirely:
 - Remove `_strategy` parameter from `MergeStations` command variant (strategy only applies to closures)
 
 ### UnmergeStations fix
-- After removing the merge, also remove any closures where either station matches `station_a` or `station_b` of the closure
-- Update undo data to capture removed closures for restore on redo
+- After removing the merge, also remove closures for the **specific merged pair only** — match `{station_a, station_b}` in either order. Do NOT remove unrelated closures involving those stations with other partners.
+- Capture the removed closures in the undo data so they can be restored on redo. Add a `removed_closures: Vec<LoopClosure>` field to `UndoData::MergeInfo` (or create a new `UnmergeInfo` variant) to store closures removed during unmerge.
+- On undo of `UnmergeStations` (which re-merges), also restore the captured closures.
 
 ### Frontend dialog flow
 - In `useMapTools.ts:116-136`: After selecting station B, call `check_merge_connectivity` invoke BEFORE opening any dialog
@@ -82,7 +83,8 @@ pnpm test:ui
 - [ ] Correct user flow: connectivity check → appropriate dialog → appropriate command
 - [ ] Undo of loop closure removes the closure entry and line from map
 - [ ] Redo of loop closure re-adds the closure entry and line
-- [ ] UnmergeStations also removes closures involving the station
+- [ ] UnmergeStations removes closures for the specific unmerged pair only (not unrelated closures)
+- [ ] UnmergeStations undo restores both the merge and any closures that were removed
 - [ ] Duplicate merge/closure between same station pair is prevented
 - [ ] Same-section closures are allowed
 - [ ] Existing tests updated, new tests added for closure undo/redo, dialog flows, and connectivity check

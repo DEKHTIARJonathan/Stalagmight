@@ -6,7 +6,7 @@ import { Button } from '../common/Button';
 import { DetailLink } from '../common/DetailLink';
 import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
-import { formatShotId } from '../../utils/formatters';
+import { formatShotId, formatStationId } from '../../utils/formatters';
 
 export default function DetailPanel() {
   const { selection, detailPanelTab, setDetailPanelTab, setSelection } = useUIStore();
@@ -261,9 +261,9 @@ function StationDetail({ station }: { station: Station }) {
     (s) => s.id === station.station_ref.section_id
   );
 
-  // Station position is 1-indexed for display
+  // Station position is 0-indexed for display
   const stationIndex = station.station_ref.station_index;
-  const stationPosition = stationIndex + 1;
+  const stationPosition = stationIndex;
   const sectionId = station.station_ref.section_id;
 
   // Station-to-Shot mapping:
@@ -334,7 +334,7 @@ function StationDetail({ station }: { station: Station }) {
       type="button"
       onClick={handleCenterOnStation}
       className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background/50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
-      aria-label={`Center map on station ${sectionId}:${stationPosition}`}
+      aria-label={`Center map on station ${formatStationId(sectionId, stationPosition)}`}
       data-testid="center-station-button"
     >
       <svg
@@ -355,7 +355,7 @@ function StationDetail({ station }: { station: Station }) {
         <div className="space-y-3">
           <DetailRow
             label="ID"
-            value={`${sectionId}:${stationPosition}`}
+            value={formatStationId(sectionId, stationPosition)}
           />
           <DetailRow label="Section" value={section?.name ?? `Section ${sectionId}`} />
           <DetailRow label="X" value={`${station.coordinates.x.toFixed(2)} m`} />
@@ -388,8 +388,8 @@ function StationDetail({ station }: { station: Station }) {
                   <li key={i} className="text-sm">
                     <DetailLink
                       type="station"
-                      target={{ sectionId: ref.section_id, position: ref.station_index + 1 }}
-                      displayText={`${ref.section_id}:${ref.station_index + 1}`}
+                      target={{ sectionId: ref.section_id, position: ref.station_index }}
+                      displayText={formatStationId(ref.section_id, ref.station_index)}
                       onSelect={() => handleSelectMergedStation(ref)}
                       isMissing={!mergedStationExists(ref)}
                       onAnnounce={announceSelection}
@@ -478,12 +478,12 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
 
   // Shot-to-Station mapping:
   // Shot at array index i connects:
-  // - Start station: station_index = i (display position = i + 1)
-  // - End station: station_index = i + 1 (display position = i + 2)
+  // - Start station: station_index = i (display position = i, 0-indexed)
+  // - End station: station_index = i + 1 (display position = i + 1, 0-indexed)
   const startStationIndex = shotIndex;
   const endStationIndex = shotIndex + 1;
-  const startStationPosition = startStationIndex + 1;
-  const endStationPosition = endStationIndex + 1;
+  const startStationPosition = startStationIndex;
+  const endStationPosition = endStationIndex;
 
   // Validate station targets exist
   const startStationExists = stations.some(
@@ -583,7 +583,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
                 <DetailLink
                   type="station"
                   target={{ sectionId: section.id, position: startStationPosition }}
-                  displayText={`${section.id}:${startStationPosition}`}
+                  displayText={formatStationId(section.id, startStationPosition)}
                   onSelect={handleSelectStartStation}
                   isMissing={!startStationExists}
                   onAnnounce={announceSelection}
@@ -596,7 +596,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
                 <DetailLink
                   type="station"
                   target={{ sectionId: section.id, position: endStationPosition }}
-                  displayText={`${section.id}:${endStationPosition}`}
+                  displayText={formatStationId(section.id, endStationPosition)}
                   onSelect={handleSelectEndStation}
                   isMissing={!endStationExists}
                   onAnnounce={announceSelection}
@@ -671,12 +671,12 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   const maxDepth = depths.length > 0 ? Math.max(...depths) : 0;
 
   // Endpoint stations for navigation links
-  // First station: index 0, position 1
-  // Last station: index = shots.length, position = shots.length + 1
+  // First station: index 0, position 0 (0-indexed)
+  // Last station: index = shots.length, position = shots.length (0-indexed)
   const firstStationIndex = 0;
-  const firstStationPosition = 1;
+  const firstStationPosition = 0;
   const lastStationIndex = section.shots.length; // Number of shots = last station index
-  const lastStationPosition = lastStationIndex + 1;
+  const lastStationPosition = lastStationIndex;
 
   // Single station case: when there are 0 shots, there's only station 0 (position 1)
   const hasSingleStation = section.shots.length === 0;
@@ -795,7 +795,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                     <DetailLink
                       type="station"
                       target={{ sectionId: section.id, position: firstStationPosition }}
-                      displayText={`${section.id}:${firstStationPosition}`}
+                      displayText={formatStationId(section.id, firstStationPosition)}
                       onSelect={handleSelectFirstStation}
                       isMissing={!firstStationExists}
                       onAnnounce={announceSelection}
@@ -811,7 +811,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                       <DetailLink
                         type="station"
                         target={{ sectionId: section.id, position: firstStationPosition }}
-                        displayText={`${section.id}:${firstStationPosition}`}
+                        displayText={formatStationId(section.id, firstStationPosition)}
                         onSelect={handleSelectFirstStation}
                         isMissing={!firstStationExists}
                         onAnnounce={announceSelection}
@@ -824,7 +824,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                       <DetailLink
                         type="station"
                         target={{ sectionId: section.id, position: lastStationPosition }}
-                        displayText={`${section.id}:${lastStationPosition}`}
+                        displayText={formatStationId(section.id, lastStationPosition)}
                         onSelect={handleSelectLastStation}
                         isMissing={!lastStationExists}
                         onAnnounce={announceSelection}
