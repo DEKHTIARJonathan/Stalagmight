@@ -769,6 +769,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         line-height: 1.4;
         z-index: 1000;
         white-space: nowrap;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
         display: none;
       `;
       map.current.getContainer().appendChild(tooltip);
@@ -837,54 +838,68 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         el.style.marginLeft = '-2px';
         el.style.marginTop = '-2px';
 
-        // Show tooltip
+        // Build tooltip content (same format as survey view)
         if (markerTooltipRef.current) {
           const tooltip = markerTooltipRef.current;
           const projectName = el.dataset.projectName || '';
-          const projectLocation = el.dataset.projectLocation || '';
-          const state = el.dataset.loadingState || '';
+          const totalLength = parseFloat(el.dataset.totalLength || '0');
+          const stationCount = parseInt(el.dataset.stationCount || '0', 10);
 
-          // Build tooltip content using DOM to prevent XSS
-          tooltip.innerHTML = '';
-          const nameSpan = document.createElement('span');
-          nameSpan.style.fontWeight = '500';
-          nameSpan.textContent = projectName;
-          tooltip.appendChild(nameSpan);
-
-          if (projectLocation) {
-            const br = document.createElement('br');
-            tooltip.appendChild(br);
-            const locSpan = document.createElement('span');
-            locSpan.style.cssText = 'font-size: 0.85em; color: #aaa;';
-            locSpan.textContent = projectLocation;
-            tooltip.appendChild(locSpan);
+          // Format length like survey view
+          let lengthStr: string;
+          if (totalLength >= 1000) {
+            lengthStr = `${(totalLength / 1000).toFixed(2)} km`;
+          } else {
+            lengthStr = `${totalLength.toFixed(1)} m`;
           }
 
-          if (state === 'loading') {
-            const br = document.createElement('br');
-            tooltip.appendChild(br);
-            const stateSpan = document.createElement('span');
-            stateSpan.style.cssText = 'font-size: 0.75em; color: #888;';
-            stateSpan.textContent = 'Loading geometry...';
-            tooltip.appendChild(stateSpan);
-          } else if (state === 'error') {
-            const br = document.createElement('br');
-            tooltip.appendChild(br);
-            const stateSpan = document.createElement('span');
-            stateSpan.style.cssText = 'font-size: 0.75em; color: #ef4444;';
-            stateSpan.textContent = 'Failed to load';
-            tooltip.appendChild(stateSpan);
-          }
+          // Build tooltip content using DOM to prevent XSS (matches survey view format)
+          tooltip.textContent = '';
 
-          // Position tooltip above the marker
-          const rect = el.getBoundingClientRect();
-          const containerRect = map.current!.getContainer().getBoundingClientRect();
-          tooltip.style.left = `${rect.left - containerRect.left + rect.width / 2}px`;
-          tooltip.style.top = `${rect.top - containerRect.top - 8}px`;
-          tooltip.style.transform = 'translate(-50%, -100%)';
+          // Name row (bold)
+          const nameDiv = document.createElement('div');
+          nameDiv.style.cssText = 'font-weight: 600; margin-bottom: 4px;';
+          nameDiv.textContent = projectName;
+          tooltip.appendChild(nameDiv);
+
+          // Length row
+          const lengthDiv = document.createElement('div');
+          lengthDiv.style.color = '#aaa';
+          lengthDiv.textContent = `Length: ${lengthStr}`;
+          tooltip.appendChild(lengthDiv);
+
+          // Station count row
+          const stationDiv = document.createElement('div');
+          stationDiv.style.color = '#aaa';
+          stationDiv.textContent = `Stations: ${stationCount}`;
+          tooltip.appendChild(stationDiv);
+
+          tooltip.style.transform = '';
           tooltip.style.display = 'block';
         }
       });
+
+      // Follow mouse while hovering (position at bottom-right of cursor like survey view)
+      el.addEventListener('mousemove', (e) => {
+        if (markerTooltipRef.current && map.current) {
+          const tooltip = markerTooltipRef.current;
+          const container = map.current.getContainer();
+          const rect = container.getBoundingClientRect();
+
+          // Position 15px offset from cursor (bottom-right)
+          const x = e.clientX - rect.left + 15;
+          const y = e.clientY - rect.top + 15;
+
+          // Measure tooltip and clamp to container bounds
+          const tooltipRect = tooltip.getBoundingClientRect();
+          const maxX = container.clientWidth - tooltipRect.width - 10;
+          const maxY = container.clientHeight - tooltipRect.height - 10;
+
+          tooltip.style.left = `${Math.max(0, Math.min(x, maxX))}px`;
+          tooltip.style.top = `${Math.max(0, Math.min(y, maxY))}px`;
+        }
+      });
+
       el.addEventListener('mouseleave', () => {
         el.style.width = '24px';
         el.style.height = '24px';
@@ -936,7 +951,8 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       // Store project info for tooltip (avoids closure over stale data)
       el.dataset.projectName = project.name;
-      el.dataset.projectLocation = project.location || '';
+      el.dataset.totalLength = String(project.total_length ?? 0);
+      el.dataset.stationCount = String(project.station_count ?? 0);
       el.dataset.loadingState = loadingState;
 
       markersRef.current.set(project.file_path, marker);
