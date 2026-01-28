@@ -10,6 +10,7 @@ import {
   normalizeShortcut,
   parseKeyEvent,
   isReservedShortcut,
+  checkReservedConflict,
   findConflict,
   formatShortcut,
   formatActionName,
@@ -79,25 +80,26 @@ describe('RESERVED_SHORTCUTS', () => {
     expect(RESERVED_SHORTCUTS.has('Backspace')).toBe(true);
   });
 
-  it('includes Ctrl+I (Import)', () => {
-    expect(RESERVED_SHORTCUTS.has('Ctrl+I')).toBe(true);
-  });
-
-  it('includes Ctrl+E (Export)', () => {
-    expect(RESERVED_SHORTCUTS.has('Ctrl+E')).toBe(true);
-  });
-
   it('includes Ctrl+A (Select All)', () => {
     expect(RESERVED_SHORTCUTS.has('Ctrl+A')).toBe(true);
+  });
+
+  it('does NOT include Ctrl+I (now configurable)', () => {
+    expect(RESERVED_SHORTCUTS.has('Ctrl+I')).toBe(false);
+  });
+
+  it('does NOT include Ctrl+E (now configurable)', () => {
+    expect(RESERVED_SHORTCUTS.has('Ctrl+E')).toBe(false);
   });
 
   it('includes Ctrl+, (Open Settings)', () => {
     expect(RESERVED_SHORTCUTS.has('Ctrl+,')).toBe(true);
   });
 
-  it('is immutable (ReadonlySet)', () => {
-    // TypeScript would prevent .add() at compile time, but verify Set is frozen
-    expect(RESERVED_SHORTCUTS.size).toBe(7);
+  it('has expected number of reserved shortcuts', () => {
+    // Escape, Delete, Backspace, Ctrl+A, Ctrl+,
+    // Note: Ctrl+I and Ctrl+E were removed (now user-configurable)
+    expect(RESERVED_SHORTCUTS.size).toBe(5);
   });
 });
 
@@ -384,20 +386,21 @@ describe('isReservedShortcut', () => {
     expect(isReservedShortcut('back')).toBe(true);
   });
 
-  it('returns true for Ctrl+I', () => {
-    expect(isReservedShortcut('Ctrl+I')).toBe(true);
-    expect(isReservedShortcut('ctrl+i')).toBe(true);
-    expect(isReservedShortcut('Meta+I')).toBe(true);
-  });
-
-  it('returns true for Ctrl+E', () => {
-    expect(isReservedShortcut('Ctrl+E')).toBe(true);
-    expect(isReservedShortcut('ctrl+e')).toBe(true);
-  });
-
   it('returns true for Ctrl+A', () => {
     expect(isReservedShortcut('Ctrl+A')).toBe(true);
     expect(isReservedShortcut('ctrl+a')).toBe(true);
+  });
+
+  it('returns false for Ctrl+I (now configurable)', () => {
+    expect(isReservedShortcut('Ctrl+I')).toBe(false);
+    expect(isReservedShortcut('ctrl+i')).toBe(false);
+    expect(isReservedShortcut('Meta+I')).toBe(false);
+  });
+
+  it('returns false for Ctrl+E (now configurable)', () => {
+    expect(isReservedShortcut('Ctrl+E')).toBe(false);
+    expect(isReservedShortcut('ctrl+e')).toBe(false);
+    expect(isReservedShortcut('Meta+E')).toBe(false);
   });
 
   it('returns false for non-reserved shortcuts', () => {
@@ -410,6 +413,57 @@ describe('isReservedShortcut', () => {
   it('returns false for invalid shortcuts', () => {
     expect(isReservedShortcut('')).toBe(false);
     expect(isReservedShortcut('A+B')).toBe(false);
+  });
+});
+
+describe('checkReservedConflict', () => {
+  it('returns conflict for reserved keys (Escape, Delete, Backspace)', () => {
+    expect(checkReservedConflict('Escape')).toEqual({ isReserved: true, reason: 'Cancel / Close dialogs' });
+    expect(checkReservedConflict('Delete')).toEqual({ isReserved: true, reason: 'Delete selection' });
+    expect(checkReservedConflict('Backspace')).toEqual({ isReserved: true, reason: 'Delete selection' });
+  });
+
+  it('blocks reserved keys even with modifiers', () => {
+    expect(checkReservedConflict('Ctrl+Escape')).toEqual({ isReserved: true, reason: 'Cancel / Close dialogs' });
+    expect(checkReservedConflict('Ctrl+Delete')).toEqual({ isReserved: true, reason: 'Delete selection' });
+    expect(checkReservedConflict('Shift+Backspace')).toEqual({ isReserved: true, reason: 'Delete selection' });
+  });
+
+  it('returns conflict for Ctrl+A (Select all)', () => {
+    expect(checkReservedConflict('Ctrl+A')).toEqual({ isReserved: true, reason: 'Select all' });
+  });
+
+  it('returns conflict for Ctrl+, (Open Settings)', () => {
+    expect(checkReservedConflict('Ctrl+,')).toEqual({ isReserved: true, reason: 'Open Settings' });
+  });
+
+  it('blocks Ctrl+A even with extra modifiers', () => {
+    expect(checkReservedConflict('Ctrl+Shift+A')).toEqual({ isReserved: true, reason: 'Select all' });
+    expect(checkReservedConflict('Ctrl+Alt+,')).toEqual({ isReserved: true, reason: 'Open Settings' });
+  });
+
+  it('returns null for Ctrl+I (now configurable)', () => {
+    expect(checkReservedConflict('Ctrl+I')).toBeNull();
+    expect(checkReservedConflict('ctrl+i')).toBeNull();
+    expect(checkReservedConflict('Meta+I')).toBeNull();
+  });
+
+  it('returns null for Ctrl+E (now configurable)', () => {
+    expect(checkReservedConflict('Ctrl+E')).toBeNull();
+    expect(checkReservedConflict('ctrl+e')).toBeNull();
+    expect(checkReservedConflict('Meta+E')).toBeNull();
+  });
+
+  it('returns null for non-reserved shortcuts', () => {
+    expect(checkReservedConflict('S')).toBeNull();
+    expect(checkReservedConflict('Ctrl+S')).toBeNull();
+    expect(checkReservedConflict('Ctrl+Z')).toBeNull();
+    expect(checkReservedConflict('F1')).toBeNull();
+  });
+
+  it('returns null for invalid shortcuts', () => {
+    expect(checkReservedConflict('')).toBeNull();
+    expect(checkReservedConflict('A+B')).toBeNull();
   });
 });
 
