@@ -1,7 +1,4 @@
 {
-  "assignee": null,
-  "claim_note": "",
-  "claimed_at": null,
   "created_at": "2026-01-28T17:07:35.951158Z",
   "depends_on": [
     "fn-45-n3z.1",
@@ -14,5 +11,5 @@
   "spec_path": ".flow/tasks/fn-45-n3z.4.md",
   "status": "todo",
   "title": "Add Loop Closures section to DetailPanel",
-  "updated_at": "2026-01-28T17:08:50.500298Z"
+  "updated_at": "2026-01-28T22:50:35.132677Z"
 }

@@ -54,3 +54,6 @@ E2E tests querying third-party library DOM elements (e.g. .maplibregl-ctrl-group
 
 ## 2026-01-28 manual [convention]
 When backend adds validation fields (like can_merge/reason) to API responses, frontend must gate on those fields rather than inferring behavior from older fields (like connected)
+
+## 2026-01-28 manual [convention]
+Collapsible UI sections must include aria-expanded and aria-controls attributes; precompute lookup Sets/Maps with useMemo instead of inline .some()/.find() per render
