@@ -589,12 +589,12 @@ impl AppState {
             None => return CommandResult::failure("No project open".to_string()),
         };
 
-        // Apply offset to section's placement
-        if let Some(_section) = project.sections.iter_mut().find(|s| s.id == section_id) {
-            // Store offset in section metadata (we'll use this during coordinate calculation)
-            // For now, we just acknowledge the command was received
-            // The actual offset application would require extending the Section model
-            tracing::info!(?section_id, ?offset, "Section move requested");
+        if project.sections.iter().any(|s| s.id == section_id) {
+            let current = project.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+            let new_offset = (current.0 + offset.x, current.1 + offset.y);
+            project.section_offsets.insert(section_id, new_offset);
+            project.touch();
+            tracing::info!(?section_id, ?offset, ?new_offset, "Section moved");
             CommandResult::success()
         } else {
             CommandResult::failure("Section not found".to_string())
