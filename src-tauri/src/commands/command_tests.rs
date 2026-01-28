@@ -929,7 +929,6 @@ fn test_merge_stations_fails_without_project() {
         state(&app),
         StationRef::new(0, 0),
         StationRef::new(1, 0),
-        ClosureStrategy::ProportionalByLength,
     );
     assert_failure_contains(&result, "No project open");
 }
@@ -943,7 +942,6 @@ fn test_merge_stations_fails_same_section() {
         state(&app),
         StationRef::new(0, 0),
         StationRef::new(0, 1),
-        ClosureStrategy::ProportionalByLength,
     );
     assert_failure_contains(&result, "same section");
 }
@@ -958,7 +956,6 @@ fn test_merge_stations_success_between_sections() {
         state(&app),
         StationRef::new(0, 1),
         StationRef::new(1, 0),
-        ClosureStrategy::ProportionalByLength,
     );
     assert_success(&result);
 }
@@ -982,7 +979,6 @@ fn test_unmerge_stations_removes_merge() {
         state(&app),
         StationRef::new(0, 1),
         StationRef::new(1, 0),
-        ClosureStrategy::ProportionalByLength,
     );
     let result = station::unmerge_stations(state(&app), StationRef::new(0, 1));
     assert_success(&result);

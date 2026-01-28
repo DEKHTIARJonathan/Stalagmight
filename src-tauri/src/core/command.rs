@@ -67,10 +67,14 @@ pub enum Command {
     MergeStations {
         station_a: StationRef,
         station_b: StationRef,
-        closure_strategy: ClosureStrategy,
     },
     UnmergeStations {
         station_ref: StationRef,
+    },
+    CreateLoopClosure {
+        station_a: StationRef,
+        station_b: StationRef,
+        closure_strategy: ClosureStrategy,
     },
     SetZeroDatum {
         station_ref: StationRef,
@@ -266,6 +270,11 @@ impl Command {
             Command::UnmergeStations { station_ref } => {
                 format!("Unmerge station {}", station_ref)
             }
+            Command::CreateLoopClosure {
+                station_a,
+                station_b,
+                ..
+            } => format!("Create loop closure between {} and {}", station_a, station_b),
             Command::SetZeroDatum { station_ref, .. } => {
                 format!("Set zero datum at {}", station_ref)
             }
@@ -301,7 +310,7 @@ mod tests {
     use super::*;
     use crate::models::{
         ClosureStrategy, Coordinates, GpsCoordinates, SectionUpdates, ShotData, ShotUpdates,
-        StationRef, SurveyDirection,
+        StationRef,
     };
     use chrono::NaiveDate;
     use std::path::PathBuf;
@@ -470,9 +479,16 @@ mod tests {
                 Command::MergeStations {
                     station_a,
                     station_b,
-                    closure_strategy: ClosureStrategy::ProportionalByLength,
                 },
                 "Merge stations 1:0 and 1:1",
+            ),
+            (
+                Command::CreateLoopClosure {
+                    station_a,
+                    station_b,
+                    closure_strategy: ClosureStrategy::ProportionalByLength,
+                },
+                "Create loop closure between 1:0 and 1:1",
             ),
             (
                 Command::UnmergeStations {

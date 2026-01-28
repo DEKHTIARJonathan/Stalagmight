@@ -80,8 +80,31 @@ Implement backend changes for merge/closure separation: a new read-only connecti
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 
 ## Done summary
-TBD
+## Summary
 
+Split `MergeStations` command into two distinct operations:
+
+1. **`MergeStations`** — now rejects already-connected stations (error: "Use Create Loop Closure instead") and removes `closure_strategy` parameter
+2. **`CreateLoopClosure`** — new command for connected stations, computes misclosure stats, returns `LoopClosure` data
+
+### Backend changes
+- `Command::MergeStations` no longer carries `closure_strategy`; `CreateLoopClosure` variant added
+- `project.merge_stations()` rejects connected stations; `project.create_loop_closure()` added
+- `project.unmerge_stations()` returns `(bool, Vec<LoopClosure>)` — removed closures for exact pair
+- `UndoData::MergeInfo.strategy` replaced with `removed_closures: Vec<LoopClosure>`; new `UndoData::ClosureInfo` variant
+- New read-only Tauri command `check_merge_connectivity` with `ConnectivityResult` / `ClosurePreview`
+- All undo/redo paths updated; finalize_undo_data captures newly created closure
+
+### Frontend changes
+- `mergeStations()` signature drops `closureStrategy` parameter
+- New store methods: `checkMergeConnectivity()`, `createLoopClosure()`
+- `ConnectivityResult` / `ClosurePreview` types added to `commands.ts`
+- All callers updated (App.tsx, MergeDialog, DmpImportDialog, e2e helpers)
+
+### Evidence
+- `cargo test` — 778 tests pass (698 unit + 80 integration)
+- `pnpm tsc --noEmit` — only pre-existing MapCanvas error
+- `pnpm test:ui` — 574 Playwright tests pass
 ## Evidence
 - Commits:
 - Tests:

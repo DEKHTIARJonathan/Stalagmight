@@ -1,6 +1,6 @@
 use crate::core::{Command, CommandResult, UndoData};
 use crate::models::{
-    ClosureStrategy, Coordinates, Project, Section, SectionData, SectionId, SectionUpdates, Shot,
+    Coordinates, LoopClosure, Project, Section, SectionData, SectionId, SectionUpdates, Shot,
     ShotData, ShotId, ShotUpdates,
 };
 
@@ -154,14 +154,14 @@ impl AppState {
             Command::MergeStations {
                 station_a,
                 station_b,
-                closure_strategy,
             } => UndoData::MergeInfo {
                 station_a: *station_a,
                 station_b: *station_b,
-                strategy: *closure_strategy,
+                removed_closures: Vec::new(),
             },
 
             // For unmerge, we need to know which stations to re-merge
+            // Also capture closures that will be removed during unmerge
             Command::UnmergeStations { station_ref } => {
                 // Find all merges involving this station
                 let merges: Vec<_> = project
@@ -172,16 +172,30 @@ impl AppState {
                     .collect();
 
                 if let Some((a, b)) = merges.first() {
-                    // For simplicity, just store the first merge
+                    // Capture closures that will be removed during unmerge
+                    let closures_to_remove: Vec<LoopClosure> = project
+                        .loop_closures
+                        .iter()
+                        .filter(|lc| {
+                            (lc.station_a == *a && lc.station_b == *b)
+                                || (lc.station_a == *b && lc.station_b == *a)
+                        })
+                        .cloned()
+                        .collect();
+
                     UndoData::MergeInfo {
                         station_a: *a,
                         station_b: *b,
-                        strategy: ClosureStrategy::ProportionalByLength, // Default strategy
+                        removed_closures: closures_to_remove,
                     }
                 } else {
                     UndoData::None
                 }
             }
+
+            // For create loop closure, return None initially (closure doesn't exist yet)
+            // Will be finalized after execution
+            Command::CreateLoopClosure { .. } => UndoData::None,
 
             // For zero datum operations - capture GPS and section offsets
             Command::SetZeroDatum { station_ref, .. } => {
@@ -298,6 +312,24 @@ impl AppState {
                 }
             }
 
+            Command::CreateLoopClosure {
+                station_a,
+                station_b,
+                ..
+            } => {
+                // Capture the newly created closure from the project's loop_closures
+                if let Some(closure) = project.loop_closures.iter().find(|lc| {
+                    (lc.station_a == *station_a && lc.station_b == *station_b)
+                        || (lc.station_a == *station_b && lc.station_b == *station_a)
+                }) {
+                    UndoData::ClosureInfo {
+                        closure: closure.clone(),
+                    }
+                } else {
+                    undo_data
+                }
+            }
+
             _ => undo_data,
         }
     }
@@ -396,13 +428,38 @@ impl AppState {
             UndoData::MergeInfo {
                 station_a,
                 station_b,
-                ..
+                removed_closures,
             } => {
-                // Unmerge the stations
+                // Unmerge the stations (and ignore any closures removed during unmerge)
+                // Then restore any closures that were captured during generate_undo_data
                 match self.project.lock() {
                     Ok(mut proj_guard) => match proj_guard.as_mut() {
                         Some(project) => {
                             project.unmerge_stations(*station_a, *station_b);
+                            // Restore closures that were removed during the original unmerge
+                            for closure in removed_closures {
+                                project.loop_closures.push(closure.clone());
+                            }
+                            CommandResult::success()
+                        }
+                        None => CommandResult::failure("No project open".to_string()),
+                    },
+                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                }
+            }
+
+            UndoData::ClosureInfo { closure } => {
+                // Remove the closure from project.loop_closures matching the stored station pair
+                match self.project.lock() {
+                    Ok(mut proj_guard) => match proj_guard.as_mut() {
+                        Some(project) => {
+                            project.loop_closures.retain(|lc| {
+                                !((lc.station_a == closure.station_a
+                                    && lc.station_b == closure.station_b)
+                                    || (lc.station_a == closure.station_b
+                                        && lc.station_b == closure.station_a))
+                            });
+                            project.touch();
                             CommandResult::success()
                         }
                         None => CommandResult::failure("No project open".to_string()),
@@ -627,9 +684,13 @@ impl AppState {
             Command::MergeStations {
                 station_a,
                 station_b,
-                closure_strategy,
-            } => self.merge_stations(*station_a, *station_b, *closure_strategy),
+            } => self.merge_stations(*station_a, *station_b),
             Command::UnmergeStations { station_ref } => self.unmerge_stations(*station_ref),
+            Command::CreateLoopClosure {
+                station_a,
+                station_b,
+                closure_strategy,
+            } => self.create_loop_closure(*station_a, *station_b, *closure_strategy),
             Command::SetZeroDatum {
                 station_ref,
                 coordinates,

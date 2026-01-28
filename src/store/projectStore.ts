@@ -20,7 +20,7 @@ import type {
   Coordinates,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem } from '../types/commands';
+import type { CommandResult, ConnectivityResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
 /**
@@ -178,8 +178,10 @@ interface ProjectStore {
   deleteShot: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
   setShotVirtual: (sectionId: SectionId, shotId: ShotId, isVirtual: boolean) => Promise<CommandResult>;
 
-  mergeStations: (stationA: StationRef, stationB: StationRef, strategy: ClosureStrategy) => Promise<CommandResult>;
+  mergeStations: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
   unmergeStations: (stationRef: StationRef) => Promise<CommandResult>;
+  checkMergeConnectivity: (stationA: StationRef, stationB: StationRef) => Promise<ConnectivityResult>;
+  createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
   moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
@@ -678,8 +680,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   // Station operations
-  mergeStations: async (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => {
-    const result = await invoke<CommandResult>('merge_stations', { stationA, stationB, closureStrategy });
+  mergeStations: async (stationA: StationRef, stationB: StationRef) => {
+    const result = await invoke<CommandResult>('merge_stations', { stationA, stationB });
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -689,6 +691,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   unmergeStations: async (stationRef: StationRef) => {
     const result = await invoke<CommandResult>('unmerge_stations', { stationRef });
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
+  },
+
+  checkMergeConnectivity: async (stationA: StationRef, stationB: StationRef) => {
+    return await invoke<ConnectivityResult>('check_merge_connectivity', { stationA, stationB });
+  },
+
+  createLoopClosure: async (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => {
+    const result = await invoke<CommandResult>('create_loop_closure', { stationA, stationB, closureStrategy });
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });

@@ -5,8 +5,8 @@ use std::sync::Mutex;
 use crate::core::undo::{UndoData, UndoEntry};
 use crate::core::Command;
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
-    ShotUpdates, StationRef, SurveyDirection,
+    Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData, ShotUpdates,
+    StationRef, SurveyDirection,
 };
 use crate::persistence::Database;
 use tempfile::TempDir;
@@ -942,12 +942,11 @@ fn test_undo_merge_info_fails_when_project_lock_poisoned() {
         Command::MergeStations {
             station_a: StationRef::new(1, 0),
             station_b: StationRef::new(1, 1),
-            closure_strategy: ClosureStrategy::ProportionalByLength,
         },
         UndoData::MergeInfo {
             station_a: StationRef::new(1, 0),
             station_b: StationRef::new(1, 1),
-            strategy: ClosureStrategy::ProportionalByLength,
+            removed_closures: Vec::new(),
         },
     );
     drop(stack);
@@ -1251,7 +1250,6 @@ fn test_merge_stations_same_section_fails() {
     let result = state.execute(Command::MergeStations {
         station_a: StationRef::new(section_id, 0),
         station_b: StationRef::new(section_id, 1),
-        closure_strategy: ClosureStrategy::ProportionalByLength,
     });
 
     assert!(!result.success);
@@ -1577,7 +1575,6 @@ fn test_execute_merge_stations_command() {
     let result = state.execute(Command::MergeStations {
         station_a,
         station_b,
-        closure_strategy: ClosureStrategy::ProportionalByLength,
     });
 
     assert!(result.success);
@@ -1681,7 +1678,6 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
     state.execute(Command::MergeStations {
         station_a: StationRef::new(section_a, 1),
         station_b: StationRef::new(section_b, 0),
-        closure_strategy: ClosureStrategy::KeepRaw,
     });
 
     // Clear undo stack to focus on SetZeroDatum
@@ -2083,7 +2079,6 @@ fn test_execute_command_no_project_open() {
         Command::MergeStations {
             station_a: StationRef::new(0, 0),
             station_b: StationRef::new(1, 0),
-            closure_strategy: ClosureStrategy::ProportionalByLength,
         },
         Command::SetZeroDatum {
             station_ref: StationRef::new(0, 0),
@@ -2232,7 +2227,6 @@ fn test_undo_merge_stations() {
     let result = state.execute(Command::MergeStations {
         station_a,
         station_b,
-        closure_strategy: ClosureStrategy::ProportionalByLength,
     });
     assert!(result.success);
 

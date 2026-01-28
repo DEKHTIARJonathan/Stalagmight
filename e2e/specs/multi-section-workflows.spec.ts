@@ -181,7 +181,6 @@ async function mergeStations(
               mergeStations: (
                 stationA: { section_id: number; station_index: number },
                 stationB: { section_id: number; station_index: number },
-                strategy: string
               ) => Promise<{ success: boolean; error?: string }>;
             };
           };
@@ -197,7 +196,6 @@ async function mergeStations(
         const result = await e2e.projectStore.getState().mergeStations(
           { section_id: secA, station_index: staA },
           { section_id: secB, station_index: staB },
-          'KeepRaw' // No closure adjustment for these tests
         );
         done({ success: result.success, error: result.error });
       } catch (err) {

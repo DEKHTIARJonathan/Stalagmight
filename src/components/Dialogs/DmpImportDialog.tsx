@@ -705,7 +705,7 @@ export default function DmpImportDialog({ filePath: initialPath }: DmpImportDial
               station_index: importStationIndex,
             };
 
-            const mergeResult = await mergeStations(importRef, existingStation, 'KeepRaw');
+            const mergeResult = await mergeStations(importRef, existingStation);
             if (!mergeResult.success) {
               // Log warning but don't fail the import
               console.warn('Failed to merge stations:', mergeResult.error);

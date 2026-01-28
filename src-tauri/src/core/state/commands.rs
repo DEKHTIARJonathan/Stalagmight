@@ -67,9 +67,13 @@ impl AppState {
             Command::MergeStations {
                 station_a,
                 station_b,
-                closure_strategy,
-            } => self.merge_stations(*station_a, *station_b, *closure_strategy),
+            } => self.merge_stations(*station_a, *station_b),
             Command::UnmergeStations { station_ref } => self.unmerge_stations(*station_ref),
+            Command::CreateLoopClosure {
+                station_a,
+                station_b,
+                closure_strategy,
+            } => self.create_loop_closure(*station_a, *station_b, *closure_strategy),
             Command::SetZeroDatum {
                 station_ref,
                 coordinates,
@@ -131,7 +135,7 @@ impl AppState {
         shots: Vec<ShotData>,
         import_station_index: u32,
         target_station: StationRef,
-        closure_strategy: ClosureStrategy,
+        _closure_strategy: ClosureStrategy,
     ) -> CommandResult {
         tracing::info!("Executing create_section_and_merge as single undo unit");
 
@@ -177,7 +181,7 @@ impl AppState {
         };
 
         // Step 3: Merge the stations
-        let merge_result = self.merge_stations(import_station_ref, target_station, closure_strategy);
+        let merge_result = self.merge_stations(import_station_ref, target_station);
         if !merge_result.success {
             // If merge fails, we need to undo the section creation by restoring the snapshot
             // For simplicity, we'll just report the error and let the user manually undo
@@ -214,7 +218,6 @@ impl AppState {
                 Command::MergeStations {
                     station_a: import_station_ref,
                     station_b: target_station,
-                    closure_strategy,
                 },
             ],
         };
@@ -448,7 +451,6 @@ impl AppState {
         &self,
         station_a: StationRef,
         station_b: StationRef,
-        strategy: ClosureStrategy,
     ) -> CommandResult {
         let mut proj_guard = match self.project.lock() {
             Ok(g) => g,
@@ -467,13 +469,41 @@ impl AppState {
             );
         }
 
-        match project.merge_stations(station_a, station_b, strategy) {
+        match project.merge_stations(station_a, station_b) {
             Ok(_) => {
                 tracing::info!(?station_a, ?station_b, "Stations merged");
                 CommandResult::success()
             }
             Err(e) => {
                 tracing::warn!(?station_a, ?station_b, error = %e, "Failed to merge stations");
+                CommandResult::failure(e)
+            }
+        }
+    }
+
+    pub(super) fn create_loop_closure(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+        strategy: ClosureStrategy,
+    ) -> CommandResult {
+        let mut proj_guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+        };
+
+        let project = match proj_guard.as_mut() {
+            Some(p) => p,
+            None => return CommandResult::failure("No project open".to_string()),
+        };
+
+        match project.create_loop_closure(station_a, station_b, strategy) {
+            Ok(_) => {
+                tracing::info!(?station_a, ?station_b, "Loop closure created");
+                CommandResult::success()
+            }
+            Err(e) => {
+                tracing::warn!(?station_a, ?station_b, error = %e, "Failed to create loop closure");
                 CommandResult::failure(e)
             }
         }
@@ -629,6 +659,77 @@ impl AppState {
             CommandResult::success_with_warnings(all_warnings)
         } else {
             CommandResult::success_with_section_ids_and_warnings(section_ids, all_warnings)
+        }
+    }
+
+    // === Station query operations ===
+
+    /// Check merge connectivity between two stations (read-only)
+    pub fn check_merge_connectivity(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+    ) -> Result<(bool, Option<crate::commands::station::ClosurePreview>), String> {
+        let proj_guard = self
+            .project
+            .lock()
+            .map_err(|_| "Failed to lock project".to_string())?;
+        let project = proj_guard
+            .as_ref()
+            .ok_or_else(|| "No project open".to_string())?;
+
+        // Check if stations already merged
+        if project.are_stations_merged(station_a, station_b) {
+            return Err("These stations are already merged.".to_string());
+        }
+
+        // Check for existing closure between them
+        let already_has_closure = project.loop_closures.iter().any(|lc| {
+            (lc.station_a == station_a && lc.station_b == station_b)
+                || (lc.station_a == station_b && lc.station_b == station_a)
+        });
+        if already_has_closure {
+            return Err(
+                "A loop closure already exists between these stations.".to_string(),
+            );
+        }
+
+        // Check connectivity
+        let connected_a = project.get_connected_section_ids(station_a.section_id);
+        let connected = connected_a.contains(&station_b.section_id);
+
+        if connected {
+            // Compute preview data
+            let coords_a = project
+                .compute_station_raw_coords(station_a)
+                .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
+            let coords_b = project
+                .compute_station_raw_coords(station_b)
+                .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
+
+            let horizontal_misclosure = coords_a.horizontal_distance_to(&coords_b);
+            let vertical_misclosure = (coords_a.z - coords_b.z).abs();
+            let misclosure_distance = coords_a.distance_to(&coords_b);
+            let path_length = project.calculate_path_length_between(station_a, station_b);
+
+            let error_percentage = if path_length > 0.0 {
+                (misclosure_distance / path_length) * 100.0
+            } else {
+                0.0
+            };
+
+            Ok((
+                true,
+                Some(crate::commands::station::ClosurePreview {
+                    path_length,
+                    misclosure_distance,
+                    error_percentage,
+                    horizontal_misclosure,
+                    vertical_misclosure,
+                }),
+            ))
+        } else {
+            Ok((false, None))
         }
     }
 

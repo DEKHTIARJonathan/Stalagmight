@@ -249,7 +249,7 @@ impl Project {
     }
 
     /// Compute raw station coordinates for a single station (without global zero datum offset)
-    fn compute_station_raw_coords(&self, station_ref: StationRef) -> Option<Coordinates> {
+    pub fn compute_station_raw_coords(&self, station_ref: StationRef) -> Option<Coordinates> {
         let section = self.sections.iter().find(|s| s.id == station_ref.section_id)?;
 
         // Get section offset
@@ -276,7 +276,7 @@ impl Project {
 
     /// Calculate the path length between two stations through the survey
     /// This finds the shortest path through shots and existing merges
-    fn calculate_path_length_between(&self, station_a: StationRef, station_b: StationRef) -> f64 {
+    pub fn calculate_path_length_between(&self, station_a: StationRef, station_b: StationRef) -> f64 {
         // Use BFS to find path between stations
         use std::collections::VecDeque;
 
@@ -355,7 +355,6 @@ impl Project {
         &mut self,
         station_a: StationRef,
         station_b: StationRef,
-        _strategy: ClosureStrategy,
     ) -> Result<bool, String> {
         // Check that both stations exist
         if !self.station_exists(station_a) || !self.station_exists(station_b) {
@@ -367,50 +366,10 @@ impl Project {
             return Err("These stations are already merged".to_string());
         }
 
-        // Check if already connected (same section group) - this creates a loop closure
+        // Check if already connected (same section group) - reject, use CreateLoopClosure instead
         let connected_a = self.get_connected_section_ids(station_a.section_id);
         if connected_a.contains(&station_b.section_id) {
-            // This merge creates a loop closure - record it but don't move sections
-            let coords_a = self.compute_station_raw_coords(station_a)
-                .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
-            let coords_b = self.compute_station_raw_coords(station_b)
-                .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
-
-            // Calculate misclosure
-            let horizontal_misclosure = coords_a.horizontal_distance_to(&coords_b);
-            let vertical_misclosure = (coords_a.z - coords_b.z).abs();
-            let misclosure_distance = coords_a.distance_to(&coords_b);
-
-            // Calculate path length (simplified: sum of all shot lengths in connected sections)
-            let path_length = self.calculate_path_length_between(station_a, station_b);
-
-            // Calculate error percentage
-            let error_percentage = if path_length > 0.0 {
-                (misclosure_distance / path_length) * 100.0
-            } else {
-                0.0
-            };
-
-            // Record the loop closure
-            self.loop_closures.push(LoopClosure {
-                station_a,
-                station_b,
-                path_length,
-                misclosure_distance,
-                error_percentage,
-                horizontal_misclosure,
-                vertical_misclosure,
-            });
-
-            // Record the merge (but don't move sections)
-            self.station_merges.push(StationMerge {
-                station_a,
-                station_b,
-                merged_at: Utc::now(),
-            });
-
-            self.touch();
-            return Ok(true);
+            return Err("Stations are already connected. Use Create Loop Closure instead.".to_string());
         }
 
         // Check zero datum status - uses transitive connections through existing merges
@@ -420,7 +379,7 @@ impl Project {
         let b_has_zd = self.section_has_zero_datum(station_b.section_id);
 
         if a_has_zd && b_has_zd {
-            return Err("Both stations are connected to zero datums. Use Closure instead to handle survey loops.".to_string());
+            return Err("Both stations are connected to zero datums. Use Create Loop Closure instead to handle survey loops.".to_string());
         }
 
         // Compute current coordinates (includes existing section offsets)
@@ -472,8 +431,75 @@ impl Project {
         Ok(true)
     }
 
-    /// Unmerge stations
-    pub fn unmerge_stations(&mut self, station_a: StationRef, station_b: StationRef) -> bool {
+    /// Create a loop closure between two connected stations
+    /// Returns the created LoopClosure on success
+    pub fn create_loop_closure(
+        &mut self,
+        station_a: StationRef,
+        station_b: StationRef,
+        _strategy: ClosureStrategy,
+    ) -> Result<LoopClosure, String> {
+        // Check that both stations exist
+        if !self.station_exists(station_a) || !self.station_exists(station_b) {
+            return Err("One or both stations do not exist".to_string());
+        }
+
+        // Check stations are connected
+        let connected_a = self.get_connected_section_ids(station_a.section_id);
+        if !connected_a.contains(&station_b.section_id) {
+            return Err("Stations are not connected. They must be in the same connected group to create a loop closure.".to_string());
+        }
+
+        // Check for duplicate closure between same station pair
+        let already_has_closure = self.loop_closures.iter().any(|lc| {
+            (lc.station_a == station_a && lc.station_b == station_b)
+                || (lc.station_a == station_b && lc.station_b == station_a)
+        });
+        if already_has_closure {
+            return Err("A loop closure already exists between these stations.".to_string());
+        }
+
+        // Compute closure values
+        let coords_a = self.compute_station_raw_coords(station_a)
+            .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
+        let coords_b = self.compute_station_raw_coords(station_b)
+            .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
+
+        let horizontal_misclosure = coords_a.horizontal_distance_to(&coords_b);
+        let vertical_misclosure = (coords_a.z - coords_b.z).abs();
+        let misclosure_distance = coords_a.distance_to(&coords_b);
+        let path_length = self.calculate_path_length_between(station_a, station_b);
+
+        let error_percentage = if path_length > 0.0 {
+            (misclosure_distance / path_length) * 100.0
+        } else {
+            0.0
+        };
+
+        let closure = LoopClosure {
+            station_a,
+            station_b,
+            path_length,
+            misclosure_distance,
+            error_percentage,
+            horizontal_misclosure,
+            vertical_misclosure,
+        };
+
+        self.loop_closures.push(closure.clone());
+        self.touch();
+
+        Ok(closure)
+    }
+
+    /// Unmerge stations. Also removes closures for the specific unmerged pair only.
+    /// Returns (success, removed_closures) where removed_closures contains any
+    /// loop closures that matched this specific station pair.
+    pub fn unmerge_stations(
+        &mut self,
+        station_a: StationRef,
+        station_b: StationRef,
+    ) -> (bool, Vec<LoopClosure>) {
         let pos = self.station_merges.iter().position(|m| {
             (m.station_a == station_a && m.station_b == station_b)
                 || (m.station_a == station_b && m.station_b == station_a)
@@ -481,10 +507,24 @@ impl Project {
 
         if let Some(pos) = pos {
             self.station_merges.remove(pos);
+
+            // Remove closures for the specific unmerged pair only
+            let mut removed_closures = Vec::new();
+            self.loop_closures.retain(|lc| {
+                let matches = (lc.station_a == station_a && lc.station_b == station_b)
+                    || (lc.station_a == station_b && lc.station_b == station_a);
+                if matches {
+                    removed_closures.push(lc.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+
             self.touch();
-            true
+            (true, removed_closures)
         } else {
-            false
+            (false, Vec::new())
         }
     }
 

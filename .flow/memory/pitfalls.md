@@ -171,3 +171,6 @@ Cache querySourceFeatures results when the same query runs on high-frequency pat
 
 ## 2026-01-28 manual [pitfall]
 After setData() on GeoJSON sources, guard re-apply calls with hasLiveStyle(map) to prevent crashes during teardown races
+
+## 2026-01-28 manual [pitfall]
+E2E tests checking MapLibre feature-state must poll (not one-shot assert) because updateVisualState() can lag behind store updates by a tick/frame, and must assert total>0 to prevent vacuous 0===0 passes

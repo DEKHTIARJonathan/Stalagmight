@@ -438,6 +438,8 @@ pub fn run() {
             commands::station::set_zero_datum,
             commands::station::remove_zero_datum,
             commands::station::move_station,
+            commands::station::check_merge_connectivity,
+            commands::station::create_loop_closure,
             // Undo/Redo
             commands::history::undo,
             commands::history::redo,

@@ -277,7 +277,6 @@ function App() {
         const mergeResult = await mergeStations(
           importRef,
           existingStation,
-          'KeepRaw'
         );
 
         if (!mergeResult.success) {
