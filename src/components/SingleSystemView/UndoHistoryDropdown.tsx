@@ -472,7 +472,7 @@ export default function UndoHistoryDropdown({
     }
   }, [menuId]);
 
-  // Handle item click with index validation - stays open and refreshes
+  // Handle item click with index validation - closes dropdown after action
   const handleItemClick = useCallback(async (index: number) => {
     // Validate index before sending to backend
     if (!Number.isInteger(index) || index < 0) {
@@ -481,7 +481,9 @@ export default function UndoHistoryDropdown({
     }
     const action = mode === 'undo' ? undoTo : redoTo;
     enqueueAction(() => action(index));
-  }, [mode, undoTo, redoTo, enqueueAction]);
+    // Close dropdown immediately after clicking an item
+    hardClose();
+  }, [mode, undoTo, redoTo, enqueueAction, hardClose]);
 
   // Handle keyboard navigation on trigger button
   const handleButtonKeyDown = useCallback(async (event: React.KeyboardEvent) => {
