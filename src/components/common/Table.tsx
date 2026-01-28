@@ -378,7 +378,7 @@ export function EditableTable<T extends object>({
                               handleInputChange(item, column.key, e.target.value, index)
                             }
                             onKeyDown={(e) => handleCellKeyDown(e, index, columnIndex)}
-                            className="w-full px-2 py-1 bg-transparent border-none focus:bg-panel"
+                            className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel ${alignmentClasses[column.align ?? 'left']} ${column.align === 'right' ? 'tabular-nums' : ''}`}
                             data-testid={`table-cell-${String(key)}-${column.key}`}
                           />
                         ) : (
