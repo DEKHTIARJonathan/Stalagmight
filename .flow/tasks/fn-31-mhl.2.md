@@ -99,9 +99,25 @@ Add a "Testing Select Dropdowns (Portal)" subsection. Document:
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
+Updated all existing Playwright e2e tests broken by the Select portal change and added new e2e tests verifying the fix works correctly.
 
-<!-- filled on completion -->
+**Existing test updates (6 files):**
+- export-dialog.spec.ts: 4 `.absolute` selectors → `page.getByRole('listbox')`
+- export-preview.spec.ts: 1 `.absolute` selector → `page.getByRole('listbox')`
+- export-color-modes.spec.ts: 9 `.absolute` selectors → `page.getByRole('listbox')`
+- panel-interactions.spec.ts: scoped option selector → `aria-controls` ID-based lookup
+- id-zero-regression.spec.ts: scoped option selector → `aria-controls` ID-based lookup
+- section-shot-editing.spec.ts: scoped option selector → `page.getByRole('listbox')`
 
+**New tests (select-dropdown.spec.ts, 4 tests):**
+- Dropdown visible above sticky header (elementFromPoint z-order proof)
+- Dropdown closes on external scroll
+- Keyboard navigation (ArrowDown/Up, Enter, Space, Escape)
+- Click outside closes dropdown
+
+**TESTING.md update:**
+- Added "Testing Select Dropdowns (Portal)" subsection documenting portal rendering, aria-controls locator strategy, z-order verification with elementFromPoint, scroll behavior, and keyboard navigation patterns
 ## Evidence
-
-<!-- filled on completion -->
+- Commits: 06157c8
+- Tests: pnpm test:ui (547 passed, 0 failed)
+- PRs:

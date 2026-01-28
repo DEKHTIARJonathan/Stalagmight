@@ -40,14 +40,14 @@ async function openDataTable(page: Page): Promise<void> {
 
 /**
  * Get the portaled Select listbox from a trigger button using aria-controls.
+ * Waits for the attribute to be set (React state update) before reading it.
  * This avoids ambiguity with other listbox elements on the page
  * (e.g. the sections panel listbox).
  */
 async function getSelectListbox(page: Page, trigger: Locator): Promise<Locator> {
+  // Wait for aria-controls to be set (React may need a render cycle after open)
+  await expect(trigger).toHaveAttribute('aria-controls', /.+/);
   const listboxId = await trigger.getAttribute('aria-controls');
-  if (!listboxId) {
-    throw new Error('Trigger does not have aria-controls — is the dropdown open?');
-  }
   // Use attribute selector to avoid CSS escaping issues with React useId() colons
   return page.locator(`[id="${listboxId}"]`);
 }
@@ -104,13 +104,12 @@ test.describe('Select Dropdown (Portal)', () => {
     const listbox = await getSelectListbox(page, trigger);
     await expect(listbox).toBeVisible();
 
-    // Scroll the page (external to the dropdown) — use dispatchEvent to trigger scroll
-    // since the page may not be scrollable natively
+    // Dispatch scroll on window (Select listens via window.addEventListener('scroll', ..., { capture: true }))
     await page.evaluate(() => {
-      document.dispatchEvent(new Event('scroll', { bubbles: true }));
+      window.dispatchEvent(new Event('scroll'));
     });
 
-    // Dropdown should close (Select listens on window with capture: true)
+    // Dropdown should close
     await expect(listbox).not.toBeVisible({ timeout: 2000 });
   });
 
@@ -147,13 +146,13 @@ test.describe('Select Dropdown (Portal)', () => {
     await page.keyboard.press('Escape');
     await expect(listbox).not.toBeVisible({ timeout: 2000 });
 
-    // Re-open with Space key
-    await page.keyboard.press('Space');
+    // Re-open with ArrowDown (avoids button click/Space double-toggle)
+    await page.keyboard.press('ArrowDown');
     listbox = await getSelectListbox(page, trigger);
     await expect(listbox).toBeVisible();
 
-    // Select "Side Tunnel" with Enter — navigate to it first
-    // Current highlight is on first enabled option (Main Passage, index 0).
+    // Navigate to "Side Tunnel" with ArrowDown
+    // Current highlight is on currently selected option (Main Passage, index 0).
     // Side Tunnel is index 1, so one ArrowDown.
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');

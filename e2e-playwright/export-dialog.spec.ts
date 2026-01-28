@@ -48,7 +48,7 @@ test.describe('Export Dialog', () => {
 
     // Click to open dropdown and verify CSV option is available
     await formatSelect.locator('button').first().click();
-    // The dropdown renders via portal to document.body — locate by role
+    // The dropdown renders via portal to document.body - locate by role
     const dropdown = page.getByRole('listbox');
     await expect(dropdown.locator('[role="option"]:has-text("CSV")')).toBeVisible();
     // Click CSV to close dropdown (selecting default value)
@@ -75,7 +75,7 @@ test.describe('Export Dialog', () => {
     const formatSelect = page.locator('[data-testid="data-format-select"]');
     // Click to open dropdown
     await formatSelect.locator('button').first().click();
-    // Click JSON option (portaled listbox — locate globally by role)
+    // Click JSON option (portaled listbox - locate globally by role)
     await page.getByRole('listbox').locator('[role="option"]:has-text("JSON")').click();
 
     // Verify JSON is now selected (check button text)
@@ -107,7 +107,7 @@ test.describe('Export Dialog', () => {
 
     // Verify available image formats by opening dropdown
     await imageFormatSelect.locator('button').first().click();
-    // The dropdown renders via portal to document.body — locate by role
+    // The dropdown renders via portal to document.body - locate by role
     const imageDropdown = page.getByRole('listbox');
     await expect(imageDropdown.locator('[role="option"]:has-text("PNG")')).toBeVisible();
     await expect(imageDropdown.locator('[role="option"]:has-text("SVG")')).toBeVisible();
