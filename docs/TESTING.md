@@ -929,7 +929,7 @@ The Detail Panel provides navigation hyperlinks and center buttons for survey el
 | Station detail view | `station-detail` | Shown when station selected |
 | Shot detail view | `shot-detail` | Shown when shot selected |
 | Section detail view | `section-detail` | Shown when section selected |
-| Station link | `station-{sectionId}-{position}-link` | Position is 1-indexed |
+| Station link | `station-{sectionId}-{position}-link` | Position is 0-indexed |
 | Shot link | `shot-{sectionId}-{position}-link` | Position is 1-indexed |
 | Section link | `section-{sectionId}-link` | No position for sections |
 | Center station button | `center-station-button` | In station detail header |

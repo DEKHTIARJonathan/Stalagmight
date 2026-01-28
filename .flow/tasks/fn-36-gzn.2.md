@@ -32,9 +32,13 @@ Update SPEC.md and TESTING.md to reflect 0-indexed station ID display convention
 - [ ] Shot position documentation is NOT changed
 - [ ] No other docs need updates (architecture.md, project-structure.md, configuration.md, roadmap.md verified clean)
 ## Done summary
-TBD
-
+Updated SPEC.md and TESTING.md to reflect 0-indexed station IDs:
+- SPEC.md section 6.2.1: Changed station position description from 1-indexed to 0-indexed, updated formula from station_index+1 to station_index
+- SPEC.md shot-to-station mapping: Updated display positions (i+1→i, i+2→i+1)
+- SPEC.md merge dialog mockup: Changed #15→#14 and #1→#0
+- TESTING.md: Updated station link test ID note from 1-indexed to 0-indexed
+- Shot positions remain unchanged (still 1-indexed)
 ## Evidence
 - Commits:
-- Tests:
+- Tests: docs-only change, no tests needed
 - PRs:
