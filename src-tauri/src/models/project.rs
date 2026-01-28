@@ -549,6 +549,11 @@ impl Project {
         // Compute closure values using shared helper
         let metrics = self.compute_closure_metrics(station_a, station_b)?;
 
+        // Normalize next_closure_id in case of legacy deserialization (default 0)
+        let max_existing = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
+        if self.next_closure_id <= max_existing {
+            self.next_closure_id = max_existing + 1;
+        }
         // Assign next closure ID from monotonic counter
         let next_id = self.next_closure_id;
         self.next_closure_id += 1;
@@ -1027,24 +1032,33 @@ impl Project {
                 .map(|&gid| groups[gid].clone())
                 .unwrap_or_else(|| vec![b_ref]);
 
+            // Skip if both endpoints are in the same merge group (legacy data edge case)
+            let a_group_id = station_to_group.get(&a_ref);
+            let b_group_id = station_to_group.get(&b_ref);
+            if a_group_id.is_some() && a_group_id == b_group_id {
+                continue;
+            }
+
             // For each station in A's group, add direct ref to B and transitive refs to B's merged partners
             for station in &mut stations {
                 if a_group.contains(&station.station_ref) {
-                    // Direct closure to station_b
-                    let via = if station.station_ref != a_ref {
-                        Some(a_ref) // transitive: reached via the actual closure endpoint
-                    } else {
-                        None
-                    };
-                    station.closures_with.push(ClosureRef {
-                        closure_id: closure.id,
-                        station_ref: b_ref,
-                        via_station: via,
-                        is_transitive: via.is_some(),
-                    });
-                    // Transitive closures to B's merged partners
+                    // Direct closure to station_b (skip self-references)
+                    if station.station_ref != b_ref {
+                        let via = if station.station_ref != a_ref {
+                            Some(a_ref) // transitive: reached via the actual closure endpoint
+                        } else {
+                            None
+                        };
+                        station.closures_with.push(ClosureRef {
+                            closure_id: closure.id,
+                            station_ref: b_ref,
+                            via_station: via,
+                            is_transitive: via.is_some(),
+                        });
+                    }
+                    // Transitive closures to B's merged partners (skip self-references)
                     for &b_member in &b_group {
-                        if b_member != b_ref {
+                        if b_member != b_ref && b_member != station.station_ref {
                             station.closures_with.push(ClosureRef {
                                 closure_id: closure.id,
                                 station_ref: b_member,
@@ -1054,21 +1068,23 @@ impl Project {
                         }
                     }
                 } else if b_group.contains(&station.station_ref) {
-                    // Direct closure to station_a
-                    let via = if station.station_ref != b_ref {
-                        Some(b_ref)
-                    } else {
-                        None
-                    };
-                    station.closures_with.push(ClosureRef {
-                        closure_id: closure.id,
-                        station_ref: a_ref,
-                        via_station: via,
-                        is_transitive: via.is_some(),
-                    });
-                    // Transitive closures to A's merged partners
+                    // Direct closure to station_a (skip self-references)
+                    if station.station_ref != a_ref {
+                        let via = if station.station_ref != b_ref {
+                            Some(b_ref)
+                        } else {
+                            None
+                        };
+                        station.closures_with.push(ClosureRef {
+                            closure_id: closure.id,
+                            station_ref: a_ref,
+                            via_station: via,
+                            is_transitive: via.is_some(),
+                        });
+                    }
+                    // Transitive closures to A's merged partners (skip self-references)
                     for &a_member in &a_group {
-                        if a_member != a_ref {
+                        if a_member != a_ref && a_member != station.station_ref {
                             station.closures_with.push(ClosureRef {
                                 closure_id: closure.id,
                                 station_ref: a_member,
