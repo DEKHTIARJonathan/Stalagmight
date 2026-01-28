@@ -98,9 +98,8 @@ Only render the portal when `isOpen` is true. When `isOpen` is false, render not
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-
-<!-- filled on completion -->
-
+Converted Select dropdown from absolute positioning to portal rendering via createPortal to document.body with position:fixed, escaping stacking contexts like sticky table headers. Implemented flicker-free positioning with useLayoutEffect, upward flip detection with actual height measurement, close on external scroll/resize, updated outside-click detection for portal, and aria-owns for accessibility.
 ## Evidence
-
-<!-- filled on completion -->
+- Commits: 01f4a169c0c9edf2f9f2fdc2f78ae16f2b8fb5ab, 3bc919977426057aaf2e8687c9d4d0b268564493
+- Tests: pnpm tsc --noEmit
+- PRs:
