@@ -119,6 +119,12 @@ export default class SurveyLayer {
   private prevSelectedStationFeatureId: number | null = null;
   private prevSelectedShotFeatureId: number | null = null;
 
+  // Previous section-level feature IDs for setFeatureState (to clear state when section hover/selection changes)
+  private prevHoveredSectionShotIds: Set<number> = new Set();
+  private prevHoveredSectionStationIds: Set<number> = new Set();
+  private prevSelectedSectionShotIds: Set<number> = new Set();
+  private prevSelectedSectionStationIds: Set<number> = new Set();
+
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
     this.callbacks = callbacks;
@@ -946,6 +952,19 @@ export default class SurveyLayer {
     return sectionId! * 100000 + index!;
   }
 
+  // Collect all feature IDs belonging to a section from a given source
+  private getSectionFeatureIds(source: string, sectionIdStr: string): Set<number> {
+    const features = this.map.querySourceFeatures(source);
+    const sectionIdNum = Number(sectionIdStr);
+    const ids = new Set<number>();
+    for (const f of features) {
+      if (f.properties?.sectionId === sectionIdNum && f.properties?.featureId != null) {
+        ids.add(f.properties.featureId as number);
+      }
+    }
+    return ids;
+  }
+
   // Update visual state using setFeatureState (much faster than setPaintProperty)
   // Only updates the specific features that changed, not the entire layer
   private updateVisualState() {
@@ -1030,6 +1049,82 @@ export default class SurveyLayer {
         );
       }
       this.prevSelectedShotFeatureId = newSelectedShotFeatureId;
+    }
+
+    // --- Section hover (shots + stations) ---
+    {
+      const newHoveredShotIds = this.hoveredSectionId
+        ? this.getSectionFeatureIds(shotsSource, this.hoveredSectionId)
+        : new Set<number>();
+      const newHoveredStationIds = this.hoveredSectionId
+        ? this.getSectionFeatureIds(stationsSource, this.hoveredSectionId)
+        : new Set<number>();
+
+      // Clear previous section-hovered shots not in new set
+      for (const id of this.prevHoveredSectionShotIds) {
+        if (!newHoveredShotIds.has(id) && id !== newHoveredShotFeatureId) {
+          this.map.setFeatureState({ source: shotsSource, id }, { hover: false });
+        }
+      }
+      // Set new section-hovered shots not in prev set
+      for (const id of newHoveredShotIds) {
+        if (!this.prevHoveredSectionShotIds.has(id) && id !== newHoveredShotFeatureId) {
+          this.map.setFeatureState({ source: shotsSource, id }, { hover: true });
+        }
+      }
+      this.prevHoveredSectionShotIds = newHoveredShotIds;
+
+      // Clear previous section-hovered stations not in new set
+      for (const id of this.prevHoveredSectionStationIds) {
+        if (!newHoveredStationIds.has(id) && id !== newHoveredStationFeatureId) {
+          this.map.setFeatureState({ source: stationsSource, id }, { hover: false });
+        }
+      }
+      // Set new section-hovered stations not in prev set
+      for (const id of newHoveredStationIds) {
+        if (!this.prevHoveredSectionStationIds.has(id) && id !== newHoveredStationFeatureId) {
+          this.map.setFeatureState({ source: stationsSource, id }, { hover: true });
+        }
+      }
+      this.prevHoveredSectionStationIds = newHoveredStationIds;
+    }
+
+    // --- Section selection (shots + stations) ---
+    {
+      const newSelectedShotIds = this.selectedSectionId
+        ? this.getSectionFeatureIds(shotsSource, this.selectedSectionId)
+        : new Set<number>();
+      const newSelectedStationIds = this.selectedSectionId
+        ? this.getSectionFeatureIds(stationsSource, this.selectedSectionId)
+        : new Set<number>();
+
+      // Clear previous section-selected shots not in new set
+      for (const id of this.prevSelectedSectionShotIds) {
+        if (!newSelectedShotIds.has(id) && id !== newSelectedShotFeatureId) {
+          this.map.setFeatureState({ source: shotsSource, id }, { selected: false });
+        }
+      }
+      // Set new section-selected shots not in prev set
+      for (const id of newSelectedShotIds) {
+        if (!this.prevSelectedSectionShotIds.has(id) && id !== newSelectedShotFeatureId) {
+          this.map.setFeatureState({ source: shotsSource, id }, { selected: true });
+        }
+      }
+      this.prevSelectedSectionShotIds = newSelectedShotIds;
+
+      // Clear previous section-selected stations not in new set
+      for (const id of this.prevSelectedSectionStationIds) {
+        if (!newSelectedStationIds.has(id) && id !== newSelectedStationFeatureId) {
+          this.map.setFeatureState({ source: stationsSource, id }, { selected: false });
+        }
+      }
+      // Set new section-selected stations not in prev set
+      for (const id of newSelectedStationIds) {
+        if (!this.prevSelectedSectionStationIds.has(id) && id !== newSelectedStationFeatureId) {
+          this.map.setFeatureState({ source: stationsSource, id }, { selected: true });
+        }
+      }
+      this.prevSelectedSectionStationIds = newSelectedStationIds;
     }
   }
 
@@ -1491,6 +1586,17 @@ export default class SurveyLayer {
         features: loopClosureFeatures,
       });
     }
+
+    // setData() clears all feature-state — reset tracking and re-apply
+    this.prevHoveredStationFeatureId = null;
+    this.prevHoveredShotFeatureId = null;
+    this.prevSelectedStationFeatureId = null;
+    this.prevSelectedShotFeatureId = null;
+    this.prevHoveredSectionShotIds = new Set();
+    this.prevHoveredSectionStationIds = new Set();
+    this.prevSelectedSectionShotIds = new Set();
+    this.prevSelectedSectionStationIds = new Set();
+    this.updateVisualState();
   }
 
   destroy() {

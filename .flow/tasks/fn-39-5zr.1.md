@@ -109,3 +109,30 @@ Feature `sectionId` is `number`, stored section IDs are `string | null`. Convert
 
 - `pnpm tsc --noEmit` passes
 - `pnpm test:ui` passes
+
+## Done summary
+## Summary
+
+Added section-level feature-state handling to `SurveyLayer.updateVisualState()` so that hovering or selecting a section in the UI highlights all shots and stations belonging to that section on the map.
+
+### Changes made to `src/components/Map/SurveyLayer.tsx`:
+
+1. **Added 4 tracking fields** (`prevHoveredSectionShotIds`, `prevHoveredSectionStationIds`, `prevSelectedSectionShotIds`, `prevSelectedSectionStationIds`) to track which feature IDs have section-level state applied per source.
+
+2. **Added `getSectionFeatureIds()` helper** that uses `querySourceFeatures()` to collect all feature IDs belonging to a section from a given source, with `Set` for deduplication.
+
+3. **Extended `updateVisualState()`** with section hover and section selection blocks that:
+   - Compute new IDs from section ID via `getSectionFeatureIds()`
+   - Clear features in prev set not in new set (skip individual hover/selection feature to avoid clobbering)
+   - Set features in new set not in prev set (skip individual feature for same reason)
+   - Replace prev set with new set
+
+4. **Added feature-state re-application in `update()`** — after all `setData()` calls (which clear MapLibre feature-state), reset all tracking fields and call `updateVisualState()` to re-apply highlights.
+
+### Verification
+- `pnpm tsc --noEmit` — passes (1 pre-existing error in MapCanvas.tsx unrelated to changes)
+- `pnpm test:ui` — 570/571 pass (1 pre-existing satellite test failure unrelated to changes)
+## Evidence
+- Commits:
+- Tests:
+- PRs:
