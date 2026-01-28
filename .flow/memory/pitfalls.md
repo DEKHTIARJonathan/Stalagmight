@@ -141,3 +141,6 @@ When reading aria-controls in Playwright tests after opening a portal-rendered d
 
 ## 2026-01-28 manual [pitfall]
 Global th/td CSS rules in index.css are unlayered and override Tailwind utility classes (text-right, text-center) on table elements; use !text-right (!important modifier) or inline styles to override
+
+## 2026-01-28 manual [pitfall]
+Select.tsx has 8+ close paths (6 explicit + scroll + resize). When adding callbacks that must fire on close, audit ALL close paths including implicit ones (scroll, resize) not just the 6 documented in specs.
