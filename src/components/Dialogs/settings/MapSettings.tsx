@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
 import { SettingsSection } from './SettingsSection';
@@ -6,18 +7,23 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
+import type { TileProviderInfo } from '../../../types/tile';
 
-// Backend currently only supports ESRI tile provider
-// See src-tauri/src/lib.rs SUPPORTED_PROVIDERS
-const SATELLITE_PROVIDER_OPTIONS = [
-  { value: 'esri', label: 'ESRI World Imagery' },
-];
+/** Fallback provider option shown when IPC call fails */
+const FALLBACK_PROVIDER_OPTION = { value: 'esri', label: 'ESRI World Imagery' };
 
 /**
  * Map settings category content.
  * Maps to config.map: satellite_provider, satellite_enabled, satellite_gps_origin,
  * zoom settings, station, shot, snap, animation configs.
  */
+/** Select option type */
+interface ProviderOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
 export function MapSettings({
   config,
   onChange,
@@ -27,6 +33,49 @@ export function MapSettings({
 }: SettingsCategoryProps) {
   // Validation state
   const hasErrorRef = useRef(false);
+
+  // Provider state - loaded dynamically from backend
+  const [providerOptions, setProviderOptions] = useState<ProviderOption[]>([FALLBACK_PROVIDER_OPTION]);
+  const [providersLoaded, setProvidersLoaded] = useState(false);
+  const mountedRef = useRef(true);
+
+  // Load providers from backend on mount
+  const loadProviders = useCallback(async () => {
+    try {
+      const providers = await invoke<TileProviderInfo[]>('get_tile_providers');
+      if (mountedRef.current) {
+        const options: ProviderOption[] = providers.map((p) => ({
+          value: p.name,
+          label: p.available ? p.display_label : `${p.display_label} (requires API key)`,
+          disabled: !p.available,
+        }));
+        // Sort available providers first
+        options.sort((a, b) => {
+          if (a.disabled && !b.disabled) return 1;
+          if (!a.disabled && b.disabled) return -1;
+          return a.label.localeCompare(b.label);
+        });
+        setProviderOptions(options.length > 0 ? options : [FALLBACK_PROVIDER_OPTION]);
+        setProvidersLoaded(true);
+      }
+    } catch (error) {
+      console.error('[MapSettings] Failed to load tile providers:', error);
+      if (mountedRef.current) {
+        // Fall back to ESRI only
+        setProviderOptions([FALLBACK_PROVIDER_OPTION]);
+        setProvidersLoaded(true);
+      }
+    }
+  }, []);
+
+  // Load providers on mount
+  useEffect(() => {
+    mountedRef.current = true;
+    loadProviders();
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [loadProviders]);
 
   // Validate on mount and when config changes
   useEffect(() => {
@@ -390,10 +439,11 @@ export function MapSettings({
           <Select
             value={config.map.satellite_provider}
             onChange={handleProviderChange}
-            options={SATELLITE_PROVIDER_OPTIONS}
+            options={providerOptions}
             className="w-40"
             aria-label="Satellite tile provider"
             data-testid="select-satellite-provider"
+            disabled={!providersLoaded}
           />
         </SettingRow>
 

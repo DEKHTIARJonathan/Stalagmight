@@ -24,7 +24,7 @@ angle = "degrees"                   # degrees, gradians
 default_background = "#1a1a2e"      # Map background color
 
 [map]
-satellite_provider = "esri"         # Tile provider
+satellite_provider = "esri"         # Tile provider (selects from backend registry via get_tile_providers IPC)
 satellite_enabled = false           # Show satellite imagery
 # GPS origin for coordinate alignment (required for satellite tiles)
 satellite_gps_origin = { latitude = 24.55, longitude = -81.78 }
