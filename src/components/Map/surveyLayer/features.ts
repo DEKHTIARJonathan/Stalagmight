@@ -27,7 +27,7 @@ export interface GhostSectionData {
 export interface GhostFeatureSets {
   shotFeatures: GeoJSON.Feature[];
   stationFeatures: GeoJSON.Feature[];
-  mergeFeatures: GeoJSON.Feature[];
+  mergeStationFeatures: GeoJSON.Feature[];
 }
 
 export interface SurveyFeatureSets {
@@ -54,10 +54,10 @@ export function buildGhostFeatures(
 ): GhostFeatureSets {
   const shotFeatures: GeoJSON.Feature[] = [];
   const stationFeatures: GeoJSON.Feature[] = [];
-  const mergeFeatures: GeoJSON.Feature[] = [];
+  const mergeStationFeatures: GeoJSON.Feature[] = [];
 
   if (!data) {
-    return { shotFeatures, stationFeatures, mergeFeatures };
+    return { shotFeatures, stationFeatures, mergeStationFeatures };
   }
 
   for (const shot of data.shots) {
@@ -86,7 +86,7 @@ export function buildGhostFeatures(
   }
 
   if (data.mergeStation) {
-    mergeFeatures.push({
+    mergeStationFeatures.push({
       type: 'Feature',
       geometry: {
         type: 'Point',
@@ -96,7 +96,7 @@ export function buildGhostFeatures(
     });
   }
 
-  return { shotFeatures, stationFeatures, mergeFeatures };
+  return { shotFeatures, stationFeatures, mergeStationFeatures };
 }
 
 export function buildSurveyFeatures(
