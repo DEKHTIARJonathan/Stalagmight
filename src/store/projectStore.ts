@@ -205,6 +205,18 @@ interface ProjectStore {
   exportImage: (path: string, options: ExportImageOptions) => Promise<void>;
 }
 
+/**
+ * Detect partial failure in multi-step undo/redo.
+ * Backend returns "Undo failed at step N of M: reason" (or "Redo failed...")
+ * when some steps succeeded before the failure. If step > 1, state was mutated.
+ */
+function isPartialMultiStepFailure(error: string | null): boolean {
+  if (!error) return false;
+  const match = error.match(/failed at step (\d+) of (\d+)/);
+  if (!match || !match[1]) return false;
+  return parseInt(match[1], 10) > 1;
+}
+
 export const useProjectStore = create<ProjectStore>((set, get) => ({
   // Initial state
   project: null,
@@ -767,6 +779,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       if (result.success) {
         set({ isDirty: true });
       } else {
+        // Partial failure: some steps applied before failure, state was mutated
+        if (isPartialMultiStepFailure(result.error)) {
+          set({ isDirty: true });
+        }
         useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed');
       }
     } catch (e) {
@@ -785,6 +801,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       if (result.success) {
         set({ isDirty: true });
       } else {
+        // Partial failure: some steps applied before failure, state was mutated
+        if (isPartialMultiStepFailure(result.error)) {
+          set({ isDirty: true });
+        }
         useUIStore.getState().showToast(result.error ?? 'Unknown error', 'redo-failed');
       }
     } catch (e) {

@@ -69,6 +69,9 @@ interface MockUndoRedoConfig {
   canRedo: boolean;
   undoStack: ReturnType<typeof getMockUndoStack>;
   redoStack: ReturnType<typeof getMockRedoStack>;
+  /** When true, undo/redo commands mutate the mock stacks (move entries between them)
+   *  and derive canUndo/canRedo from array lengths. Default: false (fixed stacks). */
+  mutating?: boolean;
 }
 
 /**
@@ -81,6 +84,7 @@ async function extendMocksWithUndoRedo(page: Page, config: Partial<MockUndoRedoC
     canRedo: config.canRedo ?? true,
     undoStack: config.undoStack ?? getMockUndoStack(),
     redoStack: config.redoStack ?? getMockRedoStack(),
+    mutating: config.mutating ?? false,
   };
 
   await page.evaluate((mockConfig) => {
@@ -93,39 +97,78 @@ async function extendMocksWithUndoRedo(page: Page, config: Partial<MockUndoRedoC
     // Get the original invoke function from the shared mock
     const originalInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
 
+    /** Re-index stack entries so index matches array position */
+    function reindex(stack: Array<{ index: number }>) {
+      stack.forEach((e, i) => { e.index = i; });
+    }
+
     // Override invoke to intercept undo/redo specific commands
     (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke = async (cmd: string, args?: Record<string, unknown>) => {
-      const config = (window as unknown as { __UNDO_REDO_MOCK_CONFIG__: typeof mockConfig }).__UNDO_REDO_MOCK_CONFIG__;
+      const cfg = (window as unknown as { __UNDO_REDO_MOCK_CONFIG__: typeof mockConfig }).__UNDO_REDO_MOCK_CONFIG__;
 
       switch (cmd) {
         case 'can_undo':
-          return config.canUndo;
+          return cfg.mutating ? cfg.undoStack.length > 0 : cfg.canUndo;
         case 'can_redo':
-          return config.canRedo;
+          return cfg.mutating ? cfg.redoStack.length > 0 : cfg.canRedo;
         case 'get_undo_state':
-          return { can_undo: config.canUndo, can_redo: config.canRedo };
+          return cfg.mutating
+            ? { can_undo: cfg.undoStack.length > 0, can_redo: cfg.redoStack.length > 0 }
+            : { can_undo: cfg.canUndo, can_redo: cfg.canRedo };
         case 'get_undo_stack':
-          return config.undoStack;
+          return cfg.undoStack;
         case 'get_redo_stack':
-          return config.redoStack;
+          return cfg.redoStack;
         case 'undo': {
           const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
           calls.push({ cmd: 'undo', index: 0 });
+          if (cfg.mutating && cfg.undoStack.length > 0) {
+            const entry = cfg.undoStack.shift()!;
+            cfg.redoStack.unshift(entry);
+            reindex(cfg.undoStack);
+            reindex(cfg.redoStack);
+          }
           return { success: true, warnings: [], error: null };
         }
         case 'redo': {
           const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
           calls.push({ cmd: 'redo', index: 0 });
+          if (cfg.mutating && cfg.redoStack.length > 0) {
+            const entry = cfg.redoStack.shift()!;
+            cfg.undoStack.unshift(entry);
+            reindex(cfg.undoStack);
+            reindex(cfg.redoStack);
+          }
           return { success: true, warnings: [], error: null };
         }
         case 'undo_to': {
           const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
-          calls.push({ cmd: 'undo_to', index: args?.index as number });
+          const toIndex = args?.index as number;
+          calls.push({ cmd: 'undo_to', index: toIndex });
+          if (cfg.mutating) {
+            const count = toIndex + 1;
+            for (let i = 0; i < count && cfg.undoStack.length > 0; i++) {
+              const entry = cfg.undoStack.shift()!;
+              cfg.redoStack.unshift(entry);
+            }
+            reindex(cfg.undoStack);
+            reindex(cfg.redoStack);
+          }
           return { success: true, warnings: [], error: null };
         }
         case 'redo_to': {
           const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
-          calls.push({ cmd: 'redo_to', index: args?.index as number });
+          const toIndex = args?.index as number;
+          calls.push({ cmd: 'redo_to', index: toIndex });
+          if (cfg.mutating) {
+            const count = toIndex + 1;
+            for (let i = 0; i < count && cfg.redoStack.length > 0; i++) {
+              const entry = cfg.redoStack.shift()!;
+              cfg.undoStack.unshift(entry);
+            }
+            reindex(cfg.undoStack);
+            reindex(cfg.redoStack);
+          }
           return { success: true, warnings: [], error: null };
         }
         default:
@@ -984,107 +1027,16 @@ test.describe('Undo/Redo Dropdown - Rapid Click Queuing', () => {
   });
 });
 
-/**
- * Extends mocks with mutating undo/redo behavior: calling undo moves the top
- * entry from undoStack to redoStack, and calling redo moves the top entry from
- * redoStack to undoStack. canUndo/canRedo are derived from array lengths.
- */
-async function extendMocksWithMutatingUndoRedo(page: Page, config: Partial<MockUndoRedoConfig> = {}): Promise<void> {
-  const fullConfig = {
-    canUndo: config.canUndo ?? true,
-    canRedo: config.canRedo ?? false,
-    undoStack: config.undoStack ?? getMockUndoStack().slice(0, 1),
-    redoStack: config.redoStack ?? [],
-  };
-
-  await page.evaluate((mockConfig) => {
-    (window as unknown as Record<string, unknown>).__UNDO_REDO_CALLS__ = [];
-    (window as unknown as Record<string, unknown>).__UNDO_REDO_MOCK_CONFIG__ = mockConfig;
-
-    const originalInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
-
-    (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke = async (cmd: string, args?: Record<string, unknown>) => {
-      const cfg = (window as unknown as { __UNDO_REDO_MOCK_CONFIG__: typeof mockConfig }).__UNDO_REDO_MOCK_CONFIG__;
-
-      switch (cmd) {
-        case 'can_undo':
-          return cfg.undoStack.length > 0;
-        case 'can_redo':
-          return cfg.redoStack.length > 0;
-        case 'get_undo_state':
-          return { can_undo: cfg.undoStack.length > 0, can_redo: cfg.redoStack.length > 0 };
-        case 'get_undo_stack':
-          return cfg.undoStack;
-        case 'get_redo_stack':
-          return cfg.redoStack;
-        case 'undo': {
-          const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
-          calls.push({ cmd: 'undo', index: 0 });
-          if (cfg.undoStack.length > 0) {
-            const entry = cfg.undoStack.shift()!;
-            cfg.redoStack.unshift(entry);
-            // Re-index both stacks
-            cfg.undoStack.forEach((e, i) => { e.index = i; });
-            cfg.redoStack.forEach((e, i) => { e.index = i; });
-          }
-          return { success: true, warnings: [], error: null };
-        }
-        case 'redo': {
-          const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
-          calls.push({ cmd: 'redo', index: 0 });
-          if (cfg.redoStack.length > 0) {
-            const entry = cfg.redoStack.shift()!;
-            cfg.undoStack.unshift(entry);
-            // Re-index both stacks
-            cfg.undoStack.forEach((e, i) => { e.index = i; });
-            cfg.redoStack.forEach((e, i) => { e.index = i; });
-          }
-          return { success: true, warnings: [], error: null };
-        }
-        case 'undo_to': {
-          const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
-          const toIndex = args?.index as number;
-          calls.push({ cmd: 'undo_to', index: toIndex });
-          const count = toIndex + 1;
-          for (let i = 0; i < count && cfg.undoStack.length > 0; i++) {
-            const entry = cfg.undoStack.shift()!;
-            cfg.redoStack.unshift(entry);
-          }
-          cfg.undoStack.forEach((e, idx) => { e.index = idx; });
-          cfg.redoStack.forEach((e, idx) => { e.index = idx; });
-          return { success: true, warnings: [], error: null };
-        }
-        case 'redo_to': {
-          const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
-          const toIndex = args?.index as number;
-          calls.push({ cmd: 'redo_to', index: toIndex });
-          const count = toIndex + 1;
-          for (let i = 0; i < count && cfg.redoStack.length > 0; i++) {
-            const entry = cfg.redoStack.shift()!;
-            cfg.undoStack.unshift(entry);
-          }
-          cfg.undoStack.forEach((e, idx) => { e.index = idx; });
-          cfg.redoStack.forEach((e, idx) => { e.index = idx; });
-          return { success: true, warnings: [], error: null };
-        }
-        default:
-          return originalInvoke(cmd, args);
-      }
-    };
-
-    console.log('[Mock IPC] Extended mocks with mutating undo/redo support');
-  }, fullConfig);
-}
-
 test.describe('Undo/Redo Happy Path - Stack Mutation', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    // Start with one entry in undo stack, empty redo stack
-    await extendMocksWithMutatingUndoRedo(page, {
+    // Start with one entry in undo stack, empty redo stack, mutating mode
+    await extendMocksWithUndoRedo(page, {
       undoStack: getMockUndoStack().slice(0, 1),
       redoStack: [],
+      mutating: true,
     });
     await createProject(page, 'Happy Path Test');
   });
