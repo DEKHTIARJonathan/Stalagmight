@@ -653,7 +653,6 @@ export default function MapCanvas() {
       surveyLayerRef.current.update(
         project.sections,
         stations,
-        project.station_merges,
         project.loop_closures,
         gpsOrigin,
         showDepthGradient,

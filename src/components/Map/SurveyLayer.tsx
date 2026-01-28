@@ -6,7 +6,6 @@ import type {
   SectionId,
   ShotId,
   Station,
-  StationMerge,
   StationRef,
 } from '../../types/project';
 import type { Config, GpsOrigin } from '../../types/config';
@@ -62,7 +61,6 @@ export default class SurveyLayer {
   private labelsLayerId = 'survey-labels';
   private shotLabelsLayerId = 'survey-shot-labels';
   private stationLabelsLayerId = 'survey-station-labels';
-  private mergesLayerId = 'survey-merges';
   private loopClosuresLayerId = 'survey-loop-closures';
   private ghostShotsLayerId = 'survey-ghost-shots';
   private ghostStationsLayerId = 'survey-ghost-stations';
@@ -229,15 +227,6 @@ export default class SurveyLayer {
     this.map.addSource(this.sourceId + '-stations', {
       type: 'geojson',
       promoteId: 'featureId',
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
-
-    // Merge connections line source
-    this.map.addSource(this.sourceId + '-merges', {
-      type: 'geojson',
       data: {
         type: 'FeatureCollection',
         features: [],
@@ -415,19 +404,6 @@ export default class SurveyLayer {
         'circle-stroke-width': 2,
         'circle-stroke-color': '#ffffff',
         'circle-opacity': 0.8,
-      },
-    });
-
-    // Merge connections layer (dashed lines) - rendered first so it's behind everything
-    this.map.addLayer({
-      id: this.mergesLayerId,
-      type: 'line',
-      source: this.sourceId + '-merges',
-      paint: {
-        'line-color': '#00cccc', // Cyan for merge connections
-        'line-width': 2,
-        'line-opacity': 0.5,
-        'line-dasharray': [4, 4], // Dashed line
       },
     });
 
@@ -1399,7 +1375,7 @@ export default class SurveyLayer {
     );
   }
 
-  // Control stations visibility (also hides merges, loop closures, and station hitbox)
+  // Control stations visibility (also hides loop closures and station hitbox)
   // Note: Highlight layer stays visible - it uses filter to control what renders,
   // allowing snapped/origin stations to appear even when stations layer is hidden
   setShowStations(visible: boolean): void {
@@ -1413,7 +1389,6 @@ export default class SurveyLayer {
     }
     this.map.setLayoutProperty(this.stationsLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.stationsHitboxLayerId, 'visibility', visibility);
-    this.map.setLayoutProperty(this.mergesLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.loopClosuresLayerId, 'visibility', visibility);
     // Note: stationsHighlightLayerId intentionally NOT hidden - it uses filter
     // to show only snapped/origin stations even when main stations layer is hidden
@@ -1543,7 +1518,6 @@ export default class SurveyLayer {
   update(
     sections: Section[],
     stations: Station[],
-    stationMerges?: StationMerge[],
     loopClosures?: LoopClosure[],
     gpsOrigin?: GpsOrigin | null,
     showDepthGradient: boolean = false,
@@ -1559,14 +1533,12 @@ export default class SurveyLayer {
       shotFeatures,
       shotLabelFeatures,
       stationFeatures,
-      mergeFeatures,
       sectionLabelFeatures,
       stationLabelFeatures,
       loopClosureFeatures,
     } = buildSurveyFeatures(
       sections,
       stations,
-      stationMerges,
       loopClosures,
       this.gpsOrigin,
       this.showDepthGradient,
@@ -1587,14 +1559,6 @@ export default class SurveyLayer {
       (stationsSource as maplibregl.GeoJSONSource).setData({
         type: 'FeatureCollection',
         features: stationFeatures,
-      });
-    }
-
-    const mergesSource = this.map.getSource(this.sourceId + '-merges');
-    if (mergesSource && 'setData' in mergesSource) {
-      (mergesSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features: mergeFeatures,
       });
     }
 
@@ -1695,9 +1659,6 @@ export default class SurveyLayer {
       if (this.map.getLayer(this.shotsLayerId)) {
         this.map.removeLayer(this.shotsLayerId);
       }
-      if (this.map.getLayer(this.mergesLayerId)) {
-        this.map.removeLayer(this.mergesLayerId);
-      }
       if (this.map.getLayer(this.loopClosuresLayerId)) {
         this.map.removeLayer(this.loopClosuresLayerId);
       }
@@ -1731,9 +1692,6 @@ export default class SurveyLayer {
       }
       if (this.map.getSource(this.sourceId + '-stations')) {
         this.map.removeSource(this.sourceId + '-stations');
-      }
-      if (this.map.getSource(this.sourceId + '-merges')) {
-        this.map.removeSource(this.sourceId + '-merges');
       }
       if (this.map.getSource(this.sourceId + '-loop-closures')) {
         this.map.removeSource(this.sourceId + '-loop-closures');
