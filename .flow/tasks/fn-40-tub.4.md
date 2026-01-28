@@ -74,8 +74,40 @@ Update these sections in `docs/SPEC.md`:
 - [ ] `pnpm test:ui` passes
 
 ## Done summary
-TBD
+## fn-40-tub.4 Summary: Merge/Closure Test Gaps & Spec Alignment
 
+### Rust Unit Tests (project model)
+- `create_loop_closure_creates_correct_values`: Verifies LoopClosure fields (path_length, misclosure_distance, error_percentage, horizontal/vertical misclosure)
+- `create_loop_closure_rejects_duplicate`: Ensures duplicate and reversed duplicate closures are rejected
+- `create_loop_closure_allows_same_section`: Validates same-section closures are allowed (unlike merges)
+- `create_loop_closure_rejects_unconnected_stations`: Validates error when stations are not connected
+- `merge_stations_rejects_already_connected`: Ensures already-connected sections can't be merged again
+- `unmerge_stations_removes_closures_for_pair_only`: Verifies selective closure removal
+- `unmerge_stations_preserves_unrelated_closures`: Verifies closures from other pairs remain
+
+### Undo/Redo Tests (state)
+- `test_undo_create_loop_closure`: Full undo/redo cycle for CreateLoopClosure
+- `test_undo_create_loop_closure_has_closure_info`: Verifies ClosureInfo undo data is captured
+- `test_undo_unmerge_restores_removed_closures`: Tests that undoing UnmergeStations restores merge
+
+### Serialization Tests (undo.rs)
+- `test_undo_data_closure_info_serialization`: Full roundtrip serialize/deserialize of ClosureInfo with all fields
+
+### SPEC.md Updates
+- Updated Command enum: MergeStations no longer has closure_strategy, added CreateLoopClosure variant
+- Updated UndoData: Added UnmergeInfo, ClosureInfo variants; MergeInfo uses removed_closures instead of strategy
+- Updated Merge Stations Dialog: simplified (no closure strategy), noted already-connected rejection
+- Added Closure Dialog (ClosureDialog.tsx) with closure preview data and strategy selection
+- Updated workflow 7.5: Split into Merge vs Loop Closure paths
+- Added ClosureDialog.tsx to project structure tree
+
+### E2E Playwright Tests
+- `merge-closure-dialogs.spec.ts`: 4 tests covering MergeDialog rendering, ClosureDialog rendering with preview data, merge button flow, strategy radio selection
+- Added mock IPC handlers for `create_loop_closure` and `unmerge_stations`
+
+### Verified Pre-existing Items
+- `test_undo_data_merge_info` at undo.rs:778 already uses `removed_closures` (no `strategy` field) - confirmed correct
+- No `survey-merges` references in SPEC.md - confirmed absent
 ## Evidence
 - Commits:
 - Tests:

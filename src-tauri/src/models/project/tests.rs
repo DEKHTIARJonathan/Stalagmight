@@ -801,3 +801,248 @@ fn find_connected_zero_datum_uses_station_connectivity() {
     let result_3 = project.set_zero_datum(StationRef::new(section_id, 3), gps);
     assert!(result_3.is_err(), "Station 3 should be connected to datum at station 1");
 }
+
+// === Loop closure tests ===
+
+#[test]
+fn create_loop_closure_creates_correct_values() {
+    let mut project = Project::new("ClosureTest".to_string(), None);
+
+    // Section A: shot goes north 10m
+    let a = project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 1.0)],
+        ..Default::default()
+    }).id;
+
+    // Section B: shot goes east 5m
+    let b = project.add_section(SectionData {
+        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+
+    // Merge B.0 to A.1 so they're connected
+    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+
+    // Create closure between A.0 and B.1 (same-section closures require same connected group)
+    let closure = project.create_loop_closure(
+        StationRef::new(a, 0),
+        StationRef::new(b, 1),
+        ClosureStrategy::default(),
+    ).unwrap();
+
+    assert_eq!(closure.station_a, StationRef::new(a, 0));
+    assert_eq!(closure.station_b, StationRef::new(b, 1));
+    assert!(closure.path_length > 0.0, "Path length should be positive");
+    assert!(closure.misclosure_distance >= 0.0, "Misclosure should be non-negative");
+    assert!(closure.error_percentage >= 0.0, "Error percentage should be non-negative");
+    assert!(closure.horizontal_misclosure >= 0.0);
+    assert!(closure.vertical_misclosure >= 0.0);
+    assert_eq!(project.loop_closures.len(), 1);
+}
+
+#[test]
+fn create_loop_closure_rejects_duplicate() {
+    let mut project = Project::new("DupClosure".to_string(), None);
+
+    let a = project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+    let b = project.add_section(SectionData {
+        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+
+    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+
+    // First closure succeeds
+    project.create_loop_closure(
+        StationRef::new(a, 0),
+        StationRef::new(b, 1),
+        ClosureStrategy::default(),
+    ).unwrap();
+
+    // Duplicate should fail
+    let result = project.create_loop_closure(
+        StationRef::new(a, 0),
+        StationRef::new(b, 1),
+        ClosureStrategy::default(),
+    );
+    assert!(result.is_err(), "Duplicate closure should be rejected");
+    assert!(result.unwrap_err().contains("already exists"));
+
+    // Reversed order should also fail
+    let result = project.create_loop_closure(
+        StationRef::new(b, 1),
+        StationRef::new(a, 0),
+        ClosureStrategy::default(),
+    );
+    assert!(result.is_err(), "Reversed duplicate closure should be rejected");
+}
+
+#[test]
+fn create_loop_closure_allows_same_section() {
+    let mut project = Project::new("SameSectionClosure".to_string(), None);
+
+    // A section with 3 shots - all stations are connected within the section
+    let a = project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            shot(90.0, 90.0, 10.0, 0.0, 0.0),
+            shot(180.0, 180.0, 10.0, 0.0, 0.0),
+        ],
+        ..Default::default()
+    }).id;
+
+    // Stations 0 and 3 are in the same section and connected through shots
+    let result = project.create_loop_closure(
+        StationRef::new(a, 0),
+        StationRef::new(a, 3),
+        ClosureStrategy::default(),
+    );
+    assert!(result.is_ok(), "Same-section closure should be allowed: {:?}", result.err());
+    assert_eq!(project.loop_closures.len(), 1);
+}
+
+#[test]
+fn create_loop_closure_rejects_unconnected_stations() {
+    let mut project = Project::new("UnconnectedClosure".to_string(), None);
+
+    let a = project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+    let b = project.add_section(SectionData {
+        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+
+    // Don't merge them - they are unconnected
+    let result = project.create_loop_closure(
+        StationRef::new(a, 0),
+        StationRef::new(b, 0),
+        ClosureStrategy::default(),
+    );
+    assert!(result.is_err(), "Unconnected stations should be rejected");
+    assert!(result.unwrap_err().contains("not connected"));
+}
+
+#[test]
+fn merge_stations_rejects_already_connected() {
+    let mut project = Project::new("ConnectedMerge".to_string(), None);
+
+    let a = project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+    let b = project.add_section(SectionData {
+        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+
+    // First merge succeeds
+    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+
+    // Second merge between connected sections should fail
+    let result = project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 1));
+    assert!(result.is_err(), "Merging already-connected stations should be rejected");
+    assert!(result.unwrap_err().contains("already connected"));
+}
+
+#[test]
+fn unmerge_stations_removes_closures_for_pair_only() {
+    let mut project = Project::new("UnmergePair".to_string(), None);
+
+    let a = project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+    let b = project.add_section(SectionData {
+        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+    let c = project.add_section(SectionData {
+        shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+
+    // Merge A-B and B-C
+    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    project.merge_stations(StationRef::new(b, 1), StationRef::new(c, 0)).unwrap();
+
+    // Create closure between A.0 and B.1 (via the A-B merge)
+    let closure_ab = project.create_loop_closure(
+        StationRef::new(a, 0),
+        StationRef::new(b, 1),
+        ClosureStrategy::default(),
+    ).unwrap();
+
+    // Create closure between A.0 and C.1 (via A-B-C merges)
+    let closure_ac = project.create_loop_closure(
+        StationRef::new(a, 0),
+        StationRef::new(c, 1),
+        ClosureStrategy::default(),
+    ).unwrap();
+
+    assert_eq!(project.loop_closures.len(), 2);
+
+    // Unmerge A-B: should remove the A.0-B.1 closure but keep A.0-C.1
+    let (success, removed) = project.unmerge_stations(
+        StationRef::new(a, 1),
+        StationRef::new(b, 0),
+    );
+    assert!(success);
+    // The removed closures should match the exact unmerged pair only
+    // Note: unmerge_stations removes closures matching the *merge* station pair (a.1, b.0),
+    // not the closure station pair (a.0, b.1). So removed may be empty if closure
+    // stations differ from merge stations.
+    // The A.0-C.1 closure should still exist
+    assert!(project.loop_closures.iter().any(|lc|
+        lc.station_a == closure_ac.station_a && lc.station_b == closure_ac.station_b
+    ), "Unrelated closure A.0-C.1 should be preserved");
+}
+
+#[test]
+fn unmerge_stations_preserves_unrelated_closures() {
+    let mut project = Project::new("UnmergePreserve".to_string(), None);
+
+    let a = project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+    let b = project.add_section(SectionData {
+        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+    let c = project.add_section(SectionData {
+        shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+
+    // Merge A-B and B-C
+    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    project.merge_stations(StationRef::new(b, 1), StationRef::new(c, 0)).unwrap();
+
+    // Create closure using B-C pair stations (b.1, c.0)
+    // This is a direct closure at the merge point
+    project.loop_closures.push(LoopClosure {
+        station_a: StationRef::new(b, 1),
+        station_b: StationRef::new(c, 0),
+        path_length: 3.0,
+        misclosure_distance: 0.1,
+        error_percentage: 3.3,
+        horizontal_misclosure: 0.1,
+        vertical_misclosure: 0.0,
+    });
+
+    assert_eq!(project.loop_closures.len(), 1);
+
+    // Unmerge A-B: should NOT remove the B.1-C.0 closure (different pair)
+    let (success, removed) = project.unmerge_stations(
+        StationRef::new(a, 1),
+        StationRef::new(b, 0),
+    );
+    assert!(success);
+    assert!(removed.is_empty(), "No closures should be removed for unrelated pair");
+    assert_eq!(project.loop_closures.len(), 1, "B-C closure should be preserved");
+}

@@ -1258,4 +1258,63 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_undo_data_closure_info_serialization() {
+        let closure = LoopClosure {
+            station_a: StationRef::new(1, 0),
+            station_b: StationRef::new(2, 3),
+            path_length: 45.5,
+            misclosure_distance: 1.2,
+            error_percentage: 2.6,
+            horizontal_misclosure: 1.0,
+            vertical_misclosure: 0.7,
+        };
+
+        let entry = UndoEntry {
+            command: Command::CreateLoopClosure {
+                station_a: StationRef::new(1, 0),
+                station_b: StationRef::new(2, 3),
+                closure_strategy: crate::models::ClosureStrategy::ProportionalByLength,
+            },
+            undo_data: UndoData::ClosureInfo {
+                closure: closure.clone(),
+            },
+            timestamp: None,
+        };
+
+        // Serialize
+        let (cmd_json, undo_json) = UndoStack::serialize_entry(&entry)
+            .expect("ClosureInfo should serialize");
+
+        // Verify JSON contains expected data
+        assert!(undo_json.contains("ClosureInfo"), "JSON should contain variant name");
+        assert!(undo_json.contains("45.5"), "JSON should contain path_length");
+
+        // Deserialize
+        let restored = UndoStack::deserialize_entry(&cmd_json, &undo_json)
+            .expect("ClosureInfo should deserialize");
+
+        // Verify roundtrip
+        match &restored.undo_data {
+            UndoData::ClosureInfo { closure: restored_closure } => {
+                assert_eq!(restored_closure.station_a, StationRef::new(1, 0));
+                assert_eq!(restored_closure.station_b, StationRef::new(2, 3));
+                assert!((restored_closure.path_length - 45.5).abs() < 1e-6);
+                assert!((restored_closure.misclosure_distance - 1.2).abs() < 1e-6);
+                assert!((restored_closure.error_percentage - 2.6).abs() < 1e-6);
+                assert!((restored_closure.horizontal_misclosure - 1.0).abs() < 1e-6);
+                assert!((restored_closure.vertical_misclosure - 0.7).abs() < 1e-6);
+            }
+            other => panic!("Expected ClosureInfo, got {}", other.variant_name()),
+        }
+
+        match &restored.command {
+            Command::CreateLoopClosure { station_a, station_b, .. } => {
+                assert_eq!(*station_a, StationRef::new(1, 0));
+                assert_eq!(*station_b, StationRef::new(2, 3));
+            }
+            _ => panic!("Expected CreateLoopClosure command"),
+        }
+    }
 }

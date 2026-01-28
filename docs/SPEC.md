@@ -895,6 +895,8 @@ For manual entry (no DMP file), goes directly to Step 2 (DmpSectionConfigDialog)
 
 #### Merge Stations Dialog
 
+Shown when merging two **unconnected** stations (different section groups).
+
 ```
 ┌─ Merge Stations ─────────────────────────────────────────────────┐
 │                                                                  │
@@ -904,15 +906,33 @@ For manual entry (no DMP file), goes directly to Step 2 (DmpSectionConfigDialog)
 │  Distance between: 2.4m                                          │
 │  Depth difference: 0.5m                                          │
 │                                                                  │
-│  ⚠ This creates a loop. Closure error: 3.2%                     │
+│  [ Cancel ]                                      [ Merge ]       │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+If the two stations are already connected (same section group), MergeStations is rejected and the frontend should show the Closure Dialog instead.
+
+#### Closure Dialog (ClosureDialog.tsx)
+
+Shown when creating a loop closure between two **connected** stations.
+
+```
+┌─ Create Loop Closure ────────────────────────────────────────────┐
+│                                                                  │
+│  Station A: Section "Main Line" #14 (depth: 12.3m)              │
+│  Station B: Section "Side Passage" #0 (depth: 12.8m)            │
+│                                                                  │
+│  Path length: 156.2m                                             │
+│  Misclosure: 2.4m (1.5%)                                        │
+│  Horizontal: 2.1m  Vertical: 0.5m                               │
 │                                                                  │
 │  How to handle closure error?                                    │
-│  (○) Distribute proportionally by shot length                   │
+│  (●) Distribute proportionally by shot length                   │
 │  (○) Distribute equally across all shots                        │
 │  (○) Keep raw data (stations won't align perfectly)             │
 │  (○) Adjust manually later                                      │
 │                                                                  │
-│  [ Cancel ]                                      [ Merge ]       │
+│  [ Cancel ]                              [ Create Closure ]      │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1010,16 +1030,30 @@ For manual entry (no DMP file), goes directly to Step 2 (DmpSectionConfigDialog)
 6. Same placement flow as DMP import
 7. Auto-saved
 
-### 7.5 Connecting Sections with Virtual Shots
+### 7.5 Connecting Sections (Merge vs Loop Closure)
 
-**Scenario**: Two sections exist but aren't connected. User surveyed the gap.
+The Merge Tool connects two stations. The behavior depends on whether the stations are already in the same connected group:
 
+**Merging unconnected stations** (different section groups):
+1. User activates Merge Tool (M)
+2. Selects two stations from different, unconnected section groups
+3. MergeDialog appears showing station details and distance
+4. Confirm → Stations merged, sections repositioned to align
+
+**Creating a loop closure** (already connected stations):
+1. User activates Merge Tool (M)
+2. Selects two stations that are already in the same connected group
+3. ClosureDialog appears with closure preview data (path length, misclosure, error %)
+4. User selects error distribution method
+5. Confirm → Loop closure created, shown as dashed line on map
+
+**Connecting Sections with Virtual Shots:**
 1. User imports/creates new section with the connection survey
 2. In data table, user marks connecting shots as Virtual (checkbox)
 3. User places section using "From Station" to connect one end
 4. User uses Merge Tool to connect other end to second section
-5. Loop detected, closure error displayed
-6. User selects error distribution method
+5. If sections are unconnected → MergeDialog (simple merge)
+6. If sections are already connected → ClosureDialog (loop closure with error preview)
 7. Virtual shots displayed as dotted lines
 8. User can toggle virtual shot visibility in display options
 
@@ -1184,10 +1218,14 @@ pub enum Command {
     MergeStations {
         station_a: StationRef,
         station_b: StationRef,
-        closure_strategy: ClosureStrategy,
     },
     UnmergeStations {
         station_ref: StationRef,
+    },
+    CreateLoopClosure {
+        station_a: StationRef,
+        station_b: StationRef,
+        closure_strategy: ClosureStrategy,
     },
     /// Set a station as the zero datum (coordinate system origin).
     ///
@@ -1291,11 +1329,26 @@ pub enum UndoData {
         position: usize,
     },
 
-    /// Merge info for unmerging stations
+    /// Merge info for unmerging stations (undo of MergeStations)
     MergeInfo {
         station_a: StationRef,
         station_b: StationRef,
-        strategy: ClosureStrategy,
+        /// Closures removed during unmerge (for restoring on undo)
+        removed_closures: Vec<LoopClosure>,
+    },
+
+    /// Unmerge info for re-merging stations (undo of UnmergeStations)
+    UnmergeInfo {
+        station_a: StationRef,
+        station_b: StationRef,
+        /// Closures removed during unmerge (for restoring on undo)
+        removed_closures: Vec<LoopClosure>,
+    },
+
+    /// Loop closure info for undoing CreateLoopClosure
+    ClosureInfo {
+        /// The full loop closure data to remove on undo
+        closure: LoopClosure,
     },
 
     /// Zero datum info for restoring previous GPS and section offsets
@@ -2485,6 +2538,7 @@ cavechef/
 │   │   ├── Dialogs/
 │   │   │   ├── ImportDialog.tsx
 │   │   │   ├── MergeDialog.tsx
+│   │   │   ├── ClosureDialog.tsx
 │   │   │   └── ExportDialog.tsx
 │   │   └── common/
 │   │       ├── Button.tsx

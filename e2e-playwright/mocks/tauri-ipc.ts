@@ -1004,6 +1004,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] merge_stations called with:', args);
             return { success: true };
 
+          case 'create_loop_closure':
+            // Mock create loop closure - return success
+            console.log('[Mock IPC] create_loop_closure called with:', args);
+            return { success: true };
+
+          case 'unmerge_stations':
+            // Mock unmerge stations - return success
+            console.log('[Mock IPC] unmerge_stations called with:', args);
+            return { success: true };
+
           case 'move_section':
             // Mock move section - just return success
             console.log('[Mock IPC] move_section called with:', args);
