@@ -402,4 +402,26 @@ test.describe('Section dropdown hover highlighting', () => {
     const clearedId = await pollHoveredSectionId(page, (id) => id === null);
     expect(clearedId).toBeNull();
   });
+
+  test('component unmount clears hoveredSectionId', async ({ page }) => {
+    const trigger = getSectionSelectTrigger(page);
+    await trigger.click();
+    const listbox = await getSelectListbox(page, trigger);
+    await expect(listbox).toBeVisible();
+
+    // Hover Beta Tunnel option
+    const betaOption = listbox.locator('[role="option"]:has-text("Beta Tunnel")');
+    await betaOption.hover();
+
+    const betaId = await getSectionIdByName(page, 'Beta Tunnel');
+    await pollHoveredSectionId(page, (id) => id === betaId);
+
+    // Collapse the DataTable via Ctrl+3, which unmounts the Select component.
+    // Select's useEffect cleanup fires onOptionHover(null) when open.
+    await page.keyboard.press('Control+3');
+
+    // The Select is unmounted — hoveredSectionId should be cleared
+    const clearedId = await pollHoveredSectionId(page, (id) => id === null);
+    expect(clearedId).toBeNull();
+  });
 });
