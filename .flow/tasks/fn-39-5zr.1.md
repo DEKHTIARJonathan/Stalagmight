@@ -117,6 +117,22 @@ Added section-level feature-state handling to `SurveyLayer.updateVisualState()` 
 
 ### Changes made to `src/components/Map/SurveyLayer.tsx`:
 
+1. **Added 4 tracking fields** for section-level hover/selection state per source
+2. **Added `getSectionFeatureIds()` helper** using `querySourceFeatures()` with Set deduplication
+3. **Added cached section ID helpers** to avoid re-scanning on every call
+4. **Added `featureBelongsToSection()` helper** for individual hover/selection restore
+5. **Extended `updateVisualState()`** with section hover and selection blocks
+6. **Added feature-state re-application in `update()`** after `setData()` calls
+
+### Verification
+- `pnpm tsc --noEmit` — passes (1 pre-existing error in MapCanvas.tsx unrelated)
+- `pnpm test:ui` — 571/571 pass
+## Summary
+
+Added section-level feature-state handling to `SurveyLayer.updateVisualState()` so that hovering or selecting a section in the UI highlights all shots and stations belonging to that section on the map.
+
+### Changes made to `src/components/Map/SurveyLayer.tsx`:
+
 1. **Added 4 tracking fields** (`prevHoveredSectionShotIds`, `prevHoveredSectionStationIds`, `prevSelectedSectionShotIds`, `prevSelectedSectionStationIds`) to track which feature IDs have section-level state applied per source.
 
 2. **Added `getSectionFeatureIds()` helper** that uses `querySourceFeatures()` to collect all feature IDs belonging to a section from a given source, with `Set` for deduplication.
@@ -133,6 +149,6 @@ Added section-level feature-state handling to `SurveyLayer.updateVisualState()` 
 - `pnpm tsc --noEmit` — passes (1 pre-existing error in MapCanvas.tsx unrelated to changes)
 - `pnpm test:ui` — 570/571 pass (1 pre-existing satellite test failure unrelated to changes)
 ## Evidence
-- Commits:
-- Tests:
+- Commits: e8aa668, 0adbebe, b9acab1
+- Tests: tsc, playwright
 - PRs:
