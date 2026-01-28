@@ -1,8 +1,9 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import {
   setupMockedPage,
   createProject,
   seedProjectWithSections,
+  openDmpSelectionDialog,
   waitForMapReady,
   waitForNoDialogs,
   waitForMapIdle,
@@ -175,5 +176,35 @@ test.describe('Table Numeric Column Alignment', () => {
     // It's the second-to-last th with title="Warnings"
     const warningsHeader = table.locator('thead th[title="Warnings"]');
     await expect(warningsHeader).toHaveCSS('text-align', 'center');
+  });
+});
+
+test.describe('DmpSelectionDialog Numeric Cell Alignment', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupMockedPage(page);
+    await createProject(page, 'DMP Alignment Test');
+  });
+
+  test('Shots column td cells should be right-aligned with tabular-nums', async ({ page }) => {
+    await openDmpSelectionDialog(page);
+
+    const dialog = page.getByTestId('dmp-selection-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+
+    // The Shots column is the last td in each row
+    const firstRow = dialog.getByTestId('section-row-0');
+    const lastTd = firstRow.locator('td').last();
+
+    // Numeric <td> cells should be right-aligned
+    await expect(lastTd).toHaveCSS('text-align', 'right');
+
+    // Numeric <td> cells should use tabular-nums
+    await expect(lastTd).toHaveCSS('font-variant-numeric', 'tabular-nums');
+
+    // Verify text columns remain left-aligned (Name column is second td)
+    const nameTd = firstRow.locator('td').nth(1);
+    const nameAlign = await nameTd.evaluate((el) => getComputedStyle(el).textAlign);
+    expect(['left', 'start']).toContain(nameAlign);
   });
 });
