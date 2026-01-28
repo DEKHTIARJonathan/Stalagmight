@@ -185,7 +185,16 @@ export default function UndoHistoryDropdown({
   // Action queue state for sequential execution
   const [isActionInProgress, setIsActionInProgress] = useState(false);
   const isActionInProgressRef = useRef(false);
-  const actionQueueRef = useRef<Array<() => Promise<CommandResult>>>([]);
+  // Queue entries include action and context for better error messages
+  interface QueuedAction {
+    action: () => Promise<CommandResult>;
+    context: {
+      description: string;
+      commandType: string;
+      timestamp: string | null;
+    };
+  }
+  const actionQueueRef = useRef<QueuedAction[]>([]);
   // aria-live announcement for remaining action count
   const [announcement, setAnnouncement] = useState('');
   // Flag to track if dropdown was opened via keyboard (for focus management)
@@ -269,13 +278,30 @@ export default function UndoHistoryDropdown({
     }
   }, [mode, getUndoStack, getRedoStack]);
 
+  // Build detailed error message with context
+  const buildErrorMessage = useCallback((
+    errorReason: string,
+    context: { description: string; commandType: string; timestamp: string | null }
+  ): string => {
+    const lines: string[] = [];
+    lines.push(`Failed to ${mode} action: "${context.description}"`);
+    lines.push('');
+    lines.push(`Reason: ${errorReason}`);
+    lines.push('');
+    lines.push(`Command type: ${context.commandType}`);
+    if (context.timestamp) {
+      lines.push(`Original timestamp: ${formatTimestamp(context.timestamp)}`);
+    }
+    return lines.join('\n');
+  }, [mode]);
+
   // Process the action queue sequentially
   const processQueue = useCallback(async () => {
     // Already processing - the current processor will pick up new items
     if (isActionInProgressRef.current) return;
 
     while (actionQueueRef.current.length > 0) {
-      const nextAction = actionQueueRef.current.shift()!;
+      const { action: nextAction, context } = actionQueueRef.current.shift()!;
       isActionInProgressRef.current = true;
       setIsActionInProgress(true);
 
@@ -285,7 +311,7 @@ export default function UndoHistoryDropdown({
       } catch (error) {
         // Secondary safety net: unexpected thrown exceptions
         console.error(`Failed to execute queued ${mode} action:`, error);
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorReason = error instanceof Error ? error.message : String(error);
         const errorStack = error instanceof Error ? error.stack : undefined;
 
         // Refresh stack so dropdown reflects actual backend state even after error
@@ -297,7 +323,7 @@ export default function UndoHistoryDropdown({
         actionQueueRef.current = [];
         openDialog('error', {
           title: `${mode === 'undo' ? 'Undo' : 'Redo'} Failed`,
-          message: errorMessage,
+          message: buildErrorMessage(errorReason, context),
           stackTrace: errorStack,
         });
         return;
@@ -306,6 +332,7 @@ export default function UndoHistoryDropdown({
       // Primary error path: check CommandResult.success (fail closed: treat missing result as error)
       if (!result?.success) {
         console.error(`${mode} action failed:`, result?.error);
+        const errorReason = result?.error ?? 'An unknown error occurred.';
 
         // Refresh stack so dropdown reflects actual backend state even after error
         await fetchStack();
@@ -316,7 +343,7 @@ export default function UndoHistoryDropdown({
         actionQueueRef.current = [];
         openDialog('error', {
           title: `${mode === 'undo' ? 'Undo' : 'Redo'} Failed`,
-          message: result?.error ?? 'An unknown error occurred.',
+          message: buildErrorMessage(errorReason, context),
         });
         return;
       }
@@ -351,11 +378,14 @@ export default function UndoHistoryDropdown({
   }, [mode, fetchStack, hardClose, openDialog]);
 
   // Enqueue an action and start processing if idle
-  const enqueueAction = useCallback((action: () => Promise<CommandResult>) => {
+  const enqueueAction = useCallback((
+    action: () => Promise<CommandResult>,
+    context: { description: string; commandType: string; timestamp: string | null }
+  ) => {
     // Immediately dismiss detail preview popup
     clearPreviewState();
 
-    actionQueueRef.current.push(action);
+    actionQueueRef.current.push({ action, context });
     processQueue();
   }, [clearPreviewState, processQueue]);
 
@@ -479,11 +509,17 @@ export default function UndoHistoryDropdown({
       console.error('Invalid undo/redo index:', index);
       return;
     }
+    // Find the item to get context for error messages
+    const item = items.find(i => i.index === index);
+    const context = item
+      ? { description: item.description, commandType: item.commandType, timestamp: item.timestamp }
+      : { description: `Action #${index}`, commandType: 'unknown', timestamp: null };
+
     const action = mode === 'undo' ? undoTo : redoTo;
-    enqueueAction(() => action(index));
+    enqueueAction(() => action(index), context);
     // Close dropdown immediately after clicking an item
     hardClose();
-  }, [mode, undoTo, redoTo, enqueueAction, hardClose]);
+  }, [mode, undoTo, redoTo, enqueueAction, hardClose, items]);
 
   // Handle keyboard navigation on trigger button
   const handleButtonKeyDown = useCallback(async (event: React.KeyboardEvent) => {
@@ -564,14 +600,20 @@ export default function UndoHistoryDropdown({
 
     if (isOpenRef.current) {
       // Dropdown is open: perform single undo/redo and refresh (stay open)
+      // Use first item for context (it's what will be undone/redone)
+      const firstItem = items[0];
+      const context = firstItem
+        ? { description: firstItem.description, commandType: firstItem.commandType, timestamp: firstItem.timestamp }
+        : { description: 'Single action', commandType: 'unknown', timestamp: null };
+
       const action = mode === 'undo' ? undo : redo;
-      enqueueAction(() => action());
+      enqueueAction(() => action(), context);
     } else {
       // Dropdown is not open: delegate to parent via onSingleAction (closed-only path)
       hardClose();
       onSingleAction();
     }
-  }, [mode, undo, redo, enqueueAction, onSingleAction, hardClose]);
+  }, [mode, undo, redo, enqueueAction, onSingleAction, hardClose, items]);
 
   // Close on Escape - use hardClose and return focus to button
   useEffect(() => {
@@ -618,9 +660,15 @@ export default function UndoHistoryDropdown({
         event.stopPropagation();
         event.preventDefault();
 
+        // Use first item for context
+        const firstItem = items[0];
+        const context = firstItem
+          ? { description: firstItem.description, commandType: firstItem.commandType, timestamp: firstItem.timestamp }
+          : { description: 'Keyboard shortcut action', commandType: 'unknown', timestamp: null };
+
         // Perform the appropriate action based on the key pressed
         const action = isUndoKey ? undo : redo;
-        enqueueAction(() => action());
+        enqueueAction(() => action(), context);
       }
     };
 
@@ -629,7 +677,7 @@ export default function UndoHistoryDropdown({
     return () => {
       document.removeEventListener('keydown', handleShortcut, true);
     };
-  }, [isOpen, undo, redo, enqueueAction]);
+  }, [isOpen, undo, redo, enqueueAction, items]);
 
   // Close on click outside - use hardClose
   useEffect(() => {
