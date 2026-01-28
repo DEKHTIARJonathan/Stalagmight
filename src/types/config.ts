@@ -213,6 +213,10 @@ export interface ShortcutsConfig {
   toggle_sections_panel: string[];
   toggle_detail_panel: string[];
   toggle_data_table: string[];
+
+  // File
+  import_dmp: string[];
+  export: string[];
 }
 
 export interface PanelsConfig {
@@ -370,6 +374,10 @@ export const defaultConfig: Config = {
     toggle_sections_panel: ['1'],
     toggle_detail_panel: ['2'],
     toggle_data_table: ['3'],
+
+    // File
+    import_dmp: ['Ctrl+I'],
+    export: ['Ctrl+E'],
   },
   panels: {
     sections_panel_width: 250,

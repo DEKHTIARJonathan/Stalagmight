@@ -40,9 +40,8 @@ Add `min-h-0` class to the Settings dialog main content panel to enable proper f
 - [ ] Scroll position resets to top when switching settings categories
 - [ ] Existing Playwright tests pass: `pnpm test:ui`
 ## Done summary
-TBD
-
+Added min-h-0 class to main content panel and sidebar scroll container to enable proper flexbox scroll behavior. Main panel now scrolls independently with visible scrollbar when content overflows, while sidebar and footer remain static.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 82c4c75d03ed4209c28d9f3db43e53651bd86cb3
+- Tests: pnpm tsc --noEmit, pnpm playwright test e2e-playwright/settings-dialog.spec.ts
 - PRs:
