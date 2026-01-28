@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
 import maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
-import GlobalSurveyLayer, { type SystemGeometry } from './GlobalSurveyLayer';
+import GlobalSurveyLayer, { type SystemGeometry, generateSystemColor } from './GlobalSurveyLayer';
 import type { SurveyGeometry } from '../../types/survey';
 import { useGlobalViewStore, type SystemGeometryState } from '../../store/globalViewStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -462,6 +462,15 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       setMapLoaded(true);
     });
 
+    // Click on map (not on marker/system) clears selection
+    const handleMapClick = () => {
+      // Clear selection - markers use stopPropagation so this only fires for empty space
+      // Survey layer has its own click handling that also clears on empty space
+      selectSystemRef.current(null);
+      onProjectSelectRef.current('');
+    };
+    map.current.on('click', handleMapClick);
+
     // Rubber-band effect: when user releases pan outside soft bounds, animate back
     // This creates a natural "spring" feel without requiring internal MapLibre APIs
     let isRubberBanding = false;
@@ -550,6 +559,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       }
       map.current?.off('moveend', handleMoveEndRubberBand);
       map.current?.off('moveend', handleMoveEndPersist);
+      map.current?.off('click', handleMapClick);
       // Clean up survey layer
       surveyLayerRef.current?.destroy();
       surveyLayerRef.current = null;
@@ -784,59 +794,60 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       const loadingState = geometryStates.get(project.file_path)?.state ?? 'idle';
       const isSelected = selectedProjectId === project.file_path;
 
-      // Determine marker color based on state
-      let bgColor: string;
-      let borderColor: string;
-      if (loadingState === 'error') {
-        bgColor = '#ef4444'; // Red for error
-        borderColor = '#fca5a5';
-      } else if (isSelected) {
-        bgColor = '#3b82f6'; // Blue for selected
-        borderColor = '#60a5fa';
-      } else {
-        bgColor = '#4ecdc4'; // Teal default
-        borderColor = '#ffffff';
-      }
+      // Use same color as survey mode (deterministic based on file path)
+      // Error state overrides with red
+      const systemColor = loadingState === 'error'
+        ? '#ef4444'
+        : generateSystemColor(project.file_path);
 
-      // Create marker element
+      // Create container element (fixed size, handles positioning)
       const el = document.createElement('div');
       el.className = 'globalview-system-marker';
       el.setAttribute('data-testid', `system-marker-${project.file_path}`);
       el.style.cssText = `
         width: 24px;
         height: 24px;
-        border-radius: 50%;
-        background-color: ${bgColor};
-        border: 3px solid ${borderColor};
         cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        transition: width 0.15s, height 0.15s, margin 0.15s, background-color 0.2s;
       `;
+
+      // Create inner visual marker (can scale from center)
+      const inner = document.createElement('div');
+      inner.className = 'marker-inner';
+      inner.style.cssText = `
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background-color: ${systemColor};
+        border: 2px solid ${isSelected ? '#ffffff' : 'rgba(255,255,255,0.5)'};
+        box-shadow: ${isSelected ? '0 0 0 3px rgba(255,255,255,0.5), ' : ''}0 2px 4px rgba(0,0,0,0.3);
+        transition: transform 0.15s ease-out, border-color 0.2s, box-shadow 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      `;
+      el.appendChild(inner);
 
       // Add spinner for loading state
       if (loadingState === 'loading') {
         const spinner = document.createElement('div');
         spinner.className = 'marker-spinner';
         spinner.style.cssText = `
-          width: 12px;
-          height: 12px;
+          width: 10px;
+          height: 10px;
           border: 2px solid rgba(255,255,255,0.3);
           border-top-color: white;
           border-radius: 50%;
           animation: spin 0.8s linear infinite;
         `;
-        el.appendChild(spinner);
+        inner.appendChild(spinner);
       }
 
-      // Hover effect - use width/height instead of transform (which MapLibre uses for positioning)
+      // Hover effect - scale inner element (grows uniformly from center)
       el.addEventListener('mouseenter', () => {
-        el.style.width = '28px';
-        el.style.height = '28px';
-        el.style.marginLeft = '-2px';
-        el.style.marginTop = '-2px';
+        inner.style.transform = 'scale(1.3)';
 
         // Build tooltip content (same format as survey view)
         if (markerTooltipRef.current) {
@@ -901,10 +912,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       });
 
       el.addEventListener('mouseleave', () => {
-        el.style.width = '24px';
-        el.style.height = '24px';
-        el.style.marginLeft = '0';
-        el.style.marginTop = '0';
+        inner.style.transform = 'scale(1)';
 
         // Hide tooltip
         if (markerTooltipRef.current) {
@@ -963,20 +971,22 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   useEffect(() => {
     markersRef.current.forEach((marker, filePath) => {
       const el = marker.getElement();
+      const inner = el.querySelector('.marker-inner') as HTMLElement | null;
+      if (!inner) return;
+
       const isSelected = selectedProjectId === filePath;
       const loadingState = geometryStates.get(filePath)?.state ?? 'idle';
 
-      // Determine marker color based on state
-      if (loadingState === 'error') {
-        el.style.backgroundColor = '#ef4444';
-        el.style.borderColor = '#fca5a5';
-      } else if (isSelected) {
-        el.style.backgroundColor = '#3b82f6';
-        el.style.borderColor = '#60a5fa';
-      } else {
-        el.style.backgroundColor = '#4ecdc4';
-        el.style.borderColor = '#ffffff';
-      }
+      // Use same color as survey mode, with error override
+      const systemColor = loadingState === 'error'
+        ? '#ef4444'
+        : generateSystemColor(filePath);
+
+      inner.style.backgroundColor = systemColor;
+      inner.style.borderColor = isSelected ? '#ffffff' : 'rgba(255,255,255,0.5)';
+      inner.style.boxShadow = isSelected
+        ? '0 0 0 3px rgba(255,255,255,0.5), 0 2px 4px rgba(0,0,0,0.3)'
+        : '0 2px 4px rgba(0,0,0,0.3)';
     });
   }, [selectedProjectId, geometryStates]);
 
