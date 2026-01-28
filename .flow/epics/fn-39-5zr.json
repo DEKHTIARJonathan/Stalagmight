@@ -7,10 +7,10 @@
   "depends_on_epics": [],
   "id": "fn-39-5zr",
   "next_task": 1,
-  "plan_review_status": "needs_work",
-  "plan_reviewed_at": "2026-01-28T05:56:15.012325Z",
+  "plan_review_status": "ship",
+  "plan_reviewed_at": "2026-01-28T06:03:21.983811Z",
   "spec_path": ".flow/specs/fn-39-5zr.md",
   "status": "open",
   "title": "Bugfix: Section highlighting not working for hover and selection",
-  "updated_at": "2026-01-28T05:56:15.012352Z"
+  "updated_at": "2026-01-28T06:03:21.983835Z"
 }
