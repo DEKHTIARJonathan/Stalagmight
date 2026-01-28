@@ -295,10 +295,13 @@ test.describe('ID=0 Bug Fixes', () => {
     // Wait for DataTable to be visible
     await page.waitForSelector('text=Data Table', { timeout: 3000 });
 
-    // Select the section with id=0 from the dropdown (custom Select component)
+    // Select the section with id=0 from the dropdown (custom Select component — portaled listbox)
     const sectionSelect = page.getByTestId('data-table-section-select');
-    await sectionSelect.click();
-    await sectionSelect.locator('[role="option"]:has-text("Zero Section")').click();
+    const sectionTrigger = sectionSelect.locator('button').first();
+    await sectionTrigger.click();
+    // Use aria-controls to locate the portaled listbox (avoids matching sections panel listbox)
+    const listboxId = await sectionTrigger.getAttribute('aria-controls');
+    await page.locator(`[id="${listboxId}"]`).locator('[role="option"]:has-text("Zero Section")').click();
 
     // Verify the warning indicator is visible with the correct data-testid
     await expect(page.getByTestId('warning-0-0')).toBeVisible({ timeout: 3000 });

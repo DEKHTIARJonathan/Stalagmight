@@ -820,6 +820,65 @@ case 'get_undo_stack': {
 }
 ```
 
+### Testing Select Dropdowns (Portal)
+
+The `Select` component renders its dropdown listbox via `createPortal` to `document.body` with `position: fixed`. This means the listbox is **not** inside the Select component's container in the DOM — it's a sibling of `<div id="root">`.
+
+#### Key Rules
+
+1. **Do NOT use `.absolute` class to locate the dropdown.** The portaled listbox has no `.absolute` class. Use `page.getByRole('listbox')` or the `aria-controls` ID from the trigger button.
+2. **Do NOT scope options under the Select container.** `selectContainer.locator('[role="option"]')` will find nothing because the options are in `document.body`.
+3. **Use `document.elementFromPoint()` to verify z-order** in stacking context tests. `toBeVisible()` alone cannot detect if an element is behind a sticky header.
+
+#### Locating the Dropdown
+
+```typescript
+// Open the dropdown
+const sectionSelect = page.getByTestId('data-table-section-select');
+await sectionSelect.locator('button').first().click();
+
+// Locate the portaled listbox globally by role
+const listbox = page.getByRole('listbox');
+
+// Or use aria-controls from the trigger
+const trigger = sectionSelect.locator('button').first();
+const listboxId = await trigger.getAttribute('aria-controls');
+const listbox2 = page.locator(`#${listboxId}`);
+
+// Locate options within the listbox
+await listbox.locator('[role="option"]:has-text("Main Passage")').click();
+```
+
+#### Z-Order Verification
+
+```typescript
+// Use elementFromPoint to prove dropdown is above sticky header
+const optionBox = await firstOption.boundingBox();
+const isTopmost = await page.evaluate(({ x, y }) => {
+  const el = document.elementFromPoint(x, y);
+  return el?.closest('[role="listbox"]') !== null;
+}, { x: optionBox.x + optionBox.width / 2, y: optionBox.y + optionBox.height / 2 });
+expect(isTopmost).toBe(true);
+```
+
+#### Scroll Behavior
+
+- **External scroll** (window, table container) **closes** the dropdown.
+- **Internal scroll** (scrolling through options inside the listbox, or `scrollIntoView` from keyboard navigation) does **not** close the dropdown.
+
+#### Keyboard Navigation
+
+`aria-activedescendant` is set synchronously from React state — no `setTimeout` workaround is needed for assertions.
+
+```typescript
+const trigger = sectionSelect.locator('button').first();
+await trigger.focus();
+await page.keyboard.press('Enter');  // Opens dropdown
+await page.keyboard.press('ArrowDown');  // Navigates
+await page.keyboard.press('Enter');  // Selects
+await page.keyboard.press('Escape');  // Closes
+```
+
 ## Testing Detail Panel
 
 The Detail Panel provides navigation hyperlinks and center buttons for survey elements.

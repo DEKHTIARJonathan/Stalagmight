@@ -307,9 +307,9 @@ test.describe('Export Preview', () => {
     const depthPresetSelect = page.locator('[data-testid="depth-preset-select"]');
     await expect(depthPresetSelect).toBeVisible();
 
-    // Open dropdown and select a different preset
+    // Open dropdown and select a different preset (portaled listbox)
     await depthPresetSelect.locator('button').first().click();
-    const dropdown = depthPresetSelect.locator('.absolute');
+    const dropdown = page.getByRole('listbox');
     await dropdown.locator('[role="option"]:has-text("Ocean")').click();
 
     // Wait for preset colors to be fetched and preview to update
