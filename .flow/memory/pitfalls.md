@@ -192,3 +192,6 @@ Chromium reserves Ctrl+Shift+I/J/C/N/B/T/Delete -- never use these combos in Pla
 
 ## 2026-01-28 manual [pitfall]
 When adding InverseCommand undo for a command, also add that command to execute_without_undo match in undo.rs or undo/redo will silently fail
+
+## 2026-01-28 manual [pitfall]
+MapLibre drag deltas are in lng/lat degrees; always convert to meters via mapCoordsToMeters before passing to backend commands that expect meter offsets
