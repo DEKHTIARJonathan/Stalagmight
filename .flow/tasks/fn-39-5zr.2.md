@@ -104,3 +104,24 @@ This covers the review finding that `setData()` clears all feature-state and the
 
 - `pnpm test:ui` — all new and existing tests pass
 - `pnpm tsc --noEmit` passes
+
+## Done summary
+Added Playwright tests verifying section feature-state on map:
+
+1. Added getSectionFeatureStates() helper that queries MapLibre querySourceFeatures + getFeatureState on survey-data-shots and survey-data-stations sources.
+
+2. Extended 3 existing tests to verify feature-state after store state checks:
+   - hovering section row: verifies hover feature-state on all section shots/stations
+   - clicking section row: verifies selected feature-state
+   - hoveredSectionId clears: verifies hover feature-state removed after unhover
+
+3. Added 3 new test cases:
+   - section selection and different section hover coexist on map
+   - pressing Escape removes selected feature-state from section features
+   - section highlighting persists after data update (setData re-apply)
+## Summary
+
+## Evidence
+- Commits:
+- Tests:
+- PRs:
