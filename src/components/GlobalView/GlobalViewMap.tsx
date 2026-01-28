@@ -129,6 +129,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
   const surveyLayerRef = useRef<GlobalSurveyLayer | null>(null);
   const errorPopupRef = useRef<maplibregl.Popup | null>(null);
+  const markerTooltipRef = useRef<HTMLDivElement | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   // Buffer for geometry data that arrives before map is ready
   const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
@@ -555,6 +556,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       // Clean up error popup
       errorPopupRef.current?.remove();
       errorPopupRef.current = null;
+      // Clean up marker tooltip
+      markerTooltipRef.current?.remove();
+      markerTooltipRef.current = null;
       // Clean up markers
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current.clear();
@@ -750,6 +754,27 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     markersRef.current.forEach((marker) => marker.remove());
     markersRef.current.clear();
 
+    // Create tooltip element if it doesn't exist (shared across all markers)
+    if (!markerTooltipRef.current) {
+      const tooltip = document.createElement('div');
+      tooltip.className = 'globalview-marker-tooltip';
+      tooltip.style.cssText = `
+        position: absolute;
+        pointer-events: none;
+        background-color: rgba(26, 26, 46, 0.95);
+        color: white;
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        line-height: 1.4;
+        z-index: 1000;
+        white-space: nowrap;
+        display: none;
+      `;
+      map.current.getContainer().appendChild(tooltip);
+      markerTooltipRef.current = tooltip;
+    }
+
     // Add markers for each GPS project
     for (const project of gpsProjects) {
       if (!project.gps_center) continue;
@@ -811,12 +836,65 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         el.style.height = '28px';
         el.style.marginLeft = '-2px';
         el.style.marginTop = '-2px';
+
+        // Show tooltip
+        if (markerTooltipRef.current) {
+          const tooltip = markerTooltipRef.current;
+          const projectName = el.dataset.projectName || '';
+          const projectLocation = el.dataset.projectLocation || '';
+          const state = el.dataset.loadingState || '';
+
+          // Build tooltip content using DOM to prevent XSS
+          tooltip.innerHTML = '';
+          const nameSpan = document.createElement('span');
+          nameSpan.style.fontWeight = '500';
+          nameSpan.textContent = projectName;
+          tooltip.appendChild(nameSpan);
+
+          if (projectLocation) {
+            const br = document.createElement('br');
+            tooltip.appendChild(br);
+            const locSpan = document.createElement('span');
+            locSpan.style.cssText = 'font-size: 0.85em; color: #aaa;';
+            locSpan.textContent = projectLocation;
+            tooltip.appendChild(locSpan);
+          }
+
+          if (state === 'loading') {
+            const br = document.createElement('br');
+            tooltip.appendChild(br);
+            const stateSpan = document.createElement('span');
+            stateSpan.style.cssText = 'font-size: 0.75em; color: #888;';
+            stateSpan.textContent = 'Loading geometry...';
+            tooltip.appendChild(stateSpan);
+          } else if (state === 'error') {
+            const br = document.createElement('br');
+            tooltip.appendChild(br);
+            const stateSpan = document.createElement('span');
+            stateSpan.style.cssText = 'font-size: 0.75em; color: #ef4444;';
+            stateSpan.textContent = 'Failed to load';
+            tooltip.appendChild(stateSpan);
+          }
+
+          // Position tooltip above the marker
+          const rect = el.getBoundingClientRect();
+          const containerRect = map.current!.getContainer().getBoundingClientRect();
+          tooltip.style.left = `${rect.left - containerRect.left + rect.width / 2}px`;
+          tooltip.style.top = `${rect.top - containerRect.top - 8}px`;
+          tooltip.style.transform = 'translate(-50%, -100%)';
+          tooltip.style.display = 'block';
+        }
       });
       el.addEventListener('mouseleave', () => {
         el.style.width = '24px';
         el.style.height = '24px';
         el.style.marginLeft = '0';
         el.style.marginTop = '0';
+
+        // Hide tooltip
+        if (markerTooltipRef.current) {
+          markerTooltipRef.current.style.display = 'none';
+        }
       });
 
       // Click handler - for error markers, show error popup instead of selecting
@@ -856,28 +934,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         .setLngLat([lng, lat])
         .addTo(map.current!);
 
-      // Add popup with project name and loading state
-      const stateText = loadingState === 'loading' ? '<br/><span style="font-size: 0.75em; color: #888;">Loading geometry...</span>'
-        : loadingState === 'error' ? '<br/><span style="font-size: 0.75em; color: #ef4444;">Failed to load</span>'
-        : '';
-      const popup = new maplibregl.Popup({
-        closeButton: false,
-        closeOnClick: false,
-        offset: 15,
-      }).setHTML(`
-        <div style="color: #1a1a2e; font-weight: 500; padding: 4px;">
-          ${project.name}
-          ${project.location ? `<br/><span style="font-size: 0.85em; color: #666;">${project.location}</span>` : ''}
-          ${stateText}
-        </div>
-      `);
-
-      el.addEventListener('mouseenter', () => {
-        popup.setLngLat([lng, lat]).addTo(map.current!);
-      });
-      el.addEventListener('mouseleave', () => {
-        popup.remove();
-      });
+      // Store project info for tooltip (avoids closure over stale data)
+      el.dataset.projectName = project.name;
+      el.dataset.projectLocation = project.location || '';
+      el.dataset.loadingState = loadingState;
 
       markersRef.current.set(project.file_path, marker);
     }
