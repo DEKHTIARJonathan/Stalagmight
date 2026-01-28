@@ -70,9 +70,14 @@ At `src/components/common/Table.tsx:368`, add `data-selected={isSelected ? 'true
 - [ ] `pnpm tsc --noEmit` passes
 - [ ] `pnpm test:ui` passes
 ## Done summary
-TBD
+Replaced the 2px solid border-left selection indicator on data table rows with an 8px-wide gradient ::before pseudo-element bar.
 
+Changes made:
+1. Added `.selected-cell-indicator` CSS class in `src/index.css` with `::before` pseudo-element
+2. Renamed `getFirstCellBorderClass()` to `getFirstCellSelectionClass()` in `Table.tsx`
+3. Added `data-selected="true"` attribute to first `<td>` of selected rows
+4. Removed old `border-l-2 border-accent` and `border-l-2 border-transparent` classes
 ## Evidence
-- Commits:
-- Tests:
+- Commits: fac8c3b
+- Tests: 552/553 Playwright tests pass (1 pre-existing failure in undo-redo-dropdown.spec.ts unrelated to changes)
 - PRs:

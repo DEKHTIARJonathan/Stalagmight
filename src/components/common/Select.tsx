@@ -37,6 +37,8 @@ interface SelectProps {
   'aria-label'?: string;
   /** ID of element that labels this select */
   'aria-labelledby'?: string;
+  /** Callback when an option is hovered (mouse or keyboard). Fires null on close. */
+  onOptionHover?: (value: string | null) => void;
 }
 
 /**
@@ -122,6 +124,7 @@ export function Select({
   'data-testid': testId,
   'aria-label': ariaLabel,
   'aria-labelledby': ariaLabelledBy,
+  onOptionHover,
 }: SelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
@@ -132,6 +135,21 @@ export function Select({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<(HTMLDivElement | null)[]>([]);
   const triggerRef = useRef<HTMLButtonElement>(null);
+
+  // Refs to avoid stale closures in unmount cleanup
+  const onOptionHoverRef = useRef(onOptionHover);
+  onOptionHoverRef.current = onOptionHover;
+  const isOpenRef = useRef(isOpen);
+  isOpenRef.current = isOpen;
+
+  // Unmount cleanup: fire onOptionHover(null) if dropdown was open
+  useEffect(() => {
+    return () => {
+      if (isOpenRef.current) {
+        onOptionHoverRef.current?.(null);
+      }
+    };
+  }, []);
 
   // Generate unique IDs for ARIA
   const baseId = useId();
@@ -158,12 +176,13 @@ export function Select({
       ) {
         return;
       }
+      onOptionHover?.(null);
       setIsOpen(false);
     };
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isOpen]);
+  }, [isOpen, onOptionHover]);
 
   // Close on external scroll (not internal dropdown scroll)
   useEffect(() => {
@@ -291,11 +310,12 @@ export function Select({
 
   const handleSelect = useCallback((optionValue: string, optionDisabled?: boolean) => {
     if (optionDisabled) return;
+    onOptionHover?.(null);
     onChange(optionValue);
     setIsOpen(false);
     // Return focus to trigger
     triggerRef.current?.focus();
-  }, [onChange]);
+  }, [onChange, onOptionHover]);
 
   // Open the dropdown, capturing trigger rect for accurate portal positioning
   const openDropdown = useCallback(() => {
@@ -316,8 +336,24 @@ export function Select({
         event.stopPropagation();
         if (!isOpen) {
           openDropdown();
+          // Compute the initially highlighted option (same logic as useEffect on open)
+          const selectedIdx = findSelectedIndex();
+          const selectedOpt = selectedIdx >= 0 ? flatOptions[selectedIdx] : null;
+          let initialIdx: number;
+          if (selectedIdx >= 0 && selectedOpt && !selectedOpt.disabled) {
+            initialIdx = selectedIdx;
+          } else {
+            initialIdx = flatOptions.findIndex(opt => opt && !opt.disabled);
+          }
+          if (initialIdx >= 0) {
+            onOptionHover?.(flatOptions[initialIdx]?.value ?? null);
+          }
         } else {
-          setHighlightedIndex(prev => findNextEnabledIndex(prev, 'down'));
+          const nextIndex = findNextEnabledIndex(highlightedIndex, 'down');
+          setHighlightedIndex(nextIndex);
+          if (nextIndex >= 0) {
+            onOptionHover?.(flatOptions[nextIndex]?.value ?? null);
+          }
         }
         break;
 
@@ -326,8 +362,24 @@ export function Select({
         event.stopPropagation();
         if (!isOpen) {
           openDropdown();
+          // Compute the initially highlighted option (same logic as useEffect on open)
+          const selectedIdxUp = findSelectedIndex();
+          const selectedOptUp = selectedIdxUp >= 0 ? flatOptions[selectedIdxUp] : null;
+          let initialIdxUp: number;
+          if (selectedIdxUp >= 0 && selectedOptUp && !selectedOptUp.disabled) {
+            initialIdxUp = selectedIdxUp;
+          } else {
+            initialIdxUp = flatOptions.findIndex(opt => opt && !opt.disabled);
+          }
+          if (initialIdxUp >= 0) {
+            onOptionHover?.(flatOptions[initialIdxUp]?.value ?? null);
+          }
         } else {
-          setHighlightedIndex(prev => findNextEnabledIndex(prev, 'up'));
+          const nextIndex = findNextEnabledIndex(highlightedIndex, 'up');
+          setHighlightedIndex(nextIndex);
+          if (nextIndex >= 0) {
+            onOptionHover?.(flatOptions[nextIndex]?.value ?? null);
+          }
         }
         break;
 
@@ -338,6 +390,7 @@ export function Select({
           const firstIdx = findFirstEnabledIndex();
           if (firstIdx >= 0) {
             setHighlightedIndex(firstIdx);
+            onOptionHover?.(flatOptions[firstIdx]?.value ?? null);
           }
         }
         break;
@@ -349,6 +402,7 @@ export function Select({
           const lastIdx = findLastEnabledIndex();
           if (lastIdx >= 0) {
             setHighlightedIndex(lastIdx);
+            onOptionHover?.(flatOptions[lastIdx]?.value ?? null);
           }
         }
         break;
@@ -370,6 +424,7 @@ export function Select({
         if (isOpen) {
           event.preventDefault();
           event.stopPropagation();
+          onOptionHover?.(null);
           setIsOpen(false);
           triggerRef.current?.focus();
         }
@@ -378,11 +433,12 @@ export function Select({
       case 'Tab':
         // Close dropdown on tab, let default behavior move focus
         if (isOpen) {
+          onOptionHover?.(null);
           setIsOpen(false);
         }
         break;
     }
-  }, [disabled, isOpen, highlightedIndex, flatOptions, findNextEnabledIndex, findFirstEnabledIndex, findLastEnabledIndex, handleSelect, openDropdown]);
+  }, [disabled, isOpen, highlightedIndex, flatOptions, findNextEnabledIndex, findFirstEnabledIndex, findLastEnabledIndex, findSelectedIndex, handleSelect, openDropdown, onOptionHover]);
 
   const selectedLabel = findLabel(options, value);
 
@@ -412,7 +468,12 @@ export function Select({
             option.disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-accent/20'
           }`}
           onClick={() => handleSelect(option.value, option.disabled)}
-          onMouseEnter={() => !option.disabled && setHighlightedIndex(optionIndex)}
+          onMouseEnter={() => {
+            if (!option.disabled) {
+              setHighlightedIndex(optionIndex);
+              onOptionHover?.(option.value);
+            }
+          }}
         >
           {option.label}
         </div>
@@ -475,6 +536,7 @@ export function Select({
         onClick={() => {
           if (disabled) return;
           if (isOpen) {
+            onOptionHover?.(null);
             setIsOpen(false);
           } else {
             openDropdown();
