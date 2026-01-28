@@ -326,7 +326,8 @@ impl Database {
                 misclosure_distance REAL NOT NULL,
                 error_percentage REAL NOT NULL,
                 horizontal_misclosure REAL NOT NULL,
-                vertical_misclosure REAL NOT NULL
+                vertical_misclosure REAL NOT NULL,
+                closure_id INTEGER NOT NULL DEFAULT 0
             );
 
             -- Display settings
