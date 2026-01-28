@@ -181,6 +181,24 @@ impl Database {
             }
         }
 
+        // Add next_closure_id column to project table if it doesn't exist (persists monotonic counter)
+        let has_next_closure_id: bool = self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('project') WHERE name='next_closure_id'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_next_closure_id {
+            self.conn.execute(
+                "ALTER TABLE project ADD COLUMN next_closure_id INTEGER NOT NULL DEFAULT 1",
+                [],
+            )?;
+            tracing::info!("Added next_closure_id column to project table");
+        }
+
         tracing::debug!("Schema migration complete");
         Ok(())
     }
@@ -232,7 +250,8 @@ impl Database {
                 location TEXT,
                 created_at TEXT NOT NULL,
                 modified_at TEXT NOT NULL,
-                schema_version INTEGER NOT NULL
+                schema_version INTEGER NOT NULL,
+                next_closure_id INTEGER NOT NULL DEFAULT 1
             );
 
             -- Sections
@@ -395,15 +414,18 @@ impl Database {
         )?;
         tracing::info!("Existing data cleared");
 
-        // Save project metadata
+        // Save project metadata (including next_closure_id for monotonic ID persistence)
+        let next_closure_id_i64 = i64::try_from(project.next_closure_id)
+            .map_err(|_| anyhow::anyhow!("next_closure_id {} exceeds i64 range", project.next_closure_id))?;
         let rows_affected = tx.execute(
-            "INSERT INTO project (id, name, location, created_at, modified_at, schema_version) VALUES (1, ?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO project (id, name, location, created_at, modified_at, schema_version, next_closure_id) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 project.name,
                 project.location,
                 project.created_at.to_rfc3339(),
                 project.modified_at.to_rfc3339(),
-                SCHEMA_VERSION
+                SCHEMA_VERSION,
+                next_closure_id_i64
             ],
         )?;
         tracing::info!("Project metadata inserted, rows_affected={}", rows_affected);
@@ -576,12 +598,31 @@ impl Database {
         }
 
         // Load project metadata - get the first row (don't require id = 1)
-        let (name, location, created_at, modified_at): (String, Option<String>, String, String) =
-            self.conn.query_row(
-                "SELECT name, location, created_at, modified_at FROM project LIMIT 1",
+        // Read next_closure_id if the column exists (added for monotonic ID persistence)
+        let has_next_closure_id_col: bool = self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('project') WHERE name='next_closure_id'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            ).context("Failed to read project metadata")?;
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        let (name, location, created_at, modified_at, persisted_next_closure_id): (String, Option<String>, String, String, Option<u64>) =
+            if has_next_closure_id_col {
+                self.conn.query_row(
+                    "SELECT name, location, created_at, modified_at, next_closure_id FROM project LIMIT 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, Some(row.get::<_, i64>(4).unwrap_or(1).max(1) as u64))),
+                ).context("Failed to read project metadata")?
+            } else {
+                let (n, l, c, m) = self.conn.query_row(
+                    "SELECT name, location, created_at, modified_at FROM project LIMIT 1",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
+                ).context("Failed to read project metadata")?;
+                (n, l, c, m, None)
+            };
 
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc);
         let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at)?.with_timezone(&Utc);
@@ -751,8 +792,13 @@ impl Database {
         // Load imported file hashes
         let imported_file_hashes = self.load_imported_file_hashes()?;
 
-        // Derive next_closure_id from loaded closures (max + 1, minimum 1)
-        let next_closure_id = loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0) + 1;
+        // Derive next_closure_id: use persisted value if available, otherwise fall back to max(existing) + 1.
+        // Always ensure it's at least max(existing closures) + 1 for safety.
+        let max_existing = loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
+        let next_closure_id = match persisted_next_closure_id {
+            Some(persisted) => persisted.max(max_existing + 1),
+            None => max_existing + 1,
+        };
 
         Ok(Project {
             name,
