@@ -156,3 +156,6 @@ When adding a parameter to a function, always add tests that assert formatted ou
 
 ## 2026-01-28 manual [pitfall]
 When validating data in commands that create entities, compute the correct context (IDs, indices) from existing state rather than using placeholder values like 0
+
+## 2026-01-28 manual [pitfall]
+When checking if content fits in a viewport with padding/panels, compute ratios against usable dimensions (container minus padding) not raw container dimensions, to avoid clipping behind panels

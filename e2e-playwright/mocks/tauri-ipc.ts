@@ -1129,6 +1129,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   enabled_merge: true,
                   enabled_measure: true,
                 },
+                animation: {
+                  enabled: true,
+                  duration: 300,
+                  point_zoom: 18,
+                },
               },
               validation: {
                 warn_shot_length_min: 0.1,
@@ -1270,6 +1275,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   enabled_draw: true,
                   enabled_merge: true,
                   enabled_measure: true,
+                },
+                animation: {
+                  enabled: true,
+                  duration: 300,
+                  point_zoom: 18,
                 },
               },
               validation: {
