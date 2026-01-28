@@ -6,7 +6,7 @@ import type {
   StationMerge,
   StationRef,
 } from '../../../types/project';
-import { getDepthColor } from '../../../utils/colors';
+import { getDepthColor, getErrorColor } from '../../../utils/colors';
 import { metersToMapCoords } from '../../../utils/coordinates';
 
 export type DepthRange = { min: number; max: number };
@@ -337,13 +337,6 @@ export function buildSurveyFeatures(
   }
 
   if (loopClosures && loopClosures.length > 0) {
-    const getErrorColor = (errorPct: number): string => {
-      if (errorPct < 1) return '#22c55e';
-      if (errorPct < 3) return '#eab308';
-      if (errorPct < 5) return '#f97316';
-      return '#ef4444';
-    };
-
     for (const closure of loopClosures) {
       const coordsA = findStationCoords(closure.station_a);
       const coordsB = findStationCoords(closure.station_b);

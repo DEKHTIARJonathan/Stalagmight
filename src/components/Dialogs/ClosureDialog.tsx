@@ -3,6 +3,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { getErrorColor } from '../../utils/colors';
 import type { StationRef, ClosureStrategy } from '../../types/project';
 import type { ClosurePreview } from '../../types/commands';
 
@@ -13,20 +14,13 @@ const STRATEGY_OPTIONS: { value: ClosureStrategy; label: string }[] = [
   { value: 'ManualAdjustment', label: 'Manual Adjustment' },
 ];
 
-function getErrorColor(errorPct: number): string {
-  if (errorPct < 1) return '#22c55e';
-  if (errorPct < 3) return '#eab308';
-  if (errorPct < 5) return '#f97316';
-  return '#ef4444';
-}
-
 export default function ClosureDialog() {
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
   const { createLoopClosure, project } = useProjectStore();
 
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;
-  const preview = dialogData.preview as ClosurePreview | undefined;
+  const preview = (dialogData.preview as ClosurePreview | null) ?? undefined;
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
