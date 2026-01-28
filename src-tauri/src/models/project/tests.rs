@@ -1074,3 +1074,273 @@ fn unmerge_stations_preserves_unrelated_closures() {
     assert!(removed.is_empty(), "No closures should be removed for unrelated pair");
     assert_eq!(project.loop_closures.len(), 1, "B-C closure should be preserved");
 }
+
+#[test]
+fn closure_expands_connected_sections_with_existing_merges() {
+    // Test: A closure between stations in different sections makes those sections
+    // connected (just like a merge). Existing merges are also traversed.
+    let mut project = Project::new("ClosureExpands".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+
+    // Merge A-B
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+
+    // Closure B-C (no merge, just a closure)
+    project.loop_closures.push(LoopClosure {
+        id: project.next_closure_id,
+        station_a: StationRef::new(b, 1),
+        station_b: StationRef::new(c, 0),
+        path_length: 5.0,
+        misclosure_distance: 0.1,
+        error_percentage: 2.0,
+        horizontal_misclosure: 0.1,
+        vertical_misclosure: 0.0,
+    });
+    project.next_closure_id += 1;
+
+    // All three sections should be connected via merge A-B and closure B-C
+    let connected = project.get_connected_section_ids(a);
+    assert!(connected.contains(&a), "A should be connected");
+    assert!(connected.contains(&b), "B should be connected");
+    assert!(connected.contains(&c), "C should be connected via closure");
+    assert_eq!(connected.len(), 3);
+
+    // Path length between A.0 and C.1 should work (BFS traverses closure)
+    let path = project.calculate_path_length_between(
+        StationRef::new(a, 0),
+        StationRef::new(c, 1),
+    );
+    // A.0 -> A.1 (1m shot) -> B.0 (merge, 0) -> B.1 (1m shot) -> C.0 (closure, 0) -> C.1 (1m shot)
+    assert!(
+        (path - 3.0).abs() < 1e-6,
+        "Path A.0 to C.1 should be 3.0m (shots only, merge+closure are zero-distance), got {}",
+        path
+    );
+
+    // are_stations_in_closure should detect the closure
+    assert!(project.are_stations_in_closure(
+        StationRef::new(b, 1),
+        StationRef::new(c, 0),
+    ));
+    // Reverse direction also works
+    assert!(project.are_stations_in_closure(
+        StationRef::new(c, 0),
+        StationRef::new(b, 1),
+    ));
+    // Non-closure pair returns false
+    assert!(!project.are_stations_in_closure(
+        StationRef::new(a, 0),
+        StationRef::new(c, 0),
+    ));
+}
+
+#[test]
+fn new_merge_expands_existing_closure_connectivity() {
+    // Test: Adding a merge after a closure exists should expand connectivity
+    // Setup: A-B closure, then merge B-C -> A should connect to C
+    let mut project = Project::new("MergeExpandsClosure".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+
+    // Closure A-B (before any merges)
+    project.loop_closures.push(LoopClosure {
+        id: project.next_closure_id,
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+        path_length: 5.0,
+        misclosure_distance: 0.1,
+        error_percentage: 2.0,
+        horizontal_misclosure: 0.1,
+        vertical_misclosure: 0.0,
+    });
+    project.next_closure_id += 1;
+
+    // Before merge, A and B are connected via closure
+    let connected_before = project.get_connected_section_ids(a);
+    assert!(connected_before.contains(&a));
+    assert!(connected_before.contains(&b));
+    assert!(!connected_before.contains(&c), "C not yet connected");
+
+    // Now merge B-C
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(b, 1),
+        station_b: StationRef::new(c, 0),
+        merged_at: Utc::now(),
+    });
+
+    // After merge, A should reach C via closure(A-B) + merge(B-C)
+    let connected_after = project.get_connected_section_ids(a);
+    assert!(connected_after.contains(&a), "A connected");
+    assert!(connected_after.contains(&b), "B connected via closure");
+    assert!(connected_after.contains(&c), "C connected via closure+merge");
+    assert_eq!(connected_after.len(), 3);
+
+    // Path should traverse both closure and merge with zero distance
+    let path = project.calculate_path_length_between(
+        StationRef::new(a, 0),
+        StationRef::new(c, 1),
+    );
+    // A.0 -> A.1 (1m) -> B.0 (closure, 0) -> B.1 (1m) -> C.0 (merge, 0) -> C.1 (1m)
+    assert!(
+        (path - 3.0).abs() < 1e-6,
+        "Path should be 3.0m (shots only), got {}",
+        path
+    );
+}
+
+#[test]
+fn transitive_closure_computation_correct() {
+    // Test: closures_with is computed correctly with transitive relationships
+    // Setup: A.1 merged with B.0, closure between A.1 and C.0
+    // Expected: B.0 gets transitive closure to C.0 (via A.1)
+    //           C.0 gets transitive closure to B.0 (via A.1)
+    let mut project = Project::new("TransitiveClosure".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+
+    // Merge A.1 with B.0
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+
+    // Closure A.1 to C.0
+    project.loop_closures.push(LoopClosure {
+        id: project.next_closure_id,
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(c, 0),
+        path_length: 8.0,
+        misclosure_distance: 0.2,
+        error_percentage: 2.5,
+        horizontal_misclosure: 0.2,
+        vertical_misclosure: 0.0,
+    });
+    let closure_id = project.next_closure_id;
+    project.next_closure_id += 1;
+
+    // Set datum so compute_station_coordinates works
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
+
+    let stations = project.compute_station_coordinates();
+
+    // A.1: direct closure to C.0 (not transitive, A.1 is the endpoint)
+    let a1 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(a, 1))
+        .unwrap();
+    let a1_direct = a1
+        .closures_with
+        .iter()
+        .find(|cr| cr.station_ref == StationRef::new(c, 0) && !cr.is_transitive);
+    assert!(
+        a1_direct.is_some(),
+        "A.1 should have direct closure to C.0"
+    );
+    assert_eq!(a1_direct.unwrap().closure_id, closure_id);
+    assert!(a1_direct.unwrap().via_station.is_none());
+
+    // B.0: transitive closure to C.0 via A.1 (B.0 is merged with A.1)
+    let b0 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(b, 0))
+        .unwrap();
+    let b0_transitive = b0
+        .closures_with
+        .iter()
+        .find(|cr| cr.station_ref == StationRef::new(c, 0) && cr.is_transitive);
+    assert!(
+        b0_transitive.is_some(),
+        "B.0 should have transitive closure to C.0 via A.1"
+    );
+    assert_eq!(
+        b0_transitive.unwrap().via_station,
+        Some(StationRef::new(a, 1))
+    );
+
+    // C.0: direct closure to A.1 (C.0 is the endpoint)
+    let c0 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(c, 0))
+        .unwrap();
+    let c0_direct = c0
+        .closures_with
+        .iter()
+        .find(|cr| cr.station_ref == StationRef::new(a, 1) && !cr.is_transitive);
+    assert!(
+        c0_direct.is_some(),
+        "C.0 should have direct closure to A.1"
+    );
+
+    // C.0: transitive closure to B.0 via A.1 (B.0 is merged with A.1)
+    let c0_transitive = c0
+        .closures_with
+        .iter()
+        .find(|cr| cr.station_ref == StationRef::new(b, 0) && cr.is_transitive);
+    assert!(
+        c0_transitive.is_some(),
+        "C.0 should have transitive closure to B.0 via A.1"
+    );
+    assert_eq!(
+        c0_transitive.unwrap().via_station,
+        Some(StationRef::new(a, 1))
+    );
+}
