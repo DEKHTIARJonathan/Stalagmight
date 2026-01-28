@@ -319,22 +319,13 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       softBoundsRef.current = null;
     }
 
-    // Update map's maxBounds and minZoom if map is initialized
+    // Update map's minZoom if map is initialized
+    // No maxBounds constraint - allow free panning
     if (map.current) {
-      const hardBounds = calculateHardBounds();
-      map.current.setMaxBounds(hardBounds ?? undefined);
-
-      // Set dynamic minZoom: allow zooming out until all systems fit with 20% margin
-      // If no systems, allow unlimited zoom out (minZoom = 0)
-      if (hardBounds) {
-        const camera = map.current.cameraForBounds(hardBounds, { padding: 20 });
-        if (camera?.zoom !== undefined) {
-          // Allow zooming out 1 level beyond what fits all systems
-          map.current.setMinZoom(Math.max(0, camera.zoom - 1));
-        }
-      } else {
-        map.current.setMinZoom(0);
-      }
+      // Remove any existing maxBounds constraint
+      map.current.setMaxBounds(undefined);
+      // No minZoom limit - allow unlimited zoom out
+      map.current.setMinZoom(0);
     }
   }, [calculateRawBounds, addPaddingToBounds, calculateHardBounds]);
 
@@ -344,7 +335,6 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
     const bounds = calculateBounds();
     const defaultCenter = bounds.getCenter();
-    const hardBounds = calculateHardBounds();
 
     // Try to restore persisted map state
     const persistedState = loadPersistedMapState();
@@ -387,11 +377,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       maxZoom: tileConfig.maxZoom,
     };
 
-    // Hard bounds (50% padding) - user cannot pan beyond this
-    if (hardBounds) {
-      mapOptions.maxBounds = hardBounds;
-    }
-
+    // No maxBounds - allow free panning and zooming
     map.current = new maplibregl.Map(mapOptions);
 
     // Disable rotation
