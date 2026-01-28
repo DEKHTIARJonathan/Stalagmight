@@ -214,7 +214,8 @@ Project (Cave System)
 │   ├── id: StationRef (section_id:shot_index)
 │   ├── coordinates: Option<Coordinates> (computed or GPS)
 │   ├── is_zero_datum: bool
-│   └── merged_with: Vec<StationRef>
+│   ├── merged_with: Vec<StationRef>
+│   └── closures_with: Option<Vec<ClosureRef>> (direct + transitive closure relationships)
 └── Settings
     ├── display_preferences: DisplaySettings
     └── export_preferences: ExportSettings
@@ -515,6 +516,13 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 │  ID: 2:5                                           │
 │  Depth: 12.3m  Section: Main Line                  │
 │                                                    │
+│  ┌─ Loop Closures (collapsible, default expanded) ┐│
+│  │  Closure to 1:3 (link), 1:4 (link)            ││
+│  │  Path: 15.2m | Error: 0.30m (1.97%)           ││
+│  │  Transitive closure to 3:0 (link) (via 1:3)   ││
+│  │  Path: 42.1m | Error: 0.85m (2.02%)           ││
+│  └────────────────────────────────────────────────┘│
+│                                                    │
 │  ┌─ Connected ───────────────────────────────────┐ │
 │  │  Previous Shot: 2:5 (link)                    │ │
 │  │  Next Shot: 2:6 (link)                        │ │
@@ -522,8 +530,20 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 │  └───────────────────────────────────────────────┘ │
 │                                                    │
 │  (Previous/Next hidden at section boundaries)      │
+│  (Loop Closures hidden when station has none)      │
 └────────────────────────────────────────────────────┘
 ```
+
+**Loop Closures Section:**
+- Placed after "Merged with", before "Connected" section
+- Collapsible with default expanded state
+- Hidden when station has no `closures_with` entries
+- Closures grouped by `closure_id`; direct closures listed first, then transitive
+- Direct closures: "Closure to B, C" with station links (DetailLink)
+- Transitive closures: "Transitive closure to X (via A)" with muted text (`text-text-tertiary`)
+- Metrics below each group: "Path: 15.2m | Error: 0.30m (1.97%)"
+- Metrics from `project.loop_closures` by matching `closure_id`
+- Station links navigate to target station (same behavior as merged station links)
 
 **Section Detail - Endpoints Section:**
 ```
@@ -1046,6 +1066,8 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 3. ClosureDialog appears with closure preview data (path length, misclosure, error %)
 4. User selects error distribution method
 5. Confirm → Loop closure created, shown as dashed line on map
+6. Closure stations updated with `closures_with` references (direct + transitive)
+7. Detail Panel shows "Loop Closures" section for involved stations
 
 **Connecting Sections with Virtual Shots:**
 1. User imports/creates new section with the connection survey

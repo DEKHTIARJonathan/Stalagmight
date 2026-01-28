@@ -4,7 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
 import { DetailLink } from '../common/DetailLink';
-import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType } from '../../types/project';
+import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId, formatStationId } from '../../utils/formatters';
 
@@ -400,6 +400,18 @@ function StationDetail({ station }: { station: Station }) {
                 ))}
               </ul>
             </div>
+          )}
+
+          {station.closures_with && station.closures_with.length > 0 && (
+            <ClosuresSection
+              closures={station.closures_with}
+              loopClosures={project?.loop_closures ?? []}
+              stations={stations}
+              onSelectStation={handleSelectMergedStation}
+              onAnnounce={announceSelection}
+              onHoverStart={(ref) => setHoveredStation({ section_id: ref.section_id, station_index: ref.station_index })}
+              onHoverEnd={() => setHoveredStation(null)}
+            />
           )}
 
           {/* Connected section with hyperlinks */}
@@ -955,6 +967,131 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
           </div>
         </div>
       </Panel>
+    </div>
+  );
+}
+
+interface ClosuresSectionProps {
+  closures: ClosureRef[];
+  loopClosures: LoopClosure[];
+  stations: Station[];
+  onSelectStation: (ref: { section_id: number; station_index: number }) => void;
+  onAnnounce: (message: string) => void;
+  onHoverStart: (ref: { section_id: number; station_index: number }) => void;
+  onHoverEnd: () => void;
+}
+
+function ClosuresSection({
+  closures,
+  loopClosures,
+  stations,
+  onSelectStation,
+  onAnnounce,
+  onHoverStart,
+  onHoverEnd,
+}: ClosuresSectionProps) {
+  const [expanded, setExpanded] = useState(true);
+
+  // Validate station targets exist
+  const stationExists = (ref: { section_id: number; station_index: number }): boolean => {
+    return stations.some(
+      (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
+    );
+  };
+
+  // Group closures by closure_id
+  const grouped = new Map<number, ClosureRef[]>();
+  for (const c of closures) {
+    const existing = grouped.get(c.closure_id);
+    if (existing) {
+      existing.push(c);
+    } else {
+      grouped.set(c.closure_id, [c]);
+    }
+  }
+
+  // Sort groups: direct closures first, then transitive
+  const sortedGroups = Array.from(grouped.entries()).sort(([, refsA], [, refsB]) => {
+    const aHasDirect = refsA.some((r) => !r.is_transitive);
+    const bHasDirect = refsB.some((r) => !r.is_transitive);
+    if (aHasDirect && !bHasDirect) return -1;
+    if (!aHasDirect && bHasDirect) return 1;
+    return 0;
+  });
+
+  return (
+    <div className="pt-2 border-t border-border" data-testid="closures-section">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary w-full text-left"
+        data-testid="closures-section-toggle"
+      >
+        <span className="text-xs">{expanded ? '▼' : '▶'}</span>
+        <span>Loop Closures</span>
+      </button>
+      {expanded && (
+        <div className="mt-1 space-y-2" data-testid="closures-section-content">
+          {sortedGroups.map(([closureId, refs]) => {
+            const closure = loopClosures.find((lc) => lc.id === closureId);
+            const directRefs = refs.filter((r) => !r.is_transitive);
+            const transitiveRefs = refs.filter((r) => r.is_transitive);
+
+            return (
+              <div key={closureId} className="space-y-1">
+                {directRefs.length > 0 && (
+                  <div className="text-sm" data-testid={`closure-direct-${closureId}`}>
+                    <span className="text-text-secondary">Closure to </span>
+                    {directRefs.map((ref, i) => (
+                      <span key={i}>
+                        {i > 0 && ', '}
+                        <DetailLink
+                          type="station"
+                          target={{ sectionId: ref.station_ref.section_id, position: ref.station_ref.station_index }}
+                          displayText={formatStationId(ref.station_ref.section_id, ref.station_ref.station_index)}
+                          onSelect={() => onSelectStation(ref.station_ref)}
+                          isMissing={!stationExists(ref.station_ref)}
+                          onAnnounce={onAnnounce}
+                          onHoverStart={() => onHoverStart(ref.station_ref)}
+                          onHoverEnd={onHoverEnd}
+                        />
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {transitiveRefs.length > 0 && (
+                  <div className="text-sm text-text-tertiary" data-testid={`closure-transitive-${closureId}`}>
+                    <span>Transitive closure to </span>
+                    {transitiveRefs.map((ref, i) => (
+                      <span key={i}>
+                        {i > 0 && ', '}
+                        <DetailLink
+                          type="station"
+                          target={{ sectionId: ref.station_ref.section_id, position: ref.station_ref.station_index }}
+                          displayText={formatStationId(ref.station_ref.section_id, ref.station_ref.station_index)}
+                          onSelect={() => onSelectStation(ref.station_ref)}
+                          isMissing={!stationExists(ref.station_ref)}
+                          onAnnounce={onAnnounce}
+                          onHoverStart={() => onHoverStart(ref.station_ref)}
+                          onHoverEnd={onHoverEnd}
+                        />
+                        {ref.via_station && (
+                          <span> (via {formatStationId(ref.via_station.section_id, ref.via_station.station_index)})</span>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {closure && (
+                  <div className="text-xs text-text-secondary" data-testid={`closure-metrics-${closureId}`}>
+                    Path: {closure.path_length.toFixed(1)}m | Error: {closure.misclosure_distance.toFixed(2)}m ({closure.error_percentage.toFixed(2)}%)
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

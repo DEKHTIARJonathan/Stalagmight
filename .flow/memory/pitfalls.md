@@ -213,3 +213,9 @@ Monotonic ID counters (like next_closure_id) must be persisted to the database, 
 
 ## 2026-01-28 manual [pitfall]
 When widening a traversal function (e.g. adding edge types), audit ALL call sites for semantic expectations -- some callers need the original narrow semantics (rigid groups) while others need the widened semantics (reachability); split into explicit variants rather than widening in place
+
+## 2026-01-28 manual [pitfall]
+When a read-only query returns multiple independent fields (e.g. connected + can_merge), always compute ALL fields before applying any early-return logic; early returns for one field can leave other fields incorrect
+
+## 2026-01-28 manual [pitfall]
+When redirecting a blocked operation to an alternative UI flow (e.g. merge→closure dialog), verify the alternative backend operation actually accepts the current state; dead-end UI flows frustrate users
