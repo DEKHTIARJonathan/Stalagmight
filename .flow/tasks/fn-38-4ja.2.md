@@ -59,9 +59,8 @@ Create `e2e-playwright/section-zoom-margin.spec.ts` with tests for:
 - [ ] `pnpm test:ui` passes (all Playwright tests including new ones)
 
 ## Done summary
-TBD
-
+Added 3 Playwright E2E tests verifying section zoom margin behavior (double-click, center button, skip-zoom-in). Fixed mock IPC config missing animation property that caused MapCanvas crashes, and made animation config overridable for future test customization.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: cd4624e, f4195c8, 1e78830
+- Tests: pnpm test:ui --grep 'Section zoom margin', pnpm test:ui, cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:
