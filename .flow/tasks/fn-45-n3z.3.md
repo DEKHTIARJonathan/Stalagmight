@@ -69,3 +69,7 @@ Implement new merge validation logic: check zero datum connectivity first, then 
 - [ ] Test: zero datum validation determines merge vs closure
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 - [ ] `pnpm tsc --noEmit` passes
+
+## Done summary
+
+## Evidence
