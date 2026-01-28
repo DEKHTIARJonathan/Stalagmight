@@ -55,9 +55,8 @@ Create a new Rust module `src-tauri/src/tile_providers.rs` containing the `TileP
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 
 ## Done summary
-TBD
-
+Created src-tauri/src/tile_providers.rs with TileProvider struct (all spec fields with per-field serde default), TileProviderInfo response DTO with computed available flag, OnceLock static registry with ESRI provider, get_provider/get_all_provider_info/expand_url public functions, and 6 unit tests. Module declared as pub mod tile_providers in lib.rs. All 715 lib + 80 integration tests pass.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 75c636f
+- Tests: cargo test: 715 lib + 80 integration tests pass (6 tile_providers tests)
 - PRs:
