@@ -1204,6 +1204,27 @@ export default function MapCanvas() {
     };
   }, [showSatellite, getSatelliteTileConfig, mapLoaded]);
 
+  // Shared padding helper: computes { top, bottom, left, right } with 10% margin
+  // and optional panel offsets
+  const calcPadding = useCallback(
+    (
+      container: HTMLElement,
+      panels?: { sectionsPanelOpen: boolean; sectionsPanelWidth: number; detailPanelOpen: boolean; detailPanelWidth: number }
+    ) => {
+      const marginX = Math.round(container.clientWidth * 0.1);
+      const marginY = Math.round(container.clientHeight * 0.1);
+      const leftPanel = panels?.sectionsPanelOpen ? panels.sectionsPanelWidth : 0;
+      const rightPanel = panels?.detailPanelOpen ? panels.detailPanelWidth : 0;
+      return {
+        top: marginY,
+        bottom: marginY,
+        left: marginX + leftPanel,
+        right: marginX + rightPanel,
+      };
+    },
+    []
+  );
+
   // Fit to survey bounds using transformed coordinates
   const fitToBounds = useCallback(() => {
     if (!map.current || stations.length === 0) return;
@@ -1215,17 +1236,19 @@ export default function MapCanvas() {
     const sw = metersToMapCoords(bounds.minX, bounds.minY, gpsOrigin);
     const ne = metersToMapCoords(bounds.maxX, bounds.maxY, gpsOrigin);
 
-    // Calculate 10% padding based on container size
+    // Reset padding to avoid MapLibre accumulation bug
+    map.current.setPadding({ top: 0, right: 0, bottom: 0, left: 0 });
+
+    // Calculate 10% padding based on container size (no panel offsets)
     const container = map.current.getContainer();
-    const paddingX = Math.round(container.clientWidth * 0.1);
-    const paddingY = Math.round(container.clientHeight * 0.1);
+    const padding = calcPadding(container);
 
     // Use MapLibre's fitBounds with percentage-based padding
     map.current.fitBounds([sw, ne], {
-      padding: { top: paddingY, bottom: paddingY, left: paddingX, right: paddingX },
+      padding,
       maxZoom: 20,
     });
-  }, [stations]);
+  }, [stations, calcPadding]);
 
   // Fit to a specific section's bounds
   const fitToSection = useCallback(
@@ -1250,17 +1273,14 @@ export default function MapCanvas() {
       const animationConfig = config.map.animation;
       const animationDuration = animationConfig.enabled ? animationConfig.duration : 0;
 
-      // Calculate padding from UIStore panel state as per spec:
-      // - Left: sectionsPanelWidth if open, else 0
-      // - Right: detailPanelWidth if open, else 0
-      // - Top/Bottom: 10% of container height
+      // Calculate padding: 10% margin on all sides plus panel offsets
       const container = map.current.getContainer();
-      const containerHeight = container.clientHeight;
-      const topPadding = Math.round(containerHeight * 0.1);
-      const bottomPadding = Math.round(containerHeight * 0.1);
-      const leftPadding = sectionsPanelOpen ? sectionsPanelWidth : 0;
-      const rightPadding = detailPanelOpen ? detailPanelWidth : 0;
-      const padding = { top: topPadding, bottom: bottomPadding, left: leftPadding, right: rightPadding };
+      const padding = calcPadding(container, {
+        sectionsPanelOpen,
+        sectionsPanelWidth,
+        detailPanelOpen,
+        detailPanelWidth,
+      });
 
       // Single station: center at point_zoom level
       if (sectionStations.length === 1) {
@@ -1296,14 +1316,40 @@ export default function MapCanvas() {
       const sw = metersToMapCoords(bounds.minX, bounds.minY, gpsOrigin);
       const ne = metersToMapCoords(bounds.maxX, bounds.maxY, gpsOrigin);
 
-      map.current.fitBounds([sw, ne], {
-        padding,
-        linear: true,
-        duration: animationDuration,
-        maxZoom: config.map.zoom_max ?? 22,
-      });
+      // Skip-zoom-in: if section already fits in usable viewport and occupies ≥30%,
+      // just pan/center without zooming
+      const usableWidth = Math.max(1, container.clientWidth - padding.left - padding.right);
+      const usableHeight = Math.max(1, container.clientHeight - padding.top - padding.bottom);
+      const swScreen = map.current.project(sw as [number, number]);
+      const neScreen = map.current.project(ne as [number, number]);
+      const screenWidth = Math.abs(neScreen.x - swScreen.x);
+      const screenHeight = Math.abs(neScreen.y - swScreen.y);
+      const ratioX = screenWidth / usableWidth;
+      const ratioY = screenHeight / usableHeight;
+
+      const fitsInViewport = ratioX <= 1.0 && ratioY <= 1.0;
+      const occupiesEnough = ratioX >= 0.3 || ratioY >= 0.3;
+
+      if (fitsInViewport && occupiesEnough) {
+        // Section already visible and large enough — center without re-zooming
+        const centerLng = (sw[0] + ne[0]) / 2;
+        const centerLat = (sw[1] + ne[1]) / 2;
+        map.current.easeTo({
+          center: [centerLng, centerLat],
+          padding,
+          duration: animationDuration,
+        });
+      } else {
+        // Section too large or too small — use fitBounds
+        map.current.fitBounds([sw, ne], {
+          padding,
+          linear: true,
+          duration: animationDuration,
+          maxZoom: config.map.zoom_max ?? 22,
+        });
+      }
     },
-    [stations, config, gpsOrigin, sectionsPanelOpen, sectionsPanelWidth, detailPanelOpen, detailPanelWidth]
+    [stations, config, gpsOrigin, sectionsPanelOpen, sectionsPanelWidth, detailPanelOpen, detailPanelWidth, calcPadding]
   );
 
   // Pan to a shot's midpoint (used when double-clicking a row in DataTable)

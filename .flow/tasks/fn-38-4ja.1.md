@@ -78,9 +78,8 @@ to describe the new behavior: 10% margin on all sides plus panel offsets, and sk
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-TBD
-
+Extracted shared `calcPadding` helper in MapCanvas.tsx that computes `{ top, bottom, left, right }` padding with 10% margin on all sides and optional panel offsets. Refactored both `fitToBounds` (no panel offsets) and `fitToSection` (with panel offsets) to use this helper. Fixed horizontal margin in `fitToSection` to include 10% of container width on top of panel offsets. Added skip-zoom-in logic that detects when the section already fits within the viewport and occupies ≥30% in at least one axis, using `easeTo` to center/pan only instead of `fitBounds`. Updated docs/SPEC.md line 570 to describe new behavior.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 2030aca
+- Tests: pnpm tsc --noEmit (passes, pre-existing unrelated error only), cargo test --manifest-path src-tauri/Cargo.toml (698 tests pass)
 - PRs:
