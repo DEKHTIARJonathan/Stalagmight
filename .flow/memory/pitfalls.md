@@ -183,3 +183,9 @@ Tailwind v3 min-w-N utilities only support 0/full/min/max/fit -- use min-w-[Nrem
 
 ## 2026-01-28 manual [pitfall]
 Tailwind utility classes referencing undefined color tokens (e.g. bg-muted when muted is not in tailwind.config.js) silently produce no CSS output -- always verify color tokens exist in the config before using them
+
+## 2026-01-28 manual [pitfall]
+E2E tests using Control+Shift+I as keyboard shortcut will be intercepted by Chromium DevTools -- use non-browser-reserved combos like Control+Shift+K in Playwright tests
+
+## 2026-01-28 manual [pitfall]
+Chromium reserves Ctrl+Shift+I/J/C/N/B/T/Delete -- never use these combos in Playwright E2E tests as they get intercepted by the browser and never reach the page

@@ -585,17 +585,17 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await expect(selectRecorder).toContainText('I');
       await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
 
-      // Also reassign Export from Ctrl+E to Ctrl+Shift+J
+      // Also reassign Export from Ctrl+E to Ctrl+Alt+E (avoid Ctrl+Shift+J which opens browser Console)
       const exportRecorder = page.locator('[data-testid="shortcut-primary-export"]');
       await exportRecorder.click();
       await waitForRecording(page, 'shortcut-primary-export', true);
-      await page.keyboard.press('Control+Shift+J');
+      await page.keyboard.press('Control+Alt+E');
       await waitForRecording(page, 'shortcut-primary-export', false);
 
       // Verify new binding is shown
       await expect(exportRecorder).toContainText('Ctrl');
-      await expect(exportRecorder).toContainText('Shift');
-      await expect(exportRecorder).toContainText('J');
+      await expect(exportRecorder).toContainText('Alt');
+      await expect(exportRecorder).toContainText('E');
 
       // No error should appear
       await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
