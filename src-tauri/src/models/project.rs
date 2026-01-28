@@ -38,7 +38,7 @@ pub struct Project {
     #[serde(default)]
     pub section_offsets: HashMap<SectionId, (f64, f64)>,
     /// Station offsets (x, y, z) applied when individual stations are moved
-    #[serde(default)]
+    #[serde(default, serialize_with = "serialize_station_offsets", deserialize_with = "deserialize_station_offsets")]
     pub station_offsets: HashMap<StationRef, (f64, f64, f64)>,
     /// SHA256 hashes of imported DMP files (for duplicate detection)
     #[serde(default)]
@@ -74,6 +74,24 @@ pub struct ProjectStats {
     pub loop_count: usize,
     /// Maximum straight-line distance from zero datum to any station
     pub penetration_distance: f64,
+}
+
+/// Serialize station_offsets as a Vec of (StationRef, (f64, f64, f64)) tuples
+/// to avoid serde_json's requirement that map keys be strings.
+fn serialize_station_offsets<S: serde::Serializer>(
+    map: &HashMap<StationRef, (f64, f64, f64)>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let entries: Vec<(&StationRef, &(f64, f64, f64))> = map.iter().collect();
+    entries.serialize(serializer)
+}
+
+/// Deserialize station_offsets from a Vec of (StationRef, (f64, f64, f64)) tuples.
+fn deserialize_station_offsets<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<HashMap<StationRef, (f64, f64, f64)>, D::Error> {
+    let entries: Vec<(StationRef, (f64, f64, f64))> = Vec::deserialize(deserializer)?;
+    Ok(entries.into_iter().collect())
 }
 
 impl Project {
@@ -273,6 +291,13 @@ impl Project {
             coords.x += dx;
             coords.y += dy;
             coords.z += dz;
+        }
+
+        // Apply station offset if exists (individual station move)
+        if let Some(&(ox, oy, oz)) = self.station_offsets.get(&station_ref) {
+            coords.x += ox;
+            coords.y += oy;
+            coords.z += oz;
         }
 
         Some(coords)
@@ -849,15 +874,16 @@ impl Project {
 
             // First station of section
             let first_station_ref = StationRef::new(section.id, 0);
-            // Apply station offset if exists
+            // Apply station offset if exists (copy, don't mutate current_coords)
+            let mut station_coords = current_coords;
             if let Some(&(ox, oy, oz)) = self.station_offsets.get(&first_station_ref) {
-                current_coords = Coordinates::new(
-                    current_coords.x + ox,
-                    current_coords.y + oy,
-                    current_coords.z + oz,
+                station_coords = Coordinates::new(
+                    station_coords.x + ox,
+                    station_coords.y + oy,
+                    station_coords.z + oz,
                 );
             }
-            stations.push(Station::with_coordinates(first_station_ref, current_coords));
+            stations.push(Station::with_coordinates(first_station_ref, station_coords));
             station_count += 1;
 
             // Report progress for first station
