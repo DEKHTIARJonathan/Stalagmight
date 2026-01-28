@@ -32,6 +32,7 @@ export default function DataTable({ sections }: DataTableProps) {
     toggleDataTable,
     dataTableHeight,
     announceSelection,
+    setHoveredSectionId,
   } = useUIStore();
 
   // Create a map of shot warnings for quick lookup
@@ -299,6 +300,35 @@ export default function DataTable({ sections }: DataTableProps) {
     [setSelection]
   );
 
+  // Track last hovered section ID for ref-based cleanup (matches SectionsPanel pattern)
+  const lastHoveredSectionIdRef = useRef<number | null>(null);
+
+  const handleSectionHover = useCallback(
+    (value: string | null) => {
+      if (value !== null) {
+        const sectionId = Number(value);
+        lastHoveredSectionIdRef.current = sectionId;
+        setHoveredSectionId(sectionId);
+      } else {
+        lastHoveredSectionIdRef.current = null;
+        setHoveredSectionId(null);
+      }
+    },
+    [setHoveredSectionId]
+  );
+
+  // Clear hoveredSectionId on unmount if it was set by this component
+  useEffect(() => {
+    return () => {
+      if (lastHoveredSectionIdRef.current !== null) {
+        const currentHoveredId = useUIStore.getState().hoveredSectionId;
+        if (currentHoveredId === lastHoveredSectionIdRef.current) {
+          useUIStore.getState().setHoveredSectionId(null);
+        }
+      }
+    };
+  }, []);
+
   // Derive the highlighted shot ID for the table
   // - For shot selection: use the shot ID directly
   // - For station selection: compute the corresponding shot ID
@@ -430,6 +460,7 @@ export default function DataTable({ sections }: DataTableProps) {
               value={String(selectedSectionId ?? '')}
               onChange={handleSectionChange}
               options={sectionOptions}
+              onOptionHover={handleSectionHover}
               data-testid="data-table-section-select"
             />
           </>
