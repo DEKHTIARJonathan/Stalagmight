@@ -787,7 +787,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         align-items: center;
         justify-content: center;
         box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        transition: transform 0.2s, background-color 0.2s;
+        transition: width 0.15s, height 0.15s, margin 0.15s, background-color 0.2s;
       `;
 
       // Add spinner for loading state
@@ -805,12 +805,18 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         el.appendChild(spinner);
       }
 
-      // Hover effect
+      // Hover effect - use width/height instead of transform (which MapLibre uses for positioning)
       el.addEventListener('mouseenter', () => {
-        el.style.transform = 'scale(1.2)';
+        el.style.width = '28px';
+        el.style.height = '28px';
+        el.style.marginLeft = '-2px';
+        el.style.marginTop = '-2px';
       });
       el.addEventListener('mouseleave', () => {
-        el.style.transform = 'scale(1)';
+        el.style.width = '24px';
+        el.style.height = '24px';
+        el.style.marginLeft = '0';
+        el.style.marginTop = '0';
       });
 
       // Click handler - for error markers, show error popup instead of selecting
