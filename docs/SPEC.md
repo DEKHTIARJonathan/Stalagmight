@@ -1957,6 +1957,7 @@ CREATE TABLE tiles (
 - `get_cache_stats`: Returns tile count, size, per-provider breakdown
 - `clear_tile_cache`: Clears all or provider-specific tiles
 - `fetch_tile`: Fetches a tile (cache-first, network fallback)
+- `get_tile_providers`: Returns available tile providers with metadata (name, display_label, attribution, tile_size, min/max zoom, available flag)
 
 ---
 

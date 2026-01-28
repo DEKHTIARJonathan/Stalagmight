@@ -1711,6 +1711,25 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] get_network_status called');
             return mockNetworkStatus;
 
+          case 'get_tile_providers':
+            // Return TileProviderInfo[] matching Rust struct shape
+            console.log('[Mock IPC] get_tile_providers called');
+            return [
+              {
+                name: 'esri',
+                display_label: 'ESRI World Imagery',
+                url_template: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                attribution: '© Esri, Maxar, Earthstar Geographics',
+                tile_size: 256,
+                min_zoom: 1,
+                max_zoom: 22,
+                content_type_hint: 'image/jpeg',
+                api_key_env: null,
+                auth_header: null,
+                available: true,
+              },
+            ];
+
           // Plugin: event system handlers for @tauri-apps/api/event
           case 'plugin:event|listen': {
             const event = args?.event as string;
