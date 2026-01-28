@@ -278,12 +278,13 @@ test.describe('Panel Interactions', () => {
     await page.keyboard.press('Control+3');
     await waitForMapIdle(page);
 
-    // Select a section with shots in the data table (custom Select component — portaled listbox)
+    // Select a section with shots in the data table (custom Select component - portaled listbox)
     const sectionSelector = page.getByTestId('data-table-section-select');
     if (await sectionSelector.isVisible()) {
       const selectorTrigger = sectionSelector.locator('button').first();
       await selectorTrigger.click();
-      // Use aria-controls to locate the portaled listbox (avoids matching sections panel listbox)
+      // Wait for aria-controls to be set, then locate the portaled listbox (avoids matching sections panel listbox)
+      await expect(selectorTrigger).toHaveAttribute('aria-controls', /.+/);
       const selectorListboxId = await selectorTrigger.getAttribute('aria-controls');
       await page.locator(`[id="${selectorListboxId}"]`).locator('[role="option"]:has-text("Main Passage")').click();
       await waitForMapIdle(page);

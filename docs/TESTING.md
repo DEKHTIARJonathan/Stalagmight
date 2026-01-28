@@ -835,19 +835,20 @@ The `Select` component renders its dropdown listbox via `createPortal` to `docum
 ```typescript
 // Open the dropdown
 const sectionSelect = page.getByTestId('data-table-section-select');
-await sectionSelect.locator('button').first().click();
-
-// Locate the portaled listbox globally by role
-const listbox = page.getByRole('listbox');
-
-// Or use aria-controls from the trigger
 const trigger = sectionSelect.locator('button').first();
+await trigger.click();
+
+// Wait for aria-controls (React may need a render cycle), then locate via ID
+await expect(trigger).toHaveAttribute('aria-controls', /.+/);
 const listboxId = await trigger.getAttribute('aria-controls');
-const listbox2 = page.locator(`#${listboxId}`);
+// Use attribute selector -- React useId() produces IDs with colons that break #id selectors
+const listbox = page.locator(`[id="${listboxId}"]`);
 
 // Locate options within the listbox
 await listbox.locator('[role="option"]:has-text("Main Passage")').click();
 ```
+
+**Prefer `aria-controls`-based lookup** over `page.getByRole('listbox')` when other listboxes may be present on the page (e.g. the sections panel listbox).
 
 #### Z-Order Verification
 
