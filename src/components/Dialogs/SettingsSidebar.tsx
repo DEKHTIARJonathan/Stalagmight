@@ -175,56 +175,58 @@ export function SettingsSidebar({
       role="tablist"
       aria-orientation="vertical"
       aria-label="Settings categories"
-      className="w-[150px] flex-shrink-0 border-r border-border bg-panel"
+      className="w-[150px] flex-shrink-0 border-r border-border bg-panel flex flex-col overflow-hidden"
       data-testid="settings-sidebar"
     >
-      {CATEGORIES.map((category, index) => {
-        const isActive = activeCategory === category.id;
-        const isFocused = effectiveFocusedIndex === index;
-        const hasError = categoryErrors[category.id] === true;
-        const isAdvanced = category.id === 'advanced';
+      <div className="flex-1 overflow-auto min-h-0">
+        {CATEGORIES.map((category, index) => {
+          const isActive = activeCategory === category.id;
+          const isFocused = effectiveFocusedIndex === index;
+          const hasError = categoryErrors[category.id] === true;
+          const isAdvanced = category.id === 'advanced';
 
-        return (
-          <div key={category.id}>
-            {/* Visual separator before Advanced */}
-            {isAdvanced && (
-              <div className="mx-3 my-2 border-t border-border" aria-hidden="true" />
-            )}
-            <div
-              ref={(el) => {
-                tabRefs.current[index] = el;
-              }}
-              id={getTabId(idBase, category.id)}
-              role="tab"
-              aria-selected={isActive}
-              aria-controls={getPanelId(idBase, category.id)}
-              tabIndex={isFocused ? 0 : -1}
-              data-testid={`settings-tab-${category.id}`}
-              className={`
-                relative px-4 py-2 text-sm cursor-pointer select-none
-                transition-colors outline-none
-                ${isActive ? 'bg-accent/20 text-accent font-medium' : 'text-text-primary hover:bg-accent/10'}
-                ${isFocused ? 'ring-2 ring-inset ring-accent' : ''}
-              `}
-              onClick={() => handleClick(category.id, index)}
-              onKeyDown={(e) => handleKeyDown(e, index)}
-              onFocus={() => handleFocus(index)}
-            >
-              <span className="flex items-center gap-2">
-                {category.label}
-                {/* Error indicator (red dot) */}
-                {hasError && (
-                  <span
-                    className="w-2 h-2 rounded-full bg-error flex-shrink-0"
-                    aria-label="Has validation errors"
-                    data-testid={`settings-tab-error-${category.id}`}
-                  />
-                )}
-              </span>
+          return (
+            <div key={category.id}>
+              {/* Visual separator before Advanced */}
+              {isAdvanced && (
+                <div className="mx-3 my-2 border-t border-border" aria-hidden="true" />
+              )}
+              <div
+                ref={(el) => {
+                  tabRefs.current[index] = el;
+                }}
+                id={getTabId(idBase, category.id)}
+                role="tab"
+                aria-selected={isActive}
+                aria-controls={getPanelId(idBase, category.id)}
+                tabIndex={isFocused ? 0 : -1}
+                data-testid={`settings-tab-${category.id}`}
+                className={`
+                  relative px-4 py-2 text-sm cursor-pointer select-none
+                  transition-colors outline-none
+                  ${isActive ? 'bg-accent/20 text-accent font-medium' : 'text-text-primary hover:bg-accent/10'}
+                  ${isFocused ? 'ring-2 ring-inset ring-accent' : ''}
+                `}
+                onClick={() => handleClick(category.id, index)}
+                onKeyDown={(e) => handleKeyDown(e, index)}
+                onFocus={() => handleFocus(index)}
+              >
+                <span className="flex items-center gap-2">
+                  {category.label}
+                  {/* Error indicator (red dot) */}
+                  {hasError && (
+                    <span
+                      className="w-2 h-2 rounded-full bg-error flex-shrink-0"
+                      aria-label="Has validation errors"
+                      data-testid={`settings-tab-error-${category.id}`}
+                    />
+                  )}
+                </span>
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
