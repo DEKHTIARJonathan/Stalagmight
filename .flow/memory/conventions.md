@@ -39,3 +39,6 @@ In WebdriverIO E2E tests, throw explicit errors in browser.execute callbacks whe
 
 ## 2026-01-28 manual [convention]
 Mock IPC handlers must return data matching the exact TypeScript interface (including all required fields); returning partial data silently reduces test fidelity
+
+## 2026-01-28 manual [convention]
+E2E test helpers on window.__E2E_TEST__ must be gated behind import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VITE_E2E === '1' to avoid leaking in production
