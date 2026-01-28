@@ -1,4 +1,4 @@
-import { type ReactNode, useRef, useEffect, useCallback } from 'react';
+import { type ReactNode, useRef, useEffect, useCallback, useState } from 'react';
 
 interface Column<T> {
   key: string;
@@ -110,6 +110,80 @@ export function Table<T extends object>({
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * EditableCell - Input that uses local state while editing and commits on blur/Enter.
+ * Prevents lag and multiple undo events when typing.
+ */
+interface EditableCellProps {
+  value: string;
+  onCommit: (value: string) => void;
+  inputType?: 'text' | 'number' | undefined;
+  inputStep?: string | undefined;
+  align?: 'left' | 'center' | 'right' | undefined;
+  testId?: string;
+  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+}
+
+function EditableCell({
+  value,
+  onCommit,
+  inputType = 'text',
+  inputStep,
+  align = 'left',
+  testId,
+  onKeyDown,
+}: EditableCellProps) {
+  const [localValue, setLocalValue] = useState(value);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Sync local state when external value changes (e.g., undo/redo)
+  useEffect(() => {
+    setLocalValue(value);
+  }, [value]);
+
+  const alignmentClasses = {
+    left: 'text-left',
+    center: 'text-center',
+    right: 'text-right',
+  };
+
+  const handleBlur = useCallback(() => {
+    // Only commit if value actually changed
+    if (localValue !== value) {
+      onCommit(localValue);
+    }
+  }, [localValue, value, onCommit]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      // Commit on Enter
+      if (localValue !== value) {
+        onCommit(localValue);
+      }
+    } else if (e.key === 'Escape') {
+      // Revert on Escape
+      setLocalValue(value);
+      inputRef.current?.blur();
+    }
+    // Pass to parent handler for navigation
+    onKeyDown?.(e);
+  }, [localValue, value, onCommit, onKeyDown]);
+
+  return (
+    <input
+      ref={inputRef}
+      type={inputType}
+      step={inputStep}
+      value={localValue}
+      onChange={(e) => setLocalValue(e.target.value)}
+      onBlur={handleBlur}
+      onKeyDown={handleKeyDown}
+      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel ${alignmentClasses[align]} ${inputType === 'number' ? 'tabular-nums' : ''}`}
+      data-testid={testId}
+    />
   );
 }
 
@@ -370,16 +444,14 @@ export function EditableTable<T extends object>({
                         {column.render ? (
                           column.render(item, index)
                         ) : isEditable ? (
-                          <input
-                            type={column.inputType ?? 'text'}
-                            step={column.inputStep}
+                          <EditableCell
                             value={displayValue}
-                            onChange={(e) =>
-                              handleInputChange(item, column.key, e.target.value, index)
-                            }
+                            onCommit={(value) => handleInputChange(item, column.key, value, index)}
+                            inputType={column.inputType}
+                            inputStep={column.inputStep}
+                            align={column.align}
+                            testId={`table-cell-${String(key)}-${column.key}`}
                             onKeyDown={(e) => handleCellKeyDown(e, index, columnIndex)}
-                            className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel ${alignmentClasses[column.align ?? 'left']} ${column.inputType === 'number' ? 'tabular-nums' : ''}`}
-                            data-testid={`table-cell-${String(key)}-${column.key}`}
                           />
                         ) : (
                           <span className="px-2 py-1 inline-block">
