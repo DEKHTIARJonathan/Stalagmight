@@ -106,7 +106,7 @@ export function DialogWrapper({
         aria-modal="true"
         aria-labelledby={titleId}
         data-testid={testId}
-        className={`relative bg-panel border border-border rounded-lg shadow-xl ${fixedSize ? '' : `${sizeClasses[size]} ${maxHeight}`} w-full mx-4 overflow-${overflow} ${overflow === 'hidden' ? 'flex flex-col' : ''}`}
+        className={`relative bg-panel border border-border rounded-lg shadow-xl ${fixedSize ? '' : `${sizeClasses[size]} ${maxHeight} w-full mx-4`} overflow-${overflow} ${overflow === 'hidden' ? 'flex flex-col' : ''}`}
         style={fixedSize ? { width: fixedSize.width, height: fixedSize.height } : undefined}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
