@@ -17,9 +17,6 @@ use tauri::{Emitter, Manager};
 
 use cache::TileCache;
 
-/// ESRI World Imagery tile server base URL
-const ESRI_TILE_URL: &str = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile";
-
 /// HTTP request timeout for tile fetches
 const TILE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -29,16 +26,12 @@ const ALLOWED_CONTENT_TYPES: &[&str] = &["image/jpeg", "image/jpg", "image/png"]
 /// Default content type when upstream doesn't provide one or it's invalid
 const DEFAULT_CONTENT_TYPE: &str = "image/jpeg";
 
-/// Supported tile providers
-const SUPPORTED_PROVIDERS: &[&str] = &["esri"];
-
 /// Fetches a tile from the network based on provider
 fn fetch_tile_from_network(provider: &str, z: u32, y: u32, x: u32) -> Result<(Vec<u8>, String), String> {
-    // Route to appropriate provider URL
-    let url = match provider {
-        "esri" => format!("{}/{}/{}/{}", ESRI_TILE_URL, z, y, x),
-        _ => return Err(format!("Unknown provider: {}", provider)),
-    };
+    // Look up provider in registry
+    let tile_provider = tile_providers::get_provider(provider)
+        .ok_or_else(|| format!("Unknown provider: {}", provider))?;
+    let url = tile_providers::expand_url(tile_provider, z, y, x);
 
     tracing::debug!(url = %url, provider = %provider, "Fetching tile from network");
 
@@ -182,12 +175,12 @@ fn handle_tile_request_with_fetcher<F>(
 where
     F: FnOnce(&str, u32, u32, u32) -> Result<(Vec<u8>, String), String>,
 {
-    // Validate provider
-    if !SUPPORTED_PROVIDERS.contains(&provider) {
+    // Validate provider against registry
+    if tile_providers::get_provider(provider).is_none() {
         tracing::warn!(provider = %provider, "Unknown tile provider requested");
         return build_error_response(
             http::StatusCode::BAD_REQUEST,
-            &format!("Unknown provider: {}. Supported: {:?}", provider, SUPPORTED_PROVIDERS),
+            &format!("Unknown provider: {}", provider),
         );
     }
 
@@ -263,12 +256,9 @@ pub fn tile_fetch_impl(
     x: u32,
     tile_cache: &Arc<Mutex<Option<TileCache>>>,
 ) -> Result<Vec<u8>, String> {
-    // Validate provider
-    if !SUPPORTED_PROVIDERS.contains(&provider) {
-        return Err(format!(
-            "Unknown provider: {}. Supported: {:?}",
-            provider, SUPPORTED_PROVIDERS
-        ));
+    // Validate provider against registry
+    if tile_providers::get_provider(provider).is_none() {
+        return Err(format!("Unknown provider: {}", provider));
     }
 
     // Check cache first (fresh tiles)
@@ -409,6 +399,7 @@ pub fn run() {
             commands::cache::clear_tile_cache,
             commands::cache::get_network_status,
             commands::cache::fetch_tile,
+            commands::cache::get_tile_providers,
             // Project commands
             commands::project::create_project,
             commands::project::open_project,
@@ -966,8 +957,13 @@ mod tests {
     // === Provider validation tests ===
 
     #[test]
-    fn test_supported_providers_includes_esri() {
-        assert!(SUPPORTED_PROVIDERS.contains(&"esri"));
+    fn test_registry_contains_esri() {
+        assert!(tile_providers::get_provider("esri").is_some());
+    }
+
+    #[test]
+    fn test_registry_unknown_provider_returns_none() {
+        assert!(tile_providers::get_provider("unknown").is_none());
     }
 
     #[test]
@@ -1212,5 +1208,115 @@ mod tests {
         let result = fetch_tile_from_network("unknown", 0, 0, 0);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Unknown provider"));
+    }
+
+    // === Registry-based fetch tests ===
+
+    #[test]
+    fn test_fetch_tile_from_network_valid_provider_uses_registry_url() {
+        // Verify that fetch_tile_from_network for a valid provider constructs the
+        // correct URL via registry lookup. We can't test the actual network call,
+        // but we verify the function doesn't error on provider lookup.
+        let provider = tile_providers::get_provider("esri").unwrap();
+        let url = tile_providers::expand_url(provider, 10, 500, 250);
+        assert_eq!(
+            url,
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/10/500/250"
+        );
+    }
+
+    #[test]
+    fn test_handle_tile_request_valid_provider_uses_registry() {
+        // With a mock fetcher, verify that a valid provider passes registry validation
+        let cache = make_test_cache();
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
+            Ok((b"tile_data".to_vec(), "image/jpeg".to_string()))
+        };
+        let response = handle_tile_request_with_fetcher("esri", 1, 2, 3, &cache, mock_fetch);
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    // === Config normalization tests ===
+
+    #[test]
+    fn test_map_config_normalize_unknown_provider_to_esri() {
+        let mut map_config = config::MapConfig {
+            satellite_provider: "nonexistent_provider".to_string(),
+            satellite_enabled: true,
+            satellite_gps_origin: config::GpsOrigin {
+                latitude: 24.55,
+                longitude: -81.78,
+            },
+            zoom_default: 15,
+            zoom_min: 1,
+            zoom_max: 22,
+            zoom_step: 1.0,
+            controls: config::MapControlsConfig {
+                pan_speed: 1.0,
+                zoom_speed: 1.0,
+                invert_scroll: false,
+            },
+            station: Default::default(),
+            shot: Default::default(),
+            snap: Default::default(),
+            animation: Default::default(),
+        };
+        map_config.normalize();
+        assert_eq!(map_config.satellite_provider, "esri");
+    }
+
+    #[test]
+    fn test_map_config_normalize_valid_provider_unchanged() {
+        let mut map_config = config::MapConfig {
+            satellite_provider: "esri".to_string(),
+            satellite_enabled: true,
+            satellite_gps_origin: config::GpsOrigin {
+                latitude: 24.55,
+                longitude: -81.78,
+            },
+            zoom_default: 15,
+            zoom_min: 1,
+            zoom_max: 22,
+            zoom_step: 1.0,
+            controls: config::MapControlsConfig {
+                pan_speed: 1.0,
+                zoom_speed: 1.0,
+                invert_scroll: false,
+            },
+            station: Default::default(),
+            shot: Default::default(),
+            snap: Default::default(),
+            animation: Default::default(),
+        };
+        map_config.normalize();
+        assert_eq!(map_config.satellite_provider, "esri");
+    }
+
+    // === get_tile_providers IPC tests ===
+
+    #[test]
+    fn test_get_tile_providers_returns_non_empty() {
+        let providers = tile_providers::get_all_provider_info();
+        assert!(!providers.is_empty());
+    }
+
+    #[test]
+    fn test_get_tile_providers_esri_available() {
+        let providers = tile_providers::get_all_provider_info();
+        let esri = providers.iter().find(|p| p.name == "esri").unwrap();
+        assert!(esri.available);
+    }
+
+    #[test]
+    fn test_get_tile_providers_response_serializes() {
+        let providers = tile_providers::get_all_provider_info();
+        let json = serde_json::to_value(&providers).unwrap();
+        let arr = json.as_array().unwrap();
+        assert!(!arr.is_empty());
+        let esri = arr.iter().find(|v| v["name"] == "esri").unwrap();
+        assert_eq!(esri["available"], true);
+        assert!(esri.get("display_label").is_some());
+        assert!(esri.get("url_template").is_some());
+        assert!(esri.get("tile_size").is_some());
     }
 }

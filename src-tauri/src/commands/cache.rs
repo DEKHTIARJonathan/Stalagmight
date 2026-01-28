@@ -149,6 +149,17 @@ pub(crate) async fn fetch_tile_impl(
     result
 }
 
+/// Get list of all registered tile providers with availability info.
+///
+/// Returns a Vec of TileProviderInfo structs from the static registry.
+/// Each entry includes provider metadata and a computed `available` flag
+/// indicating whether any required API key environment variable is set.
+/// No app state access needed — the registry is static.
+#[tauri::command]
+pub fn get_tile_providers() -> Vec<crate::tile_providers::TileProviderInfo> {
+    crate::tile_providers::get_all_provider_info()
+}
+
 /// Check network connectivity status.
 ///
 /// Performs a lightweight connectivity check by attempting to reach a known endpoint.
@@ -234,4 +245,30 @@ mod tests {
     // Note: Integration tests for get_cache_stats and clear_tile_cache
     // require AppState which needs more complex setup. Those are covered
     // in the Playwright and WebdriverIO tests.
+
+    #[test]
+    fn test_get_tile_providers_command() {
+        let providers = super::get_tile_providers();
+        assert!(!providers.is_empty());
+        let esri = providers.iter().find(|p| p.name == "esri");
+        assert!(esri.is_some());
+        assert!(esri.unwrap().available);
+    }
+
+    #[test]
+    fn test_get_tile_providers_serializes_correctly() {
+        let providers = super::get_tile_providers();
+        let json = serde_json::to_value(&providers).unwrap();
+        let arr = json.as_array().unwrap();
+        assert!(!arr.is_empty());
+        // Verify expected fields exist in the response
+        let esri = arr.iter().find(|v| v["name"] == "esri").unwrap();
+        assert!(esri.get("available").is_some());
+        assert!(esri.get("display_label").is_some());
+        assert!(esri.get("url_template").is_some());
+        assert!(esri.get("attribution").is_some());
+        assert!(esri.get("tile_size").is_some());
+        assert!(esri.get("min_zoom").is_some());
+        assert!(esri.get("max_zoom").is_some());
+    }
 }
