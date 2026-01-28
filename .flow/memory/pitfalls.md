@@ -177,3 +177,9 @@ E2E tests checking MapLibre feature-state must poll (not one-shot assert) becaus
 
 ## 2026-01-28 manual [pitfall]
 When removing items from data structures (sets/maps), also update all JSDoc comments and inline comments that enumerate those items -- reviewers flag stale documentation as NEEDS_WORK
+
+## 2026-01-28 manual [pitfall]
+Tailwind v3 min-w-N utilities only support 0/full/min/max/fit -- use min-w-[Nrem] arbitrary values for custom min-widths instead of assuming width scale applies
+
+## 2026-01-28 manual [pitfall]
+Tailwind utility classes referencing undefined color tokens (e.g. bg-muted when muted is not in tailwind.config.js) silently produce no CSS output -- always verify color tokens exist in the config before using them

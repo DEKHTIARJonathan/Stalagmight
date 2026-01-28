@@ -50,9 +50,8 @@ Apply all UI layout improvements to ShortcutsSettings: flex-grow name column, co
 - [ ] Reserved section keeps current 2-column grid style
 
 ## Done summary
-TBD
-
+Updated ShortcutsSettings UI with flex-grow name column (min-w-[8rem] + truncate + custom hover tooltip), condensed rows (space-y-0.5, py-0.5), explicit index-based alternating row colors (bg-panel/20), and moved reserved shortcuts section above the search bar so it remains visible during search filtering.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: e38e8f65b9eb06f40aae2c6e91f83eab78e088f8, c08c2674b7601a1ab5e3afc3312cc5c624fc960b
+- Tests: pnpm tsc --noEmit, pnpm test:ui -- --grep shortcuts
 - PRs:
