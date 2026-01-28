@@ -204,3 +204,9 @@ HashMap<StructKey, V> in a serde Serialize/Deserialize struct will fail JSON ser
 
 ## 2026-01-28 manual [pitfall]
 Monotonic ID counters (next_closure_id) must be normalized before use -- legacy deserialization with serde(default) can reset them to 0, causing ID reuse after deletions
+
+## 2026-01-28 manual [pitfall]
+When adding a new column to SQLite persistence, must update BOTH init_schema CREATE TABLE and migrate_schema ALTER TABLE, or new databases will fail while old ones work
+
+## 2026-01-28 manual [pitfall]
+Monotonic ID counters (like next_closure_id) must be persisted to the database, not just derived from max(existing) + 1, because deletions + undo can cause ID reuse across sessions

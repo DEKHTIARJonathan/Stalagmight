@@ -51,3 +51,6 @@ Use [id="..."] attribute selector instead of #id CSS selector when targeting ele
 
 ## 2026-01-28 manual [convention]
 E2E tests querying third-party library DOM elements (e.g. .maplibregl-ctrl-group) must scope selectors to a data-testid container to avoid false positives when multiple instances exist
+
+## 2026-01-28 manual [convention]
+When backend adds validation fields (like can_merge/reason) to API responses, frontend must gate on those fields rather than inferring behavior from older fields (like connected)
