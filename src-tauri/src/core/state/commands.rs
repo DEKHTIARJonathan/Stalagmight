@@ -1,6 +1,6 @@
 use crate::core::{Command, CommandResult, UndoData, Validator};
 use crate::models::{
-    ClosurePreview, ClosureStrategy, Coordinates, GpsCoordinates, SectionData, SectionId,
+    ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates, SectionData, SectionId,
     SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef,
 };
 
@@ -670,7 +670,7 @@ impl AppState {
         &self,
         station_a: StationRef,
         station_b: StationRef,
-    ) -> Result<(bool, Option<ClosurePreview>), String> {
+    ) -> Result<ConnectivityResult, String> {
         let proj_guard = self
             .project
             .lock()
@@ -708,11 +708,36 @@ impl AppState {
         let connected = connected_a.contains(&station_b.section_id);
 
         if connected {
-            // Compute preview data using shared helper
+            // Stations are already connected -- cannot merge, should create closure
             let preview = project.compute_closure_metrics(station_a, station_b)?;
-            Ok((true, Some(preview)))
+            Ok(ConnectivityResult {
+                connected: true,
+                preview: Some(preview),
+                can_merge: false,
+                reason: Some("Stations are already connected. Use loop closure instead.".to_string()),
+            })
         } else {
-            Ok((false, None))
+            // Not connected -- check zero datum constraints
+            let a_has_zd = project.zero_datums.iter().any(|zd| {
+                connected_a.contains(&zd.station_ref.section_id)
+            });
+            let connected_b = project.get_connected_section_ids(station_b.section_id);
+            let b_has_zd = project.zero_datums.iter().any(|zd| {
+                connected_b.contains(&zd.station_ref.section_id)
+            });
+
+            let (can_merge, reason) = if a_has_zd && b_has_zd {
+                (false, Some("Both sections have fixed coordinates (zero datums). Remove one before merging.".to_string()))
+            } else {
+                (true, None)
+            };
+
+            Ok(ConnectivityResult {
+                connected: false,
+                preview: None,
+                can_merge,
+                reason,
+            })
         }
     }
 

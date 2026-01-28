@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use tracing::{debug, info};
 
 use super::{
-    gps_to_local, ClosurePreview, ClosureStrategy, Coordinates, GpsBounds, GpsCoordinates,
-    LoopClosure, Section, SectionData, SectionId, SectionUpdates, Shot, ShotData, ShotId,
-    ShotUpdates, Station, StationMerge, StationRef, ZeroDatum,
+    gps_to_local, ClosurePreview, ClosureRef, ClosureStrategy, Coordinates, GpsBounds,
+    GpsCoordinates, LoopClosure, Section, SectionData, SectionId, SectionUpdates, Shot, ShotData,
+    ShotId, ShotUpdates, Station, StationMerge, StationRef, ZeroDatum,
 };
 
 /// A complete cave survey project
@@ -43,6 +43,9 @@ pub struct Project {
     /// SHA256 hashes of imported DMP files (for duplicate detection)
     #[serde(default)]
     pub imported_file_hashes: Vec<String>,
+    /// Monotonic counter for closure IDs. Never reused, even after deletions.
+    #[serde(default)]
+    pub next_closure_id: u64,
 }
 
 /// Project metadata for listing
@@ -112,18 +115,23 @@ impl Project {
             section_offsets: HashMap::new(),
             station_offsets: HashMap::new(),
             imported_file_hashes: Vec::new(),
+            next_closure_id: 1,
         }
     }
 
     /// Assign sequential IDs to any loop closures that have id=0 (legacy projects).
-    /// IDs start from max(existing_ids) + 1.
+    /// Updates `next_closure_id` to be greater than all existing IDs.
     pub fn assign_closure_ids(&mut self) {
+        // First, ensure next_closure_id is at least max(existing) + 1
         let max_id = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
-        let mut next_id = max_id + 1;
+        if self.next_closure_id <= max_id {
+            self.next_closure_id = max_id + 1;
+        }
+        // Assign IDs to any closures with id=0
         for lc in &mut self.loop_closures {
             if lc.id == 0 {
-                lc.id = next_id;
-                next_id += 1;
+                lc.id = self.next_closure_id;
+                self.next_closure_id += 1;
             }
         }
     }
@@ -541,8 +549,9 @@ impl Project {
         // Compute closure values using shared helper
         let metrics = self.compute_closure_metrics(station_a, station_b)?;
 
-        // Assign next closure ID: max of existing IDs + 1
-        let next_id = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0) + 1;
+        // Assign next closure ID from monotonic counter
+        let next_id = self.next_closure_id;
+        self.next_closure_id += 1;
 
         let closure = LoopClosure {
             id: next_id,
@@ -996,6 +1005,77 @@ impl Project {
                 for member in &groups[group_id] {
                     if *member != station.station_ref {
                         station.merged_with.push(*member);
+                    }
+                }
+            }
+        }
+
+        // Populate closures_with for each station from loop_closures
+        // For each closure, both endpoint stations (and their merged equivalents)
+        // get a ClosureRef entry. Transitive closures go through merged stations.
+        for closure in &self.loop_closures {
+            let a_ref = closure.station_a;
+            let b_ref = closure.station_b;
+
+            // Collect merged equivalents for each endpoint
+            let a_group: Vec<StationRef> = station_to_group
+                .get(&a_ref)
+                .map(|&gid| groups[gid].clone())
+                .unwrap_or_else(|| vec![a_ref]);
+            let b_group: Vec<StationRef> = station_to_group
+                .get(&b_ref)
+                .map(|&gid| groups[gid].clone())
+                .unwrap_or_else(|| vec![b_ref]);
+
+            // For each station in A's group, add direct ref to B and transitive refs to B's merged partners
+            for station in &mut stations {
+                if a_group.contains(&station.station_ref) {
+                    // Direct closure to station_b
+                    let via = if station.station_ref != a_ref {
+                        Some(a_ref) // transitive: reached via the actual closure endpoint
+                    } else {
+                        None
+                    };
+                    station.closures_with.push(ClosureRef {
+                        closure_id: closure.id,
+                        station_ref: b_ref,
+                        via_station: via,
+                        is_transitive: via.is_some(),
+                    });
+                    // Transitive closures to B's merged partners
+                    for &b_member in &b_group {
+                        if b_member != b_ref {
+                            station.closures_with.push(ClosureRef {
+                                closure_id: closure.id,
+                                station_ref: b_member,
+                                via_station: Some(b_ref),
+                                is_transitive: true,
+                            });
+                        }
+                    }
+                } else if b_group.contains(&station.station_ref) {
+                    // Direct closure to station_a
+                    let via = if station.station_ref != b_ref {
+                        Some(b_ref)
+                    } else {
+                        None
+                    };
+                    station.closures_with.push(ClosureRef {
+                        closure_id: closure.id,
+                        station_ref: a_ref,
+                        via_station: via,
+                        is_transitive: via.is_some(),
+                    });
+                    // Transitive closures to A's merged partners
+                    for &a_member in &a_group {
+                        if a_member != a_ref {
+                            station.closures_with.push(ClosureRef {
+                                closure_id: closure.id,
+                                station_ref: a_member,
+                                via_station: Some(a_ref),
+                                is_transitive: true,
+                            });
+                        }
                     }
                 }
             }

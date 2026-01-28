@@ -700,6 +700,20 @@ impl AppState {
                 // Redo CreateShot by restoring from snapshot to preserve original ID
                 self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position)
             }
+            UndoData::ClosureInfo { closure } => {
+                // Redo CreateLoopClosure by restoring the captured closure to preserve its ID
+                match self.project.lock() {
+                    Ok(mut proj_guard) => match proj_guard.as_mut() {
+                        Some(project) => {
+                            project.loop_closures.push(closure.clone());
+                            project.touch();
+                            CommandResult::success()
+                        }
+                        None => CommandResult::failure("No project open".to_string()),
+                    },
+                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                }
+            }
             _ => {
                 // Re-execute the original command for other undo data types
                 self.execute_without_undo(entry.command.clone())

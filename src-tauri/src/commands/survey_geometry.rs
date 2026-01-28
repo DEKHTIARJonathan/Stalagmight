@@ -142,9 +142,12 @@ fn get_survey_geometry_for_file_impl(path: &PathBuf) -> Result<SurveyGeometry, S
     })?;
 
     // Load project from database
-    let project = db.load_project().map_err(|e| SurveyGeometryError {
+    let mut project = db.load_project().map_err(|e| SurveyGeometryError {
         message: format!("Failed to load project: {}", e),
     })?;
+
+    // Assign IDs to any legacy closures with id=0 (in-memory only, read-only DB)
+    project.assign_closure_ids();
 
     // Compute geometry from project
     get_survey_geometry_for_project(&project)
