@@ -339,4 +339,45 @@ test.describe('Merge and Closure Dialogs', () => {
     await expect(closureDialog.getByText('2.0%')).toBeVisible();
     await expect(closureDialog.getByText('15.00m')).toBeVisible();
   });
+
+  test('ClosureDialog shows reason subtitle when merge redirects to closure', async ({ page }) => {
+    const sectionIds = await page.evaluate(() => {
+      const e2e = (window as any).__E2E_TEST__;
+      if (!e2e) return [];
+      const project = e2e.projectStore.getState().project;
+      if (!project) return [];
+      return project.sections.map((s: any) => s.id);
+    });
+
+    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+
+    // Open closure dialog with a reason (simulating merge-to-closure redirect)
+    await page.evaluate(
+      ({ sectionA, sectionB }) => {
+        const e2e = (window as any).__E2E_TEST__;
+        if (!e2e) return;
+        e2e.uiStore.getState().openDialog('closure', {
+          stationA: { section_id: sectionA, station_index: 0 },
+          stationB: { section_id: sectionB, station_index: 1 },
+          preview: {
+            path_length: 23.0,
+            misclosure_distance: 0.5,
+            error_percentage: 2.2,
+            horizontal_misclosure: 0.4,
+            vertical_misclosure: 0.3,
+          },
+          reason: 'These stations are already connected. Creating a loop closure instead.',
+        });
+      },
+      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+    );
+
+    const closureDialog = page.getByTestId('closure-dialog');
+    await expect(closureDialog).toBeVisible({ timeout: 5000 });
+
+    // Verify reason subtitle is displayed
+    await expect(
+      closureDialog.getByText('These stations are already connected. Creating a loop closure instead.')
+    ).toBeVisible();
+  });
 });

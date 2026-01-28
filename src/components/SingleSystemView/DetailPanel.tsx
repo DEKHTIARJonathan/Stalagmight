@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
@@ -991,33 +991,51 @@ function ClosuresSection({
   onHoverEnd,
 }: ClosuresSectionProps) {
   const [expanded, setExpanded] = useState(true);
+  const contentId = 'closures-section-content';
 
-  // Validate station targets exist
+  // Precompute station existence set for O(1) lookups
+  const stationKeySet = useMemo(() => {
+    const keys = new Set<string>();
+    for (const s of stations) {
+      keys.add(`${s.station_ref.section_id}:${s.station_ref.station_index}`);
+    }
+    return keys;
+  }, [stations]);
+
   const stationExists = (ref: { section_id: number; station_index: number }): boolean => {
-    return stations.some(
-      (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
-    );
+    return stationKeySet.has(`${ref.section_id}:${ref.station_index}`);
   };
 
-  // Group closures by closure_id
-  const grouped = new Map<number, ClosureRef[]>();
-  for (const c of closures) {
-    const existing = grouped.get(c.closure_id);
-    if (existing) {
-      existing.push(c);
-    } else {
-      grouped.set(c.closure_id, [c]);
+  // Precompute loop closures map for O(1) lookups
+  const closureMap = useMemo(() => {
+    const map = new Map<number, LoopClosure>();
+    for (const lc of loopClosures) {
+      map.set(lc.id, lc);
     }
-  }
+    return map;
+  }, [loopClosures]);
 
-  // Sort groups: direct closures first, then transitive
-  const sortedGroups = Array.from(grouped.entries()).sort(([, refsA], [, refsB]) => {
-    const aHasDirect = refsA.some((r) => !r.is_transitive);
-    const bHasDirect = refsB.some((r) => !r.is_transitive);
-    if (aHasDirect && !bHasDirect) return -1;
-    if (!aHasDirect && bHasDirect) return 1;
-    return 0;
-  });
+  // Group closures by closure_id and sort deterministically
+  const sortedGroups = useMemo(() => {
+    const grouped = new Map<number, ClosureRef[]>();
+    for (const c of closures) {
+      const existing = grouped.get(c.closure_id);
+      if (existing) {
+        existing.push(c);
+      } else {
+        grouped.set(c.closure_id, [c]);
+      }
+    }
+
+    // Sort: direct closures first, then transitive; tiebreak by closure_id ascending
+    return Array.from(grouped.entries()).sort(([idA, refsA], [idB, refsB]) => {
+      const aHasDirect = refsA.some((r) => !r.is_transitive);
+      const bHasDirect = refsB.some((r) => !r.is_transitive);
+      if (aHasDirect && !bHasDirect) return -1;
+      if (!aHasDirect && bHasDirect) return 1;
+      return idA - idB;
+    });
+  }, [closures]);
 
   return (
     <div className="pt-2 border-t border-border" data-testid="closures-section">
@@ -1026,14 +1044,16 @@ function ClosuresSection({
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary w-full text-left"
         data-testid="closures-section-toggle"
+        aria-expanded={expanded}
+        aria-controls={contentId}
       >
         <span className="text-xs">{expanded ? '▼' : '▶'}</span>
         <span>Loop Closures</span>
       </button>
       {expanded && (
-        <div className="mt-1 space-y-2" data-testid="closures-section-content">
+        <div className="mt-1 space-y-2" id={contentId} data-testid="closures-section-content">
           {sortedGroups.map(([closureId, refs]) => {
-            const closure = loopClosures.find((lc) => lc.id === closureId);
+            const closure = closureMap.get(closureId);
             const directRefs = refs.filter((r) => !r.is_transitive);
             const transitiveRefs = refs.filter((r) => r.is_transitive);
 
@@ -1082,9 +1102,13 @@ function ClosuresSection({
                     ))}
                   </div>
                 )}
-                {closure && (
+                {closure ? (
                   <div className="text-xs text-text-secondary" data-testid={`closure-metrics-${closureId}`}>
                     Path: {closure.path_length.toFixed(1)}m | Error: {closure.misclosure_distance.toFixed(2)}m ({closure.error_percentage.toFixed(2)}%)
+                  </div>
+                ) : (
+                  <div className="text-xs text-text-secondary" data-testid={`closure-metrics-${closureId}`}>
+                    Metrics unavailable
                   </div>
                 )}
               </div>

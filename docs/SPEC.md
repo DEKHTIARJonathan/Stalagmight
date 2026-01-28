@@ -216,6 +216,12 @@ Project (Cave System)
 │   ├── is_zero_datum: bool
 │   ├── merged_with: Vec<StationRef>
 │   └── closures_with: Option<Vec<ClosureRef>> (direct + transitive closure relationships)
+│
+│   ClosureRef:
+│     ├── closure_id: u32 (references LoopClosure.id)
+│     ├── station_ref: StationRef (the other station in the closure)
+│     ├── via_station: Option<StationRef> (intermediate station for transitive closures)
+│     └── is_transitive: bool (false = direct closure, true = transitive)
 └── Settings
     ├── display_preferences: DisplaySettings
     └── export_preferences: ExportSettings

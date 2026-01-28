@@ -66,9 +66,8 @@ Add "Loop Closures" section to DetailPanel showing direct and transitive closure
 - [ ] `pnpm tsc --noEmit` passes
 - [ ] `pnpm test:ui` passes
 ## Done summary
-TBD
-
+Added Loop Closures collapsible section to StationDetail in DetailPanel.tsx. Groups closures by closure_id (direct first, then transitive). Direct: 'Closure to B, C' with DetailLink. Transitive: 'Transitive closure to X (via A)' with muted text. Metrics per group from project.loop_closures. Hidden when empty. Updated SPEC.md (4.1 data model, 6.2.1 UI, 7.5 workflow). 6 E2E tests pass.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: b3a2a29
+- Tests: pnpm tsc --noEmit (pass), pnpm test:ui --grep Loop Closures (6 passed), cargo test (80 passed)
 - PRs:
