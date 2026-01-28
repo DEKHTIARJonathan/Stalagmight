@@ -261,6 +261,50 @@ tr:hover {
   z-index: 100 !important;
 }
 
+/* MapLibre controls - dark theme */
+.maplibregl-ctrl {
+  color: #f5f5f5;
+  font-family: inherit;
+}
+
+.maplibregl-ctrl-group {
+  background: #16213e !important;
+  border: 1px solid #0f3460 !important;
+  border-radius: 4px !important;
+  box-shadow: 0 0 0 2px rgba(15, 52, 96, 0.3) !important;
+}
+
+.maplibregl-ctrl-group button {
+  background-color: transparent;
+  width: 29px;
+  height: 29px;
+}
+
+.maplibregl-ctrl-group button:hover {
+  background-color: #1a1a2e !important;
+}
+
+.maplibregl-ctrl-group button:active {
+  background-color: #0f3460 !important;
+}
+
+.maplibregl-ctrl-group button + button {
+  border-top: 1px solid #0f3460 !important;
+}
+
+.maplibregl-ctrl-icon {
+  filter: brightness(0) invert(1) !important;
+}
+
+.maplibregl-ctrl-scale {
+  background-color: transparent !important;
+  border-color: #0f3460 !important;
+  color: #f5f5f5 !important;
+  font-family: inherit !important;
+  border-width: medium 2px 2px !important;
+  border-style: none solid solid !important;
+}
+
 /* GlobalView marker spinner animation */
 @keyframes spin {
   to { transform: rotate(360deg); }
