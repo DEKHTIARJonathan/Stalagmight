@@ -312,8 +312,8 @@ test.describe('Detail Link Focus Highlighting', () => {
       // Select a shot to show its detail panel with station links
       await selectShot(page, mainSectionId, firstShotId);
 
-      // Find the Start Station link (station index 0, position 1)
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      // Find the Start Station link (station index 0, position 0, 0-indexed)
+      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await expect(startStationLink).toBeVisible();
 
       // Check initial hover state
@@ -349,7 +349,7 @@ test.describe('Detail Link Focus Highlighting', () => {
       await selectShot(page, mainSectionId, firstShotId);
 
       // Focus the Start Station link
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await startStationLink.focus();
 
       // Wait for hover state to be set - use specific predicate
@@ -384,13 +384,13 @@ test.describe('Detail Link Focus Highlighting', () => {
       await selectShot(page, mainSectionId, firstShotId);
 
       // Focus Start Station link (index 0)
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await startStationLink.focus();
 
       await pollHoverState(page, (state) => state.hoveredStation?.station_index === 0);
 
       // Now focus End Station link (index 1)
-      const endStationLink = page.getByTestId(`station-${mainSectionId}-2-link`);
+      const endStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
       await endStationLink.focus();
 
       // Verify hoveredStation updated to the new station
@@ -537,7 +537,7 @@ test.describe('Detail Link Focus Highlighting', () => {
       await selectShot(page, mainSectionId, firstShotId);
 
       // Focus a station link
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await startStationLink.focus();
 
       // Verify hover state is set - use specific predicate
@@ -568,8 +568,8 @@ test.describe('Detail Link Focus Highlighting', () => {
       // Select the section to show section detail
       await selectSectionById(page, mainSectionId);
 
-      // Find the First Station link (station index 0, position 1)
-      const firstStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      // Find the First Station link (station index 0, position 0, 0-indexed)
+      const firstStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await expect(firstStationLink).toBeVisible();
 
       // Focus the link
@@ -593,8 +593,8 @@ test.describe('Detail Link Focus Highlighting', () => {
       await selectSectionById(page, mainSectionId);
 
       // Main section has 3 shots, so 4 stations (indices 0-3)
-      // Last Station is at index 3, position 4
-      const lastStationLink = page.getByTestId(`station-${mainSectionId}-4-link`);
+      // Last Station is at index 3, position 3 (0-indexed)
+      const lastStationLink = page.getByTestId(`station-${mainSectionId}-3-link`);
       await expect(lastStationLink).toBeVisible();
 
       // Focus the link
@@ -622,7 +622,7 @@ test.describe('Detail Link Focus Highlighting', () => {
       await selectShot(page, mainSectionId, firstShotId);
 
       // Focus station link first
-      const stationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      const stationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await stationLink.focus();
 
       // Verify station hover state - use specific predicate
@@ -664,8 +664,8 @@ test.describe('Detail Link Focus Highlighting', () => {
       // Select a shot to show its detail panel with station links
       await selectShot(page, mainSectionId, firstShotId);
 
-      // Find the Start Station link (station index 0, position 1)
-      const stationLinkTestId = `station-${mainSectionId}-1-link`;
+      // Find the Start Station link (station index 0, position 0, 0-indexed)
+      const stationLinkTestId = `station-${mainSectionId}-0-link`;
       const startStationLink = page.getByTestId(stationLinkTestId);
       await expect(startStationLink).toBeVisible();
 
@@ -698,7 +698,7 @@ test.describe('Detail Link Focus Highlighting', () => {
       // Select a shot to show detail panel
       await selectShot(page, mainSectionId, firstShotId);
 
-      const stationLinkTestId = `station-${mainSectionId}-1-link`;
+      const stationLinkTestId = `station-${mainSectionId}-0-link`;
       const startStationLink = page.getByTestId(stationLinkTestId);
       await expect(startStationLink).toBeVisible();
 
@@ -878,7 +878,7 @@ test.describe('Detail Link Focus Highlighting', () => {
       await selectShot(page, mainSectionId, firstShotId);
 
       // Focus the first station link
-      const startStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      const startStationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await startStationLink.focus();
 
       // Verify first station is hovered
@@ -893,7 +893,7 @@ test.describe('Detail Link Focus Highlighting', () => {
       await page.keyboard.press('Tab');
 
       // Verify End Station link is now focused
-      const endStationLink = page.getByTestId(`station-${mainSectionId}-2-link`);
+      const endStationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
       await expect(endStationLink).toBeFocused();
 
       // Verify hover state updated to station index 1
@@ -998,7 +998,7 @@ test.describe('Detail Link Focus Highlighting', () => {
       // Verify section is hovered via detail link
       await pollHoverState(page, (state) => state.hoveredSectionId === mainSectionId);
 
-      // Now hover a different section row
+      // Now hover a different section row (sections panel)
       const sideSectionId = await getSectionIdByName(page, 'Side Passage');
       const sectionRow = page.locator(`[data-testid="section-row-${sideSectionId}"]`);
       await sectionRow.hover();
@@ -1088,7 +1088,7 @@ test.describe('Detail Link Focus Highlighting', () => {
 
       // First test DetailLink station focus (same callback as hover)
       await selectShot(page, mainSectionId, firstShotId);
-      const stationLink = page.getByTestId(`station-${mainSectionId}-1-link`);
+      const stationLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await stationLink.focus();
       await pollHoverState(
         page,

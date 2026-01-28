@@ -22,9 +22,9 @@ describe('generateTestId', () => {
       expect(generateTestId('station', target)).toBe('station-2-5-link');
     });
 
-    it('generates correct test ID for first station in first section', () => {
-      const target: StationOrShotTarget = { sectionId: 1, position: 1 };
-      expect(generateTestId('station', target)).toBe('station-1-1-link');
+    it('generates correct test ID for first station in first section (0-indexed)', () => {
+      const target: StationOrShotTarget = { sectionId: 1, position: 0 };
+      expect(generateTestId('station', target)).toBe('station-1-0-link');
     });
 
     it('handles large numbers', () => {
