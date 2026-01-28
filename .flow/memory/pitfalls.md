@@ -210,3 +210,6 @@ When adding a new column to SQLite persistence, must update BOTH init_schema CRE
 
 ## 2026-01-28 manual [pitfall]
 Monotonic ID counters (like next_closure_id) must be persisted to the database, not just derived from max(existing) + 1, because deletions + undo can cause ID reuse across sessions
+
+## 2026-01-28 manual [pitfall]
+When widening a traversal function (e.g. adding edge types), audit ALL call sites for semantic expectations -- some callers need the original narrow semantics (rigid groups) while others need the widened semantics (reachability); split into explicit variants rather than widening in place
