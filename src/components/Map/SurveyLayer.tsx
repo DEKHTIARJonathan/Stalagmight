@@ -125,6 +125,14 @@ export default class SurveyLayer {
   private prevSelectedSectionShotIds: Set<number> = new Set();
   private prevSelectedSectionStationIds: Set<number> = new Set();
 
+  // Cached section feature IDs to avoid re-scanning querySourceFeatures on every updateVisualState()
+  private cachedHoveredSectionId: string | null = null;
+  private cachedHoveredSectionShotIds: Set<number> = new Set();
+  private cachedHoveredSectionStationIds: Set<number> = new Set();
+  private cachedSelectedSectionId: string | null = null;
+  private cachedSelectedSectionShotIds: Set<number> = new Set();
+  private cachedSelectedSectionStationIds: Set<number> = new Set();
+
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
     this.callbacks = callbacks;
@@ -965,6 +973,48 @@ export default class SurveyLayer {
     return ids;
   }
 
+  // Get cached section feature IDs for hover, recomputing only when section ID changes
+  private getCachedHoveredSectionIds(shotsSource: string, stationsSource: string): { shots: Set<number>; stations: Set<number> } {
+    if (this.cachedHoveredSectionId !== this.hoveredSectionId) {
+      this.cachedHoveredSectionId = this.hoveredSectionId;
+      if (this.hoveredSectionId) {
+        this.cachedHoveredSectionShotIds = this.getSectionFeatureIds(shotsSource, this.hoveredSectionId);
+        this.cachedHoveredSectionStationIds = this.getSectionFeatureIds(stationsSource, this.hoveredSectionId);
+      } else {
+        this.cachedHoveredSectionShotIds = new Set();
+        this.cachedHoveredSectionStationIds = new Set();
+      }
+    }
+    return { shots: this.cachedHoveredSectionShotIds, stations: this.cachedHoveredSectionStationIds };
+  }
+
+  // Get cached section feature IDs for selection, recomputing only when section ID changes
+  private getCachedSelectedSectionIds(shotsSource: string, stationsSource: string): { shots: Set<number>; stations: Set<number> } {
+    if (this.cachedSelectedSectionId !== this.selectedSectionId) {
+      this.cachedSelectedSectionId = this.selectedSectionId;
+      if (this.selectedSectionId) {
+        this.cachedSelectedSectionShotIds = this.getSectionFeatureIds(shotsSource, this.selectedSectionId);
+        this.cachedSelectedSectionStationIds = this.getSectionFeatureIds(stationsSource, this.selectedSectionId);
+      } else {
+        this.cachedSelectedSectionShotIds = new Set();
+        this.cachedSelectedSectionStationIds = new Set();
+      }
+    }
+    return { shots: this.cachedSelectedSectionShotIds, stations: this.cachedSelectedSectionStationIds };
+  }
+
+  // Invalidate section ID caches (called after data updates that reset feature-state)
+  private invalidateSectionCaches(): void {
+    this.cachedHoveredSectionId = null;
+    this.cachedSelectedSectionId = null;
+  }
+
+  // Check if a featureId belongs to a section (derived from encoding: sectionId * 100000 + index)
+  private featureBelongsToSection(featureId: number, sectionIdStr: string | null): boolean {
+    if (!sectionIdStr) return false;
+    return Math.floor(featureId / 100000) === Number(sectionIdStr);
+  }
+
   // Update visual state using setFeatureState (much faster than setPaintProperty)
   // Only updates the specific features that changed, not the entire layer
   private updateVisualState() {
@@ -974,11 +1024,12 @@ export default class SurveyLayer {
     // Update station hover state
     const newHoveredStationFeatureId = this.parseFeatureId(this.hoveredStationId);
     if (newHoveredStationFeatureId !== this.prevHoveredStationFeatureId) {
-      // Clear previous hover
+      // Clear previous hover — but restore section hover if feature belongs to hovered section
       if (this.prevHoveredStationFeatureId !== null) {
+        const restoreSection = this.featureBelongsToSection(this.prevHoveredStationFeatureId, this.hoveredSectionId);
         this.map.setFeatureState(
           { source: stationsSource, id: this.prevHoveredStationFeatureId },
-          { hover: false }
+          { hover: restoreSection }
         );
       }
       // Set new hover
@@ -994,11 +1045,12 @@ export default class SurveyLayer {
     // Update shot hover state
     const newHoveredShotFeatureId = this.parseFeatureId(this.hoveredShotId);
     if (newHoveredShotFeatureId !== this.prevHoveredShotFeatureId) {
-      // Clear previous hover
+      // Clear previous hover — but restore section hover if feature belongs to hovered section
       if (this.prevHoveredShotFeatureId !== null) {
+        const restoreSection = this.featureBelongsToSection(this.prevHoveredShotFeatureId, this.hoveredSectionId);
         this.map.setFeatureState(
           { source: shotsSource, id: this.prevHoveredShotFeatureId },
-          { hover: false }
+          { hover: restoreSection }
         );
       }
       // Set new hover
@@ -1014,11 +1066,12 @@ export default class SurveyLayer {
     // Update station selection state
     const newSelectedStationFeatureId = this.parseFeatureId(this.selectedStationId);
     if (newSelectedStationFeatureId !== this.prevSelectedStationFeatureId) {
-      // Clear previous selection
+      // Clear previous selection — but restore section selection if feature belongs to selected section
       if (this.prevSelectedStationFeatureId !== null) {
+        const restoreSection = this.featureBelongsToSection(this.prevSelectedStationFeatureId, this.selectedSectionId);
         this.map.setFeatureState(
           { source: stationsSource, id: this.prevSelectedStationFeatureId },
-          { selected: false }
+          { selected: restoreSection }
         );
       }
       // Set new selection
@@ -1034,11 +1087,12 @@ export default class SurveyLayer {
     // Update shot selection state
     const newSelectedShotFeatureId = this.parseFeatureId(this.selectedShotId);
     if (newSelectedShotFeatureId !== this.prevSelectedShotFeatureId) {
-      // Clear previous selection
+      // Clear previous selection — but restore section selection if feature belongs to selected section
       if (this.prevSelectedShotFeatureId !== null) {
+        const restoreSection = this.featureBelongsToSection(this.prevSelectedShotFeatureId, this.selectedSectionId);
         this.map.setFeatureState(
           { source: shotsSource, id: this.prevSelectedShotFeatureId },
-          { selected: false }
+          { selected: restoreSection }
         );
       }
       // Set new selection
@@ -1053,12 +1107,8 @@ export default class SurveyLayer {
 
     // --- Section hover (shots + stations) ---
     {
-      const newHoveredShotIds = this.hoveredSectionId
-        ? this.getSectionFeatureIds(shotsSource, this.hoveredSectionId)
-        : new Set<number>();
-      const newHoveredStationIds = this.hoveredSectionId
-        ? this.getSectionFeatureIds(stationsSource, this.hoveredSectionId)
-        : new Set<number>();
+      const { shots: newHoveredShotIds, stations: newHoveredStationIds } =
+        this.getCachedHoveredSectionIds(shotsSource, stationsSource);
 
       // Clear previous section-hovered shots not in new set
       for (const id of this.prevHoveredSectionShotIds) {
@@ -1091,12 +1141,8 @@ export default class SurveyLayer {
 
     // --- Section selection (shots + stations) ---
     {
-      const newSelectedShotIds = this.selectedSectionId
-        ? this.getSectionFeatureIds(shotsSource, this.selectedSectionId)
-        : new Set<number>();
-      const newSelectedStationIds = this.selectedSectionId
-        ? this.getSectionFeatureIds(stationsSource, this.selectedSectionId)
-        : new Set<number>();
+      const { shots: newSelectedShotIds, stations: newSelectedStationIds } =
+        this.getCachedSelectedSectionIds(shotsSource, stationsSource);
 
       // Clear previous section-selected shots not in new set
       for (const id of this.prevSelectedSectionShotIds) {
@@ -1588,6 +1634,8 @@ export default class SurveyLayer {
     }
 
     // setData() clears all feature-state — reset tracking and re-apply
+    // Guard: only re-apply if map style is still live (avoids crash during teardown)
+    if (!hasLiveStyle(this.map)) return;
     this.prevHoveredStationFeatureId = null;
     this.prevHoveredShotFeatureId = null;
     this.prevSelectedStationFeatureId = null;
@@ -1596,6 +1644,7 @@ export default class SurveyLayer {
     this.prevHoveredSectionStationIds = new Set();
     this.prevSelectedSectionShotIds = new Set();
     this.prevSelectedSectionStationIds = new Set();
+    this.invalidateSectionCaches();
     this.updateVisualState();
   }
 
