@@ -244,35 +244,10 @@ impl Project {
 
     // === Station operations ===
 
-    /// Get all section IDs connected to the given section through station merges only.
-    /// Returns a set containing the given section and all transitively merged sections.
-    /// Use this for rigid-group operations: datum propagation, offset application, merge validation.
+    /// Get all section IDs connected to the given section through merges and closures.
+    /// Both merges and closures are treated as bidirectional edges.
+    /// Returns a set containing the given section and all transitively connected sections.
     pub fn get_connected_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
-        let mut connected = HashSet::new();
-        let mut queue = vec![section_id];
-
-        while let Some(current) = queue.pop() {
-            if connected.insert(current) {
-                for merge in &self.station_merges {
-                    if merge.station_a.section_id == current {
-                        if !connected.contains(&merge.station_b.section_id) {
-                            queue.push(merge.station_b.section_id);
-                        }
-                    } else if merge.station_b.section_id == current {
-                        if !connected.contains(&merge.station_a.section_id) {
-                            queue.push(merge.station_a.section_id);
-                        }
-                    }
-                }
-            }
-        }
-        connected
-    }
-
-    /// Get all section IDs reachable from the given section through merges and closures.
-    /// Returns a set containing the given section and all transitively reachable sections.
-    /// Use this for graph reachability: connectivity checks, navigation, UI display.
-    pub fn get_reachable_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
         let mut connected = HashSet::new();
         let mut queue = vec![section_id];
 
@@ -307,6 +282,31 @@ impl Project {
         connected
     }
 
+    /// Get all section IDs connected through station merges only (rigid groups).
+    /// Closures are NOT followed. Use this for rigid-group operations:
+    /// datum propagation, offset application, zero-datum validation.
+    pub fn get_merged_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
+        let mut connected = HashSet::new();
+        let mut queue = vec![section_id];
+
+        while let Some(current) = queue.pop() {
+            if connected.insert(current) {
+                for merge in &self.station_merges {
+                    if merge.station_a.section_id == current {
+                        if !connected.contains(&merge.station_b.section_id) {
+                            queue.push(merge.station_b.section_id);
+                        }
+                    } else if merge.station_b.section_id == current {
+                        if !connected.contains(&merge.station_a.section_id) {
+                            queue.push(merge.station_a.section_id);
+                        }
+                    }
+                }
+            }
+        }
+        connected
+    }
+
     /// Capture section offsets for all sections connected to the given section.
     /// Returns a HashMap where:
     /// - Key is the section ID
@@ -316,18 +316,18 @@ impl Project {
         &self,
         section_id: SectionId,
     ) -> HashMap<SectionId, Option<(f64, f64)>> {
-        let connected_sections = self.get_connected_section_ids(section_id);
+        let merged_sections = self.get_merged_section_ids(section_id);
         let mut offsets = HashMap::new();
-        for sid in connected_sections {
+        for sid in merged_sections {
             offsets.insert(sid, self.section_offsets.get(&sid).copied());
         }
         offsets
     }
 
-    /// Check if a section is connected to a zero datum (directly or through merges)
+    /// Check if a section is connected to a zero datum (directly or through merges only)
     fn section_has_zero_datum(&self, section_id: SectionId) -> bool {
-        let connected = self.get_connected_section_ids(section_id);
-        self.zero_datums.iter().any(|zd| connected.contains(&zd.station_ref.section_id))
+        let merged = self.get_merged_section_ids(section_id);
+        self.zero_datums.iter().any(|zd| merged.contains(&zd.station_ref.section_id))
     }
 
     /// Compute raw station coordinates for a single station (without global zero datum offset)
@@ -363,19 +363,17 @@ impl Project {
         Some(coords)
     }
 
-    /// Calculate the survey traverse path length between two stations through shots and merges only.
-    /// Merges are zero-distance edges. Closures are NOT followed (they are not rigid connections).
-    /// Use this when only rigid-group survey path length is needed (not reachability via closures).
-    #[allow(dead_code)]
-    pub(crate) fn calculate_path_length_between(&self, station_a: StationRef, station_b: StationRef) -> f64 {
-        self.calculate_path_length_impl(station_a, station_b, false)
-    }
-
     /// Calculate the path length between two stations through shots, merges, and closures.
     /// Both merges and closures are zero-distance edges.
-    /// Use this for graph navigation where closures are valid traversal paths.
-    pub(crate) fn calculate_path_length_between_including_closures(&self, station_a: StationRef, station_b: StationRef) -> f64 {
+    pub(crate) fn calculate_path_length_between(&self, station_a: StationRef, station_b: StationRef) -> f64 {
         self.calculate_path_length_impl(station_a, station_b, true)
+    }
+
+    /// Calculate path length through shots and merges only (no closures).
+    /// Use this when only rigid-group survey path length is needed.
+    #[allow(dead_code)]
+    pub(crate) fn calculate_merge_only_path_length(&self, station_a: StationRef, station_b: StationRef) -> f64 {
+        self.calculate_path_length_impl(station_a, station_b, false)
     }
 
     /// Internal BFS path length implementation.
@@ -464,12 +462,12 @@ impl Project {
 
         // No path found (shouldn't happen if sections are connected)
         // Fall back to sum of all reachable section lengths
-        let reachable = if include_closures {
-            self.get_reachable_section_ids(station_a.section_id)
-        } else {
+        let fallback_sections = if include_closures {
             self.get_connected_section_ids(station_a.section_id)
+        } else {
+            self.get_merged_section_ids(station_a.section_id)
         };
-        reachable.iter()
+        fallback_sections.iter()
             .filter_map(|sid| self.sections.iter().find(|s| s.id == *sid))
             .flat_map(|s| s.shots.iter())
             .map(|shot| shot.length)
@@ -493,9 +491,9 @@ impl Project {
             return Err("These stations are already merged".to_string());
         }
 
-        // Check if already reachable (via merges or closures) - reject, use CreateLoopClosure instead
-        let reachable_a = self.get_reachable_section_ids(station_a.section_id);
-        if reachable_a.contains(&station_b.section_id) {
+        // Check if already connected (via merges or closures) - reject, use CreateLoopClosure instead
+        let connected_a = self.get_connected_section_ids(station_a.section_id);
+        if connected_a.contains(&station_b.section_id) {
             return Err("Stations are already connected. Use Create Loop Closure instead.".to_string());
         }
 
@@ -536,9 +534,9 @@ impl Project {
         let offset_x = anchor_coords.x - moving_coords.x;
         let offset_y = anchor_coords.y - moving_coords.y;
 
-        // Apply offset to all sections in the moving group
+        // Apply offset to all sections in the moving merge group (rigid body)
         // This repositions the entire moving group relative to the datum coordinate system
-        let moving_sections = self.get_connected_section_ids(moving_section_id);
+        let moving_sections = self.get_merged_section_ids(moving_section_id);
         for section_id in moving_sections {
             let current_offset = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
             self.section_offsets.insert(section_id, (
@@ -573,7 +571,7 @@ impl Project {
         let horizontal_misclosure = coords_a.horizontal_distance_to(&coords_b);
         let vertical_misclosure = (coords_a.z - coords_b.z).abs();
         let misclosure_distance = coords_a.distance_to(&coords_b);
-        let path_length = self.calculate_path_length_between_including_closures(station_a, station_b);
+        let path_length = self.calculate_path_length_between(station_a, station_b);
 
         let error_percentage = if path_length > 0.0 {
             (misclosure_distance / path_length) * 100.0
@@ -609,8 +607,8 @@ impl Project {
         }
 
         // Check stations are connected (via merges or closures)
-        let reachable_a = self.get_reachable_section_ids(station_a.section_id);
-        if !reachable_a.contains(&station_b.section_id) {
+        let connected_a = self.get_connected_section_ids(station_a.section_id);
+        if !connected_a.contains(&station_b.section_id) {
             return Err("Stations are not connected. They must be in the same connected group to create a loop closure.".to_string());
         }
 
@@ -713,8 +711,8 @@ impl Project {
     /// All stations in a section are connected via shots, and merges connect stations across sections.
     /// Uses merge-only connectivity (rigid groups) for datum validation.
     fn get_connected_stations(&self, station_ref: StationRef) -> HashSet<StationRef> {
-        // Reuse get_connected_section_ids for merge-only section-level traversal
-        let connected_sections = self.get_connected_section_ids(station_ref.section_id);
+        // Reuse get_merged_section_ids for merge-only section-level traversal
+        let connected_sections = self.get_merged_section_ids(station_ref.section_id);
 
         // Enumerate all stations in connected sections
         let mut connected = HashSet::new();
@@ -798,8 +796,8 @@ impl Project {
             station_ref.section_id, station_ref.station_index, gps.latitude, gps.longitude
         );
 
-        // Get all sections connected through merges
-        let connected_sections = self.get_connected_section_ids(station_ref.section_id);
+        // Get all sections connected through merges (rigid group for offset propagation)
+        let connected_sections = self.get_merged_section_ids(station_ref.section_id);
         debug!(
             "Connected sections for datum station: {:?}",
             connected_sections
