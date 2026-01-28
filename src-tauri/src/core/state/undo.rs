@@ -343,6 +343,9 @@ impl AppState {
         };
 
         // Apply undo based on undo_data type
+        // IMPORTANT: No early returns after this point — all paths must flow
+        // through the epilogue so the entry is either pushed to redo (success)
+        // or pushed back to undo (failure).
         let result = match &entry.undo_data {
             UndoData::InverseCommand(inverse_cmd) => {
                 // Execute the inverse command (without pushing to undo stack)
@@ -396,18 +399,16 @@ impl AppState {
                 ..
             } => {
                 // Unmerge the stations
-                let mut proj_guard = match self.project.lock() {
-                    Ok(g) => g,
-                    Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
-                };
-
-                let project = match proj_guard.as_mut() {
-                    Some(p) => p,
-                    None => return CommandResult::failure("No project open".to_string()),
-                };
-
-                project.unmerge_stations(*station_a, *station_b);
-                CommandResult::success()
+                match self.project.lock() {
+                    Ok(mut proj_guard) => match proj_guard.as_mut() {
+                        Some(project) => {
+                            project.unmerge_stations(*station_a, *station_b);
+                            CommandResult::success()
+                        }
+                        None => CommandResult::failure("No project open".to_string()),
+                    },
+                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                }
             }
 
             UndoData::ZeroDatumInfo {
@@ -418,88 +419,75 @@ impl AppState {
                 // Restore previous datum state directly without recomputing offsets
                 // This is critical because set_zero_datum would compute new offsets
                 // instead of restoring the exact previous state
-                let mut proj_guard = match self.project.lock() {
-                    Ok(g) => g,
-                    Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
-                };
+                match self.project.lock() {
+                    Ok(mut proj_guard) => match proj_guard.as_mut() {
+                        Some(project) => {
+                            // Restore section offsets directly
+                            for (section_id, prev_offset) in previous_offsets {
+                                match prev_offset {
+                                    Some(offset) => {
+                                        project.section_offsets.insert(*section_id, *offset);
+                                    }
+                                    None => {
+                                        project.section_offsets.remove(section_id);
+                                    }
+                                }
+                            }
 
-                let project = match proj_guard.as_mut() {
-                    Some(p) => p,
-                    None => return CommandResult::failure("No project open".to_string()),
-                };
+                            // Restore GPS datum state
+                            if let Some(gps) = previous_gps {
+                                if let Some(existing) = project
+                                    .zero_datums
+                                    .iter_mut()
+                                    .find(|zd| zd.station_ref == *station_ref)
+                                {
+                                    existing.gps = *gps;
+                                } else {
+                                    project.zero_datums.push(crate::models::ZeroDatum {
+                                        station_ref: *station_ref,
+                                        gps: *gps,
+                                    });
+                                }
+                            } else {
+                                project
+                                    .zero_datums
+                                    .retain(|zd| zd.station_ref != *station_ref);
+                            }
 
-                // Restore section offsets directly
-                for (section_id, prev_offset) in previous_offsets {
-                    match prev_offset {
-                        Some(offset) => {
-                            // Restore to previous value
-                            project.section_offsets.insert(*section_id, *offset);
+                            project.touch();
+                            CommandResult::success()
                         }
-                        None => {
-                            // Key didn't exist before - remove it
-                            project.section_offsets.remove(section_id);
-                        }
-                    }
+                        None => CommandResult::failure("No project open".to_string()),
+                    },
+                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                 }
-
-                // Restore GPS datum state
-                // Note: If previous_gps is Some, the datum existed before SetZeroDatum
-                // was called (it was an update, not a create). In this case, we update
-                // in place to preserve datum ordering. The push fallback handles the
-                // unlikely edge case where the datum was removed by another operation
-                // after SetZeroDatum but before undo - in this case, ordering may change.
-                if let Some(gps) = previous_gps {
-                    // Update existing datum in place (preserves ordering)
-                    if let Some(existing) = project
-                        .zero_datums
-                        .iter_mut()
-                        .find(|zd| zd.station_ref == *station_ref)
-                    {
-                        existing.gps = *gps;
-                    } else {
-                        // Fallback: datum was removed by another operation - re-add at end
-                        // This may change datum ordering but shouldn't occur in normal undo flow
-                        project.zero_datums.push(crate::models::ZeroDatum {
-                            station_ref: *station_ref,
-                            gps: *gps,
-                        });
-                    }
-                } else {
-                    // Remove the datum (there was no previous datum - this was a create)
-                    project
-                        .zero_datums
-                        .retain(|zd| zd.station_ref != *station_ref);
-                }
-
-                project.touch();
-                CommandResult::success()
             }
 
             UndoData::ProjectSnapshot(json) => {
                 // Restore entire project
-                if let Ok(project) = serde_json::from_str::<Project>(json.as_str()) {
-                    if let Ok(mut proj) = self.project.lock() {
-                        *proj = Some(project);
-                        CommandResult::success()
-                    } else {
-                        CommandResult::failure("Failed to lock project".to_string())
-                    }
-                } else {
-                    CommandResult::failure("Failed to parse project snapshot".to_string())
+                match serde_json::from_str::<Project>(json.as_str()) {
+                    Ok(project) => match self.project.lock() {
+                        Ok(mut proj) => {
+                            *proj = Some(project);
+                            CommandResult::success()
+                        }
+                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                    },
+                    Err(_) => CommandResult::failure("Failed to parse project snapshot".to_string()),
                 }
             }
 
             UndoData::ProjectSnapshotPair { before, after: _ } => {
                 // Restore the "before" snapshot for undo
-                if let Ok(project) = serde_json::from_str::<Project>(before.as_str()) {
-                    if let Ok(mut proj) = self.project.lock() {
-                        *proj = Some(project);
-                        CommandResult::success()
-                    } else {
-                        CommandResult::failure("Failed to lock project".to_string())
-                    }
-                } else {
-                    CommandResult::failure("Failed to parse project snapshot".to_string())
+                match serde_json::from_str::<Project>(before.as_str()) {
+                    Ok(project) => match self.project.lock() {
+                        Ok(mut proj) => {
+                            *proj = Some(project);
+                            CommandResult::success()
+                        }
+                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                    },
+                    Err(_) => CommandResult::failure("Failed to parse project snapshot".to_string()),
                 }
             }
 
@@ -508,12 +496,26 @@ impl AppState {
             }
         };
 
-        // Push to redo stack if successful
+        // Epilogue: push to redo stack on success, push back to undo stack on failure
         if result.success {
             if let Ok(mut stack) = self.undo_stack.lock() {
                 stack.push_redo(entry);
             }
             tracing::info!("Undo performed");
+        } else {
+            let reason = result.error.as_deref().unwrap_or("Unknown error");
+            tracing::error!(
+                command = %entry.command.description(),
+                undo_data_variant = entry.undo_data.variant_name(),
+                reason = reason,
+                "Undo operation failed after popping entry; pushing back to undo stack"
+            );
+            match self.undo_stack.lock() {
+                Ok(mut stack) => stack.push_undo(entry),
+                Err(_) => {
+                    tracing::error!("Failed to re-acquire undo stack lock to push back entry");
+                }
+            }
         }
 
         result
@@ -536,23 +538,24 @@ impl AppState {
 
         // For ProjectSnapshotPair, restore the "after" snapshot instead of re-executing
         // This handles cases where re-execution would create different IDs
+        // IMPORTANT: No early returns after the pop — all paths flow through the epilogue.
         let result = if let UndoData::ProjectSnapshotPair { before: _, after } = &entry.undo_data {
-            if let Ok(project) = serde_json::from_str::<Project>(after.as_str()) {
-                if let Ok(mut proj) = self.project.lock() {
-                    *proj = Some(project);
-                    CommandResult::success()
-                } else {
-                    CommandResult::failure("Failed to lock project".to_string())
-                }
-            } else {
-                CommandResult::failure("Failed to parse project snapshot".to_string())
+            match serde_json::from_str::<Project>(after.as_str()) {
+                Ok(project) => match self.project.lock() {
+                    Ok(mut proj) => {
+                        *proj = Some(project);
+                        CommandResult::success()
+                    }
+                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                },
+                Err(_) => CommandResult::failure("Failed to parse project snapshot".to_string()),
             }
         } else {
             // Re-execute the original command for other undo data types
             self.execute_without_undo(entry.command.clone())
         };
 
-        // Push back to undo stack if successful
+        // Epilogue: push back to undo stack on success, push back to redo stack on failure
         // Important: Use the original entry with its original undo_data, not regenerated data
         // This ensures undo after redo works correctly
         if result.success {
@@ -560,6 +563,20 @@ impl AppState {
                 stack.push_undo(entry);
             }
             tracing::info!("Redo performed");
+        } else {
+            let reason = result.error.as_deref().unwrap_or("Unknown error");
+            tracing::error!(
+                command = %entry.command.description(),
+                undo_data_variant = entry.undo_data.variant_name(),
+                reason = reason,
+                "Redo operation failed after popping entry; pushing back to redo stack"
+            );
+            match self.undo_stack.lock() {
+                Ok(mut stack) => stack.push_redo(entry),
+                Err(_) => {
+                    tracing::error!("Failed to re-acquire undo stack lock to push back entry");
+                }
+            }
         }
 
         result

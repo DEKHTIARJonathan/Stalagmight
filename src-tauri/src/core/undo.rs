@@ -99,6 +99,23 @@ pub enum UndoData {
     None,
 }
 
+impl UndoData {
+    /// Return a short, safe variant name for logging (no payload data)
+    pub fn variant_name(&self) -> &'static str {
+        match self {
+            UndoData::InverseCommand(_) => "InverseCommand",
+            UndoData::PreviousValues { .. } => "PreviousValues",
+            UndoData::SectionSnapshot { .. } => "SectionSnapshot",
+            UndoData::ShotSnapshot { .. } => "ShotSnapshot",
+            UndoData::MergeInfo { .. } => "MergeInfo",
+            UndoData::ZeroDatumInfo { .. } => "ZeroDatumInfo",
+            UndoData::ProjectSnapshot(_) => "ProjectSnapshot",
+            UndoData::ProjectSnapshotPair { .. } => "ProjectSnapshotPair",
+            UndoData::None => "None",
+        }
+    }
+}
+
 impl Default for UndoStack {
     fn default() -> Self {
         Self {
