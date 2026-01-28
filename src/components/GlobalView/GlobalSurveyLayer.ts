@@ -113,6 +113,9 @@ export default class GlobalSurveyLayer {
   // Tooltip element
   private tooltip: HTMLDivElement | null = null;
 
+  // Track if context menu is open (suppress tooltip while open)
+  private contextMenuOpen = false;
+
   // Bound event handlers for cleanup
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
   private boundMapLeave: (() => void) | null = null;
@@ -362,6 +365,8 @@ export default class GlobalSurveyLayer {
         this.callbacks.onSystemHover?.(null);
         this.updateVisualState();
       }
+      // Clear context menu flag (menu closes when mouse leaves)
+      this.contextMenuOpen = false;
       this.hideTooltip();
     };
     this.map.getCanvas().addEventListener('mouseleave', this.boundMapLeave);
@@ -386,6 +391,9 @@ export default class GlobalSurveyLayer {
         if (systemId) {
           // Prevent default browser context menu when we handle the event
           e.preventDefault();
+          // Hide tooltip while context menu is open
+          this.contextMenuOpen = true;
+          this.hideTooltip();
           this.callbacks.onSystemContextMenu(systemId, e);
           return;
         }
@@ -401,6 +409,9 @@ export default class GlobalSurveyLayer {
         if (systemId) {
           // Prevent default browser context menu when we handle the event
           e.preventDefault();
+          // Hide tooltip while context menu is open
+          this.contextMenuOpen = true;
+          this.hideTooltip();
           this.callbacks.onSystemContextMenu(systemId, e);
         }
       }
@@ -826,6 +837,9 @@ export default class GlobalSurveyLayer {
     } | null
   ): void {
     if (!this.tooltip) return;
+
+    // Don't show tooltip if context menu is open
+    if (this.contextMenuOpen) return;
 
     if (!event || !properties) {
       this.hideTooltip();
