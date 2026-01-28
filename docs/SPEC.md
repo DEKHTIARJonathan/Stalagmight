@@ -1298,10 +1298,15 @@ pub enum UndoData {
         strategy: ClosureStrategy,
     },
 
-    /// Zero datum info for restoring previous GPS
+    /// Zero datum info for restoring previous GPS and section offsets
     ZeroDatumInfo {
         station_ref: StationRef,
         previous_gps: Option<GpsCoordinates>,
+        /// Previous section offsets for affected sections
+        /// - None value means the key didn't exist (should be removed on undo)
+        /// - Some value means the offset should be restored to that value
+        #[serde(default)]
+        previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
     },
 
     /// Full project snapshot for batch operations
@@ -1347,6 +1352,14 @@ interface UndoHistoryItem {
 - `undo_to(N)` executes N+1 undo operations (indices 0 through N)
 - Operations execute sequentially (not transactional)
 - Partial completion on failure is acceptable
+
+**Failure behavior:**
+- On single `undo()`/`redo()` failure, the popped entry is pushed back to the original stack so no entry is lost
+- On `undo_to(N)`/`redo_to(N)` failure, execution stops at the failing step; already-completed steps remain applied, and the failing entry is pushed back to its original stack
+- `undo_to`/`redo_to` return an enhanced error message on partial failure: `"Undo failed at step {current} of {total}: {reason}"` (or `"Redo failed at step..."`)
+- A `tracing::error!` is logged whenever a popped entry fails to apply, including command description, undo data variant name, and failure reason (no full snapshot JSON)
+- Frontend shows a toast notification with the failure reason (`result.error ?? 'Unknown error'`) using throttle keys `'undo-failed'` / `'redo-failed'`
+- Frontend always calls `refreshProjectState()` on both success and failure (via `try/finally`) to sync UI with backend state
 
 ### 8.5 Command Execution
 

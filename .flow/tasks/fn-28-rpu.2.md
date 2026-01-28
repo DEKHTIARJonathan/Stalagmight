@@ -30,9 +30,8 @@ Add Rust unit tests that verify undo/redo entries are preserved (pushed back to 
 - [ ] All existing undo/redo tests continue to pass
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 ## Done summary
-TBD
-
+Added 9 Rust unit tests verifying undo/redo entry preservation on failure: undo() and redo() push entries back to their original stack on failure, LIFO order is preserved, undo_to()/redo_to() stop at the failed step with enhanced error messages including step counts, and entries are preserved across ProjectSnapshot and project lock failure scenarios.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: cb36b518063e1b7a6e1e23a1b5cf1f8b3b3b4b0c, e1ff2bb6c517317f27f9fe480f1db9dde3d668c2
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml -- undo, cargo test --manifest-path src-tauri/Cargo.toml -- redo, cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:
