@@ -66,9 +66,8 @@ Update the frontend to dynamically fetch tile providers from the backend via the
 - [ ] `pnpm test:ui` passes (no E2E regressions)
 
 ## Done summary
-TBD
-
+Updated MapSettings.tsx to dynamically fetch tile providers from backend via get_tile_providers IPC, removing hardcoded SATELLITE_PROVIDER_OPTIONS. Added TileProviderInfo TypeScript interface, updated tileConfig.ts to accept optional provider metadata, and added E2E mock and documentation updates.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 81cb1d0b9411dcfa2902a55a6567a112e1d215ce
+- Tests: pnpm tsc --noEmit, pnpm test:ui, cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:
