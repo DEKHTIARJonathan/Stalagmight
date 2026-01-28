@@ -33,7 +33,7 @@ export interface GlobalSurveyLayerCallbacks {
  * Generate a deterministic color for a system based on its file_path.
  * Uses HSL with hue derived from a hash of the path, saturation 70%, lightness 50%.
  */
-function generateSystemColor(filePath: string): string {
+export function generateSystemColor(filePath: string): string {
   // Simple hash function (djb2)
   let hash = 5381;
   for (let i = 0; i < filePath.length; i++) {
