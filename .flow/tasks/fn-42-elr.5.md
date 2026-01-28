@@ -9,13 +9,13 @@ Apply all UI layout improvements to ShortcutsSettings: flex-grow name column, co
 
 ## Approach
 
-### 1. Name column flex-grow (line 386)
+### 1. Name column flex-grow (line 389)
 - Replace `w-32 text-sm truncate` with `flex-1 min-w-32 text-sm truncate`
 - Add tooltip showing full action name on hover (use existing Tooltip component)
 
 ### 2. Row condensing (~40% reduction)
-- Change category `space-y-2` (line 369) to `space-y-0.5`
-- Change row `py-1` (line 379) to `py-0.5`
+- Change category `space-y-2` (line 372) to `space-y-0.5`
+- Change row `py-1` (line 384) to `py-0.5`
 
 ### 3. Alternating row colors (reset per category)
 - Track row index within each category mapping
@@ -24,10 +24,11 @@ Apply all UI layout improvements to ShortcutsSettings: flex-grow name column, co
 - Each category starts fresh (index resets to 0)
 
 ### 4. Move reserved section above search bar
-- Move JSX block at lines 316-332 (reserved shortcuts section)
-- Place it BEFORE the search bar JSX at lines 278-302
+- Move JSX block at lines 319-335 (reserved shortcuts section)
+- Place it BEFORE the search bar JSX at lines 282-305
 - Keep reserved section style unchanged
 - Reserved section always visible (not affected by search filter)
+<!-- Updated by plan-sync: fn-42-elr.3 added File category to SHORTCUT_CATEGORIES, shifting line numbers in ShortcutsSettings.tsx -->
 
 ## Key context
 - Use Tailwind `odd:` and `even:` variants for alternating colors
