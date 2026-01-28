@@ -45,3 +45,6 @@ E2E test helpers on window.__E2E_TEST__ must be gated behind import.meta.env.DEV
 
 ## 2026-01-28 manual [convention]
 IPC mocks that mutate project state (e.g. set_zero_datum updating zero_datums) must keep derived fields in get_project_state consistent -- derive station.is_zero_datum and station.gps_coordinates from project.zero_datums rather than hardcoding null
+
+## 2026-01-28 manual [convention]
+Use [id="..."] attribute selector instead of #id CSS selector when targeting elements with React useId()-generated IDs (which contain colons) in Playwright tests
