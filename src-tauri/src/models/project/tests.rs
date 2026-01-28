@@ -1120,21 +1120,21 @@ fn closure_expands_connected_sections_with_existing_merges() {
     project.next_closure_id += 1;
 
     // Merge-only connectivity: A and B are merged, C is NOT in the merge group
-    let merged = project.get_connected_section_ids(a);
+    let merged = project.get_merged_section_ids(a);
     assert!(merged.contains(&a), "A should be in merge group");
     assert!(merged.contains(&b), "B should be in merge group");
     assert!(!merged.contains(&c), "C should NOT be in merge group (only closure-linked)");
     assert_eq!(merged.len(), 2);
 
-    // Reachable connectivity (merges + closures): all three sections are reachable
-    let reachable = project.get_reachable_section_ids(a);
+    // Full connectivity (merges + closures): all three sections are connected
+    let reachable = project.get_connected_section_ids(a);
     assert!(reachable.contains(&a), "A should be reachable");
     assert!(reachable.contains(&b), "B should be reachable");
     assert!(reachable.contains(&c), "C should be reachable via closure");
     assert_eq!(reachable.len(), 3);
 
     // Path length including closures: BFS traverses closure as zero-distance edge
-    let path = project.calculate_path_length_between_including_closures(
+    let path = project.calculate_path_length_between(
         StationRef::new(a, 0),
         StationRef::new(c, 1),
     );
@@ -1145,18 +1145,18 @@ fn closure_expands_connected_sections_with_existing_merges() {
         path
     );
 
-    // Survey path length (merge-only): cannot reach C.1 from A.0 without closures
-    // Falls back to sum of connected section lengths
-    let survey_path = project.calculate_path_length_between(
+    // Merge-only path length: cannot reach C.1 from A.0 without closures
+    // Falls back to sum of merged section lengths
+    let merge_only_path = project.calculate_merge_only_path_length(
         StationRef::new(a, 0),
         StationRef::new(c, 1),
     );
     // A and B are merge-connected (total 2m), C is not reachable without closures
     // Fallback returns sum of A+B shots = 2.0
     assert!(
-        (survey_path - 2.0).abs() < 1e-6,
-        "Survey path (merge-only) should fall back to connected section sum (2.0m), got {}",
-        survey_path
+        (merge_only_path - 2.0).abs() < 1e-6,
+        "Merge-only path should fall back to merged section sum (2.0m), got {}",
+        merge_only_path
     );
 
     // are_stations_in_closure should detect the closure
@@ -1214,13 +1214,13 @@ fn new_merge_expands_existing_closure_connectivity() {
     project.next_closure_id += 1;
 
     // Before merge, A and B are reachable via closure (but not merge-connected)
-    let merged_before = project.get_connected_section_ids(a);
+    let merged_before = project.get_merged_section_ids(a);
     assert!(merged_before.contains(&a));
     assert!(!merged_before.contains(&b), "B not merge-connected to A");
-    let reachable_before = project.get_reachable_section_ids(a);
-    assert!(reachable_before.contains(&a));
-    assert!(reachable_before.contains(&b), "B reachable via closure");
-    assert!(!reachable_before.contains(&c), "C not yet reachable");
+    let connected_before = project.get_connected_section_ids(a);
+    assert!(connected_before.contains(&a));
+    assert!(connected_before.contains(&b), "B connected via closure");
+    assert!(!connected_before.contains(&c), "C not yet connected");
 
     // Now merge B-C
     project.station_merges.push(StationMerge {
@@ -1230,22 +1230,22 @@ fn new_merge_expands_existing_closure_connectivity() {
     });
 
     // After merge, A should reach C via closure(A-B) + merge(B-C)
-    let reachable_after = project.get_reachable_section_ids(a);
-    assert!(reachable_after.contains(&a), "A reachable");
-    assert!(reachable_after.contains(&b), "B reachable via closure");
-    assert!(reachable_after.contains(&c), "C reachable via closure+merge");
-    assert_eq!(reachable_after.len(), 3);
+    let connected_after = project.get_connected_section_ids(a);
+    assert!(connected_after.contains(&a), "A connected");
+    assert!(connected_after.contains(&b), "B connected via closure");
+    assert!(connected_after.contains(&c), "C connected via closure+merge");
+    assert_eq!(connected_after.len(), 3);
 
     // Merge-only: A is alone (no merges from A), B and C are merge-connected
-    let merged_a = project.get_connected_section_ids(a);
+    let merged_a = project.get_merged_section_ids(a);
     assert_eq!(merged_a.len(), 1, "A has no merges");
-    let merged_b = project.get_connected_section_ids(b);
+    let merged_b = project.get_merged_section_ids(b);
     assert!(merged_b.contains(&b));
     assert!(merged_b.contains(&c));
     assert_eq!(merged_b.len(), 2, "B and C are merge-connected");
 
     // Path including closures should traverse both closure and merge with zero distance
-    let path = project.calculate_path_length_between_including_closures(
+    let path = project.calculate_path_length_between(
         StationRef::new(a, 0),
         StationRef::new(c, 1),
     );
