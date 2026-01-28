@@ -417,7 +417,7 @@ export default class SurveyLayer {
         'line-color': ['get', 'color'],
         'line-width': 3,
         'line-opacity': 0.8,
-        'line-dasharray': [6, 4], // Longer dashes than regular merges
+        'line-dasharray': [6, 4], // Dashed line pattern for loop closures
       },
     });
 
@@ -1484,7 +1484,7 @@ export default class SurveyLayer {
    * Pass null to clear the ghost section.
    */
   setGhostSection(data: GhostSectionData | null) {
-    const { shotFeatures, stationFeatures, mergeFeatures } = buildGhostFeatures(
+    const { shotFeatures, stationFeatures, mergeStationFeatures } = buildGhostFeatures(
       data,
       this.gpsOrigin
     );
@@ -1510,7 +1510,7 @@ export default class SurveyLayer {
     if (ghostMergeSource && 'setData' in ghostMergeSource) {
       (ghostMergeSource as maplibregl.GeoJSONSource).setData({
         type: 'FeatureCollection',
-        features: mergeFeatures,
+        features: mergeStationFeatures,
       });
     }
   }

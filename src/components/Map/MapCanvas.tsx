@@ -565,11 +565,15 @@ export default function MapCanvas() {
       renderWorldCopies: false, // Not needed for cave maps (saves render work)
 
       // WebGL context optimizations (MapLibre v5+)
-      canvasContextAttributes: {
-        antialias: false, // Disable AA for better performance
-        preserveDrawingBuffer: false, // Allow buffer discard
-        failIfMajorPerformanceCaveat: false, // Don't fail on software renderer
-      },
+      // Type assertion needed: canvasContextAttributes is supported at runtime
+      // but not yet in the MapLibre GL JS TypeScript definitions
+      ...({
+        canvasContextAttributes: {
+          antialias: false, // Disable AA for better performance
+          preserveDrawingBuffer: false, // Allow buffer discard
+          failIfMajorPerformanceCaveat: false, // Don't fail on software renderer
+        },
+      } as Record<string, unknown>),
     });
 
     // Disable rotation (Ctrl+drag rotates by default, we want Ctrl+drag to pan)
