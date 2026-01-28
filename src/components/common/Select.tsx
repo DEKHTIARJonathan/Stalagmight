@@ -198,6 +198,7 @@ export function Select({
       ) {
         return;
       }
+      onOptionHoverRef.current?.(null);
       setIsOpen(false);
     };
 
@@ -210,6 +211,7 @@ export function Select({
     if (!isOpen) return;
 
     const handleResize = () => {
+      onOptionHoverRef.current?.(null);
       setIsOpen(false);
     };
 
