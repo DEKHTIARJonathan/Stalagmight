@@ -307,6 +307,11 @@ export default function DataTable({ sections }: DataTableProps) {
     (value: string | null) => {
       if (value !== null) {
         const sectionId = Number(value);
+        if (!Number.isFinite(sectionId)) {
+          lastHoveredSectionIdRef.current = null;
+          setHoveredSectionId(null);
+          return;
+        }
         lastHoveredSectionIdRef.current = sectionId;
         setHoveredSectionId(sectionId);
       } else {
