@@ -63,16 +63,38 @@ pnpm tsc --noEmit
 
 ## Acceptance
 
-- [ ] UndoData has new CreatedSectionSnapshot and CreatedShotSnapshot variants
-- [ ] CreateSection undo→redo preserves original section ID
-- [ ] CreateShot undo→redo preserves original shot ID
-- [ ] Double undo/redo cycle maintains ID stability
-- [ ] Mid-section shot inserts preserve correct position
-- [ ] Post-redo operations work (can edit/delete restored entity)
-- [ ] Rust unit tests cover undo→redo→undo→redo cycle
-- [ ] DeleteSection/DeleteShot behavior unchanged (still use SectionSnapshot/ShotSnapshot)
-- [ ] CreateLoopClosure audited (document if affected)
-- [ ] create_section_and_merge verified working (already uses ProjectSnapshotPair)
+- [x] UndoData has new CreatedSectionSnapshot and CreatedShotSnapshot variants
+- [x] CreateSection undo→redo preserves original section ID
+- [x] CreateShot undo→redo preserves original shot ID
+- [x] Double undo/redo cycle maintains ID stability
+- [x] Mid-section shot inserts preserve correct position
+- [x] Post-redo operations work (can edit/delete restored entity)
+- [x] Rust unit tests cover undo→redo→undo→redo cycle
+- [x] DeleteSection/DeleteShot behavior unchanged (still use SectionSnapshot/ShotSnapshot)
+- [x] CreateLoopClosure audited (document if affected)
+- [x] create_section_and_merge verified working (already uses ProjectSnapshotPair)
+
+## Audit Results (fn-44-3sf.3)
+
+### CreateLoopClosure - NOT AFFECTED
+Loop closures are identified by station pairs (StationRef, StationRef), not by monotonic IDs.
+- `finalize_undo_data` captures `ClosureInfo { closure }` with the full `LoopClosure` struct.
+- Undo removes the closure by matching station pairs.
+- Redo re-executes `CreateLoopClosure` which creates a closure with the same station pair.
+- Identity is the station pair itself, so redo inherently preserves identity.
+
+### create_section_and_merge - IDs PRESERVED via ProjectSnapshotPair
+- Takes full project snapshot BEFORE operation (`before`).
+- Takes full project snapshot AFTER operation (`after`).
+- Pushes `UndoData::ProjectSnapshotPair { before, after }` to undo stack.
+- Undo restores `before` snapshot (complete project state).
+- Redo restores `after` snapshot (complete project state with original IDs).
+- Snapshot approach inherently preserves all entity IDs.
+
+### Batch command - IDs PRESERVED via ProjectSnapshot
+- `generate_undo_data` captures `ProjectSnapshot` of entire project before execution.
+- Undo restores full project state from snapshot.
+- Snapshot approach inherently preserves all entity IDs.
 
 ## References
 
