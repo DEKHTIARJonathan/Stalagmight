@@ -126,7 +126,9 @@ export function Select({
   const [isOpen, setIsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
   const [dropdownPosition, setDropdownPosition] = useState<DropdownPosition | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  // Trigger rect captured on open so the hidden dropdown can use correct width/left
+  // for accurate height measurement before the position is finalized.
+  const [triggerRect, setTriggerRect] = useState<{ left: number; width: number; top: number; bottom: number } | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<(HTMLDivElement | null)[]>([]);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -169,8 +171,12 @@ export function Select({
 
     const handleScroll = (event: Event) => {
       // Ignore scroll events inside the portaled dropdown (user scrolling options,
-      // or scrollIntoView from keyboard navigation)
-      if (dropdownRef.current?.contains(event.target as Node)) {
+      // or scrollIntoView from keyboard navigation).
+      // Guard: event.target may not be a Node (e.g. window/document in some environments).
+      if (
+        event.target instanceof Node &&
+        dropdownRef.current?.contains(event.target)
+      ) {
         return;
       }
       setIsOpen(false);
@@ -192,18 +198,18 @@ export function Select({
     return () => window.removeEventListener('resize', handleResize);
   }, [isOpen]);
 
-  // Position calculation with flicker prevention via useLayoutEffect
+  // Position calculation with flicker prevention via useLayoutEffect.
+  // The hidden render pass already has correct width/left from triggerRect state,
+  // so the measured height accounts for text wrapping at the final width.
   useLayoutEffect(() => {
-    if (!isOpen) {
+    if (!isOpen || !triggerRect) {
       setDropdownPosition(null);
       return;
     }
 
-    const triggerEl = triggerRef.current;
     const dropdownEl = dropdownRef.current;
-    if (!triggerEl || !dropdownEl) return;
+    if (!dropdownEl) return;
 
-    const triggerRect = triggerEl.getBoundingClientRect();
     const dropdownHeight = dropdownEl.getBoundingClientRect().height;
 
     let top = triggerRect.bottom;
@@ -221,7 +227,7 @@ export function Select({
       left: triggerRect.left,
       width: triggerRect.width,
     });
-  }, [isOpen]);
+  }, [isOpen, triggerRect]);
 
   // Reset highlighted index when dropdown opens/closes
   useEffect(() => {
@@ -291,6 +297,15 @@ export function Select({
     triggerRef.current?.focus();
   }, [onChange]);
 
+  // Open the dropdown, capturing trigger rect for accurate portal positioning
+  const openDropdown = useCallback(() => {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setTriggerRect({ left: rect.left, width: rect.width, top: rect.top, bottom: rect.bottom });
+    }
+    setIsOpen(true);
+  }, []);
+
   // Keyboard navigation handler
   const handleKeyDown = useCallback((event: React.KeyboardEvent) => {
     if (disabled) return;
@@ -300,7 +315,7 @@ export function Select({
         event.preventDefault();
         event.stopPropagation();
         if (!isOpen) {
-          setIsOpen(true);
+          openDropdown();
         } else {
           setHighlightedIndex(prev => findNextEnabledIndex(prev, 'down'));
         }
@@ -310,7 +325,7 @@ export function Select({
         event.preventDefault();
         event.stopPropagation();
         if (!isOpen) {
-          setIsOpen(true);
+          openDropdown();
         } else {
           setHighlightedIndex(prev => findNextEnabledIndex(prev, 'up'));
         }
@@ -345,7 +360,7 @@ export function Select({
         if (isOpen && highlightedIndex >= 0 && flatOptions[highlightedIndex]) {
           handleSelect(flatOptions[highlightedIndex].value, flatOptions[highlightedIndex].disabled);
         } else if (!isOpen) {
-          setIsOpen(true);
+          openDropdown();
         }
         break;
 
@@ -367,7 +382,7 @@ export function Select({
         }
         break;
     }
-  }, [disabled, isOpen, highlightedIndex, flatOptions, findNextEnabledIndex, findFirstEnabledIndex, findLastEnabledIndex, handleSelect]);
+  }, [disabled, isOpen, highlightedIndex, flatOptions, findNextEnabledIndex, findFirstEnabledIndex, findLastEnabledIndex, handleSelect, openDropdown]);
 
   const selectedLabel = findLabel(options, value);
 
@@ -425,7 +440,9 @@ export function Select({
     }
   };
 
-  // Dropdown style: position:fixed, invisible until position is computed
+  // Dropdown style: position:fixed, invisible until position is computed.
+  // The hidden pass uses triggerRect width/left so the dropdown renders at the
+  // correct width for accurate height measurement (avoids shrink-to-fit mismatch).
   const dropdownStyle: React.CSSProperties = dropdownPosition
     ? {
         position: 'fixed',
@@ -438,13 +455,15 @@ export function Select({
     : {
         position: 'fixed',
         top: 0,
-        left: 0,
+        left: triggerRect?.left ?? 0,
+        width: triggerRect?.width ?? 'auto',
         zIndex: 9999,
         visibility: 'hidden',
+        pointerEvents: 'none',
       };
 
   return (
-    <div ref={containerRef} className={`relative ${className}`} data-testid={testId} data-dropdown-open={isOpen || undefined}>
+    <div className={`relative ${className}`} data-testid={testId} data-dropdown-open={isOpen || undefined}>
       {/* Trigger button */}
       <button
         ref={triggerRef}
@@ -453,7 +472,14 @@ export function Select({
         className={`w-full px-3 py-2 bg-background border border-border rounded text-left flex items-center justify-between ${
           disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-accent'
         }`}
-        onClick={() => !disabled && setIsOpen(!isOpen)}
+        onClick={() => {
+          if (disabled) return;
+          if (isOpen) {
+            setIsOpen(false);
+          } else {
+            openDropdown();
+          }
+        }}
         onKeyDown={handleKeyDown}
         disabled={disabled}
         aria-label={ariaLabel}
