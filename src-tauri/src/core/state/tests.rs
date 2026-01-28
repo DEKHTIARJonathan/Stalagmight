@@ -2691,6 +2691,15 @@ fn test_undo_to_partial_completion_stops_at_failed_step() {
         .sections
         .iter()
         .any(|s| s.name == Some("Section 0".to_string())));
+
+    // Verify the failed entry was preserved on the undo stack
+    let stack = state.undo_stack.lock().unwrap();
+    assert_eq!(stack.len(), 2, "Section 0 and invalid entry must remain on undo stack");
+    let top_cmd = stack.peek_undo().unwrap();
+    assert!(
+        matches!(top_cmd, Command::UpdateShot { section_id: 999, .. }),
+        "Failed invalid entry must be at top of undo stack after partial undo_to"
+    );
 }
 
 #[test]
@@ -2722,7 +2731,8 @@ fn test_redo_to_partial_completion_stops_at_failed_step() {
         shots: vec![],
     });
 
-    // Undo both: redo stack bottom-to-top = [SectionA, SectionB]
+    // Undo both: redo stack bottom-to-top = [SectionB, SectionA]
+    // (B undone first, then A; LIFO means A is on top for redo)
     state.undo();
     state.undo();
     assert!(state.get_project_state().unwrap().sections.is_empty());
@@ -2776,6 +2786,15 @@ fn test_redo_to_partial_completion_stops_at_failed_step() {
     assert_eq!(
         project.sections[0].name,
         Some("Section A".to_string())
+    );
+
+    // Verify the failed entry was preserved on the redo stack
+    let stack = state.undo_stack.lock().unwrap();
+    assert_eq!(stack.redo_len(), 2, "Invalid entry and SectionB must remain on redo stack");
+    let top_cmd = stack.peek_redo().unwrap();
+    assert!(
+        matches!(top_cmd, Command::CloseProject),
+        "Failed invalid entry must be at top of redo stack after partial redo_to"
     );
 }
 
