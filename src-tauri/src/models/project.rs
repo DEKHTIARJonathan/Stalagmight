@@ -252,6 +252,7 @@ impl Project {
 
         while let Some(current) = queue.pop() {
             if connected.insert(current) {
+                // Follow merges as edges
                 for merge in &self.station_merges {
                     if merge.station_a.section_id == current {
                         if !connected.contains(&merge.station_b.section_id) {
@@ -260,6 +261,18 @@ impl Project {
                     } else if merge.station_b.section_id == current {
                         if !connected.contains(&merge.station_a.section_id) {
                             queue.push(merge.station_a.section_id);
+                        }
+                    }
+                }
+                // Follow closures as edges (bidirectional, same as merges)
+                for closure in &self.loop_closures {
+                    if closure.station_a.section_id == current {
+                        if !connected.contains(&closure.station_b.section_id) {
+                            queue.push(closure.station_b.section_id);
+                        }
+                    } else if closure.station_b.section_id == current {
+                        if !connected.contains(&closure.station_a.section_id) {
+                            queue.push(closure.station_a.section_id);
                         }
                     }
                 }
@@ -370,9 +383,9 @@ impl Project {
                 }
             }
 
-            // Follow merges to other sections
+            // Follow merges to other sections (zero distance)
+            let current_ref = StationRef::new(section_id, station_index);
             for merge in &self.station_merges {
-                let current_ref = StationRef::new(section_id, station_index);
                 if merge.station_a == current_ref {
                     let key = (merge.station_b.section_id, merge.station_b.station_index);
                     if !visited.contains(&key) {
@@ -384,6 +397,23 @@ impl Project {
                     if !visited.contains(&key) {
                         visited.insert(key);
                         queue.push_back((merge.station_a.section_id, merge.station_a.station_index, path_len));
+                    }
+                }
+            }
+
+            // Follow closures to other sections (zero distance, same as merges)
+            for closure in &self.loop_closures {
+                if closure.station_a == current_ref {
+                    let key = (closure.station_b.section_id, closure.station_b.station_index);
+                    if !visited.contains(&key) {
+                        visited.insert(key);
+                        queue.push_back((closure.station_b.section_id, closure.station_b.station_index, path_len));
+                    }
+                } else if closure.station_b == current_ref {
+                    let key = (closure.station_a.section_id, closure.station_a.station_index);
+                    if !visited.contains(&key) {
+                        visited.insert(key);
+                        queue.push_back((closure.station_a.section_id, closure.station_a.station_index, path_len));
                     }
                 }
             }
@@ -615,6 +645,13 @@ impl Project {
     pub fn are_stations_merged(&self, a: StationRef, b: StationRef) -> bool {
         self.station_merges.iter().any(|m| {
             (m.station_a == a && m.station_b == b) || (m.station_a == b && m.station_b == a)
+        })
+    }
+
+    /// Check if two stations are in a loop closure
+    pub fn are_stations_in_closure(&self, a: StationRef, b: StationRef) -> bool {
+        self.loop_closures.iter().any(|lc| {
+            (lc.station_a == a && lc.station_b == b) || (lc.station_a == b && lc.station_b == a)
         })
     }
 
