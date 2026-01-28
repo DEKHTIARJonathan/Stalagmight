@@ -271,16 +271,26 @@ export default function MapCanvas() {
 
   // Handle move drag start from SurveyLayer
   const handleMoveDragStart = useCallback(
-    (data: { type: 'section' | 'station'; sectionId?: number; stationRef?: { section_id: number; station_index: number } }) => {
+    (data: { type: 'section' | 'station'; sectionId?: number; stationRef?: { section_id: number; station_index: number }; screenX?: number; screenY?: number }) => {
       if (!map.current) return;
 
-      // Get current mouse position from map center as starting point
-      // The actual drag will be tracked via mouse events
-      const center = map.current.getCenter();
+      // Use actual click position if available, otherwise fall back to map center
+      let startLng: number, startLat: number;
+      if (data.screenX !== undefined && data.screenY !== undefined) {
+        // Convert screen coordinates relative to map container
+        const rect = map.current.getCanvas().getBoundingClientRect();
+        const lngLat = map.current.unproject([data.screenX - rect.left, data.screenY - rect.top]);
+        startLng = lngLat.lng;
+        startLat = lngLat.lat;
+      } else {
+        const center = map.current.getCenter();
+        startLng = center.lng;
+        startLat = center.lat;
+      }
       const baseDragState = {
         type: data.type,
-        startLngLat: { lng: center.lng, lat: center.lat },
-        currentLngLat: { lng: center.lng, lat: center.lat },
+        startLngLat: { lng: startLng, lat: startLat },
+        currentLngLat: { lng: startLng, lat: startLat },
       };
 
       // Build the drag state conditionally to avoid undefined values
