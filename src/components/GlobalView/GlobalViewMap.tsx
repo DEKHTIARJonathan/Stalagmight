@@ -130,6 +130,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   const surveyLayerRef = useRef<GlobalSurveyLayer | null>(null);
   const errorPopupRef = useRef<maplibregl.Popup | null>(null);
   const markerTooltipRef = useRef<HTMLDivElement | null>(null);
+  const contextMenuOpenRef = useRef(false);
   const [mapLoaded, setMapLoaded] = useState(false);
   // Buffer for geometry data that arrives before map is ready
   const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
@@ -849,6 +850,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       el.addEventListener('mouseenter', () => {
         inner.style.transform = 'scale(1.3)';
 
+        // Don't show tooltip if context menu is open
+        if (contextMenuOpenRef.current) return;
+
         // Build tooltip content (same format as survey view)
         if (markerTooltipRef.current) {
           const tooltip = markerTooltipRef.current;
@@ -892,6 +896,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       // Follow mouse while hovering (position at bottom-right of cursor like survey view)
       el.addEventListener('mousemove', (e) => {
+        // Don't update tooltip if context menu is open
+        if (contextMenuOpenRef.current) return;
+
         if (markerTooltipRef.current && map.current) {
           const tooltip = markerTooltipRef.current;
           const container = map.current.getContainer();
@@ -913,6 +920,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       el.addEventListener('mouseleave', () => {
         inner.style.transform = 'scale(1)';
+
+        // Clear context menu flag (menu closes when mouse leaves)
+        contextMenuOpenRef.current = false;
 
         // Hide tooltip
         if (markerTooltipRef.current) {
@@ -943,6 +953,13 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         e.stopPropagation();
+
+        // Hide tooltip while context menu is open
+        contextMenuOpenRef.current = true;
+        if (markerTooltipRef.current) {
+          markerTooltipRef.current.style.display = 'none';
+        }
+
         onContextMenuRef.current?.(project.file_path, e.clientX, e.clientY);
       });
 
