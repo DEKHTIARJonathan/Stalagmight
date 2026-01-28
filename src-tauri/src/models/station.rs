@@ -145,6 +145,9 @@ pub struct Station {
     pub gps_coordinates: Option<GpsCoordinates>,
     /// Other stations merged with this one
     pub merged_with: Vec<StationRef>,
+    /// Loop closures involving this station
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub closures_with: Vec<ClosureRef>,
 }
 
 impl Station {
@@ -155,6 +158,7 @@ impl Station {
             is_zero_datum: false,
             gps_coordinates: None,
             merged_with: Vec::new(),
+            closures_with: Vec::new(),
         }
     }
 
@@ -165,6 +169,7 @@ impl Station {
             is_zero_datum: false,
             gps_coordinates: None,
             merged_with: Vec::new(),
+            closures_with: Vec::new(),
         }
     }
 }
@@ -254,6 +259,9 @@ mod tests {
 /// A detected loop closure in the survey
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopClosure {
+    /// Unique identifier for this closure
+    #[serde(default)]
+    pub id: u64,
     /// First station in the closure (merge point A)
     pub station_a: StationRef,
     /// Second station in the closure (merge point B)
@@ -268,6 +276,19 @@ pub struct LoopClosure {
     pub horizontal_misclosure: f64,
     /// Vertical misclosure component (meters)
     pub vertical_misclosure: f64,
+}
+
+/// Reference to a loop closure from a station's perspective
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClosureRef {
+    /// References LoopClosure.id
+    pub closure_id: u64,
+    /// Target station in the closure
+    pub station_ref: StationRef,
+    /// Intermediate station for transitive closures
+    pub via_station: Option<StationRef>,
+    /// Whether this is a transitive closure
+    pub is_transitive: bool,
 }
 
 /// Preview data for a potential loop closure (read-only metrics, no mutation)
@@ -285,4 +306,10 @@ pub struct ClosurePreview {
 pub struct ConnectivityResult {
     pub connected: bool,
     pub preview: Option<ClosurePreview>,
+    /// Whether merge is allowed for the given station pair
+    #[serde(default)]
+    pub can_merge: bool,
+    /// Explanation when merge is not allowed
+    #[serde(default)]
+    pub reason: Option<String>,
 }

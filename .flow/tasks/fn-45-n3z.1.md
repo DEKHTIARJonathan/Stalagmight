@@ -64,3 +64,39 @@ Add `id: u64` field to LoopClosure struct and create new ClosureRef struct. Upda
 - [ ] TypeScript ConnectivityResult has can_merge and reason fields
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 - [ ] `pnpm tsc --noEmit` passes
+
+## Done summary
+## Summary
+
+Added closure ID and ClosureRef data structures across Rust backend, SQLite persistence, and TypeScript frontend.
+
+### Changes
+
+**Rust models (`station.rs`):**
+- Added `id: u64` field to `LoopClosure` with `#[serde(default)]` for backward compatibility
+- Created `ClosureRef` struct with `closure_id`, `station_ref`, `via_station`, `is_transitive`
+- Added `closures_with: Vec<ClosureRef>` to `Station` with `#[serde(default, skip_serializing_if = "Vec::is_empty")]`
+- Added `can_merge: bool` and `reason: Option<String>` to `ConnectivityResult`
+
+**Rust project model (`project.rs`):**
+- Added `assign_closure_ids()` method for legacy project migration (id=0 → sequential)
+- Updated `create_loop_closure()` to assign next sequential ID
+
+**SQLite persistence (`sqlite.rs`):**
+- `load_loop_closures()` reads `closure_id` column when present, defaults to 0 for legacy DBs
+- `save_loop_closures()` writes `closure_id` column (creates column via ALTER TABLE if needed)
+- `migrate_schema()` adds `closure_id` column to `loop_closures` table for legacy projects
+
+**Project loading (`project_io.rs`):**
+- Calls `assign_closure_ids()` after loading to assign IDs to legacy closures
+- Updated merge_projects to preserve closure IDs
+
+**TypeScript types:**
+- `project.ts`: Added `id` to `LoopClosure`, new `ClosureRef` interface, `closures_with` on `Station`
+- `commands.ts`: Added `can_merge` and `reason` to `ConnectivityResult`
+
+**Tests:** Updated all 6 test files constructing `LoopClosure` to include `id` field.
+## Evidence
+- Commits:
+- Tests:
+- PRs:

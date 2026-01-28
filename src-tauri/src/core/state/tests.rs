@@ -3397,6 +3397,7 @@ fn test_undo_unmerge_restores_removed_closures() {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
         project.loop_closures.push(crate::models::LoopClosure {
+            id: 1,
             station_a: merge_station_a,
             station_b: merge_station_b,
             path_length: 15.0,

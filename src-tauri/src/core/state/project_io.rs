@@ -118,6 +118,9 @@ impl AppState {
 
         project.file_path = Some(path.clone());
 
+        // Assign IDs to any legacy closures that have id=0
+        project.assign_closure_ids();
+
         if let Ok(mut proj) = self.project.lock() {
             *proj = Some(project);
         }
@@ -486,6 +489,7 @@ impl AppState {
                     let new_station_b =
                         StationRef::new(new_b_section, closure.station_b.station_index);
                     merged_project.loop_closures.push(crate::models::LoopClosure {
+                        id: closure.id,
                         station_a: new_station_a,
                         station_b: new_station_b,
                         path_length: closure.path_length,
@@ -678,6 +682,8 @@ impl AppState {
             }
         };
         project.file_path = Some(path.clone());
+        // Assign IDs to any legacy closures that have id=0
+        project.assign_closure_ids();
         progress.update_phase(LoadingPhase::LoadingProjectData, 1, 1);
         check_cancelled!();
         progress.complete_phase(LoadingPhase::LoadingProjectData);

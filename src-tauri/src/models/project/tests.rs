@@ -989,6 +989,7 @@ fn unmerge_stations_removes_matching_closure_and_preserves_others() {
     // Inject a closure matching the A-B merge pair directly.
     // (create_loop_closure won't accept stations that are the merge pair itself)
     project.loop_closures.push(LoopClosure {
+        id: 1,
         station_a: StationRef::new(a, 1),
         station_b: StationRef::new(b, 0),
         path_length: 10.0,
@@ -1000,6 +1001,7 @@ fn unmerge_stations_removes_matching_closure_and_preserves_others() {
 
     // Also inject an unrelated closure for B-C pair
     project.loop_closures.push(LoopClosure {
+        id: 2,
         station_a: StationRef::new(b, 1),
         station_b: StationRef::new(c, 0),
         path_length: 3.0,
@@ -1051,6 +1053,7 @@ fn unmerge_stations_preserves_unrelated_closures() {
     // Create closure using B-C pair stations (b.1, c.0)
     // This is a direct closure at the merge point
     project.loop_closures.push(LoopClosure {
+        id: 1,
         station_a: StationRef::new(b, 1),
         station_b: StationRef::new(c, 0),
         path_length: 3.0,

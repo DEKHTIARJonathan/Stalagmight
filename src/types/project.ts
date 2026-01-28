@@ -126,6 +126,7 @@ export interface Station {
   is_zero_datum: boolean;
   gps_coordinates: GpsCoordinates | null;
   merged_with: StationRef[];
+  closures_with: ClosureRef[];
 }
 
 export interface StationMerge {
@@ -135,6 +136,7 @@ export interface StationMerge {
 }
 
 export interface LoopClosure {
+  id: number;
   station_a: StationRef;
   station_b: StationRef;
   path_length: number;
@@ -142,6 +144,13 @@ export interface LoopClosure {
   error_percentage: number;
   horizontal_misclosure: number;
   vertical_misclosure: number;
+}
+
+export interface ClosureRef {
+  closure_id: number;
+  station_ref: StationRef;
+  via_station: StationRef | null;
+  is_transitive: boolean;
 }
 
 export interface ZeroDatum {

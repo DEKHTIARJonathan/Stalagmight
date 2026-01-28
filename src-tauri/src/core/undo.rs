@@ -1310,6 +1310,7 @@ mod tests {
     #[test]
     fn test_undo_data_closure_info_serialization() {
         let closure = LoopClosure {
+            id: 1,
             station_a: StationRef::new(1, 0),
             station_b: StationRef::new(2, 3),
             path_length: 45.5,
