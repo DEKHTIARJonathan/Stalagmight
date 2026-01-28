@@ -1,8 +1,11 @@
 /**
  * Custom Select component with dark theme styling.
  * Replaces native HTML select which has dropdown styling issues in WebView.
+ * Dropdown renders via createPortal to document.body with position:fixed
+ * to escape stacking contexts (e.g. sticky table headers).
  */
-import { useState, useRef, useEffect, useCallback, useId } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useId } from 'react';
+import { createPortal } from 'react-dom';
 
 export interface SelectOption {
   value: string;
@@ -102,6 +105,13 @@ function flattenOptions(options: SelectOption[] | SelectOptionGroup[]): Flattene
   });
 }
 
+/** Position state for the portaled dropdown */
+interface DropdownPosition {
+  top: number;
+  left: number;
+  width: number;
+}
+
 export function Select({
   value,
   onChange,
@@ -115,8 +125,9 @@ export function Select({
 }: SelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
+  const [dropdownPosition, setDropdownPosition] = useState<DropdownPosition | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const listboxRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<(HTMLDivElement | null)[]>([]);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -133,18 +144,83 @@ export function Select({
     return flatOptions.findIndex(opt => opt.value === value);
   }, [flatOptions, value]);
 
-  // Close dropdown when clicking outside
+  // Close dropdown when clicking outside — checks both triggerRef and dropdownRef
   useEffect(() => {
     if (!isOpen) return;
 
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
+      const target = event.target as Node;
+      if (
+        triggerRef.current?.contains(target) ||
+        dropdownRef.current?.contains(target)
+      ) {
+        return;
       }
+      setIsOpen(false);
     };
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  // Close on external scroll (not internal dropdown scroll)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleScroll = (event: Event) => {
+      // Ignore scroll events inside the portaled dropdown (user scrolling options,
+      // or scrollIntoView from keyboard navigation)
+      if (dropdownRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setIsOpen(false);
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true, capture: true });
+    return () => window.removeEventListener('scroll', handleScroll, { capture: true });
+  }, [isOpen]);
+
+  // Close on window resize
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleResize = () => {
+      setIsOpen(false);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [isOpen]);
+
+  // Position calculation with flicker prevention via useLayoutEffect
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setDropdownPosition(null);
+      return;
+    }
+
+    const triggerEl = triggerRef.current;
+    const dropdownEl = dropdownRef.current;
+    if (!triggerEl || !dropdownEl) return;
+
+    const triggerRect = triggerEl.getBoundingClientRect();
+    const dropdownHeight = dropdownEl.getBoundingClientRect().height;
+
+    let top = triggerRect.bottom;
+
+    // Flip upward if insufficient space below
+    if (triggerRect.bottom + dropdownHeight > window.innerHeight) {
+      top = triggerRect.top - dropdownHeight;
+    }
+
+    // Clamp top to >= 0 to prevent overflow above viewport
+    top = Math.max(0, top);
+
+    setDropdownPosition({
+      top,
+      left: triggerRect.left,
+      width: triggerRect.width,
+    });
   }, [isOpen]);
 
   // Reset highlighted index when dropdown opens/closes
@@ -349,6 +425,24 @@ export function Select({
     }
   };
 
+  // Dropdown style: position:fixed, invisible until position is computed
+  const dropdownStyle: React.CSSProperties = dropdownPosition
+    ? {
+        position: 'fixed',
+        top: dropdownPosition.top,
+        left: dropdownPosition.left,
+        width: dropdownPosition.width,
+        zIndex: 9999,
+        visibility: 'visible',
+      }
+    : {
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        zIndex: 9999,
+        visibility: 'hidden',
+      };
+
   return (
     <div ref={containerRef} className={`relative ${className}`} data-testid={testId} data-dropdown-open={isOpen || undefined}>
       {/* Trigger button */}
@@ -366,7 +460,8 @@ export function Select({
         aria-labelledby={ariaLabelledBy}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
-        aria-controls={listboxId}
+        aria-controls={isOpen ? listboxId : undefined}
+        aria-owns={isOpen ? listboxId : undefined}
         aria-activedescendant={isOpen && highlightedIndex >= 0 ? getOptionId(highlightedIndex) : undefined}
       >
         <span className={selectedLabel ? 'text-foreground' : 'text-text-secondary'}>
@@ -382,18 +477,20 @@ export function Select({
         </svg>
       </button>
 
-      {/* Dropdown */}
-      {isOpen && (
+      {/* Dropdown — portaled to document.body to escape stacking contexts */}
+      {isOpen && createPortal(
         <div
-          ref={listboxRef}
+          ref={dropdownRef}
           role="listbox"
           id={listboxId}
           aria-label={ariaLabel}
           aria-labelledby={ariaLabelledBy}
-          className="absolute z-50 w-full mt-1 bg-panel border border-border rounded shadow-lg max-h-60 overflow-auto"
+          className="bg-panel border border-border rounded shadow-lg max-h-60 overflow-auto"
+          style={dropdownStyle}
         >
           {renderOptions()}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
