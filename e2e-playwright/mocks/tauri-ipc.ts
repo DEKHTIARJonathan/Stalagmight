@@ -1642,15 +1642,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
             // Check if this path should be delayed
             const delay = geometryDelayPaths.get(filePath);
+            // Return a SurveyGeometry-conformant payload matching src/types/survey.ts
             const mockGeometry = {
+              origin: [-82.46, 24.93] as [number, number],
               shots: [
-                { from: [0, 0, 0], to: [10, 5, -2] },
-                { from: [10, 5, -2], to: [20, 10, -5] },
-              ],
-              stations: [
-                { coords: [0, 0, 0], name: 'S0' },
-                { coords: [10, 5, -2], name: 'S1' },
-                { coords: [20, 10, -5], name: 'S2' },
+                { from: [-82.46, 24.93] as [number, number], to: [-82.4599, 24.9301] as [number, number], is_virtual: false, section_id: 'section-1' },
+                { from: [-82.4599, 24.9301] as [number, number], to: [-82.4598, 24.9302] as [number, number], is_virtual: false, section_id: 'section-1' },
               ],
             };
 

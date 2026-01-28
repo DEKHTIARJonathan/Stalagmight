@@ -75,11 +75,18 @@ test.describe('GlobalView Metadata Panel', () => {
       const mapTab = page.locator('[data-testid="globalview-map-tab"]');
       await mapTab.click();
       await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
+
+      // Switch to markers mode so markers stay visible (survey mode hides
+      // markers once geometry loads, which can cause flaky click failures)
+      const toggle = page.getByTestId('view-mode-toggle');
+      await expect(toggle).toBeVisible({ timeout: 5000 });
+      await toggle.click();
+
       await expect(page.locator('.globalview-system-marker')).toHaveCount(3, { timeout: 5000 });
     });
 
     test('should show project details when map marker is clicked', async ({ page }) => {
-      // Click on a marker
+      // Click on a marker (in markers mode, all markers are reliably visible)
       const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
       await marker.click();
 
