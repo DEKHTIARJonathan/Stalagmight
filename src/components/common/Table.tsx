@@ -138,10 +138,19 @@ function EditableCell({
 }: EditableCellProps) {
   const [localValue, setLocalValue] = useState(value);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Track if we just committed (to prevent double commit on Enter then blur)
+  const justCommittedRef = useRef(false);
+  // Track the last committed value to detect external changes (undo/redo)
+  const lastCommittedValueRef = useRef(value);
 
   // Sync local state when external value changes (e.g., undo/redo)
+  // This detects when value prop changes from outside (not from our own commit)
   useEffect(() => {
-    setLocalValue(value);
+    // If the value changed from outside (not from our commit), sync local state
+    if (value !== lastCommittedValueRef.current) {
+      setLocalValue(value);
+      lastCommittedValueRef.current = value;
+    }
   }, [value]);
 
   const alignmentClasses = {
@@ -151,26 +160,34 @@ function EditableCell({
   };
 
   const handleBlur = useCallback(() => {
-    // Only commit if value actually changed
-    if (localValue !== value) {
+    // Skip if we just committed via Enter (prevents double commit)
+    if (justCommittedRef.current) {
+      justCommittedRef.current = false;
+      return;
+    }
+    // Only commit if value actually changed from original
+    if (localValue !== lastCommittedValueRef.current) {
+      lastCommittedValueRef.current = localValue;
       onCommit(localValue);
     }
-  }, [localValue, value, onCommit]);
+  }, [localValue, onCommit]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
-      // Commit on Enter
-      if (localValue !== value) {
+      // Commit on Enter if value changed
+      if (localValue !== lastCommittedValueRef.current) {
+        justCommittedRef.current = true;
+        lastCommittedValueRef.current = localValue;
         onCommit(localValue);
       }
     } else if (e.key === 'Escape') {
       // Revert on Escape
-      setLocalValue(value);
+      setLocalValue(lastCommittedValueRef.current);
       inputRef.current?.blur();
     }
     // Pass to parent handler for navigation
     onKeyDown?.(e);
-  }, [localValue, value, onCommit, onKeyDown]);
+  }, [localValue, onCommit, onKeyDown]);
 
   return (
     <input

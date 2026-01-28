@@ -188,6 +188,18 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
                         });
                     }
                 }
+                // Handle comment field (Option<Option<String>>)
+                if let Some(ref new_comment_opt) = updates.comment {
+                    let old_comment = prev.get("comment")
+                        .and_then(|v| if v.is_null() { None } else { v.as_str() })
+                        .unwrap_or("");
+                    let new_comment = new_comment_opt.as_deref().unwrap_or("");
+                    changes.push(FieldChange {
+                        field: "comment".to_string(),
+                        old_value: old_comment.to_string(),
+                        new_value: new_comment.to_string(),
+                    });
+                }
             }
 
             if changes.is_empty() {
