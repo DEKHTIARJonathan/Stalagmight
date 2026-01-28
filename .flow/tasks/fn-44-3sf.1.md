@@ -55,9 +55,8 @@ Fix CreateSection command so that undo→redo preserves the original section ID 
 - [ ] Existing undo tests still pass (DeleteSection behavior unchanged)
 
 ## Done summary
-TBD
-
+Added UndoData::CreatedSectionSnapshot variant and updated finalize_undo_data, undo, and redo to use snapshot-based restoration for CreateSection. This preserves the original section ID (and all shot IDs) through undo/redo cycles instead of assigning new IDs. Added 6 tests covering single cycle, double cycle, post-redo edit/delete, variant distinction, and DeleteSection regression.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 37cd58a, 5742b5e
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml (80 passed), cargo test --manifest-path src-tauri/Cargo.toml -- undo (88 passed)
 - PRs:

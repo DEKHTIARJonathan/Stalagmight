@@ -3920,3 +3920,369 @@ fn test_delete_section_undo_redo_still_works() {
     assert!(state.undo().success);
     assert_eq!(state.get_project_state().unwrap().sections.len(), 1);
 }
+
+// === CreateShot undo/redo ID preservation tests ===
+
+#[test]
+fn test_create_shot_undo_redo_preserves_id() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Create a section first
+    let section_result = state.execute(Command::CreateSection {
+        name: Some("Shot Test".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let section_id = section_result.section_id.unwrap();
+
+    // Get the initial shot ID
+    let project = state.get_project_state().unwrap();
+    let initial_shot_id = project.sections[0].shots[0].id;
+
+    // Create a new shot
+    state.execute(Command::CreateShot {
+        section_id,
+        shot: test_shot_data(10.0),
+        after_shot_id: None,
+    });
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots.len(), 2);
+    let new_shot_id = project.sections[0].shots[1].id;
+    assert_ne!(new_shot_id, initial_shot_id);
+
+    // Undo the create shot
+    let undo_result = state.undo();
+    assert!(undo_result.success);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots.len(), 1);
+
+    // Redo the create shot - should preserve original shot ID
+    let redo_result = state.redo();
+    assert!(redo_result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots.len(), 2);
+    assert_eq!(
+        project.sections[0].shots[1].id, new_shot_id,
+        "Shot ID must be preserved after undo/redo, expected {} got {}",
+        new_shot_id, project.sections[0].shots[1].id
+    );
+    assert_eq!(project.sections[0].shots[1].length, 10.0);
+}
+
+#[test]
+fn test_create_shot_mid_section_undo_redo_preserves_position() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Create a section with 3 shots
+    let section_result = state.execute(Command::CreateSection {
+        name: Some("Mid Insert".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(1.0), test_shot_data(2.0), test_shot_data(3.0)],
+    });
+    let section_id = section_result.section_id.unwrap();
+
+    let project = state.get_project_state().unwrap();
+    let first_shot_id = project.sections[0].shots[0].id;
+    let original_ids: Vec<_> = project.sections[0].shots.iter().map(|s| s.id).collect();
+    assert_eq!(original_ids.len(), 3);
+
+    // Insert a shot after the first shot (mid-section insert)
+    state.execute(Command::CreateShot {
+        section_id,
+        shot: test_shot_data(99.0),
+        after_shot_id: Some(first_shot_id),
+    });
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots.len(), 4);
+    // The new shot should be at position 1 (after first)
+    let inserted_shot_id = project.sections[0].shots[1].id;
+    assert_eq!(project.sections[0].shots[1].length, 99.0);
+
+    // Verify order: [original[0], new, original[1], original[2]]
+    assert_eq!(project.sections[0].shots[0].id, original_ids[0]);
+    assert_eq!(project.sections[0].shots[1].id, inserted_shot_id);
+    assert_eq!(project.sections[0].shots[2].id, original_ids[1]);
+    assert_eq!(project.sections[0].shots[3].id, original_ids[2]);
+
+    // Undo the mid-section insert
+    let undo_result = state.undo();
+    assert!(undo_result.success);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots.len(), 3);
+    // Should be back to original order
+    let after_undo_ids: Vec<_> = project.sections[0].shots.iter().map(|s| s.id).collect();
+    assert_eq!(after_undo_ids, original_ids);
+
+    // Redo - should restore at position 1 with original ID
+    let redo_result = state.redo();
+    assert!(redo_result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots.len(), 4);
+    assert_eq!(
+        project.sections[0].shots[1].id, inserted_shot_id,
+        "Shot ID must be preserved after mid-section undo/redo"
+    );
+    assert_eq!(project.sections[0].shots[1].length, 99.0);
+
+    // Verify correct position restored: [original[0], new, original[1], original[2]]
+    assert_eq!(project.sections[0].shots[0].id, original_ids[0]);
+    assert_eq!(project.sections[0].shots[2].id, original_ids[1]);
+    assert_eq!(project.sections[0].shots[3].id, original_ids[2]);
+}
+
+#[test]
+fn test_create_shot_double_undo_redo_cycle() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let section_result = state.execute(Command::CreateSection {
+        name: Some("Double Cycle".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let section_id = section_result.section_id.unwrap();
+
+    // Create a shot
+    state.execute(Command::CreateShot {
+        section_id,
+        shot: test_shot_data(20.0),
+        after_shot_id: None,
+    });
+
+    let project = state.get_project_state().unwrap();
+    let original_shot_id = project.sections[0].shots[1].id;
+
+    // First cycle: undo -> redo
+    assert!(state.undo().success);
+    assert_eq!(state.get_project_state().unwrap().sections[0].shots.len(), 1);
+    assert!(state.redo().success);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots[1].id, original_shot_id);
+
+    // Second cycle: undo -> redo
+    assert!(state.undo().success);
+    assert_eq!(state.get_project_state().unwrap().sections[0].shots.len(), 1);
+    assert!(state.redo().success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.sections[0].shots[1].id, original_shot_id,
+        "Shot ID must be stable through double undo/redo cycle"
+    );
+    assert_eq!(project.sections[0].shots[1].length, 20.0);
+}
+
+#[test]
+fn test_create_shot_undo_redo_then_edit() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let section_result = state.execute(Command::CreateSection {
+        name: Some("Edit After Redo".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![],
+    });
+    let section_id = section_result.section_id.unwrap();
+
+    // Create a shot
+    state.execute(Command::CreateShot {
+        section_id,
+        shot: test_shot_data(15.0),
+        after_shot_id: None,
+    });
+
+    let project = state.get_project_state().unwrap();
+    let shot_id = project.sections[0].shots[0].id;
+
+    // Undo and redo
+    assert!(state.undo().success);
+    assert!(state.redo().success);
+
+    // Verify we can edit the restored shot
+    let update_result = state.execute(Command::UpdateShot {
+        section_id,
+        shot_id,
+        updates: ShotUpdates {
+            length: Some(42.0),
+            ..Default::default()
+        },
+    });
+    assert!(update_result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots[0].length, 42.0);
+}
+
+#[test]
+fn test_create_shot_undo_redo_then_delete() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let section_result = state.execute(Command::CreateSection {
+        name: Some("Delete After Redo".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![],
+    });
+    let section_id = section_result.section_id.unwrap();
+
+    // Create a shot
+    state.execute(Command::CreateShot {
+        section_id,
+        shot: test_shot_data(15.0),
+        after_shot_id: None,
+    });
+
+    let project = state.get_project_state().unwrap();
+    let shot_id = project.sections[0].shots[0].id;
+
+    // Undo and redo
+    assert!(state.undo().success);
+    assert!(state.redo().success);
+
+    // Delete the restored shot
+    let delete_result = state.execute(Command::DeleteShot { section_id, shot_id });
+    assert!(delete_result.success);
+    assert!(state.get_project_state().unwrap().sections[0].shots.is_empty());
+}
+
+#[test]
+fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
+    // Verify that CreateShot uses CreatedShotSnapshot while
+    // DeleteShot still uses ShotSnapshot
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let section_result = state.execute(Command::CreateSection {
+        name: Some("Variant Check".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let section_id = section_result.section_id.unwrap();
+
+    // Create a shot
+    state.execute(Command::CreateShot {
+        section_id,
+        shot: test_shot_data(10.0),
+        after_shot_id: None,
+    });
+
+    let project = state.get_project_state().unwrap();
+    let shot_id = project.sections[0].shots[1].id;
+
+    // Check that CreateShot uses CreatedShotSnapshot
+    {
+        let stack = state.undo_stack.lock().unwrap();
+        let undo_data = stack.peek_undo_data().unwrap();
+        assert_eq!(
+            undo_data.variant_name(),
+            "CreatedShotSnapshot",
+            "CreateShot should use CreatedShotSnapshot, got {}",
+            undo_data.variant_name()
+        );
+    }
+
+    // Now delete the shot and verify DeleteShot uses ShotSnapshot
+    state.execute(Command::DeleteShot { section_id, shot_id });
+
+    {
+        let stack = state.undo_stack.lock().unwrap();
+        let undo_data = stack.peek_undo_data().unwrap();
+        assert_eq!(
+            undo_data.variant_name(),
+            "ShotSnapshot",
+            "DeleteShot should use ShotSnapshot, got {}",
+            undo_data.variant_name()
+        );
+    }
+}
+
+#[test]
+fn test_delete_shot_undo_redo_still_works() {
+    // Regression test: ensure DeleteShot undo/redo behavior is unchanged
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let section_result = state.execute(Command::CreateSection {
+        name: Some("Delete Shot Regression".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0), test_shot_data(10.0)],
+    });
+    let section_id = section_result.section_id.unwrap();
+
+    let project = state.get_project_state().unwrap();
+    let shot_id = project.sections[0].shots[0].id;
+
+    // Delete the first shot
+    state.execute(Command::DeleteShot { section_id, shot_id });
+    assert_eq!(state.get_project_state().unwrap().sections[0].shots.len(), 1);
+
+    // Undo should restore it at its original position
+    assert!(state.undo().success);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots.len(), 2);
+    assert_eq!(project.sections[0].shots[0].id, shot_id);
+    assert_eq!(project.sections[0].shots[0].length, 5.0);
+
+    // Redo should delete it again
+    assert!(state.redo().success);
+    assert_eq!(state.get_project_state().unwrap().sections[0].shots.len(), 1);
+
+    // Undo again to restore
+    assert!(state.undo().success);
+    assert_eq!(state.get_project_state().unwrap().sections[0].shots.len(), 2);
+}
