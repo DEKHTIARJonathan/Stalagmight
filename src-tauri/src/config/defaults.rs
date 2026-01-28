@@ -189,6 +189,10 @@ impl Default for ShortcutsConfig {
             toggle_detail_panel: vec!["Ctrl+2".to_string()],
             toggle_data_table: vec!["Ctrl+3".to_string()],
 
+            // File
+            import_dmp: vec!["Ctrl+I".to_string()],
+            export: vec!["Ctrl+E".to_string()],
+
             // Legacy field (always None for new configs)
             legacy_delete: None,
         }

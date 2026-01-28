@@ -630,6 +630,12 @@ pub struct ShortcutsConfig {
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub toggle_data_table: Vec<String>,
 
+    // File
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub import_dmp: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub export: Vec<String>,
+
     // Legacy field for migration (accepts old "delete" key, maps to delete_tool)
     #[serde(default, skip_serializing, rename = "delete")]
     pub(super) legacy_delete: Option<LegacyShortcut>,
@@ -727,6 +733,8 @@ impl ShortcutsConfig {
             &defaults.toggle_data_table,
             "toggle_data_table",
         );
+        normalize_shortcut_field(&mut self.import_dmp, &defaults.import_dmp, "import_dmp");
+        normalize_shortcut_field(&mut self.export, &defaults.export, "export");
     }
 }
 

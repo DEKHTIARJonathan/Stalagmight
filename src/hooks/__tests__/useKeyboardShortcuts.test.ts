@@ -113,6 +113,8 @@ describe('buildShortcutMap logic', () => {
       toggle_sections_panel: ['1'],
       toggle_detail_panel: ['2'],
       toggle_data_table: ['3'],
+      import_dmp: ['Ctrl+I'],
+      export: ['Ctrl+E'],
     };
 
     const map = buildShortcutMap(shortcuts);
@@ -150,6 +152,8 @@ describe('buildShortcutMap logic', () => {
       toggle_sections_panel: ['1'],
       toggle_detail_panel: ['2'],
       toggle_data_table: ['3'],
+      import_dmp: ['Ctrl+I'],
+      export: ['Ctrl+E'],
     };
 
     const map = buildShortcutMap(shortcuts);
@@ -193,6 +197,8 @@ describe('buildShortcutMap logic', () => {
       toggle_sections_panel: ['1'],
       toggle_detail_panel: ['2'],
       toggle_data_table: ['3'],
+      import_dmp: ['Ctrl+I'],
+      export: ['Ctrl+E'],
     };
 
     const map = buildShortcutMap(shortcuts);
@@ -242,6 +248,8 @@ describe('buildShortcutMap logic', () => {
       toggle_sections_panel: ['1'],
       toggle_detail_panel: ['2'],
       toggle_data_table: ['3'],
+      import_dmp: ['Ctrl+I'],
+      export: ['Ctrl+E'],
     };
 
     const map = buildShortcutMap(shortcuts);
@@ -280,6 +288,8 @@ describe('buildShortcutMap logic', () => {
       toggle_sections_panel: ['1'],
       toggle_detail_panel: ['2'],
       toggle_data_table: ['3'],
+      import_dmp: ['Ctrl+I'],
+      export: ['Ctrl+E'],
     };
 
     const map = buildShortcutMap(shortcuts);
