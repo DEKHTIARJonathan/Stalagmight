@@ -530,7 +530,7 @@ impl Database {
                     lc.error_percentage,
                     lc.horizontal_misclosure,
                     lc.vertical_misclosure,
-                    lc.id as i64
+                    i64::try_from(lc.id).unwrap_or(i64::MAX)
                 ],
             )?;
         }
@@ -749,6 +749,9 @@ impl Database {
         // Load imported file hashes
         let imported_file_hashes = self.load_imported_file_hashes()?;
 
+        // Derive next_closure_id from loaded closures (max + 1, minimum 1)
+        let next_closure_id = loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0) + 1;
+
         Ok(Project {
             name,
             location,
@@ -763,6 +766,7 @@ impl Database {
             file_path: None,
             next_section_id,
             imported_file_hashes,
+            next_closure_id,
         })
     }
 
