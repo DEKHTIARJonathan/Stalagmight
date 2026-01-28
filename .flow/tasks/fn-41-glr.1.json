@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-28T15:14:49.887607Z",
+  "depends_on": [],
+  "epic": "fn-41-glr",
+  "id": "fn-41-glr.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-41-glr.1.md",
+  "status": "todo",
+  "title": "Fix main content panel scroll with min-h-0",
+  "updated_at": "2026-01-28T15:15:16.580707Z"
+}

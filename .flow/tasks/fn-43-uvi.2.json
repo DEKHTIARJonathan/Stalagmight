@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-28T15:19:51.697280Z",
+  "depends_on": [],
+  "epic": "fn-43-uvi",
+  "id": "fn-43-uvi.2",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-43-uvi.2.md",
+  "status": "todo",
+  "title": "Implement MoveStation command",
+  "updated_at": "2026-01-28T15:19:51.697292Z"
+}
