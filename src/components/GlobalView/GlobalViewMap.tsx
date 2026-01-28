@@ -377,6 +377,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       zoom: initialZoom,
       minZoom: 0, // Dynamic minZoom set after load based on system bounds
       maxZoom: tileConfig.maxZoom,
+      attributionControl: false, // Hide provider badge
     };
 
     // No maxBounds - allow free panning and zooming
