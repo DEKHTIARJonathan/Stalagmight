@@ -913,9 +913,9 @@ await expect.poll(
 ).toBe(true);
 ```
 
-**Playwright `hover()` reliability note:** Playwright's `hover()` method works for React `onMouseEnter` on Select option `<div>` elements. However, for components that use delegated event listeners, you may need `triggerMouseHover()` which dispatches `mouseover` with `bubbles: true` (see `detail-link-hover.spec.ts:272-282`). The Select component uses direct `onMouseEnter` handlers on each option, so standard `hover()` works reliably.
+**Playwright `hover()` reliability note:** `page.hover()` works reliably for Select option elements. If hover is unreliable for other components, fall back to `triggerMouseHover()` which dispatches bubbling `mouseover` (see `detail-link-hover.spec.ts:272-282`).
 
-**Close-path verification pattern:** All 8 Select close paths (handleSelect, outside-click, Escape, Tab, trigger-toggle-to-close, component unmount, external scroll, window resize) fire `onOptionHover(null)`. Tests verify each by opening the dropdown, hovering an option to set `hoveredSectionId`, triggering the close path, then polling for `hoveredSectionId === null`.
+**Close-path verification pattern:** All 8 Select close paths (handleSelect, outside-click, Escape, Tab, trigger-toggle-to-close, component unmount, external scroll, window resize) fire `onOptionHover(null)`. Tests verify each by opening the dropdown, hovering an option to set `hoveredSectionId`, triggering the close path, then polling for `hoveredSectionId === null`. The unmount path is tested by collapsing the DataTable (`Ctrl+3`) while the dropdown is open.
 
 ## Testing Detail Panel
 
