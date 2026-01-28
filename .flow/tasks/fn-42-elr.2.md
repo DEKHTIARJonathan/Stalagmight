@@ -26,9 +26,8 @@ Remove Ctrl+I and Ctrl+E from the reserved shortcuts sets and descriptions, allo
 - [ ] `isReservedShortcut('Ctrl+E')` returns false
 - [ ] `pnpm tsc --noEmit` passes
 ## Done summary
-TBD
-
+Removed Ctrl+I and Ctrl+E from reserved shortcuts (RESERVED_SHORTCUTS, RESERVED_CTRL_KEYS, RESERVED_CTRL_DESCRIPTIONS), updated JSDoc comments in checkReservedConflict(), and added comprehensive unit tests including a new checkReservedConflict test suite verifying both configurable and still-reserved shortcuts.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 0d3b359ac69818456b6d16884b041a9d7c4d7413
+- Tests: pnpm tsc --noEmit, pnpm vitest run src/utils/__tests__/shortcuts.test.ts (96 passed)
 - PRs:
