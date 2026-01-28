@@ -124,13 +124,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             reason: result.reason,
           });
         } else {
-          // Not connected but merge blocked (e.g. both sides have zero datums)
-          // Silently redirect to closure dialog with reason
-          openDialog('closure', {
-            stationA,
-            stationB,
-            reason: result.reason,
-          });
+          // Not connected and merge blocked (e.g. both sides have zero datums)
+          showToast(result.reason ?? 'Merge not allowed.', 'merge-blocked');
+          clearMergeStations();
         }
       } catch (e) {
         if (requestId !== connectivityRequestIdRef.current) return;

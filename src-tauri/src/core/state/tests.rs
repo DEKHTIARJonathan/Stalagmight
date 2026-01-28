@@ -4447,3 +4447,88 @@ fn test_check_merge_connectivity_connected_creates_loop() {
     );
     assert!(result.preview.is_some(), "Connected sections should have closure preview");
 }
+
+#[test]
+fn test_check_merge_connectivity_both_zd_and_connected() {
+    // When sections are connected AND both have zero datums, zero datum
+    // takes priority for reason, but connected/preview remain correct.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "BothZDConnected".to_string(),
+        location: None,
+    });
+
+    // Create sections A (with ZD), C (no ZD, will bridge), B (with ZD)
+    let result_a = state.execute(Command::CreateSection {
+        name: None, surveyor: None, date: None,
+        color: "#ff0000".to_string(), direction: None,
+        shots: vec![test_shot_data(10.0)],
+    });
+    let a = result_a.section_id.unwrap();
+
+    let result_b = state.execute(Command::CreateSection {
+        name: None, surveyor: None, date: None,
+        color: "#00ff00".to_string(), direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let b = result_b.section_id.unwrap();
+
+    let result_c = state.execute(Command::CreateSection {
+        name: None, surveyor: None, date: None,
+        color: "#0000ff".to_string(), direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+    let c = result_c.section_id.unwrap();
+
+    // Set ZD on A
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+
+    // Set ZD on B (separate group)
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(b, 0),
+        coordinates: GpsCoordinates::new(46.0, -91.0, 0.0).unwrap(),
+    });
+
+    // Merge C.0 into A.1 (C joins A's merge group)
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(c, 0),
+    });
+
+    // Connect C.1 to B.0 via an injected closure (can't merge — different ZD groups,
+    // and can't create closure through command because they're not yet connected).
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        project.loop_closures.push(crate::models::LoopClosure {
+            id: project.next_closure_id,
+            station_a: StationRef::new(c, 1),
+            station_b: StationRef::new(b, 0),
+            path_length: 8.0,
+            misclosure_distance: 0.2,
+            error_percentage: 2.5,
+            horizontal_misclosure: 0.2,
+            vertical_misclosure: 0.0,
+        });
+        project.next_closure_id += 1;
+    }
+
+    // Now: A-C merged (A has ZD), B has ZD, connected via closure C.1-B.0
+    let result = state
+        .check_merge_connectivity(StationRef::new(a, 0), StationRef::new(b, 1))
+        .unwrap();
+
+    // connected must be true (they ARE connected via merge+closure)
+    assert!(result.connected, "Sections connected via merge+closure should report connected=true");
+    assert!(result.preview.is_some(), "Connected stations should have closure preview");
+    // can_merge must be false (both have ZD — zero datum takes priority)
+    assert!(!result.can_merge, "Both sections with ZD should not be mergeable");
+    assert_eq!(
+        result.reason.as_deref(),
+        Some("Both sections have fixed coordinates"),
+        "Zero datum reason should take priority over loop reason"
+    );
+}
