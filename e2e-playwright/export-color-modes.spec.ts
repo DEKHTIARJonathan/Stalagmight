@@ -118,7 +118,7 @@ test.describe('Export Color Modes - Export Verification', () => {
     const presetSelect = page.locator('[data-testid="depth-preset-select"]');
     await expect(presetSelect).toBeVisible();
     await presetSelect.locator('button').first().click();
-    await presetSelect.locator('.absolute [role="option"]:has-text("Thermal")').click();
+    await page.getByRole('listbox').locator('[role="option"]:has-text("Thermal")').click();
 
     // Click export
     await page.locator('[data-testid="export-button"]').click();
@@ -144,13 +144,13 @@ test.describe('Export Color Modes - Export Verification', () => {
     // Switch to SVG format
     const imageFormatSelect = page.locator('[data-testid="image-format-select"]');
     await imageFormatSelect.locator('button').first().click();
-    await imageFormatSelect.locator('.absolute [role="option"]:has-text("SVG")').click();
+    await page.getByRole('listbox').locator('[role="option"]:has-text("SVG")').click();
 
     // Switch to depth mode with ocean preset
     await page.click('[data-testid="color-mode-depth"]');
     const presetSelect = page.locator('[data-testid="depth-preset-select"]');
     await presetSelect.locator('button').first().click();
-    await presetSelect.locator('.absolute [role="option"]:has-text("Ocean")').click();
+    await page.getByRole('listbox').locator('[role="option"]:has-text("Ocean")').click();
 
     // Click export
     await page.locator('[data-testid="export-button"]').click();
@@ -174,13 +174,13 @@ test.describe('Export Color Modes - Export Verification', () => {
     // Switch to PDF format
     const imageFormatSelect = page.locator('[data-testid="image-format-select"]');
     await imageFormatSelect.locator('button').first().click();
-    await imageFormatSelect.locator('.absolute [role="option"]:has-text("PDF")').click();
+    await page.getByRole('listbox').locator('[role="option"]:has-text("PDF")').click();
 
     // Switch to depth mode with terrain preset
     await page.click('[data-testid="color-mode-depth"]');
     const presetSelect = page.locator('[data-testid="depth-preset-select"]');
     await presetSelect.locator('button').first().click();
-    await presetSelect.locator('.absolute [role="option"]:has-text("Terrain")').click();
+    await page.getByRole('listbox').locator('[role="option"]:has-text("Terrain")').click();
 
     // Disable legend
     const legendCheckbox = page.locator('[data-testid="option-include-legend"]');
@@ -210,7 +210,7 @@ test.describe('Export Color Modes - Export Verification', () => {
     // Select 600 DPI
     const resolutionSelect = page.locator('[data-testid="resolution-select"]');
     await resolutionSelect.locator('button').first().click();
-    await resolutionSelect.locator('.absolute [role="option"]:has-text("600")').click();
+    await page.getByRole('listbox').locator('[role="option"]:has-text("600")').click();
 
     // Click export
     await page.locator('[data-testid="export-button"]').click();
@@ -363,9 +363,9 @@ test.describe('Export Color Modes - Preset Selection', () => {
     const presets = ['Thermal', 'Ocean', 'Terrain', 'Grayscale', 'Accessible'];
 
     for (const preset of presets) {
-      // Click to open dropdown
+      // Click to open dropdown (portaled listbox)
       await presetSelect.locator('button').first().click();
-      const dropdown = presetSelect.locator('.absolute');
+      const dropdown = page.getByRole('listbox');
 
       // Select the preset
       await dropdown.locator(`[role="option"]:has-text("${preset}")`).click();
@@ -392,7 +392,7 @@ test.describe('Export Color Modes - Preset Selection', () => {
     // Change depth preset
     const presetSelect = page.locator('[data-testid="depth-preset-select"]');
     await presetSelect.locator('button').first().click();
-    await presetSelect.locator('.absolute [role="option"]:has-text("Ocean")').click();
+    await page.getByRole('listbox').locator('[role="option"]:has-text("Ocean")').click();
 
     // Preview should still be visible after preset change
     await expect(preview).toBeVisible();
