@@ -71,5 +71,8 @@ Implement new merge validation logic: check zero datum connectivity first, then 
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-
+Implemented zero datum merge validation logic: restructured check_merge_connectivity to check zero datums first then loop detection; updated useMapTools.ts to redirect blocked merges to closure dialog; added reason subtitle to ClosureDialog; added 4 Rust tests.
 ## Evidence
+- Commits:
+- Tests:
+- PRs:

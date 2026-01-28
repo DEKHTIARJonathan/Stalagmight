@@ -699,42 +699,46 @@ impl AppState {
             );
         }
 
-        // Check connectivity (via merges and closures)
+        // 1. Check zero datum constraints first (merge-only rigid groups)
+        let merged_a = project.get_merged_section_ids(station_a.section_id);
+        let a_has_zd = project.zero_datums.iter().any(|zd| {
+            merged_a.contains(&zd.station_ref.section_id)
+        });
+        let merged_b = project.get_merged_section_ids(station_b.section_id);
+        let b_has_zd = project.zero_datums.iter().any(|zd| {
+            merged_b.contains(&zd.station_ref.section_id)
+        });
+
+        if a_has_zd && b_has_zd {
+            // Both sections have fixed coordinates — cannot merge
+            return Ok(ConnectivityResult {
+                connected: false,
+                preview: None,
+                can_merge: false,
+                reason: Some("Both sections have fixed coordinates".to_string()),
+            });
+        }
+
+        // 2. Check connectivity (via merges and closures) for loop detection
         let connected_a = project.get_connected_section_ids(station_a.section_id);
         let connected = connected_a.contains(&station_b.section_id);
 
         if connected {
-            // Stations are already connected -- cannot merge, should create closure
+            // Stations are already connected — merging would create a survey loop
             let preview = project.compute_closure_metrics(station_a, station_b)?;
             Ok(ConnectivityResult {
                 connected: true,
                 preview: Some(preview),
                 can_merge: false,
-                reason: Some("Stations are already connected. Use loop closure instead.".to_string()),
+                reason: Some("Creates survey loop".to_string()),
             })
         } else {
-            // Not connected -- check zero datum constraints using merge-only connectivity
-            // (rigid groups for datum propagation)
-            let merged_a = project.get_merged_section_ids(station_a.section_id);
-            let a_has_zd = project.zero_datums.iter().any(|zd| {
-                merged_a.contains(&zd.station_ref.section_id)
-            });
-            let merged_b = project.get_merged_section_ids(station_b.section_id);
-            let b_has_zd = project.zero_datums.iter().any(|zd| {
-                merged_b.contains(&zd.station_ref.section_id)
-            });
-
-            let (can_merge, reason) = if a_has_zd && b_has_zd {
-                (false, Some("Both sections have fixed coordinates (zero datums). Remove one before merging.".to_string()))
-            } else {
-                (true, None)
-            };
-
+            // Not connected and zero datum check passed — merge is allowed
             Ok(ConnectivityResult {
                 connected: false,
                 preview: None,
-                can_merge,
-                reason,
+                can_merge: true,
+                reason: None,
             })
         }
     }

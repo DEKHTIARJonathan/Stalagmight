@@ -52,9 +52,8 @@ Update graph traversal functions to treat closures as zero-distance edges (ident
 - [ ] Test: transitive closure computation is correct
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 ## Done summary
-TBD
-
+Updated graph traversal to treat closures as zero-distance edges: get_connected_section_ids() and calculate_path_length_between() now include closures, with get_merged_section_ids() and calculate_merge_only_path_length() as explicit merge-only variants for rigid-group operations (datum, offsets). Added are_stations_in_closure() utility and three tests covering closure+merge connectivity expansion, new merge expanding closure connectivity, and transitive closure computation.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 26d1c53, 8f2625c, 1813d15, b940408, 06af0bd
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:

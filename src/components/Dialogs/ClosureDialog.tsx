@@ -21,6 +21,7 @@ export default function ClosureDialog() {
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;
   const preview = (dialogData.preview as ClosurePreview | null) ?? undefined;
+  const reason = dialogData.reason as string | undefined;
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +71,9 @@ export default function ClosureDialog() {
   return (
     <DialogWrapper title="Create Loop Closure" onClose={handleClose} size="lg" data-testid="closure-dialog">
       <div className="space-y-4">
+        {reason && (
+          <p className="text-sm text-text-secondary">{reason}</p>
+        )}
         {error && (
           <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">{error}</div>
         )}
