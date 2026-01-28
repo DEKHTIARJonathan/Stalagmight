@@ -543,7 +543,7 @@ export default function SettingsDialog() {
         data-testid="settings-dialog"
       >
         {({ requestClose }) => (
-          <div className="flex flex-col min-w-0 w-full flex-1">
+          <div className="flex flex-col min-w-[min(500px,100%)] flex-1">
             {/* Main content area with sidebar and content */}
             <div className="flex flex-1 overflow-hidden">
               {/* Sidebar */}
