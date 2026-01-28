@@ -174,3 +174,6 @@ After setData() on GeoJSON sources, guard re-apply calls with hasLiveStyle(map) 
 
 ## 2026-01-28 manual [pitfall]
 E2E tests checking MapLibre feature-state must poll (not one-shot assert) because updateVisualState() can lag behind store updates by a tick/frame, and must assert total>0 to prevent vacuous 0===0 passes
+
+## 2026-01-28 manual [pitfall]
+When removing items from data structures (sets/maps), also update all JSDoc comments and inline comments that enumerate those items -- reviewers flag stale documentation as NEEDS_WORK

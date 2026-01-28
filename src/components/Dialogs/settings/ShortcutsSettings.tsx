@@ -26,6 +26,11 @@ interface ShortcutCategory {
 
 const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
   {
+    id: 'file',
+    label: 'File',
+    actions: ['import_dmp', 'export'],
+  },
+  {
     id: 'tools',
     label: 'Tools',
     actions: ['select', 'pan', 'zoom', 'draw', 'delete_tool', 'merge', 'measure', 'move_section', 'move_station'],
@@ -64,8 +69,6 @@ const RESERVED_SHORTCUT_DESCRIPTIONS: Record<string, string> = {
   Escape: 'Cancel / Close dialogs',
   Delete: 'Delete selection',
   Backspace: 'Delete selection',
-  'Ctrl+I': 'Import DMP',
-  'Ctrl+E': 'Export',
   'Ctrl+A': 'Select all',
   'Ctrl+,': 'Open Settings',
 };
