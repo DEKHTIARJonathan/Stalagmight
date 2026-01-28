@@ -1,7 +1,68 @@
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{ClosureStrategy, Coordinates, GpsCoordinates, StationRef};
+
+/// Result of a connectivity check between two stations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectivityResult {
+    pub connected: bool,
+    pub preview: Option<ClosurePreview>,
+}
+
+/// Preview data for a potential loop closure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClosurePreview {
+    pub path_length: f64,
+    pub misclosure_distance: f64,
+    pub error_percentage: f64,
+    pub horizontal_misclosure: f64,
+    pub vertical_misclosure: f64,
+}
+
+/// Check merge connectivity between two stations (read-only, NOT a Command)
+#[tauri::command]
+pub fn check_merge_connectivity(
+    state: State<AppState>,
+    station_a: StationRef,
+    station_b: StationRef,
+) -> Result<ConnectivityResult, String> {
+    check_merge_connectivity_impl(state.inner(), station_a, station_b)
+}
+
+pub(crate) fn check_merge_connectivity_impl(
+    state: &AppState,
+    station_a: StationRef,
+    station_b: StationRef,
+) -> Result<ConnectivityResult, String> {
+    let (connected, preview) = state.check_merge_connectivity(station_a, station_b)?;
+    Ok(ConnectivityResult { connected, preview })
+}
+
+/// Create a loop closure between two connected stations
+#[tauri::command]
+pub fn create_loop_closure(
+    state: State<AppState>,
+    station_a: StationRef,
+    station_b: StationRef,
+    closure_strategy: ClosureStrategy,
+) -> CommandResult {
+    create_loop_closure_impl(state.inner(), station_a, station_b, closure_strategy)
+}
+
+pub(crate) fn create_loop_closure_impl(
+    state: &AppState,
+    station_a: StationRef,
+    station_b: StationRef,
+    closure_strategy: ClosureStrategy,
+) -> CommandResult {
+    state.execute(Command::CreateLoopClosure {
+        station_a,
+        station_b,
+        closure_strategy,
+    })
+}
 
 /// Merge two stations
 #[tauri::command]
@@ -9,21 +70,18 @@ pub fn merge_stations(
     state: State<AppState>,
     station_a: StationRef,
     station_b: StationRef,
-    closure_strategy: ClosureStrategy,
 ) -> CommandResult {
-    merge_stations_impl(state.inner(), station_a, station_b, closure_strategy)
+    merge_stations_impl(state.inner(), station_a, station_b)
 }
 
 pub(crate) fn merge_stations_impl(
     state: &AppState,
     station_a: StationRef,
     station_b: StationRef,
-    closure_strategy: ClosureStrategy,
 ) -> CommandResult {
     state.execute(Command::MergeStations {
         station_a,
         station_b,
-        closure_strategy,
     })
 }
 

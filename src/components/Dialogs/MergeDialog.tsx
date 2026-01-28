@@ -95,7 +95,7 @@ export default function MergeDialog() {
     setError(null);
 
     try {
-      const result = await mergeStations(stationA, stationB, 'KeepRaw');
+      const result = await mergeStations(stationA, stationB);
       if (result.success) {
         clearMergeStations();
         closeDialog();

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::Command;
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, SectionData, SectionId, ShotData, ShotId, StationRef,
+    GpsCoordinates, LoopClosure, SectionData, SectionId, ShotData, ShotId, StationRef,
 };
 
 /// Default maximum number of undo entries to keep in memory
@@ -68,7 +68,15 @@ pub enum UndoData {
     MergeInfo {
         station_a: StationRef,
         station_b: StationRef,
-        strategy: ClosureStrategy,
+        /// Closures removed during unmerge (for restoring on undo)
+        #[serde(default)]
+        removed_closures: Vec<LoopClosure>,
+    },
+
+    /// Loop closure info for undoing CreateLoopClosure
+    ClosureInfo {
+        /// The full loop closure data to remove on undo
+        closure: LoopClosure,
     },
 
     /// Zero datum info for restoring previous GPS and section offsets
@@ -108,6 +116,7 @@ impl UndoData {
             UndoData::SectionSnapshot { .. } => "SectionSnapshot",
             UndoData::ShotSnapshot { .. } => "ShotSnapshot",
             UndoData::MergeInfo { .. } => "MergeInfo",
+            UndoData::ClosureInfo { .. } => "ClosureInfo",
             UndoData::ZeroDatumInfo { .. } => "ZeroDatumInfo",
             UndoData::ProjectSnapshot(_) => "ProjectSnapshot",
             UndoData::ProjectSnapshotPair { .. } => "ProjectSnapshotPair",
@@ -763,12 +772,11 @@ mod tests {
             Command::MergeStations {
                 station_a: StationRef::new(1, 0),
                 station_b: StationRef::new(2, 3),
-                closure_strategy: ClosureStrategy::ProportionalByLength,
             },
             UndoData::MergeInfo {
                 station_a: StationRef::new(1, 0),
                 station_b: StationRef::new(2, 3),
-                strategy: ClosureStrategy::ProportionalByLength,
+                removed_closures: Vec::new(),
             },
         );
 
@@ -776,14 +784,14 @@ mod tests {
         if let UndoData::MergeInfo {
             station_a,
             station_b,
-            strategy,
+            removed_closures,
         } = data
         {
             assert_eq!(station_a.section_id, 1);
             assert_eq!(station_a.station_index, 0);
             assert_eq!(station_b.section_id, 2);
             assert_eq!(station_b.station_index, 3);
-            assert!(matches!(strategy, ClosureStrategy::ProportionalByLength));
+            assert!(removed_closures.is_empty());
         } else {
             panic!("Expected MergeInfo");
         }
@@ -1192,12 +1200,11 @@ mod tests {
                 command: Command::MergeStations {
                     station_a: StationRef::new(1, 0),
                     station_b: StationRef::new(2, 1),
-                    closure_strategy: ClosureStrategy::ProportionalByLength,
                 },
                 undo_data: UndoData::MergeInfo {
                     station_a: StationRef::new(1, 0),
                     station_b: StationRef::new(2, 1),
-                    strategy: ClosureStrategy::ProportionalByLength,
+                    removed_closures: Vec::new(),
                 },
                 timestamp: None,
             },

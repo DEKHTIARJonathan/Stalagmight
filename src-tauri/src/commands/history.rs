@@ -141,6 +141,7 @@ fn get_command_type(command: &Command) -> String {
         Command::SetShotVirtual { .. } => "set_shot_virtual".to_string(),
         Command::MergeStations { .. } => "merge_stations".to_string(),
         Command::UnmergeStations { .. } => "unmerge_stations".to_string(),
+        Command::CreateLoopClosure { .. } => "create_loop_closure".to_string(),
         Command::SetZeroDatum { .. } => "set_zero_datum".to_string(),
         Command::RemoveZeroDatum { .. } => "remove_zero_datum".to_string(),
         Command::MoveSection { .. } => "move_section".to_string(),
@@ -500,12 +501,11 @@ mod tests {
             command: Command::MergeStations {
                 station_a: StationRef::new(0, 0),
                 station_b: StationRef::new(1, 0),
-                closure_strategy: crate::models::ClosureStrategy::ProportionalByLength,
             },
             undo_data: UndoData::MergeInfo {
                 station_a: StationRef::new(0, 0),
                 station_b: StationRef::new(1, 0),
-                strategy: crate::models::ClosureStrategy::ProportionalByLength,
+                removed_closures: Vec::new(),
             },
             timestamp: None,
         };

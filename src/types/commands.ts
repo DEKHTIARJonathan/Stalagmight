@@ -1,6 +1,6 @@
 // Command types for Tauri IPC
 
-import type { ShotData, StationRef, ClosureStrategy, Coordinates } from './project';
+import type { ShotData, StationRef, Coordinates } from './project';
 
 export interface CommandResult {
   success: boolean;
@@ -67,9 +67,23 @@ export interface DmpShot {
 
 export type BatchCommand =
   | { type: 'create_section'; name?: string; surveyor?: string; date?: string; color: string; direction?: 'in' | 'out'; shots: ShotData[] }
-  | { type: 'merge_stations'; station_a: StationRef; station_b: StationRef; closure_strategy: ClosureStrategy }
+  | { type: 'merge_stations'; station_a: StationRef; station_b: StationRef }
   | { type: 'move_section'; section_id: number; offset: Coordinates }
   | { type: 'set_zero_datum'; station_ref: StationRef; coordinates: { latitude: number; longitude: number; depth_reference: number } };
+
+// Station connectivity check result
+export interface ConnectivityResult {
+  connected: boolean;
+  preview: ClosurePreview | null;
+}
+
+export interface ClosurePreview {
+  path_length: number;
+  misclosure_distance: number;
+  error_percentage: number;
+  horizontal_misclosure: number;
+  vertical_misclosure: number;
+}
 
 // Undo history types (match backend UndoHistoryItem)
 export interface FieldChange {

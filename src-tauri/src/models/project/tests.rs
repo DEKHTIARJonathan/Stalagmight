@@ -429,7 +429,6 @@ fn merge_stations_propagates_datum_positioning_a_into_b() {
     project.merge_stations(
         StationRef::new(a, 1),
         StationRef::new(b, 0),
-        ClosureStrategy::KeepRaw
     ).unwrap();
 
     // After merge, B should be positioned in datum coordinate system
@@ -483,7 +482,6 @@ fn merge_stations_propagates_datum_positioning_b_into_a() {
     project.merge_stations(
         StationRef::new(a, 0),
         StationRef::new(b, 1),
-        ClosureStrategy::KeepRaw
     ).unwrap();
 
     // After merge, A should be positioned in datum coordinate system
@@ -531,7 +529,6 @@ fn merge_stations_transitive_datum_propagation() {
     project.merge_stations(
         StationRef::new(a, 1),
         StationRef::new(b, 0),
-        ClosureStrategy::KeepRaw
     ).unwrap();
 
     // Section C: shot goes south 3m
@@ -550,7 +547,6 @@ fn merge_stations_transitive_datum_propagation() {
     project.merge_stations(
         StationRef::new(b, 1),
         StationRef::new(c, 0),
-        ClosureStrategy::KeepRaw
     ).unwrap();
 
     // C.0 should be at B.1's position (5, 10)

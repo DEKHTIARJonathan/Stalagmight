@@ -1435,19 +1435,16 @@ export async function createSectionViaStore(data: {
  *
  * @param stationA - First station reference
  * @param stationB - Second station reference
- * @param strategy - Closure strategy (default: 'KeepRaw')
  * @returns Result with success status
  */
 export async function mergeStationsViaStore(
   stationA: { section_id: number; station_index: number },
   stationB: { section_id: number; station_index: number },
-  strategy: string = 'KeepRaw'
 ): Promise<{ success: boolean; error?: string }> {
   return await browser.executeAsync(
     async (
       a: { section_id: number; station_index: number },
       b: { section_id: number; station_index: number },
-      strat: string,
       done: (result: { success: boolean; error?: string }) => void
     ) => {
       const e2e = (window as unknown as {
@@ -1457,7 +1454,6 @@ export async function mergeStationsViaStore(
               mergeStations: (
                 stationA: { section_id: number; station_index: number },
                 stationB: { section_id: number; station_index: number },
-                strategy: string
               ) => Promise<{ success: boolean; error?: string }>;
             };
           };
@@ -1470,7 +1466,7 @@ export async function mergeStationsViaStore(
       }
 
       try {
-        const result = await e2e.projectStore.getState().mergeStations(a, b, strat);
+        const result = await e2e.projectStore.getState().mergeStations(a, b);
         done({
           success: result.success,
           error: result.error ?? undefined,
@@ -1481,7 +1477,6 @@ export async function mergeStationsViaStore(
     },
     stationA,
     stationB,
-    strategy
   );
 }
 

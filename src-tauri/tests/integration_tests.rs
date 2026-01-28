@@ -211,7 +211,6 @@ fn test_station_merge_repositioning() {
     let result = project.merge_stations(
         StationRef::new(0, 1),
         StationRef::new(1, 0),
-        ClosureStrategy::KeepRaw,
     );
     assert!(result.is_ok());
 
@@ -251,7 +250,6 @@ fn test_unmerge_keeps_position() {
         .merge_stations(
             StationRef::new(0, 1),
             StationRef::new(1, 0),
-            ClosureStrategy::KeepRaw,
         )
         .unwrap();
 
@@ -282,7 +280,6 @@ fn test_duplicate_merge_rejection() {
     let result1 = project.merge_stations(
         StationRef::new(0, 1),
         StationRef::new(1, 0),
-        ClosureStrategy::KeepRaw,
     );
     assert!(result1.is_ok());
 
@@ -290,7 +287,6 @@ fn test_duplicate_merge_rejection() {
     let result2 = project.merge_stations(
         StationRef::new(0, 1),
         StationRef::new(1, 0),
-        ClosureStrategy::KeepRaw,
     );
     assert!(result2.is_err());
     assert!(result2.unwrap_err().contains("already merged"));
@@ -314,7 +310,6 @@ fn test_delete_section_cleanup() {
         .merge_stations(
             StationRef::new(0, 1),
             StationRef::new(1, 0),
-            ClosureStrategy::KeepRaw,
         )
         .unwrap();
 
@@ -375,7 +370,6 @@ fn test_merge_nonexistent_station_fails() {
     let result = project.merge_stations(
         StationRef::new(0, 0),
         StationRef::new(99, 0), // doesn't exist
-        ClosureStrategy::KeepRaw,
     );
     assert!(result.is_err());
 }
@@ -410,12 +404,11 @@ fn test_loop_detection_simple() {
         .merge_stations(
             StationRef::new(0, 2),
             StationRef::new(1, 0),
-            ClosureStrategy::KeepRaw,
         )
         .unwrap();
 
-    // Second merge start of A to end of B (creates loop)
-    let result = project.merge_stations(
+    // Create loop closure between start of A and end of B (already connected)
+    let result = project.create_loop_closure(
         StationRef::new(0, 0),
         StationRef::new(1, 2),
         ClosureStrategy::KeepRaw,
@@ -446,13 +439,11 @@ fn test_loop_closure_error_calculation() {
         .merge_stations(
             StationRef::new(0, 1), // End of A
             StationRef::new(1, 0), // Start of B
-            ClosureStrategy::KeepRaw,
         )
         .unwrap();
 
-    // Now try to close the loop by merging start of A to end of B
-    // This should detect a loop and calculate error
-    let result = project.merge_stations(
+    // Now try to close the loop by creating a loop closure (stations are already connected)
+    let result = project.create_loop_closure(
         StationRef::new(0, 0), // Start of A
         StationRef::new(1, 1), // End of B
         ClosureStrategy::KeepRaw,
@@ -679,7 +670,7 @@ fn test_comprehensive_undo_types() {
         UndoData::MergeInfo {
             station_a: StationRef::new(0, 0),
             station_b: StationRef::new(1, 0),
-            strategy: ClosureStrategy::KeepRaw,
+            removed_closures: Vec::new(),
         },
         UndoData::ZeroDatumInfo {
             station_ref: StationRef::new(0, 0),
@@ -2462,7 +2453,6 @@ fn test_merge_projects_preserves_station_merges() {
         .merge_stations(
             StationRef::new(0, 1), // End of section 0
             StationRef::new(1, 0), // Start of section 1
-            ClosureStrategy::ProportionalByLength,
         )
         .unwrap();
 

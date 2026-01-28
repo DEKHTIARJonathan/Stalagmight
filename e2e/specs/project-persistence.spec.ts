@@ -207,7 +207,7 @@ describe('Project Persistence', () => {
           const stationA = { section_id: state.project.sections[0].id, station_index: 0 };
           const stationB = { section_id: state.project.sections[1].id, station_index: 0 };
 
-          const result = await state.mergeStations(stationA, stationB, 'KeepRaw');
+          const result = await state.mergeStations(stationA, stationB);
           if (result.success) {
             // Re-fetch project state to get updated merges
             const updatedState = e2e.projectStore.getState();
