@@ -4287,3 +4287,163 @@ fn test_delete_shot_undo_redo_still_works() {
     assert!(state.undo().success);
     assert_eq!(state.get_project_state().unwrap().sections[0].shots.len(), 2);
 }
+
+// === Zero datum merge validation tests ===
+
+#[test]
+fn test_check_merge_connectivity_both_zero_datums_blocked() {
+    // Both sections have zero datum → can_merge=false
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "BothZD".to_string(),
+        location: None,
+    });
+
+    let result_a = state.execute(Command::CreateSection {
+        name: None, surveyor: None, date: None,
+        color: "#ff0000".to_string(), direction: None,
+        shots: vec![test_shot_data(10.0)],
+    });
+    let a = result_a.section_id.unwrap();
+
+    let result_b = state.execute(Command::CreateSection {
+        name: None, surveyor: None, date: None,
+        color: "#00ff00".to_string(), direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let b = result_b.section_id.unwrap();
+
+    // Set zero datum on both sections
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(b, 0),
+        coordinates: GpsCoordinates::new(46.0, -91.0, 0.0).unwrap(),
+    });
+
+    let result = state
+        .check_merge_connectivity(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+
+    assert!(!result.can_merge, "Both sections with zero datums should not be mergeable");
+    assert!(!result.connected, "Unconnected sections should not be connected");
+    assert_eq!(
+        result.reason.as_deref(),
+        Some("Both sections have fixed coordinates"),
+    );
+}
+
+#[test]
+fn test_check_merge_connectivity_one_zero_datum_allowed() {
+    // Only one section has zero datum → can_merge=true
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "OneZD".to_string(),
+        location: None,
+    });
+
+    let result_a = state.execute(Command::CreateSection {
+        name: None, surveyor: None, date: None,
+        color: "#ff0000".to_string(), direction: None,
+        shots: vec![test_shot_data(10.0)],
+    });
+    let a = result_a.section_id.unwrap();
+
+    let result_b = state.execute(Command::CreateSection {
+        name: None, surveyor: None, date: None,
+        color: "#00ff00".to_string(), direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let b = result_b.section_id.unwrap();
+
+    // Set zero datum on section A only
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+
+    let result = state
+        .check_merge_connectivity(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+
+    assert!(result.can_merge, "One section with zero datum should allow merge");
+    assert!(!result.connected);
+    assert!(result.reason.is_none());
+}
+
+#[test]
+fn test_check_merge_connectivity_neither_zero_datum_no_loop() {
+    // Neither section has zero datum, no loop → can_merge=true
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "NoZD".to_string(),
+        location: None,
+    });
+
+    let result_a = state.execute(Command::CreateSection {
+        name: None, surveyor: None, date: None,
+        color: "#ff0000".to_string(), direction: None,
+        shots: vec![test_shot_data(10.0)],
+    });
+    let a = result_a.section_id.unwrap();
+
+    let result_b = state.execute(Command::CreateSection {
+        name: None, surveyor: None, date: None,
+        color: "#00ff00".to_string(), direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let b = result_b.section_id.unwrap();
+
+    let result = state
+        .check_merge_connectivity(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+
+    assert!(result.can_merge, "Neither having zero datum and no loop should allow merge");
+    assert!(!result.connected);
+    assert!(result.reason.is_none());
+}
+
+#[test]
+fn test_check_merge_connectivity_connected_creates_loop() {
+    // Connected sections (neither has zero datum, loop exists) → can_merge=false
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Loop".to_string(),
+        location: None,
+    });
+
+    let result_a = state.execute(Command::CreateSection {
+        name: None, surveyor: None, date: None,
+        color: "#ff0000".to_string(), direction: None,
+        shots: vec![test_shot_data(10.0)],
+    });
+    let a = result_a.section_id.unwrap();
+
+    let result_b = state.execute(Command::CreateSection {
+        name: None, surveyor: None, date: None,
+        color: "#00ff00".to_string(), direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let b = result_b.section_id.unwrap();
+
+    // Merge A.1 to B.0 to make them connected
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+    });
+
+    // Now check connectivity between A.0 and B.1 — they are connected via merge
+    let result = state
+        .check_merge_connectivity(StationRef::new(a, 0), StationRef::new(b, 1))
+        .unwrap();
+
+    assert!(!result.can_merge, "Connected sections should not be mergeable (creates loop)");
+    assert!(result.connected, "Merged sections should be connected");
+    assert_eq!(
+        result.reason.as_deref(),
+        Some("Creates survey loop"),
+    );
+    assert!(result.preview.is_some(), "Connected sections should have closure preview");
+}

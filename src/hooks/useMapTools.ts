@@ -109,23 +109,28 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           clearMergeStations();
           return;
         }
-        if (result.connected) {
-          // Stations are in the same connected component — create a loop closure
-          openDialog('closure', {
-            stationA,
-            stationB,
-            preview: result.preview,
-          });
-        } else if (result.can_merge) {
-          // Not connected and merge is allowed
+        if (result.can_merge) {
+          // Merge is allowed — open merge dialog
           openDialog('merge', {
             stationA,
             stationB,
           });
+        } else if (result.connected) {
+          // Connected — redirect to closure dialog (creates survey loop)
+          openDialog('closure', {
+            stationA,
+            stationB,
+            preview: result.preview,
+            reason: result.reason,
+          });
         } else {
-          // Not connected but merge is blocked (e.g. both sides have zero datums)
-          showToast(result.reason ?? 'Merge not allowed.', 'merge-blocked');
-          clearMergeStations();
+          // Not connected but merge blocked (e.g. both sides have zero datums)
+          // Silently redirect to closure dialog with reason
+          openDialog('closure', {
+            stationA,
+            stationB,
+            reason: result.reason,
+          });
         }
       } catch (e) {
         if (requestId !== connectivityRequestIdRef.current) return;
