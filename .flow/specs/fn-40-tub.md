@@ -1,66 +1,75 @@
 # Fix Merge/Closure Separation: Undo Bug, Remove Merge Line, New Dialogs
 
-## Problem
+## Overview
 
-When merging two stations that are already connected through a chain of shots, stations, and merges:
+Merge and loop closure are currently conflated in `merge_stations()` (`src-tauri/src/models/project.rs:354-473`). When two already-connected stations are "merged", the function creates BOTH a `StationMerge` AND a `LoopClosure` — but these are mutually exclusive operations. Additionally, `unmerge_stations()` (`project.rs:476-489`) does not remove closures, so undoing a merge leaves an orphaned closure line on the map.
 
-1. **Both a merge entry AND a loop closure entry are created** — but they should be mutually exclusive operations. A merge aligns unconnected sections. A closure records misclosure for already-connected stations.
-2. **Two lines appear on the map** — a cyan "merge line" (which should not exist at all, since merged stations always overlap) and a colored "loop closure line".
-3. **On undo, only the cyan line disappears** — the loop closure entry is never removed by `unmerge_stations()`, so the closure line stays permanently on the map.
-4. **No dialog is shown** — the merge proceeds automatically without asking the user whether they want a closure instead.
+This epic separates the two operations entirely:
+- **Merge** = connect unconnected sections (moves sections, creates `StationMerge` only)
+- **Closure** = record misclosure between already-connected stations (no movement, creates `LoopClosure` only)
 
-## Key Decisions
+### Scope
 
-### Merge vs. Closure Are Mutually Exclusive
-- **Merge**: Stations are NOT connected. Sections move to align. Creates a `StationMerge` entry only.
-- **Closure**: Stations ARE already connected. Sections do NOT move. Creates a `LoopClosure` entry only. Never both.
+1. **Rust backend**: New `check_merge_connectivity` read-only invoke, new `CreateLoopClosure` command with undo/redo, fix `MergeStations` to reject connected stations, fix `UnmergeStations` to clean up closures
+2. **Frontend**: Replace current MergeDialog with simple confirmation, add new ClosureDialog with preview data, update merge tool flow to call connectivity check first
+3. **Map**: Remove `survey-merges` layer entirely (merged stations always overlap — the cyan line is useless)
+4. **Docs**: Update SPEC.md sections for commands, dialogs, and workflow
 
-### Remove Merge Line Layer Entirely
-- The `survey-merges` map layer (cyan dashed lines) should be **removed completely** — merged stations always perfectly overlap, so there is no need for a visual line between them.
-- Remove the layer, source, and feature builder code (`buildMergeFeatures` in `features.ts`).
+## Approach
 
-### Preemptive Connectivity Check
-- Add a new **Tauri invoke** (read-only query, not through Command enum): `check_merge_connectivity`
-- Returns whether two stations are already connected, plus full closure preview data (error %, path length, misclosure distance, horizontal/vertical breakdown).
-- Frontend calls this BEFORE attempting any merge.
+### Connectivity check (read-only invoke, not a Command)
+- Add `check_merge_connectivity` to `src-tauri/src/commands/station.rs` — calls existing `get_connected_section_ids()` at `project.rs:204` and `calculate_path_length_between()` at `project.rs:279`
+- Returns `ConnectivityResult { connected: bool, preview: Option<ClosurePreview> }` where `ClosurePreview` contains path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure
+- Register in `lib.rs:435-440` alongside other station commands
 
-### New CreateLoopClosure Command
-- Add `CreateLoopClosure` as a **separate Command enum variant** (distinct from `MergeStations`).
-- Full undo/redo support: undo removes the closure, redo re-adds it.
+### CreateLoopClosure command
+- New variant in `Command` enum at `command.rs:67`
+- Fields: `station_a: StationRef, station_b: StationRef, closure_strategy: ClosureStrategy`
+- Execution: Extract closure calculation from current `merge_stations()` lines 370-413 into a standalone `create_loop_closure()` method
+- Undo: New `UndoData::ClosureInfo` variant storing full `LoopClosure` struct (follow `ShotSnapshot` pattern — store full data, don't recalculate)
+- Redo: Re-execute the command (standard pattern at `undo.rs:553-556`)
 
-### Dialog Redesign
-- **MergeDialog** becomes a **simple confirmation**: "Merge Station A with Station B?" with Merge/Cancel buttons. No strategy selector. Station names only.
-- **New ClosureDialog** component: Shows full preview data (error %, path length, misclosure distance, H/V breakdown) using existing app distance formatting. Includes closure strategy selector. Title: "Create Loop Closure". Button: "Create Closure" / "Cancel".
+### MergeStations fix
+- Remove the "connected sections → create closure" branch (lines 370-413 of `project.rs`)
+- Return `Err(...)` if sections are already connected (let frontend route to closure flow instead)
+- Remove `_strategy` parameter from `MergeStations` command variant (strategy only applies to closures)
 
-### User Flow
-1. User selects two stations to merge
-2. Frontend calls `check_merge_connectivity` (Tauri invoke)
-3. If NOT connected → show simple MergeDialog → on confirm → execute `MergeStations` command
-4. If connected → show ClosureDialog with preview data → on confirm → execute `CreateLoopClosure` command; on decline → cancel entirely
+### UnmergeStations fix
+- After removing the merge, also remove any closures where either station matches `station_a` or `station_b` of the closure
+- Update undo data to capture removed closures for restore on redo
 
-### Undo/Redo
-- `CreateLoopClosure` undo: removes the loop closure entry (from both in-memory `loop_closures` and database). Redo re-adds it.
-- `MergeStations` undo: unchanged (removes merge, sections move back).
-- `UnmergeStations` command: should also remove any closures involving the station (cleanup).
-- Undo data storage approach: follow existing patterns (no strong preference on storing full struct vs. recalculating).
+### Frontend dialog flow
+- In `useMapTools.ts:116-136`: After selecting station B, call `check_merge_connectivity` invoke BEFORE opening any dialog
+- If not connected → open simplified MergeDialog (station names + confirm/cancel)
+- If connected → open new ClosureDialog with preview data from connectivity check
+- ClosureDialog: Shows error %, path length, misclosure, H/V breakdown using existing distance formatting (`toFixed(2)` for distances). Includes `ClosureStrategy` selector. Follow `DialogWrapper` pattern from existing dialogs.
 
-### Loop Closure Line Colors (Unchanged)
-- Green (#22c55e): error < 1%
-- Yellow (#eab308): error 1-3%
-- Orange (#f97316): error 3-5%
-- Red (#ef4444): error > 5%
+### Map layer removal
+- Remove `survey-merges` layer, source, and `buildMergeFeatures` from `SurveyLayer.tsx` and `features.ts`
+- Remove `mergesLayerId` constant and all references
+- Keep `survey-loop-closures` layer unchanged
 
-## Edge Cases
+## Risks / Dependencies
 
-- **Same-section closure**: Allow closures between stations in the same section (loop goes through the section's own shots).
-- **Duplicate prevention**: If stations are already merged or already have a closure between them (exact same pair), prevent the operation and show an error.
-- **No data migration needed**: Feature is fresh enough that no existing projects need migration of orphaned closures.
-- **UnmergeStations scope**: When unmerging a station, also remove any loop closures involving that station.
+| Risk | Mitigation |
+|------|------------|
+| Undo data backward compatibility — existing undo entries may have `MergeInfo` for operations that created both merge + closure | On undo of `MergeInfo`, also clean up any closures for the same station pair (defensive cleanup) |
+| `calculate_path_length_between` BFS may return incorrect path length for complex networks | Existing function already handles this; connectivity check reuses it without changes |
+| Removing merge layer may break existing map tests | Search for `survey-merges` in test files and update |
+| `UnmergeStations` undo currently only stores first merge (line 174 of state/undo.rs) | This is an existing bug unrelated to this epic; note it but don't fix (scope creep) |
 
-## Open Questions
+## Quick commands
 
-- Exact undo data strategy for `CreateLoopClosure` (store full struct vs. station pair + recalculate) — decide during implementation based on existing patterns.
-- Whether merge undo (sections moving back) currently works correctly — should be verified during testing.
+```bash
+# Type check
+pnpm tsc --noEmit
+
+# Rust tests
+cargo test --manifest-path src-tauri/Cargo.toml
+
+# E2E tests
+pnpm test:ui
+```
 
 ## Acceptance
 
@@ -68,7 +77,7 @@ When merging two stations that are already connected through a chain of shots, s
 - [ ] `survey-merges` map layer, source, and feature builder code are completely removed
 - [ ] New `check_merge_connectivity` Tauri invoke returns connectivity status + full closure preview data
 - [ ] New `CreateLoopClosure` command variant with full undo/redo support
-- [ ] MergeDialog simplified to station-names-only confirmation (no strategy selector)
+- [ ] MergeDialog simplified to station-names-only confirmation (no strategy selector, no distance info)
 - [ ] New ClosureDialog shows full preview data (error %, path length, misclosure distance, H/V) with strategy selector
 - [ ] Correct user flow: connectivity check → appropriate dialog → appropriate command
 - [ ] Undo of loop closure removes the closure entry and line from map
@@ -78,3 +87,26 @@ When merging two stations that are already connected through a chain of shots, s
 - [ ] Same-section closures are allowed
 - [ ] Existing tests updated, new tests added for closure undo/redo, dialog flows, and connectivity check
 - [ ] Distance/error values in ClosureDialog use existing app formatting conventions
+- [ ] SPEC.md updated for changed commands, dialogs, and workflow
+
+## References
+
+| File | Lines | What |
+|------|-------|------|
+| `src-tauri/src/core/command.rs` | 67-74 | Command enum (MergeStations, UnmergeStations) |
+| `src-tauri/src/core/state/commands.rs` | 67-72 | Command execution dispatch |
+| `src-tauri/src/core/state/undo.rs` | 153-184 | Merge undo data generation |
+| `src-tauri/src/core/state/undo.rs` | 396-412 | Merge undo execution |
+| `src-tauri/src/core/undo.rs` | 37-100 | UndoData enum |
+| `src-tauri/src/models/project.rs` | 204-226 | `get_connected_section_ids()` |
+| `src-tauri/src/models/project.rs` | 279-350 | `calculate_path_length_between()` |
+| `src-tauri/src/models/project.rs` | 352-489 | `merge_stations()` and `unmerge_stations()` |
+| `src-tauri/src/models/station.rs` | 187-199 | `ClosureStrategy` enum |
+| `src-tauri/src/models/station.rs` | 254-271 | `LoopClosure` struct |
+| `src-tauri/src/commands/station.rs` | 6-38 | Tauri command handlers |
+| `src-tauri/src/lib.rs` | 405-475 | Command registration |
+| `src-tauri/src/persistence/sqlite.rs` | 269, 339, 408-446, 780 | DB schema + persistence |
+| `src/components/Dialogs/MergeDialog.tsx` | 1-191 | Current merge dialog |
+| `src/components/Map/SurveyLayer.tsx` | 65, 234, 424, 1487 | Merges layer setup |
+| `src/components/Map/surveyLayer/features.ts` | 244-266 | `buildMergeFeatures` |
+| `src/hooks/useMapTools.ts` | 116-136 | Merge tool click handler |

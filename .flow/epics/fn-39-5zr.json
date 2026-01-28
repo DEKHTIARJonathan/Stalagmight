@@ -1,13 +1,16 @@
 {
   "branch_name": "fn-39-5zr",
   "created_at": "2026-01-27T17:00:07.819769Z",
+  "default_impl": null,
+  "default_review": null,
+  "default_sync": null,
   "depends_on_epics": [],
   "id": "fn-39-5zr",
   "next_task": 1,
-  "plan_review_status": "unknown",
-  "plan_reviewed_at": null,
+  "plan_review_status": "needs_work",
+  "plan_reviewed_at": "2026-01-28T05:56:15.012325Z",
   "spec_path": ".flow/specs/fn-39-5zr.md",
   "status": "open",
   "title": "Bugfix: Section highlighting not working for hover and selection",
-  "updated_at": "2026-01-27T17:00:40.226207Z"
+  "updated_at": "2026-01-28T05:56:15.012352Z"
 }

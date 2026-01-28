@@ -1,53 +1,63 @@
 # Bugfix: Station IDs should display 0-indexed
 
-## Problem
+## Overview
 
-Station IDs are displayed as 1-indexed throughout the UI. For example, the first station in section 4 shows as `4:1` instead of the correct `4:0`. The underlying data model (`station_index`) is 0-indexed, but the display code adds `+1` before rendering.
+Station IDs are displayed as 1-indexed throughout the Detail Panel UI. The first station in section 4 shows as `4:1` instead of the correct `4:0`. The data model uses 0-indexed `station_index`, but `DetailPanel.tsx` adds `+ 1` before rendering.
 
-This is inconsistent with:
-- The data model definition in SPEC.md (lines 259-262) which states `0:0` is the first station of section 0
-- The station-model.md documentation which shows `0:0` as the first station
-- User expectations for this application
+**Scope**: Only `DetailPanel.tsx` needs code changes. Many other components (dialogs, map layers, export preview) already display 0-indexed station IDs correctly. The Rust backend's `format_station_ref_for_display` is already 0-indexed.
 
-## Key Decisions
+## Approach
 
-1. **Scope: All station IDs everywhere** — Fix applies to all UI locations where station IDs are displayed, not just the Detail Panel
-2. **Shots unchanged** — Shot IDs keep their current indexing convention; only station IDs change to 0-indexed display
-3. **Section IDs unchanged** — Only the station index within a section changes; section IDs are not affected
-4. **Format: always `sectionId:stationIndex`** — First station displays as `4:0`, not as `4` or any special format
-5. **Create `formatStationId` utility** — Add a centralized utility function (like existing `formatShotId`) in `src/utils/formatters.ts`
-6. **Use utility everywhere possible** — `formatStationId` should be used in all TypeScript code including map utilities, not just React components
-7. **Exports excluded** — File exports (CSV, etc.) are not affected; they may have their own conventions
-8. **ARIA labels updated** — Accessibility labels that include station IDs must also reflect 0-indexed values
-9. **Map display updated** — Station IDs shown on the map (tooltips, labels, popups) must also be 0-indexed
-10. **Spec and docs updated** — SPEC.md and related docs must be updated to match the new convention
-11. **Tests updated together** — All affected Playwright e2e tests updated in the same change as the code fix
-12. **Check Rust backend** — Verify the Rust backend doesn't format station IDs with +1; fix if it does
+1. Create a `formatStationId(sectionId, stationIndex)` utility in `src/utils/formatters.ts` (following the existing `formatShotId` pattern)
+2. Remove all `+ 1` station display logic in `DetailPanel.tsx` and use the new utility
+3. Update `DetailLink` position documentation from 1-indexed to 0-indexed
+4. Update all e2e and unit test assertions to expect 0-indexed values
+5. Update SPEC.md and TESTING.md documentation
 
-## Edge Cases
+## Affected files
 
-- Single-station sections: station_index=0 displays as `4:0` — no special handling
-- Station with station_index=0 (first station): displays as `sectionId:0` consistently
-- Merged stations from multiple sections: each station ref shows its own 0-indexed ID
-- Map expressions (MapLibre): may format IDs via expressions rather than TypeScript — check if these also add +1
+**Code changes:**
+- `src/utils/formatters.ts` — add `formatStationId`
+- `src/components/SingleSystemView/DetailPanel.tsx` — remove `+ 1` at ~10 locations
+- `src/components/common/DetailLink.tsx` — update JSDoc for `position` field
 
-## Open Questions
+**Test changes:**
+- `src/utils/__tests__/formatters.test.ts` — add `formatStationId` tests
+- `src/components/common/__tests__/DetailLink.test.ts` — update position expectations
+- `e2e-playwright/detail-panel-links.spec.ts` — update station ID assertions (~12 locations)
+- `e2e-playwright/detail-link-hover.spec.ts` — update station ID assertions (~8 locations)
 
-- Are there any docs in `./docs/` beyond SPEC.md that reference station ID formatting and need updating? (Check during implementation)
-- Does the Rust backend format station IDs anywhere, or is it purely a frontend display issue? (Check during implementation)
+**Doc changes:**
+- `docs/SPEC.md` — lines 490-496, 549-556, 901-902
+- `docs/TESTING.md` — lines 932-933
+
+**No changes needed (already 0-indexed):**
+- EditStationDialog.tsx, MergeDialog.tsx, DrawShotDialog.tsx, DmpSectionConfigDialog.tsx
+- SurveyLayer.tsx, MapCanvas.tsx, features.ts, ExportPreview.tsx
+- Rust backend (`format_station_ref_for_display`)
+
+## Risks
+
+- **Many scattered assertions**: E2e tests have 20+ station ID assertions that must all be updated consistently
+- **data-testid values**: `DetailLink.generateTestId()` uses `position` field directly. After change, testids like `station-4-1-link` become `station-4-0-link`, requiring all test selectors to update
+
+## Quick commands
+
+```bash
+pnpm tsc --noEmit
+pnpm test:ui
+cargo test --manifest-path src-tauri/Cargo.toml
+```
 
 ## Acceptance
 
 - [ ] First station in any section displays as `sectionId:0` (not `sectionId:1`)
-- [ ] All station ID displays across the app are 0-indexed (Detail Panel, map tooltips, linked station refs, section detail, shot detail)
+- [ ] All station ID displays in Detail Panel are 0-indexed
 - [ ] `formatStationId(sectionId, stationIndex)` utility exists in `src/utils/formatters.ts`
-- [ ] `formatStationId` is used in all TypeScript code that formats station IDs
+- [ ] `formatStationId` is used in DetailPanel.tsx for all station ID formatting
 - [ ] ARIA labels use 0-indexed station IDs
-- [ ] Shot ID display is NOT changed (only stations affected)
-- [ ] SPEC.md updated: lines 620-623 and 693-699 reflect 0-indexed station display
-- [ ] Any other docs referencing station ID format are updated
-- [ ] All Playwright e2e tests pass with updated assertions
-- [ ] Rust backend checked — if it formats station IDs, those are fixed too
+- [ ] Shot ID display is NOT changed
+- [ ] SPEC.md and TESTING.md updated
+- [ ] All Playwright e2e tests pass
 - [ ] `pnpm tsc --noEmit` passes
-- [ ] `pnpm test:ui` passes
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
