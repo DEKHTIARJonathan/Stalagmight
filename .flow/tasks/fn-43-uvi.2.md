@@ -46,9 +46,8 @@ Properly implement MoveStation command with delta-based offset (matching MoveSec
 - [ ] All callers updated for new signature
 
 ## Done summary
-TBD
-
+Implemented MoveStation command with delta-based offset semantics matching MoveSection. Changed command signature from absolute new_position to delta offset, added station_offsets HashMap to Project model with custom serde, applied station offsets in both compute_station_coordinates_with_progress and compute_station_raw_coords, switched undo from ProjectSnapshot to InverseCommand, added SQLite persistence, and updated all callers including frontend.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: ed97358, 68d8b62
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, pnpm tsc --noEmit
 - PRs:
