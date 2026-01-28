@@ -84,21 +84,6 @@ function getReservedShortcutsForDisplay(): Array<{ shortcut: string; description
 }
 
 /**
- * Get abbreviated action name for display (with tooltip for full name).
- */
-function getAbbreviatedName(action: string): { short: string; full: string } {
-  const full = formatActionName(action);
-  if (full.length > 16) {
-    const words = full.split(' ');
-    if (words.length >= 3) {
-      const abbrev = words.slice(0, -1).map((w) => w[0]).join('') + ' ' + words[words.length - 1];
-      return { short: abbrev, full };
-    }
-  }
-  return { short: full, full };
-}
-
-/**
  * Shortcuts settings category content.
  * Preserves the table layout from the original SettingsDialog shortcuts tab.
  */
@@ -278,6 +263,24 @@ export function ShortcutsSettings({
       <h2 className="text-lg font-medium mb-4">Shortcuts</h2>
 
       <div className="space-y-4" data-testid="shortcuts-tab-content">
+        {/* Reserved shortcuts section (always visible, above search) */}
+        <div className="mb-4">
+          <h3 className="text-sm font-medium mb-2 text-text-secondary">Reserved Shortcuts</h3>
+          <div
+            className="bg-background/50 rounded-lg p-3 grid grid-cols-2 gap-2 text-sm"
+            data-testid="reserved-shortcuts"
+          >
+            {getReservedShortcutsForDisplay().map(({ shortcut, description }) => (
+              <div key={shortcut} className="flex items-center gap-2">
+                <span className="inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-medium bg-panel border border-border rounded min-w-[3rem] text-text-secondary">
+                  {formatShortcut(shortcut, isMac())}
+                </span>
+                <span className="text-text-secondary text-xs">{description}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* Search bar */}
         <div className="relative">
           <input
@@ -316,24 +319,6 @@ export function ShortcutsSettings({
           </div>
         )}
 
-        {/* Reserved shortcuts section */}
-        <div className="mb-4">
-          <h3 className="text-sm font-medium mb-2 text-text-secondary">Reserved Shortcuts</h3>
-          <div
-            className="bg-background/50 rounded-lg p-3 grid grid-cols-2 gap-2 text-sm"
-            data-testid="reserved-shortcuts"
-          >
-            {getReservedShortcutsForDisplay().map(({ shortcut, description }) => (
-              <div key={shortcut} className="flex items-center gap-2">
-                <span className="inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-medium bg-panel border border-border rounded min-w-[3rem] text-text-secondary">
-                  {formatShortcut(shortcut, isMac())}
-                </span>
-                <span className="text-text-secondary text-xs">{description}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
         {/* Scrollable shortcuts list */}
         <div className="max-h-[300px] overflow-y-auto space-y-4 pr-2">
           {SHORTCUT_CATEGORIES.map((category) => {
@@ -369,27 +354,27 @@ export function ShortcutsSettings({
 
                 {/* Category content */}
                 {!isCollapsed && (
-                  <div className="space-y-2 pl-6">
+                  <div className="space-y-0.5 pl-6">
                     {filteredActions.map((action) => {
                       const bindings = config.shortcuts[action] || [];
                       const primary = bindings[0] || null;
                       const secondary = bindings[1] || null;
-                      const { short, full } = getAbbreviatedName(action);
+                      const full = formatActionName(action);
                       const hasChanges =
                         JSON.stringify(bindings) !== JSON.stringify(defaultConfig.shortcuts[action]);
 
                       return (
                         <div
                           key={action}
-                          className="flex items-center gap-3 py-1"
+                          className="flex items-center gap-3 py-0.5 rounded odd:bg-muted/30 even:bg-transparent dark:odd:bg-muted/20"
                           data-testid={`shortcut-row-${action}`}
                         >
                           {/* Action name */}
                           <div
-                            className="w-32 text-sm truncate"
-                            title={short !== full ? full : undefined}
+                            className="flex-1 min-w-32 text-sm truncate"
+                            title={full}
                           >
-                            {short}
+                            {full}
                           </div>
 
                           {/* Primary slot */}
