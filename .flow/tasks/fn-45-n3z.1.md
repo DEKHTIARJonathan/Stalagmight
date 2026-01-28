@@ -99,5 +99,5 @@ Added closure ID and ClosureRef data structures across Rust backend, SQLite pers
 **Tests:** Updated all 6 test files constructing `LoopClosure` to include `id` field.
 ## Evidence
 - Commits: c29f011, 8ddcf16, 48141e4, 63fe56f, afcd336
-- Tests: cargo test --manifest-path src-tauri/Cargo.toml, pnpm tsc --noEmit
+- Tests: cargo test (80 passed), pnpm tsc --noEmit (clean)
 - PRs:
