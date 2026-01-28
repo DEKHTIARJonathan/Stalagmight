@@ -244,9 +244,35 @@ impl Project {
 
     // === Station operations ===
 
-    /// Get all section IDs connected to the given section through station merges.
-    /// Returns a set containing the given section and all transitively connected sections.
+    /// Get all section IDs connected to the given section through station merges only.
+    /// Returns a set containing the given section and all transitively merged sections.
+    /// Use this for rigid-group operations: datum propagation, offset application, merge validation.
     pub fn get_connected_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
+        let mut connected = HashSet::new();
+        let mut queue = vec![section_id];
+
+        while let Some(current) = queue.pop() {
+            if connected.insert(current) {
+                for merge in &self.station_merges {
+                    if merge.station_a.section_id == current {
+                        if !connected.contains(&merge.station_b.section_id) {
+                            queue.push(merge.station_b.section_id);
+                        }
+                    } else if merge.station_b.section_id == current {
+                        if !connected.contains(&merge.station_a.section_id) {
+                            queue.push(merge.station_a.section_id);
+                        }
+                    }
+                }
+            }
+        }
+        connected
+    }
+
+    /// Get all section IDs reachable from the given section through merges and closures.
+    /// Returns a set containing the given section and all transitively reachable sections.
+    /// Use this for graph reachability: connectivity checks, navigation, UI display.
+    pub fn get_reachable_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
         let mut connected = HashSet::new();
         let mut queue = vec![section_id];
 
@@ -337,9 +363,23 @@ impl Project {
         Some(coords)
     }
 
-    /// Calculate the path length between two stations through the survey
-    /// This finds the shortest path through shots and existing merges
+    /// Calculate the survey traverse path length between two stations through shots and merges only.
+    /// Merges are zero-distance edges. Closures are NOT followed (they are not rigid connections).
+    /// Use this for closure metrics computation where "survey path length" means shots + merges.
     pub(crate) fn calculate_path_length_between(&self, station_a: StationRef, station_b: StationRef) -> f64 {
+        self.calculate_path_length_impl(station_a, station_b, false)
+    }
+
+    /// Calculate the path length between two stations through shots, merges, and closures.
+    /// Both merges and closures are zero-distance edges.
+    /// Use this for graph navigation where closures are valid traversal paths.
+    pub(crate) fn calculate_path_length_between_including_closures(&self, station_a: StationRef, station_b: StationRef) -> f64 {
+        self.calculate_path_length_impl(station_a, station_b, true)
+    }
+
+    /// Internal BFS path length implementation.
+    /// When `include_closures` is true, loop closures are treated as zero-distance edges.
+    fn calculate_path_length_impl(&self, station_a: StationRef, station_b: StationRef, include_closures: bool) -> f64 {
         // Use BFS to find path between stations
         use std::collections::VecDeque;
 
@@ -402,27 +442,33 @@ impl Project {
             }
 
             // Follow closures to other sections (zero distance, same as merges)
-            for closure in &self.loop_closures {
-                if closure.station_a == current_ref {
-                    let key = (closure.station_b.section_id, closure.station_b.station_index);
-                    if !visited.contains(&key) {
-                        visited.insert(key);
-                        queue.push_back((closure.station_b.section_id, closure.station_b.station_index, path_len));
-                    }
-                } else if closure.station_b == current_ref {
-                    let key = (closure.station_a.section_id, closure.station_a.station_index);
-                    if !visited.contains(&key) {
-                        visited.insert(key);
-                        queue.push_back((closure.station_a.section_id, closure.station_a.station_index, path_len));
+            if include_closures {
+                for closure in &self.loop_closures {
+                    if closure.station_a == current_ref {
+                        let key = (closure.station_b.section_id, closure.station_b.station_index);
+                        if !visited.contains(&key) {
+                            visited.insert(key);
+                            queue.push_back((closure.station_b.section_id, closure.station_b.station_index, path_len));
+                        }
+                    } else if closure.station_b == current_ref {
+                        let key = (closure.station_a.section_id, closure.station_a.station_index);
+                        if !visited.contains(&key) {
+                            visited.insert(key);
+                            queue.push_back((closure.station_a.section_id, closure.station_a.station_index, path_len));
+                        }
                     }
                 }
             }
         }
 
         // No path found (shouldn't happen if sections are connected)
-        // Fall back to sum of all connected section lengths
-        let connected = self.get_connected_section_ids(station_a.section_id);
-        connected.iter()
+        // Fall back to sum of all reachable section lengths
+        let reachable = if include_closures {
+            self.get_reachable_section_ids(station_a.section_id)
+        } else {
+            self.get_connected_section_ids(station_a.section_id)
+        };
+        reachable.iter()
             .filter_map(|sid| self.sections.iter().find(|s| s.id == *sid))
             .flat_map(|s| s.shots.iter())
             .map(|shot| shot.length)
@@ -561,17 +607,14 @@ impl Project {
             return Err("These stations are already merged. Closures are for unmerged station pairs.".to_string());
         }
 
-        // Check stations are connected
-        let connected_a = self.get_connected_section_ids(station_a.section_id);
-        if !connected_a.contains(&station_b.section_id) {
+        // Check stations are connected (via merges or closures)
+        let reachable_a = self.get_reachable_section_ids(station_a.section_id);
+        if !reachable_a.contains(&station_b.section_id) {
             return Err("Stations are not connected. They must be in the same connected group to create a loop closure.".to_string());
         }
 
         // Check for duplicate closure between same station pair
-        let already_has_closure = self.loop_closures.iter().any(|lc| {
-            (lc.station_a == station_a && lc.station_b == station_b)
-                || (lc.station_a == station_b && lc.station_b == station_a)
-        });
+        let already_has_closure = self.are_stations_in_closure(station_a, station_b);
         if already_has_closure {
             return Err("A loop closure already exists between these stations.".to_string());
         }
@@ -665,11 +708,11 @@ impl Project {
         }
     }
 
-    /// Get all station refs connected to this station via shots and merges (transitive)
-    /// All stations in a section are connected via shots, and merges connect stations across sections
+    /// Get all station refs reachable from this station via shots, merges, and closures (transitive)
+    /// All stations in a section are connected via shots; merges and closures connect across sections
     fn get_connected_stations(&self, station_ref: StationRef) -> HashSet<StationRef> {
-        // Reuse get_connected_section_ids for section-level traversal
-        let connected_sections = self.get_connected_section_ids(station_ref.section_id);
+        // Reuse get_reachable_section_ids for section-level traversal (includes closures)
+        let connected_sections = self.get_reachable_section_ids(station_ref.section_id);
 
         // Enumerate all stations in connected sections
         let mut connected = HashSet::new();

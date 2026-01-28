@@ -693,19 +693,15 @@ impl AppState {
         }
 
         // Check for existing closure between them
-        let already_has_closure = project.loop_closures.iter().any(|lc| {
-            (lc.station_a == station_a && lc.station_b == station_b)
-                || (lc.station_a == station_b && lc.station_b == station_a)
-        });
-        if already_has_closure {
+        if project.are_stations_in_closure(station_a, station_b) {
             return Err(
                 "A loop closure already exists between these stations.".to_string(),
             );
         }
 
-        // Check connectivity
-        let connected_a = project.get_connected_section_ids(station_a.section_id);
-        let connected = connected_a.contains(&station_b.section_id);
+        // Check connectivity (via merges and closures for reachability)
+        let reachable_a = project.get_reachable_section_ids(station_a.section_id);
+        let connected = reachable_a.contains(&station_b.section_id);
 
         if connected {
             // Stations are already connected -- cannot merge, should create closure
@@ -717,13 +713,15 @@ impl AppState {
                 reason: Some("Stations are already connected. Use loop closure instead.".to_string()),
             })
         } else {
-            // Not connected -- check zero datum constraints
+            // Not connected -- check zero datum constraints using merge-only connectivity
+            // (rigid groups for datum propagation)
+            let merged_a = project.get_connected_section_ids(station_a.section_id);
             let a_has_zd = project.zero_datums.iter().any(|zd| {
-                connected_a.contains(&zd.station_ref.section_id)
+                merged_a.contains(&zd.station_ref.section_id)
             });
-            let connected_b = project.get_connected_section_ids(station_b.section_id);
+            let merged_b = project.get_connected_section_ids(station_b.section_id);
             let b_has_zd = project.zero_datums.iter().any(|zd| {
-                connected_b.contains(&zd.station_ref.section_id)
+                merged_b.contains(&zd.station_ref.section_id)
             });
 
             let (can_merge, reason) = if a_has_zd && b_has_zd {
