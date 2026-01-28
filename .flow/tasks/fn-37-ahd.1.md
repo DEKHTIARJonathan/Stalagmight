@@ -46,3 +46,19 @@ Add `section_id: SectionId` parameter to `Validator::validate_shot()` and update
 - [ ] `docs/SPEC.md` Appendix B table updated with new message format
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 - [ ] `pnpm tsc --noEmit` passes
+
+## Done summary
+
+Added `section_id: SectionId` parameter to `Validator::validate_shot()` and updated all 12 warning message format strings to use "Shot {section_id}:{position}" format (e.g., "Shot 4:1 has zero length"). Updated all callers:
+
+- `compute_project_warnings()` in `warnings.rs` now passes `section.id`
+- `create_section()` in `commands.rs` derives `section_id` from `project.next_section_id` before validation
+- `create_shot()` in `commands.rs` computes real shot index from section state and passes parent `section_id`
+
+Updated all ~30 test invocations in `validation.rs` and 5 in `integration_tests.rs` with the new parameter. Added `test_warning_message_format` test asserting "Shot X:Y" prefix with non-zero section_id and shot_index. Updated `docs/SPEC.md` Appendix B validation rules table with new message format examples.
+
+## Evidence
+
+- Commits:
+- Tests:
+- PRs:

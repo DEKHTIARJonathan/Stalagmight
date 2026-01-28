@@ -59,7 +59,7 @@ impl AppState {
                     temperature: shot.temperature,
                 };
 
-                let warnings = Validator::validate_shot(&shot_data, &config.validation, shot_index);
+                let warnings = Validator::validate_shot(&shot_data, &config.validation, section.id, shot_index);
                 for warning in warnings {
                     let key = format!("{}:{}:{}", section.id, shot.id, warning.code);
                     let is_resolved = resolved_set.contains(&key);

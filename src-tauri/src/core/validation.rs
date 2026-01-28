@@ -1,5 +1,5 @@
 use crate::config::ValidationConfig;
-use crate::models::ShotData;
+use crate::models::{SectionId, ShotData};
 
 use super::{ValidationWarning, WarningSeverity};
 
@@ -11,6 +11,7 @@ impl Validator {
     pub fn validate_shot(
         shot: &ShotData,
         config: &ValidationConfig,
+        section_id: SectionId,
         shot_index: usize,
     ) -> Vec<ValidationWarning> {
         let mut warnings = Vec::new();
@@ -19,7 +20,7 @@ impl Validator {
         if shot.length == 0.0 {
             warnings.push(ValidationWarning {
                 code: "ZERO_LENGTH".to_string(),
-                message: format!("Shot {} has zero length", shot_index + 1),
+                message: format!("Shot {}:{} has zero length", section_id, shot_index + 1),
                 severity: WarningSeverity::Error,
             });
         }
@@ -28,7 +29,7 @@ impl Validator {
         if shot.length < 0.0 {
             warnings.push(ValidationWarning {
                 code: "NEGATIVE_LENGTH".to_string(),
-                message: format!("Shot {} has negative length: {:.1}m", shot_index + 1, shot.length),
+                message: format!("Shot {}:{} has negative length: {:.1}m", section_id, shot_index + 1, shot.length),
                 severity: WarningSeverity::Error,
             });
         }
@@ -38,7 +39,8 @@ impl Validator {
             warnings.push(ValidationWarning {
                 code: "SHORT_SHOT".to_string(),
                 message: format!(
-                    "Shot {} length {:.1}m below minimum threshold {:.1}m",
+                    "Shot {}:{} length {:.1}m below minimum threshold {:.1}m",
+                    section_id,
                     shot_index + 1,
                     shot.length,
                     config.warn_shot_length_min
@@ -51,7 +53,8 @@ impl Validator {
             warnings.push(ValidationWarning {
                 code: "LONG_SHOT".to_string(),
                 message: format!(
-                    "Shot {} length {:.1}m above maximum threshold {:.1}m",
+                    "Shot {}:{} length {:.1}m above maximum threshold {:.1}m",
+                    section_id,
                     shot_index + 1,
                     shot.length,
                     config.warn_shot_length_max
@@ -66,7 +69,8 @@ impl Validator {
             warnings.push(ValidationWarning {
                 code: "LARGE_DEPTH_CHANGE".to_string(),
                 message: format!(
-                    "Shot {} depth change {:.1}m exceeds threshold {:.1}m",
+                    "Shot {}:{} depth change {:.1}m exceeds threshold {:.1}m",
+                    section_id,
                     shot_index + 1,
                     depth_change,
                     config.warn_depth_change_per_shot_max
@@ -80,7 +84,8 @@ impl Validator {
             warnings.push(ValidationWarning {
                 code: "INVALID_AZIMUTH".to_string(),
                 message: format!(
-                    "Shot {} has invalid azimuth_in: {:.1}° (must be 0-360)",
+                    "Shot {}:{} has invalid azimuth_in: {:.1}° (must be 0-360)",
+                    section_id,
                     shot_index + 1,
                     shot.azimuth_in
                 ),
@@ -92,7 +97,8 @@ impl Validator {
             warnings.push(ValidationWarning {
                 code: "INVALID_AZIMUTH".to_string(),
                 message: format!(
-                    "Shot {} has invalid azimuth_out: {:.1}° (must be 0-360)",
+                    "Shot {}:{} has invalid azimuth_out: {:.1}° (must be 0-360)",
+                    section_id,
                     shot_index + 1,
                     shot.azimuth_out
                 ),
@@ -107,7 +113,8 @@ impl Validator {
             warnings.push(ValidationWarning {
                 code: "AZIMUTH_DEVIATION".to_string(),
                 message: format!(
-                    "Shot {} azimuth in/out deviation {:.1}° exceeds threshold {:.1}°",
+                    "Shot {}:{} azimuth in/out deviation {:.1}° exceeds threshold {:.1}°",
+                    section_id,
                     shot_index + 1,
                     deviation,
                     config.warn_azimuth_deviation_max
@@ -121,7 +128,7 @@ impl Validator {
             if left < 0.0 {
                 warnings.push(ValidationWarning {
                     code: "NEGATIVE_LRUD".to_string(),
-                    message: format!("Shot {} has negative left distance: {:.1}m", shot_index + 1, left),
+                    message: format!("Shot {}:{} has negative left distance: {:.1}m", section_id, shot_index + 1, left),
                     severity: WarningSeverity::Error,
                 });
             }
@@ -131,7 +138,7 @@ impl Validator {
             if right < 0.0 {
                 warnings.push(ValidationWarning {
                     code: "NEGATIVE_LRUD".to_string(),
-                    message: format!("Shot {} has negative right distance: {:.1}m", shot_index + 1, right),
+                    message: format!("Shot {}:{} has negative right distance: {:.1}m", section_id, shot_index + 1, right),
                     severity: WarningSeverity::Error,
                 });
             }
@@ -141,7 +148,7 @@ impl Validator {
             if up < 0.0 {
                 warnings.push(ValidationWarning {
                     code: "NEGATIVE_LRUD".to_string(),
-                    message: format!("Shot {} has negative up distance: {:.1}m", shot_index + 1, up),
+                    message: format!("Shot {}:{} has negative up distance: {:.1}m", section_id, shot_index + 1, up),
                     severity: WarningSeverity::Error,
                 });
             }
@@ -151,7 +158,7 @@ impl Validator {
             if down < 0.0 {
                 warnings.push(ValidationWarning {
                     code: "NEGATIVE_LRUD".to_string(),
-                    message: format!("Shot {} has negative down distance: {:.1}m", shot_index + 1, down),
+                    message: format!("Shot {}:{} has negative down distance: {:.1}m", section_id, shot_index + 1, down),
                     severity: WarningSeverity::Error,
                 });
             }
@@ -195,7 +202,7 @@ mod tests {
             ..Default::default()
         };
 
-        let warnings = Validator::validate_shot(&shot, &default_config(), 0);
+        let warnings = Validator::validate_shot(&shot, &default_config(), 0, 0);
         assert!(warnings.is_empty());
     }
 
@@ -210,7 +217,7 @@ mod tests {
             ..Default::default()
         };
 
-        let warnings = Validator::validate_shot(&shot, &default_config(), 0);
+        let warnings = Validator::validate_shot(&shot, &default_config(), 0, 0);
         assert!(Validator::has_errors(&warnings));
     }
 
@@ -225,9 +232,60 @@ mod tests {
             ..Default::default()
         };
 
-        let warnings = Validator::validate_shot(&shot, &default_config(), 0);
+        let warnings = Validator::validate_shot(&shot, &default_config(), 0, 0);
         assert!(!warnings.is_empty());
         assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
+    }
+
+    /// Verify warning messages use "Shot {section_id}:{position}" format
+    #[test]
+    fn test_warning_message_format() {
+        let config = default_config();
+
+        // ZERO_LENGTH with section_id=4, shot_index=2 → "Shot 4:3 has zero length"
+        let zero_shot = ShotData {
+            azimuth_in: 45.0,
+            azimuth_out: 225.0,
+            length: 0.0,
+            ..Default::default()
+        };
+        let warnings = Validator::validate_shot(&zero_shot, &config, 4, 2);
+        let w = warnings.iter().find(|w| w.code == "ZERO_LENGTH").unwrap();
+        assert!(w.message.starts_with("Shot 4:3 "), "Expected 'Shot 4:3 ...' but got: {}", w.message);
+
+        // SHORT_SHOT with section_id=7, shot_index=0 → "Shot 7:1 length ..."
+        let short_shot = ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 270.0,
+            length: 0.05,
+            ..Default::default()
+        };
+        let warnings = Validator::validate_shot(&short_shot, &config, 7, 0);
+        let w = warnings.iter().find(|w| w.code == "SHORT_SHOT").unwrap();
+        assert!(w.message.starts_with("Shot 7:1 "), "Expected 'Shot 7:1 ...' but got: {}", w.message);
+
+        // INVALID_AZIMUTH with section_id=2, shot_index=5 → "Shot 2:6 has invalid azimuth_in..."
+        let bad_azimuth = ShotData {
+            azimuth_in: 400.0,
+            azimuth_out: 180.0,
+            length: 5.0,
+            ..Default::default()
+        };
+        let warnings = Validator::validate_shot(&bad_azimuth, &config, 2, 5);
+        let w = warnings.iter().find(|w| w.code == "INVALID_AZIMUTH").unwrap();
+        assert!(w.message.starts_with("Shot 2:6 "), "Expected 'Shot 2:6 ...' but got: {}", w.message);
+
+        // NEGATIVE_LRUD with section_id=10, shot_index=3 → "Shot 10:4 has negative left..."
+        let neg_lrud = ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 270.0,
+            length: 5.0,
+            left: Some(-1.0),
+            ..Default::default()
+        };
+        let warnings = Validator::validate_shot(&neg_lrud, &config, 10, 3);
+        let w = warnings.iter().find(|w| w.code == "NEGATIVE_LRUD").unwrap();
+        assert!(w.message.starts_with("Shot 10:4 "), "Expected 'Shot 10:4 ...' but got: {}", w.message);
     }
 
     /// Test 5.1: Verify shot length validation (must be positive, reasonable max)
@@ -244,7 +302,7 @@ mod tests {
             depth_out: 0.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&valid_shot, &config, 0);
+        let warnings = Validator::validate_shot(&valid_shot, &config, 0, 0);
         assert!(warnings.iter().all(|w| !w.code.contains("LENGTH")));
 
         // Negative length should produce error
@@ -254,7 +312,7 @@ mod tests {
             azimuth_out: 270.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&negative_shot, &config, 0);
+        let warnings = Validator::validate_shot(&negative_shot, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LENGTH"));
         assert!(Validator::has_errors(&warnings));
 
@@ -265,7 +323,7 @@ mod tests {
             azimuth_out: 270.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&zero_shot, &config, 0);
+        let warnings = Validator::validate_shot(&zero_shot, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "ZERO_LENGTH"));
         assert!(Validator::has_errors(&warnings));
 
@@ -276,7 +334,7 @@ mod tests {
             azimuth_out: 270.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&short_shot, &config, 0);
+        let warnings = Validator::validate_shot(&short_shot, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "SHORT_SHOT"));
 
         // Very long shot (above max threshold) should produce warning
@@ -286,7 +344,7 @@ mod tests {
             azimuth_out: 270.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&long_shot, &config, 0);
+        let warnings = Validator::validate_shot(&long_shot, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "LONG_SHOT"));
     }
 
@@ -302,7 +360,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&shot_0, &config, 0);
+        let warnings = Validator::validate_shot(&shot_0, &config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "INVALID_AZIMUTH"));
 
         // Valid azimuth at 359.9 degrees
@@ -312,7 +370,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&shot_359, &config, 0);
+        let warnings = Validator::validate_shot(&shot_359, &config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "INVALID_AZIMUTH"));
 
         // Invalid: azimuth_in >= 360
@@ -322,7 +380,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&shot_360, &config, 0);
+        let warnings = Validator::validate_shot(&shot_360, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "INVALID_AZIMUTH"));
         assert!(Validator::has_errors(&warnings));
 
@@ -333,7 +391,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&shot_out_400, &config, 0);
+        let warnings = Validator::validate_shot(&shot_out_400, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "INVALID_AZIMUTH"));
 
         // Invalid: negative azimuth_in
@@ -343,7 +401,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&shot_neg, &config, 0);
+        let warnings = Validator::validate_shot(&shot_neg, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "INVALID_AZIMUTH"));
 
         // Invalid: negative azimuth_out
@@ -353,7 +411,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&shot_neg_out, &config, 0);
+        let warnings = Validator::validate_shot(&shot_neg_out, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "INVALID_AZIMUTH"));
     }
 
@@ -373,7 +431,7 @@ mod tests {
             down: Some(0.5),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&valid_shot, &config, 0);
+        let warnings = Validator::validate_shot(&valid_shot, &config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "NEGATIVE_LRUD"));
 
         // Valid: zero LRUD values are allowed (wall touching)
@@ -387,7 +445,7 @@ mod tests {
             down: Some(0.0),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&zero_lrud, &config, 0);
+        let warnings = Validator::validate_shot(&zero_lrud, &config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "NEGATIVE_LRUD"));
 
         // Valid: None LRUD values (not measured)
@@ -401,7 +459,7 @@ mod tests {
             down: None,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&none_lrud, &config, 0);
+        let warnings = Validator::validate_shot(&none_lrud, &config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "NEGATIVE_LRUD"));
 
         // Invalid: negative left
@@ -412,7 +470,7 @@ mod tests {
             left: Some(-1.0),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&neg_left, &config, 0);
+        let warnings = Validator::validate_shot(&neg_left, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LRUD"));
         assert!(Validator::has_errors(&warnings));
 
@@ -424,7 +482,7 @@ mod tests {
             right: Some(-2.5),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&neg_right, &config, 0);
+        let warnings = Validator::validate_shot(&neg_right, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LRUD"));
 
         // Invalid: negative up
@@ -435,7 +493,7 @@ mod tests {
             up: Some(-0.5),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&neg_up, &config, 0);
+        let warnings = Validator::validate_shot(&neg_up, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LRUD"));
 
         // Invalid: negative down
@@ -446,7 +504,7 @@ mod tests {
             down: Some(-3.0),
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&neg_down, &config, 0);
+        let warnings = Validator::validate_shot(&neg_down, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LRUD"));
     }
 
@@ -535,7 +593,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&perfect_backsight, &config, 0);
+        let warnings = Validator::validate_shot(&perfect_backsight, &config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
 
         // Valid: within tolerance (20° deviation)
@@ -545,7 +603,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&within_tolerance, &config, 0);
+        let warnings = Validator::validate_shot(&within_tolerance, &config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
 
         // Invalid: exceeds tolerance (45° deviation)
@@ -555,7 +613,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&exceeds_tolerance, &config, 0);
+        let warnings = Validator::validate_shot(&exceeds_tolerance, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
 
         // Test wraparound at 360°/0°: azimuth_in=350°, expected_out=170°
@@ -565,7 +623,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&wraparound, &config, 0);
+        let warnings = Validator::validate_shot(&wraparound, &config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
 
         // Test wraparound with deviation: azimuth_in=350°, out=220° (50° off)
@@ -575,7 +633,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&wraparound_deviation, &config, 0);
+        let warnings = Validator::validate_shot(&wraparound_deviation, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
 
         // Test with strict config (5° max deviation)
@@ -591,7 +649,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&small_deviation, &strict_config, 0);
+        let warnings = Validator::validate_shot(&small_deviation, &strict_config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
 
         // Medium deviation (10°) should fail with strict config
@@ -601,7 +659,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&medium_deviation, &strict_config, 0);
+        let warnings = Validator::validate_shot(&medium_deviation, &strict_config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
 
         // Test with lenient config (90° max deviation)
@@ -617,7 +675,7 @@ mod tests {
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&large_deviation, &lenient_config, 0);
+        let warnings = Validator::validate_shot(&large_deviation, &lenient_config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
     }
 }

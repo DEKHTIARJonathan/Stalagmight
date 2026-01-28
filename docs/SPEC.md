@@ -2625,13 +2625,14 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 
 | Rule | Severity | Message |
 |------|----------|---------|
-| Shot length < 0.1m | Warning | "Shot length {length}m below minimum threshold" |
-| Shot length > 50m | Warning | "Shot length {length}m above maximum threshold" |
-| Depth change > 10m per shot | Warning | "Depth change {change}m exceeds threshold" |
-| Azimuth deviation > 30° | Warning | "Azimuth in/out deviation {dev}° exceeds threshold" |
-| Zero length shot | Error | "Shot length cannot be zero" |
-| Negative values | Error | "Length and LRUD values must be positive" |
-| Invalid azimuth | Error | "Azimuth must be between 0 and 360 degrees" |
+| Shot length < 0.1m | Warning | "Shot {section_id}:{position} length {length}m below minimum threshold {threshold}m" |
+| Shot length > 50m | Warning | "Shot {section_id}:{position} length {length}m above maximum threshold {threshold}m" |
+| Depth change > 10m per shot | Warning | "Shot {section_id}:{position} depth change {change}m exceeds threshold {threshold}m" |
+| Azimuth deviation > 30° | Warning | "Shot {section_id}:{position} azimuth in/out deviation {dev}° exceeds threshold {threshold}°" |
+| Zero length shot | Error | "Shot {section_id}:{position} has zero length" |
+| Negative length | Error | "Shot {section_id}:{position} has negative length: {length}m" |
+| Negative LRUD | Error | "Shot {section_id}:{position} has negative {direction} distance: {value}m" |
+| Invalid azimuth | Error | "Shot {section_id}:{position} has invalid azimuth_{in/out}: {value}° (must be 0-360)" |
 | Duplicate station merge | Error | "Station is already merged with target" |
 
 ---

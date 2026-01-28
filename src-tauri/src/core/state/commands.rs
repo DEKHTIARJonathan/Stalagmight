@@ -246,14 +246,6 @@ impl AppState {
 
     pub(super) fn create_section(&self, data: SectionData) -> CommandResult {
         let config = self.config.lock().ok();
-        let mut warnings = Vec::new();
-
-        // Validate shots
-        for (i, shot) in data.shots.iter().enumerate() {
-            if let Some(ref cfg) = config {
-                warnings.extend(Validator::validate_shot(shot, &cfg.validation, i));
-            }
-        }
 
         let mut proj_guard = match self.project.lock() {
             Ok(g) => g,
@@ -264,6 +256,15 @@ impl AppState {
             Some(p) => p,
             None => return CommandResult::failure("No project open".to_string()),
         };
+
+        // Validate shots using the section_id that will be assigned
+        let section_id_for_validation = project.next_section_id;
+        let mut warnings = Vec::new();
+        for (i, shot) in data.shots.iter().enumerate() {
+            if let Some(ref cfg) = config {
+                warnings.extend(Validator::validate_shot(shot, &cfg.validation, section_id_for_validation, i));
+            }
+        }
 
         let section = project.add_section(data);
         let section_id = section.id;
@@ -323,11 +324,6 @@ impl AppState {
         after_shot_id: Option<ShotId>,
     ) -> CommandResult {
         let config = self.config.lock().ok();
-        let mut warnings = Vec::new();
-
-        if let Some(ref cfg) = config {
-            warnings.extend(Validator::validate_shot(&data, &cfg.validation, 0));
-        }
 
         let mut proj_guard = match self.project.lock() {
             Ok(g) => g,
@@ -338,6 +334,29 @@ impl AppState {
             Some(p) => p,
             None => return CommandResult::failure("No project open".to_string()),
         };
+
+        // Compute the real shot index for validation messages
+        let shot_index = if let Some(after_id) = after_shot_id {
+            project
+                .sections
+                .iter()
+                .find(|s| s.id == section_id)
+                .and_then(|s| s.shots.iter().position(|shot| shot.id == after_id))
+                .map(|pos| pos + 1)
+                .unwrap_or(0)
+        } else {
+            project
+                .sections
+                .iter()
+                .find(|s| s.id == section_id)
+                .map(|s| s.shots.len())
+                .unwrap_or(0)
+        };
+
+        let mut warnings = Vec::new();
+        if let Some(ref cfg) = config {
+            warnings.extend(Validator::validate_shot(&data, &cfg.validation, section_id, shot_index));
+        }
 
         let shot = if let Some(after_id) = after_shot_id {
             project.insert_shot_after(section_id, after_id, data)

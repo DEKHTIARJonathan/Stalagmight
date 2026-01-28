@@ -1591,7 +1591,7 @@ fn test_negative_length_shot() {
         ..Default::default()
     };
     let config = default_validation_config();
-    let warnings = Validator::validate_shot(&shot, &config, 0);
+    let warnings = Validator::validate_shot(&shot, &config, 0, 0);
 
     assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LENGTH"));
     assert!(Validator::has_errors(&warnings));
@@ -1612,7 +1612,7 @@ fn test_short_shot_warning() {
         warn_shot_length_min: 0.1,
         ..default_validation_config()
     };
-    let warnings = Validator::validate_shot(&shot, &config, 0);
+    let warnings = Validator::validate_shot(&shot, &config, 0, 0);
 
     assert!(warnings.iter().any(|w| w.code == "SHORT_SHOT"));
     // SHORT_SHOT is a warning, not error
@@ -1635,7 +1635,7 @@ fn test_long_shot_warning() {
         warn_shot_length_max: 50.0,
         ..default_validation_config()
     };
-    let warnings = Validator::validate_shot(&shot, &config, 0);
+    let warnings = Validator::validate_shot(&shot, &config, 0, 0);
 
     assert!(warnings.iter().any(|w| w.code == "LONG_SHOT"));
 }
@@ -1655,7 +1655,7 @@ fn test_large_depth_change_warning() {
         warn_depth_change_per_shot_max: 10.0,
         ..default_validation_config()
     };
-    let warnings = Validator::validate_shot(&shot, &config, 0);
+    let warnings = Validator::validate_shot(&shot, &config, 0, 0);
 
     assert!(warnings.iter().any(|w| w.code == "LARGE_DEPTH_CHANGE"));
 }
@@ -1675,7 +1675,7 @@ fn test_negative_lrud_errors() {
         down: Some(-4.0),
         ..Default::default()
     };
-    let warnings = Validator::validate_shot(&shot, &default_validation_config(), 0);
+    let warnings = Validator::validate_shot(&shot, &default_validation_config(), 0, 0);
 
     let lrud_errors: Vec<_> = warnings
         .iter()
