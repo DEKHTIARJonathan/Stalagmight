@@ -983,6 +983,51 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] move_section called with:', args);
             return { success: true };
 
+          case 'set_zero_datum': {
+            console.log('[Mock IPC] set_zero_datum called with:', args);
+            // Update currentProject's zero_datums to reflect the change
+            if (currentProject && args) {
+              const stationRef = args.stationRef as { section_id: number; station_index: number };
+              const coordinates = args.coordinates as { latitude: number; longitude: number; depth_reference: number };
+              const datums = currentProject.zero_datums as Array<{
+                station_ref: { section_id: number; station_index: number };
+                gps: { latitude: number; longitude: number; depth_reference: number };
+              }>;
+              // Update in-place if exists, otherwise push
+              const existing = datums.find(
+                (d) =>
+                  d.station_ref.section_id === stationRef.section_id &&
+                  d.station_ref.station_index === stationRef.station_index
+              );
+              if (existing) {
+                existing.gps = coordinates;
+              } else {
+                datums.push({ station_ref: stationRef, gps: coordinates });
+              }
+            }
+            return { success: true };
+          }
+
+          case 'remove_zero_datum': {
+            console.log('[Mock IPC] remove_zero_datum called with:', args);
+            // Remove datum from currentProject's zero_datums
+            if (currentProject && args) {
+              const stationRef = args.stationRef as { section_id: number; station_index: number };
+              const datums = currentProject.zero_datums as Array<{
+                station_ref: { section_id: number; station_index: number };
+              }>;
+              const idx = datums.findIndex(
+                (d) =>
+                  d.station_ref.section_id === stationRef.section_id &&
+                  d.station_ref.station_index === stationRef.station_index
+              );
+              if (idx >= 0) {
+                datums.splice(idx, 1);
+              }
+            }
+            return { success: true };
+          }
+
           case 'undo':
           case 'redo':
             return { success: true };

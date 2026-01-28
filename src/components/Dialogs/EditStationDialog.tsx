@@ -96,14 +96,8 @@ export default function EditStationDialog() {
         const oldLon = station.gps_coordinates?.longitude;
 
         if (lat !== oldLat || lon !== oldLon) {
-          // Remove then re-add with new coordinates
-          let result = await removeZeroDatum(stationRef);
-          if (!result.success) {
-            setError(result.error ?? 'Failed to update zero datum');
-            return;
-          }
-
-          result = await setZeroDatum(stationRef, {
+          // Update in place - backend's set_zero_datum handles in-place updates
+          const result = await setZeroDatum(stationRef, {
             latitude: lat,
             longitude: lon,
             depth_reference: station.coordinates.z,
