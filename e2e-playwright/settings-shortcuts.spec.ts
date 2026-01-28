@@ -519,13 +519,16 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await expect(reserved).toBeVisible();
       await expect(search).toBeVisible();
 
-      // Verify reserved section is above search bar by comparing bounding boxes
-      const reservedBox = await reserved.boundingBox();
-      const searchBox = await search.boundingBox();
-      expect(reservedBox).toBeTruthy();
-      expect(searchBox).toBeTruthy();
-      // Reserved section's bottom should be above search bar's top
-      expect(reservedBox!.y + reservedBox!.height).toBeLessThan(searchBox!.y + 10);
+      // Verify reserved section precedes search bar in DOM order
+      // compareDocumentPosition returns bitmask; bit 4 (DOCUMENT_POSITION_FOLLOWING) means search follows reserved
+      const reservedPrecedesSearch = await page.evaluate(() => {
+        const reservedEl = document.querySelector('[data-testid="reserved-shortcuts"]');
+        const searchEl = document.querySelector('[data-testid="shortcuts-search"]');
+        if (!reservedEl || !searchEl) return false;
+        // Bit 4 = DOCUMENT_POSITION_FOLLOWING: searchEl follows reservedEl
+        return (reservedEl.compareDocumentPosition(searchEl) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+      });
+      expect(reservedPrecedesSearch).toBe(true);
     });
   });
 
@@ -555,17 +558,17 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await openSettingsDialog(page);
       await navigateToShortcutsCategory(page);
 
-      // Reassign Import DMP from Ctrl+I to Ctrl+Shift+I
+      // Reassign Import DMP from Ctrl+I to Ctrl+Shift+K (avoid Ctrl+Shift+I which opens browser DevTools)
       const importRecorder = page.locator('[data-testid="shortcut-primary-import_dmp"]');
       await importRecorder.click();
       await waitForRecording(page, 'shortcut-primary-import_dmp', true);
-      await page.keyboard.press('Control+Shift+I');
+      await page.keyboard.press('Control+Shift+K');
       await waitForRecording(page, 'shortcut-primary-import_dmp', false);
 
       // Verify new binding is shown
       await expect(importRecorder).toContainText('Ctrl');
       await expect(importRecorder).toContainText('Shift');
-      await expect(importRecorder).toContainText('I');
+      await expect(importRecorder).toContainText('K');
 
       // No error should appear
       await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
@@ -580,6 +583,33 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       // Should show Ctrl+I without error (it's no longer reserved or taken)
       await expect(selectRecorder).toContainText('Ctrl');
       await expect(selectRecorder).toContainText('I');
+      await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
+
+      // Also reassign Export from Ctrl+E to Ctrl+Shift+J
+      const exportRecorder = page.locator('[data-testid="shortcut-primary-export"]');
+      await exportRecorder.click();
+      await waitForRecording(page, 'shortcut-primary-export', true);
+      await page.keyboard.press('Control+Shift+J');
+      await waitForRecording(page, 'shortcut-primary-export', false);
+
+      // Verify new binding is shown
+      await expect(exportRecorder).toContainText('Ctrl');
+      await expect(exportRecorder).toContainText('Shift');
+      await expect(exportRecorder).toContainText('J');
+
+      // No error should appear
+      await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
+
+      // Assign freed Ctrl+E to pan - should NOT conflict since it was freed
+      const panRecorder = page.locator('[data-testid="shortcut-primary-pan"]');
+      await panRecorder.click();
+      await waitForRecording(page, 'shortcut-primary-pan', true);
+      await page.keyboard.press('Control+E');
+      await waitForRecording(page, 'shortcut-primary-pan', false);
+
+      // Should show Ctrl+E without error
+      await expect(panRecorder).toContainText('Ctrl');
+      await expect(panRecorder).toContainText('E');
       await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
     });
 
