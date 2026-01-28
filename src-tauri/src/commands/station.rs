@@ -108,23 +108,23 @@ pub(crate) fn remove_zero_datum_impl(state: &AppState, station_ref: StationRef) 
     state.execute(Command::RemoveZeroDatum { station_ref })
 }
 
-/// Move a station to a new position
+/// Move a station by a delta offset
 #[tauri::command]
 pub fn move_station(
     state: State<AppState>,
     station_ref: StationRef,
-    new_position: Coordinates,
+    offset: Coordinates,
 ) -> CommandResult {
-    move_station_impl(state.inner(), station_ref, new_position)
+    move_station_impl(state.inner(), station_ref, offset)
 }
 
 pub(crate) fn move_station_impl(
     state: &AppState,
     station_ref: StationRef,
-    new_position: Coordinates,
+    offset: Coordinates,
 ) -> CommandResult {
     state.execute(Command::MoveStation {
         station_ref,
-        new_position,
+        offset,
     })
 }

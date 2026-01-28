@@ -84,8 +84,8 @@ impl AppState {
             }
             Command::MoveStation {
                 station_ref,
-                new_position,
-            } => self.move_station(*station_ref, *new_position),
+                offset,
+            } => self.move_station(*station_ref, *offset),
             Command::Batch { commands } => self.execute_batch(commands.clone()),
             Command::MergeProjects {
                 source_paths,
@@ -601,7 +601,7 @@ impl AppState {
         }
     }
 
-    pub(super) fn move_station(&self, station_ref: StationRef, new_position: Coordinates) -> CommandResult {
+    pub(super) fn move_station(&self, station_ref: StationRef, offset: Coordinates) -> CommandResult {
         let mut proj_guard = match self.project.lock() {
             Ok(g) => g,
             Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
@@ -615,7 +615,7 @@ impl AppState {
         // Find the section containing this station
         let section = project
             .sections
-            .iter_mut()
+            .iter()
             .find(|s| s.id == station_ref.section_id);
 
         let section = match section {
@@ -628,13 +628,14 @@ impl AppState {
             return CommandResult::failure("Invalid station index".to_string());
         }
 
-        // Moving a station requires updating adjacent shots
-        // For station N:
-        // - Update shot N-1 (if exists) to point to new position
-        // - Update shot N (if exists) to start from new position
+        // Get current offset or default to (0, 0, 0)
+        let current = project.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0));
+        // Apply delta
+        let new_offset = (current.0 + offset.x, current.1 + offset.y, current.2 + offset.z);
+        project.station_offsets.insert(station_ref, new_offset);
+        project.touch();
 
-        // For now, log the request - full implementation requires coordinate recalculation
-        tracing::info!(?station_ref, ?new_position, "Station move requested");
+        tracing::info!(?station_ref, ?offset, ?new_offset, "Station moved");
         CommandResult::success()
     }
 

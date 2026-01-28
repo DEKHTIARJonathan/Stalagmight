@@ -741,8 +741,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     return result;
   },
 
-  moveStation: async (stationRef: StationRef, newPosition: Coordinates) => {
-    const result = await invoke<CommandResult>('move_station', { stationRef, newPosition });
+  moveStation: async (stationRef: StationRef, offset: Coordinates) => {
+    const result = await invoke<CommandResult>('move_station', { stationRef, offset });
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });

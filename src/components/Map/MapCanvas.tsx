@@ -520,26 +520,13 @@ export default function MapCanvas() {
       if (moveDrag.type === 'section' && moveDrag.sectionId !== undefined) {
         await moveSection(moveDrag.sectionId, offset);
       } else if (moveDrag.type === 'station' && moveDrag.stationRef) {
-        // For station, we need the new absolute position
-        // Get the station's current position and add the offset
-        const station = stations.find(
-          (s) =>
-            s.station_ref.section_id === moveDrag.stationRef!.section_id &&
-            s.station_ref.station_index === moveDrag.stationRef!.station_index
-        );
-        if (station) {
-          const newPosition = {
-            x: station.coordinates.x + dx,
-            y: station.coordinates.y + dy,
-            z: station.coordinates.z,
-          };
-          await moveStation(moveDrag.stationRef, newPosition);
-        }
+        // Pass the delta offset directly to the backend
+        await moveStation(moveDrag.stationRef, offset);
       }
     }
 
     setMoveDrag(null);
-  }, [moveDrag, moveSection, moveStation, stations, gpsOrigin]);
+  }, [moveDrag, moveSection, moveStation, gpsOrigin]);
 
   // Initialize map
   useEffect(() => {

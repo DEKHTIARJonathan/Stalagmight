@@ -91,7 +91,7 @@ pub enum Command {
     },
     MoveStation {
         station_ref: StationRef,
-        new_position: Coordinates,
+        offset: Coordinates,
     },
 
     // Batch commands
@@ -519,7 +519,7 @@ mod tests {
             (
                 Command::MoveStation {
                     station_ref: station_a,
-                    new_position: Coordinates::new(1.0, 0.0, 0.0),
+                    offset: Coordinates::new(1.0, 0.0, 0.0),
                 },
                 "Move station 1:0",
             ),
