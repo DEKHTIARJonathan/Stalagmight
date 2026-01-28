@@ -3,7 +3,6 @@ import type {
   LoopClosure,
   Section,
   Station,
-  StationMerge,
   StationRef,
 } from '../../../types/project';
 import { getDepthColor, getErrorColor } from '../../../utils/colors';
@@ -35,7 +34,6 @@ export interface SurveyFeatureSets {
   shotFeatures: GeoJSON.Feature[];
   shotLabelFeatures: GeoJSON.Feature[];
   stationFeatures: GeoJSON.Feature[];
-  mergeFeatures: GeoJSON.Feature[];
   sectionLabelFeatures: GeoJSON.Feature[];
   stationLabelFeatures: GeoJSON.Feature[];
   loopClosureFeatures: GeoJSON.Feature[];
@@ -104,7 +102,6 @@ export function buildGhostFeatures(
 export function buildSurveyFeatures(
   sections: Section[],
   stations: Station[],
-  stationMerges: StationMerge[] | undefined,
   loopClosures: LoopClosure[] | undefined,
   gpsOrigin: GpsOrigin | null,
   showDepthGradient: boolean,
@@ -113,7 +110,6 @@ export function buildSurveyFeatures(
   const shotFeatures: GeoJSON.Feature[] = [];
   const shotLabelFeatures: GeoJSON.Feature[] = [];
   const stationFeatures: GeoJSON.Feature[] = [];
-  const mergeFeatures: GeoJSON.Feature[] = [];
   const sectionLabelFeatures: GeoJSON.Feature[] = [];
   const stationLabelFeatures: GeoJSON.Feature[] = [];
   const loopClosureFeatures: GeoJSON.Feature[] = [];
@@ -241,30 +237,6 @@ export function buildSurveyFeatures(
     return station?.coordinates;
   };
 
-  if (stationMerges && stationMerges.length > 0) {
-    for (const merge of stationMerges) {
-      const coordsA = findStationCoords(merge.station_a);
-      const coordsB = findStationCoords(merge.station_b);
-
-      if (coordsA && coordsB) {
-        mergeFeatures.push({
-          type: 'Feature',
-          geometry: {
-            type: 'LineString',
-            coordinates: [
-              metersToMapCoords(coordsA.x, coordsA.y, gpsOrigin),
-              metersToMapCoords(coordsB.x, coordsB.y, gpsOrigin),
-            ],
-          },
-          properties: {
-            stationA: `${merge.station_a.section_id}:${merge.station_a.station_index}`,
-            stationB: `${merge.station_b.section_id}:${merge.station_b.station_index}`,
-          },
-        });
-      }
-    }
-  }
-
   for (const section of sections) {
     const sectionStations = stations.filter((s) => s.station_ref.section_id === section.id);
     if (sectionStations.length > 0) {
@@ -368,7 +340,6 @@ export function buildSurveyFeatures(
     shotFeatures,
     shotLabelFeatures,
     stationFeatures,
-    mergeFeatures,
     sectionLabelFeatures,
     stationLabelFeatures,
     loopClosureFeatures,
