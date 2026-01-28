@@ -41,6 +41,6 @@ Changes:
 - Added `test_move_section_undo_redo` to verify undo restores offset and redo re-applies
 
 ## Evidence
-- Commits: 841d7fe, bc281eb
-- Tests: All 729+80 Rust tests pass (new: test_move_section enhanced, test_move_section_undo_redo added), TypeScript type check passes
+- Commits:
+- Tests:
 - PRs:
