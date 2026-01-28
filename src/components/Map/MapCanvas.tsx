@@ -71,7 +71,14 @@ export default function MapCanvas() {
   const { project, stations, stats, config, moveSection, moveStation } = useProjectStore();
 
   // Get GPS origin for coordinate transforms (enables satellite tile alignment)
-  const gpsOrigin = config?.map.satellite_gps_origin ?? null;
+  // Priority: project's zero-datum GPS > config's satellite_gps_origin
+  const gpsOrigin = useMemo(() => {
+    const zeroDatum = project?.zero_datums?.[0];
+    if (zeroDatum?.gps) {
+      return { latitude: zeroDatum.gps.latitude, longitude: zeroDatum.gps.longitude };
+    }
+    return config?.map.satellite_gps_origin ?? null;
+  }, [project?.zero_datums, config?.map.satellite_gps_origin]);
 
   // Extract zoom config values for stable dependencies (used by zoom handlers and effects)
   const zoomStep = config?.map.zoom_step ?? 1.0;
