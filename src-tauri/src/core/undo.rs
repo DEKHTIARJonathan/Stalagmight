@@ -72,6 +72,16 @@ pub enum UndoData {
         position: usize,
     },
 
+    /// Snapshot of a newly created shot (for CreateShot undo/redo ID preservation)
+    /// Distinct from ShotSnapshot (used by DeleteShot) to avoid ambiguity in redo logic.
+    CreatedShotSnapshot {
+        section_id: SectionId,
+        shot_id: ShotId,
+        shot_data: ShotData,
+        /// Position in the section's shot list (for re-insertion at correct position)
+        position: usize,
+    },
+
     /// Merge info for unmerging stations
     MergeInfo {
         station_a: StationRef,
@@ -133,6 +143,7 @@ impl UndoData {
             UndoData::SectionSnapshot { .. } => "SectionSnapshot",
             UndoData::CreatedSectionSnapshot { .. } => "CreatedSectionSnapshot",
             UndoData::ShotSnapshot { .. } => "ShotSnapshot",
+            UndoData::CreatedShotSnapshot { .. } => "CreatedShotSnapshot",
             UndoData::MergeInfo { .. } => "MergeInfo",
             UndoData::UnmergeInfo { .. } => "UnmergeInfo",
             UndoData::ClosureInfo { .. } => "ClosureInfo",
@@ -1205,6 +1216,26 @@ mod tests {
                     shot_id: 100,
                     shot_data: ShotData {
                         length: 5.0,
+                        ..Default::default()
+                    },
+                    position: 0,
+                },
+                timestamp: None,
+            },
+            UndoEntry {
+                command: Command::CreateShot {
+                    section_id: 1,
+                    shot: ShotData {
+                        length: 8.0,
+                        ..Default::default()
+                    },
+                    after_shot_id: None,
+                },
+                undo_data: UndoData::CreatedShotSnapshot {
+                    section_id: 1,
+                    shot_id: 200,
+                    shot_data: ShotData {
+                        length: 8.0,
                         ..Default::default()
                     },
                     position: 0,

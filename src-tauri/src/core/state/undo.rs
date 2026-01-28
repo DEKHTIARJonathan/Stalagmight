@@ -22,13 +22,7 @@ impl AppState {
         match cmd {
             // For create commands, we'll fill in the ID after execution
             Command::CreateSection { .. } => UndoData::None, // Will be finalized after execution
-            Command::CreateShot { section_id, .. } => {
-                // Store section ID, shot ID will be filled in after execution
-                UndoData::InverseCommand(Command::DeleteShot {
-                    section_id: *section_id,
-                    shot_id: 0, // Placeholder, will be updated
-                })
-            }
+            Command::CreateShot { .. } => UndoData::None, // Will be finalized after execution
 
             // For delete commands, capture the full state
             Command::DeleteSection { section_id } => {
@@ -300,13 +294,26 @@ impl AppState {
             }
 
             Command::CreateShot { section_id, .. } => {
-                // Get the ID of the just-created shot
+                // Capture full snapshot of the just-created shot so that redo can
+                // restore it with its original ID instead of re-executing CreateShot
+                // (which would assign a new ID).
                 if let Some(section) = project.get_section(*section_id) {
-                    if let Some(shot) = section.shots.last() {
-                        UndoData::InverseCommand(Command::DeleteShot {
+                    // The just-created shot has ID = next_shot_id - 1
+                    let shot_id = section.next_shot_id - 1;
+                    // Find the shot by ID to get its actual position (not last() which
+                    // would be wrong for mid-section inserts via after_shot_id)
+                    if let Some((position, shot)) = section
+                        .shots
+                        .iter()
+                        .enumerate()
+                        .find(|(_, s)| s.id == shot_id)
+                    {
+                        UndoData::CreatedShotSnapshot {
                             section_id: *section_id,
-                            shot_id: shot.id,
-                        })
+                            shot_id,
+                            shot_data: shot.to_shot_data(),
+                            position,
+                        }
                     } else {
                         undo_data
                     }
@@ -433,6 +440,15 @@ impl AppState {
             } => {
                 // Restore deleted shot at its original position with original ID
                 self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position)
+            }
+
+            UndoData::CreatedShotSnapshot {
+                section_id,
+                shot_id,
+                ..
+            } => {
+                // Undo a CreateShot by deleting the shot
+                self.delete_shot(*section_id, *shot_id)
             }
 
             UndoData::MergeInfo {
@@ -674,6 +690,15 @@ impl AppState {
             } => {
                 // Redo CreateSection by restoring from snapshot to preserve original ID
                 self.restore_section(*section_id, section_data.clone())
+            }
+            UndoData::CreatedShotSnapshot {
+                section_id,
+                shot_id,
+                shot_data,
+                position,
+            } => {
+                // Redo CreateShot by restoring from snapshot to preserve original ID
+                self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position)
             }
             _ => {
                 // Re-execute the original command for other undo data types
