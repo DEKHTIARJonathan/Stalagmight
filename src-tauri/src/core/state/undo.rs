@@ -488,8 +488,9 @@ impl AppState {
                                     station_b: *station_b,
                                     merged_at: chrono::Utc::now(),
                                 });
-                                // Restore removed closures
+                                // Restore removed closures and bump next_closure_id
                                 for closure in removed_closures {
+                                    project.next_closure_id = project.next_closure_id.max(closure.id + 1);
                                     project.loop_closures.push(closure.clone());
                                 }
                                 project.touch();
@@ -506,6 +507,7 @@ impl AppState {
                             Ok(mut proj_guard) => {
                                 if let Some(project) = proj_guard.as_mut() {
                                     for closure in removed_closures {
+                                        project.next_closure_id = project.next_closure_id.max(closure.id + 1);
                                         project.loop_closures.push(closure.clone());
                                     }
                                     project.touch();
@@ -705,6 +707,8 @@ impl AppState {
                 match self.project.lock() {
                     Ok(mut proj_guard) => match proj_guard.as_mut() {
                         Some(project) => {
+                            // Ensure next_closure_id stays ahead of restored closure's ID
+                            project.next_closure_id = project.next_closure_id.max(closure.id + 1);
                             project.loop_closures.push(closure.clone());
                             project.touch();
                             CommandResult::success()

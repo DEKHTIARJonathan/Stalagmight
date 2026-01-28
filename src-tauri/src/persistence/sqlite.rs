@@ -518,6 +518,8 @@ impl Database {
         }
 
         for lc in &project.loop_closures {
+            let closure_id_i64 = i64::try_from(lc.id)
+                .map_err(|_| anyhow::anyhow!("Closure ID {} exceeds i64 range", lc.id))?;
             tx.execute(
                 "INSERT INTO loop_closures (station_a_section, station_a_index, station_b_section, station_b_index, path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure, closure_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
@@ -530,7 +532,7 @@ impl Database {
                     lc.error_percentage,
                     lc.horizontal_misclosure,
                     lc.vertical_misclosure,
-                    i64::try_from(lc.id).unwrap_or(i64::MAX)
+                    closure_id_i64
                 ],
             )?;
         }
