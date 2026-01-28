@@ -1,7 +1,4 @@
 {
-  "assignee": null,
-  "claim_note": "",
-  "claimed_at": null,
   "created_at": "2026-01-28T05:50:19.536032Z",
   "depends_on": [],
   "epic": "fn-40-tub",
@@ -10,5 +7,5 @@
   "spec_path": ".flow/tasks/fn-40-tub.1.md",
   "status": "todo",
   "title": "Backend: connectivity check, CreateLoopClosure command, fix MergeStations/UnmergeStations",
-  "updated_at": "2026-01-28T06:15:29.309244Z"
+  "updated_at": "2026-01-28T09:22:18.855145Z"
 }
