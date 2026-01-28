@@ -189,3 +189,6 @@ E2E tests using Control+Shift+I as keyboard shortcut will be intercepted by Chro
 
 ## 2026-01-28 manual [pitfall]
 Chromium reserves Ctrl+Shift+I/J/C/N/B/T/Delete -- never use these combos in Playwright E2E tests as they get intercepted by the browser and never reach the page
+
+## 2026-01-28 manual [pitfall]
+When adding InverseCommand undo for a command, also add that command to execute_without_undo match in undo.rs or undo/redo will silently fail
