@@ -51,15 +51,9 @@ fn test_station_offset_applied_in_coordinates() {
 - [ ] All existing tests still pass
 
 ## Done summary
-Added 4 unit tests for MoveStation command:
+TBD
 
-1. `test_move_station_updates_offsets` — verifies station_offsets are set and accumulated across two moves
-2. `test_move_station_undo` — verifies undo reverses the move back to origin
-3. `test_move_station_redo` — verifies redo re-applies the move after undo
-4. `test_station_offset_applied_in_coordinates` — verifies compute_station_raw_coords includes the station offset
-
-All 4 new tests pass. Full test suite (733 unit + 80 integration) passes with 0 failures.
 ## Evidence
-- Commits: 35da968
-- Tests: test_move_station_updates_offsets, test_move_station_undo, test_move_station_redo, test_station_offset_applied_in_coordinates
+- Commits:
+- Tests:
 - PRs:
