@@ -55,9 +55,45 @@ Refactor `fetch_tile_from_network()`, `handle_tile_request()`, and `tile_fetch_i
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 
 ## Done summary
-TBD
+## Summary
 
+Refactored tile fetch logic to use the new tile provider registry from Task 1 (fn-24-pme.1) and added the `get_tile_providers` IPC command.
+
+### Changes Made
+
+1. **Removed hardcoded constants** (lib.rs:20-33):
+   - Removed `ESRI_TILE_URL` constant
+   - Removed `SUPPORTED_PROVIDERS` array
+
+2. **Refactored `fetch_tile_from_network()`** (lib.rs:35-41):
+   - Now uses `tile_providers::get_provider()` for registry lookup
+   - Uses `tile_providers::expand_url()` to construct tile URLs
+   - Returns descriptive error for unknown providers
+
+3. **Refactored `handle_tile_request_with_fetcher()`** (lib.rs:185-192):
+   - Replaced `SUPPORTED_PROVIDERS.contains()` with registry-based validation
+   - Returns BAD_REQUEST error for unknown providers
+
+4. **Refactored `tile_fetch_impl()`** (lib.rs:266-271):
+   - Same registry-based validation pattern
+   - Returns descriptive error for unknown providers
+
+5. **Added config normalization** (config/types.rs:499-507):
+   - `MapConfig::normalize()` now checks `satellite_provider` against registry
+   - Unknown providers are normalized to "esri" with a logged warning
+
+6. **Added `get_tile_providers` IPC command** (commands/cache.rs:160-167):
+   - New `#[tauri::command]` that returns `Vec<TileProviderInfo>`
+   - Registered in `invoke_handler` at lib.rs:411
+
+7. **Updated tests**:
+   - Removed tests referencing removed constants
+   - Added new tests for registry-based fetch validation
+   - Added tests for config normalization of unknown providers
+   - Added tests for `get_tile_providers` IPC command response
+
+All 808 Rust tests pass. TypeScript type check passes. 579/580 Playwright tests pass (1 pre-existing failure unrelated to these changes).
 ## Evidence
 - Commits:
-- Tests:
+- Tests: rust_unit_tests, rust_integration_tests, typescript_typecheck, playwright_e2e
 - PRs:

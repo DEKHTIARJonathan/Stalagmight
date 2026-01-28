@@ -1312,3 +1312,37 @@ fn test_load_from_path_invalid_toml_errors() {
     std::fs::write(&path, "not = [valid").unwrap();
     assert!(Config::load_from_path(&path).is_err());
 }
+
+// ========================================================================
+// Satellite Provider Normalization Tests
+// ========================================================================
+
+#[test]
+fn test_map_config_normalize_unknown_provider_to_esri() {
+    let mut config = MapConfig {
+        satellite_provider: "unknown_provider".to_string(),
+        ..Default::default()
+    };
+    config.normalize();
+    assert_eq!(config.satellite_provider, "esri");
+}
+
+#[test]
+fn test_map_config_normalize_valid_provider_unchanged() {
+    let mut config = MapConfig {
+        satellite_provider: "esri".to_string(),
+        ..Default::default()
+    };
+    config.normalize();
+    assert_eq!(config.satellite_provider, "esri");
+}
+
+#[test]
+fn test_map_config_normalize_empty_provider_to_esri() {
+    let mut config = MapConfig {
+        satellite_provider: "".to_string(),
+        ..Default::default()
+    };
+    config.normalize();
+    assert_eq!(config.satellite_provider, "esri");
+}

@@ -496,7 +496,17 @@ pub struct MapConfig {
 impl MapConfig {
     /// Normalize zoom_step and nested config values (station, shot, snap) to valid ranges
     /// Handles NaN/inf by falling back to defaults
+    /// Normalizes unknown satellite_provider to "esri" with a logged warning
     pub fn normalize(&mut self) {
+        // Normalize satellite_provider: unknown providers fall back to "esri"
+        if crate::tile_providers::get_provider(&self.satellite_provider).is_none() {
+            tracing::warn!(
+                provider = %self.satellite_provider,
+                "Unknown satellite_provider in config, normalizing to \"esri\""
+            );
+            self.satellite_provider = "esri".to_string();
+        }
+
         if !self.zoom_step.is_finite() {
             self.zoom_step = default_zoom_step();
         } else {
