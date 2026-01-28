@@ -99,25 +99,8 @@ Add a "Testing Select Dropdowns (Portal)" subsection. Document:
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-Updated all existing Playwright e2e tests broken by the Select portal change and added new e2e tests verifying the fix works correctly.
-
-**Existing test updates (6 files):**
-- export-dialog.spec.ts: 4 `.absolute` selectors → `page.getByRole('listbox')`
-- export-preview.spec.ts: 1 `.absolute` selector → `page.getByRole('listbox')`
-- export-color-modes.spec.ts: 9 `.absolute` selectors → `page.getByRole('listbox')`
-- panel-interactions.spec.ts: scoped option selector → `aria-controls` ID-based lookup
-- id-zero-regression.spec.ts: scoped option selector → `aria-controls` ID-based lookup
-- section-shot-editing.spec.ts: scoped option selector → `page.getByRole('listbox')`
-
-**New tests (select-dropdown.spec.ts, 4 tests):**
-- Dropdown visible above sticky header (elementFromPoint z-order proof)
-- Dropdown closes on external scroll
-- Keyboard navigation (ArrowDown/Up, Enter, Space, Escape)
-- Click outside closes dropdown
-
-**TESTING.md update:**
-- Added "Testing Select Dropdowns (Portal)" subsection documenting portal rendering, aria-controls locator strategy, z-order verification with elementFromPoint, scroll behavior, and keyboard navigation patterns
+Updated all existing Playwright e2e tests broken by the Select portal change (no .absolute selectors) and added new select-dropdown.spec.ts with 5 tests: z-order proof via elementFromPoint, external scroll close, internal scroll preservation, keyboard navigation, and click-outside close. Updated TESTING.md with Select portal test patterns documentation.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 06157c817bd264cbecf58396ec5f6ea8dc7591c7, 4faeac824a43cf975a5a5753aa47aa0e63f2679b, 7d5811378718c026714c2ea2b6b5572670804a5a
+- Tests: pnpm test:ui -- e2e-playwright/select-dropdown.spec.ts, pnpm test:ui -- --grep 'select|Select|export.*dialog|export.*preview|export.*color|panel.*interact|id.*zero|section.*shot.*edit', pnpm test:ui, pnpm tsc --noEmit
 - PRs:
