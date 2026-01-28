@@ -365,7 +365,8 @@ impl Project {
 
     /// Calculate the survey traverse path length between two stations through shots and merges only.
     /// Merges are zero-distance edges. Closures are NOT followed (they are not rigid connections).
-    /// Use this for closure metrics computation where "survey path length" means shots + merges.
+    /// Use this when only rigid-group survey path length is needed (not reachability via closures).
+    #[allow(dead_code)]
     pub(crate) fn calculate_path_length_between(&self, station_a: StationRef, station_b: StationRef) -> f64 {
         self.calculate_path_length_impl(station_a, station_b, false)
     }
@@ -492,9 +493,9 @@ impl Project {
             return Err("These stations are already merged".to_string());
         }
 
-        // Check if already connected (same section group) - reject, use CreateLoopClosure instead
-        let connected_a = self.get_connected_section_ids(station_a.section_id);
-        if connected_a.contains(&station_b.section_id) {
+        // Check if already reachable (via merges or closures) - reject, use CreateLoopClosure instead
+        let reachable_a = self.get_reachable_section_ids(station_a.section_id);
+        if reachable_a.contains(&station_b.section_id) {
             return Err("Stations are already connected. Use Create Loop Closure instead.".to_string());
         }
 
@@ -572,7 +573,7 @@ impl Project {
         let horizontal_misclosure = coords_a.horizontal_distance_to(&coords_b);
         let vertical_misclosure = (coords_a.z - coords_b.z).abs();
         let misclosure_distance = coords_a.distance_to(&coords_b);
-        let path_length = self.calculate_path_length_between(station_a, station_b);
+        let path_length = self.calculate_path_length_between_including_closures(station_a, station_b);
 
         let error_percentage = if path_length > 0.0 {
             (misclosure_distance / path_length) * 100.0
@@ -708,11 +709,12 @@ impl Project {
         }
     }
 
-    /// Get all station refs reachable from this station via shots, merges, and closures (transitive)
-    /// All stations in a section are connected via shots; merges and closures connect across sections
+    /// Get all station refs connected to this station via shots and merges (transitive).
+    /// All stations in a section are connected via shots, and merges connect stations across sections.
+    /// Uses merge-only connectivity (rigid groups) for datum validation.
     fn get_connected_stations(&self, station_ref: StationRef) -> HashSet<StationRef> {
-        // Reuse get_reachable_section_ids for section-level traversal (includes closures)
-        let connected_sections = self.get_reachable_section_ids(station_ref.section_id);
+        // Reuse get_connected_section_ids for merge-only section-level traversal
+        let connected_sections = self.get_connected_section_ids(station_ref.section_id);
 
         // Enumerate all stations in connected sections
         let mut connected = HashSet::new();
