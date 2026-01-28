@@ -144,3 +144,6 @@ Global th/td CSS rules in index.css are unlayered and override Tailwind utility 
 
 ## 2026-01-28 manual [pitfall]
 Select.tsx has 8+ close paths (6 explicit + scroll + resize). When adding callbacks that must fire on close, audit ALL close paths including implicit ones (scroll, resize) not just the 6 documented in specs.
+
+## 2026-01-28 manual [pitfall]
+Playwright keyboard nav tests on React Select are flaky under parallel load due to React state batching; use mouse hover positioning + dispatchEvent instead of sequential keyboard presses for multi-step navigation
