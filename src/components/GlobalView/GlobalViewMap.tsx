@@ -290,31 +290,12 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   }, []);
 
   // Calculate bounds to fit all systems (for Fit All button and initial view)
-  // This applies a max span limit to avoid extremely zoomed-out initial views
   const calculateBounds = useCallback(() => {
     const rawBounds = calculateRawBounds();
     if (!rawBounds) {
       // Default to world view if no GPS projects
       return new maplibregl.LngLatBounds([-180, -85], [180, 85]);
     }
-
-    // Apply max span limit for fitting (500km ~ 4.5 degrees at mid-latitudes)
-    const MAX_SPAN_DEGREES = 4.5;
-    const sw = rawBounds.getSouthWest();
-    const ne = rawBounds.getNorthEast();
-    const lngSpan = ne.lng - sw.lng;
-    const latSpan = ne.lat - sw.lat;
-
-    if (lngSpan > MAX_SPAN_DEGREES || latSpan > MAX_SPAN_DEGREES) {
-      // Limit to max span, centered on the center of all projects
-      const centerLng = (sw.lng + ne.lng) / 2;
-      const centerLat = (sw.lat + ne.lat) / 2;
-      return new maplibregl.LngLatBounds(
-        [centerLng - MAX_SPAN_DEGREES / 2, centerLat - MAX_SPAN_DEGREES / 2],
-        [centerLng + MAX_SPAN_DEGREES / 2, centerLat + MAX_SPAN_DEGREES / 2]
-      );
-    }
-
     return rawBounds;
   }, [calculateRawBounds]);
 
