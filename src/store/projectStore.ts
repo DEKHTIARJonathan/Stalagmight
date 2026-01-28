@@ -725,37 +725,73 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   // Undo/Redo
   undo: async () => {
-    const result = await invoke<CommandResult>('undo');
-    if (result.success) {
+    let result: CommandResult;
+    try {
+      result = await invoke<CommandResult>('undo');
+      if (result.success) {
+        set({ isDirty: true });
+      } else {
+        useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed');
+      }
+    } catch (e) {
+      result = { success: false, warnings: [], error: String(e) };
+      useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed');
+    } finally {
       await get().refreshProjectState();
-      set({ isDirty: true });
     }
     return result;
   },
 
   redo: async () => {
-    const result = await invoke<CommandResult>('redo');
-    if (result.success) {
+    let result: CommandResult;
+    try {
+      result = await invoke<CommandResult>('redo');
+      if (result.success) {
+        set({ isDirty: true });
+      } else {
+        useUIStore.getState().showToast(result.error ?? 'Unknown error', 'redo-failed');
+      }
+    } catch (e) {
+      result = { success: false, warnings: [], error: String(e) };
+      useUIStore.getState().showToast(result.error ?? 'Unknown error', 'redo-failed');
+    } finally {
       await get().refreshProjectState();
-      set({ isDirty: true });
     }
     return result;
   },
 
   undoTo: async (index: number) => {
-    const result = await invoke<CommandResult>('undo_to', { index });
-    if (result.success) {
+    let result: CommandResult;
+    try {
+      result = await invoke<CommandResult>('undo_to', { index });
+      if (result.success) {
+        set({ isDirty: true });
+      } else {
+        useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed');
+      }
+    } catch (e) {
+      result = { success: false, warnings: [], error: String(e) };
+      useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed');
+    } finally {
       await get().refreshProjectState();
-      set({ isDirty: true });
     }
     return result;
   },
 
   redoTo: async (index: number) => {
-    const result = await invoke<CommandResult>('redo_to', { index });
-    if (result.success) {
+    let result: CommandResult;
+    try {
+      result = await invoke<CommandResult>('redo_to', { index });
+      if (result.success) {
+        set({ isDirty: true });
+      } else {
+        useUIStore.getState().showToast(result.error ?? 'Unknown error', 'redo-failed');
+      }
+    } catch (e) {
+      result = { success: false, warnings: [], error: String(e) };
+      useUIStore.getState().showToast(result.error ?? 'Unknown error', 'redo-failed');
+    } finally {
       await get().refreshProjectState();
-      set({ isDirty: true });
     }
     return result;
   },

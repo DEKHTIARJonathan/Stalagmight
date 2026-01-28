@@ -14,14 +14,14 @@ Update the frontend to handle undo/redo failures: show toast notifications with 
   - Check `CommandResult.success` from IPC invoke result
   - On failure: call `useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed')` (or `'redo-failed'`). **Guard against null/undefined** `result.error`.
   - Use `try/finally` so `refreshProjectState()` runs even if `invoke()` throws (currently only called on success)
-- Check if bare `undo()`/`redo()` actions (called by keyboard shortcuts at `useKeyboardShortcuts.ts:501-509`) also need the same treatment — they should show toast on failure and always refresh.
+- Check if bare `undo()`/`redo()` actions (called by keyboard shortcuts at `useKeyboardShortcuts.ts:500-510`) also need the same treatment — they should show toast on failure and always refresh.
 - Use existing toast system at `src/store/uiStore.ts:546-568` — access via `useUIStore.getState().showToast(message, key)` (NOT `uiStore.showToast()`). 5-second throttle per key.
 - `isDirty` should NOT be set on failed undo/redo (no data change occurred).
 
 **Playwright E2E test:**
 - **Extend the existing mock layer** in `e2e-playwright/undo-redo-dropdown.spec.ts` to handle `undo`/`redo` commands by mutating the mock `undoStack`/`redoStack` arrays and deriving `canUndo`/`canRedo` from array lengths. Do NOT create a new spec file.
 - Add happy-path test: perform an action, undo it (entry moves from undo to redo stack), redo it (entry moves back to undo stack).
-- Follow existing patterns in `extendMocksWithUndoRedo(page, config)` at `undo-redo-dropdown.spec.ts:78-128`.
+- Follow existing patterns in `extendMocksWithUndoRedo(page, config)` at `undo-redo-dropdown.spec.ts:78-138`.
 - Use deterministic assertions (not `waitForTimeout`) per project conventions.
 
 **Documentation:**
@@ -31,8 +31,8 @@ Update the frontend to handle undo/redo failures: show toast notifications with 
 ## Key context
 
 - Toast throttle uses 5-second cooldown per key — use distinct keys like `'undo-failed'` / `'redo-failed'` so they don't conflict with other toasts.
-- `refreshProjectState()` defined at `projectStore.ts:488-504` — updates all project state including canUndo/canRedo.
-- Keyboard shortcuts call bare `undo()`/`redo()` — check if these are the same store actions or different code paths.
+- `refreshProjectState()` defined at `projectStore.ts:488-508` — updates all project state including canUndo/canRedo.
+- Keyboard shortcuts call bare `undo()`/`redo()` at `useKeyboardShortcuts.ts:500-510` — check if these are the same store actions or different code paths.
 - Playwright memory pitfall: "wait for `__cavechef_map__` after canvas appears" and "use deterministic assertions, not `waitForTimeout()`".
 - Existing mock `extendMocksWithUndoRedo` returns fixed stacks — extend to support mutation via `undo`/`redo` intercepts.
 
@@ -46,6 +46,7 @@ Update the frontend to handle undo/redo failures: show toast notifications with 
 - [ ] `pnpm tsc --noEmit` passes
 - [ ] `pnpm test:ui` passes
 
+<!-- Updated by plan-sync: fn-28-rpu.2 shifted line numbers in projectStore.ts (refreshProjectState 488-508 not 488-504), useKeyboardShortcuts.ts (500-510 not 501-509), and undo-redo-dropdown.spec.ts (extendMocksWithUndoRedo 78-138 not 78-128) -->
 ## Done summary
 TBD
 

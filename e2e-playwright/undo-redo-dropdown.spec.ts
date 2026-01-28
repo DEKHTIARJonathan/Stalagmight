@@ -983,3 +983,145 @@ test.describe('Undo/Redo Dropdown - Rapid Click Queuing', () => {
     await expect(dropdown).toBeVisible();
   });
 });
+
+/**
+ * Extends mocks with mutating undo/redo behavior: calling undo moves the top
+ * entry from undoStack to redoStack, and calling redo moves the top entry from
+ * redoStack to undoStack. canUndo/canRedo are derived from array lengths.
+ */
+async function extendMocksWithMutatingUndoRedo(page: Page, config: Partial<MockUndoRedoConfig> = {}): Promise<void> {
+  const fullConfig = {
+    canUndo: config.canUndo ?? true,
+    canRedo: config.canRedo ?? false,
+    undoStack: config.undoStack ?? getMockUndoStack().slice(0, 1),
+    redoStack: config.redoStack ?? [],
+  };
+
+  await page.evaluate((mockConfig) => {
+    (window as unknown as Record<string, unknown>).__UNDO_REDO_CALLS__ = [];
+    (window as unknown as Record<string, unknown>).__UNDO_REDO_MOCK_CONFIG__ = mockConfig;
+
+    const originalInvoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
+
+    (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke = async (cmd: string, args?: Record<string, unknown>) => {
+      const cfg = (window as unknown as { __UNDO_REDO_MOCK_CONFIG__: typeof mockConfig }).__UNDO_REDO_MOCK_CONFIG__;
+
+      switch (cmd) {
+        case 'can_undo':
+          return cfg.undoStack.length > 0;
+        case 'can_redo':
+          return cfg.redoStack.length > 0;
+        case 'get_undo_state':
+          return { can_undo: cfg.undoStack.length > 0, can_redo: cfg.redoStack.length > 0 };
+        case 'get_undo_stack':
+          return cfg.undoStack;
+        case 'get_redo_stack':
+          return cfg.redoStack;
+        case 'undo': {
+          const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
+          calls.push({ cmd: 'undo', index: 0 });
+          if (cfg.undoStack.length > 0) {
+            const entry = cfg.undoStack.shift()!;
+            cfg.redoStack.unshift(entry);
+            // Re-index both stacks
+            cfg.undoStack.forEach((e, i) => { e.index = i; });
+            cfg.redoStack.forEach((e, i) => { e.index = i; });
+          }
+          return { success: true, warnings: [], error: null };
+        }
+        case 'redo': {
+          const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
+          calls.push({ cmd: 'redo', index: 0 });
+          if (cfg.redoStack.length > 0) {
+            const entry = cfg.redoStack.shift()!;
+            cfg.undoStack.unshift(entry);
+            // Re-index both stacks
+            cfg.undoStack.forEach((e, i) => { e.index = i; });
+            cfg.redoStack.forEach((e, i) => { e.index = i; });
+          }
+          return { success: true, warnings: [], error: null };
+        }
+        case 'undo_to': {
+          const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
+          const toIndex = args?.index as number;
+          calls.push({ cmd: 'undo_to', index: toIndex });
+          const count = toIndex + 1;
+          for (let i = 0; i < count && cfg.undoStack.length > 0; i++) {
+            const entry = cfg.undoStack.shift()!;
+            cfg.redoStack.unshift(entry);
+          }
+          cfg.undoStack.forEach((e, idx) => { e.index = idx; });
+          cfg.redoStack.forEach((e, idx) => { e.index = idx; });
+          return { success: true, warnings: [], error: null };
+        }
+        case 'redo_to': {
+          const calls = (window as unknown as { __UNDO_REDO_CALLS__: Array<{ cmd: string; index: number }> }).__UNDO_REDO_CALLS__;
+          const toIndex = args?.index as number;
+          calls.push({ cmd: 'redo_to', index: toIndex });
+          const count = toIndex + 1;
+          for (let i = 0; i < count && cfg.redoStack.length > 0; i++) {
+            const entry = cfg.redoStack.shift()!;
+            cfg.undoStack.unshift(entry);
+          }
+          cfg.undoStack.forEach((e, idx) => { e.index = idx; });
+          cfg.redoStack.forEach((e, idx) => { e.index = idx; });
+          return { success: true, warnings: [], error: null };
+        }
+        default:
+          return originalInvoke(cmd, args);
+      }
+    };
+
+    console.log('[Mock IPC] Extended mocks with mutating undo/redo support');
+  }, fullConfig);
+}
+
+test.describe('Undo/Redo Happy Path - Stack Mutation', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    // Start with one entry in undo stack, empty redo stack
+    await extendMocksWithMutatingUndoRedo(page, {
+      undoStack: getMockUndoStack().slice(0, 1),
+      redoStack: [],
+    });
+    await createProject(page, 'Happy Path Test');
+  });
+
+  test('undo moves entry from undo stack to redo stack, redo moves it back', async ({ page }) => {
+    // Verify initial state: undo enabled, redo disabled
+    const undoButton = page.getByTestId('toolbar-undo-button');
+    const redoButton = page.getByTestId('toolbar-redo-button');
+    await expect(undoButton).toBeEnabled();
+    await expect(redoButton).toBeDisabled();
+
+    // Perform undo via button click
+    await undoButton.click();
+
+    // Wait for redo button to become enabled (entry moved to redo stack)
+    await expect(redoButton).toBeEnabled({ timeout: 3000 });
+
+    // Undo button should now be disabled (undo stack empty)
+    await expect(undoButton).toBeDisabled({ timeout: 3000 });
+
+    // Verify undo was called
+    const callsAfterUndo = await getUndoRedoCalls(page);
+    expect(callsAfterUndo).toHaveLength(1);
+    expect(callsAfterUndo[0]).toEqual({ cmd: 'undo', index: 0 });
+
+    // Now perform redo via button click
+    await redoButton.click();
+
+    // Wait for undo button to become enabled again (entry moved back to undo stack)
+    await expect(undoButton).toBeEnabled({ timeout: 3000 });
+
+    // Redo button should now be disabled (redo stack empty again)
+    await expect(redoButton).toBeDisabled({ timeout: 3000 });
+
+    // Verify redo was called
+    const callsAfterRedo = await getUndoRedoCalls(page);
+    expect(callsAfterRedo).toHaveLength(2);
+    expect(callsAfterRedo[1]).toEqual({ cmd: 'redo', index: 0 });
+  });
+});
