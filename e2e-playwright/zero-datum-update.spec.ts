@@ -181,7 +181,9 @@ async function injectZeroDatumFixture(
 }
 
 /**
- * Extend mocks to track set_zero_datum / remove_zero_datum IPC calls.
+ * Extend mocks to:
+ * 1. Track set_zero_datum / remove_zero_datum IPC calls
+ * 2. Maintain a real mutating undo stack (entries pushed on set/remove, queryable via get_undo_stack)
  * MUST be called AFTER page.goto().
  */
 async function extendMocksWithZeroDatumTracking(page: Page): Promise<void> {
@@ -192,8 +194,15 @@ async function extendMocksWithZeroDatumTracking(page: Page): Promise<void> {
       args: Record<string, unknown>;
     }>;
 
-    // Undo stack entries created by set_zero_datum / remove_zero_datum
-    (window as unknown as Record<string, unknown>).__ZERO_DATUM_UNDO_COUNT__ = 0;
+    // Mutating undo stack -- entries are pushed when set/remove_zero_datum is called
+    // and can be queried via get_undo_stack, matching the real app behavior.
+    (window as unknown as Record<string, unknown>).__ZERO_DATUM_UNDO_STACK__ = [] as Array<{
+      index: number;
+      description: string;
+      timestamp: string;
+      commandType: string;
+      previewData: null;
+    }>;
 
     const originalInvoke = (
       window as unknown as {
@@ -210,28 +219,77 @@ async function extendMocksWithZeroDatumTracking(page: Page): Promise<void> {
         };
       }
     ).__TAURI_INTERNALS__.invoke = async (cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === 'set_zero_datum' || cmd === 'remove_zero_datum') {
-        const calls = (
-          window as unknown as {
-            __ZERO_DATUM_CALLS__: Array<{ cmd: string; args: Record<string, unknown> }>;
-          }
-        ).__ZERO_DATUM_CALLS__;
-        calls.push({ cmd, args: args ?? {} });
+      const calls = (
+        window as unknown as {
+          __ZERO_DATUM_CALLS__: Array<{ cmd: string; args: Record<string, unknown> }>;
+        }
+      ).__ZERO_DATUM_CALLS__;
+      const undoStack = (
+        window as unknown as {
+          __ZERO_DATUM_UNDO_STACK__: Array<{
+            index: number;
+            description: string;
+            timestamp: string;
+            commandType: string;
+            previewData: null;
+          }>;
+        }
+      ).__ZERO_DATUM_UNDO_STACK__;
 
-        // Increment undo count
-        (window as unknown as { __ZERO_DATUM_UNDO_COUNT__: number })
-          .__ZERO_DATUM_UNDO_COUNT__++;
+      if (cmd === 'set_zero_datum') {
+        calls.push({ cmd, args: args ?? {} });
+        undoStack.unshift({
+          index: 0,
+          description: 'Set zero datum',
+          timestamp: new Date().toISOString(),
+          commandType: 'set_zero_datum',
+          previewData: null,
+        });
+        // Re-index entries
+        undoStack.forEach((e, i) => {
+          e.index = i;
+        });
+        // Delegate to base mock for project state mutation
+        return originalInvoke(cmd, args);
+      }
+
+      if (cmd === 'remove_zero_datum') {
+        calls.push({ cmd, args: args ?? {} });
+        undoStack.unshift({
+          index: 0,
+          description: 'Remove zero datum',
+          timestamp: new Date().toISOString(),
+          commandType: 'remove_zero_datum',
+          previewData: null,
+        });
+        undoStack.forEach((e, i) => {
+          e.index = i;
+        });
+        return originalInvoke(cmd, args);
+      }
+
+      // For undo-related queries, return from our mutating stack
+      if (cmd === 'get_undo_stack') {
+        return undoStack;
+      }
+
+      if (cmd === 'can_undo') {
+        return undoStack.length > 0;
+      }
+
+      if (cmd === 'get_undo_state') {
+        return { can_undo: undoStack.length > 0, can_redo: false };
       }
 
       return originalInvoke(cmd, args);
     };
 
-    console.log('[Mock IPC] Extended mocks with zero datum tracking');
+    console.log('[Mock IPC] Extended mocks with zero datum tracking + mutating undo stack');
   });
 }
 
 /**
- * Get the number of zero-datum-related IPC calls.
+ * Get the zero-datum-related IPC calls.
  */
 async function getZeroDatumCalls(page: Page): Promise<IpcCallRecord[]> {
   return page.evaluate(() => {
@@ -246,13 +304,18 @@ async function getZeroDatumCalls(page: Page): Promise<IpcCallRecord[]> {
 }
 
 /**
- * Get the count of undo entries from zero datum operations.
+ * Get the undo stack length from the mutating mock (via IPC, same as the real app).
  */
-async function getZeroDatumUndoCount(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    return (
-      (window as unknown as { __ZERO_DATUM_UNDO_COUNT__: number }).__ZERO_DATUM_UNDO_COUNT__ ?? 0
-    );
+async function getUndoStackLength(page: Page): Promise<number> {
+  return page.evaluate(async () => {
+    const result = await (
+      window as unknown as {
+        __TAURI_INTERNALS__: {
+          invoke: (cmd: string) => Promise<unknown>;
+        };
+      }
+    ).__TAURI_INTERNALS__.invoke('get_undo_stack');
+    return Array.isArray(result) ? result.length : 0;
   });
 }
 
@@ -304,8 +367,8 @@ test.describe('Zero Datum Update - Single Undo Entry', () => {
   test('updating GPS on existing zero datum produces exactly one undo entry', async ({
     page,
   }) => {
-    // Record baseline undo count
-    const baselineCount = await getZeroDatumUndoCount(page);
+    // Record baseline undo stack length via IPC
+    const baselineLength = await getUndoStackLength(page);
 
     // Open EditStationDialog for station 0 of section 1 (the zero datum station)
     await openEditStationDialog(page, 1, 0);
@@ -317,8 +380,8 @@ test.describe('Zero Datum Update - Single Undo Entry', () => {
     const checkbox = dialog.locator('#zeroDatum');
     await expect(checkbox).toBeChecked();
 
-    // Verify GPS fields are populated with initial values
-    const latInput = dialog.locator('input[type="number"]').first();
+    // Verify GPS fields are populated; use data-testid for stability
+    const latInput = dialog.getByTestId('station-latitude-input');
     await expect(latInput).toHaveValue('25');
 
     // Change latitude from 25.0 to 26.0
@@ -339,14 +402,14 @@ test.describe('Zero Datum Update - Single Undo Entry', () => {
     expect(removeCallCount).toBe(0);
     expect(setCallCount).toBe(1);
 
-    // Verify undo count delta is exactly 1
-    const finalCount = await getZeroDatumUndoCount(page);
-    expect(finalCount - baselineCount).toBe(1);
+    // Verify undo stack grew by exactly 1 entry (queried via real IPC get_undo_stack)
+    const finalLength = await getUndoStackLength(page);
+    expect(finalLength - baselineLength).toBe(1);
   });
 
   test('saving without modifying lat/lon creates no new undo entry', async ({ page }) => {
-    // Record baseline undo count
-    const baselineCount = await getZeroDatumUndoCount(page);
+    // Record baseline undo stack length via IPC
+    const baselineLength = await getUndoStackLength(page);
 
     // Open EditStationDialog for station 0 of section 1
     await openEditStationDialog(page, 1, 0);
@@ -369,8 +432,8 @@ test.describe('Zero Datum Update - Single Undo Entry', () => {
     const calls = await getZeroDatumCalls(page);
     expect(calls.length).toBe(0);
 
-    // Verify no new undo entries
-    const finalCount = await getZeroDatumUndoCount(page);
-    expect(finalCount - baselineCount).toBe(0);
+    // Verify undo stack did not grow (queried via real IPC get_undo_stack)
+    const finalLength = await getUndoStackLength(page);
+    expect(finalLength - baselineLength).toBe(0);
   });
 });

@@ -359,12 +359,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               station_ref: { section_id: number; station_index: number };
               coordinates: { x: number; y: number; z: number };
               is_zero_datum: boolean;
-              gps_coordinates: null;
+              gps_coordinates: { latitude: number; longitude: number; depth_reference: number } | null;
               merged_with: Array<{ section_id: number; station_index: number }>;
             }> = [];
 
             // Collect all section IDs for merged station setup
             const sectionIds = (currentProject.sections as Array<{ id: number }>).map(s => s.id);
+
+            // Build zero_datums lookup for deriving is_zero_datum and gps_coordinates
+            const loadDatums = (currentProject.zero_datums ?? []) as Array<{
+              station_ref: { section_id: number; station_index: number };
+              gps: { latitude: number; longitude: number; depth_reference: number };
+            }>;
 
             for (const section of currentProject.sections as Array<{ id: number; shots: Array<{ depth_in?: number; depth_out?: number }> }>) {
               const shots = section.shots ?? [];
@@ -399,11 +405,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   mergedWith = [{ section_id: sectionIds[0]!, station_index: firstSectionLastStationIndex }];
                 }
 
+                // Derive is_zero_datum and gps_coordinates from project zero_datums
+                const loadDatum = loadDatums.find(
+                  (d) => d.station_ref.section_id === section.id && d.station_ref.station_index === i
+                );
+
                 mockStations.push({
                   station_ref: { section_id: section.id, station_index: i },
                   coordinates: { x: i * 10, y: 0, z: depths[i] ?? 0 },
-                  is_zero_datum: i === 0 && sectionIndex === 0,
-                  gps_coordinates: null,
+                  is_zero_datum: !!loadDatum,
+                  gps_coordinates: loadDatum ? loadDatum.gps : null,
                   merged_with: mergedWith,
                 });
               }
@@ -527,12 +538,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               station_ref: { section_id: number; station_index: number };
               coordinates: { x: number; y: number; z: number };
               is_zero_datum: boolean;
-              gps_coordinates: null;
+              gps_coordinates: { latitude: number; longitude: number; depth_reference: number } | null;
               merged_with: Array<{ section_id: number; station_index: number }>;
             }> = [];
 
             // Collect all section IDs for merged station setup
             const sectionIdList = (currentProject?.sections as Array<{ id: number }> ?? []).map(s => s.id);
+
+            // Build zero_datums lookup for deriving is_zero_datum and gps_coordinates
+            const zeroDatums = (currentProject?.zero_datums ?? []) as Array<{
+              station_ref: { section_id: number; station_index: number };
+              gps: { latitude: number; longitude: number; depth_reference: number };
+            }>;
 
             if (currentProject?.sections) {
               for (const section of currentProject.sections as Array<{ id: number; shots: unknown[] }>) {
@@ -557,14 +574,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     mergedWith = [{ section_id: sectionIdList[0]!, station_index: firstSectionLastStationIndex }];
                   }
 
+                  // Derive is_zero_datum and gps_coordinates from project zero_datums
+                  const matchingDatum = zeroDatums.find(
+                    (d) => d.station_ref.section_id === section.id && d.station_ref.station_index === i
+                  );
+
                   mockStations.push({
                     station_ref: {
                       section_id: section.id,
                       station_index: i,
                     },
                     coordinates: { x: i * 10, y: 0, z: 0 },
-                    is_zero_datum: i === 0 && sectionIndex === 0,
-                    gps_coordinates: null,
+                    is_zero_datum: !!matchingDatum,
+                    gps_coordinates: matchingDatum ? matchingDatum.gps : null,
                     merged_with: mergedWith,
                   });
                 }

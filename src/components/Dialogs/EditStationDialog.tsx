@@ -191,10 +191,12 @@ export default function EditStationDialog() {
           {isZeroDatum && (
             <div className="space-y-3 pl-6">
               <div>
-                <label className="block text-sm text-text-secondary mb-1">
+                <label className="block text-sm text-text-secondary mb-1" htmlFor="station-latitude">
                   Latitude
                 </label>
                 <input
+                  id="station-latitude"
+                  data-testid="station-latitude-input"
                   type="number"
                   value={latitude}
                   onChange={(e) => setLatitude(e.target.value)}
