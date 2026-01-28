@@ -42,9 +42,8 @@ Options:
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 
 ## Done summary
-TBD
-
+Restructured undo() and redo() to push entries back to their original stacks on failure, eliminating entry loss. Added UndoData::variant_name() helper and tracing::error! logging with safe summary fields on all post-pop failure paths.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 488046485b40281d4ea676c9b5972dd55e040d6d
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml (685 unit + 80 integration, 0 failures)
 - PRs:
