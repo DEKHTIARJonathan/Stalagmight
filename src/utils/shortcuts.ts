@@ -23,8 +23,6 @@ export const RESERVED_SHORTCUTS: ReadonlySet<string> = new Set([
   'Escape',
   'Delete',
   'Backspace',
-  'Ctrl+I', // Import DMP
-  'Ctrl+E', // Export
   'Ctrl+A', // Select all
   'Ctrl+,', // Open Settings
 ]);
@@ -338,8 +336,6 @@ export const RESERVED_KEYS: ReadonlySet<string> = new Set([
  * The modifier (Ctrl) plus these keys are reserved.
  */
 export const RESERVED_CTRL_KEYS: ReadonlySet<string> = new Set([
-  'I', // Import DMP
-  'E', // Export
   'A', // Select all
   ',', // Open Settings
 ]);
@@ -349,8 +345,6 @@ export const RESERVED_CTRL_KEYS: ReadonlySet<string> = new Set([
  * Used in checkReservedConflict() to explain why a shortcut is reserved.
  */
 export const RESERVED_CTRL_DESCRIPTIONS: Readonly<Record<string, string>> = {
-  I: 'Import DMP',
-  E: 'Export',
   A: 'Select all',
   ',': 'Open Settings',
 };
@@ -359,7 +353,7 @@ export const RESERVED_CTRL_DESCRIPTIONS: Readonly<Record<string, string>> = {
  * Check if a shortcut conflicts with reserved shortcuts.
  * This is broader than isReservedShortcut - it blocks:
  * 1. Any shortcut using Escape, Delete, or Backspace (regardless of modifiers)
- * 2. Any shortcut using Ctrl+I, Ctrl+E, Ctrl+A, or Ctrl+, (regardless of additional modifiers)
+ * 2. Any shortcut using Ctrl+A or Ctrl+, (regardless of additional modifiers)
  *
  * This matches the runtime behavior where reserved handlers fire even with extra modifiers.
  *
@@ -390,7 +384,7 @@ export function checkReservedConflict(shortcut: string): { isReserved: boolean; 
     };
   }
 
-  // Check if Ctrl + reserved key (I, E, A, ,)
+  // Check if Ctrl + reserved key (A, ,)
   if (key && hasCtrl && RESERVED_CTRL_KEYS.has(key)) {
     return {
       isReserved: true,
