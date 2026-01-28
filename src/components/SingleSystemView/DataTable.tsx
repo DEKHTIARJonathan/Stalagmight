@@ -39,7 +39,7 @@ export default function DataTable({ sections }: DataTableProps) {
   const shotWarningsMap = useMemo(() => {
     const map = new Map<string, ProjectWarning[]>();
     for (const warning of warnings) {
-      const key = `${warning.section_id}:${warning.shot_id}`;
+      const key = `${warning.sectionId}:${warning.shotId}`;
       if (!map.has(key)) {
         map.set(key, []);
       }

@@ -150,3 +150,9 @@ Playwright keyboard nav tests on React Select are flaky under parallel load due 
 
 ## 2026-01-28 manual [pitfall]
 E2E computed style assertions must parse colors numerically (not exact string match) and use individual border side properties (borderTopColor) instead of shorthand (borderColor) for cross-engine stability
+
+## 2026-01-28 manual [pitfall]
+When adding a parameter to a function, always add tests that assert formatted output strings with non-default parameter values to prevent regressions
+
+## 2026-01-28 manual [pitfall]
+When validating data in commands that create entities, compute the correct context (IDs, indices) from existing state rather than using placeholder values like 0
