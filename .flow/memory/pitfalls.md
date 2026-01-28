@@ -201,3 +201,6 @@ When applying per-item offsets in a coordinate accumulator loop, use a local cop
 
 ## 2026-01-28 manual [pitfall]
 HashMap<StructKey, V> in a serde Serialize/Deserialize struct will fail JSON serialization because serde_json requires string map keys -- use custom serialize_with/deserialize_with converting to Vec<(K, V)>
+
+## 2026-01-28 manual [pitfall]
+Monotonic ID counters (next_closure_id) must be normalized before use -- legacy deserialization with serde(default) can reset them to 0, causing ID reuse after deletions

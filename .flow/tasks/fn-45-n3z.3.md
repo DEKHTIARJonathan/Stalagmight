@@ -13,8 +13,11 @@ Implement new merge validation logic: check zero datum connectivity first, then 
 
 ## Approach
 
-1. Update `check_merge_connectivity_impl()` in `commands/station.rs`:
-   - Set `can_merge` and `reason` fields (types added in task 1)
+<!-- Updated by plan-sync: fn-45-n3z.1 changed check_merge_connectivity_impl structure and line references -->
+
+1. Update merge connectivity validation logic:
+   - `check_merge_connectivity_impl()` in `commands/station.rs:16-22` currently delegates to `state.check_merge_connectivity()` -- the validation logic lives in the state layer, not in this thin wrapper
+   - Set `can_merge` and `reason` fields on `ConnectivityResult` (types added in task 1, with `#[serde(default)]` on both fields)
    - New validation flow:
      1. Check if both sections connected to zero datum → `can_merge: false, reason: Some("Both sections have fixed coordinates".into())`
      2. Check if only one has zero datum → `can_merge: true, reason: None`
@@ -27,7 +30,7 @@ Implement new merge validation logic: check zero datum connectivity first, then 
    - BFS from section through merges/closures
    - Return true if any reachable station has `is_zero_datum=true`
 
-3. Update `useMapTools.ts` merge flow (lines 84-134):
+3. Update `useMapTools.ts` merge flow (lines 87-134):
    - Check `result.can_merge` (not `result.connected`) to decide dialog
    - When `can_merge: false`, pass `result.reason` to ClosureDialog
    - Silent redirect (no intermediate confirmation)
@@ -45,11 +48,12 @@ Implement new merge validation logic: check zero datum connectivity first, then 
 
 ## Key Context
 
-- Existing `check_merge_connectivity` at `commands/station.rs:16-47`
+- Existing `check_merge_connectivity_impl` at `commands/station.rs:16-22` (thin wrapper, delegates to `state.check_merge_connectivity()`)
 - Zero datum check uses connected sections (includes merges AND closures now)
 - Loop detection reuses `get_connected_section_ids()` which now includes closures
 - ClosureDialog at `src/components/Dialogs/ClosureDialog.tsx`
-- ConnectivityResult type updated in task 1 with can_merge and reason fields
+- ConnectivityResult type updated in task 1 with `can_merge: bool` and `reason: Option<String>` fields (both have `#[serde(default)]`)
+- `ConnectivityResult` also has existing `connected: bool` and `preview: Option<ClosurePreview>` fields (station.rs:306-315)
 
 ## Acceptance
 
