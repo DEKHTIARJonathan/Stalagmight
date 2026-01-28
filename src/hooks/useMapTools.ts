@@ -110,16 +110,22 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           return;
         }
         if (result.connected) {
+          // Stations are in the same connected component — create a loop closure
           openDialog('closure', {
             stationA,
             stationB,
             preview: result.preview,
           });
-        } else {
+        } else if (result.can_merge) {
+          // Not connected and merge is allowed
           openDialog('merge', {
             stationA,
             stationB,
           });
+        } else {
+          // Not connected but merge is blocked (e.g. both sides have zero datums)
+          showToast(result.reason ?? 'Merge not allowed.', 'merge-blocked');
+          clearMergeStations();
         }
       } catch (e) {
         if (requestId !== connectivityRequestIdRef.current) return;
