@@ -27,6 +27,12 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.locator('.fixed.inset-0 input').first().fill(name);
   await page.click('.fixed.inset-0 button:has-text("Create")');
   await page.waitForSelector('canvas', { timeout: 10000 });
+
+  // Wait for map initialization (known flakiness pitfall)
+  await page.waitForFunction(
+    () => (window as unknown as { __cavechef_map__?: unknown }).__cavechef_map__ !== undefined,
+    { timeout: 10000 }
+  );
 }
 
 /**
@@ -405,6 +411,19 @@ test.describe('Zero Datum Update - Single Undo Entry', () => {
     // Verify undo stack grew by exactly 1 entry (queried via real IPC get_undo_stack)
     const finalLength = await getUndoStackLength(page);
     expect(finalLength - baselineLength).toBe(1);
+
+    // UI assertion: undo button should be enabled and dropdown should show exactly 1 item
+    const undoButton = page.getByTestId('toolbar-undo-button');
+    await expect(undoButton).toBeEnabled();
+
+    // Hover to open undo dropdown
+    await undoButton.hover();
+    const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
+    await expect(dropdown).toBeVisible({ timeout: 5000 });
+
+    // Verify exactly 1 item in the dropdown (delta = 1)
+    const items = dropdown.locator('[data-testid^="toolbar-undo-button-item-"]');
+    await expect(items).toHaveCount(1);
   });
 
   test('saving without modifying lat/lon creates no new undo entry', async ({ page }) => {
