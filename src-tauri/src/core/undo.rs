@@ -55,6 +55,14 @@ pub enum UndoData {
         section_data: SectionData,
     },
 
+    /// Snapshot of a newly created section (for CreateSection undo/redo ID preservation)
+    /// Distinct from SectionSnapshot (used by DeleteSection) to avoid ambiguity in redo logic.
+    CreatedSectionSnapshot {
+        section_id: SectionId,
+        /// Full section data including all shots
+        section_data: SectionData,
+    },
+
     /// Shot snapshot for restoring deleted shots
     ShotSnapshot {
         section_id: SectionId,
@@ -123,6 +131,7 @@ impl UndoData {
             UndoData::InverseCommand(_) => "InverseCommand",
             UndoData::PreviousValues { .. } => "PreviousValues",
             UndoData::SectionSnapshot { .. } => "SectionSnapshot",
+            UndoData::CreatedSectionSnapshot { .. } => "CreatedSectionSnapshot",
             UndoData::ShotSnapshot { .. } => "ShotSnapshot",
             UndoData::MergeInfo { .. } => "MergeInfo",
             UndoData::UnmergeInfo { .. } => "UnmergeInfo",
@@ -1175,6 +1184,14 @@ mod tests {
                 undo_data: UndoData::SectionSnapshot {
                     section_id: 2,
                     section_data: test_section_data("Snapshot"),
+                },
+                timestamp: None,
+            },
+            UndoEntry {
+                command: test_create_section_command("Created Snapshot"),
+                undo_data: UndoData::CreatedSectionSnapshot {
+                    section_id: 3,
+                    section_data: test_section_data("Created"),
                 },
                 timestamp: None,
             },

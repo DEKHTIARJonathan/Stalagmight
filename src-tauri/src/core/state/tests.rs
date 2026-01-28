@@ -3651,3 +3651,272 @@ fn test_station_offset_applied_in_coordinates() {
         dz
     );
 }
+
+// === CreateSection undo/redo ID preservation tests ===
+
+#[test]
+fn test_create_section_undo_redo_preserves_id() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Create a section with shots
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("ID Preservation".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0), test_shot_data(10.0)],
+    });
+
+    let original_section_id = create_result.section_id.unwrap();
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 1);
+    assert_eq!(project.sections[0].id, original_section_id);
+    let original_shot_ids: Vec<_> = project.sections[0].shots.iter().map(|s| s.id).collect();
+    assert_eq!(original_shot_ids.len(), 2);
+
+    // Undo the create
+    let undo_result = state.undo();
+    assert!(undo_result.success);
+    assert!(state.get_project_state().unwrap().sections.is_empty());
+
+    // Redo the create - should preserve original section ID
+    let redo_result = state.redo();
+    assert!(redo_result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 1);
+    assert_eq!(
+        project.sections[0].id, original_section_id,
+        "Section ID must be preserved after undo/redo, expected {} got {}",
+        original_section_id, project.sections[0].id
+    );
+    assert_eq!(
+        project.sections[0].name,
+        Some("ID Preservation".to_string())
+    );
+
+    // Verify shot IDs are preserved too
+    let restored_shot_ids: Vec<_> = project.sections[0].shots.iter().map(|s| s.id).collect();
+    assert_eq!(
+        restored_shot_ids, original_shot_ids,
+        "Shot IDs must be preserved after undo/redo"
+    );
+}
+
+#[test]
+fn test_create_section_double_undo_redo_cycle() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Create a section with shots
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Double Cycle".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0), test_shot_data(7.0), test_shot_data(11.0)],
+    });
+
+    let original_section_id = create_result.section_id.unwrap();
+    let project = state.get_project_state().unwrap();
+    let original_shot_ids: Vec<_> = project.sections[0].shots.iter().map(|s| s.id).collect();
+
+    // First cycle: undo -> redo
+    assert!(state.undo().success);
+    assert!(state.get_project_state().unwrap().sections.is_empty());
+    assert!(state.redo().success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].id, original_section_id);
+    let shot_ids_after_first: Vec<_> = project.sections[0].shots.iter().map(|s| s.id).collect();
+    assert_eq!(shot_ids_after_first, original_shot_ids);
+
+    // Second cycle: undo -> redo
+    assert!(state.undo().success);
+    assert!(state.get_project_state().unwrap().sections.is_empty());
+    assert!(state.redo().success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.sections[0].id, original_section_id,
+        "Section ID must be stable through double undo/redo cycle"
+    );
+    let shot_ids_after_second: Vec<_> = project.sections[0].shots.iter().map(|s| s.id).collect();
+    assert_eq!(
+        shot_ids_after_second, original_shot_ids,
+        "Shot IDs must be stable through double undo/redo cycle"
+    );
+}
+
+#[test]
+fn test_create_section_undo_redo_then_edit() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Editable".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#0000ff".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+
+    let section_id = create_result.section_id.unwrap();
+
+    // Undo and redo
+    assert!(state.undo().success);
+    assert!(state.redo().success);
+
+    // Verify we can edit the restored section
+    let project = state.get_project_state().unwrap();
+    let shot_id = project.sections[0].shots[0].id;
+
+    let update_result = state.execute(Command::UpdateShot {
+        section_id,
+        shot_id,
+        updates: ShotUpdates {
+            length: Some(99.0),
+            ..Default::default()
+        },
+    });
+    assert!(update_result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots[0].length, 99.0);
+}
+
+#[test]
+fn test_create_section_undo_redo_then_delete() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Deletable".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff00ff".to_string(),
+        direction: None,
+        shots: vec![],
+    });
+
+    let section_id = create_result.section_id.unwrap();
+
+    // Undo and redo
+    assert!(state.undo().success);
+    assert!(state.redo().success);
+
+    // Delete the restored section
+    let delete_result = state.execute(Command::DeleteSection { section_id });
+    assert!(delete_result.success);
+    assert!(state.get_project_state().unwrap().sections.is_empty());
+}
+
+#[test]
+fn test_create_section_created_snapshot_distinct_from_section_snapshot() {
+    // Verify that CreateSection uses CreatedSectionSnapshot while
+    // DeleteSection still uses SectionSnapshot
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Create a section
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Check Variant".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(1.0)],
+    });
+    let section_id = create_result.section_id.unwrap();
+
+    // Check that CreateSection uses CreatedSectionSnapshot
+    {
+        let stack = state.undo_stack.lock().unwrap();
+        let undo_data = stack.peek_undo_data().unwrap();
+        assert_eq!(
+            undo_data.variant_name(),
+            "CreatedSectionSnapshot",
+            "CreateSection should use CreatedSectionSnapshot, got {}",
+            undo_data.variant_name()
+        );
+    }
+
+    // Now delete the section and verify DeleteSection uses SectionSnapshot
+    state.execute(Command::DeleteSection { section_id });
+
+    {
+        let stack = state.undo_stack.lock().unwrap();
+        let undo_data = stack.peek_undo_data().unwrap();
+        assert_eq!(
+            undo_data.variant_name(),
+            "SectionSnapshot",
+            "DeleteSection should use SectionSnapshot, got {}",
+            undo_data.variant_name()
+        );
+    }
+}
+
+#[test]
+fn test_delete_section_undo_redo_still_works() {
+    // Regression test: ensure DeleteSection undo/redo behavior is unchanged
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Delete Test".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+
+    let section_id = create_result.section_id.unwrap();
+
+    // Delete the section
+    state.execute(Command::DeleteSection { section_id });
+    assert!(state.get_project_state().unwrap().sections.is_empty());
+
+    // Undo should restore it
+    assert!(state.undo().success);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 1);
+    assert_eq!(project.sections[0].id, section_id);
+    assert_eq!(project.sections[0].name, Some("Delete Test".to_string()));
+
+    // Redo should delete it again
+    assert!(state.redo().success);
+    assert!(state.get_project_state().unwrap().sections.is_empty());
+
+    // Undo again to restore
+    assert!(state.undo().success);
+    assert_eq!(state.get_project_state().unwrap().sections.len(), 1);
+}
