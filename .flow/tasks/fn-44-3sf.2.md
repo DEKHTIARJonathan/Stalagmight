@@ -57,9 +57,8 @@ Fix CreateShot command so that undo→redo preserves the original shot ID instea
 - [ ] Existing shot undo tests still pass
 
 ## Done summary
-TBD
-
+Added CreatedShotSnapshot UndoData variant and wired it into finalize_undo_data, undo(), and redo() so that CreateShot undo/redo preserves the original shot ID and position (including mid-section inserts via after_shot_id). Added 8 tests covering ID preservation, position preservation, double-cycle stability, post-redo edit/delete, variant distinction, and DeleteShot regression.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 7a55b44, 96e5ccb
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, cargo test --manifest-path src-tauri/Cargo.toml -- create_shot, cargo test --manifest-path src-tauri/Cargo.toml -- delete_shot_undo, pnpm tsc --noEmit
 - PRs:
