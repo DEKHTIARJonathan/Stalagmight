@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-28T17:07:31.431705Z",
+  "depends_on": [],
+  "epic": "fn-45-n3z",
+  "id": "fn-45-n3z.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-45-n3z.1.md",
+  "status": "todo",
+  "title": "Add closure ID and ClosureRef data structures",
+  "updated_at": "2026-01-28T17:13:07.894235Z"
+}

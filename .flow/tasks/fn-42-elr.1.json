@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-28T15:26:15.948077Z",
+  "depends_on": [],
+  "epic": "fn-42-elr",
+  "id": "fn-42-elr.1",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-42-elr.1.md",
+  "status": "todo",
+  "title": "Add import_dmp and export to ShortcutsConfig types",
+  "updated_at": "2026-01-28T15:29:18.947173Z"
+}

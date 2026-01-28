@@ -1,0 +1,13 @@
+{
+  "branch_name": "fn-43-uvi",
+  "created_at": "2026-01-28T15:19:11.518595Z",
+  "depends_on_epics": [],
+  "id": "fn-43-uvi",
+  "next_task": 1,
+  "plan_review_status": "unknown",
+  "plan_reviewed_at": null,
+  "spec_path": ".flow/specs/fn-43-uvi.md",
+  "status": "open",
+  "title": "Bugfix: MoveSection and MoveStation commands cannot be undone",
+  "updated_at": "2026-01-28T15:19:11.518607Z"
+}
