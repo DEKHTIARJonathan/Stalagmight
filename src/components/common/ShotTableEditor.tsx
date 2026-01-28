@@ -310,14 +310,14 @@ export function ShotTableEditor({
           <thead className="bg-background sticky top-0 z-10">
             <tr className="border-b border-border">
               <th className="px-2 py-1 text-left w-12">#</th>
-              <th className="px-2 py-1 text-left">Length</th>
-              <th className="px-2 py-1 text-left">Azimuth</th>
-              <th className="px-2 py-1 text-left">Depth In</th>
-              <th className="px-2 py-1 text-left">Depth Out</th>
-              <th className="px-2 py-1 text-left w-12">L</th>
-              <th className="px-2 py-1 text-left w-12">R</th>
-              <th className="px-2 py-1 text-left w-12">U</th>
-              <th className="px-2 py-1 text-left w-12">D</th>
+              <th className="px-2 py-1 text-right">Length</th>
+              <th className="px-2 py-1 text-right">Azimuth</th>
+              <th className="px-2 py-1 text-right">Depth In</th>
+              <th className="px-2 py-1 text-right">Depth Out</th>
+              <th className="px-2 py-1 text-right w-12">L</th>
+              <th className="px-2 py-1 text-right w-12">R</th>
+              <th className="px-2 py-1 text-right w-12">U</th>
+              <th className="px-2 py-1 text-right w-12">D</th>
               <th className="px-2 py-1 text-left">Comment</th>
               <th className="px-2 py-1 text-center w-8" title="Warnings"></th>
               <th className="px-2 py-1 w-10"></th>
@@ -352,7 +352,7 @@ export function ShotTableEditor({
                       onChange={(e) =>
                         onShotChange(actualIndex, 'length', parseFloat(e.target.value) || 0)
                       }
-                      className="w-16 text-xs px-1 py-0.5"
+                      className="w-16 text-xs px-1 py-0.5 text-right tabular-nums"
                       step="0.1"
                       disabled={readOnly}
                       data-testid={`shot-length-${visibleIdx}`}
@@ -365,7 +365,7 @@ export function ShotTableEditor({
                       type="number"
                       value={avgAzimuth.toFixed(1)}
                       onChange={(e) => handleAzimuthChange(actualIndex, e.target.value)}
-                      className="w-16 text-xs px-1 py-0.5"
+                      className="w-16 text-xs px-1 py-0.5 text-right tabular-nums"
                       step="0.1"
                       min="0"
                       max="360"
@@ -383,7 +383,7 @@ export function ShotTableEditor({
                       onChange={(e) =>
                         onShotChange(actualIndex, 'depth_in', parseFloat(e.target.value) || 0)
                       }
-                      className="w-16 text-xs px-1 py-0.5"
+                      className="w-16 text-xs px-1 py-0.5 text-right tabular-nums"
                       step="0.1"
                       disabled={readOnly}
                       data-testid={`shot-depth-in-${visibleIdx}`}
@@ -398,7 +398,7 @@ export function ShotTableEditor({
                       onChange={(e) =>
                         onShotChange(actualIndex, 'depth_out', parseFloat(e.target.value) || 0)
                       }
-                      className="w-16 text-xs px-1 py-0.5"
+                      className="w-16 text-xs px-1 py-0.5 text-right tabular-nums"
                       step="0.1"
                       disabled={readOnly}
                       data-testid={`shot-depth-out-${visibleIdx}`}
@@ -417,7 +417,7 @@ export function ShotTableEditor({
                           e.target.value === '' ? null : parseFloat(e.target.value)
                         )
                       }
-                      className="w-10 text-xs px-1 py-0.5"
+                      className="w-10 text-xs px-1 py-0.5 text-right tabular-nums"
                       step="0.1"
                       placeholder="-"
                       disabled={readOnly}
@@ -437,7 +437,7 @@ export function ShotTableEditor({
                           e.target.value === '' ? null : parseFloat(e.target.value)
                         )
                       }
-                      className="w-10 text-xs px-1 py-0.5"
+                      className="w-10 text-xs px-1 py-0.5 text-right tabular-nums"
                       step="0.1"
                       placeholder="-"
                       disabled={readOnly}
@@ -457,7 +457,7 @@ export function ShotTableEditor({
                           e.target.value === '' ? null : parseFloat(e.target.value)
                         )
                       }
-                      className="w-10 text-xs px-1 py-0.5"
+                      className="w-10 text-xs px-1 py-0.5 text-right tabular-nums"
                       step="0.1"
                       placeholder="-"
                       disabled={readOnly}
@@ -477,7 +477,7 @@ export function ShotTableEditor({
                           e.target.value === '' ? null : parseFloat(e.target.value)
                         )
                       }
-                      className="w-10 text-xs px-1 py-0.5"
+                      className="w-10 text-xs px-1 py-0.5 text-right tabular-nums"
                       step="0.1"
                       placeholder="-"
                       disabled={readOnly}

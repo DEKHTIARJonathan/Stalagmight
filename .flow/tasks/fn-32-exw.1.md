@@ -54,9 +54,16 @@ Manual table — not using EditableTable. Fix:
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-TBD
+Fixed numeric column alignment in three components:
 
+1. **Table.tsx (EditableTable)**: Added alignment class and `tabular-nums` to the editable input element, inheriting the column's `align` property via the existing `alignmentClasses` mapping.
+
+2. **ShotTableEditor.tsx**: Changed all numeric column headers (Length, Azimuth, Depth In, Depth Out, L, R, U, D) from `text-left` to `text-right`. Added `text-right tabular-nums` to all numeric input classNames. Left # column left-aligned, Comment left-aligned, Warnings/Delete centered.
+
+3. **ImportDialog.tsx**: Added `text-right` to numeric column headers (Length, Azi In, Azi Out, Depth In, Depth Out). Added `text-right tabular-nums` to all numeric input classNames. Added explicit `text-center` to Virtual header. Left # column as-is.
+
+No global CSS changes. Pre-existing TS error in MapCanvas.tsx unrelated to changes.
 ## Evidence
 - Commits:
-- Tests:
+- Tests: pnpm tsc --noEmit (pre-existing error only, no new errors)
 - PRs:

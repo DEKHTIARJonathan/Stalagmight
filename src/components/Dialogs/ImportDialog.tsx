@@ -118,12 +118,12 @@ export default function ImportDialog() {
               <thead>
                 <tr>
                   <th className="w-8">#</th>
-                  <th>Length</th>
-                  <th>Azi In</th>
-                  <th>Azi Out</th>
-                  <th>Depth In</th>
-                  <th>Depth Out</th>
-                  <th>Virtual</th>
+                  <th className="text-right">Length</th>
+                  <th className="text-right">Azi In</th>
+                  <th className="text-right">Azi Out</th>
+                  <th className="text-right">Depth In</th>
+                  <th className="text-right">Depth Out</th>
+                  <th className="text-center">Virtual</th>
                   <th className="w-8"></th>
                 </tr>
               </thead>
@@ -136,7 +136,7 @@ export default function ImportDialog() {
                         type="number"
                         value={shot.length}
                         onChange={(e) => handleShotChange(index, 'length', parseFloat(e.target.value) || 0)}
-                        className="w-full"
+                        className="w-full text-right tabular-nums"
                         step="0.1"
                       />
                     </td>
@@ -145,7 +145,7 @@ export default function ImportDialog() {
                         type="number"
                         value={shot.azimuth_in}
                         onChange={(e) => handleShotChange(index, 'azimuth_in', parseFloat(e.target.value) || 0)}
-                        className="w-full"
+                        className="w-full text-right tabular-nums"
                         step="0.1"
                       />
                     </td>
@@ -154,7 +154,7 @@ export default function ImportDialog() {
                         type="number"
                         value={shot.azimuth_out}
                         onChange={(e) => handleShotChange(index, 'azimuth_out', parseFloat(e.target.value) || 0)}
-                        className="w-full"
+                        className="w-full text-right tabular-nums"
                         step="0.1"
                       />
                     </td>
@@ -163,7 +163,7 @@ export default function ImportDialog() {
                         type="number"
                         value={shot.depth_in}
                         onChange={(e) => handleShotChange(index, 'depth_in', parseFloat(e.target.value) || 0)}
-                        className="w-full"
+                        className="w-full text-right tabular-nums"
                         step="0.1"
                       />
                     </td>
@@ -172,7 +172,7 @@ export default function ImportDialog() {
                         type="number"
                         value={shot.depth_out}
                         onChange={(e) => handleShotChange(index, 'depth_out', parseFloat(e.target.value) || 0)}
-                        className="w-full"
+                        className="w-full text-right tabular-nums"
                         step="0.1"
                       />
                     </td>
