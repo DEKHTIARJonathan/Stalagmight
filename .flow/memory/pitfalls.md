@@ -138,3 +138,6 @@ Capture-phase scroll event.target can be window or document (not a Node) - guard
 
 ## 2026-01-28 manual [pitfall]
 When reading aria-controls in Playwright tests after opening a portal-rendered dropdown, always await expect(trigger).toHaveAttribute('aria-controls', /.+/) before getAttribute to avoid React render cycle race conditions
+
+## 2026-01-28 manual [pitfall]
+Global th/td CSS rules in index.css are unlayered and override Tailwind utility classes (text-right, text-center) on table elements; use !text-right (!important modifier) or inline styles to override
