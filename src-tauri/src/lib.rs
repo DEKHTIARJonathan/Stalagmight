@@ -9,6 +9,7 @@ pub mod parsers;
 pub mod persistence;
 #[cfg(test)]
 pub mod test_helpers;
+pub mod tile_providers;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
