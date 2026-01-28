@@ -118,6 +118,6 @@ Updated all existing Playwright e2e tests broken by the Select portal change and
 **TESTING.md update:**
 - Added "Testing Select Dropdowns (Portal)" subsection documenting portal rendering, aria-controls locator strategy, z-order verification with elementFromPoint, scroll behavior, and keyboard navigation patterns
 ## Evidence
-- Commits: 06157c8
-- Tests: pnpm test:ui (547 passed, 0 failed)
+- Commits:
+- Tests:
 - PRs:

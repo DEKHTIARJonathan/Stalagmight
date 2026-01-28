@@ -1,7 +1,4 @@
 {
-  "assignee": null,
-  "claim_note": "",
-  "claimed_at": null,
   "created_at": "2026-01-27T22:08:18.033548Z",
   "depends_on": [
     "fn-31-mhl.1"
@@ -12,5 +9,5 @@
   "spec_path": ".flow/tasks/fn-31-mhl.2.md",
   "status": "todo",
   "title": "Playwright e2e tests and TESTING.md update",
-  "updated_at": "2026-01-27T22:13:55.545100Z"
+  "updated_at": "2026-01-28T03:11:44.933690Z"
 }
