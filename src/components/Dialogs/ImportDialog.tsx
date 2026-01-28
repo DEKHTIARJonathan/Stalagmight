@@ -118,12 +118,12 @@ export default function ImportDialog() {
               <thead>
                 <tr>
                   <th className="w-8">#</th>
-                  <th className="text-right">Length</th>
-                  <th className="text-right">Azi In</th>
-                  <th className="text-right">Azi Out</th>
-                  <th className="text-right">Depth In</th>
-                  <th className="text-right">Depth Out</th>
-                  <th className="text-center">Virtual</th>
+                  <th className="!text-right">Length</th>
+                  <th className="!text-right">Azi In</th>
+                  <th className="!text-right">Azi Out</th>
+                  <th className="!text-right">Depth In</th>
+                  <th className="!text-right">Depth Out</th>
+                  <th className="!text-center">Virtual</th>
                   <th className="w-8"></th>
                 </tr>
               </thead>
