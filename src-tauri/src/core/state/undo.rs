@@ -743,6 +743,7 @@ impl AppState {
                 coordinates,
             } => self.set_zero_datum(*station_ref, *coordinates),
             Command::RemoveZeroDatum { station_ref } => self.remove_zero_datum(*station_ref),
+            Command::MoveSection { section_id, offset } => self.move_section(*section_id, *offset),
             _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),
         }
     }

@@ -1352,12 +1352,85 @@ fn test_move_section() {
 
     let section_id = create_result.section_id.unwrap();
 
+    // First move
     let result = state.execute(Command::MoveSection {
         section_id,
         offset: Coordinates::new(10.0, 20.0, 0.0),
     });
-
     assert!(result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.section_offsets.get(&section_id),
+        Some(&(10.0, 20.0)),
+        "First move should set offset to (10, 20)"
+    );
+
+    // Second move should accumulate
+    let result = state.execute(Command::MoveSection {
+        section_id,
+        offset: Coordinates::new(5.0, -10.0, 0.0),
+    });
+    assert!(result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.section_offsets.get(&section_id),
+        Some(&(15.0, 10.0)),
+        "Second move should accumulate to (15, 10)"
+    );
+}
+
+#[test]
+fn test_move_section_undo_redo() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+
+    let section_id = create_result.section_id.unwrap();
+
+    // Move section
+    state.execute(Command::MoveSection {
+        section_id,
+        offset: Coordinates::new(10.0, 20.0, 0.0),
+    });
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.section_offsets.get(&section_id), Some(&(10.0, 20.0)));
+
+    // Undo should reverse the move
+    let undo_result = state.undo();
+    assert!(undo_result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0)),
+        (0.0, 0.0),
+        "Undo should restore offset to origin"
+    );
+
+    // Redo should re-apply
+    let redo_result = state.redo();
+    assert!(redo_result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.section_offsets.get(&section_id),
+        Some(&(10.0, 20.0)),
+        "Redo should re-apply the move"
+    );
 }
 
 #[test]
