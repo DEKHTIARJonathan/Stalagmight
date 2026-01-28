@@ -286,11 +286,14 @@ impl AppState {
 
         match cmd {
             Command::CreateSection { .. } => {
-                // Get the ID of the just-created section (it's the last one)
+                // Capture full snapshot of the just-created section (the last one)
+                // so that redo can restore it with its original ID instead of
+                // re-executing CreateSection (which would assign a new ID).
                 if let Some(section) = project.sections.last() {
-                    UndoData::InverseCommand(Command::DeleteSection {
+                    UndoData::CreatedSectionSnapshot {
                         section_id: section.id,
-                    })
+                        section_data: section.to_section_data(),
+                    }
                 } else {
                     undo_data
                 }
@@ -413,6 +416,13 @@ impl AppState {
             } => {
                 // Restore deleted section
                 self.restore_section(*section_id, section_data.clone())
+            }
+
+            UndoData::CreatedSectionSnapshot {
+                section_id, ..
+            } => {
+                // Undo a CreateSection by deleting the section
+                self.delete_section(*section_id)
             }
 
             UndoData::ShotSnapshot {
@@ -640,23 +650,35 @@ impl AppState {
             }
         };
 
-        // For ProjectSnapshotPair, restore the "after" snapshot instead of re-executing
-        // This handles cases where re-execution would create different IDs
+        // For snapshot-based undo data, restore from snapshot instead of re-executing.
+        // This handles cases where re-execution would create different IDs.
         // IMPORTANT: No early returns after the pop — all paths flow through the epilogue.
-        let result = if let UndoData::ProjectSnapshotPair { before: _, after } = &entry.undo_data {
-            match serde_json::from_str::<Project>(after.as_str()) {
-                Ok(project) => match self.project.lock() {
-                    Ok(mut proj) => {
-                        *proj = Some(project);
-                        CommandResult::success()
+        let result = match &entry.undo_data {
+            UndoData::ProjectSnapshotPair { before: _, after } => {
+                match serde_json::from_str::<Project>(after.as_str()) {
+                    Ok(project) => match self.project.lock() {
+                        Ok(mut proj) => {
+                            *proj = Some(project);
+                            CommandResult::success()
+                        }
+                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                    },
+                    Err(_) => {
+                        CommandResult::failure("Failed to parse project snapshot".to_string())
                     }
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                },
-                Err(_) => CommandResult::failure("Failed to parse project snapshot".to_string()),
+                }
             }
-        } else {
-            // Re-execute the original command for other undo data types
-            self.execute_without_undo(entry.command.clone())
+            UndoData::CreatedSectionSnapshot {
+                section_id,
+                section_data,
+            } => {
+                // Redo CreateSection by restoring from snapshot to preserve original ID
+                self.restore_section(*section_id, section_data.clone())
+            }
+            _ => {
+                // Re-execute the original command for other undo data types
+                self.execute_without_undo(entry.command.clone())
+            }
         };
 
         // Epilogue: push back to undo stack on success, push back to redo stack on failure
