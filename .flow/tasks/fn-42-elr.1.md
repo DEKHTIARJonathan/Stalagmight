@@ -29,9 +29,8 @@ Add `import_dmp` and `export` fields to the ShortcutsConfig type in both TypeScr
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 
 ## Done summary
-TBD
-
+Added import_dmp and export fields to ShortcutsConfig in both TypeScript and Rust, with Ctrl+I and Ctrl+E as defaults. Updated test mocks to include new fields.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 2600e55a2e7efd4d7b73d97aada6d7990de229f2
+- Tests: pnpm tsc --noEmit, cargo test --manifest-path src-tauri/Cargo.toml
 - PRs:
