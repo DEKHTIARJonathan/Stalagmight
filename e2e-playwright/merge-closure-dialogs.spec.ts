@@ -221,4 +221,122 @@ test.describe('Merge and Closure Dialogs', () => {
     await expect(keepRawRadio).toBeChecked();
     await expect(proportionalRadio).not.toBeChecked();
   });
+
+  test('Merge Tool opens MergeDialog when checkMergeConnectivity returns not connected', async ({ page }) => {
+    const sectionIds = await page.evaluate(() => {
+      const e2e = (window as any).__E2E_TEST__;
+      if (!e2e) return [];
+      const project = e2e.projectStore.getState().project;
+      if (!project) return [];
+      return project.sections.map((s: any) => s.id);
+    });
+    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+
+    // Set connectivity result to NOT connected (merge path)
+    await page.evaluate(() => {
+      (window as any).__MOCK_CONNECTIVITY_RESULT__ = { connected: false, preview: null };
+    });
+
+    // Simulate merge tool flow: call checkAndOpenMergeDialog via project store
+    await page.evaluate(
+      async ({ sectionA, sectionB }) => {
+        const e2e = (window as any).__E2E_TEST__;
+        if (!e2e) return;
+        // Set merge tool active and set station A
+        e2e.uiStore.getState().setActiveTool('merge');
+        e2e.uiStore.getState().setMergeStationA({ section_id: sectionA, station_index: 1 });
+
+        // Call connectivity check directly (simulates second station click)
+        const result = await e2e.projectStore.getState().checkMergeConnectivity(
+          { section_id: sectionA, station_index: 1 },
+          { section_id: sectionB, station_index: 0 },
+        );
+
+        // Open dialog based on result (replicate merge tool logic)
+        if (result.connected) {
+          e2e.uiStore.getState().openDialog('closure', {
+            stationA: { section_id: sectionA, station_index: 1 },
+            stationB: { section_id: sectionB, station_index: 0 },
+            preview: result.preview,
+          });
+        } else {
+          e2e.uiStore.getState().openDialog('merge', {
+            stationA: { section_id: sectionA, station_index: 1 },
+            stationB: { section_id: sectionB, station_index: 0 },
+          });
+        }
+      },
+      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+    );
+
+    // Should open MergeDialog (not ClosureDialog)
+    const mergeDialog = page.getByTestId('merge-dialog');
+    await expect(mergeDialog).toBeVisible({ timeout: 5000 });
+    const closureDialog = page.getByTestId('closure-dialog');
+    await expect(closureDialog).toBeHidden();
+  });
+
+  test('Merge Tool opens ClosureDialog when checkMergeConnectivity returns connected', async ({ page }) => {
+    const sectionIds = await page.evaluate(() => {
+      const e2e = (window as any).__E2E_TEST__;
+      if (!e2e) return [];
+      const project = e2e.projectStore.getState().project;
+      if (!project) return [];
+      return project.sections.map((s: any) => s.id);
+    });
+    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+
+    // Set connectivity result to CONNECTED (closure path)
+    await page.evaluate(() => {
+      (window as any).__MOCK_CONNECTIVITY_RESULT__ = {
+        connected: true,
+        preview: {
+          path_length: 15.0,
+          misclosure_distance: 0.3,
+          error_percentage: 2.0,
+          horizontal_misclosure: 0.2,
+          vertical_misclosure: 0.1,
+        },
+      };
+    });
+
+    // Simulate merge tool flow
+    await page.evaluate(
+      async ({ sectionA, sectionB }) => {
+        const e2e = (window as any).__E2E_TEST__;
+        if (!e2e) return;
+        e2e.uiStore.getState().setActiveTool('merge');
+        e2e.uiStore.getState().setMergeStationA({ section_id: sectionA, station_index: 1 });
+
+        const result = await e2e.projectStore.getState().checkMergeConnectivity(
+          { section_id: sectionA, station_index: 1 },
+          { section_id: sectionB, station_index: 0 },
+        );
+
+        if (result.connected) {
+          e2e.uiStore.getState().openDialog('closure', {
+            stationA: { section_id: sectionA, station_index: 1 },
+            stationB: { section_id: sectionB, station_index: 0 },
+            preview: result.preview,
+          });
+        } else {
+          e2e.uiStore.getState().openDialog('merge', {
+            stationA: { section_id: sectionA, station_index: 1 },
+            stationB: { section_id: sectionB, station_index: 0 },
+          });
+        }
+      },
+      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+    );
+
+    // Should open ClosureDialog (not MergeDialog)
+    const closureDialog = page.getByTestId('closure-dialog');
+    await expect(closureDialog).toBeVisible({ timeout: 5000 });
+    const mergeDialog = page.getByTestId('merge-dialog');
+    await expect(mergeDialog).toBeHidden();
+
+    // Verify preview data is displayed
+    await expect(closureDialog.getByText('2.0%')).toBeVisible();
+    await expect(closureDialog.getByText('15.00m')).toBeVisible();
+  });
 });

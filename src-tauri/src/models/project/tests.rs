@@ -832,11 +832,27 @@ fn create_loop_closure_creates_correct_values() {
 
     assert_eq!(closure.station_a, StationRef::new(a, 0));
     assert_eq!(closure.station_b, StationRef::new(b, 1));
-    assert!(closure.path_length > 0.0, "Path length should be positive");
-    assert!(closure.misclosure_distance >= 0.0, "Misclosure should be non-negative");
-    assert!(closure.error_percentage >= 0.0, "Error percentage should be non-negative");
-    assert!(closure.horizontal_misclosure >= 0.0);
+
+    // Path length should be sum of shot lengths: 10m + 5m = 15m
+    assert!((closure.path_length - 15.0).abs() < 0.1,
+        "Path length should be ~15m (10+5), got {}", closure.path_length);
+
+    // Misclosure is Euclidean distance between A.0 and B.1
+    assert!(closure.misclosure_distance > 0.0, "Misclosure should be positive for non-coincident stations");
+
+    // Verify error_percentage formula: (misclosure / path_length) * 100
+    let expected_pct = (closure.misclosure_distance / closure.path_length) * 100.0;
+    assert!((closure.error_percentage - expected_pct).abs() < 1e-6,
+        "error_percentage should equal misclosure/path_length*100: expected {}, got {}",
+        expected_pct, closure.error_percentage);
+
+    // Horizontal + vertical misclosure should be consistent with total misclosure
+    // (total >= horizontal because total includes vertical component)
+    assert!(closure.misclosure_distance >= closure.horizontal_misclosure,
+        "Total misclosure {} should be >= horizontal {}",
+        closure.misclosure_distance, closure.horizontal_misclosure);
     assert!(closure.vertical_misclosure >= 0.0);
+
     assert_eq!(project.loop_closures.len(), 1);
 }
 
@@ -950,7 +966,7 @@ fn merge_stations_rejects_already_connected() {
 }
 
 #[test]
-fn unmerge_stations_removes_closures_for_pair_only() {
+fn unmerge_stations_removes_matching_closure_and_preserves_others() {
     let mut project = Project::new("UnmergePair".to_string(), None);
 
     let a = project.add_section(SectionData {
@@ -970,36 +986,45 @@ fn unmerge_stations_removes_closures_for_pair_only() {
     project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
     project.merge_stations(StationRef::new(b, 1), StationRef::new(c, 0)).unwrap();
 
-    // Create closure between A.0 and B.1 (via the A-B merge)
-    let closure_ab = project.create_loop_closure(
-        StationRef::new(a, 0),
-        StationRef::new(b, 1),
-        ClosureStrategy::default(),
-    ).unwrap();
+    // Inject a closure matching the A-B merge pair directly.
+    // (create_loop_closure won't accept stations that are the merge pair itself)
+    project.loop_closures.push(LoopClosure {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+        path_length: 10.0,
+        misclosure_distance: 0.2,
+        error_percentage: 2.0,
+        horizontal_misclosure: 0.15,
+        vertical_misclosure: 0.05,
+    });
 
-    // Create closure between A.0 and C.1 (via A-B-C merges)
-    let closure_ac = project.create_loop_closure(
-        StationRef::new(a, 0),
-        StationRef::new(c, 1),
-        ClosureStrategy::default(),
-    ).unwrap();
+    // Also inject an unrelated closure for B-C pair
+    project.loop_closures.push(LoopClosure {
+        station_a: StationRef::new(b, 1),
+        station_b: StationRef::new(c, 0),
+        path_length: 3.0,
+        misclosure_distance: 0.1,
+        error_percentage: 3.3,
+        horizontal_misclosure: 0.1,
+        vertical_misclosure: 0.0,
+    });
 
     assert_eq!(project.loop_closures.len(), 2);
 
-    // Unmerge A-B: should remove the A.0-B.1 closure but keep A.0-C.1
+    // Unmerge A-B: should remove the A.1-B.0 closure but keep B.1-C.0
     let (success, removed) = project.unmerge_stations(
         StationRef::new(a, 1),
         StationRef::new(b, 0),
     );
     assert!(success);
-    // The removed closures should match the exact unmerged pair only
-    // Note: unmerge_stations removes closures matching the *merge* station pair (a.1, b.0),
-    // not the closure station pair (a.0, b.1). So removed may be empty if closure
-    // stations differ from merge stations.
-    // The A.0-C.1 closure should still exist
-    assert!(project.loop_closures.iter().any(|lc|
-        lc.station_a == closure_ac.station_a && lc.station_b == closure_ac.station_b
-    ), "Unrelated closure A.0-C.1 should be preserved");
+    assert_eq!(removed.len(), 1, "Should remove exactly 1 closure matching the merge pair");
+    assert_eq!(removed[0].station_a, StationRef::new(a, 1));
+    assert_eq!(removed[0].station_b, StationRef::new(b, 0));
+
+    // Only the B-C closure should remain
+    assert_eq!(project.loop_closures.len(), 1);
+    assert_eq!(project.loop_closures[0].station_a, StationRef::new(b, 1));
+    assert_eq!(project.loop_closures[0].station_b, StationRef::new(c, 0));
 }
 
 #[test]
