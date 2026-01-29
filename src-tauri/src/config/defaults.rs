@@ -171,7 +171,6 @@ impl Default for ShortcutsConfig {
             // Edit
             undo: vec!["Ctrl+Z".to_string()],
             redo: vec!["Ctrl+Y".to_string(), "Ctrl+Shift+Z".to_string()],
-            save: vec!["Ctrl+S".to_string()],
 
             // View
             toggle_depth_gradient: vec!["G".to_string()],
@@ -190,6 +189,10 @@ impl Default for ShortcutsConfig {
             toggle_data_table: vec!["Ctrl+3".to_string()],
 
             // File
+            save: vec!["Ctrl+S".to_string()],
+            new_file: vec!["Ctrl+N".to_string()],
+            open_file: vec!["Ctrl+O".to_string()],
+            save_as: vec!["Ctrl+Shift+S".to_string()],
             import_dmp: vec!["Ctrl+I".to_string()],
             export: vec!["Ctrl+E".to_string()],
 
