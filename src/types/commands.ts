@@ -70,6 +70,7 @@ export type BatchCommand =
   | { type: 'merge_stations'; station_a: StationRef; station_b: StationRef }
   | { type: 'move_section'; section_id: number; offset: Coordinates }
   | { type: 'move_segment'; section_id: number; offset: Coordinates }
+  | { type: 'move_station'; station_ref: StationRef; offset: Coordinates }
   | { type: 'set_zero_datum'; station_ref: StationRef; coordinates: { latitude: number; longitude: number; depth_reference: number } };
 
 // Station connectivity check result
