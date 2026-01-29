@@ -9,6 +9,6 @@
   "priority": 5,
   "spec_path": ".flow/tasks/fn-50-3j7.5.md",
   "status": "todo",
-  "title": "Add --cc-focus-ring CSS variable and replace hardcoded #4ecdc4",
-  "updated_at": "2026-01-29T17:47:53.021500Z"
+  "title": "Add CSS focus-ring variables, update SPEC.md and docs",
+  "updated_at": "2026-01-29T18:38:18.318648Z"
 }

@@ -11,6 +11,6 @@
   "priority": 3,
   "spec_path": ".flow/tasks/fn-50-3j7.3.md",
   "status": "todo",
-  "title": "Add initial focus logic to DialogWrapper",
-  "updated_at": "2026-01-29T17:47:31.368797Z"
+  "title": "Wire focus trap and Escape handler into DialogWrapper",
+  "updated_at": "2026-01-29T18:37:42.612206Z"
 }
