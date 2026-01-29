@@ -363,8 +363,8 @@ export function ShortcutsSettings({
           </div>
         )}
 
-        {/* Scrollable shortcuts list */}
-        <div className="max-h-[300px] overflow-y-auto space-y-4 pr-2">
+        {/* Shortcuts list — outer container handles scrolling */}
+        <div className="space-y-4">
           {SHORTCUT_CATEGORIES.map((category) => {
             const filteredActions = category.actions.filter(filterAction);
             if (filteredActions.length === 0) return null;
