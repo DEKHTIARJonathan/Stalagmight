@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -947,6 +948,7 @@ fn test_undo_merge_info_fails_when_project_lock_poisoned() {
             station_a: StationRef::new(1, 0),
             station_b: StationRef::new(1, 1),
             removed_closures: Vec::new(),
+            previous_offsets: HashMap::new(),
         },
     );
     drop(stack);

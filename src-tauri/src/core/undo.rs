@@ -89,6 +89,9 @@ pub enum UndoData {
         /// Closures removed during unmerge (for restoring on undo)
         #[serde(default)]
         removed_closures: Vec<LoopClosure>,
+        /// Section offsets before the merge (for restoring positions on undo)
+        #[serde(default)]
+        previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
     },
 
     /// Unmerge info for re-merging stations on undo (opposite of MergeInfo)
@@ -807,6 +810,7 @@ mod tests {
                 station_a: StationRef::new(1, 0),
                 station_b: StationRef::new(2, 3),
                 removed_closures: Vec::new(),
+                previous_offsets: HashMap::new(),
             },
         );
 
@@ -815,6 +819,7 @@ mod tests {
             station_a,
             station_b,
             removed_closures,
+            ..
         } = data
         {
             assert_eq!(station_a.section_id, 1);
@@ -1263,6 +1268,7 @@ mod tests {
                     station_a: StationRef::new(1, 0),
                     station_b: StationRef::new(2, 1),
                     removed_closures: Vec::new(),
+                    previous_offsets: HashMap::new(),
                 },
                 timestamp: None,
             },
