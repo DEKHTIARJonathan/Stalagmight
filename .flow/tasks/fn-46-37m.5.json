@@ -1,0 +1,18 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-29T15:28:40.330498Z",
+  "depends_on": [
+    "fn-46-37m.1",
+    "fn-46-37m.3",
+    "fn-46-37m.4"
+  ],
+  "epic": "fn-46-37m",
+  "id": "fn-46-37m.5",
+  "priority": 5,
+  "spec_path": ".flow/tasks/fn-46-37m.5.md",
+  "status": "todo",
+  "title": "Toolbar UI - Tool Group Buttons",
+  "updated_at": "2026-01-29T15:30:22.371196Z"
+}

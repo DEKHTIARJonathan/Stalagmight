@@ -1,0 +1,16 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-29T16:26:42.341339Z",
+  "depends_on": [
+    "fn-47-ok1.1"
+  ],
+  "epic": "fn-47-ok1",
+  "id": "fn-47-ok1.2",
+  "priority": 2,
+  "spec_path": ".flow/tasks/fn-47-ok1.2.md",
+  "status": "todo",
+  "title": "Add context menu to DataTable rows",
+  "updated_at": "2026-01-29T17:26:13.122688Z"
+}

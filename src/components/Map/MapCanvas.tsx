@@ -876,6 +876,8 @@ export default function MapCanvas() {
       measure: 'crosshair',
       move_section: 'move',
       move_station: 'move',
+      move_segment: 'move',
+      move_shot: 'move',
     };
 
     // If hovering over a feature, SurveyLayer sets cursor to 'pointer'
@@ -896,7 +898,7 @@ export default function MapCanvas() {
   useEffect(() => {
     if (!map.current) return;
 
-    const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station'];
+    const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station', 'move_segment', 'move_shot'];
 
     if (noPanTools.includes(activeTool)) {
       map.current.dragPan.disable();
@@ -1037,6 +1039,8 @@ export default function MapCanvas() {
             measure: 'crosshair',
             move_section: 'move',
             move_station: 'move',
+            move_segment: 'move',
+            move_shot: 'move',
           };
           map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
         }
@@ -1640,7 +1644,7 @@ export default function MapCanvas() {
       map.current.dragPan.disable();
     } else {
       // Re-enable drag pan when placement mode ends (unless current tool should disable it)
-      const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station'];
+      const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_section', 'move_station', 'move_segment', 'move_shot'];
       if (!noPanTools.includes(activeTool)) {
         map.current.dragPan.enable();
       }
@@ -1655,6 +1659,8 @@ export default function MapCanvas() {
         measure: 'crosshair',
         move_section: 'move',
         move_station: 'move',
+        move_segment: 'move',
+        move_shot: 'move',
       };
       map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
     }
