@@ -873,13 +873,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   // Batch execution - groups multiple commands into a single undo/redo unit
   executeBatch: async (commands: BatchCommand[]) => {
-    console.log('[projectStore] executeBatch called with', commands.length, 'commands');
     const result = await invoke<CommandResult>('execute_batch', { commands });
-    console.log('[projectStore] execute_batch result:', result);
     if (result.success) {
-      console.log('[projectStore] Refreshing after batch execute...');
       await get().refreshProjectState();
-      console.log('[projectStore] Refresh done after batch execute');
       set({ isDirty: true });
     }
     return result;

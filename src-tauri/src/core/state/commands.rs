@@ -684,11 +684,34 @@ impl AppState {
         CommandResult::success()
     }
 
+    /// Check if a command is allowed in a batch (whitelist for IPC safety)
+    fn is_batch_allowed(cmd: &Command) -> bool {
+        matches!(
+            cmd,
+            Command::CreateSection { .. }
+                | Command::MergeStations { .. }
+                | Command::MoveSection { .. }
+                | Command::MoveSegment { .. }
+                | Command::MoveStation { .. }
+                | Command::SetZeroDatum { .. }
+        )
+    }
+
     /// Execute a batch of commands atomically.
     /// When `push_undo` is true (called from `execute()`), pushes a ProjectSnapshotPair
     /// undo entry. When false (called from `execute_without_undo()`), no undo entry is pushed.
     /// Caller must already hold `command_lock`.
     pub(super) fn execute_batch(&self, commands: Vec<Command>, push_undo: bool) -> CommandResult {
+        // Whitelist: reject commands not allowed in batch context
+        for cmd in &commands {
+            if !Self::is_batch_allowed(cmd) {
+                return CommandResult::failure(format!(
+                    "Command '{}' is not allowed in batch context",
+                    cmd.description()
+                ));
+            }
+        }
+
         // Capture pre-batch snapshot for rollback on partial failure and undo
         let before_snapshot = {
             let proj_guard = match self.project.lock() {
@@ -870,6 +893,11 @@ impl AppState {
 
     /// Get all section IDs connected to the given section through merges and closures
     pub fn get_connected_section_ids(&self, section_id: SectionId) -> Result<Vec<SectionId>, String> {
+        // Serialize with command execution to avoid observing intermediate batch state
+        let _cmd_guard = self
+            .command_lock
+            .lock()
+            .map_err(|_| "Failed to acquire command lock".to_string())?;
         let proj_guard = self
             .project
             .lock()
@@ -890,7 +918,14 @@ impl AppState {
     }
 
     /// Get all section IDs belonging to segments that contain a zero datum
+    /// Note: Uses merge-group semantics (not merge+closure connectivity) because
+    /// a zero datum anchors only the rigidly merged group, not loosely connected segments.
     pub fn get_anchored_section_ids(&self) -> Result<Vec<SectionId>, String> {
+        // Serialize with command execution to avoid observing intermediate batch state
+        let _cmd_guard = self
+            .command_lock
+            .lock()
+            .map_err(|_| "Failed to acquire command lock".to_string())?;
         let proj_guard = self
             .project
             .lock()
