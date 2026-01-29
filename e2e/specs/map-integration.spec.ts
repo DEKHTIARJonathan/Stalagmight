@@ -237,7 +237,7 @@ describe('Map Integration', () => {
     const result = await importDmpFile(dmpPath);
     expect(result.success).toBe(true);
 
-    // Switch to move section tool (V key)
+    // Switch to move section tool (Shift+V)
     await selectTool('moveSection');
     await waitForUiIdle(300);
 
