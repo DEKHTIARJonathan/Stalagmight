@@ -5255,3 +5255,491 @@ fn test_batch_disallowed_command() {
         "Error should mention batch whitelist"
     );
 }
+
+// === Delete Shot and Split Section Tests ===
+
+fn shot_data_with_azimuth(length: f64, az_in: f64, az_out: f64) -> ShotData {
+    ShotData {
+        azimuth_in: az_in,
+        azimuth_out: az_out,
+        length,
+        depth_in: 10.0,
+        depth_out: 11.0,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn test_split_section_basic() {
+    // 5-shot section, split at shot index 2 -> A has 2 shots, B has 2 shots
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Split Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Original".to_string()),
+        surveyor: Some("TestSurveyor".to_string()),
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: Some(SurveyDirection::Out),
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+        ],
+    });
+    assert!(create_result.success);
+    let section_id = create_result.section_id.unwrap();
+
+    // Get the shot_id for the middle shot (index 2)
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        let section = proj.get_section(section_id).unwrap();
+        section.shots[2].id
+    };
+
+    let result = state.execute_delete_shot_and_split(
+        section_id,
+        shot_id,
+        "Section A".to_string(),
+        "Section B".to_string(),
+    );
+
+    assert!(result.success, "Split should succeed: {:?}", result.error);
+    let new_section_id = result.section_id.unwrap();
+
+    // Verify sections
+    let proj = state.get_project_state().unwrap();
+    let section_a = proj.get_section(section_id).unwrap();
+    let section_b = proj.get_section(new_section_id).unwrap();
+
+    assert_eq!(section_a.name, Some("Section A".to_string()));
+    assert_eq!(section_a.shots.len(), 2);
+    assert_eq!(section_a.shots[0].length, 5.0);
+    assert_eq!(section_a.shots[1].length, 7.0);
+
+    assert_eq!(section_b.name, Some("Section B".to_string()));
+    assert_eq!(section_b.shots.len(), 2);
+    assert_eq!(section_b.shots[0].length, 4.0);
+    assert_eq!(section_b.shots[1].length, 6.0);
+}
+
+#[test]
+fn test_split_preserves_metadata() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Metadata Test".to_string(),
+        location: None,
+    });
+
+    let date = chrono::NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Original".to_string()),
+        surveyor: Some("Jane".to_string()),
+        date: Some(date),
+        color: "#aabbcc".to_string(),
+        direction: Some(SurveyDirection::Out),
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+        ],
+    });
+    let section_id = create_result.section_id.unwrap();
+
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots[1].id
+    };
+
+    let result = state.execute_delete_shot_and_split(
+        section_id, shot_id, "A".to_string(), "B".to_string(),
+    );
+    assert!(result.success);
+    let new_id = result.section_id.unwrap();
+
+    let proj = state.get_project_state().unwrap();
+    let section_a = proj.get_section(section_id).unwrap();
+    let section_b = proj.get_section(new_id).unwrap();
+
+    // Both sections inherit metadata
+    assert_eq!(section_a.surveyor, Some("Jane".to_string()));
+    assert_eq!(section_a.date, Some(date));
+    assert_eq!(section_a.color, "#aabbcc");
+    assert_eq!(section_a.direction, SurveyDirection::Out);
+
+    assert_eq!(section_b.surveyor, Some("Jane".to_string()));
+    assert_eq!(section_b.date, Some(date));
+    assert_eq!(section_b.color, "#aabbcc");
+    assert_eq!(section_b.direction, SurveyDirection::Out);
+}
+
+#[test]
+fn test_split_recalculates_offset_b() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Offset Test".to_string(),
+        location: None,
+    });
+
+    // Create section with known geometry: 3 shots going east (azimuth 90)
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Original".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            shot_data_with_azimuth(10.0, 90.0, 90.0),  // East
+            shot_data_with_azimuth(5.0, 90.0, 90.0),   // East (deleted)
+            shot_data_with_azimuth(8.0, 90.0, 90.0),   // East
+        ],
+    });
+    let section_id = create_result.section_id.unwrap();
+
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots[1].id
+    };
+
+    let result = state.execute_delete_shot_and_split(
+        section_id, shot_id, "A".to_string(), "B".to_string(),
+    );
+    assert!(result.success);
+    let new_id = result.section_id.unwrap();
+
+    // Section B offset should be at (accumulated shots_before + deleted shot)
+    // shots_before: 10m east, deleted: 5m east = 15m east
+    // With azimuth 90, sin(90) = 1, cos(90) = 0
+    // So bx = 15, by = 0 (approximately)
+    let proj = state.get_project_state().unwrap();
+    let b_offset = proj.section_offsets.get(&new_id);
+    assert!(b_offset.is_some(), "Section B should have an offset");
+    let (bx, by) = b_offset.unwrap();
+    assert!((*bx - 15.0).abs() < 0.001, "bx should be ~15, got {}", bx);
+    assert!(by.abs() < 0.001, "by should be ~0, got {}", by);
+}
+
+#[test]
+fn test_split_remaps_merges() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Merge Remap Test".to_string(),
+        location: None,
+    });
+
+    // Create two sections
+    let create_a = state.execute(Command::CreateSection {
+        name: Some("ToSplit".to_string()),
+        surveyor: None, date: None, color: "#ff0000".to_string(), direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+        ],
+    });
+    let section_a_id = create_a.section_id.unwrap();
+
+    let create_b = state.execute(Command::CreateSection {
+        name: Some("Other".to_string()),
+        surveyor: None, date: None, color: "#00ff00".to_string(), direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let section_b_id = create_b.section_id.unwrap();
+
+    // Merge station 3 of section A (after split, belongs to B index 0) with station 0 of section B
+    let merge_result = state.execute(Command::MergeStations {
+        station_a: StationRef::new(section_a_id, 3),  // This is after split point
+        station_b: StationRef::new(section_b_id, 0),
+    });
+    assert!(merge_result.success, "Merge should succeed: {:?}", merge_result.error);
+
+    // Now split at shot index 1
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_a_id).unwrap().shots[1].id
+    };
+
+    let result = state.execute_delete_shot_and_split(
+        section_a_id, shot_id, "A".to_string(), "B".to_string(),
+    );
+    assert!(result.success);
+    let new_section_id = result.section_id.unwrap();
+
+    // The merge with station_index 3 should now be remapped to new_section_id, station_index 1
+    // (original index 3, split_station = 2, so new index = 3 - 2 = 1)
+    let proj = state.get_project_state().unwrap();
+    let has_remapped_merge = proj.station_merges.iter().any(|m| {
+        (m.station_a.section_id == new_section_id && m.station_a.station_index == 1
+            && m.station_b.section_id == section_b_id)
+        || (m.station_b.section_id == new_section_id && m.station_b.station_index == 1
+            && m.station_a.section_id == section_b_id)
+    });
+    assert!(has_remapped_merge, "Merge should be remapped to new section with adjusted index");
+}
+
+#[test]
+fn test_split_remaps_closures() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Closure Remap Test".to_string(),
+        location: None,
+    });
+
+    // Create two sections and merge them first so we can create a closure
+    let create_a = state.execute(Command::CreateSection {
+        name: Some("ToSplit".to_string()),
+        surveyor: None, date: None, color: "#ff0000".to_string(), direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+        ],
+    });
+    let sec_a_id = create_a.section_id.unwrap();
+
+    let create_b = state.execute(Command::CreateSection {
+        name: Some("Other".to_string()),
+        surveyor: None, date: None, color: "#00ff00".to_string(), direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let sec_b_id = create_b.section_id.unwrap();
+
+    // First merge station 0 of A with station 0 of B (so they are connected)
+    let merge_result = state.execute(Command::MergeStations {
+        station_a: StationRef::new(sec_a_id, 0),
+        station_b: StationRef::new(sec_b_id, 0),
+    });
+    assert!(merge_result.success);
+
+    // Create a loop closure between station 4 of A (will be in B after split) and station 1 of B
+    let closure_result = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(sec_a_id, 4),
+        station_b: StationRef::new(sec_b_id, 1),
+        closure_strategy: crate::models::ClosureStrategy::ProportionalByLength,
+    });
+    assert!(closure_result.success, "Closure should succeed: {:?}", closure_result.error);
+
+    // Split at shot index 2
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(sec_a_id).unwrap().shots[2].id
+    };
+
+    let result = state.execute_delete_shot_and_split(
+        sec_a_id, shot_id, "A".to_string(), "B-split".to_string(),
+    );
+    assert!(result.success);
+    let new_section_id = result.section_id.unwrap();
+
+    // Closure should be remapped: station_a was (sec_a_id, 4) -> (new_section_id, 1)
+    // (split_station = 3, so 4 - 3 = 1)
+    let proj = state.get_project_state().unwrap();
+    let has_remapped_closure = proj.loop_closures.iter().any(|lc| {
+        (lc.station_a.section_id == new_section_id && lc.station_a.station_index == 1)
+        || (lc.station_b.section_id == new_section_id && lc.station_b.station_index == 1)
+    });
+    assert!(has_remapped_closure, "Closure should be remapped to new section with adjusted index");
+}
+
+#[test]
+fn test_split_remaps_station_offsets() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Station Offset Remap".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Original".to_string()),
+        surveyor: None, date: None, color: "#ff0000".to_string(), direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+        ],
+    });
+    let section_id = create_result.section_id.unwrap();
+
+    // Move station 3 (will be in section B after split at index 1)
+    let move_result = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(section_id, 3),
+        offset: Coordinates::new(1.0, 2.0, 3.0),
+    });
+    assert!(move_result.success);
+
+    // Split at shot index 1
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots[1].id
+    };
+
+    let result = state.execute_delete_shot_and_split(
+        section_id, shot_id, "A".to_string(), "B".to_string(),
+    );
+    assert!(result.success);
+    let new_section_id = result.section_id.unwrap();
+
+    // Station offset should be remapped from (section_id, 3) to (new_section_id, 1)
+    // split_station = 2, so 3 - 2 = 1
+    let proj = state.get_project_state().unwrap();
+    let new_ref = StationRef::new(new_section_id, 1);
+    let offset = proj.station_offsets.get(&new_ref);
+    assert!(offset.is_some(), "Station offset should be remapped to new section");
+    let (ox, oy, oz) = offset.unwrap();
+    assert!((ox - 1.0).abs() < 0.001);
+    assert!((oy - 2.0).abs() < 0.001);
+    assert!((oz - 3.0).abs() < 0.001);
+
+    // Old ref should not exist
+    let old_ref = StationRef::new(section_id, 3);
+    assert!(proj.station_offsets.get(&old_ref).is_none(), "Old station offset should be removed");
+}
+
+#[test]
+fn test_split_undo_restores_original() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Undo Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Original".to_string()),
+        surveyor: None, date: None, color: "#ff0000".to_string(), direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+        ],
+    });
+    let section_id = create_result.section_id.unwrap();
+
+    // Record initial state
+    let initial_shot_count = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots.len()
+    };
+    let initial_section_count = state.get_project_state().unwrap().sections.len();
+
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots[1].id
+    };
+
+    let result = state.execute_delete_shot_and_split(
+        section_id, shot_id, "A".to_string(), "B".to_string(),
+    );
+    assert!(result.success);
+
+    // Verify split happened
+    let proj = state.get_project_state().unwrap();
+    assert_eq!(proj.sections.len(), initial_section_count + 1);
+
+    // Undo
+    let undo_result = state.undo();
+    assert!(undo_result.success, "Undo should succeed: {:?}", undo_result.error);
+
+    // Verify restored
+    let proj = state.get_project_state().unwrap();
+    assert_eq!(proj.sections.len(), initial_section_count);
+    let section = proj.get_section(section_id).unwrap();
+    assert_eq!(section.shots.len(), initial_shot_count);
+    assert_eq!(section.name, Some("Original".to_string()));
+}
+
+#[test]
+fn test_split_redo_resplits() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Redo Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Original".to_string()),
+        surveyor: None, date: None, color: "#ff0000".to_string(), direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+        ],
+    });
+    let section_id = create_result.section_id.unwrap();
+
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots[1].id
+    };
+
+    let result = state.execute_delete_shot_and_split(
+        section_id, shot_id, "A".to_string(), "B".to_string(),
+    );
+    assert!(result.success);
+    let new_section_id = result.section_id.unwrap();
+
+    // Undo
+    let undo_result = state.undo();
+    assert!(undo_result.success);
+
+    // Redo
+    let redo_result = state.redo();
+    assert!(redo_result.success, "Redo should succeed: {:?}", redo_result.error);
+
+    // Verify re-split: should have section A and section B again
+    let proj = state.get_project_state().unwrap();
+    let section_a = proj.get_section(section_id).unwrap();
+    let section_b = proj.get_section(new_section_id).unwrap();
+    assert_eq!(section_a.shots.len(), 1);
+    assert_eq!(section_b.shots.len(), 1);
+    assert_eq!(section_a.name, Some("A".to_string()));
+    assert_eq!(section_b.name, Some("B".to_string()));
+}
+
+#[test]
+fn test_split_rejects_edge_shot() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Edge Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Original".to_string()),
+        surveyor: None, date: None, color: "#ff0000".to_string(), direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+        ],
+    });
+    let section_id = create_result.section_id.unwrap();
+
+    // Try to split at first shot
+    let first_shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots[0].id
+    };
+    let result = state.execute_delete_shot_and_split(
+        section_id, first_shot_id, "A".to_string(), "B".to_string(),
+    );
+    assert!(!result.success, "Should reject first shot");
+    assert!(result.error.unwrap().contains("edge shot"));
+
+    // Try to split at last shot
+    let last_shot_id = {
+        let proj = state.get_project_state().unwrap();
+        let section = proj.get_section(section_id).unwrap();
+        section.shots[section.shots.len() - 1].id
+    };
+    let result = state.execute_delete_shot_and_split(
+        section_id, last_shot_id, "A".to_string(), "B".to_string(),
+    );
+    assert!(!result.success, "Should reject last shot");
+    assert!(result.error.unwrap().contains("edge shot"));
+}

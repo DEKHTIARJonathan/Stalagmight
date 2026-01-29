@@ -75,6 +75,28 @@ pub(crate) fn delete_shot_impl(
     })
 }
 
+/// Delete a mid-section shot and split the section into two named sections
+#[tauri::command]
+pub fn delete_shot_and_split(
+    state: State<AppState>,
+    section_id: SectionId,
+    shot_id: ShotId,
+    name_a: String,
+    name_b: String,
+) -> CommandResult {
+    delete_shot_and_split_impl(state.inner(), section_id, shot_id, name_a, name_b)
+}
+
+pub(crate) fn delete_shot_and_split_impl(
+    state: &AppState,
+    section_id: SectionId,
+    shot_id: ShotId,
+    name_a: String,
+    name_b: String,
+) -> CommandResult {
+    state.execute_delete_shot_and_split(section_id, shot_id, name_a, name_b)
+}
+
 /// Set shot virtual status
 #[tauri::command]
 pub fn set_shot_virtual(

@@ -846,6 +846,253 @@ impl AppState {
         }
     }
 
+    /// Execute a delete-shot-and-split-section operation as a single atomic undo/redo unit.
+    /// Deletes a mid-section shot and splits the section into two, with user-provided names.
+    /// Uses `ProjectSnapshotPair` for single-undo. Follows `execute_create_and_merge()` pattern.
+    pub fn execute_delete_shot_and_split(
+        &self,
+        section_id: SectionId,
+        shot_id: ShotId,
+        name_a: String,
+        name_b: String,
+    ) -> CommandResult {
+        // Serialize command execution to prevent concurrent interleaving
+        let _cmd_guard = match self.command_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
+        };
+        tracing::info!(section_id, shot_id, "Executing delete_shot_and_split as single undo unit");
+
+        // Step 1: Take BEFORE snapshot
+        let before_snapshot = {
+            let proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+            };
+            match proj_guard.as_ref() {
+                Some(p) => match serde_json::to_string(p) {
+                    Ok(json) => json,
+                    Err(e) => return CommandResult::failure(format!("Failed to serialize project: {}", e)),
+                },
+                None => return CommandResult::failure("No project open".to_string()),
+            }
+        };
+
+        // Step 2: Get split data and perform the operation
+        let new_section_id = {
+            let mut proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+            };
+
+            let project = match proj_guard.as_mut() {
+                Some(p) => p,
+                None => return CommandResult::failure("No project open".to_string()),
+            };
+
+            let section = match project.get_section(section_id) {
+                Some(s) => s,
+                None => return CommandResult::failure(format!("Section {} not found", section_id)),
+            };
+
+            // Get split data
+            let (pos, shots_before, shots_after) = match section.split_shots_at(shot_id) {
+                Some(data) => data,
+                None => return CommandResult::failure(
+                    "Cannot split at edge shot (first or last). Use simple delete instead.".to_string()
+                ),
+            };
+
+            // Capture deleted shot data for offset calculation
+            let deleted_shot_data = section.shots[pos].to_shot_data();
+
+            // Capture metadata from original section (surveyor, date, color, direction -- NOT comment)
+            let surveyor = section.surveyor.clone();
+            let date = section.date;
+            let color = section.color.clone();
+            let direction = section.direction;
+
+            // Step 3: Modify original section -> section A
+            let section_mut = project.get_section_mut(section_id).unwrap();
+            section_mut.name = Some(name_a);
+            // Replace shots with shots_before
+            section_mut.shots.clear();
+            section_mut.next_shot_id = 0;
+            for shot_data in &shots_before {
+                section_mut.add_shot(shot_data.clone());
+            }
+
+            // Step 4: Calculate offset for section B
+            // Walk shots_before + deleted shot to accumulate (bx, by)
+            let mut bx: f64 = 0.0;
+            let mut by: f64 = 0.0;
+            for shot_data in &shots_before {
+                let avg_az = crate::models::Shot::new(0, shot_data.clone()).average_azimuth();
+                let azimuth_rad = avg_az.to_radians();
+                bx += shot_data.length * azimuth_rad.sin();
+                by += shot_data.length * azimuth_rad.cos();
+            }
+            // Add deleted shot
+            {
+                let deleted_shot = crate::models::Shot::new(0, deleted_shot_data);
+                let azimuth_rad = deleted_shot.average_azimuth().to_radians();
+                bx += deleted_shot.length * azimuth_rad.sin();
+                by += deleted_shot.length * azimuth_rad.cos();
+            }
+
+            // Get existing section offset to add to computed B offset
+            let (section_ox, section_oy) = project.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+
+            // Capture counts before moving data
+            let shots_after_len = shots_after.len();
+
+            // Step 5: Create section B with inherited metadata
+            let section_b_data = SectionData {
+                name: Some(name_b),
+                surveyor,
+                date,
+                color,
+                direction: Some(direction),
+                shots: shots_after,
+            };
+
+            let section_b = project.add_section(section_b_data);
+            let new_id = section_b.id;
+
+            // Set section B offset
+            project.section_offsets.insert(new_id, (section_ox + bx, section_oy + by));
+
+            // Step 6: Remap merge/closure/station_offset references
+            // Stations after split point belong to new section with adjusted indices.
+            // Original station indices: 0..pos are section A, pos+1..N are section B (shifted)
+            // The split position is the deleted shot. Stations in section B had indices
+            // pos+1 through N (N = original shot count). In section B, they become
+            // 0 through (N - pos - 1).
+            let split_station = pos + 1; // first station index that belongs to section B
+
+            // Original station count = shots_before + deleted_shot + shots_after + 1
+            let original_station_count = shots_before.len() + 1 + shots_after_len + 1;
+
+            // Remap station merges
+            for merge in &mut project.station_merges {
+                if merge.station_a.section_id == section_id
+                    && (merge.station_a.station_index as usize) >= split_station
+                    && (merge.station_a.station_index as usize) < original_station_count
+                {
+                    merge.station_a.section_id = new_id;
+                    merge.station_a.station_index -= split_station as u32;
+                }
+                if merge.station_b.section_id == section_id
+                    && (merge.station_b.station_index as usize) >= split_station
+                    && (merge.station_b.station_index as usize) < original_station_count
+                {
+                    merge.station_b.section_id = new_id;
+                    merge.station_b.station_index -= split_station as u32;
+                }
+            }
+
+            // Remap loop closures
+            for closure in &mut project.loop_closures {
+                if closure.station_a.section_id == section_id
+                    && (closure.station_a.station_index as usize) >= split_station
+                    && (closure.station_a.station_index as usize) < original_station_count
+                {
+                    closure.station_a.section_id = new_id;
+                    closure.station_a.station_index -= split_station as u32;
+                }
+                if closure.station_b.section_id == section_id
+                    && (closure.station_b.station_index as usize) >= split_station
+                    && (closure.station_b.station_index as usize) < original_station_count
+                {
+                    closure.station_b.section_id = new_id;
+                    closure.station_b.station_index -= split_station as u32;
+                }
+            }
+
+            // Remap station offsets
+            let offsets_to_remap: Vec<(StationRef, (f64, f64, f64))> = project
+                .station_offsets
+                .iter()
+                .filter(|(sr, _)| {
+                    sr.section_id == section_id
+                        && (sr.station_index as usize) >= split_station
+                        && (sr.station_index as usize) < original_station_count
+                })
+                .map(|(sr, v)| (*sr, *v))
+                .collect();
+
+            for (old_ref, offset_val) in offsets_to_remap {
+                project.station_offsets.remove(&old_ref);
+                let new_ref = StationRef {
+                    section_id: new_id,
+                    station_index: old_ref.station_index - split_station as u32,
+                };
+                project.station_offsets.insert(new_ref, offset_val);
+            }
+
+            // Remap zero datums
+            for zd in &mut project.zero_datums {
+                if zd.station_ref.section_id == section_id
+                    && (zd.station_ref.station_index as usize) >= split_station
+                    && (zd.station_ref.station_index as usize) < original_station_count
+                {
+                    zd.station_ref.section_id = new_id;
+                    zd.station_ref.station_index -= split_station as u32;
+                }
+            }
+
+            project.touch();
+            new_id
+        };
+
+        // Step 7: Take AFTER snapshot
+        let after_snapshot = {
+            let proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(_) => return CommandResult::failure("Failed to lock project for after snapshot".to_string()),
+            };
+            match proj_guard.as_ref() {
+                Some(p) => match serde_json::to_string(p) {
+                    Ok(json) => json,
+                    Err(e) => return CommandResult::failure(format!("Failed to serialize after snapshot: {}", e)),
+                },
+                None => return CommandResult::failure("No project for after snapshot".to_string()),
+            }
+        };
+
+        // Step 8: Push single undo entry with ProjectSnapshotPair
+        let batch_cmd = Command::Batch {
+            commands: vec![
+                Command::DeleteShot {
+                    section_id,
+                    shot_id,
+                },
+            ],
+        };
+
+        if let Ok(mut undo_stack) = self.undo_stack.lock() {
+            undo_stack.push_with_data(batch_cmd, UndoData::ProjectSnapshotPair {
+                before: before_snapshot,
+                after: after_snapshot,
+            });
+        }
+
+        // Auto-save if enabled
+        let should_auto_save = self.config.lock().map(|c| c.general.auto_save).unwrap_or(false);
+        if should_auto_save {
+            let _ = self.save_project(None);
+        }
+
+        tracing::info!(
+            section_id,
+            shot_id,
+            new_section_id,
+            "Delete shot and split section completed"
+        );
+
+        CommandResult::success_with_section_id(new_section_id)
+    }
+
     // === Station query operations ===
 
     /// Check merge connectivity between two stations (read-only)

@@ -209,6 +209,24 @@ impl Section {
         }
     }
 
+    /// Split shots at the given shot ID, excluding the target shot.
+    /// Returns `(position, shots_before, shots_after)` where position is the index of the
+    /// target shot. Returns `None` if the shot is first or last (edge shots don't split),
+    /// or if the shot is not found.
+    pub fn split_shots_at(&self, shot_id: ShotId) -> Option<(usize, Vec<ShotData>, Vec<ShotData>)> {
+        let pos = self.shots.iter().position(|s| s.id == shot_id)?;
+
+        // Edge shots cannot split
+        if pos == 0 || pos == self.shots.len() - 1 {
+            return None;
+        }
+
+        let shots_before: Vec<ShotData> = self.shots[..pos].iter().map(|s| s.to_shot_data()).collect();
+        let shots_after: Vec<ShotData> = self.shots[pos + 1..].iter().map(|s| s.to_shot_data()).collect();
+
+        Some((pos, shots_before, shots_after))
+    }
+
     /// Calculate statistics for this section
     /// Note: min_depth and max_depth are computed from accumulated z-coordinates
     /// (like station positions) not from raw shot depth_in/depth_out values.
@@ -839,5 +857,99 @@ mod tests {
         assert_eq!(deserialized.min_depth, 3.0);
         assert_eq!(deserialized.max_depth, 25.0);
         assert_eq!(deserialized.virtual_shot_count, 1);
+    }
+
+    // === Split Shots Tests ===
+
+    #[test]
+    fn test_split_shots_at_middle() {
+        // 5-shot section, split at index 2 -> A has 2 shots, B has 2 shots
+        let section = Section::new(0, SectionData {
+            shots: vec![
+                test_shot_data(5.0),
+                test_shot_data(7.0),
+                test_shot_data(3.0), // shot to delete (index 2)
+                test_shot_data(4.0),
+                test_shot_data(6.0),
+            ],
+            ..Default::default()
+        });
+
+        let shot_id = section.shots[2].id; // middle shot
+        let result = section.split_shots_at(shot_id);
+        assert!(result.is_some());
+
+        let (pos, before, after) = result.unwrap();
+        assert_eq!(pos, 2);
+        assert_eq!(before.len(), 2);
+        assert_eq!(after.len(), 2);
+        assert_eq!(before[0].length, 5.0);
+        assert_eq!(before[1].length, 7.0);
+        assert_eq!(after[0].length, 4.0);
+        assert_eq!(after[1].length, 6.0);
+    }
+
+    #[test]
+    fn test_split_shots_rejects_first_shot() {
+        let section = Section::new(0, SectionData {
+            shots: vec![
+                test_shot_data(5.0),
+                test_shot_data(7.0),
+                test_shot_data(3.0),
+            ],
+            ..Default::default()
+        });
+
+        let first_shot_id = section.shots[0].id;
+        assert!(section.split_shots_at(first_shot_id).is_none());
+    }
+
+    #[test]
+    fn test_split_shots_rejects_last_shot() {
+        let section = Section::new(0, SectionData {
+            shots: vec![
+                test_shot_data(5.0),
+                test_shot_data(7.0),
+                test_shot_data(3.0),
+            ],
+            ..Default::default()
+        });
+
+        let last_shot_id = section.shots[2].id;
+        assert!(section.split_shots_at(last_shot_id).is_none());
+    }
+
+    #[test]
+    fn test_split_shots_rejects_nonexistent() {
+        let section = Section::new(0, SectionData {
+            shots: vec![test_shot_data(5.0)],
+            ..Default::default()
+        });
+
+        assert!(section.split_shots_at(999).is_none());
+    }
+
+    #[test]
+    fn test_split_shots_at_index_1_of_3() {
+        // 3-shot section, split at index 1 -> A has 1 shot, B has 1 shot
+        let section = Section::new(0, SectionData {
+            shots: vec![
+                test_shot_data(5.0),
+                test_shot_data(7.0), // shot to delete
+                test_shot_data(3.0),
+            ],
+            ..Default::default()
+        });
+
+        let shot_id = section.shots[1].id;
+        let result = section.split_shots_at(shot_id);
+        assert!(result.is_some());
+
+        let (pos, before, after) = result.unwrap();
+        assert_eq!(pos, 1);
+        assert_eq!(before.len(), 1);
+        assert_eq!(after.len(), 1);
+        assert_eq!(before[0].length, 5.0);
+        assert_eq!(after[0].length, 3.0);
     }
 }
