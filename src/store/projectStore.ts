@@ -173,7 +173,7 @@ interface ProjectStore {
   updateSection: (sectionId: SectionId, updates: SectionUpdates) => Promise<CommandResult>;
   deleteSection: (sectionId: SectionId) => Promise<CommandResult>;
 
-  createShot: (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId) => Promise<CommandResult>;
+  createShot: (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => Promise<CommandResult>;
   updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdates) => Promise<CommandResult>;
   deleteShot: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
   setShotVirtual: (sectionId: SectionId, shotId: ShotId, isVirtual: boolean) => Promise<CommandResult>;
@@ -642,11 +642,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   // Shot operations
-  createShot: async (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId) => {
+  createShot: async (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => {
     const result = await invoke<CommandResult>('create_shot', {
       sectionId,
       shot,
-      afterShotId,
+      afterShotId: afterShotId ?? null,
+      beforeShotId: beforeShotId ?? null,
     });
     if (result.success) {
       await get().refreshProjectState();

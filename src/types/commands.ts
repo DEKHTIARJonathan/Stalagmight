@@ -10,6 +10,8 @@ export interface CommandResult {
   section_id?: number;
   /** IDs of created sections (for Batch commands containing CreateSection) */
   section_ids?: number[];
+  /** ID of the created shot (for CreateShot command) */
+  shot_id?: number;
 }
 
 export interface ValidationWarning {

@@ -10,8 +10,9 @@ pub fn create_shot(
     section_id: SectionId,
     shot: ShotData,
     after_shot_id: Option<ShotId>,
+    before_shot_id: Option<ShotId>,
 ) -> CommandResult {
-    create_shot_impl(state.inner(), section_id, shot, after_shot_id)
+    create_shot_impl(state.inner(), section_id, shot, after_shot_id, before_shot_id)
 }
 
 pub(crate) fn create_shot_impl(
@@ -19,11 +20,13 @@ pub(crate) fn create_shot_impl(
     section_id: SectionId,
     shot: ShotData,
     after_shot_id: Option<ShotId>,
+    before_shot_id: Option<ShotId>,
 ) -> CommandResult {
     state.execute(Command::CreateShot {
         section_id,
         shot,
         after_shot_id,
+        before_shot_id,
     })
 }
 
