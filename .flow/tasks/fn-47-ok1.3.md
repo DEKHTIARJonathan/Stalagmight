@@ -81,3 +81,10 @@ Add `deleteShotAndSplit(sectionId, shotId, nameA, nameB)` — invokes the Tauri 
 - [ ] Edge shots rejected
 - [ ] Uses `project.add_section()` (not nonexistent `create_section_internal`)
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
+
+## Done summary
+Implemented delete-shot-and-split-section compound backend command with ProjectSnapshotPair undo, section B offset calculation, station reference remapping, and 9 integration tests. Fixed review feedback: TS interface, shot ID preservation, distinct error messages, descriptive undo history.
+## Evidence
+- Commits: 8d9bea3e5210b9273cbd63747f19dbd132845b3a
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, pnpm tsc --noEmit
+- PRs:
