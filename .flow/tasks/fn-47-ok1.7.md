@@ -9,6 +9,11 @@ When a section is deleted via `project.remove_section(section_id)` (project.rs:1
 - `loop_closures` — LoopClosure entries referencing the deleted section
 - `section_offsets` — HashMap entry for the deleted section ID
 - `station_offsets` — HashMap entries where StationRef.section_id matches
+- `zero_datums` — ZeroDatum entries where station_ref.section_id matches
+<!-- Updated by plan-sync: fn-47-ok1.4 also cleans up zero_datums inline -->
+
+**Note from plan-sync:** Task fn-47-ok1.4 (delete-last-shot-and-section) already implements section reference cleanup **inline** in `execute_delete_last_shot_and_section()` (commands.rs:1178-1204). That inline code cleans up: merges, closures, section_offsets, station_offsets, and zero_datums. The `cleanup_section_references()` method created here serves the standard `delete_section()` flow. Once this method exists, consider refactoring Task 4's inline code to use it (optional, not required).
+<!-- Updated by plan-sync: fn-47-ok1.4 used inline cleanup not cleanup_section_references() -->
 
 ## Files to Modify
 
@@ -30,13 +35,16 @@ When a section is deleted via `project.remove_section(section_id)` (project.rs:1
 
 #### Query method
 Signature: `pub fn get_section_relationships(&self, section_id: SectionId) -> SectionRelationships`
-Returns a struct with: merges (Vec<StationMerge>), closures (Vec<LoopClosure>), has_section_offset (bool), station_offset_count (usize).
+Returns a struct with: merges (Vec<StationMerge>), closures (Vec<LoopClosure>), has_section_offset (bool), station_offset_count (usize), zero_datum_count (usize).
+<!-- Updated by plan-sync: fn-47-ok1.4 cleans up zero_datums, so relationships query must report them -->
 
 #### Cleanup method
 Signature: `pub fn cleanup_section_references(&mut self, section_id: SectionId)`
-Removes all merges, closures, section_offsets, and station_offsets referencing the given section.
+Removes all merges, closures, section_offsets, station_offsets, and zero_datums referencing the given section.
+<!-- Updated by plan-sync: fn-47-ok1.4 already cleans up zero_datums inline in execute_delete_last_shot_and_section(); this helper must match that scope -->
 
-### Backend: Core `delete_section()` (commands.rs line ~283)
+### Backend: Core `delete_section()` (commands.rs line ~299)
+<!-- Updated by plan-sync: fn-47-ok1.4 added ~100 lines to commands.rs, shifting delete_section() from ~283 to ~299 -->
 
 Add cleanup call with existence guard:
 ```rust
@@ -58,7 +66,7 @@ The existence guard ensures cleanup doesn't mutate state when the section doesn'
 
 ### Backend: Undo architecture (stays within `execute()` flow)
 
-**Step 1: `generate_undo_data` (undo.rs line ~28)**
+**Step 1: `generate_undo_data` (undo.rs line ~28, DeleteSection branch)**
 Change `Command::DeleteSection` to capture full project snapshot:
 ```rust
 Command::DeleteSection { .. } => {
@@ -72,7 +80,8 @@ Command::DeleteSection { .. } => {
 }
 ```
 
-**Step 2: `finalize_undo_data` (undo.rs line ~282)**
+**Step 2: `finalize_undo_data` (undo.rs line ~300)**
+<!-- Updated by plan-sync: fn-47-ok1.4 shifted finalize_undo_data from ~282 to ~300 -->
 Add `Command::DeleteSection` branch to fill in `after` snapshot:
 ```rust
 Command::DeleteSection { .. } => {
@@ -87,7 +96,7 @@ Command::DeleteSection { .. } => {
 }
 ```
 
-### Backend: History preview (history.rs line ~299) — MUST UPDATE
+### Backend: History preview (history.rs line ~156, fn derive_preview_data) -- MUST UPDATE
 
 The `derive_preview_data` function currently matches `(DeleteSection, SectionSnapshot)`. Since we're switching to `ProjectSnapshotPair`, update this:
 
@@ -125,9 +134,11 @@ The `derive_preview_data` function currently matches `(DeleteSection, SectionSna
 
 ### Tests to update
 
-1. **`test_entry_to_history_item_without_timestamp`** (history.rs:447): Change `UndoData::SectionSnapshot` to `UndoData::ProjectSnapshotPair`. Must construct a valid project JSON with a section that has the expected name/shots.
+1. **`test_entry_to_history_item_without_timestamp`** (history.rs:448): Change `UndoData::SectionSnapshot` to `UndoData::ProjectSnapshotPair`. Must construct a valid project JSON with a section that has the expected name/shots.
+<!-- Updated by plan-sync: fn-47-ok1.4 shifted this test from line 447 to 448 -->
 
-2. **`test_create_section_created_snapshot_distinct_from_section_snapshot`** (state/tests.rs:3838): Change assertion to expect `ProjectSnapshotPair` instead of `SectionSnapshot`.
+2. **`test_create_section_created_snapshot_distinct_from_section_snapshot`** (state/tests.rs:3842): Change assertion to expect `ProjectSnapshotPair` instead of `SectionSnapshot`.
+<!-- Updated by plan-sync: fn-47-ok1.4 shifted this test from line 3838 to 3842 -->
 
 3. **`test_delete_section_undo_redo_still_works`** (state/tests.rs:3887): Should still pass since `ProjectSnapshotPair` undo/redo restores full state.
 
@@ -149,6 +160,8 @@ While not this task's primary responsibility, note that Task 1 adds `shot_id: Op
 - Rust unit test: `test_cleanup_removes_merges` — verify merges removed after cleanup
 - Rust unit test: `test_cleanup_removes_closures` — verify closures removed
 - Rust unit test: `test_cleanup_removes_offsets` — verify section_offsets and station_offsets removed
+- Rust unit test: `test_cleanup_removes_zero_datums` — verify zero_datums referencing section removed
+<!-- Updated by plan-sync: fn-47-ok1.4 cleans up zero_datums, so cleanup_section_references must too -->
 - Rust unit test: `test_delete_section_undo_restores_relationships` — undo restores merges + closures
 - Rust unit test: `test_get_section_relationships` — correct filtering
 - Rust unit test: `test_cleanup_guarded_by_existence` — cleanup doesn't mutate when section doesn't exist
