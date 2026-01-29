@@ -1108,9 +1108,9 @@ impl AppState {
     }
 
     /// Execute a delete-last-shot-and-section operation as a single atomic undo/redo unit.
-    /// When a section has exactly 1 shot remaining, this deletes that shot and removes
-    /// the section entirely. Also cleans up all section references (merges, closures,
-    /// section_offsets, station_offsets). Uses `ProjectSnapshotPair` for single-undo.
+    /// When a section has exactly 1 shot remaining, this removes the section (and its
+    /// only shot) along with all section references (merges, closures, section_offsets,
+    /// station_offsets, zero_datums). Uses `ProjectSnapshotPair` for single-undo.
     pub fn execute_delete_last_shot_and_section(
         &self,
         section_id: SectionId,
@@ -1138,8 +1138,10 @@ impl AppState {
             }
         };
 
-        // Step 2: Validate and perform the operation
-        {
+        // Step 2: Validate, mutate, and capture AFTER snapshot in a single lock scope.
+        // This ensures the after snapshot is always captured atomically with the mutation,
+        // and on any failure after mutation we rollback from before_snapshot.
+        let after_snapshot = {
             let mut proj_guard = match self.project.lock() {
                 Ok(g) => g,
                 Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
@@ -1201,24 +1203,46 @@ impl AppState {
             // Remove zero datums referencing this section
             project.zero_datums.retain(|zd| zd.station_ref.section_id != section_id);
 
-            // Step 4: Remove the section (which contains the shot)
-            project.remove_section(section_id);
+            // Step 4: Remove the section (and its only shot)
+            if project.remove_section(section_id).is_none() {
+                // Section vanished between validation and removal (should not happen).
+                // Rollback to before_snapshot to undo reference cleanup.
+                tracing::error!(section_id, "remove_section returned None after validation; rolling back");
+                match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                    Ok(restored) => *proj_guard = Some(restored),
+                    Err(e) => tracing::error!("Failed to rollback from before_snapshot: {e}"),
+                }
+                return CommandResult::failure(format!("Section {} not found during removal", section_id));
+            }
 
             tracing::info!(section_id, shot_id, "Deleted last shot and removed section");
-        }
 
-        // Step 5: Take AFTER snapshot
-        let after_snapshot = {
-            let proj_guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(_) => return CommandResult::failure("Failed to lock project for after snapshot".to_string()),
-            };
+            // Step 5: Take AFTER snapshot while still holding the lock
             match proj_guard.as_ref() {
                 Some(p) => match serde_json::to_string(p) {
                     Ok(json) => json,
-                    Err(e) => return CommandResult::failure(format!("Failed to serialize after snapshot: {}", e)),
+                    Err(e) => {
+                        // Rollback: restore before_snapshot since we already mutated
+                        tracing::error!("Failed to serialize after snapshot: {e}; rolling back");
+                        match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                            Ok(restored) => {
+                                *proj_guard = Some(restored);
+                                tracing::info!("Successfully rolled back after snapshot failure");
+                            }
+                            Err(re) => tracing::error!("Failed to rollback from before_snapshot: {re}"),
+                        }
+                        return CommandResult::failure(format!("Failed to serialize after snapshot: {}", e));
+                    }
                 },
-                None => return CommandResult::failure("No project for after snapshot".to_string()),
+                None => {
+                    // Project became None -- restore
+                    tracing::error!("Project became None after mutation; rolling back");
+                    match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                        Ok(restored) => *proj_guard = Some(restored),
+                        Err(e) => tracing::error!("Failed to rollback from before_snapshot: {e}"),
+                    }
+                    return CommandResult::failure("No project after mutation".to_string());
+                }
             }
         };
 
@@ -1235,11 +1259,27 @@ impl AppState {
             ],
         };
 
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.push_with_data(batch_cmd, UndoData::ProjectSnapshotPair {
-                before: before_snapshot,
-                after: after_snapshot,
-            });
+        match self.undo_stack.lock() {
+            Ok(mut undo_stack) => {
+                undo_stack.push_with_data(batch_cmd, UndoData::ProjectSnapshotPair {
+                    before: before_snapshot.clone(),
+                    after: after_snapshot,
+                });
+            }
+            Err(_) => {
+                // Undo stack lock failure: rollback to preserve atomicity
+                tracing::error!("Failed to lock undo stack; rolling back mutation");
+                match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                    Ok(restored) => {
+                        if let Ok(mut proj) = self.project.lock() {
+                            *proj = Some(restored);
+                            tracing::info!("Successfully rolled back after undo-stack lock failure");
+                        }
+                    }
+                    Err(e) => tracing::error!("Failed to rollback from before_snapshot: {e}"),
+                }
+                return CommandResult::failure("Failed to lock undo stack".to_string());
+            }
         }
 
         // Auto-save if enabled
