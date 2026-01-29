@@ -28,7 +28,7 @@ export default function DrawShotDialog() {
   // Form state — prefill from source geometry if provided
   const [azimuthIn, setAzimuthIn] = useState(sourceGeometry ? String(sourceGeometry.azimuth_in) : '');
   const [azimuthOut, setAzimuthOut] = useState(sourceGeometry ? String(sourceGeometry.azimuth_out) : '');
-  const [length, setLength] = useState('');
+  const [length, setLength] = useState((prependMode || appendMode) ? '0' : '');
   const [depthIn, setDepthIn] = useState(sourceGeometry ? String(sourceGeometry.depth_in) : '');
   const [depthOut, setDepthOut] = useState(sourceGeometry ? String(sourceGeometry.depth_out) : '');
   const [isVirtual, setIsVirtual] = useState(false);

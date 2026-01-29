@@ -98,9 +98,10 @@ export default function ContextMenu() {
         },
       ];
 
-      // "Add Shot Before" - only for station 0 (first station) AND section has shots
-      // (empty sections should not offer prepend mode since azimuth reversal has no reference)
-      if (isFirstStation && totalShots > 0) {
+      // "Add Shot Before" - only for station 0 (first station)
+      // When section is empty, skip prependMode (no azimuth reversal reference)
+      if (isFirstStation) {
+        const hasShotsForPrepend = totalShots > 0;
         items.push({
           label: 'Add Shot Before',
           action: () => {
@@ -109,7 +110,7 @@ export default function ContextMenu() {
                 section_id: sectionId,
                 station_index: 0,
               },
-              prependMode: true,
+              ...(hasShotsForPrepend ? { prependMode: true } : {}),
               allowZeroLength: true,
               sourceGeometry: stationSourceGeometry,
             });
@@ -251,6 +252,17 @@ export default function ContextMenu() {
         danger: true,
       });
       items.push({ label: '', action: () => {}, separator: true });
+      // Position-aware Delete Shot:
+      // - Edge shot (first/last, section has >1 shot): simple confirm
+      // - Mid-section shot: will open split dialog (wired in Task fn-47-ok1.6)
+      // - Last remaining shot (totalShots === 1): "remove entire section" confirm
+      const isMidShot = shotIndex >= 0 && !isFirst && !isLast && totalShots > 2;
+      const isLastRemaining = totalShots === 1;
+      const deleteMessage = isLastRemaining
+        ? 'This is the only shot in the section. Deleting it will remove the entire section. Continue?'
+        : isMidShot
+          ? 'Deleting a mid-section shot will split the section into two. Continue?'
+          : 'Are you sure you want to delete this shot?';
       items.push({
         label: 'Delete Shot',
         action: () => {
@@ -261,6 +273,7 @@ export default function ContextMenu() {
             isFirst,
             isLast,
             totalShots,
+            message: deleteMessage,
           });
         },
         danger: true,
