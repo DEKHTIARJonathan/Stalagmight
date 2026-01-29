@@ -9,6 +9,11 @@ use super::AppState;
 impl AppState {
     /// Execute a command and return the result
     pub fn execute(&self, cmd: Command) -> CommandResult {
+        // Serialize all command execution to prevent concurrent interleaving
+        let _cmd_guard = match self.command_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
+        };
         tracing::info!(command = ?cmd.description(), "Executing command");
 
         // Generate undo data before executing the command
@@ -89,7 +94,7 @@ impl AppState {
                 station_ref,
                 offset,
             } => self.move_station(*station_ref, *offset),
-            Command::Batch { commands } => self.execute_batch(commands.clone()),
+            Command::Batch { commands } => self.execute_batch(commands.clone(), true),
             Command::MergeProjects {
                 source_paths,
                 output_path,
@@ -142,6 +147,11 @@ impl AppState {
         target_station: StationRef,
         _closure_strategy: ClosureStrategy,
     ) -> CommandResult {
+        // Serialize command execution to prevent concurrent interleaving
+        let _cmd_guard = match self.command_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
+        };
         tracing::info!("Executing create_section_and_merge as single undo unit");
 
         // Take a project snapshot BEFORE any modifications
@@ -674,14 +684,11 @@ impl AppState {
         CommandResult::success()
     }
 
-    pub(super) fn execute_batch(&self, commands: Vec<Command>) -> CommandResult {
-        // Hold batch_lock for the entire duration to prevent concurrent commands
-        // from interleaving with sub-commands or being clobbered by rollback
-        let _batch_guard = match self.batch_lock.lock() {
-            Ok(g) => g,
-            Err(_) => return CommandResult::failure("Failed to acquire batch lock".to_string()),
-        };
-
+    /// Execute a batch of commands atomically.
+    /// When `push_undo` is true (called from `execute()`), pushes a ProjectSnapshotPair
+    /// undo entry. When false (called from `execute_without_undo()`), no undo entry is pushed.
+    /// Caller must already hold `command_lock`.
+    pub(super) fn execute_batch(&self, commands: Vec<Command>, push_undo: bool) -> CommandResult {
         // Capture pre-batch snapshot for rollback on partial failure and undo
         let before_snapshot = {
             let proj_guard = match self.project.lock() {
@@ -706,9 +713,17 @@ impl AppState {
             let result = self.execute_without_undo(cmd.clone());
             if !result.success {
                 // Rollback: restore pre-batch state to avoid partial mutations
-                if let Ok(project) = serde_json::from_str::<crate::models::Project>(&before_snapshot) {
-                    if let Ok(mut proj) = self.project.lock() {
-                        *proj = Some(project);
+                match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                    Ok(project) => {
+                        if let Ok(mut proj) = self.project.lock() {
+                            *proj = Some(project);
+                            tracing::info!("Successfully rolled back batch after sub-command failure");
+                        } else {
+                            tracing::error!("Failed to acquire project lock during batch rollback — project state may be inconsistent");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to deserialize before-snapshot during batch rollback: {e} — project state may be inconsistent");
                     }
                 }
                 return result;
@@ -721,45 +736,50 @@ impl AppState {
             section_ids.extend(result.section_ids);
         }
 
-        // Capture after-snapshot for redo support; failure means rollback
-        let after_snapshot = {
-            let proj_guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(_) => {
-                    // Cannot lock — rollback impossible, return failure
-                    return CommandResult::failure("Failed to lock project for after-snapshot".to_string());
+        if push_undo {
+            // Capture after-snapshot for redo support; failure means rollback
+            let after_snapshot = {
+                let proj_guard = match self.project.lock() {
+                    Ok(g) => g,
+                    Err(_) => {
+                        // Cannot lock — rollback impossible, return failure
+                        return CommandResult::failure("Failed to lock project for after-snapshot".to_string());
+                    }
+                };
+                match proj_guard.as_ref() {
+                    Some(p) => match serde_json::to_string(p) {
+                        Ok(json) => json,
+                        Err(e) => {
+                            tracing::error!("Failed to capture after-snapshot for batch: {e}; rolling back");
+                            drop(proj_guard);
+                            // Rollback: restore pre-batch state
+                            if let Ok(project) = serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                                if let Ok(mut proj) = self.project.lock() {
+                                    *proj = Some(project);
+                                    tracing::info!("Successfully rolled back batch after after-snapshot failure");
+                                }
+                            } else {
+                                tracing::error!("Failed to deserialize before-snapshot during rollback — project state may be inconsistent");
+                            }
+                            return CommandResult::failure(format!("Failed to capture after-snapshot for batch undo: {e}"));
+                        }
+                    },
+                    None => {
+                        return CommandResult::failure("No project open after batch execution".to_string());
+                    }
                 }
             };
-            match proj_guard.as_ref() {
-                Some(p) => match serde_json::to_string(p) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        tracing::error!("Failed to capture after-snapshot for batch: {e}; rolling back");
-                        drop(proj_guard);
-                        // Rollback
-                        if let Ok(project) = serde_json::from_str::<crate::models::Project>(&before_snapshot) {
-                            if let Ok(mut proj) = self.project.lock() {
-                                *proj = Some(project);
-                            }
-                        }
-                        return CommandResult::failure(format!("Failed to capture after-snapshot for batch undo: {e}"));
-                    }
-                },
-                None => {
-                    return CommandResult::failure("No project open after batch execution".to_string());
-                }
-            }
-        };
 
-        // Push undo entry directly (bypasses finalize_undo_data which is a no-op for Batch)
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.push_with_data(
-                Command::Batch { commands },
-                UndoData::ProjectSnapshotPair {
-                    before: before_snapshot,
-                    after: after_snapshot,
-                },
-            );
+            // Push undo entry directly (bypasses finalize_undo_data which is a no-op for Batch)
+            if let Ok(mut undo_stack) = self.undo_stack.lock() {
+                undo_stack.push_with_data(
+                    Command::Batch { commands },
+                    UndoData::ProjectSnapshotPair {
+                        before: before_snapshot,
+                        after: after_snapshot,
+                    },
+                );
+            }
         }
 
         if section_ids.is_empty() {

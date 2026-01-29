@@ -121,6 +121,18 @@ pub enum UndoData {
         previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
     },
 
+    /// Per-section previous offsets for segment moves (captured at execution time)
+    /// Unlike InverseCommand, this stores the exact set of affected sections and their
+    /// previous offsets so that undo/redo is correct even if the connectivity graph changes.
+    SegmentMoveInfo {
+        /// Section IDs that were moved (captured at execution time)
+        affected_sections: Vec<SectionId>,
+        /// Previous offsets for each affected section (None = no offset existed)
+        previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
+        /// The offset that was applied (for redo)
+        offset: (f64, f64),
+    },
+
     /// Full project snapshot for batch operations (JSON serialized)
     ProjectSnapshot(String),
 
@@ -151,6 +163,7 @@ impl UndoData {
             UndoData::UnmergeInfo { .. } => "UnmergeInfo",
             UndoData::ClosureInfo { .. } => "ClosureInfo",
             UndoData::ZeroDatumInfo { .. } => "ZeroDatumInfo",
+            UndoData::SegmentMoveInfo { .. } => "SegmentMoveInfo",
             UndoData::ProjectSnapshot(_) => "ProjectSnapshot",
             UndoData::ProjectSnapshotPair { .. } => "ProjectSnapshotPair",
             UndoData::None => "None",
