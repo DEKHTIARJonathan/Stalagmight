@@ -222,3 +222,6 @@ When redirecting a blocked operation to an alternative UI flow (e.g. merge→clo
 
 ## 2026-01-29 manual [pitfall]
 BFS graph traversals (get_connected_section_ids, get_merged_section_ids) can return stale IDs for deleted sections since Project::remove_section does not clean up station_merges/loop_closures — always filter results against existing project.sections before use in IPCs, move operations, and undo/redo data capture
+
+## 2026-01-29 manual [pitfall]
+When capturing before/after snapshots for atomic undo, take the AFTER snapshot in the same lock scope as the mutation -- separate lock acquisition can fail after mutation, leaving the project changed with no undo entry and no rollback
