@@ -9,13 +9,14 @@ import type { SectionRelationships } from '../../types/commands';
 
 export default function ConfirmDialog() {
   const { closeDialog, dialogData, clearSelection } = useUIStore();
-  const { deleteShot, deleteSection } = useProjectStore();
+  const { deleteShot, deleteSection, deleteLastShotAndSection } = useProjectStore();
 
   const type = dialogData.type as 'station' | 'shot' | 'section' | undefined;
   const message = dialogData.message as string | undefined;
   const stationRef = dialogData.stationRef as StationRef | undefined;
   const sectionId = dialogData.sectionId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
+  const totalShots = dialogData.totalShots as number | undefined;
 
   const [relationships, setRelationships] = useState<SectionRelationships | null>(null);
 
@@ -32,7 +33,13 @@ export default function ConfirmDialog() {
 
   const handleConfirm = async () => {
     if (type === 'shot' && sectionId !== undefined && shotId !== undefined) {
-      await deleteShot(sectionId, shotId);
+      if (totalShots === 1) {
+        // Last remaining shot: delete shot + section
+        await deleteLastShotAndSection(sectionId, shotId);
+      } else {
+        // Edge shot (or legacy caller without position data): simple delete
+        await deleteShot(sectionId, shotId);
+      }
       clearSelection();
     } else if (type === 'section' && sectionId !== undefined) {
       await deleteSection(sectionId);

@@ -98,10 +98,9 @@ export default function ContextMenu() {
         },
       ];
 
-      // "Add Shot Before" - only for station 0 (first station)
-      // When section is empty, skip prependMode (no azimuth reversal reference)
-      if (isFirstStation) {
-        const hasShotsForPrepend = totalShots > 0;
+      // "Add Shot Before" - only for station 0 (first station) when section has shots
+      // Empty sections have no reference shot for azimuth reversal; use "Add Shot After" instead
+      if (isFirstStation && totalShots > 0) {
         items.push({
           label: 'Add Shot Before',
           action: () => {
@@ -110,7 +109,7 @@ export default function ContextMenu() {
                 section_id: sectionId,
                 station_index: 0,
               },
-              ...(hasShotsForPrepend ? { prependMode: true } : {}),
+              prependMode: true,
               allowZeroLength: true,
               sourceGeometry: stationSourceGeometry,
             });
@@ -253,28 +252,33 @@ export default function ContextMenu() {
       });
       items.push({ label: '', action: () => {}, separator: true });
       // Position-aware Delete Shot:
-      // - Edge shot (first/last, section has >1 shot): simple confirm
-      // - Mid-section shot: will open split dialog (wired in Task fn-47-ok1.6)
-      // - Last remaining shot (totalShots === 1): "remove entire section" confirm
+      // - Edge shot (first/last, section has >1 shot): simple confirm → deleteShot
+      // - Mid-section shot: split dialog (SplitSectionDialog from Task fn-47-ok1.5)
+      // - Last remaining shot (totalShots === 1): confirm → deleteLastShotAndSection
       const isMidShot = shotIndex >= 0 && !isFirst && !isLast && totalShots > 2;
       const isLastRemaining = totalShots === 1;
-      const deleteMessage = isLastRemaining
-        ? 'This is the only shot in the section. Deleting it will remove the entire section. Continue?'
-        : isMidShot
-          ? 'Deleting a mid-section shot will split the section into two. Continue?'
-          : 'Are you sure you want to delete this shot?';
       items.push({
         label: 'Delete Shot',
         action: () => {
-          openDialog('confirm-delete', {
-            type: 'shot',
-            sectionId: target.sectionId,
-            shotId: target.shotId,
-            isFirst,
-            isLast,
-            totalShots,
-            message: deleteMessage,
-          });
+          if (isMidShot) {
+            // Mid-section shot: open split dialog (Task fn-47-ok1.5/6 provides the component)
+            openDialog('split-section', {
+              sectionId: target.sectionId,
+              shotId: target.shotId,
+            });
+          } else {
+            openDialog('confirm-delete', {
+              type: 'shot',
+              sectionId: target.sectionId,
+              shotId: target.shotId,
+              isFirst,
+              isLast,
+              totalShots,
+              message: isLastRemaining
+                ? 'This is the only shot in the section. Deleting it will remove the entire section. Continue?'
+                : undefined,
+            });
+          }
         },
         danger: true,
       });
