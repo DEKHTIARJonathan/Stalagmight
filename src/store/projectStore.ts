@@ -177,6 +177,7 @@ interface ProjectStore {
   updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdates) => Promise<CommandResult>;
   deleteShot: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
   deleteShotAndSplit: (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
+  deleteLastShotAndSection: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
   setShotVirtual: (sectionId: SectionId, shotId: ShotId, isVirtual: boolean) => Promise<CommandResult>;
 
   mergeStations: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
@@ -677,6 +678,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   deleteShotAndSplit: async (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => {
     const result = await invoke<CommandResult>('delete_shot_and_split', { sectionId, shotId, nameA, nameB });
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
+  },
+
+  deleteLastShotAndSection: async (sectionId: SectionId, shotId: ShotId) => {
+    const result = await invoke<CommandResult>('delete_last_shot_and_section', { sectionId, shotId });
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });

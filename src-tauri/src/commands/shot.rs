@@ -97,6 +97,24 @@ pub(crate) fn delete_shot_and_split_impl(
     state.execute_delete_shot_and_split(section_id, shot_id, name_a, name_b)
 }
 
+/// Delete the last remaining shot in a section and remove the section
+#[tauri::command]
+pub fn delete_last_shot_and_section(
+    state: State<AppState>,
+    section_id: SectionId,
+    shot_id: ShotId,
+) -> CommandResult {
+    delete_last_shot_and_section_impl(state.inner(), section_id, shot_id)
+}
+
+pub(crate) fn delete_last_shot_and_section_impl(
+    state: &AppState,
+    section_id: SectionId,
+    shot_id: ShotId,
+) -> CommandResult {
+    state.execute_delete_last_shot_and_section(section_id, shot_id)
+}
+
 /// Set shot virtual status
 #[tauri::command]
 pub fn set_shot_virtual(

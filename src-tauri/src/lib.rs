@@ -429,6 +429,7 @@ pub fn run() {
             commands::shot::delete_shot,
             commands::shot::set_shot_virtual,
             commands::shot::delete_shot_and_split,
+            commands::shot::delete_last_shot_and_section,
             // Station commands
             commands::station::merge_stations,
             commands::station::unmerge_stations,
