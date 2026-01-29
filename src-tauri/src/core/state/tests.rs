@@ -4534,3 +4534,276 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
         "Zero datum reason should take priority over loop reason"
     );
 }
+
+// === Full pipeline: transitive closures through AppState ===
+
+#[test]
+fn test_transitive_closures_in_computed_stations() {
+    // Test the full pipeline: create sections, merge, create closure, then
+    // verify closures_with (including transitive) appears in computed stations.
+    //
+    // Setup: 3 sections A, B, C
+    //   Merge: A.1 ↔ B.0 (connects A and B)
+    //   Merge: B.1 ↔ C.0 (connects B and C)
+    //   Closure: A.0 ↔ C.1 (loop closure between endpoints)
+    //
+    // Expected closures_with:
+    //   A.0: direct closure to C.1 (A.0 is endpoint, not merged)
+    //   C.1: direct closure to A.0 (C.1 is endpoint, not merged)
+    //   No transitive closures since neither endpoint is in a merge group.
+    //
+    // Then add ANOTHER closure: A.1 ↔ C.1
+    //   A.1 is merged with B.0, so:
+    //   A.1: direct closure to C.1
+    //   B.0: transitive closure to C.1 (via A.1)
+    //   C.1: direct closure to A.1, transitive closure to B.0 (via A.1)
+    //   C.0 is merged with B.1, so:
+    //   C.1: is endpoint, not in merge group for this closure
+    //   Wait - C.1 is NOT merged with anything. C.0 is merged with B.1.
+    //   So C.1 gets direct closure to A.1, and transitive closure to B.0 (via A.1).
+
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "TransitiveTest".to_string(),
+        location: None,
+    });
+
+    // Create section A with 2 shots (stations: A.0, A.1, A.2)
+    let result_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(10.0), test_shot_data(8.0)],
+    });
+    let a = result_a.section_id.unwrap();
+
+    // Create section B with 1 shot (stations: B.0, B.1)
+    let result_b = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let b = result_b.section_id.unwrap();
+
+    // Create section C with 1 shot (stations: C.0, C.1)
+    let result_c = state.execute(Command::CreateSection {
+        name: Some("C".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#0000ff".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+    let c = result_c.section_id.unwrap();
+
+    // Merge A.2 ↔ B.0
+    let merge1 = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(merge1.success, "Merge A.2↔B.0 should succeed");
+
+    // Merge B.1 ↔ C.0
+    let merge2 = state.execute(Command::MergeStations {
+        station_a: StationRef::new(b, 1),
+        station_b: StationRef::new(c, 0),
+    });
+    assert!(merge2.success, "Merge B.1↔C.0 should succeed");
+
+    // Now create a loop closure between A.1 and C.1
+    // (A.1 is in merge group with B.0, so B.0 should get transitive closure)
+    // Wait - A.1 is NOT merged. A.2 is merged with B.0. Let me fix: use A.2 as endpoint.
+    // Actually, let me just inject the closure directly since the CreateLoopClosure command
+    // requires specific connectivity conditions.
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        let closure_id = project.next_closure_id;
+        project.loop_closures.push(crate::models::LoopClosure {
+            id: closure_id,
+            station_a: StationRef::new(a, 2), // A.2 (merged with B.0)
+            station_b: StationRef::new(c, 1), // C.1 (not merged with anything)
+            path_length: 20.0,
+            misclosure_distance: 0.5,
+            error_percentage: 2.5,
+            horizontal_misclosure: 0.4,
+            vertical_misclosure: 0.3,
+        });
+        project.next_closure_id += 1;
+    }
+
+    // Get computed stations through the full pipeline
+    let project = state.get_project_state().unwrap();
+    let stations = project.compute_station_coordinates();
+
+    // A.2: direct closure to C.1 (A.2 is the endpoint)
+    let a2 = stations.iter().find(|s| s.station_ref == StationRef::new(a, 2)).unwrap();
+    let a2_direct = a2.closures_with.iter().find(|cr|
+        cr.station_ref == StationRef::new(c, 1) && !cr.is_transitive
+    );
+    assert!(a2_direct.is_some(), "A.2 should have direct closure to C.1, got: {:?}", a2.closures_with);
+
+    // B.0: transitive closure to C.1 via A.2 (B.0 is merged with A.2)
+    let b0 = stations.iter().find(|s| s.station_ref == StationRef::new(b, 0)).unwrap();
+    let b0_transitive = b0.closures_with.iter().find(|cr|
+        cr.station_ref == StationRef::new(c, 1) && cr.is_transitive
+    );
+    assert!(
+        b0_transitive.is_some(),
+        "B.0 should have transitive closure to C.1 (via A.2), got: {:?}", b0.closures_with
+    );
+    assert_eq!(b0_transitive.unwrap().via_station, Some(StationRef::new(a, 2)));
+
+    // C.1: direct closure to A.2
+    let c1 = stations.iter().find(|s| s.station_ref == StationRef::new(c, 1)).unwrap();
+    let c1_direct = c1.closures_with.iter().find(|cr|
+        cr.station_ref == StationRef::new(a, 2) && !cr.is_transitive
+    );
+    assert!(c1_direct.is_some(), "C.1 should have direct closure to A.2, got: {:?}", c1.closures_with);
+
+    // C.1: transitive closure to B.0 (via A.2, since B.0 is in A.2's merge group)
+    let c1_transitive = c1.closures_with.iter().find(|cr|
+        cr.station_ref == StationRef::new(b, 0) && cr.is_transitive
+    );
+    assert!(
+        c1_transitive.is_some(),
+        "C.1 should have transitive closure to B.0 (via A.2), got: {:?}", c1.closures_with
+    );
+    assert_eq!(c1_transitive.unwrap().via_station, Some(StationRef::new(a, 2)));
+
+    // A.0 and A.1: should NOT have any closures (not endpoints, not merged with endpoints)
+    let a0 = stations.iter().find(|s| s.station_ref == StationRef::new(a, 0)).unwrap();
+    assert!(a0.closures_with.is_empty(), "A.0 should have no closures, got: {:?}", a0.closures_with);
+    let a1 = stations.iter().find(|s| s.station_ref == StationRef::new(a, 1)).unwrap();
+    assert!(a1.closures_with.is_empty(), "A.1 should have no closures, got: {:?}", a1.closures_with);
+
+    // B.1: NOT in A.2's merge group, IS merged with C.0 but C.0 is not a closure endpoint
+    let b1 = stations.iter().find(|s| s.station_ref == StationRef::new(b, 1)).unwrap();
+    assert!(b1.closures_with.is_empty(), "B.1 should have no closures, got: {:?}", b1.closures_with);
+
+    // C.0: merged with B.1, but B.1 is not a closure endpoint. C.0 is NOT in C.1's group.
+    let c0 = stations.iter().find(|s| s.station_ref == StationRef::new(c, 0)).unwrap();
+    assert!(c0.closures_with.is_empty(), "C.0 should have no closures, got: {:?}", c0.closures_with);
+}
+
+#[test]
+fn test_transitive_closures_serialization_preserves_data() {
+    // Test that closures_with survives JSON serialization (the Tauri IPC path).
+    // This tests that #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // doesn't cause data loss for non-empty vecs.
+    use crate::models::Station;
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "SerTest".to_string(),
+        location: None,
+    });
+
+    let result_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(10.0)],
+    });
+    let a = result_a.section_id.unwrap();
+
+    let result_b = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let b = result_b.section_id.unwrap();
+
+    // Merge A.1 ↔ B.0
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+    });
+
+    // Inject a closure between A.1 and... we need a third section
+    let result_c = state.execute(Command::CreateSection {
+        name: Some("C".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#0000ff".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+    let c = result_c.section_id.unwrap();
+
+    // Merge B.1 ↔ C.0 to connect everything
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(b, 1),
+        station_b: StationRef::new(c, 0),
+    });
+
+    // Inject closure A.1 ↔ C.1
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        project.loop_closures.push(crate::models::LoopClosure {
+            id: project.next_closure_id,
+            station_a: StationRef::new(a, 1),
+            station_b: StationRef::new(c, 1),
+            path_length: 15.0,
+            misclosure_distance: 0.3,
+            error_percentage: 2.0,
+            horizontal_misclosure: 0.2,
+            vertical_misclosure: 0.2,
+        });
+        project.next_closure_id += 1;
+    }
+
+    // Get stations through the normal pipeline
+    let project = state.get_project_state().unwrap();
+    let stations = project.compute_station_coordinates();
+
+    // Verify B.0 has transitive closure (it's merged with A.1)
+    let b0 = stations.iter().find(|s| s.station_ref == StationRef::new(b, 0)).unwrap();
+    assert!(!b0.closures_with.is_empty(), "B.0 should have transitive closures");
+
+    // Now serialize to JSON and deserialize back (simulating Tauri IPC)
+    let json = serde_json::to_string(&stations).unwrap();
+    let deserialized: Vec<Station> = serde_json::from_str(&json).unwrap();
+
+    // Find B.0 in deserialized
+    let b0_de = deserialized.iter().find(|s| s.station_ref == StationRef::new(b, 0)).unwrap();
+    assert_eq!(
+        b0_de.closures_with.len(),
+        b0.closures_with.len(),
+        "closures_with should survive serialization round-trip"
+    );
+    assert!(
+        b0_de.closures_with.iter().any(|cr| cr.is_transitive),
+        "Transitive closure should survive serialization"
+    );
+
+    // Verify A.1 has direct closure
+    let a1_de = deserialized.iter().find(|s| s.station_ref == StationRef::new(a, 1)).unwrap();
+    assert!(
+        a1_de.closures_with.iter().any(|cr| !cr.is_transitive),
+        "Direct closure on A.1 should survive serialization"
+    );
+
+    // Verify C.1 has closures (direct + transitive)
+    let c1_de = deserialized.iter().find(|s| s.station_ref == StationRef::new(c, 1)).unwrap();
+    assert!(
+        c1_de.closures_with.iter().any(|cr| !cr.is_transitive),
+        "C.1 direct closure should survive serialization"
+    );
+    assert!(
+        c1_de.closures_with.iter().any(|cr| cr.is_transitive),
+        "C.1 transitive closure should survive serialization"
+    );
+}

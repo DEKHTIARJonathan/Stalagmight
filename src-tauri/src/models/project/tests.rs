@@ -1376,3 +1376,645 @@ fn transitive_closure_computation_correct() {
         Some(StationRef::new(a, 1))
     );
 }
+
+#[test]
+fn transitive_closure_both_endpoints_merged() {
+    // Test: both closure endpoints are in different merge groups
+    // Setup: A.1↔B.0 merge, B.1↔C.0 merge, closure between A.1 and C.0
+    // Expected: B.0 gets transitive to C.0 (via A.1)
+    //           B.1 gets transitive to A.1 (via C.0)
+    //           A.1 gets transitive to B.1 (via C.0) - B.1 is in C.0's group
+    //           C.0 gets transitive to B.0 (via A.1) - B.0 is in A.1's group
+    let mut project = Project::new("TransitiveBothMerged".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+
+    // Merge A.1 ↔ B.0
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+
+    // Merge B.1 ↔ C.0
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(b, 1),
+        station_b: StationRef::new(c, 0),
+        merged_at: Utc::now(),
+    });
+
+    // Closure A.1 ↔ C.0 (both endpoints are in merge groups)
+    project.loop_closures.push(LoopClosure {
+        id: project.next_closure_id,
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(c, 0),
+        path_length: 8.0,
+        misclosure_distance: 0.2,
+        error_percentage: 2.5,
+        horizontal_misclosure: 0.2,
+        vertical_misclosure: 0.0,
+    });
+    let closure_id = project.next_closure_id;
+    project.next_closure_id += 1;
+
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
+
+    let stations = project.compute_station_coordinates();
+
+    // A.1: direct closure to C.0
+    let a1 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(a, 1))
+        .unwrap();
+    assert!(
+        a1.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(c, 0)
+                && !cr.is_transitive
+                && cr.closure_id == closure_id),
+        "A.1 should have direct closure to C.0, got: {:?}",
+        a1.closures_with
+    );
+    // A.1: transitive closure to B.1 (via C.0, since B.1 is in C.0's group)
+    assert!(
+        a1.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(b, 1)
+                && cr.is_transitive
+                && cr.via_station == Some(StationRef::new(c, 0))),
+        "A.1 should have transitive closure to B.1 (via C.0), got: {:?}",
+        a1.closures_with
+    );
+
+    // B.0: transitive closure to C.0 (via A.1, since B.0 is in A.1's group)
+    let b0 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(b, 0))
+        .unwrap();
+    assert!(
+        b0.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(c, 0)
+                && cr.is_transitive
+                && cr.via_station == Some(StationRef::new(a, 1))),
+        "B.0 should have transitive closure to C.0 (via A.1), got: {:?}",
+        b0.closures_with
+    );
+    // B.0: transitive closure to B.1 (via C.0)
+    assert!(
+        b0.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(b, 1)
+                && cr.is_transitive
+                && cr.via_station == Some(StationRef::new(c, 0))),
+        "B.0 should have transitive closure to B.1 (via C.0), got: {:?}",
+        b0.closures_with
+    );
+
+    // C.0: direct closure to A.1
+    let c0 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(c, 0))
+        .unwrap();
+    assert!(
+        c0.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(a, 1)
+                && !cr.is_transitive
+                && cr.closure_id == closure_id),
+        "C.0 should have direct closure to A.1, got: {:?}",
+        c0.closures_with
+    );
+    // C.0: transitive closure to B.0 (via A.1)
+    assert!(
+        c0.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(b, 0)
+                && cr.is_transitive
+                && cr.via_station == Some(StationRef::new(a, 1))),
+        "C.0 should have transitive closure to B.0 (via A.1), got: {:?}",
+        c0.closures_with
+    );
+
+    // B.1: transitive closure to A.1 (via C.0, since B.1 is in C.0's group)
+    let b1 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(b, 1))
+        .unwrap();
+    assert!(
+        b1.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(a, 1)
+                && cr.is_transitive
+                && cr.via_station == Some(StationRef::new(c, 0))),
+        "B.1 should have transitive closure to A.1 (via C.0), got: {:?}",
+        b1.closures_with
+    );
+    // B.1: transitive closure to B.0 (via A.1)
+    assert!(
+        b1.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(b, 0)
+                && cr.is_transitive
+                && cr.via_station == Some(StationRef::new(a, 1))),
+        "B.1 should have transitive closure to B.0 (via A.1), got: {:?}",
+        b1.closures_with
+    );
+
+    // A.0 and C.1 should have NO closures (they're not closure endpoints or merged with one)
+    let a0 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(a, 0))
+        .unwrap();
+    assert!(
+        a0.closures_with.is_empty(),
+        "A.0 should have no closures, got: {:?}",
+        a0.closures_with
+    );
+
+    let c1 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(c, 1))
+        .unwrap();
+    assert!(
+        c1.closures_with.is_empty(),
+        "C.1 should have no closures, got: {:?}",
+        c1.closures_with
+    );
+}
+
+#[test]
+fn transitive_closure_through_create_loop_closure_api() {
+    // Test: using the actual create_loop_closure API (not raw push)
+    // Setup: 3 sections, merge chain A.1↔B.0 and B.1↔C.0, closure A.0↔C.1
+    // Expected: A.0 and C.1 get direct closures to each other
+    //           No transitive closures (endpoints not in any merge group)
+    let mut project = Project::new("TransitiveAPI".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
+
+    // Merge A.1 ↔ B.0 (unconnected, so merge works)
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+
+    // Merge B.1 ↔ C.0 (B and C not yet connected)
+    project
+        .merge_stations(StationRef::new(b, 1), StationRef::new(c, 0))
+        .unwrap();
+
+    // Now A, B, C are all connected. Create closure A.0 ↔ C.1
+    let closure = project
+        .create_loop_closure(
+            StationRef::new(a, 0),
+            StationRef::new(c, 1),
+            ClosureStrategy::default(),
+        )
+        .unwrap();
+
+    let stations = project.compute_station_coordinates();
+
+    // A.0: direct closure to C.1 (endpoint, not merged with anything)
+    let a0 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(a, 0))
+        .unwrap();
+    assert!(
+        a0.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(c, 1)
+                && !cr.is_transitive
+                && cr.closure_id == closure.id),
+        "A.0 should have direct closure to C.1, got: {:?}",
+        a0.closures_with
+    );
+    assert_eq!(
+        a0.closures_with.len(),
+        1,
+        "A.0 should have exactly 1 closure ref (no transitive since A.0 not merged)"
+    );
+
+    // C.1: direct closure to A.0
+    let c1 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(c, 1))
+        .unwrap();
+    assert!(
+        c1.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(a, 0)
+                && !cr.is_transitive
+                && cr.closure_id == closure.id),
+        "C.1 should have direct closure to A.0, got: {:?}",
+        c1.closures_with
+    );
+    assert_eq!(
+        c1.closures_with.len(),
+        1,
+        "C.1 should have exactly 1 closure ref"
+    );
+
+    // Other stations (A.1, B.0, B.1, C.0) should NOT have any closure refs
+    // because neither closure endpoint (A.0, C.1) is in a merge group
+    for (section_id, station_index, label) in [
+        (a, 1, "A.1"),
+        (b, 0, "B.0"),
+        (b, 1, "B.1"),
+        (c, 0, "C.0"),
+    ] {
+        let station = stations
+            .iter()
+            .find(|s| {
+                s.station_ref == StationRef::new(section_id, station_index)
+            })
+            .unwrap();
+        assert!(
+            station.closures_with.is_empty(),
+            "{} should have no closures (endpoint not in its merge group), got: {:?}",
+            label,
+            station.closures_with
+        );
+    }
+}
+
+#[test]
+fn closure_chain_transitivity_two_closures_shared_endpoint() {
+    // Test: closure-chain transitivity
+    // Setup: 3 sections A, B, C. Merge chain: A.1↔B.0, B.1↔C.0
+    //   Closure 1: A.0 ↔ B.1 (between A start and B end)
+    //   Closure 2: B.1 ↔ C.1 (between B end and C end)
+    //
+    // B.1 has 2 direct closures: to A.0 and to C.1
+    // A.0 should see transitive closure to C.1 via B.1
+    // C.1 should see transitive closure to A.0 via B.1
+    let mut project = Project::new("ChainTransitive".to_string(), None);
+
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
+
+    // Merge chain
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(b, 1), StationRef::new(c, 0))
+        .unwrap();
+
+    // Closure 1: A.0 ↔ B.1 (they're connected via merges)
+    let closure1 = project
+        .create_loop_closure(
+            StationRef::new(a, 0),
+            StationRef::new(b, 1),
+            ClosureStrategy::default(),
+        )
+        .unwrap();
+
+    // Closure 2: B.1 ↔ C.1 (B.1 is merged with C.0, so B and C are connected)
+    // Wait - B.1 and C.0 are merged. So B.1 and C.1 are in the same section group.
+    // But are_stations_merged(B.1, C.1)? No (direct check only).
+    // Actually C.1 is in section C. B.1 is in section B. They're connected through merge.
+    // create_loop_closure checks connectivity via get_connected_section_ids.
+    let closure2 = project
+        .create_loop_closure(
+            StationRef::new(b, 1),
+            StationRef::new(c, 1),
+            ClosureStrategy::default(),
+        )
+        .unwrap();
+
+    let stations = project.compute_station_coordinates();
+
+    // B.1: should have 2 direct closures (to A.0 and to C.1)
+    let b1 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(b, 1))
+        .unwrap();
+    let b1_to_a0 = b1
+        .closures_with
+        .iter()
+        .find(|cr| cr.station_ref == StationRef::new(a, 0) && !cr.is_transitive);
+    assert!(
+        b1_to_a0.is_some(),
+        "B.1 should have direct closure to A.0, got: {:?}",
+        b1.closures_with
+    );
+    let b1_to_c1 = b1
+        .closures_with
+        .iter()
+        .find(|cr| cr.station_ref == StationRef::new(c, 1) && !cr.is_transitive);
+    assert!(
+        b1_to_c1.is_some(),
+        "B.1 should have direct closure to C.1, got: {:?}",
+        b1.closures_with
+    );
+
+    // A.0: should have direct closure to B.1 AND transitive closure to C.1 (via B.1)
+    let a0 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(a, 0))
+        .unwrap();
+    let a0_direct = a0
+        .closures_with
+        .iter()
+        .find(|cr| cr.station_ref == StationRef::new(b, 1) && !cr.is_transitive);
+    assert!(
+        a0_direct.is_some(),
+        "A.0 should have direct closure to B.1, got: {:?}",
+        a0.closures_with
+    );
+    let a0_transitive = a0
+        .closures_with
+        .iter()
+        .find(|cr| cr.station_ref == StationRef::new(c, 1) && cr.is_transitive);
+    assert!(
+        a0_transitive.is_some(),
+        "A.0 should have transitive closure to C.1 (via B.1), got: {:?}",
+        a0.closures_with
+    );
+    assert_eq!(
+        a0_transitive.unwrap().via_station,
+        Some(StationRef::new(b, 1)),
+        "A.0 transitive to C.1 should be via B.1"
+    );
+    assert_eq!(
+        a0_transitive.unwrap().closure_id,
+        closure2.id,
+        "A.0 transitive to C.1 should reference closure2's id"
+    );
+
+    // C.1: should have direct closure to B.1 AND transitive closure to A.0 (via B.1)
+    let c1 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(c, 1))
+        .unwrap();
+    let c1_direct = c1
+        .closures_with
+        .iter()
+        .find(|cr| cr.station_ref == StationRef::new(b, 1) && !cr.is_transitive);
+    assert!(
+        c1_direct.is_some(),
+        "C.1 should have direct closure to B.1, got: {:?}",
+        c1.closures_with
+    );
+    let c1_transitive = c1
+        .closures_with
+        .iter()
+        .find(|cr| cr.station_ref == StationRef::new(a, 0) && cr.is_transitive);
+    assert!(
+        c1_transitive.is_some(),
+        "C.1 should have transitive closure to A.0 (via B.1), got: {:?}",
+        c1.closures_with
+    );
+    assert_eq!(
+        c1_transitive.unwrap().via_station,
+        Some(StationRef::new(b, 1)),
+        "C.1 transitive to A.0 should be via B.1"
+    );
+    assert_eq!(
+        c1_transitive.unwrap().closure_id,
+        closure1.id,
+        "C.1 transitive to A.0 should reference closure1's id"
+    );
+}
+
+#[test]
+fn closure_chain_transitivity_three_closures_shared_endpoint() {
+    // Test: station with 3 closures creates transitive refs for all pairs
+    // Setup: 4 sections, all connected through merges
+    //   Station X has closures to A, B, and C
+    //   A should see transitive to B (via X) and transitive to C (via X)
+    //   B should see transitive to A (via X) and transitive to C (via X)
+    //   C should see transitive to A (via X) and transitive to B (via X)
+    let mut project = Project::new("ChainTriple".to_string(), None);
+
+    let sec_main = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    let sec_a = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let sec_b = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let sec_c = project
+        .add_section(SectionData {
+            shots: vec![shot(270.0, 270.0, 4.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+
+    project
+        .set_zero_datum(
+            StationRef::new(sec_main, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
+
+    // Connect all sections to main: main.1↔A.0, main.2↔B.0, main.3↔C.0
+    project
+        .merge_stations(StationRef::new(sec_main, 1), StationRef::new(sec_a, 0))
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(sec_main, 2), StationRef::new(sec_b, 0))
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(sec_main, 3), StationRef::new(sec_c, 0))
+        .unwrap();
+
+    // Station main.0 (X) has closures to A.1, B.1, C.1
+    let cl_a = project
+        .create_loop_closure(
+            StationRef::new(sec_main, 0),
+            StationRef::new(sec_a, 1),
+            ClosureStrategy::default(),
+        )
+        .unwrap();
+    let cl_b = project
+        .create_loop_closure(
+            StationRef::new(sec_main, 0),
+            StationRef::new(sec_b, 1),
+            ClosureStrategy::default(),
+        )
+        .unwrap();
+    let cl_c = project
+        .create_loop_closure(
+            StationRef::new(sec_main, 0),
+            StationRef::new(sec_c, 1),
+            ClosureStrategy::default(),
+        )
+        .unwrap();
+
+    let stations = project.compute_station_coordinates();
+
+    // X (main.0) should have 3 direct closures
+    let x = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(sec_main, 0))
+        .unwrap();
+    let x_directs: Vec<_> = x
+        .closures_with
+        .iter()
+        .filter(|cr| !cr.is_transitive)
+        .collect();
+    assert_eq!(
+        x_directs.len(),
+        3,
+        "X should have 3 direct closures, got: {:?}",
+        x.closures_with
+    );
+
+    // A.1 should have: direct to X, transitive to B.1 (via X), transitive to C.1 (via X)
+    let a1 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(sec_a, 1))
+        .unwrap();
+    assert!(
+        a1.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(sec_main, 0) && !cr.is_transitive),
+        "A.1 direct to X"
+    );
+    assert!(
+        a1.closures_with.iter().any(|cr| cr.station_ref
+            == StationRef::new(sec_b, 1)
+            && cr.is_transitive
+            && cr.via_station == Some(StationRef::new(sec_main, 0))
+            && cr.closure_id == cl_b.id),
+        "A.1 transitive to B.1 via X, got: {:?}",
+        a1.closures_with
+    );
+    assert!(
+        a1.closures_with.iter().any(|cr| cr.station_ref
+            == StationRef::new(sec_c, 1)
+            && cr.is_transitive
+            && cr.via_station == Some(StationRef::new(sec_main, 0))
+            && cr.closure_id == cl_c.id),
+        "A.1 transitive to C.1 via X, got: {:?}",
+        a1.closures_with
+    );
+
+    // B.1 should have: direct to X, transitive to A.1 (via X), transitive to C.1 (via X)
+    let b1 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(sec_b, 1))
+        .unwrap();
+    assert!(
+        b1.closures_with.iter().any(|cr| cr.station_ref
+            == StationRef::new(sec_a, 1)
+            && cr.is_transitive
+            && cr.closure_id == cl_a.id),
+        "B.1 transitive to A.1 via X, got: {:?}",
+        b1.closures_with
+    );
+    assert!(
+        b1.closures_with.iter().any(|cr| cr.station_ref
+            == StationRef::new(sec_c, 1)
+            && cr.is_transitive
+            && cr.closure_id == cl_c.id),
+        "B.1 transitive to C.1 via X, got: {:?}",
+        b1.closures_with
+    );
+
+    // C.1 should have: direct to X, transitive to A.1 (via X), transitive to B.1 (via X)
+    let c1 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(sec_c, 1))
+        .unwrap();
+    assert!(
+        c1.closures_with.iter().any(|cr| cr.station_ref
+            == StationRef::new(sec_a, 1)
+            && cr.is_transitive
+            && cr.closure_id == cl_a.id),
+        "C.1 transitive to A.1 via X, got: {:?}",
+        c1.closures_with
+    );
+    assert!(
+        c1.closures_with.iter().any(|cr| cr.station_ref
+            == StationRef::new(sec_b, 1)
+            && cr.is_transitive
+            && cr.closure_id == cl_b.id),
+        "C.1 transitive to B.1 via X, got: {:?}",
+        c1.closures_with
+    );
+}

@@ -685,9 +685,37 @@ impl Project {
 
     /// Check if two stations are merged
     pub fn are_stations_merged(&self, a: StationRef, b: StationRef) -> bool {
-        self.station_merges.iter().any(|m| {
-            (m.station_a == a && m.station_b == b) || (m.station_a == b && m.station_b == a)
-        })
+        if a == b {
+            return true;
+        }
+        // Check transitive merge equivalence using BFS through merge graph.
+        // Two stations are "merged" if there's any chain of merges connecting them
+        // (i.e., they're in the same merge group).
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        visited.insert(a);
+        queue.push_back(a);
+
+        while let Some(current) = queue.pop_front() {
+            for merge in &self.station_merges {
+                let neighbor = if merge.station_a == current {
+                    Some(merge.station_b)
+                } else if merge.station_b == current {
+                    Some(merge.station_a)
+                } else {
+                    None
+                };
+                if let Some(n) = neighbor {
+                    if n == b {
+                        return true;
+                    }
+                    if visited.insert(n) {
+                        queue.push_back(n);
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Check if two stations are in a loop closure
@@ -1172,6 +1200,77 @@ impl Project {
                                 is_transitive: true,
                             });
                         }
+                    }
+                }
+            }
+        }
+
+        // Closure-chain transitivity: when a station has direct closures to multiple
+        // other stations, those other stations should see transitive closures to each
+        // other via the shared station.
+        //
+        // Example: Station X has closures to Y and Z.
+        //   Y should see: transitive closure to Z (via X)
+        //   Z should see: transitive closure to Y (via X)
+        //
+        // The closure_id used is the one connecting the shared station to the far endpoint,
+        // so the metrics displayed correspond to that specific loop closure.
+        {
+            // Collect direct (non-transitive) closure refs for each station
+            let mut direct_closures: std::collections::HashMap<StationRef, Vec<(u64, StationRef)>> =
+                std::collections::HashMap::new();
+            for station in stations.iter() {
+                for cr in &station.closures_with {
+                    if !cr.is_transitive {
+                        direct_closures
+                            .entry(station.station_ref)
+                            .or_default()
+                            .push((cr.closure_id, cr.station_ref));
+                    }
+                }
+            }
+
+            // For each station with 2+ direct closures, create chain-transitive refs
+            // between all pairs of its closure partners
+            let mut chain_transitive_refs: Vec<(StationRef, ClosureRef)> = Vec::new();
+            for (shared_ref, endpoints) in &direct_closures {
+                if endpoints.len() < 2 {
+                    continue;
+                }
+                for i in 0..endpoints.len() {
+                    for j in 0..endpoints.len() {
+                        if i == j {
+                            continue;
+                        }
+                        let (_, target_i) = &endpoints[i];
+                        let (closure_j, target_j) = &endpoints[j];
+
+                        // target_i should see transitive closure to target_j via shared_ref
+                        // using closure_j's id (the closure connecting shared_ref to target_j)
+                        if target_i != target_j {
+                            chain_transitive_refs.push((
+                                *target_i,
+                                ClosureRef {
+                                    closure_id: *closure_j,
+                                    station_ref: *target_j,
+                                    via_station: Some(*shared_ref),
+                                    is_transitive: true,
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // Apply chain-transitive refs, avoiding duplicates
+            for (station_ref, new_ref) in chain_transitive_refs {
+                if let Some(station) = stations.iter_mut().find(|s| s.station_ref == station_ref) {
+                    let already_exists = station.closures_with.iter().any(|cr| {
+                        cr.station_ref == new_ref.station_ref
+                            && cr.via_station == new_ref.via_station
+                    });
+                    if !already_exists {
+                        station.closures_with.push(new_ref);
                     }
                 }
             }
