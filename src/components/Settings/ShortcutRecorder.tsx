@@ -34,6 +34,7 @@ export const BLOCKED_KEYS: ReadonlySet<string> = new Set([
   'F12',
   // Special keys
   'Tab',
+  'Enter',
   'CapsLock',
   'Meta', // OS key (Windows/Command)
   'OS', // Firefox name for Meta
@@ -128,6 +129,15 @@ export function ShortcutRecorder({
     isCapturingRef.current = false;
     setAnnouncement('Recording cancelled.');
   }, []);
+
+  // Cancel recording when value is externally reset (e.g., "Reset to default")
+  const prevValueRef = useRef(value);
+  useEffect(() => {
+    if (isRecording && value !== prevValueRef.current) {
+      cancelRecording();
+    }
+    prevValueRef.current = value;
+  }, [value, isRecording, cancelRecording]);
 
   // Complete recording with current pending shortcut (reads from ref)
   const completeRecording = useCallback(() => {

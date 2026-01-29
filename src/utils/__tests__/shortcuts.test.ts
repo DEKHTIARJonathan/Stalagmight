@@ -80,6 +80,14 @@ describe('RESERVED_SHORTCUTS', () => {
     expect(RESERVED_SHORTCUTS.has('Backspace')).toBe(true);
   });
 
+  it('includes Tab', () => {
+    expect(RESERVED_SHORTCUTS.has('Tab')).toBe(true);
+  });
+
+  it('includes Enter', () => {
+    expect(RESERVED_SHORTCUTS.has('Enter')).toBe(true);
+  });
+
   it('includes Ctrl+A (Select All)', () => {
     expect(RESERVED_SHORTCUTS.has('Ctrl+A')).toBe(true);
   });
@@ -97,9 +105,8 @@ describe('RESERVED_SHORTCUTS', () => {
   });
 
   it('has expected number of reserved shortcuts', () => {
-    // Escape, Delete, Backspace, Ctrl+A, Ctrl+,
-    // Note: Ctrl+I and Ctrl+E were removed (now user-configurable)
-    expect(RESERVED_SHORTCUTS.size).toBe(5);
+    // Escape, Delete, Backspace, Tab, Enter, Ctrl+A, Ctrl+,
+    expect(RESERVED_SHORTCUTS.size).toBe(7);
   });
 });
 
@@ -386,6 +393,17 @@ describe('isReservedShortcut', () => {
     expect(isReservedShortcut('back')).toBe(true);
   });
 
+  it('returns true for Tab', () => {
+    expect(isReservedShortcut('Tab')).toBe(true);
+    expect(isReservedShortcut('tab')).toBe(true);
+  });
+
+  it('returns true for Enter', () => {
+    expect(isReservedShortcut('Enter')).toBe(true);
+    expect(isReservedShortcut('enter')).toBe(true);
+    expect(isReservedShortcut('return')).toBe(true);
+  });
+
   it('returns true for Ctrl+A', () => {
     expect(isReservedShortcut('Ctrl+A')).toBe(true);
     expect(isReservedShortcut('ctrl+a')).toBe(true);
@@ -423,10 +441,17 @@ describe('checkReservedConflict', () => {
     expect(checkReservedConflict('Backspace')).toEqual({ isReserved: true, reason: 'Delete selection' });
   });
 
+  it('returns conflict for Tab and Enter (UI Navigation)', () => {
+    expect(checkReservedConflict('Tab')).toEqual({ isReserved: true, reason: 'UI Navigation' });
+    expect(checkReservedConflict('Enter')).toEqual({ isReserved: true, reason: 'UI Navigation' });
+  });
+
   it('blocks reserved keys even with modifiers', () => {
     expect(checkReservedConflict('Ctrl+Escape')).toEqual({ isReserved: true, reason: 'Cancel / Close dialogs' });
     expect(checkReservedConflict('Ctrl+Delete')).toEqual({ isReserved: true, reason: 'Delete selection' });
     expect(checkReservedConflict('Shift+Backspace')).toEqual({ isReserved: true, reason: 'Delete selection' });
+    expect(checkReservedConflict('Ctrl+Tab')).toEqual({ isReserved: true, reason: 'UI Navigation' });
+    expect(checkReservedConflict('Shift+Enter')).toEqual({ isReserved: true, reason: 'UI Navigation' });
   });
 
   it('returns conflict for Ctrl+A (Select all)', () => {
