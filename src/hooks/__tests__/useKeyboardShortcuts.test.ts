@@ -57,7 +57,6 @@ describe('buildShortcutMap logic', () => {
       'move_station',
       'undo',
       'redo',
-      'save',
       'toggle_depth_gradient',
       'toggle_grid',
       'toggle_satellite',
@@ -70,6 +69,12 @@ describe('buildShortcutMap logic', () => {
       'toggle_sections_panel',
       'toggle_detail_panel',
       'toggle_data_table',
+      'new_file',
+      'open_file',
+      'save',
+      'save_as',
+      'import_dmp',
+      'export',
     ];
 
     for (const action of actions) {
@@ -113,6 +118,9 @@ describe('buildShortcutMap logic', () => {
       toggle_sections_panel: ['1'],
       toggle_detail_panel: ['2'],
       toggle_data_table: ['3'],
+      new_file: ['Ctrl+N'],
+      open_file: ['Ctrl+O'],
+      save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
     };
@@ -152,6 +160,9 @@ describe('buildShortcutMap logic', () => {
       toggle_sections_panel: ['1'],
       toggle_detail_panel: ['2'],
       toggle_data_table: ['3'],
+      new_file: ['Ctrl+N'],
+      open_file: ['Ctrl+O'],
+      save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
     };
@@ -197,6 +208,9 @@ describe('buildShortcutMap logic', () => {
       toggle_sections_panel: ['1'],
       toggle_detail_panel: ['2'],
       toggle_data_table: ['3'],
+      new_file: ['Ctrl+N'],
+      open_file: ['Ctrl+O'],
+      save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
     };
@@ -248,6 +262,9 @@ describe('buildShortcutMap logic', () => {
       toggle_sections_panel: ['1'],
       toggle_detail_panel: ['2'],
       toggle_data_table: ['3'],
+      new_file: ['Ctrl+N'],
+      open_file: ['Ctrl+O'],
+      save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
     };
@@ -288,6 +305,9 @@ describe('buildShortcutMap logic', () => {
       toggle_sections_panel: ['1'],
       toggle_detail_panel: ['2'],
       toggle_data_table: ['3'],
+      new_file: ['Ctrl+N'],
+      open_file: ['Ctrl+O'],
+      save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
     };

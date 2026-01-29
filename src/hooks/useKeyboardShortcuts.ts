@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useRef } from 'react';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
+import { exists } from '@tauri-apps/plugin-fs';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { isNonInteractiveTool } from '../utils/toolUtils';
@@ -25,7 +26,6 @@ type ShortcutAction =
   // Edit
   | 'undo'
   | 'redo'
-  | 'save'
   // View
   | 'toggle_depth_gradient'
   | 'toggle_grid'
@@ -41,6 +41,10 @@ type ShortcutAction =
   | 'toggle_detail_panel'
   | 'toggle_data_table'
   // File
+  | 'new_file'
+  | 'open_file'
+  | 'save'
+  | 'save_as'
   | 'import_dmp'
   | 'export';
 
@@ -104,7 +108,6 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   move_station: 'Move station tool',
   undo: 'Undo',
   redo: 'Redo',
-  save: 'Save',
   toggle_depth_gradient: 'Depth gradient',
   toggle_grid: 'Grid',
   toggle_satellite: 'Satellite',
@@ -117,6 +120,10 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   toggle_sections_panel: 'Sections panel',
   toggle_detail_panel: 'Detail panel',
   toggle_data_table: 'Data table',
+  new_file: 'New',
+  open_file: 'Open',
+  save: 'Save',
+  save_as: 'Save As',
   import_dmp: 'Import DMP',
   export: 'Export',
 };
@@ -152,7 +159,6 @@ function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutActio
     // Edit
     'undo',
     'redo',
-    'save',
     // View
     'toggle_depth_gradient',
     'toggle_grid',
@@ -168,6 +174,10 @@ function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutActio
     'toggle_detail_panel',
     'toggle_data_table',
     // File
+    'new_file',
+    'open_file',
+    'save',
+    'save_as',
     'import_dmp',
     'export',
   ];
@@ -450,14 +460,6 @@ export function useKeyboardShortcuts() {
           maybeShowToast(action);
           break;
 
-        case 'save':
-          event.preventDefault();
-          if (project) {
-            saveProject();
-            maybeShowToast(action);
-          }
-          break;
-
         // View toggle actions
         case 'toggle_depth_gradient':
         case 'toggle_grid':
@@ -520,6 +522,94 @@ export function useKeyboardShortcuts() {
         }
 
         // File actions
+        case 'new_file':
+          event.preventDefault();
+          openDialog('new-project');
+          maybeShowToast(action);
+          break;
+
+        case 'open_file': {
+          event.preventDefault();
+          (async () => {
+            try {
+              const selected = await open({
+                multiple: false,
+                filters: [{ name: 'CaveChef Project', extensions: ['cvproj', 'cvchef'] }],
+              });
+
+              let path: string | null = null;
+              if (typeof selected === 'string') {
+                path = selected;
+              } else if (Array.isArray(selected) && (selected as string[]).length > 0) {
+                path = (selected as string[])[0] ?? null;
+              }
+
+              if (path) {
+                const store = useProjectStore.getState();
+                await store.loadProject(path);
+              }
+            } catch (e) {
+              openDialog('error', {
+                title: 'Open Failed',
+                message: e instanceof Error ? e.message : 'Failed to open project',
+              });
+            }
+          })();
+          break;
+        }
+
+        case 'save':
+          event.preventDefault();
+          if (project) {
+            saveProject();
+            maybeShowToast(action);
+          }
+          break;
+
+        case 'save_as': {
+          event.preventDefault();
+          const currentProjectSA = useProjectStore.getState().project;
+          if (currentProjectSA) {
+            (async () => {
+              try {
+                const selected = await save({
+                  filters: [{ name: 'CaveChef Project', extensions: ['cvproj'] }],
+                });
+
+                if (selected) {
+                  const finalPath = selected.endsWith('.cvproj') ? selected : `${selected}.cvproj`;
+
+                  try {
+                    const fileExists = await exists(finalPath);
+                    if (fileExists) {
+                      openDialog('confirm-overwrite', {
+                        path: finalPath,
+                        fileName: finalPath.split('/').pop() ?? finalPath,
+                      });
+                      return;
+                    }
+                  } catch {
+                    // If exists check fails, proceed with save
+                  }
+
+                  const store = useProjectStore.getState();
+                  const result = await store.saveProject(selected);
+                  if (result && !result.success && result.error) {
+                    openDialog('error', { message: result.error, title: 'Save Failed' });
+                  }
+                }
+              } catch (e) {
+                openDialog('error', {
+                  title: 'Save Failed',
+                  message: e instanceof Error ? e.message : 'Failed to save project',
+                });
+              }
+            })();
+            maybeShowToast(action);
+          }
+          break;
+        }
+
         case 'import_dmp': {
           event.preventDefault();
           // Context-aware DMP import

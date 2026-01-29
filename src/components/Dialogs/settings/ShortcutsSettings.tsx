@@ -27,7 +27,7 @@ const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
   {
     id: 'file',
     label: 'File',
-    actions: ['import_dmp', 'export'],
+    actions: ['new_file', 'open_file', 'save', 'save_as', 'import_dmp', 'export'],
   },
   {
     id: 'tools',
@@ -37,7 +37,7 @@ const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
   {
     id: 'edit',
     label: 'Edit',
-    actions: ['undo', 'redo', 'save'],
+    actions: ['undo', 'redo'],
   },
   {
     id: 'view',
