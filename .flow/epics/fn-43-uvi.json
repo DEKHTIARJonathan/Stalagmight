@@ -7,7 +7,7 @@
   "plan_review_status": "unknown",
   "plan_reviewed_at": null,
   "spec_path": ".flow/specs/fn-43-uvi.md",
-  "status": "open",
+  "status": "done",
   "title": "Bugfix: MoveSection and MoveStation commands cannot be undone",
-  "updated_at": "2026-01-28T15:19:11.518607Z"
+  "updated_at": "2026-01-28T22:57:31.589825Z"
 }
