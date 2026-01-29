@@ -118,6 +118,6 @@ Existing `CreatedShotSnapshot` stores `position` which captures the actual inser
 ## Done summary
 Added insert_shot_before to Section/Project models, extended CreateShot with before_shot_id, added shot_id to CommandResult with success_with_shot_id and success_with_shot_id_and_warnings constructors, updated command execution to return shot_id in all success paths, updated Tauri command signature, frontend store and TypeScript types. All 80 Rust tests pass, tsc --noEmit passes.
 ## Evidence
-- Commits:
-- Tests:
-- PRs:
+- Commits: 73dd60d (feat: add insert_shot_before and shot_id to CommandResult), b7d646f (fix: address impl-review feedback)
+- Tests: cargo test 80 passed; 0 failed. pnpm tsc --noEmit passes.
+- Review: codex impl-review VERDICT=SHIP (session 019c0ba9-899e-7ca1-a0cd-03efb80ddc9f)
