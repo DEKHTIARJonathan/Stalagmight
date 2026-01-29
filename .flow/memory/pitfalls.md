@@ -225,3 +225,6 @@ BFS graph traversals (get_connected_section_ids, get_merged_section_ids) can ret
 
 ## 2026-01-29 manual [pitfall]
 When capturing before/after snapshots for atomic undo, take the AFTER snapshot in the same lock scope as the mutation -- separate lock acquisition can fail after mutation, leaving the project changed with no undo entry and no rollback
+
+## 2026-01-29 manual [pitfall]
+When passing dialog flags (e.g. allowZeroLength, prependMode) via openDialog data, ensure the target dialog component actually reads and applies them — passing data is insufficient if the consumer ignores it
