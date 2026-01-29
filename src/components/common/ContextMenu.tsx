@@ -221,13 +221,10 @@ export default function ContextMenu() {
         items.push({
           label: 'Add Shot After',
           action: () => {
-            // Find the section to get the last station index
-            const section = project?.sections.find((s) => s.id === target.sectionId);
-            const stationIndex = section ? section.shots.length : 0;
             openDialog('draw-shot', {
               fromStation: {
                 section_id: target.sectionId,
-                station_index: stationIndex,
+                station_index: target.totalShots,
               },
               allowZeroLength: true,
             });
