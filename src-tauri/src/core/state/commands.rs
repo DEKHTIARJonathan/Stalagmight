@@ -673,6 +673,18 @@ impl AppState {
     }
 
     pub(super) fn execute_batch(&self, commands: Vec<Command>) -> CommandResult {
+        // Capture pre-batch snapshot for rollback on partial failure
+        let before_snapshot = {
+            let proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+            };
+            match proj_guard.as_ref() {
+                Some(p) => serde_json::to_string(p).ok(),
+                None => None,
+            }
+        };
+
         let mut all_warnings = Vec::new();
         let mut section_ids = Vec::new();
 
@@ -681,6 +693,14 @@ impl AppState {
             // the outer Batch command handles undo as a single unit via ProjectSnapshotPair
             let result = self.execute_without_undo(cmd);
             if !result.success {
+                // Rollback: restore pre-batch state to avoid partial mutations
+                if let Some(ref snapshot) = before_snapshot {
+                    if let Ok(project) = serde_json::from_str::<crate::models::Project>(snapshot) {
+                        if let Ok(mut proj) = self.project.lock() {
+                            *proj = Some(project);
+                        }
+                    }
+                }
                 return result;
             }
             all_warnings.extend(result.warnings);
