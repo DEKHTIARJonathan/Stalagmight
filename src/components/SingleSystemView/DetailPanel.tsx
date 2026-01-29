@@ -1080,8 +1080,8 @@ function ClosuresSection({
                   </div>
                 )}
                 {transitiveRefs.length > 0 && (
-                  <div className="text-sm text-text-tertiary opacity-60" data-testid={`closure-transitive-${closureId}`}>
-                    <span>Transitive closure to </span>
+                  <div className="text-sm opacity-50" data-testid={`closure-transitive-${closureId}`}>
+                    <span className="text-text-secondary">Transitive closure to </span>
                     {transitiveRefs.map((ref, i) => (
                       <span key={i}>
                         {i > 0 && ', '}
