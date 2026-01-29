@@ -1057,8 +1057,10 @@ function ClosuresSection({
             const directRefs = refs.filter((r) => !r.is_transitive);
             const transitiveRefs = refs.filter((r) => r.is_transitive);
 
+            const isTransitiveOnly = directRefs.length === 0 && transitiveRefs.length > 0;
+
             return (
-              <div key={closureId} className="space-y-1">
+              <div key={closureId} className={`space-y-1${isTransitiveOnly ? ' opacity-50' : ''}`}>
                 {directRefs.length > 0 && (
                   <div className="text-sm" data-testid={`closure-direct-${closureId}`}>
                     <span className="text-text-secondary">Closure to </span>
@@ -1080,7 +1082,7 @@ function ClosuresSection({
                   </div>
                 )}
                 {transitiveRefs.length > 0 && (
-                  <div className="text-sm opacity-50" data-testid={`closure-transitive-${closureId}`}>
+                  <div className="text-sm" data-testid={`closure-transitive-${closureId}`}>
                     <span className="text-text-secondary">Transitive closure to </span>
                     {transitiveRefs.map((ref, i) => (
                       <span key={i}>
