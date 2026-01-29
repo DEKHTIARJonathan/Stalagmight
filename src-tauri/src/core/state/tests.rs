@@ -5984,3 +5984,163 @@ fn test_delete_last_shot_cleans_up_station_offsets() {
         .collect();
     assert!(remaining_station_offsets.is_empty(), "Station offsets referencing deleted section should be removed");
 }
+
+#[test]
+fn test_delete_last_shot_cleans_up_closures() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Closure Cleanup Test".to_string(),
+        location: None,
+    });
+
+    // Create two sections
+    let create_a = state.execute(Command::CreateSection {
+        name: Some("ToDelete".to_string()),
+        surveyor: None, date: None, color: "#ff0000".to_string(), direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let section_a_id = create_a.section_id.unwrap();
+
+    let create_b = state.execute(Command::CreateSection {
+        name: Some("Other".to_string()),
+        surveyor: None, date: None, color: "#00ff00".to_string(), direction: None,
+        shots: vec![test_shot_data(4.0), test_shot_data(3.0)],
+    });
+    let section_b_id = create_b.section_id.unwrap();
+
+    // Manually insert a loop closure referencing section A
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        project.loop_closures.push(crate::models::LoopClosure {
+            id: project.next_closure_id,
+            station_a: StationRef::new(section_a_id, 0),
+            station_b: StationRef::new(section_b_id, 1),
+            path_length: 10.0,
+            misclosure_distance: 0.5,
+            error_percentage: 5.0,
+            horizontal_misclosure: 0.4,
+            vertical_misclosure: 0.3,
+        });
+        project.next_closure_id += 1;
+    }
+
+    // Verify closure exists
+    {
+        let proj = state.get_project_state().unwrap();
+        assert_eq!(proj.loop_closures.len(), 1, "Should have 1 closure before delete");
+    }
+
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_a_id).unwrap().shots[0].id
+    };
+
+    let result = state.execute_delete_last_shot_and_section(section_a_id, shot_id);
+    assert!(result.success);
+
+    // Verify closure is cleaned up
+    let proj = state.get_project_state().unwrap();
+    let remaining_closures: Vec<_> = proj.loop_closures.iter()
+        .filter(|lc| lc.station_a.section_id == section_a_id || lc.station_b.section_id == section_a_id)
+        .collect();
+    assert!(remaining_closures.is_empty(), "Closures referencing deleted section should be removed");
+}
+
+#[test]
+fn test_delete_last_shot_undo_restores_references() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Undo Refs Test".to_string(),
+        location: None,
+    });
+
+    // Create two sections
+    let create_a = state.execute(Command::CreateSection {
+        name: Some("ToDelete".to_string()),
+        surveyor: None, date: None, color: "#ff0000".to_string(), direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let section_a_id = create_a.section_id.unwrap();
+
+    let create_b = state.execute(Command::CreateSection {
+        name: Some("Other".to_string()),
+        surveyor: None, date: None, color: "#00ff00".to_string(), direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let section_b_id = create_b.section_id.unwrap();
+
+    // Merge station 1 of A with station 0 of B
+    let merge_result = state.execute(Command::MergeStations {
+        station_a: StationRef::new(section_a_id, 1),
+        station_b: StationRef::new(section_b_id, 0),
+    });
+    assert!(merge_result.success);
+
+    // Manually add a section offset and station offset for section A
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        // Note: merge already sets section_offsets, so add station offset
+        project.station_offsets.insert(StationRef::new(section_a_id, 0), (1.0, 2.0, 3.0));
+        // Add a closure referencing section A
+        project.loop_closures.push(crate::models::LoopClosure {
+            id: project.next_closure_id,
+            station_a: StationRef::new(section_a_id, 0),
+            station_b: StationRef::new(section_b_id, 1),
+            path_length: 10.0,
+            misclosure_distance: 0.5,
+            error_percentage: 5.0,
+            horizontal_misclosure: 0.4,
+            vertical_misclosure: 0.3,
+        });
+        project.next_closure_id += 1;
+    }
+
+    // Capture counts before deletion
+    let (merges_before, closures_before, station_offsets_a_before) = {
+        let proj = state.get_project_state().unwrap();
+        let merges = proj.station_merges.len();
+        let closures = proj.loop_closures.len();
+        let so = proj.station_offsets.keys().filter(|sr| sr.section_id == section_a_id).count();
+        (merges, closures, so)
+    };
+    assert!(merges_before > 0);
+    assert!(closures_before > 0);
+    assert!(station_offsets_a_before > 0);
+
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_a_id).unwrap().shots[0].id
+    };
+
+    // Delete section A
+    let result = state.execute_delete_last_shot_and_section(section_a_id, shot_id);
+    assert!(result.success);
+
+    // Verify everything cleaned up
+    {
+        let proj = state.get_project_state().unwrap();
+        assert!(proj.get_section(section_a_id).is_none());
+        let a_merges: Vec<_> = proj.station_merges.iter()
+            .filter(|m| m.station_a.section_id == section_a_id || m.station_b.section_id == section_a_id)
+            .collect();
+        assert!(a_merges.is_empty());
+        let a_closures: Vec<_> = proj.loop_closures.iter()
+            .filter(|lc| lc.station_a.section_id == section_a_id || lc.station_b.section_id == section_a_id)
+            .collect();
+        assert!(a_closures.is_empty());
+    }
+
+    // Undo
+    let undo_result = state.undo();
+    assert!(undo_result.success, "Undo should succeed: {:?}", undo_result.error);
+
+    // Verify all references restored
+    let proj = state.get_project_state().unwrap();
+    assert!(proj.get_section(section_a_id).is_some(), "Section should be restored");
+    assert_eq!(proj.station_merges.len(), merges_before, "Merges should be restored");
+    assert_eq!(proj.loop_closures.len(), closures_before, "Closures should be restored");
+    let so_after = proj.station_offsets.keys().filter(|sr| sr.section_id == section_a_id).count();
+    assert_eq!(so_after, station_offsets_a_before, "Station offsets should be restored");
+}
