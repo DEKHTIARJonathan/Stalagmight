@@ -196,7 +196,6 @@ export interface ShortcutsConfig {
   // Edit
   undo: string[];
   redo: string[];
-  save: string[];
 
   // View
   toggle_depth_gradient: string[];
@@ -215,6 +214,10 @@ export interface ShortcutsConfig {
   toggle_data_table: string[];
 
   // File
+  new_file: string[];
+  open_file: string[];
+  save: string[];
+  save_as: string[];
   import_dmp: string[];
   export: string[];
 }
@@ -357,7 +360,6 @@ export const defaultConfig: Config = {
     // Edit
     undo: ['Ctrl+Z'],
     redo: ['Ctrl+Y', 'Ctrl+Shift+Z'],
-    save: ['Ctrl+S'],
 
     // View
     toggle_depth_gradient: ['G'],
@@ -376,6 +378,10 @@ export const defaultConfig: Config = {
     toggle_data_table: ['3'],
 
     // File
+    new_file: ['Ctrl+N'],
+    open_file: ['Ctrl+O'],
+    save: ['Ctrl+S'],
+    save_as: ['Ctrl+Shift+S'],
     import_dmp: ['Ctrl+I'],
     export: ['Ctrl+E'],
   },
