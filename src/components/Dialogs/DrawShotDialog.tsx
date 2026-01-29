@@ -6,22 +6,30 @@ import { DialogWrapper } from './DialogWrapper';
 import type { StationRef, ShotData } from '../../types/project';
 
 export default function DrawShotDialog() {
-  const { closeDialog, dialogData, setDrawFromStation } = useUIStore();
+  const { closeDialog, dialogData, setDrawFromStation, setSelection } = useUIStore();
   const { createShot, project, stations } = useProjectStore();
 
   const fromStation = dialogData.fromStation as StationRef | undefined;
   const allowZeroLength = dialogData.allowZeroLength as boolean | undefined;
   const prependMode = dialogData.prependMode as boolean | undefined;
+  const sourceGeometry = dialogData.sourceGeometry as {
+    azimuth_in: number;
+    azimuth_out: number;
+    depth_in: number;
+    depth_out: number;
+    pitch_in: number | null;
+    pitch_out: number | null;
+  } | undefined;
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Form state
-  const [azimuthIn, setAzimuthIn] = useState('');
-  const [azimuthOut, setAzimuthOut] = useState('');
+  // Form state — prefill from source geometry if provided
+  const [azimuthIn, setAzimuthIn] = useState(sourceGeometry ? String(sourceGeometry.azimuth_in) : '');
+  const [azimuthOut, setAzimuthOut] = useState(sourceGeometry ? String(sourceGeometry.azimuth_out) : '');
   const [length, setLength] = useState('');
-  const [depthIn, setDepthIn] = useState('');
-  const [depthOut, setDepthOut] = useState('');
+  const [depthIn, setDepthIn] = useState(sourceGeometry ? String(sourceGeometry.depth_in) : '');
+  const [depthOut, setDepthOut] = useState(sourceGeometry ? String(sourceGeometry.depth_out) : '');
   const [isVirtual, setIsVirtual] = useState(false);
   const [left, setLeft] = useState('');
   const [right, setRight] = useState('');
@@ -46,7 +54,7 @@ export default function DrawShotDialog() {
   }, [fromStation, stations]);
 
   // Track if depth was auto-initialized (for isDirty calculation)
-  const depthAutoInitialized = useRef(false);
+  const depthAutoInitialized = useRef(!!sourceGeometry);
 
   // Initialize depth_in with current station depth on mount
   useEffect(() => {
@@ -100,8 +108,8 @@ export default function DrawShotDialog() {
         length: parseFloat(length),
         depth_in: depthIn ? parseFloat(depthIn) : currentStationDepth,
         depth_out: depthOut ? parseFloat(depthOut) : (depthIn ? parseFloat(depthIn) : currentStationDepth),
-        pitch_in: null,
-        pitch_out: null,
+        pitch_in: sourceGeometry?.pitch_in ?? null,
+        pitch_out: sourceGeometry?.pitch_out ?? null,
         left: left ? parseFloat(left) : null,
         right: right ? parseFloat(right) : null,
         up: up ? parseFloat(up) : null,
@@ -126,6 +134,14 @@ export default function DrawShotDialog() {
       const result = await createShot(fromStation.section_id, shotData, afterShotId, beforeShotId);
 
       if (result.success) {
+        // Select the newly created shot
+        if (result.shot_id != null) {
+          setSelection({
+            type: 'shot',
+            sectionId: fromStation.section_id,
+            shotId: result.shot_id,
+          });
+        }
         setDrawFromStation(null);
         closeDialog();
       } else {

@@ -199,6 +199,19 @@ export default function ContextMenu() {
     if (target.type === 'datatable-shot') {
       const items: ContextMenuItem[] = [];
 
+      // Look up the source shot for geometry copying
+      const sourceSection = project?.sections.find((s) => s.id === target.sectionId);
+      const sourceShot = sourceSection?.shots.find((sh) => sh.id === target.shotId);
+      // Copy geometry only (azimuth, depth, pitch) — not temperature/marker_index
+      const sourceGeometry = sourceShot ? {
+        azimuth_in: sourceShot.azimuth_in,
+        azimuth_out: sourceShot.azimuth_out,
+        depth_in: sourceShot.depth_in,
+        depth_out: sourceShot.depth_out,
+        pitch_in: sourceShot.pitch_in,
+        pitch_out: sourceShot.pitch_out,
+      } : undefined;
+
       // "Add Shot Before" - only for first shot (prepend mode)
       if (target.isFirst) {
         items.push({
@@ -211,6 +224,7 @@ export default function ContextMenu() {
               },
               prependMode: true,
               allowZeroLength: true,
+              sourceGeometry,
             });
           },
         });
@@ -227,6 +241,7 @@ export default function ContextMenu() {
                 station_index: target.totalShots,
               },
               allowZeroLength: true,
+              sourceGeometry,
             });
           },
         });
