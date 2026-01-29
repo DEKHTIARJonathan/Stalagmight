@@ -61,7 +61,27 @@ export default function ContextMenu() {
 
     if (target.type === 'station') {
       const sectionId = target.ref.section_id;
-      return [
+      const stationSection = project?.sections.find((s) => s.id === sectionId);
+      const totalShots = stationSection?.shots.length ?? 0;
+      const isFirstStation = target.ref.station_index === 0;
+      const isLastStation = target.ref.station_index === totalShots;
+
+      // Get geometry from neighbor shot for add-shot defaults
+      const neighborShot = isFirstStation
+        ? stationSection?.shots[0]
+        : isLastStation
+          ? stationSection?.shots[totalShots - 1]
+          : undefined;
+      const stationSourceGeometry = neighborShot ? {
+        azimuth_in: neighborShot.azimuth_in,
+        azimuth_out: neighborShot.azimuth_out,
+        depth_in: neighborShot.depth_in,
+        depth_out: neighborShot.depth_out,
+        pitch_in: neighborShot.pitch_in,
+        pitch_out: neighborShot.pitch_out,
+      } : undefined;
+
+      const items: ContextMenuItem[] = [
         {
           label: 'Edit Station',
           action: () => {
@@ -76,40 +96,93 @@ export default function ContextMenu() {
             closeDialog();
           },
         },
-        { label: '', action: () => {}, separator: true },
-        {
-          label: 'Set Zero Datum',
-          action: () => {
-            openDialog('set-zero-datum', { stationRef: target.ref });
-          },
-        },
-        { label: '', action: () => {}, separator: true },
-        {
-          label: 'Edit Section',
-          action: () => {
-            openDialog('edit-section', { sectionId });
-          },
-        },
-        {
-          label: 'Delete Section',
-          action: () => {
-            openDialog('confirm-delete', { type: 'section', sectionId });
-          },
-          danger: true,
-        },
-        { label: '', action: () => {}, separator: true },
-        {
-          label: 'Delete Station',
-          action: () => {
-            openDialog('confirm-delete', { type: 'station', stationRef: target.ref });
-          },
-          danger: true,
-        },
       ];
+
+      // "Add Shot Before" - only for station 0 (first station)
+      if (isFirstStation) {
+        items.push({
+          label: 'Add Shot Before',
+          action: () => {
+            openDialog('draw-shot', {
+              fromStation: {
+                section_id: sectionId,
+                station_index: 0,
+              },
+              prependMode: true,
+              allowZeroLength: true,
+              sourceGeometry: stationSourceGeometry,
+            });
+          },
+        });
+      }
+
+      // "Add Shot After" - only for last station
+      if (isLastStation) {
+        items.push({
+          label: 'Add Shot After',
+          action: () => {
+            openDialog('draw-shot', {
+              fromStation: {
+                section_id: sectionId,
+                station_index: totalShots,
+              },
+              allowZeroLength: true,
+              sourceGeometry: stationSourceGeometry,
+            });
+          },
+        });
+      }
+
+      items.push({ label: '', action: () => {}, separator: true });
+      items.push({
+        label: 'Set Zero Datum',
+        action: () => {
+          openDialog('set-zero-datum', { stationRef: target.ref });
+        },
+      });
+      items.push({ label: '', action: () => {}, separator: true });
+      items.push({
+        label: 'Edit Section',
+        action: () => {
+          openDialog('edit-section', { sectionId });
+        },
+      });
+      items.push({
+        label: 'Delete Section',
+        action: () => {
+          openDialog('confirm-delete', { type: 'section', sectionId });
+        },
+        danger: true,
+      });
+      items.push({ label: '', action: () => {}, separator: true });
+      items.push({
+        label: 'Delete Station',
+        action: () => {
+          openDialog('confirm-delete', { type: 'station', stationRef: target.ref });
+        },
+        danger: true,
+      });
+
+      return items;
     }
 
     if (target.type === 'shot') {
-      return [
+      const section = project?.sections.find((s) => s.id === target.sectionId);
+      const shotIndex = section?.shots.findIndex((sh) => sh.id === target.shotId) ?? -1;
+      const totalShots = section?.shots.length ?? 0;
+      const isFirst = shotIndex === 0;
+      const isLast = shotIndex === totalShots - 1;
+      const sourceShot = section?.shots[shotIndex];
+      const sourceGeometry = sourceShot ? {
+        azimuth_in: sourceShot.azimuth_in,
+        azimuth_out: sourceShot.azimuth_out,
+        depth_in: sourceShot.depth_in,
+        depth_out: sourceShot.depth_out,
+        pitch_in: sourceShot.pitch_in,
+        pitch_out: sourceShot.pitch_out,
+      } : undefined;
+
+      const items: ContextMenuItem[] = [
         {
           label: 'Edit Shot',
           action: () => {
@@ -123,45 +196,67 @@ export default function ContextMenu() {
             closeDialog();
           },
         },
-        {
-          label: 'Insert Shot After',
-          action: () => {
-            // Find the station after this shot
-            const section = project?.sections.find((s) => s.id === target.sectionId);
-            const shotIndex = section?.shots.findIndex((sh) => sh.id === target.shotId);
-            if (shotIndex !== undefined && shotIndex >= 0) {
-              openDialog('draw-shot', {
-                fromStation: {
-                  section_id: target.sectionId,
-                  station_index: shotIndex + 1,
-                },
-              });
-            }
-          },
-        },
-        { label: '', action: () => {}, separator: true },
-        {
-          label: 'Edit Section',
-          action: () => {
-            openDialog('edit-section', { sectionId: target.sectionId });
-          },
-        },
-        {
-          label: 'Delete Section',
-          action: () => {
-            openDialog('confirm-delete', { type: 'section', sectionId: target.sectionId });
-          },
-          danger: true,
-        },
-        { label: '', action: () => {}, separator: true },
-        {
-          label: 'Delete Shot',
-          action: () => {
-            openDialog('confirm-delete', { type: 'shot', sectionId: target.sectionId, shotId: target.shotId });
-          },
-          danger: true,
-        },
       ];
+
+      // "Add Shot Before" - only for first shot (prepend mode)
+      if (isFirst) {
+        items.push({
+          label: 'Add Shot Before',
+          action: () => {
+            openDialog('draw-shot', {
+              fromStation: {
+                section_id: target.sectionId,
+                station_index: 0,
+              },
+              prependMode: true,
+              allowZeroLength: true,
+              sourceGeometry,
+            });
+          },
+        });
+      }
+
+      // "Add Shot After" - only for last shot
+      if (isLast) {
+        items.push({
+          label: 'Add Shot After',
+          action: () => {
+            openDialog('draw-shot', {
+              fromStation: {
+                section_id: target.sectionId,
+                station_index: totalShots,
+              },
+              allowZeroLength: true,
+              sourceGeometry,
+            });
+          },
+        });
+      }
+
+      items.push({ label: '', action: () => {}, separator: true });
+      items.push({
+        label: 'Edit Section',
+        action: () => {
+          openDialog('edit-section', { sectionId: target.sectionId });
+        },
+      });
+      items.push({
+        label: 'Delete Section',
+        action: () => {
+          openDialog('confirm-delete', { type: 'section', sectionId: target.sectionId });
+        },
+        danger: true,
+      });
+      items.push({ label: '', action: () => {}, separator: true });
+      items.push({
+        label: 'Delete Shot',
+        action: () => {
+          openDialog('confirm-delete', { type: 'shot', sectionId: target.sectionId, shotId: target.shotId });
+        },
+        danger: true,
+      });
+
+      return items;
     }
 
     if (target.type === 'section') {
