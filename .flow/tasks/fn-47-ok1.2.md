@@ -53,3 +53,20 @@ Add branch in `buildMenuItems()` for `target.type === 'datatable-shot'`:
 - [ ] "Delete Shot" (danger) visible on all rows
 - [ ] A shot that is both first AND last (1-shot section) shows both add options + delete
 - [ ] `pnpm tsc --noEmit` passes
+
+## Done summary
+## Summary
+
+Added right-click context menu to DataTable rows with position-dependent items:
+
+1. **Table.tsx**: Added `onRowContextMenu` prop to `EditableTableProps` and wired it to `<tr>` `onContextMenu` handler
+2. **DataTable.tsx**: Added `handleRowContextMenu` callback that prevents default, computes `isFirst`/`isLast`/`totalShots`, and opens context menu dialog with `datatable-shot` target type
+3. **ContextMenu.tsx**: Extended target type union with `datatable-shot` and added `buildMenuItems()` branch:
+   - "Add Shot Before" (first shot only): opens DrawShotDialog with `prependMode: true, allowZeroLength: true`, `station_index: 0`
+   - "Add Shot After" (last shot only): opens DrawShotDialog with `allowZeroLength: true`, `station_index: shots.length`
+   - Separator (only when add items present)
+   - "Delete Shot" (danger, all rows): opens `confirm-delete` with `type: 'shot'`
+## Evidence
+- Commits:
+- Tests:
+- PRs:
