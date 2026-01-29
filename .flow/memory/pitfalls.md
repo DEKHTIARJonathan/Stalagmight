@@ -219,3 +219,6 @@ When a read-only query returns multiple independent fields (e.g. connected + can
 
 ## 2026-01-28 manual [pitfall]
 When redirecting a blocked operation to an alternative UI flow (e.g. merge→closure dialog), verify the alternative backend operation actually accepts the current state; dead-end UI flows frustrate users
+
+## 2026-01-29 manual [pitfall]
+BFS graph traversals (get_connected_section_ids, get_merged_section_ids) can return stale IDs for deleted sections since Project::remove_section does not clean up station_merges/loop_closures — always filter results against existing project.sections before use in IPCs, move operations, and undo/redo data capture
