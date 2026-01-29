@@ -4,11 +4,11 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 ## Summary
 
-**DMP Import Refactoring**: 19/22 complete (86%)
+**DMP Import Refactoring**: 20/22 complete (91%)
 - Core functionality ✅ COMPLETE
-- Minor items remaining: file hash tracking (command exists but unused), validation thresholds (settings exist but not in DMP import), removing old dialog (exists but unused)
+- Minor items remaining: file hash tracking (command exists but unused), validation thresholds (settings exist but not in DMP import)
 
-**v1.0 Completion Tasks**: 13/32 complete (41%)
+**v1.0 Completion Tasks**: 13/40 complete (33%)
 - ✅ COMPLETE: Loop Closure (3/3), Settings/Configuration (4/4)
 - 🟡 PARTIAL: Data Table (2/4 - inline editing ✅, but no add/delete row buttons)
 - 🟡 PARTIAL: Accessibility (2/4 - screen reader/keyboard ✅, no focus management/theme)
@@ -20,7 +20,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 ---
 
-## ✅ COMPLETED FEATURES (Pre-Task 31)
+## ✅ Completed Features
 
 ### Core Functionality
 - [x] DMP Parser (versions 2-5) with IntBuffer, LRUD, pitch, temperature, time
@@ -91,50 +91,50 @@ All components are implemented and working:
 
 ### Phase 1: Shared Components (Parallel)
 
-| Task | Title | Status |
-|------|-------|--------|
-| 01 | Shared ShotTableEditor | ✅ |
-| 02 | Shared SectionMetadataForm | ✅ |
-| 03 | Enhanced SectionPreview | ✅ |
-| 04 | DmpSelectionDialog Shell | ✅ |
-| 15 | File Hash Tracking | 🟡 (Rust command exists but not used in DMP import) |
+| Title | Status |
+|-------|--------|
+| Shared ShotTableEditor | ✅ |
+| Shared SectionMetadataForm | ✅ |
+| Enhanced SectionPreview | ✅ |
+| DmpSelectionDialog Shell | ✅ |
+| File Hash Tracking | 🟡 (Rust command exists but not used in DMP import) |
 
 ### Phase 2: Dialog Core (Sequential)
 
-| Task | Title | Status |
-|------|-------|--------|
-| 05 | DmpSectionConfigDialog Shell | ✅ |
-| 06 | Section Parameters Panel | ✅ |
-| 07 | Placement Options Panel | ✅ |
-| 08 | Shot Table Integration | ✅ |
-| 11 | Import State Management | ✅ |
-| 16 | Session Surveyor Memory | ✅ |
-| 17 | Validation Thresholds in DMP Import | ❌ (ValidationSettings exists but not integrated into DmpSectionConfigDialog) |
+| Title | Status |
+|-------|--------|
+| DmpSectionConfigDialog Shell | ✅ |
+| Section Parameters Panel | ✅ |
+| Placement Options Panel | ✅ |
+| Shot Table Integration | ✅ |
+| Import State Management | ✅ |
+| Session Surveyor Memory | ✅ |
+| Validation Thresholds in DMP Import | ❌ (ValidationSettings exists but not integrated into DmpSectionConfigDialog) |
 
 ### Phase 3: Placement Features
 
-| Task | Title | Status |
-|------|-------|--------|
-| 09 | Merge Preview Visualization | ✅ |
-| 10 | Manual Placement Mode | ✅ |
-| 12 | Section Creation Logic | ✅ |
+| Title | Status |
+|-------|--------|
+| Merge Preview Visualization | ✅ |
+| Manual Placement Mode | ✅ |
+| Section Creation Logic | ✅ |
 
 ### Phase 4: Navigation & Integration
 
-| Task | Title | Status |
-|------|-------|--------|
-| 13 | Navigation & Import Buttons | ✅ |
-| 14 | Context-Aware Triggering | ✅ |
-| 18 | Error Blocking Logic | ✅ |
+| Title | Status |
+|-------|--------|
+| Navigation & Import Buttons | ✅ |
+| Context-Aware Triggering | ✅ |
+| Error Blocking Logic | ✅ |
 
 ### Phase 5: Cleanup & Testing
 
-| Task | Title | Status |
-|------|-------|--------|
-| 19 | Update Edit Section Dialog | ✅ |
-| 20 | Remove Old Dialog | ❌ (Old DmpImportDialog.tsx exists (1316 lines) but not imported anywhere) |
-| 21 | App Close Confirmation | ✅ |
-| 22 | Update Existing Tests | ✅ |
+| Title | Status |
+|-------|--------|
+| Update Edit Section Dialog | ✅ |
+| Remove Old Dialog | ✅ |
+| App Close Confirmation | ✅ |
+| Update Existing Tests | ✅ |
 
 ### Key Design Decisions
 
@@ -148,100 +148,122 @@ All components are implemented and working:
 
 ---
 
-## 🚧 v1.0 COMPLETION TASKS (31-62) - STATUS UPDATE
+## 🚧 v1.0 Completion Tasks
 
 Based on codebase analysis as of 2026-01-29.
 
 ### Phase A: Loop Closure Foundation
 
-| Task | Title | Risk | Status |
-|------|-------|------|--------|
-| 31 | Loop Detection Algorithm | Medium-High | ✅ |
-| 32 | Closure Error Calculation | Low-Medium | ✅ |
-| 33 | Closure Strategy Selector | High | ✅ (ClosureDialog exists with strategy selection) |
+| Title | Status |
+|-------|--------|
+| Loop Detection Algorithm | ✅ |
+| Closure Error Calculation | ✅ |
+| Closure Strategy Selector | ✅ (ClosureDialog exists with strategy selection) |
 
 ### Phase B: Settings & Configuration
 
-| Task | Title | Risk | Status |
-|------|-------|------|--------|
-| 34 | Settings Dialog Shell | Medium | ✅ |
-| 35 | Display Settings Tab | Medium | ✅ (DisplaySettings.tsx exists) |
-| 36 | Validation Thresholds Tab | Low-Medium | ✅ (ValidationSettings.tsx exists) |
-| 37 | Export Defaults Tab | Low | ✅ (ExportSettings.tsx exists) |
+| Title | Status |
+|-------|--------|
+| Settings Dialog Shell | ✅ |
+| Display Settings Tab | ✅ (DisplaySettings.tsx exists) |
+| Validation Thresholds Tab | ✅ (ValidationSettings.tsx exists) |
+| Export Defaults Tab | ✅ (ExportSettings.tsx exists) |
 
 ### Phase C: Data Table Enhancements
 
-| Task | Title | Risk | Status |
-|------|-------|------|--------|
-| 38 | Inline Editing | High | ✅ (EditableTable component with EditableCell) |
-| 39 | Add Row | Medium | ❌ (createShot command exists but no "Add Row" button in DataTable UI) |
-| 40 | Delete Row with Split | High | ❌ (deleteShot command exists but no "Delete Row" button in DataTable UI) |
-| 41 | Row Highlighting Sync | Low-Medium | ✅ |
+| Title | Status |
+|-------|--------|
+| Inline Editing | ✅ (EditableTable component with EditableCell) |
+| Add Row | ❌ (createShot command exists but no "Add Row" button in DataTable UI) |
+| Delete Row with Split | ❌ (deleteShot command exists but no "Delete Row" button in DataTable UI) |
+| Row Highlighting Sync | ✅ |
 
 ### Phase D: Accessibility
 
-| Task | Title | Risk | Status |
-|------|-------|------|--------|
-| 42 | Focus Management | High | ❌ (No React ErrorBoundary components, only ErrorDialog) |
-| 43 | Screen Reader Announcements | Medium-High | ✅ (aria-live regions, announceSelection(), 28 occurrences) |
-| 44 | Theme Infrastructure | Medium | ❌ (Only dark mode hardcoded, no useTheme/ThemeProvider) |
-| 45 | Keyboard Navigation | Medium | ✅ (useKeyboardShortcuts hook, ShortcutRecorder, ShortcutsSettings) |
+| Title | Status |
+|-------|--------|
+| Focus Management | ❌ (No React ErrorBoundary components, only ErrorDialog) |
+| Screen Reader Announcements | ✅ (aria-live regions, announceSelection(), 28 occurrences) |
+| Theme Infrastructure | ❌ (Only dark mode hardcoded, no useTheme/ThemeProvider) |
+| Keyboard Navigation | ✅ (useKeyboardShortcuts hook, ShortcutRecorder, ShortcutsSettings) |
 
 ### Phase E: i18n Foundation
 
-| Task | Title | Risk | Status |
-|------|-------|------|--------|
-| 46 | i18n Infrastructure | Medium | ❌ (No i18n libraries detected) |
-| 47 | Extract UI Strings | High (tedious) | ❌ |
-| 48 | Number/Date Formatting | Low-Medium | ❌ (Only basic ID formatters, no locale support) |
+| Title | Status |
+|-------|--------|
+| i18n Infrastructure | ❌ (No i18n libraries detected) |
+| Extract UI Strings | ❌ |
+| Number/Date Formatting | ❌ (Only basic ID formatters, no locale support) |
 
 ### Phase F: Performance & Polish
 
-| Task | Title | Risk | Status |
-|------|-------|------|--------|
-| 49 | Virtual Scrolling | Medium | ❌ (No VirtualList/virtualized libraries, despite deck.gl in package.json) |
-| 50 | Map Rendering Optimization | Medium-High | ❌ (deck.gl in package.json but not used - only commented in SurveyLayer) |
-| 51 | Debounced Auto-Save | Low-Medium | ❌ (Config exists but no useEffect setInterval timer implementation) |
-| 52 | Loading States | Medium | ✅ (LoadingProgress component with aria-live) |
+| Title | Status |
+|-------|--------|
+| Virtual Scrolling | ❌ (No VirtualList/virtualized libraries) |
+| Debounced Auto-Save | ❌ (Config exists but no useEffect setInterval timer implementation) |
+| Loading States | ✅ (LoadingProgress component with aria-live) |
 
 ### Phase G: Error Handling
 
-| Task | Title | Risk | Status |
-|------|-------|------|--------|
-| 53 | Error Boundary Wrapper | Medium | ❌ (No React ErrorBoundary class components, only ErrorDialog for displaying errors) |
-| 54 | Network Error Handling | Medium | 🟡 (Basic tile fetch error stats in MapDevStats, no retry logic) |
-| 55 | File Corruption Recovery | Medium | ❌ |
-| 56 | Validation Error Recovery | Low-Medium | ❌ |
+| Title | Status |
+|-------|--------|
+| Error Boundary Wrapper | ❌ (No React ErrorBoundary class components, only ErrorDialog for displaying errors) |
+| Network Error Handling | 🟡 (Basic tile fetch error stats in MapDevStats, no retry logic) |
+| File Corruption Recovery | ❌ |
+| Validation Error Recovery | ❌ |
 
 ### Phase H: Final Polish
 
-| Task | Title | Risk | Status |
-|------|-------|------|--------|
-| 57 | Splash Screen | Medium | ❌ |
-| 58 | About Dialog | Low | ❌ |
-| 59 | Keyboard Shortcuts Overlay | Low-Medium | ❌ |
-| 60 | Release Automation | Medium | ❌ |
-| 61 | Bug Reporter | Medium | ❌ |
-| 62 | Tile Caching | Medium-High | ✅ (CacheSettings.tsx + Rust config) |
+| Title | Status |
+|-------|--------|
+| Splash Screen | ❌ |
+| About Dialog | ❌ |
+| Keyboard Shortcuts Overlay | ❌ |
+| Release Automation | ❌ |
+| Bug Reporter | ❌ |
+| Tile Caching | ✅ (CacheSettings.tsx + Rust config) |
+
+### Phase I: Tool Panel & Move Tool
+
+| Title | Status |
+|-------|--------|
+| Tool Panel Redesign | ❌ (Photoshop-style subtools via right-click; group Pan + Zoom) |
+| Move Segment Tool | ❌ (Move whole segment: everything connected by shots/stations/merges/closures) |
+| Move Shot Subtool | ❌ (Move a single shot) |
+| Move Station Subtool | ❌ (Move a single station) |
+
+### Phase J: Closure Error Distribution
+
+| Title | Status |
+|-------|--------|
+| Proportional by Length | ❌ (Distribute errors proportional to shot lengths; closure stations share new position) |
+| Equal Distribution | ❌ (Distribute errors equally to shots; closure stations share new position) |
+
+### Phase K: Import & Reporting
+
+| Title | Status |
+|-------|--------|
+| Bug Report Dialog | ❌ (Button in Settings bottom bar, left-aligned next to Save/Cancel) |
+| Ariane .ari Import | ❌ |
 
 ---
 
-## 📊 TASK STATISTICS
+## 📊 Task Statistics
 
 ### DMP Import Refactoring - COMPLETED (mostly)
 
 | Phase | Tasks | Completed | Remaining |
 |-------|-------|-----------|-----------|
-| 1: Shared Components | 5 | 4 | 1 |
-| 2: Dialog Core | 7 | 6 | 1 |
-| 3: Placement Features | 3 | 3 | 0 |
-| 4: Navigation & Integration | 3 | 3 | 0 |
-| 5: Cleanup & Testing | 4 | 3 | 1 |
-| **Import Total** | **22** | **19** | **3** |
+| Shared Components | 5 | 4 | 1 |
+| Dialog Core | 7 | 6 | 1 |
+| Placement Features | 3 | 3 | 0 |
+| Navigation & Integration | 3 | 3 | 0 |
+| Cleanup & Testing | 4 | 4 | 0 |
+| **Import Total** | **22** | **20** | **2** |
 
-**Note**: Main functionality is complete. Remaining items are minor (file hash tracking, validation thresholds, removing old dialog).
+**Note**: Main functionality is complete. Remaining items are minor (file hash tracking, validation thresholds).
 
-### v1.0 Completion Tasks (31-62) - Updated Status
+### v1.0 Completion Tasks
 
 | Phase | Tasks | Completed | Remaining |
 |-------|-------|-----------|-----------|
@@ -250,30 +272,28 @@ Based on codebase analysis as of 2026-01-29.
 | C: Data Table | 4 | 2 | 2 |
 | D: Accessibility | 4 | 2 | 2 |
 | E: i18n | 3 | 0 | 3 |
-| F: Performance | 4 | 1 | 3 |
+| F: Performance | 3 | 1 | 2 |
 | G: Error Handling | 4 | 0 | 4 |
 | H: Polish | 6 | 1 | 5 |
-| **v1.0 Total** | **32** | **13** | **19** |
+| I: Tool Panel & Move | 4 | 0 | 4 |
+| J: Closure Distribution | 2 | 0 | 2 |
+| K: Import & Reporting | 2 | 0 | 2 |
+| **v1.0 Total** | **39** | **13** | **26** |
 
 ### Grand Total
 
 | Category | Tasks | Completed | Remaining |
 |----------|-------|-----------|-----------|
-| DMP Import Refactoring | 22 | 19 | 3 |
-| v1.0 Completion | 32 | 13 | 19 |
-| **Grand Total** | **54** | **32** | **22** |
+| DMP Import Refactoring | 22 | 20 | 2 |
+| v1.0 Completion | 39 | 13 | 26 |
+| **Grand Total** | **61** | **33** | **28** |
 
 ---
 
-## 🔮 DEFERRED TO v2.0+
+## 🔮 Deferred to v2.0+
 
 ### Loop Closure (v2.0)
-- [ ] Error distribution algorithms (Bowditch, equal, keep raw)
 - [ ] Least squares adjustment for complex loops
-
-### Performance (v3.0)
-- [ ] deck.gl integration for 100k+ line segments
-- [ ] WebGL-based survey rendering
 
 ### Display Features (v2.0)
 - [ ] Depth color gradient rendering
@@ -281,7 +301,6 @@ Based on codebase analysis as of 2026-01-29.
 - [ ] High-contrast theme (beyond infrastructure)
 
 ### Import/Export (v2.x)
-- [ ] Ariane .ari import
 - [ ] Additional export formats: Survex, Therion, KML/KMZ
 
 ### Platform (v3.0+)
@@ -293,66 +312,66 @@ Based on codebase analysis as of 2026-01-29.
 
 ---
 
-## 📝 DEPENDENCY NOTES
+## 📝 Dependency Notes
 
-### DMP Import Refactoring Dependencies (fn-51-ctu)
+### DMP Import Refactoring Dependencies
 ```
 Phase 1: Shared Components (parallel start)
-├── 01-ShotTableEditor
-├── 02-SectionMetadataForm
-├── 03-SectionPreview
-├── 04-DmpSelectionDialog ──> 16-SessionSurveyorMemory
-└── 15-FileHashTracking
+├── ShotTableEditor
+├── SectionMetadataForm
+├── SectionPreview
+├── DmpSelectionDialog ──> SessionSurveyorMemory
+└── FileHashTracking
 
 Phase 2: Dialog Core
-└── 05-DmpSectionConfigDialog (depends: 01, 02, 03)
-    ├── 06-ParametersPanel (depends: 02)
-    ├── 07-PlacementOptionsPanel
-    │   ├── 09-MergePreview (depends: 03)
-    │   └── 10-ManualPlacement
-    ├── 08-ShotTableIntegration (depends: 01)
-    └── 11-ImportStateManagement
-        ├── 12-SectionCreationLogic (depends: 07)
-        └── 13-NavigationButtons
-            └── 18-ErrorBlockingLogic
+└── DmpSectionConfigDialog (depends: ShotTableEditor, SectionMetadataForm, SectionPreview)
+    ├── ParametersPanel (depends: SectionMetadataForm)
+    ├── PlacementOptionsPanel
+    │   ├── MergePreview (depends: SectionPreview)
+    │   └── ManualPlacement
+    ├── ShotTableIntegration (depends: ShotTableEditor)
+    └── ImportStateManagement
+        ├── SectionCreationLogic (depends: PlacementOptionsPanel)
+        └── NavigationButtons
+            └── ErrorBlockingLogic
 
 Phase 3: Integration
-├── 14-ContextAwareTriggering (depends: 04, 05)
-├── 17-ValidationThresholds (depends: 01)
-└── 19-UpdateEditSectionDialog (depends: 01, 02)
+├── ContextAwareTriggering (depends: DmpSelectionDialog, DmpSectionConfigDialog)
+├── ValidationThresholds (depends: ShotTableEditor)
+└── UpdateEditSectionDialog (depends: ShotTableEditor, SectionMetadataForm)
 
 Phase 4: Cleanup
-└── 20-RemoveOldDialog (depends: 14, 18, 19)
-    ├── 21-AppCloseConfirmation
-    └── 22-UpdateExistingTests
+└── RemoveOldDialog (depends: ContextAwareTriggering, ErrorBlockingLogic, UpdateEditSectionDialog)
+    ├── AppCloseConfirmation
+    └── UpdateExistingTests
 ```
 
-### v1.0 Completion Task Dependencies (Updated)
+### v1.0 Completion Task Dependencies
 ```
-31 (Loop Detection) ──┐
-                       ├──> 33 (Closure Strategy) ✅ DONE
-32 (Closure Error) ───┘
+Loop Detection ──┐
+                  ├──> Closure Strategy ✅
+Closure Error ───┘
 
-34 (Settings Shell) ──┬──> 35 (Display Tab) ✅ DONE
-                       ├──> 36 (Validation Tab) ✅ DONE
-                       └──> 37 (Export Tab) ✅ DONE
+Settings Shell ──┬──> Display Tab ✅
+                  ├──> Validation Tab ✅
+                  └──> Export Tab ✅
 
-38 (Inline Edit) ✅ ──┬──> 39 (Add Row) ❌
-                       └──> 40 (Delete Row) ❌
+Inline Edit ✅ ──┬──> Add Row ❌
+                  └──> Delete Row ❌
 
-42 (Focus) ❌ ────────┬──> 43 (Screen Reader) ✅
-                       └──> 45 (Keyboard Nav) ✅
+Focus ❌ ────────┬──> Screen Reader ✅
+                  └──> Keyboard Nav ✅
 
-46 (i18n Infra) ❌ ───┬──> 47 (Extract Strings) ❌
-                       └──> 48 (Number Format) ❌
+i18n Infra ❌ ───┬──> Extract Strings ❌
+                  └──> Number Format ❌
 
-53 (Error Boundary) ❌─┬──> 54 (Network Errors) ❌ (not applicable)
-                       └──> 55 (Corruption Recovery) ❌
+Error Boundary ❌─┬──> Network Errors ❌
+                  └──> Corruption Recovery ❌
 
-58 (About Dialog) ❌ ───> 61 (Bug Reporter) ❌
+About Dialog ❌ ───> Bug Reporter ❌
 ```
 
-### Critical Path (Updated)
+### Critical Path
 1. **DMP Import Refactoring**: Mostly complete, minor cleanup remaining
 2. **Phase A** (Loop Closure): ✅ COMPLETE
 3. **Phase B** (Settings): ✅ COMPLETE
@@ -415,4 +434,4 @@ This TODO was updated on 2026-01-29 by analyzing the actual codebase:
 - ❌ No virtual scrolling implementation
 - ❌ No auto-save functionality
 - ❌ No About dialog, Splash screen, or Bug reporter components
-- ❌ Old `DmpImportDialog.tsx` still exists (54KB file)
+- ✅ Old `DmpImportDialog.tsx` removed (was 1316 lines of dead code)
