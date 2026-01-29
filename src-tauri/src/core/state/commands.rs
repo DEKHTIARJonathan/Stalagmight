@@ -343,6 +343,13 @@ impl AppState {
         after_shot_id: Option<ShotId>,
         before_shot_id: Option<ShotId>,
     ) -> CommandResult {
+        // Reject ambiguous input: both after and before cannot be specified
+        if after_shot_id.is_some() && before_shot_id.is_some() {
+            return CommandResult::failure(
+                "Cannot specify both after_shot_id and before_shot_id".to_string(),
+            );
+        }
+
         let config = self.config.lock().ok();
 
         let mut proj_guard = match self.project.lock() {

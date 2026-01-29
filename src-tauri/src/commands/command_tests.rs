@@ -830,6 +830,32 @@ fn test_create_shot_returns_warning_for_short() {
     let result = shot::create_shot(state(&app), id, shot_data(0.05), None, None);
     assert!(result.success);
     assert!(!result.warnings.is_empty());
+    assert!(result.shot_id.is_some(), "shot_id must be returned even when warnings are present");
+}
+
+#[test]
+fn test_create_shot_rejects_both_after_and_before() {
+    let app = app_with_state();
+    create_project(&app);
+    let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
+    let result = shot::create_shot(state(&app), id, shot_data(3.0), Some(0), Some(1));
+    assert_failure_contains(&result, "Cannot specify both");
+}
+
+#[test]
+fn test_create_shot_before_inserts_at_position() {
+    let app = app_with_state();
+    create_project(&app);
+    let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
+    // Insert before the first shot (position 0)
+    let result = shot::create_shot(state(&app), id, shot_data(5.0), None, Some(0));
+    assert_success(&result);
+    assert!(result.shot_id.is_some(), "shot_id must be returned on success");
+    let section = section::get_section(state(&app), id).unwrap();
+    assert_eq!(section.shots.len(), 3);
+    assert_eq!(section.shots[0].length, 5.0, "New shot should be at position 0 (prepended)");
+    assert_eq!(section.shots[1].length, 1.0);
+    assert_eq!(section.shots[2].length, 2.0);
 }
 
 #[test]
