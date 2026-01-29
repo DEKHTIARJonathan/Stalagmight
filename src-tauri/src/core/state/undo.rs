@@ -365,10 +365,14 @@ impl AppState {
             // For batch, upgrade ProjectSnapshot to ProjectSnapshotPair with "after" snapshot
             Command::Batch { .. } => {
                 if let UndoData::ProjectSnapshot(before) = undo_data {
-                    if let Ok(after) = serde_json::to_string(project) {
-                        UndoData::ProjectSnapshotPair { before, after }
-                    } else {
-                        UndoData::ProjectSnapshot(before.clone())
+                    match serde_json::to_string(project) {
+                        Ok(after) => UndoData::ProjectSnapshotPair { before, after },
+                        Err(e) => {
+                            tracing::error!("Failed to capture after-snapshot for batch undo: {e}");
+                            // Fall back to before-only snapshot; undo works but redo
+                            // will re-execute the batch (may assign new IDs)
+                            UndoData::ProjectSnapshot(before)
+                        }
                     }
                 } else {
                     undo_data
