@@ -89,6 +89,10 @@ pub enum Command {
         section_id: SectionId,
         offset: Coordinates,
     },
+    MoveSegment {
+        section_id: SectionId,
+        offset: Coordinates,
+    },
     MoveStation {
         station_ref: StationRef,
         offset: Coordinates,
@@ -283,6 +287,9 @@ impl Command {
             }
             Command::MoveSection { section_id, .. } => {
                 format!("Move section {}", section_id)
+            }
+            Command::MoveSegment { section_id, .. } => {
+                format!("Move segment (section {})", section_id)
             }
             Command::MoveStation { station_ref, .. } => {
                 format!("Move station {}", station_ref)
@@ -515,6 +522,13 @@ mod tests {
                     offset: Coordinates::new(1.0, 2.0, 3.0),
                 },
                 "Move section 2",
+            ),
+            (
+                Command::MoveSegment {
+                    section_id: 2,
+                    offset: Coordinates::new(1.0, 2.0, 3.0),
+                },
+                "Move segment (section 2)",
             ),
             (
                 Command::MoveStation {

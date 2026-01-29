@@ -253,6 +253,14 @@ impl AppState {
                 })
             }
 
+            Command::MoveSegment { section_id, offset } => {
+                // Inverse is moving back by negative offset
+                UndoData::InverseCommand(Command::MoveSegment {
+                    section_id: *section_id,
+                    offset: Coordinates::new(-offset.x, -offset.y, -offset.z),
+                })
+            }
+
             Command::MoveStation {
                 station_ref,
                 offset,
@@ -833,6 +841,7 @@ impl AppState {
             } => self.set_zero_datum(*station_ref, *coordinates),
             Command::RemoveZeroDatum { station_ref } => self.remove_zero_datum(*station_ref),
             Command::MoveSection { section_id, offset } => self.move_section(*section_id, *offset),
+            Command::MoveSegment { section_id, offset } => self.move_segment(*section_id, *offset),
             Command::MoveStation { station_ref, offset } => self.move_station(*station_ref, *offset),
             _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),
         }

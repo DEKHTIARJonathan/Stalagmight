@@ -69,6 +69,7 @@ export type BatchCommand =
   | { type: 'create_section'; name?: string; surveyor?: string; date?: string; color: string; direction?: 'in' | 'out'; shots: ShotData[] }
   | { type: 'merge_stations'; station_a: StationRef; station_b: StationRef }
   | { type: 'move_section'; section_id: number; offset: Coordinates }
+  | { type: 'move_segment'; section_id: number; offset: Coordinates }
   | { type: 'set_zero_datum'; station_ref: StationRef; coordinates: { latitude: number; longitude: number; depth_reference: number } };
 
 // Station connectivity check result

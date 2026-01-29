@@ -185,7 +185,10 @@ interface ProjectStore {
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
   moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
+  moveSegment: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
   moveStation: (stationRef: StationRef, newPosition: Coordinates) => Promise<CommandResult>;
+  getConnectedSectionIds: (sectionId: SectionId) => Promise<number[]>;
+  getAnchoredSectionIds: () => Promise<number[]>;
 
   undo: () => Promise<CommandResult>;
   redo: () => Promise<CommandResult>;
@@ -741,6 +744,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     return result;
   },
 
+  moveSegment: async (sectionId: SectionId, offset: Coordinates) => {
+    const result = await invoke<CommandResult>('move_segment', { sectionId, offset });
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
+  },
+
   moveStation: async (stationRef: StationRef, offset: Coordinates) => {
     const result = await invoke<CommandResult>('move_station', { stationRef, offset });
     if (result.success) {
@@ -748,6 +760,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       set({ isDirty: true });
     }
     return result;
+  },
+
+  getConnectedSectionIds: async (sectionId: SectionId) => {
+    return await invoke<number[]>('get_connected_section_ids', { sectionId });
+  },
+
+  getAnchoredSectionIds: async () => {
+    return await invoke<number[]>('get_anchored_section_ids');
   },
 
   // Undo/Redo

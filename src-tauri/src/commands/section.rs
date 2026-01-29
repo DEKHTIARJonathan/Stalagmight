@@ -97,6 +97,42 @@ pub(crate) fn move_section_impl(
     state.execute(Command::MoveSection { section_id, offset })
 }
 
+/// Move an entire segment (all connected sections) by an offset
+#[tauri::command]
+pub fn move_segment(
+    state: State<AppState>,
+    section_id: SectionId,
+    offset: Coordinates,
+) -> CommandResult {
+    state.execute(Command::MoveSegment { section_id, offset })
+}
+
+/// Execute a batch of commands as a single undo/redo unit
+#[tauri::command]
+pub fn execute_batch(
+    state: State<AppState>,
+    commands: Vec<Command>,
+) -> CommandResult {
+    state.execute(Command::Batch { commands })
+}
+
+/// Get all section IDs connected to the given section through merges and closures
+#[tauri::command]
+pub fn get_connected_section_ids(
+    state: State<AppState>,
+    section_id: SectionId,
+) -> Result<Vec<SectionId>, String> {
+    state.get_connected_section_ids(section_id)
+}
+
+/// Get all section IDs belonging to segments that contain a zero datum
+#[tauri::command]
+pub fn get_anchored_section_ids(
+    state: State<AppState>,
+) -> Result<Vec<SectionId>, String> {
+    state.get_anchored_section_ids()
+}
+
 /// Create a new section and immediately merge one of its stations with an existing station.
 /// This is executed as a single undo/redo operation using the internal batch mechanism.
 ///

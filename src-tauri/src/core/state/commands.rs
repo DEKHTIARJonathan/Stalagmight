@@ -82,6 +82,9 @@ impl AppState {
             Command::MoveSection { section_id, offset } => {
                 self.move_section(*section_id, *offset)
             }
+            Command::MoveSegment { section_id, offset } => {
+                self.move_segment(*section_id, *offset)
+            }
             Command::MoveStation {
                 station_ref,
                 offset,
@@ -601,6 +604,34 @@ impl AppState {
         }
     }
 
+    pub(super) fn move_segment(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
+        let mut proj_guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+        };
+
+        let project = match proj_guard.as_mut() {
+            Some(p) => p,
+            None => return CommandResult::failure("No project open".to_string()),
+        };
+
+        // Get all connected section IDs (merges + closures)
+        let connected = project.get_connected_section_ids(section_id);
+        if connected.is_empty() {
+            return CommandResult::failure("Section not found".to_string());
+        }
+
+        // Apply offset to every section in the connected set
+        for sid in &connected {
+            let current = project.section_offsets.get(sid).copied().unwrap_or((0.0, 0.0));
+            let new_offset = (current.0 + offset.x, current.1 + offset.y);
+            project.section_offsets.insert(*sid, new_offset);
+        }
+        project.touch();
+        tracing::info!(?section_id, ?offset, section_count = connected.len(), "Segment moved");
+        CommandResult::success()
+    }
+
     pub(super) fn move_station(&self, station_ref: StationRef, offset: Coordinates) -> CommandResult {
         let mut proj_guard = match self.project.lock() {
             Ok(g) => g,
@@ -739,4 +770,37 @@ impl AppState {
     }
 
     // === Project merge operations ===
+
+    // === Query operations ===
+
+    /// Get all section IDs connected to the given section through merges and closures
+    pub fn get_connected_section_ids(&self, section_id: SectionId) -> Result<Vec<SectionId>, String> {
+        let proj_guard = self
+            .project
+            .lock()
+            .map_err(|_| "Failed to lock project".to_string())?;
+        let project = proj_guard
+            .as_ref()
+            .ok_or_else(|| "No project open".to_string())?;
+        let connected = project.get_connected_section_ids(section_id);
+        Ok(connected.into_iter().collect())
+    }
+
+    /// Get all section IDs belonging to segments that contain a zero datum
+    pub fn get_anchored_section_ids(&self) -> Result<Vec<SectionId>, String> {
+        let proj_guard = self
+            .project
+            .lock()
+            .map_err(|_| "Failed to lock project".to_string())?;
+        let project = proj_guard
+            .as_ref()
+            .ok_or_else(|| "No project open".to_string())?;
+
+        let mut anchored = std::collections::HashSet::new();
+        for zd in &project.zero_datums {
+            let merged = project.get_merged_section_ids(zd.station_ref.section_id);
+            anchored.extend(merged);
+        }
+        Ok(anchored.into_iter().collect())
+    }
 }
