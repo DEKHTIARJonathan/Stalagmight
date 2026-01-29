@@ -26,9 +26,11 @@ interface BoxSelectState {
 }
 
 interface MoveDragState {
-  type: 'section' | 'station';
+  type: 'section' | 'station' | 'segment' | 'shot';
   sectionId?: number;
   stationRef?: { section_id: number; station_index: number };
+  shotIndex?: number;
+  connectedSectionIds?: number[];
   startLngLat: { lng: number; lat: number };
   currentLngLat: { lng: number; lat: number };
 }
@@ -67,8 +69,14 @@ export default function MapCanvas() {
   const pendingCenterOnStationRef = useRef<StationRef | null>(null);
   // Pending center-on-shot request (stored when map not loaded, processed when it loads)
   const pendingCenterOnShotRef = useRef<{ sectionId: number; shotId: number } | null>(null);
+  // Anchored section IDs (cached when Move Segment tool is active)
+  const [anchoredSectionIds, setAnchoredSectionIds] = useState<Set<number>>(new Set());
+  // Segment drag offset for real-time preview (meters)
+  const [segmentDragOffset, setSegmentDragOffset] = useState<{ x: number; y: number } | null>(null);
+  // Connected section IDs currently being dragged (for segment preview)
+  const [dragConnectedSectionIds, setDragConnectedSectionIds] = useState<Set<number>>(new Set());
 
-  const { project, stations, stats, config, moveSection, moveStation } = useProjectStore();
+  const { project, stations, stats, config, moveSection, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
 
   // Get GPS origin for coordinate transforms (enables satellite tile alignment)
   // Priority: project's zero-datum GPS > config's satellite_gps_origin
@@ -271,7 +279,7 @@ export default function MapCanvas() {
 
   // Handle move drag start from SurveyLayer
   const handleMoveDragStart = useCallback(
-    (data: { type: 'section' | 'station'; sectionId?: number; stationRef?: { section_id: number; station_index: number }; screenX?: number; screenY?: number }) => {
+    (data: { type: 'section' | 'station' | 'segment' | 'shot'; sectionId?: number; stationRef?: { section_id: number; station_index: number }; shotIndex?: number; screenX?: number; screenY?: number }) => {
       if (!map.current) return;
 
       // Use actual click position if available, otherwise fall back to map center
@@ -287,7 +295,7 @@ export default function MapCanvas() {
         startLng = center.lng;
         startLat = center.lat;
       }
-      const baseDragState = {
+      const baseDragState: MoveDragState = {
         type: data.type,
         startLngLat: { lng: startLng, lat: startLat },
         currentLngLat: { lng: startLng, lat: startLat },
@@ -298,9 +306,43 @@ export default function MapCanvas() {
         setMoveDrag({ ...baseDragState, type: 'section', sectionId: data.sectionId });
       } else if (data.type === 'station' && data.stationRef !== undefined) {
         setMoveDrag({ ...baseDragState, type: 'station', stationRef: data.stationRef });
+      } else if (data.type === 'segment' && data.sectionId !== undefined) {
+        const segmentSectionId = data.sectionId;
+        // Check if section is anchored — silent no-op if so
+        if (anchoredSectionIds.has(segmentSectionId)) return;
+
+        // Fetch connected section IDs at drag start
+        getConnectedSectionIds(segmentSectionId).then((ids) => {
+          // Filter out anchored sections
+          const movable = ids.filter((id) => !anchoredSectionIds.has(id));
+          const connectedSet = new Set(movable);
+          setDragConnectedSectionIds(connectedSet);
+          setMoveDrag({
+            ...baseDragState,
+            type: 'segment',
+            sectionId: segmentSectionId,
+            connectedSectionIds: movable,
+          });
+        }).catch(() => {
+          // On failure, just move the single section
+          setDragConnectedSectionIds(new Set([segmentSectionId]));
+          setMoveDrag({
+            ...baseDragState,
+            type: 'segment',
+            sectionId: segmentSectionId,
+            connectedSectionIds: [segmentSectionId],
+          });
+        });
+      } else if (data.type === 'shot' && data.sectionId !== undefined && data.shotIndex !== undefined) {
+        setMoveDrag({
+          ...baseDragState,
+          type: 'shot',
+          sectionId: data.sectionId,
+          shotIndex: data.shotIndex,
+        });
       }
     },
-    []
+    [anchoredSectionIds, getConnectedSectionIds]
   );
 
   // Get map tool callbacks
@@ -497,15 +539,31 @@ export default function MapCanvas() {
       setMoveDrag((prev) =>
         prev ? { ...prev, currentLngLat: { lng: lngLat.lng, lat: lngLat.lat } } : null
       );
+
+      // Compute drag offset in meters for segment preview
+      if (moveDrag.type === 'segment') {
+        const startMeters = mapCoordsToMeters(moveDrag.startLngLat.lng, moveDrag.startLngLat.lat, gpsOrigin);
+        const currentMeters = mapCoordsToMeters(lngLat.lng, lngLat.lat, gpsOrigin);
+        setSegmentDragOffset({
+          x: currentMeters.x - startMeters.x,
+          y: currentMeters.y - startMeters.y,
+        });
+      }
     },
-    [moveDrag]
+    [moveDrag, gpsOrigin]
   );
 
   const handleMoveDragEnd = useCallback(async () => {
     if (!moveDrag || !map.current) {
       setMoveDrag(null);
+      setSegmentDragOffset(null);
+      setDragConnectedSectionIds(new Set());
       return;
     }
+
+    // Clear segment preview state before committing
+    setSegmentDragOffset(null);
+    setDragConnectedSectionIds(new Set());
 
     // Convert drag start/end from map lng/lat to meters, then compute delta
     const startMeters = mapCoordsToMeters(moveDrag.startLngLat.lng, moveDrag.startLngLat.lat, gpsOrigin);
@@ -520,13 +578,22 @@ export default function MapCanvas() {
       if (moveDrag.type === 'section' && moveDrag.sectionId !== undefined) {
         await moveSection(moveDrag.sectionId, offset);
       } else if (moveDrag.type === 'station' && moveDrag.stationRef) {
-        // Pass the delta offset directly to the backend
         await moveStation(moveDrag.stationRef, offset);
+      } else if (moveDrag.type === 'segment' && moveDrag.sectionId !== undefined) {
+        await moveSegment(moveDrag.sectionId, offset);
+      } else if (moveDrag.type === 'shot' && moveDrag.sectionId !== undefined && moveDrag.shotIndex !== undefined) {
+        // Move both stations atomically via executeBatch
+        const fromRef = { section_id: moveDrag.sectionId, station_index: moveDrag.shotIndex };
+        const toRef = { section_id: moveDrag.sectionId, station_index: moveDrag.shotIndex + 1 };
+        await executeBatch([
+          { type: 'move_station', station_ref: fromRef, offset },
+          { type: 'move_station', station_ref: toRef, offset },
+        ]);
       }
     }
 
     setMoveDrag(null);
-  }, [moveDrag, moveSection, moveStation, gpsOrigin]);
+  }, [moveDrag, moveSection, moveStation, moveSegment, executeBatch, gpsOrigin]);
 
   // Initialize map
   useEffect(() => {
@@ -797,6 +864,29 @@ export default function MapCanvas() {
     surveyLayerRef.current.setShowVirtualShots(getEffectiveShowVirtualShots(showShots, showVirtualShots));
   }, [showVirtualShots, showShots, mapLoaded]);
 
+  // Sync anchored section IDs with SurveyLayer for fading
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setAnchoredSections(anchoredSectionIds);
+  }, [anchoredSectionIds, mapLoaded]);
+
+  // Sync segment drag preview with SurveyLayer for real-time visual offset
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    if (segmentDragOffset && dragConnectedSectionIds.size > 0) {
+      // Convert meter offset to map coordinate offset
+      // metersToMapCoords uses a linear scale: 1 meter = 1/111320 degrees at equator
+      // We need to compute the delta in lng/lat that corresponds to the meter offset
+      const originCoords = metersToMapCoords(0, 0, gpsOrigin);
+      const offsetCoords = metersToMapCoords(segmentDragOffset.x, segmentDragOffset.y, gpsOrigin);
+      const dLng = offsetCoords[0] - originCoords[0];
+      const dLat = offsetCoords[1] - originCoords[1];
+      surveyLayerRef.current.setSegmentDragPreview(dragConnectedSectionIds, dLng, dLat);
+    } else {
+      surveyLayerRef.current.setSegmentDragPreview(new Set(), 0, 0);
+    }
+  }, [segmentDragOffset, dragConnectedSectionIds, gpsOrigin, mapLoaded]);
+
   // Clear station selection, hover, and cancel merge when stations hidden
   // Note: Draw/Measure/Snap operations continue to work - highlight layer shows snapped stations
   useEffect(() => {
@@ -916,6 +1006,19 @@ export default function MapCanvas() {
       map.current.doubleClickZoom.enable();
     }
   }, [activeTool]);
+
+  // Fetch anchored section IDs when Move Segment tool becomes active
+  useEffect(() => {
+    if (activeTool === 'move_segment') {
+      getAnchoredSectionIds().then((ids) => {
+        setAnchoredSectionIds(new Set(ids));
+      }).catch(() => {
+        setAnchoredSectionIds(new Set());
+      });
+    } else {
+      setAnchoredSectionIds(new Set());
+    }
+  }, [activeTool, getAnchoredSectionIds, project]);
 
   // Wire up setActiveTool - depend on mapLoaded to ensure it runs after layer creation
   useEffect(() => {
@@ -1893,7 +1996,7 @@ export default function MapCanvas() {
       {moveDrag && !placementMode && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-accent rounded px-3 py-2 text-sm">
           <span className="text-accent">
-            {moveDrag.type === 'section' ? 'Move Section' : 'Move Station'}:
+            {moveDrag.type === 'section' ? 'Move Section' : moveDrag.type === 'station' ? 'Move Station' : moveDrag.type === 'segment' ? 'Move Segment' : 'Move Shot'}:
           </span>{' '}
           Drag to new position, release to confirm
         </div>

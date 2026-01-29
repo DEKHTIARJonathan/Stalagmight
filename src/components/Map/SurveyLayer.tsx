@@ -92,6 +92,17 @@ export default class SurveyLayer {
   // Active tool state (for disabling interactions when non-interactive tools are active)
   private activeTool: ToolType = 'select';
 
+  // Anchored section IDs (for fading when Move Segment tool is active)
+  private anchoredSectionIds: Set<number> = new Set();
+  private prevAnchoredFeatureIds: Set<number> = new Set();
+
+  // Cached features from last update() for efficient segment drag preview
+  private cachedShotFeatures: GeoJSON.Feature[] = [];
+  private cachedStationFeatures: GeoJSON.Feature[] = [];
+  private cachedShotLabelFeatures: GeoJSON.Feature[] = [];
+  private cachedSectionLabelFeatures: GeoJSON.Feature[] = [];
+  private cachedStationLabelFeatures: GeoJSON.Feature[] = [];
+
   // Visibility state (for hidden feature detection)
   private stationsVisible: boolean = true;
   private shotsVisible: boolean = true;
@@ -439,7 +450,12 @@ export default class SurveyLayer {
           ['boolean', ['feature-state', 'selected'], false], selectionWidth,
           baseWidth,
         ],
-        'line-opacity': ['case', ['get', 'isVirtual'], 0.5, 1],
+        'line-opacity': [
+          'case',
+          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          ['get', 'isVirtual'], 0.5,
+          1,
+        ],
       },
     });
 
@@ -464,6 +480,12 @@ export default class SurveyLayer {
         ],
         // Color from feature property
         'circle-color': ['get', 'color'],
+        // Opacity: reduced for anchored sections
+        'circle-opacity': [
+          'case',
+          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          1,
+        ],
         // Stroke width: hover/selected states get thicker strokes (uses feature-state)
         'circle-stroke-width': [
           'case',
@@ -478,6 +500,12 @@ export default class SurveyLayer {
           ['boolean', ['feature-state', 'hover'], false], '#0066ff',
           ['boolean', ['feature-state', 'selected'], false], '#00aaff',
           ['get', 'strokeColor'],
+        ],
+        // Stroke opacity: reduced for anchored sections
+        'circle-stroke-opacity': [
+          'case',
+          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          1,
         ],
       },
     });
@@ -683,8 +711,19 @@ export default class SurveyLayer {
         this.hoveredStationId = newHoveredStationId;
         this.hoveredShotId = newHoveredShotId;
 
-        // Update cursor
-        this.map.getCanvas().style.cursor = (newHoveredStationId || newHoveredShotId) ? 'pointer' : '';
+        // Update cursor - suppress for anchored sections when Move Segment tool is active
+        let showPointer = Boolean(newHoveredStationId || newHoveredShotId);
+        if (showPointer && this.activeTool === 'move_segment' && this.anchoredSectionIds.size > 0) {
+          // Check if hovered feature belongs to an anchored section
+          const hoveredId = newHoveredStationId || newHoveredShotId;
+          if (hoveredId) {
+            const sectionId = parseInt(hoveredId.split(':')[0]!, 10);
+            if (this.anchoredSectionIds.has(sectionId)) {
+              showPointer = false;
+            }
+          }
+        }
+        this.map.getCanvas().style.cursor = showPointer ? 'pointer' : '';
 
         // Update MapLibre visual state
         this.updateVisualState();
@@ -1480,6 +1519,147 @@ export default class SurveyLayer {
   }
 
   /**
+   * Set anchored section IDs for fading when Move Segment tool is active.
+   * Sections in this set get reduced opacity via feature-state.
+   */
+  setAnchoredSections(sectionIds: Set<number>): void {
+    const stationsSource = this.sourceId + '-stations';
+    const shotsSource = this.sourceId + '-shots';
+
+    // Clear previously anchored features
+    for (const featureId of this.prevAnchoredFeatureIds) {
+      try {
+        this.map.setFeatureState({ source: stationsSource, id: featureId }, { anchored: false });
+      } catch { /* feature may not exist */ }
+      try {
+        this.map.setFeatureState({ source: shotsSource, id: featureId }, { anchored: false });
+      } catch { /* feature may not exist */ }
+    }
+
+    this.anchoredSectionIds = sectionIds;
+    const newAnchoredFeatureIds = new Set<number>();
+
+    if (sectionIds.size > 0) {
+      // Find all features belonging to anchored sections and set feature-state
+      for (const source of [stationsSource, shotsSource]) {
+        try {
+          const features = this.map.querySourceFeatures(source);
+          for (const f of features) {
+            if (f.properties?.sectionId != null && sectionIds.has(f.properties.sectionId as number) && f.id != null) {
+              const featureId = typeof f.id === 'number' ? f.id : parseInt(String(f.id), 10);
+              if (!isNaN(featureId)) {
+                this.map.setFeatureState({ source, id: featureId }, { anchored: true });
+                newAnchoredFeatureIds.add(featureId);
+              }
+            }
+          }
+        } catch { /* source may not be loaded */ }
+      }
+    }
+
+    this.prevAnchoredFeatureIds = newAnchoredFeatureIds;
+  }
+
+  /**
+   * Set segment drag preview - shifts connected sections visually during drag.
+   * Pass null/empty connectedSectionIds to clear the preview.
+   */
+  setSegmentDragPreview(connectedSectionIds: Set<number>, offsetX: number, offsetY: number): void {
+    if (connectedSectionIds.size === 0 || (offsetX === 0 && offsetY === 0)) {
+      // Restore original data
+      this.applyFeatureData(this.cachedShotFeatures, this.cachedStationFeatures, this.cachedShotLabelFeatures, this.cachedSectionLabelFeatures, this.cachedStationLabelFeatures);
+      return;
+    }
+
+    // Apply offset to connected section features
+    const offsetShots = this.applyOffsetToFeatures(this.cachedShotFeatures, connectedSectionIds, offsetX, offsetY);
+    const offsetStations = this.applyOffsetToFeatures(this.cachedStationFeatures, connectedSectionIds, offsetX, offsetY);
+    const offsetShotLabels = this.applyOffsetToFeatures(this.cachedShotLabelFeatures, connectedSectionIds, offsetX, offsetY);
+    const offsetSectionLabels = this.applyOffsetToFeatures(this.cachedSectionLabelFeatures, connectedSectionIds, offsetX, offsetY);
+    const offsetStationLabels = this.applyOffsetToFeatures(this.cachedStationLabelFeatures, connectedSectionIds, offsetX, offsetY);
+    this.applyFeatureData(offsetShots, offsetStations, offsetShotLabels, offsetSectionLabels, offsetStationLabels);
+  }
+
+  /**
+   * Apply offset to features belonging to specified sections.
+   * Returns new feature array with offset coordinates (does not mutate originals).
+   */
+  private applyOffsetToFeatures(features: GeoJSON.Feature[], sectionIds: Set<number>, offsetX: number, offsetY: number): GeoJSON.Feature[] {
+    return features.map((f) => {
+      if (!f.properties?.sectionId || !sectionIds.has(f.properties.sectionId as number)) {
+        return f;
+      }
+      const geom = f.geometry;
+      if (geom.type === 'Point') {
+        const [lng, lat] = (geom as GeoJSON.Point).coordinates;
+        return {
+          ...f,
+          geometry: {
+            ...geom,
+            coordinates: [lng! + offsetX, lat! + offsetY],
+          },
+        };
+      } else if (geom.type === 'LineString') {
+        return {
+          ...f,
+          geometry: {
+            ...geom,
+            coordinates: (geom as GeoJSON.LineString).coordinates.map(([lng, lat]) => [lng! + offsetX, lat! + offsetY]),
+          },
+        };
+      }
+      return f;
+    });
+  }
+
+  /**
+   * Apply feature data to all GeoJSON sources.
+   */
+  private applyFeatureData(
+    shotFeatures: GeoJSON.Feature[],
+    stationFeatures: GeoJSON.Feature[],
+    shotLabelFeatures: GeoJSON.Feature[],
+    sectionLabelFeatures: GeoJSON.Feature[],
+    stationLabelFeatures: GeoJSON.Feature[]
+  ): void {
+    const shotsSource = this.map.getSource(this.sourceId + '-shots');
+    if (shotsSource && 'setData' in shotsSource) {
+      (shotsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: shotFeatures,
+      });
+    }
+    const stationsSource = this.map.getSource(this.sourceId + '-stations');
+    if (stationsSource && 'setData' in stationsSource) {
+      (stationsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: stationFeatures,
+      });
+    }
+    const shotLabelsSource = this.map.getSource(this.sourceId + '-shot-labels');
+    if (shotLabelsSource && 'setData' in shotLabelsSource) {
+      (shotLabelsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: shotLabelFeatures,
+      });
+    }
+    const sectionLabelsSource = this.map.getSource(this.sourceId + '-section-labels');
+    if (sectionLabelsSource && 'setData' in sectionLabelsSource) {
+      (sectionLabelsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: sectionLabelFeatures,
+      });
+    }
+    const stationLabelsSource = this.map.getSource(this.sourceId + '-station-labels');
+    if (stationLabelsSource && 'setData' in stationLabelsSource) {
+      (stationLabelsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: stationLabelFeatures,
+      });
+    }
+  }
+
+  /**
    * Set ghost section data for merge preview visualization.
    * Pass null to clear the ghost section.
    */
@@ -1544,6 +1724,13 @@ export default class SurveyLayer {
       this.showDepthGradient,
       this.depthRange
     );
+
+    // Cache features for segment drag preview
+    this.cachedShotFeatures = shotFeatures;
+    this.cachedStationFeatures = stationFeatures;
+    this.cachedShotLabelFeatures = shotLabelFeatures;
+    this.cachedSectionLabelFeatures = sectionLabelFeatures;
+    this.cachedStationLabelFeatures = stationLabelFeatures;
 
     // Update sources
     const shotsSource = this.map.getSource(this.sourceId + '-shots');

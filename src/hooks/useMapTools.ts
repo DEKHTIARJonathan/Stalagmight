@@ -6,9 +6,10 @@ import type { SectionId, ShotId, StationRef, Coordinates } from '../types/projec
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 
 interface MoveDragStartData {
-  type: 'section' | 'station';
+  type: 'section' | 'station' | 'segment' | 'shot';
   sectionId?: number;
   stationRef?: StationRef;
+  shotIndex?: number;
   /** Screen coordinates of the click that initiated the drag */
   screenX?: number;
   screenY?: number;
@@ -248,6 +249,17 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           }
           break;
         }
+
+        case 'move_segment': {
+          // Start segment move drag - anchored sections are silently ignored
+          options.onMoveDragStart?.({
+            type: 'segment',
+            sectionId: ref.section_id,
+            screenX: mouseEvent.clientX,
+            screenY: mouseEvent.clientY,
+          });
+          break;
+        }
       }
     },
     [
@@ -310,10 +322,28 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           break;
         }
 
+        case 'move_shot': {
+          // Find the shot index within the section
+          const section = project?.sections.find((s) => s.id === sectionId);
+          if (section) {
+            const shotIndex = section.shots.findIndex((s) => s.id === shotId);
+            if (shotIndex !== -1) {
+              options.onMoveDragStart?.({
+                type: 'shot',
+                sectionId,
+                shotIndex,
+                screenX: mouseEvent.clientX,
+                screenY: mouseEvent.clientY,
+              });
+            }
+          }
+          break;
+        }
+
         // Other tools don't respond to shot clicks
       }
     },
-    [activeTool, addToSelection, openDialog, setSelection, showShots, showToast, toggleSelection]
+    [activeTool, addToSelection, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection]
   );
 
   // Handle empty click (no feature) - but use snapped station if available
