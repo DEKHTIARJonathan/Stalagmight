@@ -75,6 +75,15 @@ export type BatchCommand =
   | { type: 'move_station'; station_ref: StationRef; offset: Coordinates }
   | { type: 'set_zero_datum'; station_ref: StationRef; coordinates: { latitude: number; longitude: number; depth_reference: number } };
 
+// Section relationships (for section deletion dialog)
+export interface SectionRelationships {
+  merges: { station_a: StationRef; station_b: StationRef; merged_at: string }[];
+  closures: { id: number; station_a: StationRef; station_b: StationRef; path_length: number; misclosure_distance: number; error_percentage: number; horizontal_misclosure: number; vertical_misclosure: number }[];
+  has_section_offset: boolean;
+  station_offset_count: number;
+  zero_datum_count: number;
+}
+
 // Station connectivity check result
 export interface ConnectivityResult {
   connected: boolean;

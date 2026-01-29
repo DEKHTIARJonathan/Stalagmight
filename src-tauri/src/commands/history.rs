@@ -297,23 +297,31 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
             })
         }
 
-        // DeleteSection - show name and shot count from SectionSnapshot
-        (Command::DeleteSection { .. }, UndoData::SectionSnapshot { section_data, .. }) => {
-            Some(PreviewData {
-                changes: vec![
-                    FieldChange {
-                        field: "name".to_string(),
-                        old_value: section_data.name.clone().unwrap_or_else(|| "unnamed".to_string()),
-                        new_value: String::new(),
-                    },
-                    FieldChange {
-                        field: "shots".to_string(),
-                        old_value: section_data.shots.len().to_string(),
-                        new_value: "0".to_string(),
-                    },
-                ],
-                additional_changes: 0,
-            })
+        // DeleteSection - extract section info from ProjectSnapshotPair before snapshot
+        (Command::DeleteSection { section_id }, UndoData::ProjectSnapshotPair { before, .. }) => {
+            if let Ok(project) = serde_json::from_str::<crate::models::Project>(before) {
+                if let Some(section) = project.get_section(*section_id) {
+                    Some(PreviewData {
+                        changes: vec![
+                            FieldChange {
+                                field: "name".to_string(),
+                                old_value: section.name.clone().unwrap_or_else(|| "unnamed".to_string()),
+                                new_value: String::new(),
+                            },
+                            FieldChange {
+                                field: "shots".to_string(),
+                                old_value: section.shots.len().to_string(),
+                                new_value: "0".to_string(),
+                            },
+                        ],
+                        additional_changes: 0,
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         }
 
         // DeleteShot - show length and azimuth from ShotSnapshot
@@ -446,21 +454,28 @@ mod tests {
 
     #[test]
     fn test_entry_to_history_item_without_timestamp() {
+        // Build a Project with section_id=5 containing 2 shots for the "before" snapshot
+        let mut project = crate::models::Project::new("Test".to_string(), None);
+        // Advance next_section_id to 5
+        project.next_section_id = 5;
+        project.add_section(SectionData {
+            name: Some("Deleted Section".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#000".to_string(),
+            direction: None,
+            shots: vec![
+                ShotData::default(),
+                ShotData::default(),
+            ],
+        });
+        let before_json = serde_json::to_string(&project).unwrap();
+
         let entry = UndoEntry {
             command: Command::DeleteSection { section_id: 5 },
-            undo_data: UndoData::SectionSnapshot {
-                section_id: 5,
-                section_data: SectionData {
-                    name: Some("Deleted Section".to_string()),
-                    surveyor: None,
-                    date: None,
-                    color: "#000".to_string(),
-                    direction: None,
-                    shots: vec![
-                        ShotData::default(),
-                        ShotData::default(),
-                    ],
-                },
+            undo_data: UndoData::ProjectSnapshotPair {
+                before: before_json,
+                after: String::new(),
             },
             timestamp: None,
         };

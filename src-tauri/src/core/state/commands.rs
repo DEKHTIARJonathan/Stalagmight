@@ -307,8 +307,11 @@ impl AppState {
             None => return CommandResult::failure("No project open".to_string()),
         };
 
-        if project.remove_section(section_id).is_some() {
-            tracing::info!(section_id, "Section deleted");
+        // Only clean up if the section actually exists
+        if project.get_section(section_id).is_some() {
+            project.cleanup_section_references(section_id);
+            project.remove_section(section_id);
+            tracing::info!(section_id, "Section deleted (with cleanup)");
             CommandResult::success()
         } else {
             CommandResult::failure(format!("Section {} not found", section_id))

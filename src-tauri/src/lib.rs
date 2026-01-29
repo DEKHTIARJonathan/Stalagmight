@@ -423,6 +423,7 @@ pub fn run() {
             commands::section::get_connected_section_ids,
             commands::section::get_anchored_section_ids,
             commands::section::create_section_and_merge,
+            commands::section::get_section_relationships,
             // Shot commands
             commands::shot::create_shot,
             commands::shot::update_shot,

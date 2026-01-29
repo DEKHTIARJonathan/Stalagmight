@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
-use crate::models::{ClosureStrategy, Coordinates, Section, SectionId, SectionUpdates, ShotData, StationRef, SurveyDirection};
+use crate::models::{ClosureStrategy, Coordinates, Section, SectionId, SectionRelationships, SectionUpdates, ShotData, StationRef, SurveyDirection};
 
 /// Create a new section
 #[tauri::command]
@@ -193,4 +193,27 @@ pub(crate) fn create_section_and_merge_impl(
         target_station,
         closure_strategy,
     )
+}
+
+/// Get relationships that reference a section (merges, closures, offsets, zero datums).
+/// Used by the frontend to show affected relationships before section deletion.
+#[tauri::command]
+pub fn get_section_relationships(
+    state: State<AppState>,
+    section_id: SectionId,
+) -> Result<SectionRelationships, String> {
+    get_section_relationships_impl(state.inner(), section_id)
+}
+
+pub(crate) fn get_section_relationships_impl(
+    state: &AppState,
+    section_id: SectionId,
+) -> Result<SectionRelationships, String> {
+    let project = state.get_project_state().ok_or_else(|| "No project open".to_string())?;
+
+    if project.get_section(section_id).is_none() {
+        return Err(format!("Section {} not found", section_id));
+    }
+
+    Ok(project.get_section_relationships(section_id))
 }
