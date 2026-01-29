@@ -255,14 +255,22 @@ impl AppState {
 
             Command::MoveSegment { section_id, offset } => {
                 // Capture affected sections and their previous offsets at execution time
-                // so that undo/redo is correct even if the connectivity graph changes later
-                let connected = project.get_connected_section_ids(*section_id);
+                // so that undo/redo is correct even if the connectivity graph changes later.
+                // Filter to existing sections to avoid stale merges/closures referencing
+                // deleted sections (matches move_segment() filtering).
+                let existing: std::collections::HashSet<SectionId> =
+                    project.sections.iter().map(|s| s.id).collect();
+                let connected: Vec<SectionId> = project
+                    .get_connected_section_ids(*section_id)
+                    .into_iter()
+                    .filter(|id| existing.contains(id))
+                    .collect();
                 let mut previous_offsets = std::collections::HashMap::new();
                 for sid in &connected {
                     previous_offsets.insert(*sid, project.section_offsets.get(sid).copied());
                 }
                 UndoData::SegmentMoveInfo {
-                    affected_sections: connected.into_iter().collect(),
+                    affected_sections: connected,
                     previous_offsets,
                     offset: (offset.x, offset.y),
                 }
@@ -794,10 +802,16 @@ impl AppState {
                 ..
             } => {
                 // Redo by reapplying the offset to the captured affected sections
+                // Filter to sections that still exist (a section may have been deleted since capture)
                 match self.project.lock() {
                     Ok(mut proj_guard) => match proj_guard.as_mut() {
                         Some(project) => {
+                            let existing: std::collections::HashSet<SectionId> =
+                                project.sections.iter().map(|s| s.id).collect();
                             for sid in affected_sections {
+                                if !existing.contains(sid) {
+                                    continue;
+                                }
                                 let current = project.section_offsets.get(sid).copied().unwrap_or((0.0, 0.0));
                                 let new_offset = (current.0 + offset.0, current.1 + offset.1);
                                 project.section_offsets.insert(*sid, new_offset);
