@@ -98,8 +98,9 @@ export default function ContextMenu() {
         },
       ];
 
-      // "Add Shot Before" - only for station 0 (first station)
-      if (isFirstStation) {
+      // "Add Shot Before" - only for station 0 (first station) AND section has shots
+      // (empty sections should not offer prepend mode since azimuth reversal has no reference)
+      if (isFirstStation && totalShots > 0) {
         items.push({
           label: 'Add Shot Before',
           action: () => {
@@ -126,6 +127,7 @@ export default function ContextMenu() {
                 section_id: sectionId,
                 station_index: totalShots,
               },
+              appendMode: true,
               allowZeroLength: true,
               sourceGeometry: stationSourceGeometry,
             });
@@ -170,9 +172,9 @@ export default function ContextMenu() {
       const section = project?.sections.find((s) => s.id === target.sectionId);
       const shotIndex = section?.shots.findIndex((sh) => sh.id === target.shotId) ?? -1;
       const totalShots = section?.shots.length ?? 0;
-      const isFirst = shotIndex === 0;
-      const isLast = shotIndex === totalShots - 1;
-      const sourceShot = section?.shots[shotIndex];
+      const isFirst = shotIndex === 0 && totalShots > 0;
+      const isLast = shotIndex >= 0 && shotIndex === totalShots - 1;
+      const sourceShot = shotIndex >= 0 ? section?.shots[shotIndex] : undefined;
       const sourceGeometry = sourceShot ? {
         azimuth_in: sourceShot.azimuth_in,
         azimuth_out: sourceShot.azimuth_out,
@@ -226,6 +228,7 @@ export default function ContextMenu() {
                 section_id: target.sectionId,
                 station_index: totalShots,
               },
+              appendMode: true,
               allowZeroLength: true,
               sourceGeometry,
             });
@@ -251,7 +254,14 @@ export default function ContextMenu() {
       items.push({
         label: 'Delete Shot',
         action: () => {
-          openDialog('confirm-delete', { type: 'shot', sectionId: target.sectionId, shotId: target.shotId });
+          openDialog('confirm-delete', {
+            type: 'shot',
+            sectionId: target.sectionId,
+            shotId: target.shotId,
+            isFirst,
+            isLast,
+            totalShots,
+          });
         },
         danger: true,
       });
@@ -335,6 +345,7 @@ export default function ContextMenu() {
                 section_id: target.sectionId,
                 station_index: target.totalShots,
               },
+              appendMode: true,
               allowZeroLength: true,
               sourceGeometry,
             });
