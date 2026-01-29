@@ -254,11 +254,18 @@ impl AppState {
             }
 
             Command::MoveSegment { section_id, offset } => {
-                // Inverse is moving back by negative offset
-                UndoData::InverseCommand(Command::MoveSegment {
-                    section_id: *section_id,
-                    offset: Coordinates::new(-offset.x, -offset.y, -offset.z),
-                })
+                // Capture affected sections and their previous offsets at execution time
+                // so that undo/redo is correct even if the connectivity graph changes later
+                let connected = project.get_connected_section_ids(*section_id);
+                let mut previous_offsets = std::collections::HashMap::new();
+                for sid in &connected {
+                    previous_offsets.insert(*sid, project.section_offsets.get(sid).copied());
+                }
+                UndoData::SegmentMoveInfo {
+                    affected_sections: connected.into_iter().collect(),
+                    previous_offsets,
+                    offset: (offset.x, offset.y),
+                }
             }
 
             Command::MoveStation {
@@ -391,6 +398,16 @@ impl AppState {
 
     /// Perform undo - restore previous state based on undo data
     pub fn undo(&self) -> CommandResult {
+        // Serialize command execution to prevent concurrent interleaving
+        let _cmd_guard = match self.command_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
+        };
+        self.undo_inner()
+    }
+
+    /// Undo implementation (caller must hold command_lock)
+    fn undo_inner(&self) -> CommandResult {
         // Pop from undo stack
         let entry = {
             let mut stack = match self.undo_stack.lock() {
@@ -627,6 +644,33 @@ impl AppState {
                 }
             }
 
+            UndoData::SegmentMoveInfo {
+                previous_offsets,
+                ..
+            } => {
+                // Restore previous offsets for each affected section
+                match self.project.lock() {
+                    Ok(mut proj_guard) => match proj_guard.as_mut() {
+                        Some(project) => {
+                            for (section_id, prev_offset) in previous_offsets {
+                                match prev_offset {
+                                    Some(offset) => {
+                                        project.section_offsets.insert(*section_id, *offset);
+                                    }
+                                    None => {
+                                        project.section_offsets.remove(section_id);
+                                    }
+                                }
+                            }
+                            project.touch();
+                            CommandResult::success()
+                        }
+                        None => CommandResult::failure("No project open".to_string()),
+                    },
+                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                }
+            }
+
             UndoData::ProjectSnapshot(json) => {
                 // Restore entire project
                 match serde_json::from_str::<Project>(json.as_str()) {
@@ -687,6 +731,16 @@ impl AppState {
 
     /// Perform redo - re-execute the command or restore snapshot
     pub fn redo(&self) -> CommandResult {
+        // Serialize command execution to prevent concurrent interleaving
+        let _cmd_guard = match self.command_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
+        };
+        self.redo_inner()
+    }
+
+    /// Redo implementation (caller must hold command_lock)
+    fn redo_inner(&self) -> CommandResult {
         // Pop from redo stack
         let entry = {
             let mut stack = match self.undo_stack.lock() {
@@ -733,6 +787,28 @@ impl AppState {
             } => {
                 // Redo CreateShot by restoring from snapshot to preserve original ID
                 self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position)
+            }
+            UndoData::SegmentMoveInfo {
+                affected_sections,
+                offset,
+                ..
+            } => {
+                // Redo by reapplying the offset to the captured affected sections
+                match self.project.lock() {
+                    Ok(mut proj_guard) => match proj_guard.as_mut() {
+                        Some(project) => {
+                            for sid in affected_sections {
+                                let current = project.section_offsets.get(sid).copied().unwrap_or((0.0, 0.0));
+                                let new_offset = (current.0 + offset.0, current.1 + offset.1);
+                                project.section_offsets.insert(*sid, new_offset);
+                            }
+                            project.touch();
+                            CommandResult::success()
+                        }
+                        None => CommandResult::failure("No project open".to_string()),
+                    },
+                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                }
             }
             UndoData::ClosureInfo { closure } => {
                 // Redo CreateLoopClosure by restoring the captured closure to preserve its ID
@@ -843,7 +919,7 @@ impl AppState {
             Command::MoveSection { section_id, offset } => self.move_section(*section_id, *offset),
             Command::MoveSegment { section_id, offset } => self.move_segment(*section_id, *offset),
             Command::MoveStation { station_ref, offset } => self.move_station(*station_ref, *offset),
-            Command::Batch { commands } => self.execute_batch(commands.clone()),
+            Command::Batch { commands } => self.execute_batch(commands.clone(), false),
             _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),
         }
     }
@@ -970,6 +1046,12 @@ impl AppState {
     /// Perform multiple undos to reach a specific history point
     /// Index 0 = most recent action, so undo_to(N) executes (N+1) undos
     pub fn undo_to(&self, index: usize) -> CommandResult {
+        // Serialize command execution to prevent concurrent interleaving
+        let _cmd_guard = match self.command_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
+        };
+
         // Validate index first
         {
             let stack = match self.undo_stack.lock() {
@@ -988,7 +1070,7 @@ impl AppState {
         // Execute (index + 1) undos to include the target index
         let count = index + 1;
         for i in 0..count {
-            let result = self.undo();
+            let result = self.undo_inner();
             if !result.success {
                 return CommandResult::failure(format!(
                     "Undo failed at step {} of {}: {}",
@@ -1006,6 +1088,12 @@ impl AppState {
     /// Perform multiple redos to reach a specific history point
     /// Index 0 = most recent undone action, so redo_to(N) executes (N+1) redos
     pub fn redo_to(&self, index: usize) -> CommandResult {
+        // Serialize command execution to prevent concurrent interleaving
+        let _cmd_guard = match self.command_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
+        };
+
         // Validate index first
         {
             let stack = match self.undo_stack.lock() {
@@ -1024,7 +1112,7 @@ impl AppState {
         // Execute (index + 1) redos to include the target index
         let count = index + 1;
         for i in 0..count {
-            let result = self.redo();
+            let result = self.redo_inner();
             if !result.success {
                 return CommandResult::failure(format!(
                     "Redo failed at step {} of {}: {}",

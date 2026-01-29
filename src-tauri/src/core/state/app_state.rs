@@ -26,10 +26,10 @@ pub struct AppState {
     pub(super) recent_projects: Mutex<Vec<PathBuf>>,
     /// In-memory display settings cache (used when no DB is open, e.g., new unsaved project)
     pub(super) display_settings_cache: Mutex<HashMap<String, String>>,
-    /// Serialization lock for batch command execution.
-    /// Held for the entire duration of a batch to prevent concurrent commands
-    /// from interleaving with sub-commands or being clobbered by rollback.
-    pub(super) batch_lock: Mutex<()>,
+    /// Serialization lock for command execution.
+    /// Held for the entire duration of execute(), undo(), and redo() to prevent
+    /// concurrent commands from interleaving (especially with batch sub-commands).
+    pub(super) command_lock: Mutex<()>,
     /// Tile cache for offline satellite imagery.
     ///
     /// Note: Uses Arc<Mutex<...>> rather than plain Mutex<...> because the protocol handler
@@ -78,7 +78,7 @@ impl AppState {
             config: Mutex::new(config),
             recent_projects: Mutex::new(recent),
             display_settings_cache: Mutex::new(HashMap::new()),
-            batch_lock: Mutex::new(()),
+            command_lock: Mutex::new(()),
             tile_cache: Arc::new(Mutex::new(tile_cache)),
             app_handle: Mutex::new(None),
             active_loading: Mutex::new(None),
