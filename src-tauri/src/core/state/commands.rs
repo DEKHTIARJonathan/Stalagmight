@@ -895,13 +895,22 @@ impl AppState {
                 None => return CommandResult::failure(format!("Section {} not found", section_id)),
             };
 
-            // Get split data
-            let (pos, shots_before, shots_after) = match section.split_shots_at(shot_id) {
-                Some(data) => data,
+            // Pre-check: distinguish "shot not found" from "edge shot"
+            let shot_pos = section.shots.iter().position(|s| s.id == shot_id);
+            match shot_pos {
                 None => return CommandResult::failure(
-                    "Cannot split at edge shot (first or last). Use simple delete instead.".to_string()
+                    format!("Shot {} not found in section {}", shot_id, section_id)
                 ),
-            };
+                Some(p) if p == 0 || p == section.shots.len() - 1 => {
+                    return CommandResult::failure(
+                        "Cannot split at edge shot (first or last). Use simple delete instead.".to_string()
+                    );
+                }
+                _ => {}
+            }
+
+            // Get split data (safe to unwrap after pre-checks)
+            let (pos, shots_before, shots_after) = section.split_shots_at(shot_id).unwrap();
 
             // Capture deleted shot data for offset calculation
             let deleted_shot_data = section.shots[pos].to_shot_data();
@@ -913,14 +922,10 @@ impl AppState {
             let direction = section.direction;
 
             // Step 3: Modify original section -> section A
+            // Truncate in-place to preserve existing Shot IDs and next_shot_id
             let section_mut = project.get_section_mut(section_id).unwrap();
             section_mut.name = Some(name_a);
-            // Replace shots with shots_before
-            section_mut.shots.clear();
-            section_mut.next_shot_id = 0;
-            for shot_data in &shots_before {
-                section_mut.add_shot(shot_data.clone());
-            }
+            section_mut.shots.truncate(pos); // keep shots[0..pos], drop deleted + after
 
             // Step 4: Calculate offset for section B
             // Walk shots_before + deleted shot to accumulate (bx, by)
@@ -1061,11 +1066,20 @@ impl AppState {
         };
 
         // Step 8: Push single undo entry with ProjectSnapshotPair
+        // Use a Batch with both DeleteShot + CreateSection to accurately describe the compound op
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::DeleteShot {
                     section_id,
                     shot_id,
+                },
+                Command::CreateSection {
+                    name: Some(format!("Split from section {}", section_id)),
+                    surveyor: None,
+                    date: None,
+                    color: String::new(),
+                    direction: None,
+                    shots: Vec::new(),
                 },
             ],
         };

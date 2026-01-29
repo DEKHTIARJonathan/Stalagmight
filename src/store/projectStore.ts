@@ -176,6 +176,7 @@ interface ProjectStore {
   createShot: (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => Promise<CommandResult>;
   updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdates) => Promise<CommandResult>;
   deleteShot: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
+  deleteShotAndSplit: (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
   setShotVirtual: (sectionId: SectionId, shotId: ShotId, isVirtual: boolean) => Promise<CommandResult>;
 
   mergeStations: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
