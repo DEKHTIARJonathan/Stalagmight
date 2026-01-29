@@ -599,8 +599,6 @@ pub struct ShortcutsConfig {
     pub undo: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub redo: Vec<String>,
-    #[serde(deserialize_with = "deserialize_shortcut_vec")]
-    pub save: Vec<String>,
 
     // View
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
@@ -631,6 +629,14 @@ pub struct ShortcutsConfig {
     pub toggle_data_table: Vec<String>,
 
     // File
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub save: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub new_file: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub open_file: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub save_as: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub import_dmp: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
@@ -684,7 +690,6 @@ impl ShortcutsConfig {
         normalize_shortcut_field(&mut self.move_station, &defaults.move_station, "move_station");
         normalize_shortcut_field(&mut self.undo, &defaults.undo, "undo");
         normalize_shortcut_field(&mut self.redo, &defaults.redo, "redo");
-        normalize_shortcut_field(&mut self.save, &defaults.save, "save");
         normalize_shortcut_field(
             &mut self.toggle_depth_gradient,
             &defaults.toggle_depth_gradient,
@@ -733,6 +738,10 @@ impl ShortcutsConfig {
             &defaults.toggle_data_table,
             "toggle_data_table",
         );
+        normalize_shortcut_field(&mut self.save, &defaults.save, "save");
+        normalize_shortcut_field(&mut self.new_file, &defaults.new_file, "new_file");
+        normalize_shortcut_field(&mut self.open_file, &defaults.open_file, "open_file");
+        normalize_shortcut_field(&mut self.save_as, &defaults.save_as, "save_as");
         normalize_shortcut_field(&mut self.import_dmp, &defaults.import_dmp, "import_dmp");
         normalize_shortcut_field(&mut self.export, &defaults.export, "export");
     }
