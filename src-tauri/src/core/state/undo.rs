@@ -27,13 +27,18 @@ impl AppState {
             // For DeleteSection, capture full project snapshot (before/after pair)
             // because cleanup_section_references removes merges, closures, offsets, and
             // zero datums — a SectionSnapshot alone cannot restore those.
-            Command::DeleteSection { .. } => {
-                match serde_json::to_string(project) {
-                    Ok(before) => UndoData::ProjectSnapshotPair {
-                        before,
-                        after: String::new(), // Filled by finalize_undo_data
-                    },
-                    Err(_) => UndoData::None,
+            // Guard: only serialize if section exists (avoids overhead for doomed commands).
+            Command::DeleteSection { section_id } => {
+                if project.get_section(*section_id).is_some() {
+                    match serde_json::to_string(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
+                    }
+                } else {
+                    UndoData::None
                 }
             }
 

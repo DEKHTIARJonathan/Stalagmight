@@ -25,6 +25,8 @@ export default function ConfirmDialog() {
       invoke<SectionRelationships>('get_section_relationships', { sectionId })
         .then(setRelationships)
         .catch(() => setRelationships(null));
+    } else {
+      setRelationships(null);
     }
   }, [type, sectionId]);
 
@@ -73,6 +75,7 @@ export default function ConfirmDialog() {
     relationships !== null &&
     (relationships.merges.length > 0 ||
       relationships.closures.length > 0 ||
+      relationships.has_section_offset ||
       relationships.station_offset_count > 0 ||
       relationships.zero_datum_count > 0);
 
@@ -96,6 +99,9 @@ export default function ConfirmDialog() {
               )}
               {relationships!.closures.length > 0 && (
                 <li>{relationships!.closures.length} loop closure{relationships!.closures.length !== 1 ? 's' : ''}</li>
+              )}
+              {relationships!.has_section_offset && (
+                <li>1 section offset</li>
               )}
               {relationships!.station_offset_count > 0 && (
                 <li>{relationships!.station_offset_count} station offset{relationships!.station_offset_count !== 1 ? 's' : ''}</li>

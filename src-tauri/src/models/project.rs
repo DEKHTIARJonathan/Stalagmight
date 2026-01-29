@@ -254,15 +254,7 @@ impl Project {
         self.section_offsets.remove(&section_id);
 
         // Remove station offsets referencing this section
-        let station_offset_keys: Vec<StationRef> = self
-            .station_offsets
-            .keys()
-            .filter(|sr| sr.section_id == section_id)
-            .copied()
-            .collect();
-        for key in station_offset_keys {
-            self.station_offsets.remove(&key);
-        }
+        self.station_offsets.retain(|sr, _| sr.section_id != section_id);
 
         // Remove zero datums referencing this section
         self.zero_datums.retain(|zd| zd.station_ref.section_id != section_id);
