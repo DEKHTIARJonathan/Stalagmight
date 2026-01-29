@@ -210,6 +210,7 @@ interface EditableTableProps<T> extends Omit<TableProps<T>, 'onRowClick'> {
   // Row interaction props
   onRowClick?: (item: T, index: number) => void;
   onRowDoubleClick?: (item: T, index: number) => void;
+  onRowContextMenu?: (item: T, index: number, event: React.MouseEvent) => void;
   onRowHover?: (item: T | null, index: number | null) => void;
   hoveredKey?: T[keyof T] | null;
   scrollToKey?: T[keyof T] | null;
@@ -227,6 +228,7 @@ export function EditableTable<T extends object>({
   emptyMessage = 'No data',
   onRowClick,
   onRowDoubleClick,
+  onRowContextMenu,
   onRowHover,
   hoveredKey,
   scrollToKey,
@@ -436,6 +438,7 @@ export function EditableTable<T extends object>({
                   className={getRowClassName(item, isSelected, isHovered)}
                   onClick={(e) => handleRowClick(e, item, index)}
                   onDoubleClick={() => handleRowDoubleClick(item, index)}
+                  onContextMenu={onRowContextMenu ? (e) => onRowContextMenu(item, index, e) : undefined}
                   onMouseEnter={() => handleRowMouseEnter(item, index)}
                   onMouseLeave={handleRowMouseLeave}
                   data-testid={`table-row-${String(key)}`}

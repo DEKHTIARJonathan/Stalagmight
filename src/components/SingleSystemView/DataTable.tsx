@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { type Section, type Shot } from '../../types/project';
+import { type Section, type Shot, type SectionId, type ShotId } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { EditableTable } from '../common/Table';
@@ -33,6 +33,7 @@ export default function DataTable({ sections }: DataTableProps) {
     dataTableHeight,
     announceSelection,
     setHoveredSectionId,
+    openDialog,
   } = useUIStore();
 
   // Create a map of shot warnings for quick lookup
@@ -287,6 +288,32 @@ export default function DataTable({ sections }: DataTableProps) {
     [selectedSection, setHoveredShot]
   );
 
+  // Row right-click opens context menu
+  const handleRowContextMenu = useCallback(
+    (shot: Shot, index: number, event: React.MouseEvent) => {
+      event.preventDefault();
+      if (!selectedSection) return;
+
+      const totalShots = selectedSection.shots.length;
+      const isFirst = index === 0;
+      const isLast = index === totalShots - 1;
+
+      openDialog('context-menu', {
+        target: {
+          type: 'datatable-shot' as const,
+          sectionId: selectedSection.id as SectionId,
+          shotId: shot.id as ShotId,
+          isFirst,
+          isLast,
+          totalShots,
+          sectionName: selectedSection.name ?? `Section ${selectedSection.id}`,
+        },
+        position: { x: event.clientX, y: event.clientY },
+      });
+    },
+    [selectedSection, openDialog]
+  );
+
   // Section dropdown manual change - select the new section
   // Note: Select component with controlled value doesn't call onChange when value changes
   // programmatically, only on user interaction, so no feedback loop prevention needed
@@ -496,6 +523,7 @@ export default function DataTable({ sections }: DataTableProps) {
               scrollToKey={scrollToKey}
               onRowClick={handleRowClick}
               onRowDoubleClick={handleRowDoubleClick}
+              onRowContextMenu={handleRowContextMenu}
               onRowHover={handleRowHover}
               emptyMessage="No shots in this section"
             />

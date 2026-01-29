@@ -21,6 +21,7 @@ export default function ContextMenu() {
     | { type: 'station'; ref: StationRef }
     | { type: 'shot'; sectionId: SectionId; shotId: ShotId }
     | { type: 'section'; sectionId: SectionId }
+    | { type: 'datatable-shot'; sectionId: SectionId; shotId: ShotId; isFirst: boolean; isLast: boolean; totalShots: number; sectionName: string }
     | null;
   const position = dialogData.position as { x: number; y: number } | undefined;
 
@@ -193,6 +194,62 @@ export default function ContextMenu() {
           danger: true,
         },
       ];
+    }
+
+    if (target.type === 'datatable-shot') {
+      const items: ContextMenuItem[] = [];
+
+      // "Add Shot Before" - only for first shot (prepend mode)
+      if (target.isFirst) {
+        items.push({
+          label: 'Add Shot Before',
+          action: () => {
+            openDialog('draw-shot', {
+              fromStation: {
+                section_id: target.sectionId,
+                station_index: 0,
+              },
+              prependMode: true,
+              allowZeroLength: true,
+            });
+          },
+        });
+      }
+
+      // "Add Shot After" - only for last shot
+      if (target.isLast) {
+        items.push({
+          label: 'Add Shot After',
+          action: () => {
+            // Find the section to get the last station index
+            const section = project?.sections.find((s) => s.id === target.sectionId);
+            const stationIndex = section ? section.shots.length : 0;
+            openDialog('draw-shot', {
+              fromStation: {
+                section_id: target.sectionId,
+                station_index: stationIndex,
+              },
+              allowZeroLength: true,
+            });
+          },
+        });
+      }
+
+      // Separator before delete (only if there are add items above)
+      if (items.length > 0) {
+        items.push({ label: '', action: () => {}, separator: true });
+      }
+
+      // "Delete Shot" - always visible, danger-styled
+      items.push({
+        label: 'Delete Shot',
+        action: () => {
+          openDialog('confirm-delete', { type: 'shot', sectionId: target.sectionId, shotId: target.shotId });
+        },
+        danger: true,
+      });
+
+      return items;
     }
 
     return [];
