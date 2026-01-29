@@ -518,6 +518,7 @@ mod tests {
                 station_a: StationRef::new(0, 0),
                 station_b: StationRef::new(1, 0),
                 removed_closures: Vec::new(),
+                previous_offsets: std::collections::HashMap::new(),
             },
             timestamp: None,
         };

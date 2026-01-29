@@ -144,15 +144,27 @@ impl AppState {
                 is_virtual: !*is_virtual,
             }),
 
-            // For merge, store the info to unmerge
+            // For merge, store the info to unmerge + section offsets to restore positions
             Command::MergeStations {
                 station_a,
                 station_b,
-            } => UndoData::MergeInfo {
-                station_a: *station_a,
-                station_b: *station_b,
-                removed_closures: Vec::new(),
-            },
+            } => {
+                // Capture section offsets for both merge groups before the merge moves them
+                let mut previous_offsets = std::collections::HashMap::new();
+                let sections_a = project.get_merged_section_ids(station_a.section_id);
+                let sections_b = project.get_merged_section_ids(station_b.section_id);
+                for section_id in sections_a.into_iter().chain(sections_b.into_iter()) {
+                    previous_offsets
+                        .insert(section_id, project.section_offsets.get(&section_id).copied());
+                }
+
+                UndoData::MergeInfo {
+                    station_a: *station_a,
+                    station_b: *station_b,
+                    removed_closures: Vec::new(),
+                    previous_offsets,
+                }
+            }
 
             // For unmerge, we need to know which stations to re-merge
             // Also capture closures that will be removed during unmerge
@@ -454,14 +466,26 @@ impl AppState {
             UndoData::MergeInfo {
                 station_a,
                 station_b,
+                previous_offsets,
                 ..
             } => {
-                // Undo a merge by unmerging the stations.
-                // Note: removed_closures is always empty for MergeInfo (merges don't remove closures);
-                // closure restoration is handled by UnmergeInfo instead.
+                // Undo a merge by restoring section offsets and unmerging the stations.
                 match self.project.lock() {
                     Ok(mut proj_guard) => match proj_guard.as_mut() {
                         Some(project) => {
+                            // Restore section offsets to pre-merge positions
+                            for (section_id, prev_offset) in previous_offsets {
+                                match prev_offset {
+                                    Some(offset) => {
+                                        project.section_offsets.insert(*section_id, *offset);
+                                    }
+                                    None => {
+                                        project.section_offsets.remove(section_id);
+                                    }
+                                }
+                            }
+
+                            // Then unmerge the stations
                             project.unmerge_stations(*station_a, *station_b);
                             CommandResult::success()
                         }

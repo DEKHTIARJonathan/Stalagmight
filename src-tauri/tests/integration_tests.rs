@@ -671,6 +671,7 @@ fn test_comprehensive_undo_types() {
             station_a: StationRef::new(0, 0),
             station_b: StationRef::new(1, 0),
             removed_closures: Vec::new(),
+            previous_offsets: HashMap::new(),
         },
         UndoData::ZeroDatumInfo {
             station_ref: StationRef::new(0, 0),
