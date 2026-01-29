@@ -4258,6 +4258,96 @@ fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
 }
 
 #[test]
+fn test_insert_shot_before_first_position_and_undo_redo() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let section_result = state.execute(Command::CreateSection {
+        name: Some("Before Insert".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(10.0), test_shot_data(20.0)],
+    });
+    let section_id = section_result.section_id.unwrap();
+
+    let project = state.get_project_state().unwrap();
+    let first_shot_id = project.sections[0].shots[0].id;
+
+    // Insert before the first shot (position 0 / prepend)
+    let result = state.execute(Command::CreateShot {
+        section_id,
+        shot: test_shot_data(5.0),
+        after_shot_id: None,
+        before_shot_id: Some(first_shot_id),
+    });
+    assert!(result.success);
+    assert!(result.shot_id.is_some(), "shot_id must be returned on success");
+    let new_shot_id = result.shot_id.unwrap();
+
+    // Verify insertion at position 0
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots.len(), 3);
+    assert_eq!(project.sections[0].shots[0].length, 5.0, "Prepended shot should be first");
+    assert_eq!(project.sections[0].shots[0].id, new_shot_id);
+    assert_eq!(project.sections[0].shots[1].length, 10.0);
+    assert_eq!(project.sections[0].shots[2].length, 20.0);
+
+    // Undo the prepend
+    let undo_result = state.undo();
+    assert!(undo_result.success);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots.len(), 2);
+    assert_eq!(project.sections[0].shots[0].length, 10.0);
+    assert_eq!(project.sections[0].shots[1].length, 20.0);
+
+    // Redo the prepend - should restore at position 0 with same ID
+    let redo_result = state.redo();
+    assert!(redo_result.success);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots.len(), 3);
+    assert_eq!(project.sections[0].shots[0].length, 5.0);
+    assert_eq!(
+        project.sections[0].shots[0].id, new_shot_id,
+        "Shot ID must be preserved after undo/redo"
+    );
+}
+
+#[test]
+fn test_create_shot_rejects_both_after_and_before() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let section_result = state.execute(Command::CreateSection {
+        name: Some("Reject Both".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(10.0), test_shot_data(20.0)],
+    });
+    let section_id = section_result.section_id.unwrap();
+
+    let result = state.execute(Command::CreateShot {
+        section_id,
+        shot: test_shot_data(5.0),
+        after_shot_id: Some(0),
+        before_shot_id: Some(1),
+    });
+    assert!(!result.success);
+    assert!(result.error.as_deref().unwrap().contains("Cannot specify both"));
+}
+
+#[test]
 fn test_delete_shot_undo_redo_still_works() {
     // Regression test: ensure DeleteShot undo/redo behavior is unchanged
     let state = AppState::new().unwrap();
