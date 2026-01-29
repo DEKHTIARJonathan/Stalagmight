@@ -10,6 +10,8 @@ export default function DrawShotDialog() {
   const { createShot, project, stations } = useProjectStore();
 
   const fromStation = dialogData.fromStation as StationRef | undefined;
+  const allowZeroLength = dialogData.allowZeroLength as boolean | undefined;
+  const prependMode = dialogData.prependMode as boolean | undefined;
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,8 +62,9 @@ export default function DrawShotDialog() {
   };
 
   const validateForm = (): boolean => {
-    if (!length || parseFloat(length) <= 0) {
-      setError('Length must be greater than 0');
+    const lengthVal = parseFloat(length);
+    if (!length || isNaN(lengthVal) || (allowZeroLength ? lengthVal < 0 : lengthVal <= 0)) {
+      setError(allowZeroLength ? 'Length must be 0 or greater' : 'Length must be greater than 0');
       return false;
     }
     const azVal = parseFloat(azimuthIn);
@@ -86,8 +89,11 @@ export default function DrawShotDialog() {
 
     try {
       // Build shot data with normalized azimuths
-      const normalizedAzimuthIn = normalizeAzimuth(parseFloat(azimuthIn));
-      const normalizedAzimuthOut = azimuthOut ? normalizeAzimuth(parseFloat(azimuthOut)) : normalizedAzimuthIn;
+      // In prepend mode, reverse the azimuth by 180° (user enters forward direction, shot stores backward)
+      const rawAzimuthIn = parseFloat(azimuthIn);
+      const rawAzimuthOut = azimuthOut ? parseFloat(azimuthOut) : rawAzimuthIn;
+      const normalizedAzimuthIn = normalizeAzimuth(prependMode ? rawAzimuthIn + 180 : rawAzimuthIn);
+      const normalizedAzimuthOut = normalizeAzimuth(prependMode ? rawAzimuthOut + 180 : rawAzimuthOut);
       const shotData: ShotData = {
         azimuth_in: normalizedAzimuthIn,
         azimuth_out: normalizedAzimuthOut,
@@ -107,13 +113,17 @@ export default function DrawShotDialog() {
       };
 
       // Determine where to insert the shot
-      // If station_index === shots.length, append to end
-      // Otherwise, insert after the shot at station_index - 1
-      const afterShotId = fromStation.station_index > 0 && fromStation.station_index <= section.shots.length
-        ? section.shots[fromStation.station_index - 1]?.id
-        : undefined;
+      let afterShotId: number | undefined;
+      let beforeShotId: number | undefined;
+      if (prependMode && section.shots.length > 0) {
+        // Prepend: insert before the first shot
+        beforeShotId = section.shots[0]?.id;
+      } else if (fromStation.station_index > 0 && fromStation.station_index <= section.shots.length) {
+        // Append after the shot at station_index - 1
+        afterShotId = section.shots[fromStation.station_index - 1]?.id;
+      }
 
-      const result = await createShot(fromStation.section_id, shotData, afterShotId);
+      const result = await createShot(fromStation.section_id, shotData, afterShotId, beforeShotId);
 
       if (result.success) {
         setDrawFromStation(null);
@@ -212,7 +222,7 @@ export default function DrawShotDialog() {
           </label>
           <input
             type="number"
-            min="0.01"
+            min={allowZeroLength ? '0' : '0.01'}
             step="0.01"
             value={length}
             onChange={(e) => setLength(e.target.value)}

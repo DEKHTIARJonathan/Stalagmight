@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { type Section, type Shot, type SectionId, type ShotId } from '../../types/project';
+import { type Section, type Shot } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { EditableTable } from '../common/Table';
@@ -300,9 +300,9 @@ export default function DataTable({ sections }: DataTableProps) {
 
       openDialog('context-menu', {
         target: {
-          type: 'datatable-shot' as const,
-          sectionId: selectedSection.id as SectionId,
-          shotId: shot.id as ShotId,
+          type: 'datatable-shot',
+          sectionId: selectedSection.id,
+          shotId: shot.id,
           isFirst,
           isLast,
           totalShots,
