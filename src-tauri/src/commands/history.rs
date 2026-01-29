@@ -145,6 +145,7 @@ fn get_command_type(command: &Command) -> String {
         Command::SetZeroDatum { .. } => "set_zero_datum".to_string(),
         Command::RemoveZeroDatum { .. } => "remove_zero_datum".to_string(),
         Command::MoveSection { .. } => "move_section".to_string(),
+        Command::MoveSegment { .. } => "move_segment".to_string(),
         Command::MoveStation { .. } => "move_station".to_string(),
         Command::Batch { .. } => "batch".to_string(),
         Command::MergeProjects { .. } => "merge_projects".to_string(),

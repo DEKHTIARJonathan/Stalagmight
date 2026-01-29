@@ -418,6 +418,10 @@ pub fn run() {
             commands::section::delete_section,
             commands::section::get_section,
             commands::section::move_section,
+            commands::section::move_segment,
+            commands::section::execute_batch,
+            commands::section::get_connected_section_ids,
+            commands::section::get_anchored_section_ids,
             commands::section::create_section_and_merge,
             // Shot commands
             commands::shot::create_shot,
