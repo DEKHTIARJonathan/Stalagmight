@@ -615,11 +615,13 @@ impl AppState {
             None => return CommandResult::failure("No project open".to_string()),
         };
 
-        // Get all connected section IDs (merges + closures)
-        let connected = project.get_connected_section_ids(section_id);
-        if connected.is_empty() {
+        // Validate section exists
+        if !project.sections.iter().any(|s| s.id == section_id) {
             return CommandResult::failure("Section not found".to_string());
         }
+
+        // Get all connected section IDs (merges + closures)
+        let connected = project.get_connected_section_ids(section_id);
 
         // Apply offset to every section in the connected set
         for sid in &connected {
@@ -670,12 +672,14 @@ impl AppState {
         CommandResult::success()
     }
 
-    fn execute_batch(&self, commands: Vec<Command>) -> CommandResult {
+    pub(super) fn execute_batch(&self, commands: Vec<Command>) -> CommandResult {
         let mut all_warnings = Vec::new();
         let mut section_ids = Vec::new();
 
         for cmd in commands {
-            let result = self.execute(cmd);
+            // Use execute_without_undo to avoid pushing individual undo entries;
+            // the outer Batch command handles undo as a single unit via ProjectSnapshotPair
+            let result = self.execute_without_undo(cmd);
             if !result.success {
                 return result;
             }
@@ -782,8 +786,16 @@ impl AppState {
         let project = proj_guard
             .as_ref()
             .ok_or_else(|| "No project open".to_string())?;
+
+        // Validate section exists
+        if !project.sections.iter().any(|s| s.id == section_id) {
+            return Err(format!("Section {} not found", section_id));
+        }
+
         let connected = project.get_connected_section_ids(section_id);
-        Ok(connected.into_iter().collect())
+        let mut result: Vec<SectionId> = connected.into_iter().collect();
+        result.sort_unstable();
+        Ok(result)
     }
 
     /// Get all section IDs belonging to segments that contain a zero datum
@@ -801,6 +813,8 @@ impl AppState {
             let merged = project.get_merged_section_ids(zd.station_ref.section_id);
             anchored.extend(merged);
         }
-        Ok(anchored.into_iter().collect())
+        let mut result: Vec<SectionId> = anchored.into_iter().collect();
+        result.sort_unstable();
+        Ok(result)
     }
 }
