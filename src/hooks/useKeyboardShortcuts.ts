@@ -23,6 +23,8 @@ type ShortcutAction =
   | 'measure'
   | 'move_section'
   | 'move_station'
+  | 'move_segment'
+  | 'move_shot'
   // Edit
   | 'undo'
   | 'redo'
@@ -61,6 +63,8 @@ const TOOL_ACTIONS: Partial<Record<ShortcutAction, ToolType>> = {
   measure: 'measure',
   move_section: 'move_section',
   move_station: 'move_station',
+  move_segment: 'move_segment',
+  move_shot: 'move_shot',
 };
 
 /**
@@ -106,6 +110,8 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   measure: 'Measure tool',
   move_section: 'Move section tool',
   move_station: 'Move station tool',
+  move_segment: 'Move segment tool',
+  move_shot: 'Move shot tool',
   undo: 'Undo',
   redo: 'Redo',
   toggle_depth_gradient: 'Depth gradient',
@@ -156,6 +162,8 @@ function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutActio
     'measure',
     'move_section',
     'move_station',
+    'move_segment',
+    'move_shot',
     // Edit
     'undo',
     'redo',
@@ -430,7 +438,9 @@ export function useKeyboardShortcuts() {
         case 'merge':
         case 'measure':
         case 'move_section':
-        case 'move_station': {
+        case 'move_station':
+        case 'move_segment':
+        case 'move_shot': {
           const tool = TOOL_ACTIONS[action];
           if (tool) {
             event.preventDefault();

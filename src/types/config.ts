@@ -192,6 +192,8 @@ export interface ShortcutsConfig {
   measure: string[];
   move_section: string[];
   move_station: string[];
+  move_segment: string[];
+  move_shot: string[];
 
   // Edit
   undo: string[];
@@ -354,15 +356,17 @@ export const defaultConfig: Config = {
     delete_tool: ['X'],
     merge: ['M'],
     measure: ['R'],
-    move_section: ['V'],
+    move_section: ['Shift+V'],
     move_station: ['T'],
+    move_segment: ['V'],
+    move_shot: ['G'],
 
     // Edit
     undo: ['Ctrl+Z'],
     redo: ['Ctrl+Y', 'Ctrl+Shift+Z'],
 
     // View
-    toggle_depth_gradient: ['G'],
+    toggle_depth_gradient: ['Shift+D'],
     toggle_grid: ['Shift+G'],
     toggle_satellite: ['B'],
     toggle_station_labels: ['L'],

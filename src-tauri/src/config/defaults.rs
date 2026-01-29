@@ -165,15 +165,17 @@ impl Default for ShortcutsConfig {
             delete_tool: vec!["X".to_string()],
             merge: vec!["M".to_string()],
             measure: vec!["R".to_string()],
-            move_section: vec!["V".to_string()],
+            move_section: vec!["Shift+V".to_string()],
             move_station: vec!["T".to_string()],
+            move_segment: vec!["V".to_string()],
+            move_shot: vec!["G".to_string()],
 
             // Edit
             undo: vec!["Ctrl+Z".to_string()],
             redo: vec!["Ctrl+Y".to_string(), "Ctrl+Shift+Z".to_string()],
 
             // View
-            toggle_depth_gradient: vec!["G".to_string()],
+            toggle_depth_gradient: vec!["Shift+D".to_string()],
             toggle_grid: vec!["Shift+G".to_string()],
             toggle_satellite: vec!["B".to_string()],
             toggle_station_labels: vec!["L".to_string()],
