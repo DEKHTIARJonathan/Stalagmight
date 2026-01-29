@@ -682,6 +682,20 @@ impl ShortcutsConfig {
             }
         }
 
+        // Migrate shortcut reassignments from pre-move-segment era:
+        // V was move_section, now it's move_segment; move_section moves to Shift+V
+        // G was toggle_depth_gradient, now it's move_shot; toggle_depth_gradient moves to Shift+D
+        if self.move_segment.is_empty() && self.move_section == vec!["V".to_string()] {
+            self.move_section = vec!["Shift+V".to_string()];
+            self.move_segment = vec!["V".to_string()];
+            tracing::info!("Migrated move_section shortcut: V -> Shift+V (V now used by move_segment)");
+        }
+        if self.move_shot.is_empty() && self.toggle_depth_gradient == vec!["G".to_string()] {
+            self.toggle_depth_gradient = vec!["Shift+D".to_string()];
+            self.move_shot = vec!["G".to_string()];
+            tracing::info!("Migrated toggle_depth_gradient shortcut: G -> Shift+D (G now used by move_shot)");
+        }
+
         // Normalize each field
         normalize_shortcut_field(&mut self.select, &defaults.select, "select");
         normalize_shortcut_field(&mut self.pan, &defaults.pan, "pan");

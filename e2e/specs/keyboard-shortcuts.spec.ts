@@ -25,8 +25,9 @@ describe('Keyboard Shortcuts', () => {
       { key: 'x', name: 'delete', expectedClass: 'delete' },
       { key: 'm', name: 'merge', expectedClass: 'merge' },
       { key: 'r', name: 'measure', expectedClass: 'measure' },
-      { key: 'v', name: 'moveSection', expectedClass: 'move' },
+      { key: 'v', name: 'moveSegment', expectedClass: 'segment' },
       { key: 't', name: 'moveStation', expectedClass: 'station' },
+      { key: 'g', name: 'moveShot', expectedClass: 'shot' },
     ];
 
     for (const tool of tools) {

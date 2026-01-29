@@ -781,18 +781,21 @@ export async function redo(): Promise<void> {
  * Switch to a specific map tool by keyboard shortcut.
  */
 export async function selectTool(
-  tool: 'select' | 'pan' | 'zoom' | 'draw' | 'delete' | 'merge' | 'measure' | 'moveSection' | 'moveStation'
+  tool: 'select' | 'pan' | 'zoom' | 'draw' | 'delete' | 'merge' | 'measure' | 'moveSection' | 'moveStation' | 'moveSegment' | 'moveShot'
 ): Promise<void> {
-  const toolKeys: Record<string, string> = {
-    select: 's',
-    pan: 'p',
-    zoom: 'z',
-    draw: 'd',
-    delete: 'x',
-    merge: 'm',
-    measure: 'r',
-    moveSection: 'v',
-    moveStation: 't',
+  // Keys to send for each tool (arrays for multi-key combos like Shift+key)
+  const toolKeys: Record<string, string[]> = {
+    select: ['s'],
+    pan: ['p'],
+    zoom: ['z'],
+    draw: ['d'],
+    delete: ['x'],
+    merge: ['m'],
+    measure: ['r'],
+    moveSection: ['Shift', 'v'],
+    moveStation: ['t'],
+    moveSegment: ['v'],
+    moveShot: ['g'],
   };
 
   // Map camelCase helper names to snake_case store names
@@ -806,9 +809,11 @@ export async function selectTool(
     measure: 'measure',
     moveSection: 'move_section',
     moveStation: 'move_station',
+    moveSegment: 'move_segment',
+    moveShot: 'move_shot',
   };
 
-  await browser.keys([toolKeys[tool] ?? 's']);
+  await browser.keys(toolKeys[tool] ?? ['s']);
   await waitForActiveTool(storeToolNames[tool] ?? tool);
 }
 
