@@ -10,12 +10,45 @@
  * - Escape: Deselect all (or close context menu)
  * - Ctrl+A: Select all systems
  * - Arrow keys: Navigate to nearest system in direction (map view only)
+ * - Ctrl+N: New project (configurable)
+ * - Ctrl+O: Open project (configurable)
+ * - Ctrl+I: Import DMP (configurable)
  */
 
 import { useEffect, useRef, useCallback, type Dispatch, type SetStateAction } from 'react';
+import { open } from '@tauri-apps/plugin-dialog';
 import { useGlobalViewStore } from '../store/globalViewStore';
+import { useProjectStore } from '../store/projectStore';
+import { useUIStore } from '../store/uiStore';
+import { parseKeyEvent, normalizeShortcut } from '../utils/shortcuts';
+import { defaultConfig } from '../types/config';
+import type { ShortcutsConfig } from '../types/config';
 import type { ProjectMetadata } from '../types/project';
 import type { GlobalViewMapHandle } from '../components/GlobalView/GlobalViewMap';
+
+/**
+ * File actions available in the global view.
+ */
+type FileAction = 'new_file' | 'open_file' | 'import_dmp';
+const FILE_ACTIONS: FileAction[] = ['new_file', 'open_file', 'import_dmp'];
+
+/**
+ * Build a shortcut map for file actions only.
+ */
+function buildFileShortcutMap(shortcuts: ShortcutsConfig): Map<string, FileAction> {
+  const map = new Map<string, FileAction>();
+  for (const action of FILE_ACTIONS) {
+    const bindings = shortcuts[action];
+    if (!Array.isArray(bindings)) continue;
+    for (const binding of bindings) {
+      const normalized = normalizeShortcut(binding);
+      if (normalized) {
+        map.set(normalized, action);
+      }
+    }
+  }
+  return map;
+}
 
 interface ContextMenuState {
   visible: boolean;
@@ -62,6 +95,15 @@ export function useGlobalViewShortcuts({
   handleRemoveFromRecent,
 }: UseGlobalViewShortcutsOptions): void {
   const { clearSelection, selectSystem, setSelectedSystems } = useGlobalViewStore();
+  const { openDialog, setImportContext, hasImportedDmpPath, addImportedDmpPath } = useUIStore();
+  const { importDmp, config } = useProjectStore();
+
+  // File shortcut map - config-aware, updated when config changes
+  const fileShortcutMapRef = useRef(buildFileShortcutMap(defaultConfig.shortcuts));
+  useEffect(() => {
+    const shortcuts = config?.shortcuts ?? defaultConfig.shortcuts;
+    fileShortcutMapRef.current = buildFileShortcutMap(shortcuts);
+  }, [config?.shortcuts]);
 
   // Store values in refs to avoid stale closures in keydown handler
   const multiSelectedIdsRef = useRef(multiSelectedIds);
@@ -271,8 +313,108 @@ export function useGlobalViewShortcuts({
           break;
         }
       }
+
+      // Configurable file shortcuts (new, open, import)
+      if (e.defaultPrevented) return;
+      const normalizedKey = parseKeyEvent(e);
+      if (!normalizedKey || normalizedKey === 'Ctrl' || normalizedKey === 'Alt' || normalizedKey === 'Shift') {
+        return;
+      }
+
+      const fileAction = fileShortcutMapRef.current.get(normalizedKey);
+      if (!fileAction) return;
+
+      switch (fileAction) {
+        case 'new_file':
+          e.preventDefault();
+          openDialog('new-project');
+          break;
+
+        case 'open_file': {
+          e.preventDefault();
+          (async () => {
+            try {
+              const selected = await open({
+                multiple: false,
+                filters: [{ name: 'CaveChef Project', extensions: ['cvproj', 'cvchef'] }],
+              });
+
+              let path: string | null = null;
+              if (typeof selected === 'string') {
+                path = selected;
+              } else if (Array.isArray(selected) && (selected as string[]).length > 0) {
+                path = (selected as string[])[0] ?? null;
+              }
+
+              if (path) {
+                const store = useProjectStore.getState();
+                await store.loadProject(path);
+              }
+            } catch (err) {
+              useUIStore.getState().openDialog('error', {
+                title: 'Open Failed',
+                message: err instanceof Error ? err.message : 'Failed to open project',
+              });
+            }
+          })();
+          break;
+        }
+
+        case 'import_dmp': {
+          e.preventDefault();
+          (async () => {
+            try {
+              const selected = await open({
+                multiple: false,
+                filters: [{ name: 'mNemo DMP', extensions: ['dmp'] }],
+              });
+
+              if (!selected || typeof selected !== 'string') {
+                return;
+              }
+
+              // Check for duplicate import (existing project only)
+              const currentProject = useProjectStore.getState().project;
+              if (currentProject && hasImportedDmpPath(selected)) {
+                openDialog('confirm-duplicate-import', {
+                  filePath: selected,
+                });
+                return;
+              }
+
+              const dmpFile = await importDmp(selected);
+              if (!dmpFile) return;
+
+              addImportedDmpPath(selected);
+
+              if (currentProject) {
+                setImportContext('existing-project');
+                openDialog('dmp-selection', {
+                  dmpFile,
+                  filePath: selected,
+                });
+              } else {
+                setImportContext('new-project');
+                const fileName = selected.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
+                openDialog('new-project-for-import', {
+                  dmpFile,
+                  filePath: selected,
+                  defaultName: fileName,
+                });
+              }
+            } catch (err) {
+              useUIStore.getState().openDialog('error', {
+                title: 'Import Failed',
+                message: err instanceof Error ? err.message : 'Failed to parse DMP file',
+              });
+            }
+          })();
+          break;
+        }
+      }
     },
-    [clearSelection, selectSystem, setContextMenu, setMultiSelectedIds, setSelectedProjectId, mapRef]
+    [clearSelection, selectSystem, setContextMenu, setMultiSelectedIds, setSelectedProjectId, mapRef,
+     openDialog, setImportContext, hasImportedDmpPath, addImportedDmpPath, importDmp]
   );
 
   // Register single keyboard event listener
