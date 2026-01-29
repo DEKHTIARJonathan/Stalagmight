@@ -1,7 +1,4 @@
 {
-  "assignee": null,
-  "claim_note": "",
-  "claimed_at": null,
   "created_at": "2026-01-29T16:26:34.113089Z",
   "depends_on": [],
   "epic": "fn-47-ok1",
@@ -10,5 +7,5 @@
   "spec_path": ".flow/tasks/fn-47-ok1.1.md",
   "status": "todo",
   "title": "Add prepend_shot to Section model + expose in create_shot command",
-  "updated_at": "2026-01-29T17:38:05.844103Z"
+  "updated_at": "2026-01-29T21:38:57.807764Z"
 }

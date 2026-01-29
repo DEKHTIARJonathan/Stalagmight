@@ -116,8 +116,8 @@ Existing `CreatedShotSnapshot` stores `position` which captures the actual inser
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-Added insert_shot_before to Section/Project models, extended CreateShot with before_shot_id, added shot_id to CommandResult with success_with_shot_id and success_with_shot_id_and_warnings constructors, updated command execution to return shot_id in all success paths, updated Tauri command signature, frontend store and TypeScript types. All Rust tests pass, tsc --noEmit passes. Impl-review gave SHIP verdict.
+Added insert_shot_before to Section/Project models, extended CreateShot with before_shot_id, added shot_id to CommandResult with success_with_shot_id and success_with_shot_id_and_warnings constructors, updated command execution to return shot_id in all success paths, updated Tauri command signature, frontend store and TypeScript types. All Rust tests pass (80/80), tsc --noEmit passes.
 ## Evidence
-- Commits: 73dd60d, b7d646f, c439a69
-- Tests: cargo test --manifest-path src-tauri/Cargo.toml (770+80 passed, 0 failed), pnpm tsc --noEmit (clean)
+- Commits: 73dd60d, 5275f93
+- Tests: cargo_test, tsc
 - PRs:
