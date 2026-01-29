@@ -4999,6 +4999,88 @@ fn test_move_segment_nonexistent_section() {
     assert!(!result.success, "MoveSegment should fail for nonexistent section");
 }
 
+#[test]
+fn test_move_segment_closure_connectivity() {
+    // Sections connected only via a loop closure (not merge) should both move
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let r1 = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let sid_a = r1.section_id.unwrap();
+
+    let r2 = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+    let sid_b = r2.section_id.unwrap();
+
+    // Inject a loop closure directly (no merge needed) connecting A.1 ↔ B.0
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        let closure_id = project.next_closure_id;
+        project.loop_closures.push(crate::models::LoopClosure {
+            id: closure_id,
+            station_a: StationRef::new(sid_a, 1),
+            station_b: StationRef::new(sid_b, 0),
+            path_length: 10.0,
+            misclosure_distance: 0.1,
+            error_percentage: 1.0,
+            horizontal_misclosure: 0.08,
+            vertical_misclosure: 0.06,
+        });
+        project.next_closure_id += 1;
+    }
+
+    // Record offsets before move
+    let project = state.get_project_state().unwrap();
+    let a_before = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let b_before = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
+
+    // Move segment starting from section A
+    let result = state.execute(Command::MoveSegment {
+        section_id: sid_a,
+        offset: Coordinates::new(5.0, 15.0, 0.0),
+    });
+    assert!(result.success);
+
+    // Both sections should have moved (connected via closure, not merge)
+    let project = state.get_project_state().unwrap();
+    let a_after = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let b_after = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
+
+    assert!(
+        (a_after.0 - a_before.0 - 5.0).abs() < 0.001,
+        "Section A x should increase by 5"
+    );
+    assert!(
+        (a_after.1 - a_before.1 - 15.0).abs() < 0.001,
+        "Section A y should increase by 15"
+    );
+    assert!(
+        (b_after.0 - b_before.0 - 5.0).abs() < 0.001,
+        "Section B x (connected via closure) should increase by 5"
+    );
+    assert!(
+        (b_after.1 - b_before.1 - 15.0).abs() < 0.001,
+        "Section B y (connected via closure) should increase by 15"
+    );
+}
+
 // === Batch Tests ===
 
 #[test]

@@ -632,8 +632,14 @@ impl AppState {
             return CommandResult::failure("Section not found".to_string());
         }
 
-        // Get all connected section IDs (merges + closures)
-        let connected = project.get_connected_section_ids(section_id);
+        // Get all connected section IDs (merges + closures), filtered to existing sections
+        let existing: std::collections::HashSet<SectionId> =
+            project.sections.iter().map(|s| s.id).collect();
+        let connected: Vec<SectionId> = project
+            .get_connected_section_ids(section_id)
+            .into_iter()
+            .filter(|id| existing.contains(id))
+            .collect();
 
         // Apply offset to every section in the connected set
         for sid in &connected {
@@ -702,6 +708,11 @@ impl AppState {
     /// undo entry. When false (called from `execute_without_undo()`), no undo entry is pushed.
     /// Caller must already hold `command_lock`.
     pub(super) fn execute_batch(&self, commands: Vec<Command>, push_undo: bool) -> CommandResult {
+        // No-op for empty batch: skip snapshot/undo overhead
+        if commands.is_empty() {
+            return CommandResult::success();
+        }
+
         // Whitelist: reject commands not allowed in batch context
         for cmd in &commands {
             if !Self::is_batch_allowed(cmd) {
@@ -911,8 +922,11 @@ impl AppState {
             return Err(format!("Section {} not found", section_id));
         }
 
+        // Filter to existing sections (stale merges/closures may reference deleted sections)
+        let existing: std::collections::HashSet<SectionId> =
+            project.sections.iter().map(|s| s.id).collect();
         let connected = project.get_connected_section_ids(section_id);
-        let mut result: Vec<SectionId> = connected.into_iter().collect();
+        let mut result: Vec<SectionId> = connected.into_iter().filter(|id| existing.contains(id)).collect();
         result.sort_unstable();
         Ok(result)
     }
@@ -934,10 +948,13 @@ impl AppState {
             .as_ref()
             .ok_or_else(|| "No project open".to_string())?;
 
+        // Filter to existing sections (stale merges may reference deleted sections)
+        let existing: std::collections::HashSet<SectionId> =
+            project.sections.iter().map(|s| s.id).collect();
         let mut anchored = std::collections::HashSet::new();
         for zd in &project.zero_datums {
             let merged = project.get_merged_section_ids(zd.station_ref.section_id);
-            anchored.extend(merged);
+            anchored.extend(merged.into_iter().filter(|id| existing.contains(id)));
         }
         let mut result: Vec<SectionId> = anchored.into_iter().collect();
         result.sort_unstable();
