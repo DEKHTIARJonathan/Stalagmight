@@ -11,6 +11,6 @@
   "priority": 2,
   "spec_path": ".flow/tasks/fn-50-3j7.2.md",
   "status": "todo",
-  "title": "Integrate focus trap into DialogWrapper",
-  "updated_at": "2026-01-29T17:47:20.996592Z"
+  "title": "Migrate DialogWrapper to React portal with inert management",
+  "updated_at": "2026-01-29T18:37:27.477390Z"
 }

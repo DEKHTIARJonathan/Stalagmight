@@ -3,14 +3,12 @@
   "claim_note": "",
   "claimed_at": null,
   "created_at": "2026-01-29T17:46:56.590888Z",
-  "depends_on": [
-    "fn-50-3j7.2"
-  ],
+  "depends_on": [],
   "epic": "fn-50-3j7",
   "id": "fn-50-3j7.8",
   "priority": 8,
   "spec_path": ".flow/tasks/fn-50-3j7.8.md",
-  "status": "todo",
-  "title": "Verify SettingsSidebar roving tabindex compatibility",
-  "updated_at": "2026-01-29T17:48:22.346185Z"
+  "status": "done",
+  "title": "[MERGED into .6] SettingsSidebar verification — see fn-50-3j7.6",
+  "updated_at": "2026-01-29T18:30:00.000000Z"
 }

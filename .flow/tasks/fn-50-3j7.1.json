@@ -9,6 +9,6 @@
   "priority": 1,
   "spec_path": ".flow/tasks/fn-50-3j7.1.md",
   "status": "todo",
-  "title": "Create useFocusTrap hook",
-  "updated_at": "2026-01-29T17:47:10.607450Z"
+  "title": "Create useFocusTrap hook and dialogStack utility",
+  "updated_at": "2026-01-29T18:42:49.076589Z"
 }
