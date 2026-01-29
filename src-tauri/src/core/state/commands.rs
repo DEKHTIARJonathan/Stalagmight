@@ -103,8 +103,10 @@ impl AppState {
             ),
         };
 
-        // Push to undo stack if successful and undoable
-        if result.success && Self::is_undoable(&cmd) {
+        // Push to undo stack if successful and undoable.
+        // Batch commands handle their own undo push inside execute_batch()
+        // (with before+after snapshots), so skip them here.
+        if result.success && Self::is_undoable(&cmd) && !matches!(cmd, Command::Batch { .. }) {
             // For create commands, finalize undo data with snapshot-based ID preservation
             let final_undo_data = self.finalize_undo_data(&cmd, undo_data);
 
@@ -673,32 +675,40 @@ impl AppState {
     }
 
     pub(super) fn execute_batch(&self, commands: Vec<Command>) -> CommandResult {
-        // Capture pre-batch snapshot for rollback on partial failure
+        // Hold batch_lock for the entire duration to prevent concurrent commands
+        // from interleaving with sub-commands or being clobbered by rollback
+        let _batch_guard = match self.batch_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to acquire batch lock".to_string()),
+        };
+
+        // Capture pre-batch snapshot for rollback on partial failure and undo
         let before_snapshot = {
             let proj_guard = match self.project.lock() {
                 Ok(g) => g,
                 Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
             };
             match proj_guard.as_ref() {
-                Some(p) => serde_json::to_string(p).ok(),
-                None => None,
+                Some(p) => match serde_json::to_string(p) {
+                    Ok(json) => json,
+                    Err(e) => return CommandResult::failure(format!("Failed to capture pre-batch snapshot: {e}")),
+                },
+                None => return CommandResult::failure("No project open".to_string()),
             }
         };
 
         let mut all_warnings = Vec::new();
         let mut section_ids = Vec::new();
 
-        for cmd in commands {
+        for cmd in &commands {
             // Use execute_without_undo to avoid pushing individual undo entries;
             // the outer Batch command handles undo as a single unit via ProjectSnapshotPair
-            let result = self.execute_without_undo(cmd);
+            let result = self.execute_without_undo(cmd.clone());
             if !result.success {
                 // Rollback: restore pre-batch state to avoid partial mutations
-                if let Some(ref snapshot) = before_snapshot {
-                    if let Ok(project) = serde_json::from_str::<crate::models::Project>(snapshot) {
-                        if let Ok(mut proj) = self.project.lock() {
-                            *proj = Some(project);
-                        }
+                if let Ok(project) = serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                    if let Ok(mut proj) = self.project.lock() {
+                        *proj = Some(project);
                     }
                 }
                 return result;
@@ -709,6 +719,47 @@ impl AppState {
                 section_ids.push(id);
             }
             section_ids.extend(result.section_ids);
+        }
+
+        // Capture after-snapshot for redo support; failure means rollback
+        let after_snapshot = {
+            let proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(_) => {
+                    // Cannot lock — rollback impossible, return failure
+                    return CommandResult::failure("Failed to lock project for after-snapshot".to_string());
+                }
+            };
+            match proj_guard.as_ref() {
+                Some(p) => match serde_json::to_string(p) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        tracing::error!("Failed to capture after-snapshot for batch: {e}; rolling back");
+                        drop(proj_guard);
+                        // Rollback
+                        if let Ok(project) = serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                            if let Ok(mut proj) = self.project.lock() {
+                                *proj = Some(project);
+                            }
+                        }
+                        return CommandResult::failure(format!("Failed to capture after-snapshot for batch undo: {e}"));
+                    }
+                },
+                None => {
+                    return CommandResult::failure("No project open after batch execution".to_string());
+                }
+            }
+        };
+
+        // Push undo entry directly (bypasses finalize_undo_data which is a no-op for Batch)
+        if let Ok(mut undo_stack) = self.undo_stack.lock() {
+            undo_stack.push_with_data(
+                Command::Batch { commands },
+                UndoData::ProjectSnapshotPair {
+                    before: before_snapshot,
+                    after: after_snapshot,
+                },
+            );
         }
 
         if section_ids.is_empty() {
