@@ -52,3 +52,10 @@ Add `deleteLastShotAndSection(sectionId, shotId)` — invokes Tauri command, ref
 - [ ] **All section references cleaned up**: merges, closures, section_offsets, station_offsets
 - [ ] Single undo restores section with shot and all references
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
+
+## Done summary
+Implemented delete-last-shot-and-section compound command with atomic undo via ProjectSnapshotPair. Includes inline section reference cleanup (merges, closures, section_offsets, station_offsets, zero_datums), rollback on any failure after mutation, Tauri command registration, frontend store method, and 8 comprehensive tests.
+## Evidence
+- Commits: b821e266847166443a12cdf25f09469e1b84eeb4, 06ee37d
+- Tests: cargo test --manifest-path src-tauri/Cargo.toml, pnpm tsc --noEmit
+- PRs:
