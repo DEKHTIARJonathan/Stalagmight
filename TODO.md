@@ -97,7 +97,7 @@ All components are implemented and working:
 | Shared SectionMetadataForm | ✅ |
 | Enhanced SectionPreview | ✅ |
 | DmpSelectionDialog Shell | ✅ |
-| File Hash Tracking | 🟡 (Rust command exists but not used in DMP import) |
+| File Hash Tracking | 🟡 WIP — Wire existing Rust commands into DMP import flow; duplicate warning banner in Step 1; track hash after successful import |
 
 ### Phase 2: Dialog Core (Sequential)
 
@@ -109,7 +109,7 @@ All components are implemented and working:
 | Shot Table Integration | ✅ |
 | Import State Management | ✅ |
 | Session Surveyor Memory | ✅ |
-| Validation Thresholds in DMP Import | ❌ (ValidationSettings exists but not integrated into DmpSectionConfigDialog) |
+| Validation Thresholds in DMP Import | 🟡 WIP — Wire config.validation into DmpSectionConfigDialog → ShotTableEditor; add warning count badges to section list |
 
 ### Phase 3: Placement Features
 
@@ -174,15 +174,15 @@ Based on codebase analysis as of 2026-01-29.
 | Title | Status |
 |-------|--------|
 | Inline Editing | ✅ (EditableTable component with EditableCell) |
-| Add Row | ❌ (createShot command exists but no "Add Row" button in DataTable UI) |
-| Delete Row with Split | ❌ (deleteShot command exists but no "Delete Row" button in DataTable UI) |
+| Add Row | 🟡 WIP (fn-47-ok1) — Context menu on DataTable + map; DrawShotDialog; prepend mode |
+| Delete Row with Split | 🟡 WIP (fn-47-ok1) — Position-aware delete: edge/mid-split/last-shot; section cleanup bug fix |
 | Row Highlighting Sync | ✅ |
 
 ### Phase D: Accessibility
 
 | Title | Status |
 |-------|--------|
-| Focus Management | ❌ (No React ErrorBoundary components, only ErrorDialog) |
+| Focus Management | 🟡 WIP — useFocusTrap hook in DialogWrapper; initial focus (first input for forms, primary action for confirms); return focus on close; --cc-focus-ring CSS variable |
 | Screen Reader Announcements | ✅ (aria-live regions, announceSelection(), 28 occurrences) |
 | Theme Infrastructure | ❌ (Only dark mode hardcoded, no useTheme/ThemeProvider) |
 | Keyboard Navigation | ✅ (useKeyboardShortcuts hook, ShortcutRecorder, ShortcutsSettings) |
@@ -227,10 +227,10 @@ Based on codebase analysis as of 2026-01-29.
 
 | Title | Status |
 |-------|--------|
-| Tool Panel Redesign | ❌ (Photoshop-style subtools via right-click; group Pan + Zoom) |
-| Move Segment Tool | ❌ (Move whole segment: everything connected by shots/stations/merges/closures) |
-| Move Shot Subtool | ❌ (Move a single shot) |
-| Move Station Subtool | ❌ (Move a single station) |
+| Tool Panel Redesign | 🟡 WIP (fn-46-37m) — Photoshop-style subtools via right-click; group Pan + Zoom |
+| Move Segment Tool | 🟡 WIP (fn-46-37m) — Move whole segment: everything connected by shots/stations/merges/closures |
+| Move Shot Subtool | 🟡 WIP (fn-46-37m) — Move a single shot |
+| Move Station Subtool | 🟡 WIP (fn-46-37m) — Move a single station |
 
 ### Phase J: Closure Error Distribution
 

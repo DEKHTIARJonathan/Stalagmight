@@ -114,6 +114,8 @@ function ToolIcon({ tool }: { tool: ToolType }) {
     measure: '📏',
     move_section: '↔',
     move_station: '⤢',
+    move_segment: '⇔',
+    move_shot: '⇄',
   };
 
   return <span className="text-sm">{icons[tool]}</span>;

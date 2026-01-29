@@ -1,0 +1,14 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-29T15:28:31.599903Z",
+  "depends_on": [],
+  "epic": "fn-46-37m",
+  "id": "fn-46-37m.2",
+  "priority": 2,
+  "spec_path": ".flow/tasks/fn-46-37m.2.md",
+  "status": "todo",
+  "title": "Backend - MoveSegment Command",
+  "updated_at": "2026-01-29T15:59:29.370425Z"
+}

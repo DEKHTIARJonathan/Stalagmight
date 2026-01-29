@@ -7,6 +7,7 @@ import { DISPLAY_DEFAULTS } from './displaySelectors';
 
 // Import tool utilities for internal use and re-export for convenience
 import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
+import { getGroupForTool } from '../utils/toolGroups';
 export { NON_INTERACTIVE_TOOLS, isNonInteractiveTool };
 
 export type ViewType = 'global' | 'single';
@@ -22,7 +23,9 @@ export type ToolType =
   | 'merge'
   | 'measure'
   | 'move_section'
-  | 'move_station';
+  | 'move_station'
+  | 'move_segment'
+  | 'move_shot';
 
 /**
  * Placement result returned when placement mode completes.
@@ -85,6 +88,7 @@ interface UIStore {
 
   // Tool state
   activeTool: ToolType;
+  lastSubtoolByGroup: Record<string, ToolType>;
   setActiveTool: (tool: ToolType) => void;
 
   // Selection state
@@ -270,8 +274,15 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Tool state
   activeTool: 'select',
+  lastSubtoolByGroup: {},
   setActiveTool: (activeTool) =>
     set((state) => {
+      // Track last-used subtool per group
+      const group = getGroupForTool(activeTool);
+      const lastSubtoolByGroup = group
+        ? { ...state.lastSubtoolByGroup, [group.id]: activeTool }
+        : state.lastSubtoolByGroup;
+
       // Clear hover state when switching to non-interactive tools (pan/zoom)
       // This ensures store consistency regardless of how hover was set
       // Use explicit null checks (not truthiness) because SectionId can be 0
@@ -279,9 +290,9 @@ export const useUIStore = create<UIStore>((set) => ({
         isNonInteractiveTool(activeTool) &&
         (state.hoveredStation !== null || state.hoveredShot !== null || state.hoveredSectionId !== null)
       ) {
-        return { activeTool, hoveredStation: null, hoveredShot: null, hoveredSectionId: null };
+        return { activeTool, lastSubtoolByGroup, hoveredStation: null, hoveredShot: null, hoveredSectionId: null };
       }
-      return { activeTool };
+      return { activeTool, lastSubtoolByGroup };
     }),
 
   // Selection state
