@@ -5743,3 +5743,244 @@ fn test_split_rejects_edge_shot() {
     assert!(!result.success, "Should reject last shot");
     assert!(result.error.unwrap().contains("edge shot"));
 }
+
+// === delete_last_shot_and_section tests ===
+
+#[test]
+fn test_delete_last_shot_removes_section() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Delete Last Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Single".to_string()),
+        surveyor: Some("Tester".to_string()),
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    assert!(create_result.success);
+    let section_id = create_result.section_id.unwrap();
+
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots[0].id
+    };
+
+    let result = state.execute_delete_last_shot_and_section(section_id, shot_id);
+    assert!(result.success, "Delete last shot should succeed: {:?}", result.error);
+
+    // Verify section is gone
+    let proj = state.get_project_state().unwrap();
+    assert!(proj.get_section(section_id).is_none(), "Section should be removed");
+}
+
+#[test]
+fn test_delete_last_shot_fails_if_multiple_shots() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Multi Shot Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Multi".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+    });
+    assert!(create_result.success);
+    let section_id = create_result.section_id.unwrap();
+
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots[0].id
+    };
+
+    let result = state.execute_delete_last_shot_and_section(section_id, shot_id);
+    assert!(!result.success, "Should fail with multiple shots");
+    assert!(result.error.unwrap().contains("2 shots"));
+}
+
+#[test]
+fn test_delete_last_shot_undo_restores() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Undo Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("WillDelete".to_string()),
+        surveyor: Some("UndoTester".to_string()),
+        date: None,
+        color: "#aabbcc".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let section_id = create_result.section_id.unwrap();
+
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots[0].id
+    };
+
+    let result = state.execute_delete_last_shot_and_section(section_id, shot_id);
+    assert!(result.success);
+
+    // Verify deleted
+    {
+        let proj = state.get_project_state().unwrap();
+        assert!(proj.get_section(section_id).is_none());
+    }
+
+    // Undo
+    let undo_result = state.undo();
+    assert!(undo_result.success, "Undo should succeed: {:?}", undo_result.error);
+
+    // Verify restored
+    let proj = state.get_project_state().unwrap();
+    let section = proj.get_section(section_id).expect("Section should be restored");
+    assert_eq!(section.name, Some("WillDelete".to_string()));
+    assert_eq!(section.surveyor, Some("UndoTester".to_string()));
+    assert_eq!(section.shots.len(), 1);
+    assert_eq!(section.shots[0].id, shot_id);
+    assert_eq!(section.shots[0].length, 5.0);
+}
+
+#[test]
+fn test_delete_last_shot_cleans_up_offsets() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Offset Cleanup Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("WithOffset".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let section_id = create_result.section_id.unwrap();
+
+    // Manually set a section offset
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        project.section_offsets.insert(section_id, (10.0, 20.0));
+    }
+
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots[0].id
+    };
+
+    let result = state.execute_delete_last_shot_and_section(section_id, shot_id);
+    assert!(result.success);
+
+    // Verify section offset is cleaned up
+    let proj = state.get_project_state().unwrap();
+    assert!(!proj.section_offsets.contains_key(&section_id), "Section offset should be removed");
+}
+
+#[test]
+fn test_delete_last_shot_cleans_up_merges() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Merge Cleanup Test".to_string(),
+        location: None,
+    });
+
+    // Create two sections
+    let create_a = state.execute(Command::CreateSection {
+        name: Some("ToDelete".to_string()),
+        surveyor: None, date: None, color: "#ff0000".to_string(), direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let section_a_id = create_a.section_id.unwrap();
+
+    let create_b = state.execute(Command::CreateSection {
+        name: Some("Other".to_string()),
+        surveyor: None, date: None, color: "#00ff00".to_string(), direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let section_b_id = create_b.section_id.unwrap();
+
+    // Merge station 1 of A with station 0 of B
+    let merge_result = state.execute(Command::MergeStations {
+        station_a: StationRef::new(section_a_id, 1),
+        station_b: StationRef::new(section_b_id, 0),
+    });
+    assert!(merge_result.success);
+
+    // Verify merge exists
+    {
+        let proj = state.get_project_state().unwrap();
+        assert!(!proj.station_merges.is_empty(), "Should have merge before delete");
+    }
+
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_a_id).unwrap().shots[0].id
+    };
+
+    let result = state.execute_delete_last_shot_and_section(section_a_id, shot_id);
+    assert!(result.success);
+
+    // Verify merge is cleaned up
+    let proj = state.get_project_state().unwrap();
+    let remaining_merges: Vec<_> = proj.station_merges.iter()
+        .filter(|m| m.station_a.section_id == section_a_id || m.station_b.section_id == section_a_id)
+        .collect();
+    assert!(remaining_merges.is_empty(), "Merges referencing deleted section should be removed");
+}
+
+#[test]
+fn test_delete_last_shot_cleans_up_station_offsets() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Station Offset Cleanup Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("WithStationOffset".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let section_id = create_result.section_id.unwrap();
+
+    // Manually set a station offset
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        let station_ref = StationRef::new(section_id, 0);
+        project.station_offsets.insert(station_ref, (1.0, 2.0, 3.0));
+    }
+
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots[0].id
+    };
+
+    let result = state.execute_delete_last_shot_and_section(section_id, shot_id);
+    assert!(result.success);
+
+    // Verify station offsets for this section are cleaned up
+    let proj = state.get_project_state().unwrap();
+    let remaining_station_offsets: Vec<_> = proj.station_offsets.keys()
+        .filter(|sr| sr.section_id == section_id)
+        .collect();
+    assert!(remaining_station_offsets.is_empty(), "Station offsets referencing deleted section should be removed");
+}

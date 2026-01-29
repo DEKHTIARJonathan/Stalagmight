@@ -1107,6 +1107,150 @@ impl AppState {
         CommandResult::success_with_section_id(new_section_id)
     }
 
+    /// Execute a delete-last-shot-and-section operation as a single atomic undo/redo unit.
+    /// When a section has exactly 1 shot remaining, this deletes that shot and removes
+    /// the section entirely. Also cleans up all section references (merges, closures,
+    /// section_offsets, station_offsets). Uses `ProjectSnapshotPair` for single-undo.
+    pub fn execute_delete_last_shot_and_section(
+        &self,
+        section_id: SectionId,
+        shot_id: ShotId,
+    ) -> CommandResult {
+        // Serialize command execution to prevent concurrent interleaving
+        let _cmd_guard = match self.command_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
+        };
+        tracing::info!(section_id, shot_id, "Executing delete_last_shot_and_section as single undo unit");
+
+        // Step 1: Take BEFORE snapshot
+        let before_snapshot = {
+            let proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+            };
+            match proj_guard.as_ref() {
+                Some(p) => match serde_json::to_string(p) {
+                    Ok(json) => json,
+                    Err(e) => return CommandResult::failure(format!("Failed to serialize project: {}", e)),
+                },
+                None => return CommandResult::failure("No project open".to_string()),
+            }
+        };
+
+        // Step 2: Validate and perform the operation
+        {
+            let mut proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+            };
+
+            let project = match proj_guard.as_mut() {
+                Some(p) => p,
+                None => return CommandResult::failure("No project open".to_string()),
+            };
+
+            // Validate section exists
+            let section = match project.get_section(section_id) {
+                Some(s) => s,
+                None => return CommandResult::failure(format!("Section {} not found", section_id)),
+            };
+
+            // Verify section has exactly 1 shot
+            if section.shots.len() != 1 {
+                return CommandResult::failure(format!(
+                    "Section {} has {} shots, expected exactly 1",
+                    section_id,
+                    section.shots.len()
+                ));
+            }
+
+            // Verify the shot matches
+            if section.shots[0].id != shot_id {
+                return CommandResult::failure(format!(
+                    "Shot {} not found in section {} (section has shot {})",
+                    shot_id, section_id, section.shots[0].id
+                ));
+            }
+
+            // Step 3: Clean up section references (inline, Task 7 will provide helper later)
+            // Remove merges referencing this section
+            project.station_merges.retain(|m| {
+                m.station_a.section_id != section_id && m.station_b.section_id != section_id
+            });
+
+            // Remove closures referencing this section
+            project.loop_closures.retain(|lc| {
+                lc.station_a.section_id != section_id && lc.station_b.section_id != section_id
+            });
+
+            // Remove section offsets
+            project.section_offsets.remove(&section_id);
+
+            // Remove station offsets referencing this section
+            let station_offset_keys: Vec<StationRef> = project
+                .station_offsets
+                .keys()
+                .filter(|sr| sr.section_id == section_id)
+                .copied()
+                .collect();
+            for key in station_offset_keys {
+                project.station_offsets.remove(&key);
+            }
+
+            // Remove zero datums referencing this section
+            project.zero_datums.retain(|zd| zd.station_ref.section_id != section_id);
+
+            // Step 4: Remove the section (which contains the shot)
+            project.remove_section(section_id);
+
+            tracing::info!(section_id, shot_id, "Deleted last shot and removed section");
+        }
+
+        // Step 5: Take AFTER snapshot
+        let after_snapshot = {
+            let proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(_) => return CommandResult::failure("Failed to lock project for after snapshot".to_string()),
+            };
+            match proj_guard.as_ref() {
+                Some(p) => match serde_json::to_string(p) {
+                    Ok(json) => json,
+                    Err(e) => return CommandResult::failure(format!("Failed to serialize after snapshot: {}", e)),
+                },
+                None => return CommandResult::failure("No project for after snapshot".to_string()),
+            }
+        };
+
+        // Step 6: Push single undo entry with ProjectSnapshotPair
+        let batch_cmd = Command::Batch {
+            commands: vec![
+                Command::DeleteShot {
+                    section_id,
+                    shot_id,
+                },
+                Command::DeleteSection {
+                    section_id,
+                },
+            ],
+        };
+
+        if let Ok(mut undo_stack) = self.undo_stack.lock() {
+            undo_stack.push_with_data(batch_cmd, UndoData::ProjectSnapshotPair {
+                before: before_snapshot,
+                after: after_snapshot,
+            });
+        }
+
+        // Auto-save if enabled
+        let should_auto_save = self.config.lock().map(|c| c.general.auto_save).unwrap_or(false);
+        if should_auto_save {
+            let _ = self.save_project(None);
+        }
+
+        CommandResult::success()
+    }
+
     // === Station query operations ===
 
     /// Check merge connectivity between two stations (read-only)
