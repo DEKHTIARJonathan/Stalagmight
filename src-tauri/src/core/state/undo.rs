@@ -272,16 +272,9 @@ impl AppState {
                 })
             }
 
-            // For batch, capture "before" snapshot (will be finalized to ProjectSnapshotPair)
-            Command::Batch { .. } => {
-                if let Ok(json) = serde_json::to_string(project) {
-                    // Store as ProjectSnapshot initially; finalize_undo_data will
-                    // capture the "after" snapshot and upgrade to ProjectSnapshotPair
-                    UndoData::ProjectSnapshot(json)
-                } else {
-                    UndoData::None
-                }
-            }
+            // Batch: undo data is handled entirely inside execute_batch(),
+            // which captures before+after snapshots and pushes directly.
+            Command::Batch { .. } => UndoData::None,
 
             // Non-undoable commands
             _ => UndoData::None,
@@ -362,22 +355,10 @@ impl AppState {
                 }
             }
 
-            // For batch, upgrade ProjectSnapshot to ProjectSnapshotPair with "after" snapshot
-            Command::Batch { .. } => {
-                if let UndoData::ProjectSnapshot(before) = undo_data {
-                    match serde_json::to_string(project) {
-                        Ok(after) => UndoData::ProjectSnapshotPair { before, after },
-                        Err(e) => {
-                            tracing::error!("Failed to capture after-snapshot for batch undo: {e}");
-                            // Fall back to before-only snapshot; undo works but redo
-                            // will re-execute the batch (may assign new IDs)
-                            UndoData::ProjectSnapshot(before)
-                        }
-                    }
-                } else {
-                    undo_data
-                }
-            }
+            // Batch: finalize_undo_data is a no-op; execute_batch handles
+            // ProjectSnapshotPair construction directly so after-snapshot
+            // failure can trigger rollback.
+            Command::Batch { .. } => undo_data,
 
             _ => undo_data,
         }
