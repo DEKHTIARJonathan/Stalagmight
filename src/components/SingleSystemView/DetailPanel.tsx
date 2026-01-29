@@ -1080,7 +1080,7 @@ function ClosuresSection({
                   </div>
                 )}
                 {transitiveRefs.length > 0 && (
-                  <div className="text-sm text-text-tertiary" data-testid={`closure-transitive-${closureId}`}>
+                  <div className="text-sm text-text-tertiary opacity-60" data-testid={`closure-transitive-${closureId}`}>
                     <span>Transitive closure to </span>
                     {transitiveRefs.map((ref, i) => (
                       <span key={i}>
@@ -1096,7 +1096,20 @@ function ClosuresSection({
                           onHoverEnd={onHoverEnd}
                         />
                         {ref.via_station && (
-                          <span> (via {formatStationId(ref.via_station.section_id, ref.via_station.station_index)})</span>
+                          <span>
+                            {' (via '}
+                            <DetailLink
+                              type="station"
+                              target={{ sectionId: ref.via_station.section_id, position: ref.via_station.station_index }}
+                              displayText={formatStationId(ref.via_station.section_id, ref.via_station.station_index)}
+                              onSelect={() => onSelectStation(ref.via_station!)}
+                              isMissing={!stationExists(ref.via_station)}
+                              onAnnounce={onAnnounce}
+                              onHoverStart={() => onHoverStart(ref.via_station!)}
+                              onHoverEnd={onHoverEnd}
+                            />
+                            {')'}
+                          </span>
                         )}
                       </span>
                     ))}
