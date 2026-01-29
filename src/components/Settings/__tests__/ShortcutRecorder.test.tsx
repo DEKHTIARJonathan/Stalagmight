@@ -27,6 +27,10 @@ describe('BLOCKED_KEYS constant', () => {
       expect(BLOCKED_KEYS.has('Tab')).toBe(true);
     });
 
+    it('blocks Enter', () => {
+      expect(BLOCKED_KEYS.has('Enter')).toBe(true);
+    });
+
     it('blocks CapsLock', () => {
       expect(BLOCKED_KEYS.has('CapsLock')).toBe(true);
     });
@@ -59,8 +63,8 @@ describe('BLOCKED_KEYS constant', () => {
       }
     });
 
-    it('allows navigation keys', () => {
-      for (const key of ['Space', 'Enter', 'Backspace', 'Delete']) {
+    it('allows navigation keys (except Enter)', () => {
+      for (const key of ['Space', 'Backspace', 'Delete']) {
         expect(BLOCKED_KEYS.has(key)).toBe(false);
       }
     });
@@ -71,7 +75,7 @@ describe('BLOCKED_KEYS constant', () => {
   });
 
   it('is immutable (ReadonlySet)', () => {
-    expect(BLOCKED_KEYS.size).toBe(16); // 12 function keys + Tab, CapsLock, Meta, OS
+    expect(BLOCKED_KEYS.size).toBe(17); // 12 function keys + Tab, Enter, CapsLock, Meta, OS
   });
 });
 
@@ -96,6 +100,10 @@ describe('isBlockedKey function', () => {
   describe('blocks special keys', () => {
     it('blocks Tab', () => {
       expect(isBlockedKey(createKeyEvent('Tab'))).toBe(true);
+    });
+
+    it('blocks Enter', () => {
+      expect(isBlockedKey(createKeyEvent('Enter'))).toBe(true);
     });
 
     it('blocks CapsLock', () => {
@@ -134,8 +142,8 @@ describe('isBlockedKey function', () => {
       expect(isBlockedKey(createKeyEvent('Space'))).toBe(false);
     });
 
-    it('allows Enter', () => {
-      expect(isBlockedKey(createKeyEvent('Enter'))).toBe(false);
+    it('blocks Enter', () => {
+      expect(isBlockedKey(createKeyEvent('Enter'))).toBe(true);
     });
 
     it('allows Escape', () => {

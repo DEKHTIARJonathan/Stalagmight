@@ -321,6 +321,33 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await expect(resetButton).toBeDisabled();
     });
 
+    test('reset cancels active recording and restores default', async ({ page }) => {
+      await openSettingsDialog(page);
+      await navigateToShortcutsCategory(page);
+
+      // First change the select shortcut so reset button is enabled
+      const recorder = page.locator('[data-testid="shortcut-primary-select"]');
+      await recorder.click();
+      await waitForRecording(page, 'shortcut-primary-select', true);
+      await page.keyboard.press('Q');
+      await waitForRecording(page, 'shortcut-primary-select', false);
+      await expect(recorder).toContainText('Q');
+
+      // Start recording again on the same recorder
+      await recorder.click();
+      await waitForRecording(page, 'shortcut-primary-select', true);
+
+      // Click reset while recording is active
+      const resetButton = page.locator('[data-testid="shortcut-reset-select"]');
+      await resetButton.click();
+
+      // Recording should be terminated
+      await waitForRecording(page, 'shortcut-primary-select', false);
+
+      // Shortcut should be back to default (S)
+      await expect(recorder).toContainText('S');
+    });
+
     test('Reset All restores all shortcuts to defaults', async ({ page }) => {
       await openSettingsDialog(page);
       await navigateToShortcutsCategory(page);
@@ -499,10 +526,17 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       const reserved = page.locator('[data-testid="reserved-shortcuts"]');
       await expect(reserved).toBeVisible();
 
-      // Verify reserved shortcuts are shown (Ctrl+I and Ctrl+E are no longer reserved)
+      // Verify reserved shortcuts are shown
       await expect(reserved).toContainText('Escape');
       await expect(reserved).toContainText('Delete');
+      await expect(reserved).toContainText('Backspace');
+      await expect(reserved).toContainText('Tab');
+      await expect(reserved).toContainText('Enter');
       await expect(reserved).toContainText('Ctrl+A');
+
+      // Verify grouped descriptions
+      await expect(reserved).toContainText('Delete selection');
+      await expect(reserved).toContainText('UI Navigation');
 
       // Ctrl+I and Ctrl+E should NOT be in reserved section (they are now configurable)
       await expect(reserved).not.toContainText('Ctrl+I');

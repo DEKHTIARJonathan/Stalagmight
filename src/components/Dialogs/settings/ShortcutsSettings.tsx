@@ -12,7 +12,6 @@ import {
   formatShortcut,
   formatActionName,
   isMac,
-  RESERVED_SHORTCUTS,
 } from '../../../utils/shortcuts';
 
 /**
@@ -105,25 +104,21 @@ function ShortcutNameLabel({ name }: { name: string }) {
 }
 
 /**
- * Reserved shortcut descriptions for display.
+ * Reserved shortcut display entries.
+ * Groups related shortcuts into single display rows.
  */
-const RESERVED_SHORTCUT_DESCRIPTIONS: Record<string, string> = {
-  Escape: 'Cancel / Close dialogs',
-  Delete: 'Delete selection',
-  Backspace: 'Delete selection',
-  'Ctrl+A': 'Select all',
-  'Ctrl+,': 'Open Settings',
-};
-
-/**
- * Get reserved shortcuts for display.
- */
-function getReservedShortcutsForDisplay(): Array<{ shortcut: string; description: string }> {
-  return Array.from(RESERVED_SHORTCUTS).map((shortcut) => ({
-    shortcut,
-    description: RESERVED_SHORTCUT_DESCRIPTIONS[shortcut] || 'Reserved',
-  }));
+interface ReservedShortcutEntry {
+  shortcuts: string[];
+  description: string;
 }
+
+const RESERVED_DISPLAY_ENTRIES: ReservedShortcutEntry[] = [
+  { shortcuts: ['Escape'], description: 'Cancel / Close dialogs' },
+  { shortcuts: ['Delete', 'Backspace'], description: 'Delete selection' },
+  { shortcuts: ['Tab', 'Enter'], description: 'UI Navigation' },
+  { shortcuts: ['Ctrl+A'], description: 'Select all' },
+  { shortcuts: ['Ctrl+,'], description: 'Open Settings' },
+];
 
 /**
  * Shortcuts settings category content.
@@ -312,10 +307,17 @@ export function ShortcutsSettings({
             className="bg-background/50 rounded-lg p-3 grid grid-cols-2 gap-2 text-sm"
             data-testid="reserved-shortcuts"
           >
-            {getReservedShortcutsForDisplay().map(({ shortcut, description }) => (
-              <div key={shortcut} className="flex items-center gap-2">
-                <span className="inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-medium bg-panel border border-border rounded min-w-[3rem] text-text-secondary">
-                  {formatShortcut(shortcut, isMac())}
+            {RESERVED_DISPLAY_ENTRIES.map(({ shortcuts, description }) => (
+              <div key={shortcuts.join('+')} className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1 shrink-0">
+                  {shortcuts.map((s, i) => (
+                    <span key={s} className="inline-flex items-center gap-1">
+                      {i > 0 && <span className="text-text-secondary text-xs">/</span>}
+                      <span className="inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-medium bg-panel border border-border rounded min-w-[1.5rem] text-text-secondary">
+                        {formatShortcut(s, isMac())}
+                      </span>
+                    </span>
+                  ))}
                 </span>
                 <span className="text-text-secondary text-xs">{description}</span>
               </div>

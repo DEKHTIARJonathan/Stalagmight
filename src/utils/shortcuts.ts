@@ -23,6 +23,8 @@ export const RESERVED_SHORTCUTS: ReadonlySet<string> = new Set([
   'Escape',
   'Delete',
   'Backspace',
+  'Tab',
+  'Enter',
   'Ctrl+A', // Select all
   'Ctrl+,', // Open Settings
 ]);
@@ -329,6 +331,8 @@ export const RESERVED_KEYS: ReadonlySet<string> = new Set([
   'Escape',
   'Delete',
   'Backspace',
+  'Tab',
+  'Enter',
 ]);
 
 /**
@@ -371,12 +375,14 @@ export function checkReservedConflict(shortcut: string): { isReserved: boolean; 
   const key = parts[parts.length - 1] ?? '';
   const hasCtrl = parts.includes('Ctrl');
 
-  // Check if the key itself is reserved (Escape, Delete, Backspace)
+  // Check if the key itself is reserved (Escape, Delete, Backspace, Tab, Enter)
   if (key && RESERVED_KEYS.has(key)) {
     const descriptions: Record<string, string> = {
       Escape: 'Cancel / Close dialogs',
       Delete: 'Delete selection',
       Backspace: 'Delete selection',
+      Tab: 'UI Navigation',
+      Enter: 'UI Navigation',
     };
     return {
       isReserved: true,
