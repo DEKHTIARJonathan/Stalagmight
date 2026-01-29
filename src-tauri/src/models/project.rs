@@ -206,6 +206,20 @@ impl Project {
         self.get_section(section_id)?.get_shot(shot_id)
     }
 
+    /// Insert a shot before a specific shot in a section
+    pub fn insert_shot_before(
+        &mut self,
+        section_id: SectionId,
+        before_shot_id: ShotId,
+        data: ShotData,
+    ) -> Option<&Shot> {
+        let section = self.get_section_mut(section_id)?;
+        let shot = section.insert_shot_before(before_shot_id, data)?;
+        let shot_id = shot.id;
+        self.touch();
+        self.get_section(section_id)?.get_shot(shot_id)
+    }
+
     /// Update a shot
     pub fn update_shot(
         &mut self,

@@ -114,3 +114,10 @@ Existing `CreatedShotSnapshot` stores `position` which captures the actual inser
 - [ ] All existing `CommandResult` constructors set `shot_id: None`
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 - [ ] `pnpm tsc --noEmit` passes
+
+## Done summary
+Added insert_shot_before to Section/Project models, extended CreateShot with before_shot_id, added shot_id to CommandResult with success_with_shot_id and success_with_shot_id_and_warnings constructors, updated command execution to return shot_id in all success paths, updated Tauri command signature, frontend store and TypeScript types. All 80 Rust tests pass, tsc --noEmit passes.
+## Evidence
+- Commits:
+- Tests:
+- PRs:

@@ -165,6 +165,15 @@ impl Section {
         Some(&self.shots[pos + 1])
     }
 
+    /// Insert a shot before a specific shot ID
+    pub fn insert_shot_before(&mut self, before_id: ShotId, data: ShotData) -> Option<&Shot> {
+        let pos = self.shots.iter().position(|s| s.id == before_id)?;
+        let shot = Shot::new(self.next_shot_id, data);
+        self.next_shot_id += 1;
+        self.shots.insert(pos, shot);
+        Some(&self.shots[pos])
+    }
+
     /// Get a shot by ID
     pub fn get_shot(&self, shot_id: ShotId) -> Option<&Shot> {
         self.shots.iter().find(|s| s.id == shot_id)

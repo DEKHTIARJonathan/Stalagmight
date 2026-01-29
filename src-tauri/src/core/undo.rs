@@ -1248,6 +1248,7 @@ mod tests {
                         ..Default::default()
                     },
                     after_shot_id: None,
+                    before_shot_id: None,
                 },
                 undo_data: UndoData::CreatedShotSnapshot {
                     section_id: 1,

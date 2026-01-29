@@ -47,6 +47,8 @@ pub enum Command {
         section_id: SectionId,
         shot: ShotData,
         after_shot_id: Option<ShotId>,
+        #[serde(default)]
+        before_shot_id: Option<ShotId>,
     },
     UpdateShot {
         section_id: SectionId,
@@ -128,6 +130,9 @@ pub struct CommandResult {
     /// IDs of created sections (for Batch commands containing CreateSection)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub section_ids: Vec<u32>,
+    /// ID of the created shot (for CreateShot command)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shot_id: Option<u32>,
 }
 
 /// Validation warning from command execution
@@ -153,6 +158,7 @@ impl CommandResult {
             error: None,
             section_id: None,
             section_ids: Vec::new(),
+            shot_id: None,
         }
     }
 
@@ -163,6 +169,7 @@ impl CommandResult {
             error: None,
             section_id: None,
             section_ids: Vec::new(),
+            shot_id: None,
         }
     }
 
@@ -174,6 +181,7 @@ impl CommandResult {
             error: None,
             section_id: Some(section_id),
             section_ids: Vec::new(),
+            shot_id: None,
         }
     }
 
@@ -185,6 +193,7 @@ impl CommandResult {
             error: None,
             section_id: Some(section_id),
             section_ids: Vec::new(),
+            shot_id: None,
         }
     }
 
@@ -196,6 +205,7 @@ impl CommandResult {
             error: None,
             section_id: None,
             section_ids,
+            shot_id: None,
         }
     }
 
@@ -207,6 +217,31 @@ impl CommandResult {
             error: None,
             section_id: None,
             section_ids,
+            shot_id: None,
+        }
+    }
+
+    /// Create a success result with the created shot ID
+    pub fn success_with_shot_id(shot_id: u32) -> Self {
+        Self {
+            success: true,
+            warnings: Vec::new(),
+            error: None,
+            section_id: None,
+            section_ids: Vec::new(),
+            shot_id: Some(shot_id),
+        }
+    }
+
+    /// Create a success result with the created shot ID and warnings
+    pub fn success_with_shot_id_and_warnings(shot_id: u32, warnings: Vec<ValidationWarning>) -> Self {
+        Self {
+            success: true,
+            warnings,
+            error: None,
+            section_id: None,
+            section_ids: Vec::new(),
+            shot_id: Some(shot_id),
         }
     }
 
@@ -217,6 +252,7 @@ impl CommandResult {
             error: Some(error),
             section_id: None,
             section_ids: Vec::new(),
+            shot_id: None,
         }
     }
 }
@@ -336,6 +372,7 @@ mod tests {
         assert!(success.error.is_none());
         assert!(success.section_id.is_none());
         assert!(success.section_ids.is_empty());
+        assert!(success.shot_id.is_none());
 
         let success_with_warnings = CommandResult::success_with_warnings(vec![warning.clone()]);
         assert!(success_with_warnings.success);
@@ -343,28 +380,45 @@ mod tests {
         assert!(success_with_warnings.error.is_none());
         assert!(success_with_warnings.section_id.is_none());
         assert!(success_with_warnings.section_ids.is_empty());
+        assert!(success_with_warnings.shot_id.is_none());
 
         let success_with_section = CommandResult::success_with_section_id(7);
         assert!(success_with_section.success);
         assert_eq!(success_with_section.section_id, Some(7));
         assert!(success_with_section.section_ids.is_empty());
+        assert!(success_with_section.shot_id.is_none());
 
         let success_with_section_and_warnings =
             CommandResult::success_with_section_id_and_warnings(8, vec![warning.clone()]);
         assert!(success_with_section_and_warnings.success);
         assert_eq!(success_with_section_and_warnings.section_id, Some(8));
         assert_eq!(success_with_section_and_warnings.warnings.len(), 1);
+        assert!(success_with_section_and_warnings.shot_id.is_none());
 
         let success_with_sections = CommandResult::success_with_section_ids(vec![1, 2, 3]);
         assert!(success_with_sections.success);
         assert!(success_with_sections.section_id.is_none());
         assert_eq!(success_with_sections.section_ids, vec![1, 2, 3]);
+        assert!(success_with_sections.shot_id.is_none());
 
         let success_with_sections_and_warnings =
-            CommandResult::success_with_section_ids_and_warnings(vec![4, 5], vec![warning]);
+            CommandResult::success_with_section_ids_and_warnings(vec![4, 5], vec![warning.clone()]);
         assert!(success_with_sections_and_warnings.success);
         assert_eq!(success_with_sections_and_warnings.section_ids, vec![4, 5]);
         assert_eq!(success_with_sections_and_warnings.warnings.len(), 1);
+        assert!(success_with_sections_and_warnings.shot_id.is_none());
+
+        let success_with_shot = CommandResult::success_with_shot_id(42);
+        assert!(success_with_shot.success);
+        assert_eq!(success_with_shot.shot_id, Some(42));
+        assert!(success_with_shot.section_id.is_none());
+        assert!(success_with_shot.section_ids.is_empty());
+
+        let success_with_shot_and_warnings =
+            CommandResult::success_with_shot_id_and_warnings(99, vec![warning]);
+        assert!(success_with_shot_and_warnings.success);
+        assert_eq!(success_with_shot_and_warnings.shot_id, Some(99));
+        assert_eq!(success_with_shot_and_warnings.warnings.len(), 1);
 
         let failure = CommandResult::failure("boom".to_string());
         assert!(!failure.success);
@@ -372,6 +426,7 @@ mod tests {
         assert_eq!(failure.error.as_deref(), Some("boom"));
         assert!(failure.section_id.is_none());
         assert!(failure.section_ids.is_empty());
+        assert!(failure.shot_id.is_none());
     }
 
     #[test]
@@ -448,6 +503,7 @@ mod tests {
                     section_id: 4,
                     shot: shot_data.clone(),
                     after_shot_id: None,
+                    before_shot_id: None,
                 },
                 "Create shot in section 4",
             ),

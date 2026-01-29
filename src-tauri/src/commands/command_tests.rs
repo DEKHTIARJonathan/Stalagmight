@@ -787,7 +787,7 @@ fn test_create_section_with_validation_warnings() {
 #[test]
 fn test_create_shot_fails_without_project() {
     let app = app_with_state();
-    let result = shot::create_shot(state(&app), 0, shot_data(1.0), None);
+    let result = shot::create_shot(state(&app), 0, shot_data(1.0), None, None);
     assert_failure_contains(&result, "No project open");
 }
 
@@ -795,7 +795,7 @@ fn test_create_shot_fails_without_project() {
 fn test_create_shot_fails_invalid_section() {
     let app = app_with_state();
     create_project(&app);
-    let result = shot::create_shot(state(&app), 99, shot_data(1.0), None);
+    let result = shot::create_shot(state(&app), 99, shot_data(1.0), None, None);
     assert_failure_contains(&result, "Failed to create shot");
 }
 
@@ -804,7 +804,7 @@ fn test_create_shot_success_adds_shot() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![]);
-    let result = shot::create_shot(state(&app), id, shot_data(1.0), None);
+    let result = shot::create_shot(state(&app), id, shot_data(1.0), None, None);
     assert_success(&result);
     let section = section::get_section(state(&app), id).unwrap();
     assert_eq!(section.shots.len(), 1);
@@ -815,7 +815,7 @@ fn test_create_shot_after_shot_id_inserts() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
-    let result = shot::create_shot(state(&app), id, shot_data(3.0), Some(0));
+    let result = shot::create_shot(state(&app), id, shot_data(3.0), Some(0), None);
     assert_success(&result);
     let section = section::get_section(state(&app), id).unwrap();
     assert_eq!(section.shots.len(), 3);
@@ -827,7 +827,7 @@ fn test_create_shot_returns_warning_for_short() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![]);
-    let result = shot::create_shot(state(&app), id, shot_data(0.05), None);
+    let result = shot::create_shot(state(&app), id, shot_data(0.05), None, None);
     assert!(result.success);
     assert!(!result.warnings.is_empty());
 }

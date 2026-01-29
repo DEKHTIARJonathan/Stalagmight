@@ -54,7 +54,8 @@ impl AppState {
                 section_id,
                 shot,
                 after_shot_id,
-            } => self.create_shot(*section_id, shot.clone(), *after_shot_id),
+                before_shot_id,
+            } => self.create_shot(*section_id, shot.clone(), *after_shot_id, *before_shot_id),
             Command::UpdateShot {
                 section_id,
                 shot_id,
@@ -340,6 +341,7 @@ impl AppState {
         section_id: SectionId,
         data: ShotData,
         after_shot_id: Option<ShotId>,
+        before_shot_id: Option<ShotId>,
     ) -> CommandResult {
         let config = self.config.lock().ok();
 
@@ -354,7 +356,14 @@ impl AppState {
         };
 
         // Compute the real shot index for validation messages
-        let shot_index = if let Some(after_id) = after_shot_id {
+        let shot_index = if let Some(before_id) = before_shot_id {
+            project
+                .sections
+                .iter()
+                .find(|s| s.id == section_id)
+                .and_then(|s| s.shots.iter().position(|shot| shot.id == before_id))
+                .unwrap_or(0)
+        } else if let Some(after_id) = after_shot_id {
             project
                 .sections
                 .iter()
@@ -376,15 +385,22 @@ impl AppState {
             warnings.extend(Validator::validate_shot(&data, &cfg.validation, section_id, shot_index));
         }
 
-        let shot = if let Some(after_id) = after_shot_id {
+        let shot = if let Some(before_id) = before_shot_id {
+            project.insert_shot_before(section_id, before_id, data)
+        } else if let Some(after_id) = after_shot_id {
             project.insert_shot_after(section_id, after_id, data)
         } else {
             project.add_shot(section_id, data)
         };
 
-        if shot.is_some() {
-            tracing::info!(section_id, "Shot created");
-            CommandResult::success_with_warnings(warnings)
+        if let Some(new_shot) = shot {
+            let new_shot_id = new_shot.id;
+            tracing::info!(section_id, shot_id = new_shot_id, "Shot created");
+            if warnings.is_empty() {
+                CommandResult::success_with_shot_id(new_shot_id)
+            } else {
+                CommandResult::success_with_shot_id_and_warnings(new_shot_id, warnings)
+            }
         } else {
             CommandResult::failure("Failed to create shot".to_string())
         }

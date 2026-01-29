@@ -480,6 +480,7 @@ fn test_undo_redo_chain() {
         section_id: 0,
         shot: create_shot_data(0.0, 10.0, 5.0, 5.0),
         after_shot_id: None,
+        before_shot_id: None,
     });
 
     assert!(stack.can_undo());

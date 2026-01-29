@@ -900,7 +900,8 @@ impl AppState {
                 section_id,
                 shot,
                 after_shot_id,
-            } => self.create_shot(*section_id, shot.clone(), *after_shot_id),
+                before_shot_id,
+            } => self.create_shot(*section_id, shot.clone(), *after_shot_id, *before_shot_id),
             Command::UpdateShot {
                 section_id,
                 shot_id,

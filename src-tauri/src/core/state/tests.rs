@@ -448,6 +448,7 @@ fn test_create_shot() {
         section_id,
         shot: test_shot_data(10.0),
         after_shot_id: None,
+        before_shot_id: None,
     });
 
     assert!(result.success);
@@ -1016,6 +1017,7 @@ fn test_is_undoable_commands() {
         section_id: 0,
         shot: ShotData::default(),
         after_shot_id: None,
+        before_shot_id: None,
     }));
 }
 
@@ -1987,6 +1989,7 @@ fn test_execute_create_shot_command() {
         section_id,
         shot: test_shot_data(7.5), // Intermediate length
         after_shot_id: Some(first_shot_id),
+        before_shot_id: None,
     });
 
     assert!(result.success);
@@ -2141,6 +2144,7 @@ fn test_execute_command_no_project_open() {
             section_id: 0,
             shot: test_shot_data(5.0),
             after_shot_id: None,
+            before_shot_id: None,
         },
         Command::UpdateShot {
             section_id: 0,
@@ -3955,6 +3959,7 @@ fn test_create_shot_undo_redo_preserves_id() {
         section_id,
         shot: test_shot_data(10.0),
         after_shot_id: None,
+        before_shot_id: None,
     });
 
     let project = state.get_project_state().unwrap();
@@ -4012,6 +4017,7 @@ fn test_create_shot_mid_section_undo_redo_preserves_position() {
         section_id,
         shot: test_shot_data(99.0),
         after_shot_id: Some(first_shot_id),
+        before_shot_id: None,
     });
 
     let project = state.get_project_state().unwrap();
@@ -4077,6 +4083,7 @@ fn test_create_shot_double_undo_redo_cycle() {
         section_id,
         shot: test_shot_data(20.0),
         after_shot_id: None,
+        before_shot_id: None,
     });
 
     let project = state.get_project_state().unwrap();
@@ -4126,6 +4133,7 @@ fn test_create_shot_undo_redo_then_edit() {
         section_id,
         shot: test_shot_data(15.0),
         after_shot_id: None,
+        before_shot_id: None,
     });
 
     let project = state.get_project_state().unwrap();
@@ -4174,6 +4182,7 @@ fn test_create_shot_undo_redo_then_delete() {
         section_id,
         shot: test_shot_data(15.0),
         after_shot_id: None,
+        before_shot_id: None,
     });
 
     let project = state.get_project_state().unwrap();
@@ -4215,6 +4224,7 @@ fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
         section_id,
         shot: test_shot_data(10.0),
         after_shot_id: None,
+        before_shot_id: None,
     });
 
     let project = state.get_project_state().unwrap();
