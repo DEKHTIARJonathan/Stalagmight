@@ -697,7 +697,7 @@ await page.keyboard.press('Enter');       // Select
 
 #### Close Behavior Testing
 
-The dropdown stays open on action (button click, item click, Ctrl+Z/Y) and refreshes its items. It closes only on mouse leave, Escape, click outside, and empty stack.
+The dropdown stays open on button click and Ctrl+Z/Y (refreshes its items). It closes on item click, Enter key selection, mouse leave, Escape, click outside, and empty stack.
 
 Test close paths:
 
@@ -712,6 +712,14 @@ await page.click('body', { position: { x: 10, y: 10 } });
 // 3. Mouse leave (100ms buffer)
 await page.hover('[data-testid="map-canvas"]');
 await page.waitForTimeout(150);
+
+// 4. Item click closes dropdown
+await page.click('[data-testid="toolbar-undo-button-item-0"]');
+await expect(page.getByTestId('toolbar-undo-button-dropdown')).not.toBeVisible();
+
+// 5. Enter key on navigated item closes dropdown
+await page.keyboard.press('Enter');
+await expect(page.getByTestId('toolbar-undo-button-dropdown')).not.toBeVisible();
 ```
 
 Test stay-open behavior (dropdown must be open first via hover or keyboard):
@@ -724,10 +732,6 @@ await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible({ tim
 // Button click keeps dropdown open and shows loading indicator
 await page.click('[data-testid="toolbar-undo-button"]');
 await expect(page.getByTestId('toolbar-undo-button-loading')).toBeVisible();
-await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible();
-
-// Item click keeps dropdown open and refreshes
-await page.click('[data-testid="toolbar-undo-button-item-0"]');
 await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible();
 
 // Ctrl+Z keeps dropdown open and refreshes (ensure focus is NOT in a text input)
@@ -757,7 +761,7 @@ await expect(page.getByTestId('toolbar-undo-button-announcement'))
   .toContainText('actions remaining');
 ```
 
-Test navigation reset after action (dropdown must be open first):
+Test item selection via keyboard closes dropdown:
 
 ```typescript
 // Open via keyboard, navigate, then trigger action
@@ -766,8 +770,8 @@ await page.keyboard.press('ArrowDown');
 const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
 await expect(dropdown).toBeVisible();
 await page.keyboard.press('End'); // Navigate to last item
-await page.keyboard.press('Enter'); // Perform action
-await expect(dropdown).toHaveAttribute('aria-activedescendant', /item-0/);
+await page.keyboard.press('Enter'); // Select item and close dropdown
+await expect(dropdown).not.toBeVisible();
 ```
 
 Test error dialog on failure (dropdown must be open first):

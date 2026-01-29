@@ -150,28 +150,29 @@ test.describe('GlobalView Map', () => {
     test('should select project on marker click', async ({ page }) => {
       // Click on a marker - dispatch click event directly for reliability
       const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      const inner = marker.locator('.marker-inner');
 
-      // Verify initial unselected state (teal)
-      await expect(marker).toHaveCSS('background-color', 'rgb(78, 205, 196)'); // #4ecdc4
+      // Verify initial unselected state (semi-transparent border)
+      await expect(inner).toHaveCSS('border-color', 'rgba(255, 255, 255, 0.5)');
 
       // Dispatch click event directly
       await marker.dispatchEvent('click');
 
       // Wait for React state update and marker style change
-      // Marker should change to selected style (blue background)
-      await expect(marker).toHaveCSS('background-color', 'rgb(59, 130, 246)', { timeout: 2000 }); // #3b82f6
+      // Marker should change to selected style (solid white border)
+      await expect(inner).toHaveCSS('border-color', 'rgb(255, 255, 255)', { timeout: 2000 });
     });
 
-    test('should show popup on marker hover', async ({ page }) => {
+    test('should show tooltip on marker hover', async ({ page }) => {
       const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
 
-      // Dispatch mouseenter event directly to trigger popup
+      // Dispatch mouseenter event directly to trigger tooltip
       await marker.dispatchEvent('mouseenter');
 
-      // Popup should appear with project name
-      const popup = page.locator('.maplibregl-popup');
-      await expect(popup).toBeVisible({ timeout: 5000 });
-      await expect(popup).toContainText('Cave System Alpha', { timeout: 5000 });
+      // Custom tooltip should appear with project name
+      const tooltip = page.locator('.globalview-marker-tooltip');
+      await expect(tooltip).toBeVisible({ timeout: 5000 });
+      await expect(tooltip).toContainText('Cave System Alpha', { timeout: 5000 });
     });
 
     test('should open project on marker double-click', async ({ page }) => {
@@ -327,8 +328,9 @@ test.describe('GlobalView Map', () => {
       const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
       await expect(marker).toHaveCSS('display', 'flex', { timeout: 10000 });
 
-      // Error marker should be red
-      await expect(marker).toHaveCSS('background-color', 'rgb(239, 68, 68)', { timeout: 10000 }); // #ef4444
+      // Error marker inner circle should be red
+      const inner = marker.locator('.marker-inner');
+      await expect(inner).toHaveCSS('background-color', 'rgb(239, 68, 68)', { timeout: 10000 }); // #ef4444
     });
 
     test('should show all markers in markers mode', async ({ page }) => {

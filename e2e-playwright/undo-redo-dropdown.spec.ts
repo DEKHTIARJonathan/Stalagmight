@@ -321,7 +321,7 @@ test.describe('Undo/Redo History Dropdown', () => {
   });
 
   test.describe('Item Click Behavior', () => {
-    test('clicking item at index 2 executes 3 undos (indices 0,1,2) and stays open', async ({ page }) => {
+    test('clicking item at index 2 executes undo_to and closes dropdown', async ({ page }) => {
       const undoButton = page.getByTestId('toolbar-undo-button');
       const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
 
@@ -340,8 +340,8 @@ test.describe('Undo/Redo History Dropdown', () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]).toEqual({ cmd: 'undo_to', index: 2 });
 
-      // Dropdown should stay open after click (stay-open behavior)
-      await expect(dropdown).toBeVisible({ timeout: 1000 });
+      // Dropdown should close after item click
+      await expect(dropdown).not.toBeVisible({ timeout: 1000 });
     });
 
     test('clicking item in redo dropdown calls redo_to', async ({ page }) => {
@@ -422,7 +422,7 @@ test.describe('Undo/Redo History Dropdown', () => {
       await expect(dropdown).toBeVisible();
     });
 
-    test('Enter selects item and keeps dropdown open', async ({ page }) => {
+    test('Enter selects item and closes dropdown', async ({ page }) => {
       const undoButton = page.getByTestId('toolbar-undo-button');
       const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
 
@@ -442,8 +442,8 @@ test.describe('Undo/Redo History Dropdown', () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]).toEqual({ cmd: 'undo_to', index: 0 });
 
-      // Dropdown should stay open (stay-open behavior)
-      await expect(dropdown).toBeVisible({ timeout: 1000 });
+      // Dropdown should close after item selection
+      await expect(dropdown).not.toBeVisible({ timeout: 1000 });
     });
 
     test('keyboard navigation to last item and Enter selects correct index', async ({ page }) => {
@@ -720,7 +720,7 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
     await expect(announcement).toContainText('actions remaining', { timeout: 2000 });
   });
 
-  test('item click keeps dropdown open and refreshes items', async ({ page }) => {
+  test('item click closes dropdown and executes action', async ({ page }) => {
     const undoButton = page.getByTestId('toolbar-undo-button');
     const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
 
@@ -733,17 +733,13 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
     await expect(item).toBeVisible();
     await item.click();
 
-    // Dropdown should stay open
-    await expect(dropdown).toBeVisible({ timeout: 2000 });
+    // Dropdown should close after item click
+    await expect(dropdown).not.toBeVisible({ timeout: 2000 });
 
     // Verify undo_to was called
     const calls = await getUndoRedoCalls(page);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({ cmd: 'undo_to', index: 0 });
-
-    // aria-live announcement should update (proves refresh happened)
-    const announcement = page.getByTestId('toolbar-undo-button-announcement');
-    await expect(announcement).toContainText('actions remaining', { timeout: 2000 });
   });
 
   test('Ctrl+Z keeps dropdown open and refreshes items', async ({ page }) => {
@@ -823,7 +819,7 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
     await expect(loadingIndicator).toContainText('Processing...');
   });
 
-  test('navigation resets to top after refresh', async ({ page }) => {
+  test('Enter on navigated item closes dropdown and executes correct action', async ({ page }) => {
     const undoButton = page.getByTestId('toolbar-undo-button');
     const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
 
@@ -843,8 +839,13 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
     // Perform action via Enter
     await page.keyboard.press('Enter');
 
-    // After action and refresh, navigation should reset to first item (index 0)
-    await expect(dropdown).toHaveAttribute('aria-activedescendant', /item-0/, { timeout: 2000 });
+    // Dropdown should close after item selection
+    await expect(dropdown).not.toBeVisible({ timeout: 2000 });
+
+    // Verify undo_to was called with the correct index (last item = index 3)
+    const calls = await getUndoRedoCalls(page);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({ cmd: 'undo_to', index: 3 });
   });
 
   test('aria-live announcement after action', async ({ page }) => {
