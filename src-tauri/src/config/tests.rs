@@ -1152,7 +1152,10 @@ fn test_shortcut_new_actions_defaults() {
     assert_eq!(config.toggle_section_labels, vec!["Ctrl+L".to_string()]);
     assert_eq!(config.zoom_in, vec!["Equal".to_string(), "Plus".to_string()]);
     assert_eq!(config.zoom_out, vec!["Minus".to_string()]);
-    assert_eq!(config.toggle_depth_gradient, vec!["G".to_string()]);
+    assert_eq!(config.toggle_depth_gradient, vec!["Shift+D".to_string()]);
+    assert_eq!(config.move_segment, vec!["V".to_string()]);
+    assert_eq!(config.move_shot, vec!["G".to_string()]);
+    assert_eq!(config.move_section, vec!["Shift+V".to_string()]);
     assert_eq!(config.toggle_grid, vec!["Shift+G".to_string()]);
     assert_eq!(config.toggle_satellite, vec!["B".to_string()]);
     assert_eq!(config.fit_to_bounds, vec!["F".to_string()]);

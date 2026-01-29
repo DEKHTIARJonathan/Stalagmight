@@ -32,7 +32,7 @@ const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
   {
     id: 'tools',
     label: 'Tools',
-    actions: ['select', 'pan', 'zoom', 'draw', 'delete_tool', 'merge', 'measure', 'move_section', 'move_station'],
+    actions: ['select', 'pan', 'zoom', 'draw', 'delete_tool', 'merge', 'measure', 'move_section', 'move_station', 'move_segment', 'move_shot'],
   },
   {
     id: 'edit',
