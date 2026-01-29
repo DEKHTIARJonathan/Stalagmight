@@ -6186,16 +6186,35 @@ fn test_delete_section_undo_restores_relationships() {
     });
     assert!(merge_result.success, "Merge should succeed");
 
+    // Set a zero datum on sec_a:0 so cleanup removes it
+    let datum_result = state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(sec_a, 0),
+        coordinates: crate::models::GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+    });
+    assert!(datum_result.success, "SetZeroDatum should succeed");
+
+    // Move station sec_a:0 to create a station offset
+    let move_result = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(sec_a, 0),
+        offset: Coordinates::new(1.0, 2.0, 0.0),
+    });
+    assert!(move_result.success, "MoveStation should succeed");
+
     // Capture state before deletion
     let proj_before = state.get_project_state().unwrap();
     let merges_before = proj_before.station_merges.len();
+    let zero_datums_before = proj_before.zero_datums.len();
+    let station_offsets_a_before = proj_before.station_offsets.keys()
+        .filter(|sr| sr.section_id == sec_a).count();
     assert!(merges_before >= 1, "Should have at least 1 merge");
+    assert!(zero_datums_before >= 1, "Should have at least 1 zero datum");
+    assert!(station_offsets_a_before >= 1, "Should have at least 1 station offset for sec_a");
 
-    // Delete section A (triggers cleanup)
+    // Delete section A (triggers cleanup of merges, offsets, zero datums)
     let del_result = state.execute(Command::DeleteSection { section_id: sec_a });
     assert!(del_result.success, "Delete should succeed");
 
-    // Verify cleanup happened
+    // Verify cleanup happened: merges, zero datums, station offsets
     let proj_after = state.get_project_state().unwrap();
     assert!(proj_after.get_section(sec_a).is_none(), "Section A should be gone");
     assert_eq!(
@@ -6204,6 +6223,16 @@ fn test_delete_section_undo_restores_relationships() {
         ).count(),
         0,
         "No merges should reference deleted section A"
+    );
+    assert_eq!(
+        proj_after.zero_datums.iter().filter(|zd| zd.station_ref.section_id == sec_a).count(),
+        0,
+        "No zero datums should reference deleted section A"
+    );
+    assert_eq!(
+        proj_after.station_offsets.keys().filter(|sr| sr.section_id == sec_a).count(),
+        0,
+        "No station offsets should reference deleted section A"
     );
 
     // Undo should restore everything
@@ -6216,6 +6245,16 @@ fn test_delete_section_undo_restores_relationships() {
         proj_restored.station_merges.len(),
         merges_before,
         "Merges should be fully restored"
+    );
+    assert_eq!(
+        proj_restored.zero_datums.len(),
+        zero_datums_before,
+        "Zero datums should be fully restored"
+    );
+    assert_eq!(
+        proj_restored.station_offsets.keys().filter(|sr| sr.section_id == sec_a).count(),
+        station_offsets_a_before,
+        "Station offsets should be fully restored"
     );
 
     // Redo should re-delete and re-cleanup
@@ -6230,5 +6269,15 @@ fn test_delete_section_undo_restores_relationships() {
         ).count(),
         0,
         "No merges should reference deleted section after redo"
+    );
+    assert_eq!(
+        proj_redone.zero_datums.iter().filter(|zd| zd.station_ref.section_id == sec_a).count(),
+        0,
+        "No zero datums should reference deleted section after redo"
+    );
+    assert_eq!(
+        proj_redone.station_offsets.keys().filter(|sr| sr.section_id == sec_a).count(),
+        0,
+        "No station offsets should reference deleted section after redo"
     );
 }
