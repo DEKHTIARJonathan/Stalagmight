@@ -674,6 +674,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     return result;
   },
 
+  deleteShotAndSplit: async (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => {
+    const result = await invoke<CommandResult>('delete_shot_and_split', { sectionId, shotId, nameA, nameB });
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
+  },
+
   setShotVirtual: async (sectionId: SectionId, shotId: ShotId, isVirtual: boolean) => {
     const result = await invoke<CommandResult>('set_shot_virtual', { sectionId, shotId, isVirtual });
     if (result.success) {
