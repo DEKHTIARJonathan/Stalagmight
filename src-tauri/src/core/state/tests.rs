@@ -3872,7 +3872,8 @@ fn test_create_section_created_snapshot_distinct_from_section_snapshot() {
         );
     }
 
-    // Now delete the section and verify DeleteSection uses SectionSnapshot
+    // Now delete the section and verify DeleteSection uses ProjectSnapshotPair
+    // (changed from SectionSnapshot to support cleanup of orphaned merges/closures/offsets)
     state.execute(Command::DeleteSection { section_id });
 
     {
@@ -3880,8 +3881,8 @@ fn test_create_section_created_snapshot_distinct_from_section_snapshot() {
         let undo_data = stack.peek_undo_data().unwrap();
         assert_eq!(
             undo_data.variant_name(),
-            "SectionSnapshot",
-            "DeleteSection should use SectionSnapshot, got {}",
+            "ProjectSnapshotPair",
+            "DeleteSection should use ProjectSnapshotPair, got {}",
             undo_data.variant_name()
         );
     }
@@ -6143,4 +6144,91 @@ fn test_delete_last_shot_undo_restores_references() {
     assert_eq!(proj.loop_closures.len(), closures_before, "Closures should be restored");
     let so_after = proj.station_offsets.keys().filter(|sr| sr.section_id == section_a_id).count();
     assert_eq!(so_after, station_offsets_a_before, "Station offsets should be restored");
+}
+
+// === Section deletion cleanup undo/redo tests (fn-47-ok1.7) ===
+
+#[test]
+fn test_delete_section_undo_restores_relationships() {
+    // Delete a section with merges, closures, offsets, zero datums.
+    // Undo should restore all of them.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Cleanup Undo Test".to_string(),
+        location: None,
+    });
+
+    // Create two sections
+    let sec_a_result = state.execute(Command::CreateSection {
+        name: Some("Section A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let sec_a = sec_a_result.section_id.unwrap();
+
+    let sec_b_result = state.execute(Command::CreateSection {
+        name: Some("Section B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+    let sec_b = sec_b_result.section_id.unwrap();
+
+    // Merge sec_a:1 -> sec_b:0
+    let merge_result = state.execute(Command::MergeStations {
+        station_a: StationRef::new(sec_a, 1),
+        station_b: StationRef::new(sec_b, 0),
+    });
+    assert!(merge_result.success, "Merge should succeed");
+
+    // Capture state before deletion
+    let proj_before = state.get_project_state().unwrap();
+    let merges_before = proj_before.station_merges.len();
+    assert!(merges_before >= 1, "Should have at least 1 merge");
+
+    // Delete section A (triggers cleanup)
+    let del_result = state.execute(Command::DeleteSection { section_id: sec_a });
+    assert!(del_result.success, "Delete should succeed");
+
+    // Verify cleanup happened
+    let proj_after = state.get_project_state().unwrap();
+    assert!(proj_after.get_section(sec_a).is_none(), "Section A should be gone");
+    assert_eq!(
+        proj_after.station_merges.iter().filter(|m|
+            m.station_a.section_id == sec_a || m.station_b.section_id == sec_a
+        ).count(),
+        0,
+        "No merges should reference deleted section A"
+    );
+
+    // Undo should restore everything
+    let undo_result = state.undo();
+    assert!(undo_result.success, "Undo should succeed");
+
+    let proj_restored = state.get_project_state().unwrap();
+    assert!(proj_restored.get_section(sec_a).is_some(), "Section A should be restored");
+    assert_eq!(
+        proj_restored.station_merges.len(),
+        merges_before,
+        "Merges should be fully restored"
+    );
+
+    // Redo should re-delete and re-cleanup
+    let redo_result = state.redo();
+    assert!(redo_result.success, "Redo should succeed");
+
+    let proj_redone = state.get_project_state().unwrap();
+    assert!(proj_redone.get_section(sec_a).is_none(), "Section A should be gone after redo");
+    assert_eq!(
+        proj_redone.station_merges.iter().filter(|m|
+            m.station_a.section_id == sec_a || m.station_b.section_id == sec_a
+        ).count(),
+        0,
+        "No merges should reference deleted section after redo"
+    );
 }

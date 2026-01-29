@@ -10,6 +10,22 @@ use super::{
     ShotId, ShotUpdates, Station, StationMerge, StationRef, ZeroDatum,
 };
 
+/// Relationships that reference a given section (merges, closures, offsets, zero datums).
+/// Used by the frontend to show affected relationships before section deletion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectionRelationships {
+    /// Station merges referencing the section
+    pub merges: Vec<StationMerge>,
+    /// Loop closures referencing the section
+    pub closures: Vec<LoopClosure>,
+    /// Whether the section has a section offset
+    pub has_section_offset: bool,
+    /// Number of station offsets referencing the section
+    pub station_offset_count: usize,
+    /// Number of zero datums referencing the section
+    pub zero_datum_count: usize,
+}
+
 /// A complete cave survey project
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
@@ -179,6 +195,77 @@ impl Project {
         let pos = self.sections.iter().position(|s| s.id == section_id)?;
         self.touch();
         Some(self.sections.remove(pos))
+    }
+
+    /// Query relationships that reference the given section.
+    /// Returns merges, closures, offset info, and zero datum count.
+    pub fn get_section_relationships(&self, section_id: SectionId) -> SectionRelationships {
+        let merges: Vec<StationMerge> = self
+            .station_merges
+            .iter()
+            .filter(|m| m.station_a.section_id == section_id || m.station_b.section_id == section_id)
+            .cloned()
+            .collect();
+
+        let closures: Vec<LoopClosure> = self
+            .loop_closures
+            .iter()
+            .filter(|lc| lc.station_a.section_id == section_id || lc.station_b.section_id == section_id)
+            .cloned()
+            .collect();
+
+        let has_section_offset = self.section_offsets.contains_key(&section_id);
+
+        let station_offset_count = self
+            .station_offsets
+            .keys()
+            .filter(|sr| sr.section_id == section_id)
+            .count();
+
+        let zero_datum_count = self
+            .zero_datums
+            .iter()
+            .filter(|zd| zd.station_ref.section_id == section_id)
+            .count();
+
+        SectionRelationships {
+            merges,
+            closures,
+            has_section_offset,
+            station_offset_count,
+            zero_datum_count,
+        }
+    }
+
+    /// Remove all merges, closures, section_offsets, station_offsets, and zero_datums
+    /// that reference the given section. Call before `remove_section()` to avoid orphans.
+    pub fn cleanup_section_references(&mut self, section_id: SectionId) {
+        // Remove merges referencing this section
+        self.station_merges.retain(|m| {
+            m.station_a.section_id != section_id && m.station_b.section_id != section_id
+        });
+
+        // Remove closures referencing this section
+        self.loop_closures.retain(|lc| {
+            lc.station_a.section_id != section_id && lc.station_b.section_id != section_id
+        });
+
+        // Remove section offset
+        self.section_offsets.remove(&section_id);
+
+        // Remove station offsets referencing this section
+        let station_offset_keys: Vec<StationRef> = self
+            .station_offsets
+            .keys()
+            .filter(|sr| sr.section_id == section_id)
+            .copied()
+            .collect();
+        for key in station_offset_keys {
+            self.station_offsets.remove(&key);
+        }
+
+        // Remove zero datums referencing this section
+        self.zero_datums.retain(|zd| zd.station_ref.section_id != section_id);
     }
 
     // === Shot operations ===
