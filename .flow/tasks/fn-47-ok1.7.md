@@ -182,3 +182,10 @@ While not this task's primary responsibility, note that Task 1 adds `shot_id: Op
 - [ ] Undo restores all cleaned-up relationships
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 - [ ] `pnpm tsc --noEmit` passes
+
+## Done summary
+Implemented section deletion cleanup: orphaned merges, closures, offsets + enhanced confirm dialog. Added cleanup_section_references() and get_section_relationships() to Project model. Updated delete_section() to call cleanup before removal. Changed DeleteSection undo to ProjectSnapshotPair. Enhanced ConfirmDialog to show affected relationships. All 80 Rust tests pass, tsc passes, review verdict SHIP (codex).
+## Evidence
+- Commits: f70bf39, e46591e
+- Tests:
+- PRs:
