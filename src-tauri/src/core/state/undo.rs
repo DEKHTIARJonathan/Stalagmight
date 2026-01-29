@@ -272,9 +272,11 @@ impl AppState {
                 })
             }
 
-            // For batch, snapshot the entire project
+            // For batch, capture "before" snapshot (will be finalized to ProjectSnapshotPair)
             Command::Batch { .. } => {
                 if let Ok(json) = serde_json::to_string(project) {
+                    // Store as ProjectSnapshot initially; finalize_undo_data will
+                    // capture the "after" snapshot and upgrade to ProjectSnapshotPair
                     UndoData::ProjectSnapshot(json)
                 } else {
                     UndoData::None
@@ -354,6 +356,19 @@ impl AppState {
                 }) {
                     UndoData::ClosureInfo {
                         closure: closure.clone(),
+                    }
+                } else {
+                    undo_data
+                }
+            }
+
+            // For batch, upgrade ProjectSnapshot to ProjectSnapshotPair with "after" snapshot
+            Command::Batch { .. } => {
+                if let UndoData::ProjectSnapshot(before) = undo_data {
+                    if let Ok(after) = serde_json::to_string(project) {
+                        UndoData::ProjectSnapshotPair { before, after }
+                    } else {
+                        UndoData::ProjectSnapshot(before.clone())
                     }
                 } else {
                     undo_data
@@ -783,8 +798,8 @@ impl AppState {
         result
     }
 
-    /// Execute a command without pushing to undo stack (used for undo operations)
-    fn execute_without_undo(&self, cmd: Command) -> CommandResult {
+    /// Execute a command without pushing to undo stack (used for undo operations and batch)
+    pub(super) fn execute_without_undo(&self, cmd: Command) -> CommandResult {
         match &cmd {
             Command::CreateSection {
                 name,
@@ -843,6 +858,7 @@ impl AppState {
             Command::MoveSection { section_id, offset } => self.move_section(*section_id, *offset),
             Command::MoveSegment { section_id, offset } => self.move_segment(*section_id, *offset),
             Command::MoveStation { station_ref, offset } => self.move_station(*station_ref, *offset),
+            Command::Batch { commands } => self.execute_batch(commands.clone()),
             _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),
         }
     }

@@ -41,6 +41,7 @@ function getCommandIcon(commandType: string): string {
     case 'remove_zero_datum':
       return '○';
     case 'move_section':
+    case 'move_segment':
     case 'move_station':
       return '↔';
     case 'unmerge_stations':
