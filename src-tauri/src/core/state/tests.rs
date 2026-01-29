@@ -4807,3 +4807,269 @@ fn test_transitive_closures_serialization_preserves_data() {
         "C.1 transitive closure should survive serialization"
     );
 }
+
+// === Move Segment Tests ===
+
+#[test]
+fn test_move_segment() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Create two sections and merge them so they form a segment
+    let r1 = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let sid_a = r1.section_id.unwrap();
+
+    let r2 = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+    let sid_b = r2.section_id.unwrap();
+
+    // Merge station A.1 with B.0
+    let merge_result = state.execute(Command::MergeStations {
+        station_a: StationRef::new(sid_a, 1),
+        station_b: StationRef::new(sid_b, 0),
+    });
+    assert!(merge_result.success);
+
+    // Record offsets after merge (merge may set non-zero offsets)
+    let project = state.get_project_state().unwrap();
+    let a_before = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let b_before = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
+
+    // Move segment starting from section A
+    let result = state.execute(Command::MoveSegment {
+        section_id: sid_a,
+        offset: Coordinates::new(10.0, 20.0, 0.0),
+    });
+    assert!(result.success);
+
+    // Both sections should have been moved by the offset delta
+    let project = state.get_project_state().unwrap();
+    let a_after = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let b_after = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
+
+    assert!(
+        (a_after.0 - a_before.0 - 10.0).abs() < 0.001,
+        "Section A x should increase by 10"
+    );
+    assert!(
+        (a_after.1 - a_before.1 - 20.0).abs() < 0.001,
+        "Section A y should increase by 20"
+    );
+    assert!(
+        (b_after.0 - b_before.0 - 10.0).abs() < 0.001,
+        "Section B x (connected via merge) should increase by 10"
+    );
+    assert!(
+        (b_after.1 - b_before.1 - 20.0).abs() < 0.001,
+        "Section B y (connected via merge) should increase by 20"
+    );
+}
+
+#[test]
+fn test_move_segment_undo_redo() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Create two sections and merge
+    let r1 = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let sid_a = r1.section_id.unwrap();
+
+    let r2 = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+    let sid_b = r2.section_id.unwrap();
+
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(sid_a, 1),
+        station_b: StationRef::new(sid_b, 0),
+    });
+
+    // Record offsets after merge (merge may set non-zero offsets)
+    let project = state.get_project_state().unwrap();
+    let a_pre_move = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let b_pre_move = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
+
+    // Move segment
+    state.execute(Command::MoveSegment {
+        section_id: sid_a,
+        offset: Coordinates::new(10.0, 20.0, 0.0),
+    });
+
+    // Verify both moved by delta
+    let project = state.get_project_state().unwrap();
+    let a_post_move = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let b_post_move = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
+    assert!((a_post_move.0 - a_pre_move.0 - 10.0).abs() < 0.001);
+    assert!((a_post_move.1 - a_pre_move.1 - 20.0).abs() < 0.001);
+    assert!((b_post_move.0 - b_pre_move.0 - 10.0).abs() < 0.001);
+    assert!((b_post_move.1 - b_pre_move.1 - 20.0).abs() < 0.001);
+
+    // Undo should restore exact pre-move offsets
+    let undo_result = state.undo();
+    assert!(undo_result.success);
+
+    let project = state.get_project_state().unwrap();
+    let a_after_undo = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let b_after_undo = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
+    assert!(
+        (a_after_undo.0 - a_pre_move.0).abs() < 0.001,
+        "Undo should restore A's exact pre-move x offset"
+    );
+    assert!(
+        (a_after_undo.1 - a_pre_move.1).abs() < 0.001,
+        "Undo should restore A's exact pre-move y offset"
+    );
+    assert!(
+        (b_after_undo.0 - b_pre_move.0).abs() < 0.001,
+        "Undo should restore B's exact pre-move x offset"
+    );
+    assert!(
+        (b_after_undo.1 - b_pre_move.1).abs() < 0.001,
+        "Undo should restore B's exact pre-move y offset"
+    );
+
+    // Redo should reapply the delta
+    let redo_result = state.redo();
+    assert!(redo_result.success);
+
+    let project = state.get_project_state().unwrap();
+    let a_after_redo = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let b_after_redo = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
+    assert!(
+        (a_after_redo.0 - a_after_undo.0 - 10.0).abs() < 0.001,
+        "Redo should add back the x delta to section A"
+    );
+    assert!(
+        (a_after_redo.1 - a_after_undo.1 - 20.0).abs() < 0.001,
+        "Redo should add back the y delta to section A"
+    );
+    assert!(
+        (b_after_redo.0 - b_after_undo.0 - 10.0).abs() < 0.001,
+        "Redo should add back the x delta to section B"
+    );
+    assert!(
+        (b_after_redo.1 - b_after_undo.1 - 20.0).abs() < 0.001,
+        "Redo should add back the y delta to section B"
+    );
+}
+
+#[test]
+fn test_move_segment_nonexistent_section() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let result = state.execute(Command::MoveSegment {
+        section_id: 999,
+        offset: Coordinates::new(10.0, 20.0, 0.0),
+    });
+    assert!(!result.success, "MoveSegment should fail for nonexistent section");
+}
+
+// === Batch Tests ===
+
+#[test]
+fn test_batch_rollback_on_failure() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Create a section first
+    let r1 = state.execute(Command::CreateSection {
+        name: Some("Existing".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let _existing_id = r1.section_id.unwrap();
+
+    // Capture state before batch
+    let project_before = state.get_project_state().unwrap();
+    let sections_before = project_before.sections.len();
+
+    // Execute batch with valid command followed by invalid command
+    let result = state.execute(Command::Batch {
+        commands: vec![
+            Command::CreateSection {
+                name: Some("New".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#00ff00".to_string(),
+                direction: None,
+                shots: vec![],
+            },
+            // Move a nonexistent section — should fail
+            Command::MoveSection {
+                section_id: 99999,
+                offset: Coordinates::new(1.0, 1.0, 0.0),
+            },
+        ],
+    });
+    assert!(!result.success, "Batch should fail");
+
+    // Verify rollback: project should be exactly as before
+    let project_after = state.get_project_state().unwrap();
+    assert_eq!(
+        project_after.sections.len(),
+        sections_before,
+        "Batch rollback should restore exact section count"
+    );
+}
+
+#[test]
+fn test_batch_disallowed_command() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Try to open a project inside a batch (should be rejected by whitelist)
+    let result = state.execute(Command::Batch {
+        commands: vec![Command::OpenProject {
+            path: std::path::PathBuf::from("/nonexistent"),
+        }],
+    });
+    assert!(!result.success, "Batch should reject non-whitelisted commands");
+    assert!(
+        result.error.unwrap_or_default().contains("not allowed in batch"),
+        "Error should mention batch whitelist"
+    );
+}
