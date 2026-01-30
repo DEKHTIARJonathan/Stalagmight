@@ -113,21 +113,21 @@
   --cc-border: #d4c5a9;
   --cc-text-primary: #1a120b;
   --cc-text-secondary: #6b5b4a;
-  --cc-accent: #2d7a73;
+  --cc-accent: #3a8a82;
   --cc-accent-on: #ffffff;
-  --cc-warning: #996d00;
+  --cc-warning: #b8860b;
   --cc-error: #c0392b;
   --cc-success: #27764e;
   --cc-hover: #ede6db;
-  --cc-focus-ring: #2d7a73;
-  --cc-focus-glow: rgba(45, 122, 115, 0.4);
+  --cc-focus-ring: #3a8a82;
+  --cc-focus-glow: rgba(58, 138, 130, 0.4);
   --cc-scrollbar-track: #ede6db;
   --cc-scrollbar-thumb: #c1a07a;
-  --cc-scrollbar-hover: #2d7a73;
+  --cc-scrollbar-hover: #3a8a82;
   --cc-input-bg: #ffffff;
   --cc-input-border: #d4c5a9;
   --cc-outside-month: #b0a090;
-  --cc-selection-gradient: rgba(45, 122, 115, 0.2);
+  --cc-selection-gradient: rgba(58, 138, 130, 0.2);
 
   /* --- MapLibre Controls --- */
   --cc-map-ctrl-bg: #ffffff;
@@ -142,8 +142,8 @@
 
   /* --- Map Visualization --- */
   --cc-snap-color: #c0392b;
-  --cc-hover-highlight: #996d00;
-  --cc-select-highlight: #2d7a73;
+  --cc-hover-highlight: #b8860b;
+  --cc-select-highlight: #3a8a82;
   --cc-stroke-color: #1a120b;
   --cc-stroke-light: rgba(26, 18, 11, 0.25);
   --cc-text-halo: #ffffff;
@@ -152,9 +152,9 @@
   --cc-gray-line: #b0a090;
   --cc-gray-text: #8a7a6a;
   --cc-grid-default: #c1a07a;
-  --cc-zero-datum: #996d00;
+  --cc-zero-datum: #b8860b;
   --cc-compass-color: #1a120b;
-  --cc-depth-shallow: #2d7a73;
+  --cc-depth-shallow: #3a8a82;
   --cc-depth-deep: #c0392b;
   --cc-depth-text: #1a120b;
 
@@ -163,14 +163,14 @@
   --cc-preview-text: #1a120b;
 
   /* --- Opacity Variants: accent --- */
-  --cc-accent-5: rgba(45, 122, 115, 0.05);
-  --cc-accent-10: rgba(45, 122, 115, 0.1);
-  --cc-accent-20: rgba(45, 122, 115, 0.2);
-  --cc-accent-30: rgba(45, 122, 115, 0.3);
-  --cc-accent-50: rgba(45, 122, 115, 0.5);
-  --cc-accent-70: rgba(45, 122, 115, 0.7);
-  --cc-accent-80: rgba(45, 122, 115, 0.8);
-  --cc-accent-90: rgba(45, 122, 115, 0.9);
+  --cc-accent-5: rgba(58, 138, 130, 0.05);
+  --cc-accent-10: rgba(58, 138, 130, 0.1);
+  --cc-accent-20: rgba(58, 138, 130, 0.2);
+  --cc-accent-30: rgba(58, 138, 130, 0.3);
+  --cc-accent-50: rgba(58, 138, 130, 0.5);
+  --cc-accent-70: rgba(58, 138, 130, 0.7);
+  --cc-accent-80: rgba(58, 138, 130, 0.8);
+  --cc-accent-90: rgba(58, 138, 130, 0.9);
 
   /* --- Opacity Variants: background --- */
   --cc-background-30: rgba(245, 240, 232, 0.3);
@@ -190,9 +190,9 @@
   --cc-error-90: rgba(192, 57, 43, 0.9);
 
   /* --- Opacity Variants: warning --- */
-  --cc-warning-10: rgba(153, 109, 0, 0.1);
-  --cc-warning-20: rgba(153, 109, 0, 0.2);
-  --cc-warning-30: rgba(153, 109, 0, 0.3);
+  --cc-warning-10: rgba(184, 134, 11, 0.1);
+  --cc-warning-20: rgba(184, 134, 11, 0.2);
+  --cc-warning-30: rgba(184, 134, 11, 0.3);
 
   /* --- Opacity Variants: success --- */
   --cc-success-5: rgba(39, 118, 78, 0.05);
