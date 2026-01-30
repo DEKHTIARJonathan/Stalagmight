@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
@@ -109,6 +109,33 @@ export default function DmpSelectionDialog({
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
   const depthUnit = config?.units?.depth ?? defaultConfig.units.depth;
 
+  // Get hash functions from project store
+  const calculateFileHash = useProjectStore((state) => state.calculateFileHash);
+  const checkDuplicateImport = useProjectStore((state) => state.checkDuplicateImport);
+
+  // File hash and duplicate detection state
+  const [fileHash, setFileHash] = useState<string | null>(null);
+  // _isDuplicate will be consumed by the duplicate warning banner (Task 3)
+  const [_isDuplicate, setIsDuplicate] = useState(false);
+
+  // Compute file hash and check for duplicates on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const hash = await calculateFileHash(filePath);
+        if (cancelled) return;
+        setFileHash(hash);
+        const isDup = await checkDuplicateImport(hash);
+        if (cancelled) return;
+        setIsDuplicate(isDup);
+      } catch {
+        // Graceful degradation: proceed without warning
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [filePath, calculateFileHash, checkDuplicateImport]);
+
   // Get last used surveyor from session memory
   const lastUsedSurveyor = useUIStore((state) => state.lastUsedSurveyor);
   const setLastUsedSurveyor = useUIStore((state) => state.setLastUsedSurveyor);
@@ -217,10 +244,10 @@ export default function DmpSelectionDialog({
       selectedIndices,
       defaultSurveyor,
       defaultDate: defaultDate.trim() || null,
-      fileHash: null,
+      fileHash,
     };
     onContinue(config);
-  }, [selectedIndices, defaultSurveyor, defaultDate, onContinue, setLastUsedSurveyor]);
+  }, [selectedIndices, defaultSurveyor, defaultDate, fileHash, onContinue, setLastUsedSurveyor]);
 
   // Calculate section counts for display
   const nonEmptySectionCount = useMemo(() => {
