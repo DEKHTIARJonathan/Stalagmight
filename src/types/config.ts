@@ -421,3 +421,65 @@ export const defaultConfig: Config = {
     theme: 'dark',
   },
 };
+
+/**
+ * Light-theme display defaults. Used when "Reset to defaults" is triggered
+ * while the light theme is active. Colors are chosen for visibility on
+ * light backgrounds.
+ */
+export const lightDisplayDefaults: DisplayConfig = {
+  default_background: '#f5f0e8',
+  grid_color: '#c1a07a',
+  grid_spacing: 10,
+  font_size: 12,
+  font_color: '#1a120b',
+  depth_gradient: {
+    enabled: false,
+    shallow_color: '#0077b6',
+    deep_color: '#c1121f',
+    shallow_depth: 0.0,
+    deep_depth: 50.0,
+  },
+};
+
+/**
+ * Light-theme section color palette. Darker/more saturated colors that
+ * are visually distinct on light backgrounds.
+ */
+export const lightSectionColorDefaults: SectionColorsConfig = {
+  palette: [
+    '#1a8a7d',
+    '#c0392b',
+    '#2e7d6e',
+    '#b94a4a',
+    '#6b4fa0',
+    '#c4587a',
+    '#2f7d9e',
+    '#c7873a',
+  ],
+};
+
+/**
+ * Get theme-appropriate display defaults.
+ * Returns dark-theme defaults for 'dark', light-theme defaults for 'light'.
+ */
+export function getThemedDisplayDefaults(resolvedTheme: 'dark' | 'light'): DisplayConfig {
+  if (resolvedTheme === 'light') {
+    return { ...lightDisplayDefaults, depth_gradient: { ...lightDisplayDefaults.depth_gradient } };
+  }
+  return {
+    ...defaultConfig.display,
+    depth_gradient: { ...defaultConfig.display.depth_gradient },
+  };
+}
+
+/**
+ * Get theme-appropriate section color defaults.
+ * Returns dark-theme palette for 'dark', light-theme palette for 'light'.
+ */
+export function getThemedSectionColorDefaults(resolvedTheme: 'dark' | 'light'): SectionColorsConfig {
+  if (resolvedTheme === 'light') {
+    return { palette: [...lightSectionColorDefaults.palette] };
+  }
+  return { palette: [...defaultConfig.section_colors.palette] };
+}
