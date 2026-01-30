@@ -2,6 +2,7 @@ import { useLayoutEffect, useId, useRef, type ReactNode, useCallback, useState, 
 import { createPortal } from 'react-dom';
 import { Button } from '../common/Button';
 import { pushDialog, popDialog } from '../../utils/dialogStack';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 
 /** Resolve portal target once at module level to avoid per-render getElementById calls. */
 let portalTargetCache: HTMLElement | null = null;
@@ -72,7 +73,49 @@ export function DialogWrapper({
 }: DialogWrapperProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogContentRef = useRef<HTMLDivElement>(null);
+  const alertDialogRef = useRef<HTMLDivElement>(null);
   const [showConfirm, setShowConfirm] = useState(false);
+
+  // Focus trap for the main dialog container.
+  // Disabled when the dirty-confirm alertdialog is open so that its own trap takes over.
+  useFocusTrap(dialogRef, { enabled: !showConfirm });
+
+  // Focus trap for the nested dirty-confirm alertdialog.
+  // Only active when the confirm overlay is shown.
+  useFocusTrap(alertDialogRef, { enabled: showConfirm });
+
+  // Set inert on the outer dialog content (header + body) when dirty-confirm is shown.
+  // This prevents Tab from reaching outer dialog elements while the alertdialog is open.
+  // When dismissed, remove inert and return focus to the outer dialog container.
+  useLayoutEffect(() => {
+    const contentEl = dialogContentRef.current;
+    if (!contentEl) return;
+
+    if (showConfirm) {
+      contentEl.setAttribute('inert', '');
+    } else {
+      contentEl.removeAttribute('inert');
+    }
+  }, [showConfirm]);
+
+  // When dirty-confirm opens, focus the alertdialog container.
+  // When it closes, return focus to the outer dialog container.
+  useLayoutEffect(() => {
+    if (showConfirm) {
+      const alertEl = alertDialogRef.current;
+      if (alertEl && !alertEl.contains(document.activeElement)) {
+        alertEl.focus();
+      }
+    } else {
+      // Return focus to the outer dialog when confirm is dismissed
+      // (but not on initial mount when showConfirm starts as false)
+      const dialogEl = dialogRef.current;
+      if (dialogEl && !dialogEl.contains(document.activeElement)) {
+        dialogEl.focus();
+      }
+    }
+  }, [showConfirm]);
 
   const requestClose = useCallback(() => {
     if (isDirty) {
@@ -151,6 +194,7 @@ export function DialogWrapper({
     >
       <div className="absolute inset-0 bg-black/50" onClick={handleBackdropClick} />
       <div
+        ref={dialogContentRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -176,7 +220,11 @@ export function DialogWrapper({
 
       {/* Inline confirm overlay for dirty state */}
       {showConfirm && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center">
+        <div
+          ref={alertDialogRef}
+          className="fixed inset-0 z-[60] flex items-center justify-center"
+          tabIndex={-1}
+        >
           <div className="absolute inset-0 bg-black/50" onClick={handleCancelDiscard} />
           <div
             role="alertdialog"
