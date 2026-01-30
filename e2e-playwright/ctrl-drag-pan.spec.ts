@@ -90,7 +90,7 @@ test.describe('Ctrl+Drag Panning', () => {
   // Note: zoom mode supports Ctrl+drag panning (added in box zoom feature), so it's not in this list
   const unsupportedTools = [
     { key: 'p', name: 'pan' },
-    { key: 'v', name: 'move_section' },
+    { key: 'v', name: 'move_segment' },
     { key: 't', name: 'move_station' },
   ];
 

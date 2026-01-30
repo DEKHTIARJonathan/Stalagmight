@@ -68,10 +68,11 @@ test.describe('Map Tools', () => {
       { key: 'x', tool: 'delete' },
       { key: 'm', tool: 'merge' },
       { key: 'r', tool: 'measure' },
-      { key: 'v', tool: 'move_section' },
+      { key: 'v', tool: 'move_segment' },
       { key: 't', tool: 'move_station' },
     ];
-    const toolbarTools = new Set(['select', 'pan', 'zoom', 'draw', 'delete', 'merge', 'measure']);
+    // Standalone toolbar buttons (not inside tool groups)
+    const toolbarTools = new Set(['select', 'draw', 'delete', 'merge', 'measure']);
 
     for (const { key, tool } of toolShortcuts) {
       await page.keyboard.press(key);
