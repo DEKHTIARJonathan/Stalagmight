@@ -255,3 +255,6 @@ Never fall back to inerting a parent container (#root) when the expected sibling
 
 ## 2026-01-30 manual [pitfall]
 When moving event handlers from document capture phase to element-level onKeyDown, use useLayoutEffect (not useEffect) to focus the container before paint, and guard with el.contains(document.activeElement) to avoid overriding autoFocus on inner elements
+
+## 2026-01-30 manual [pitfall]
+Auto-applying data attributes based on component variant (e.g. data-primary-action on all danger buttons) can unintentionally focus destructive controls -- use opt-in for dangerous variants and auto-add only for safe ones
