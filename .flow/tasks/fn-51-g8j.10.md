@@ -81,6 +81,21 @@ Replace `text-background` with `text-accent-on` in primary variant (line 14). In
 ## Done summary
 Migrated inline hex colors in TSX component files to CSS variables via the new themeColors utility.
 
+Changes:
+- Created `src/utils/themeColors.ts` with `getThemeColor()`, `MapThemeColors` interface, and `getMapThemeColors()`
+- Modified `src/components/Map/surveyLayer/features.ts` — `buildSurveyFeatures()` now accepts `themeColors` parameter
+- Modified `src/components/Map/SurveyLayer.tsx` — added `applyThemeColors()` method with feature rebuild and cached data
+- Modified `src/components/Map/MapCanvas.tsx` — wired `resolvedTheme` subscription calling `surveyLayer.applyThemeColors()`
+- Modified `src/components/Dialogs/SectionPreview.tsx` — replaced 12 hardcoded colors with theme reads + `useEffect` on resolvedTheme
+- Modified `src/components/common/Button.tsx` — changed `text-background` to `text-accent-on`
+- Modified `src/components/GlobalView/GlobalSurveyLayer.ts` — added `applyThemeColors()` method with feature rebuild
+- Modified `src/components/GlobalView/GlobalViewMap.tsx` — wired resolvedTheme subscription
+- Modified `src/components/Map/PlacementOverlay.tsx` — replaced snap/anchor colors
+- Modified `src/components/Map/GridOverlay.tsx` — replaced grid color default
+- Modified `src/components/Map/DepthLegend.tsx` — replaced depth/text colors
+- Modified `src/components/Dialogs/EditSectionDialog.tsx` — replaced default section color
+- ExportPreview.tsx canvas render colors remain hardcoded (dark palette for exports)
+- Updated test assertion for new color value
 ## Changes
 - Created `src/utils/themeColors.ts` with `getThemeColor()`, `MapThemeColors` interface, and `getMapThemeColors()`
 - Modified `src/components/Map/surveyLayer/features.ts` — `buildSurveyFeatures()` now accepts optional `themeColors` parameter
@@ -91,6 +106,6 @@ Migrated inline hex colors in TSX component files to CSS variables via the new t
 - Modified 7 more files replacing hardcoded colors with theme reads
 - Updated test assertion for new `--cc-error` color value
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 128e26d feat(theme): migrate inline hex colors in TSX components to CSS variables, 21c5380 fix(theme): address review — seed theme at construction, re-apply bg, guard applyThemeColors, 2883f88 fix(theme): address review round 2 — require themeColors, fix marker reactivity, 514d611 fix(theme): address review round 3 - tooltip re-theming, spinner tokens, loop hoisting
+- Tests: pnpm tsc --noEmit: PASS
 - PRs:
