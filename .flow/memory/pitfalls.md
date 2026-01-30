@@ -261,3 +261,9 @@ Auto-applying data attributes based on component variant (e.g. data-primary-acti
 
 ## 2026-01-30 manual [pitfall]
 When writing test examples in docs, always grep the actual codebase for data-testid values instead of guessing — wrong test IDs make documentation examples non-executable
+
+## 2026-01-30 manual [pitfall]
+Async-loaded guard sets (e.g. anchored IDs) must fail closed on fetch error -- keeping the loading flag false blocks the guarded operation, while clearing it to 'loaded with empty set' silently disables the guard
+
+## 2026-01-30 manual [pitfall]
+Rollback paths that re-acquire a mutex will silently fail if the mutex is poisoned -- use into_inner() on the PoisonError to recover the guard and ensure rollback applies
