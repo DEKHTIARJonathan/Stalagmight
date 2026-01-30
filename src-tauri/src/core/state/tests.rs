@@ -5224,9 +5224,14 @@ fn test_move_segment_isolated() {
     });
     assert!(result.success);
 
-    // Section A should have moved
+    // Section A should have moved (entry must exist after MoveSegment)
     let project = state.get_project_state().unwrap();
-    let a_after = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let a_after = project
+        .section_offsets
+        .get(&sid_a)
+        .copied()
+        .expect("Section A offset should exist after MoveSegment");
+    // Section B was not moved; entry may or may not exist
     let b_after = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
 
     assert!(
@@ -5280,7 +5285,11 @@ fn test_move_segment_accumulates() {
     assert!(result1.success);
 
     let project = state.get_project_state().unwrap();
-    let after_first = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let after_first = project
+        .section_offsets
+        .get(&sid_a)
+        .copied()
+        .expect("Offset should exist after first MoveSegment");
     assert!(
         (after_first.0 - initial.0 - 10.0).abs() < 0.001,
         "After first move, x should increase by 10"
@@ -5298,7 +5307,11 @@ fn test_move_segment_accumulates() {
     assert!(result2.success);
 
     let project = state.get_project_state().unwrap();
-    let after_second = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let after_second = project
+        .section_offsets
+        .get(&sid_a)
+        .copied()
+        .expect("Offset should exist after second MoveSegment");
     assert!(
         (after_second.0 - initial.0 - 13.0).abs() < 0.001,
         "After second move, x should be initial + 10 + 3 = +13"
@@ -5316,7 +5329,11 @@ fn test_move_segment_accumulates() {
     assert!(result3.success);
 
     let project = state.get_project_state().unwrap();
-    let after_third = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let after_third = project
+        .section_offsets
+        .get(&sid_a)
+        .copied()
+        .expect("Offset should exist after third MoveSegment");
     assert!(
         (after_third.0 - initial.0 - 8.0).abs() < 0.001,
         "After third move, x should be initial + 13 - 5 = +8"
