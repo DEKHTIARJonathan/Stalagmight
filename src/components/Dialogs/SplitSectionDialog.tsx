@@ -20,7 +20,7 @@ export default function SplitSectionDialog() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Re-initialize if dialog data changes
+  // Re-initialize names when sectionName changes
   useEffect(() => {
     setNameA(sectionName ? `${sectionName}-A` : 'Section-A');
     setNameB(sectionName ? `${sectionName}-B` : 'Section-B');
@@ -52,12 +52,15 @@ export default function SplitSectionDialog() {
     }
   };
 
+  const handleClose = isLoading ? () => {} : closeDialog;
+
   return (
     <DialogWrapper
       title="Delete Shot & Split Section"
-      onClose={closeDialog}
+      onClose={handleClose}
       size="md"
       isDirty={isDirty}
+      closeOnBackdropClick={!isLoading}
       data-testid="split-section-dialog"
     >
       <div className="space-y-4">
@@ -97,7 +100,7 @@ export default function SplitSectionDialog() {
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} disabled={isLoading}>
+          <Button onClick={handleClose} disabled={isLoading}>
             Cancel
           </Button>
           <Button
