@@ -7,9 +7,8 @@ Update E2E tests and mocks to reflect the new hash-based duplicate detection sys
 - Make `check_duplicate_import` return value configurable via global flag or mock state
 - Default: return false (no duplicate)
 
-**Update existing tests** (`e2e-playwright/dmp-import.spec.ts`):
-- Test 6.5: Change from expecting duplicate-import-dialog to expecting dmp-selection-dialog with duplicate-hash-warning banner (set mock to return true)
-- Test 6.7: Same — expect inline banner, remove confirm-duplicate-import-button references
+<!-- Updated by plan-sync: fn-48-oen.5 already updated Tests 6.5 and 6.7 -->
+**Note:** Tests 6.5 and 6.7 were already updated in fn-48-oen.5 to remove `duplicate-import-dialog` and `confirm-duplicate-import-button` references. Test 6.5 ("should close dialog on Cancel without importing") now expects `dmp-selection-dialog` on re-open. Test 6.7 ("should allow re-importing same file without session-based duplicate warning") already expects `dmp-selection-dialog` without any session-based duplicate dialog. No further modifications to these tests are needed.
 
 **Add new test cases**:
 - duplicate-hash-warning banner NOT visible on first import (mock returns false)
@@ -19,7 +18,7 @@ Update E2E tests and mocks to reflect the new hash-based duplicate detection sys
 
 ## Acceptance
 - [ ] Mock supports configurable check_duplicate_import return value
-- [ ] Tests 6.5 and 6.7 updated to use inline banner instead of separate dialog
+- [ ] ~Tests 6.5 and 6.7 updated to use inline banner instead of separate dialog~ (already done in fn-48-oen.5)
 - [ ] New test: banner not visible on first import
 - [ ] New test: banner visible when check returns true
 - [ ] New test: track_imported_file called after success
