@@ -33,9 +33,8 @@ Change all hardcoded hex color values in `tailwind.config.js` to reference the `
 - [ ] App renders identically in dark theme (no visual regression)
 
 ## Done summary
-
-(To be filled on completion)
-
+Updated tailwind.config.js to reference CSS variables: replaced all hardcoded hex UI chrome colors with var(--cc-*) references, mapped grid/zero-datum/loop-closure to CSS variables, added accent-on token, and added all 25 unique opacity variant entries covering 29 codebase usage patterns. Section palette colors remain hardcoded and virtual-shot remains as rgba literal per spec.
 ## Evidence
-
-(To be filled on completion)
+- Commits: ac5b9c018594fc031491d043ee6e9002d3322ccb
+- Tests: pnpm tsc --noEmit
+- PRs:
