@@ -46,9 +46,8 @@ This does NOT auto-change display settings when switching themes. It only affect
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-
-(To be filled on completion)
-
+Added theme-aware default color palettes for the Display settings "Reset to Defaults" flow. When the light theme is active, resetting produces light-appropriate colors (warm limestone background, sandstone grid, dark font); dark theme retains existing defaults. Includes light section color palette with darker/more saturated colors visible on light backgrounds, plus 14 unit tests.
 ## Evidence
-
-(To be filled on completion)
+- Commits: 4ec36d306036145397810083f9be8b50ed9d1a4d
+- Tests: pnpm tsc --noEmit, pnpm vitest run src/types/__tests__/config.test.ts
+- PRs:
