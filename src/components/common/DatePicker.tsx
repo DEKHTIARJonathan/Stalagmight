@@ -1,5 +1,5 @@
 /**
- * Custom DatePicker component using react-datepicker with dark theme styling.
+ * Custom DatePicker component using react-datepicker with theme-aware styling.
  * Replaces native HTML date input which has issues in Tauri/WebView.
  */
 import ReactDatePicker from 'react-datepicker';
@@ -60,10 +60,10 @@ export function DatePicker({
         dateFormat="yyyy-MM-dd"
         placeholderText={placeholder}
         disabled={disabled}
-        className="w-full px-3 py-2 bg-background border border-border rounded text-foreground disabled:opacity-50"
-        calendarClassName="dark-calendar"
+        className="w-full px-3 py-2 bg-background border border-border rounded text-text-primary disabled:opacity-50"
+        calendarClassName="cc-calendar"
         wrapperClassName="w-full"
-        popperClassName="dark-popper"
+        popperClassName="cc-popper"
         showPopperArrow={false}
       />
     </div>

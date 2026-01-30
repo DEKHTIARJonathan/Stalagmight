@@ -50,9 +50,8 @@ Search for any other third-party components with hardcoded dark theme overrides 
 - [ ] No inline styles in components override theme variables for third-party widgets
 
 ## Done summary
-
-(To be filled on completion)
-
+Verified MapLibre controls and DatePicker third-party widget theming for both dark and light themes. All .maplibregl-* and .react-datepicker* CSS rules use var(--cc-*) tokens. Fixed text-foreground (undefined Tailwind token) to text-text-primary in DatePicker.tsx and Select.tsx. Renamed dark-calendar/dark-popper class names to theme-neutral cc-calendar/cc-popper. No other third-party widgets with hardcoded dark theme overrides found.
 ## Evidence
-
-(To be filled on completion)
+- Commits:
+- Tests:
+- PRs:
