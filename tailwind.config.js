@@ -14,17 +14,19 @@ export default {
         },
       },
       colors: {
-        // UI Colors from spec
-        background: '#1a1a2e',
-        panel: '#16213e',
-        border: '#0f3460',
-        'text-primary': '#f5f5f5',
-        'text-secondary': '#a0a0a0',
-        accent: '#4ecdc4',
-        warning: '#ffcb77',
-        error: '#ff6b6b',
-        success: '#95e1d3',
-        // Section palette colors
+        // UI Chrome colors (CSS variable references)
+        background: 'var(--cc-background)',
+        panel: 'var(--cc-panel)',
+        border: 'var(--cc-border)',
+        'text-primary': 'var(--cc-text-primary)',
+        'text-secondary': 'var(--cc-text-secondary)',
+        accent: 'var(--cc-accent)',
+        'accent-on': 'var(--cc-accent-on)',
+        warning: 'var(--cc-warning)',
+        error: 'var(--cc-error)',
+        success: 'var(--cc-success)',
+
+        // Section palette colors (hardcoded — per-project display settings, not theme-dependent)
         'section-teal': '#4ecdc4',
         'section-coral': '#ff6b6b',
         'section-mint': '#95e1d3',
@@ -33,11 +35,50 @@ export default {
         'section-pink': '#fcbad3',
         'section-sky': '#a8d8ea',
         'section-peach': '#ffcb77',
-        // Map colors
-        grid: '#333366',
-        'zero-datum': '#ffd700',
+
+        // Map colors (CSS variable references)
+        grid: 'var(--cc-grid-default)',
+        'zero-datum': 'var(--cc-zero-datum)',
+        'loop-closure': 'var(--cc-hover-highlight)',
+        // virtual-shot stays as rgba literal (semi-transparent overlay, works on any background)
         'virtual-shot': 'rgba(255, 255, 255, 0.25)',
-        'loop-closure': '#ffcb77',
+
+        // Opacity variants: accent (8 entries)
+        'accent-5': 'var(--cc-accent-5)',
+        'accent-10': 'var(--cc-accent-10)',
+        'accent-20': 'var(--cc-accent-20)',
+        'accent-30': 'var(--cc-accent-30)',
+        'accent-50': 'var(--cc-accent-50)',
+        'accent-70': 'var(--cc-accent-70)',
+        'accent-80': 'var(--cc-accent-80)',
+        'accent-90': 'var(--cc-accent-90)',
+
+        // Opacity variants: background (3 entries)
+        'background-30': 'var(--cc-background-30)',
+        'background-50': 'var(--cc-background-50)',
+        'background-80': 'var(--cc-background-80)',
+
+        // Opacity variants: panel (3 entries)
+        'panel-20': 'var(--cc-panel-20)',
+        'panel-50': 'var(--cc-panel-50)',
+        'panel-90': 'var(--cc-panel-90)',
+
+        // Opacity variants: error (5 entries)
+        'error-10': 'var(--cc-error-10)',
+        'error-20': 'var(--cc-error-20)',
+        'error-30': 'var(--cc-error-30)',
+        'error-80': 'var(--cc-error-80)',
+        'error-90': 'var(--cc-error-90)',
+
+        // Opacity variants: warning (3 entries)
+        'warning-10': 'var(--cc-warning-10)',
+        'warning-20': 'var(--cc-warning-20)',
+        'warning-30': 'var(--cc-warning-30)',
+
+        // Opacity variants: success (3 entries)
+        'success-5': 'var(--cc-success-5)',
+        'success-10': 'var(--cc-success-10)',
+        'success-30': 'var(--cc-success-30)',
       },
     },
   },
