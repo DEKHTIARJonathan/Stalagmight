@@ -4,6 +4,7 @@ import {
   createProject,
   openDmpSelectionDialog,
   proceedToDmpSectionConfig,
+  placeAllSections,
 } from './helpers/app';
 
 /**
@@ -526,5 +527,151 @@ test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
     const status1 = page.locator('[data-testid="section-status-1"]');
     await expect(status1).toContainText('!');
     await expect(status1).toHaveClass(/text-error/);
+  });
+});
+
+test.describe('DMP Import Dialog - Hash Tracking', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupMockedPage(page);
+  });
+
+  /**
+   * Test: duplicate-hash-warning banner NOT visible on first import
+   *
+   * When check_duplicate_import returns false (default), the warning
+   * banner should not appear in the DmpSelectionDialog.
+   */
+  test('should not show duplicate-hash-warning banner on first import', async ({ page }) => {
+    await createProject(page, 'Hash Test No Banner');
+    await openDmpSelectionDialog(page);
+
+    // Wait for hash computation to settle (the dialog runs useEffect on mount)
+    const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
+    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+
+    // The duplicate-hash-warning banner should NOT be visible
+    // since check_duplicate_import returns false by default
+    await expect(page.locator('[data-testid="duplicate-hash-warning"]')).not.toBeVisible();
+  });
+
+  /**
+   * Test: duplicate-hash-warning banner IS visible when check returns true
+   *
+   * When check_duplicate_import returns true, the warning banner
+   * should appear in the DmpSelectionDialog.
+   */
+  test('should show duplicate-hash-warning banner when file was previously imported', async ({ page }) => {
+    // Set mock to return true for check_duplicate_import
+    await page.evaluate(() => {
+      const setter = (window as unknown as Record<string, unknown>).__MOCK_SET_CHECK_DUPLICATE_RESULT__ as
+        | ((result: boolean) => void)
+        | undefined;
+      if (setter) setter(true);
+    });
+
+    await createProject(page, 'Hash Test With Banner');
+    await openDmpSelectionDialog(page);
+
+    // Wait for sections to load (hash check runs on mount)
+    const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
+    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+
+    // The duplicate-hash-warning banner should be visible
+    const warning = page.locator('[data-testid="duplicate-hash-warning"]');
+    await expect(warning).toBeVisible({ timeout: 5000 });
+    await expect(warning).toContainText('File may have been imported before');
+  });
+
+  /**
+   * Test: track_imported_file IPC call made after successful import
+   *
+   * After a successful import (no errors), the track_imported_file
+   * command should be called with the file hash.
+   */
+  test('should call track_imported_file after successful import', async ({ page }) => {
+    await createProject(page, 'Hash Track Success');
+
+    // Reset tracking call counter
+    await page.evaluate(() => {
+      const reset = (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ as
+        | (() => void)
+        | undefined;
+      if (reset) reset();
+    });
+
+    // Open import dialog and select only Main Passage (no errors)
+    await openDmpSelectionDialog(page);
+    const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
+    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+
+    // Select only Main Passage
+    await dialog.locator('[data-testid="select-none-button"]').click();
+    await page.locator('[data-testid="section-checkbox-0"]').click();
+
+    // Proceed to Step 2
+    await proceedToDmpSectionConfig(page);
+
+    // Place the section (single section = Place and finish)
+    await placeAllSections(page);
+
+    // Wait for track_imported_file to be called (async, happens after import completes)
+    // Poll to avoid race conditions with async IPC calls
+    await expect(async () => {
+      const calls = await page.evaluate(() => {
+        const getter = (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ as
+          | (() => Array<{ hash: string }>)
+          | undefined;
+        return getter ? getter() : [];
+      });
+      expect(calls.length).toBeGreaterThan(0);
+      // The hash should be the mock hash based on the file path
+      expect(calls[0]?.hash).toContain('mock_hash_');
+    }).toPass({ timeout: 5000 });
+  });
+
+  /**
+   * Test: track_imported_file NOT called when import has errors
+   *
+   * When importing a section with validation errors, the track_imported_file
+   * command should NOT be called (hash is only tracked on zero errors).
+   */
+  test('should not call track_imported_file when import has errors', async ({ page }) => {
+    await createProject(page, 'Hash Track Error');
+
+    // Reset tracking call counter
+    await page.evaluate(() => {
+      const reset = (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ as
+        | (() => void)
+        | undefined;
+      if (reset) reset();
+    });
+
+    // Open import dialog and select only the Validation Test Section (has errors)
+    await openDmpSelectionDialog(page);
+    const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
+    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+
+    // Select only Validation Test Section (index 5)
+    await dialog.locator('[data-testid="select-none-button"]').click();
+    await page.locator('[data-testid="section-checkbox-5"]').click();
+
+    // Proceed to Step 2
+    await proceedToDmpSectionConfig(page);
+
+    // The Place button should be disabled because the section has errors
+    // (azimuth 400 is out of range), so we can't actually place it.
+    // Verify the button is disabled.
+    const placeButton = page.locator('[data-testid="place-section-button"], [data-testid="place-and-finish-button"]');
+    await expect(placeButton.first()).toBeDisabled();
+
+    // Verify track_imported_file was NOT called (can't even import)
+    const calls = await page.evaluate(() => {
+      const getter = (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ as
+        | (() => Array<{ hash: string }>)
+        | undefined;
+      return getter ? getter() : [];
+    });
+
+    expect(calls.length).toBe(0);
   });
 });

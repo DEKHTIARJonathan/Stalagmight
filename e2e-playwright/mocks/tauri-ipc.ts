@@ -192,6 +192,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         geometryDelayPaths.delete(path);
       };
 
+      // Duplicate import mock state - configurable for hash-tracking tests
+      let mockCheckDuplicateResult = false; // Default: no duplicate
+      let trackImportedFileCalls: Array<{ hash: string }> = [];
+
+      (window as unknown as Record<string, unknown>).__MOCK_SET_CHECK_DUPLICATE_RESULT__ = (result: boolean) => {
+        mockCheckDuplicateResult = result;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ = () => trackImportedFileCalls;
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ = () => {
+        trackImportedFileCalls = [];
+      };
+
       // Expose config override for testing config reload
       (window as unknown as Record<string, unknown>).__MOCK_SET_CONFIG_OVERRIDES__ = (overrides: MockConfigOverrides) => {
         mockConfigOverrides = overrides;
@@ -657,7 +669,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shots,
             };
             currentProject?.sections.push(section);
-            return { success: true, section };
+            return { success: true, section, section_id: sectionCounter, warnings: [], error: null };
           }
 
           // File hash tracking for duplicate detection
@@ -666,11 +678,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return `mock_hash_${(args?.path as string)?.split('/').pop() ?? 'unknown'}`;
 
           case 'check_duplicate_import':
-            // By default, no duplicates in mock
-            return false;
+            // Configurable via __MOCK_SET_CHECK_DUPLICATE_RESULT__
+            return mockCheckDuplicateResult;
 
           case 'track_imported_file':
             console.log('[Mock IPC] track_imported_file called with:', args);
+            trackImportedFileCalls.push({ hash: (args?.hash as string) ?? '' });
             return { success: true };
 
           case 'import_dmp':
