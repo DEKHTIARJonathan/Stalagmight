@@ -9,53 +9,55 @@ describe('Zoom Tool E2E', () => {
   });
 
   describe('Toolbar Interaction', () => {
-    it('clicking zoom button in toolbar activates zoom tool', async () => {
-      const zoomBtn = await $('[data-testid="tool-zoom"]');
-      await zoomBtn.waitForExist({ timeout: 10000, timeoutMsg: 'Zoom tool button did not appear' });
-      await zoomBtn.click();
+    it('clicking navigate group button activates zoom tool after cycling', async () => {
+      // Navigate group defaults to pan; click once to activate pan, click again to cycle to zoom
+      const navGroup = await $('[data-testid="tool-group-navigate"]');
+      await navGroup.waitForExist({ timeout: 10000, timeoutMsg: 'Navigate group button did not appear' });
+      await navGroup.click(); // activates pan (default)
+      await navGroup.click(); // cycles to zoom
 
-      // Wait for tool activation
+      // Wait for tool activation - navigate group should show active
       await browser.waitUntil(
         async () => {
-          const classes = await zoomBtn.getAttribute('class');
+          const classes = await navGroup.getAttribute('class');
           return classes?.includes('ring-accent') ?? false;
         },
-        { timeout: 2000, timeoutMsg: 'Zoom button did not become active' }
+        { timeout: 2000, timeoutMsg: 'Navigate group button did not become active' }
       );
 
-      const classes = await zoomBtn.getAttribute('class');
+      const classes = await navGroup.getAttribute('class');
       expect(classes).toContain('ring-accent');
     });
 
     it('Z key shortcut activates zoom tool', async () => {
       // Wait for toolbar to be ready
-      const zoomBtn = await $('[data-testid="tool-zoom"]');
-      await zoomBtn.waitForExist({ timeout: 10000, timeoutMsg: 'Zoom tool button did not appear' });
+      const navGroup = await $('[data-testid="tool-group-navigate"]');
+      await navGroup.waitForExist({ timeout: 10000, timeoutMsg: 'Navigate group button did not appear' });
 
       await browser.keys('z');
 
       await browser.waitUntil(
         async () => {
-          const classes = await zoomBtn.getAttribute('class');
+          const classes = await navGroup.getAttribute('class');
           return classes?.includes('ring-accent') ?? false;
         },
-        { timeout: 2000, timeoutMsg: 'Zoom button did not become active after Z key' }
+        { timeout: 2000, timeoutMsg: 'Navigate group button did not become active after Z key' }
       );
 
-      const classes = await zoomBtn.getAttribute('class');
+      const classes = await navGroup.getAttribute('class');
       expect(classes).toContain('ring-accent');
     });
   });
 
   describe('Click Zoom', () => {
     it('left click on map zooms in', async () => {
-      // Activate zoom tool via toolbar click
-      const zoomBtn = await $('[data-testid="tool-zoom"]');
-      await zoomBtn.waitForExist({ timeout: 10000 });
-      await zoomBtn.click();
+      // Activate zoom tool via keyboard shortcut (zoom is now in Navigate group)
+      await browser.keys('z');
+      const navGroup = await $('[data-testid="tool-group-navigate"]');
+      await navGroup.waitForExist({ timeout: 10000 });
       await browser.waitUntil(
         async () => {
-          const classes = await zoomBtn.getAttribute('class');
+          const classes = await navGroup.getAttribute('class');
           return classes?.includes('ring-accent') ?? false;
         },
         { timeout: 2000 }
@@ -99,13 +101,13 @@ describe('Zoom Tool E2E', () => {
     });
 
     it('right click on map zooms out', async () => {
-      // Activate zoom tool via toolbar click
-      const zoomBtn = await $('[data-testid="tool-zoom"]');
-      await zoomBtn.waitForExist({ timeout: 10000 });
-      await zoomBtn.click();
+      // Activate zoom tool via keyboard shortcut (zoom is now in Navigate group)
+      await browser.keys('z');
+      const navGroup = await $('[data-testid="tool-group-navigate"]');
+      await navGroup.waitForExist({ timeout: 10000 });
       await browser.waitUntil(
         async () => {
-          const classes = await zoomBtn.getAttribute('class');
+          const classes = await navGroup.getAttribute('class');
           return classes?.includes('ring-accent') ?? false;
         },
         { timeout: 2000 }
@@ -178,13 +180,13 @@ describe('Zoom Tool E2E', () => {
 
   describe('Box Zoom', () => {
     it('drag rectangle zooms to fit area', async () => {
-      // Activate zoom tool via toolbar click
-      const zoomBtn = await $('[data-testid="tool-zoom"]');
-      await zoomBtn.waitForExist({ timeout: 10000 });
-      await zoomBtn.click();
+      // Activate zoom tool via keyboard shortcut (zoom is now in Navigate group)
+      await browser.keys('z');
+      const navGroup = await $('[data-testid="tool-group-navigate"]');
+      await navGroup.waitForExist({ timeout: 10000 });
       await browser.waitUntil(
         async () => {
-          const classes = await zoomBtn.getAttribute('class');
+          const classes = await navGroup.getAttribute('class');
           return classes?.includes('ring-accent') ?? false;
         },
         { timeout: 2000 }
@@ -233,13 +235,13 @@ describe('Zoom Tool E2E', () => {
     });
 
     it('box zoom overlay visible during drag', async () => {
-      // Activate zoom tool via toolbar click
-      const zoomBtn = await $('[data-testid="tool-zoom"]');
-      await zoomBtn.waitForExist({ timeout: 10000 });
-      await zoomBtn.click();
+      // Activate zoom tool via keyboard shortcut (zoom is now in Navigate group)
+      await browser.keys('z');
+      const navGroup = await $('[data-testid="tool-group-navigate"]');
+      await navGroup.waitForExist({ timeout: 10000 });
       await browser.waitUntil(
         async () => {
-          const classes = await zoomBtn.getAttribute('class');
+          const classes = await navGroup.getAttribute('class');
           return classes?.includes('ring-accent') ?? false;
         },
         { timeout: 2000 }
@@ -335,13 +337,13 @@ describe('Zoom Tool E2E', () => {
       expect(typeof configuredZoomStep).toBe('number');
       expect(configuredZoomStep).toBeGreaterThan(0);
 
-      // Activate zoom tool via toolbar click
-      const zoomBtn = await $('[data-testid="tool-zoom"]');
-      await zoomBtn.waitForExist({ timeout: 10000 });
-      await zoomBtn.click();
+      // Activate zoom tool via keyboard shortcut (zoom is now in Navigate group)
+      await browser.keys('z');
+      const navGroup = await $('[data-testid="tool-group-navigate"]');
+      await navGroup.waitForExist({ timeout: 10000 });
       await browser.waitUntil(
         async () => {
-          const classes = await zoomBtn.getAttribute('class');
+          const classes = await navGroup.getAttribute('class');
           return classes?.includes('ring-accent') ?? false;
         },
         { timeout: 2000 }
