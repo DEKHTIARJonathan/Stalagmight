@@ -19,6 +19,8 @@ export interface DmpSelectionConfig {
   defaultSurveyor: string;
   /** Optional date override to apply to all sections */
   defaultDate: string | null;
+  /** SHA256 hash of the source DMP file, null if computation failed */
+  fileHash: string | null;
 }
 
 interface DmpSelectionDialogProps {
@@ -215,6 +217,7 @@ export default function DmpSelectionDialog({
       selectedIndices,
       defaultSurveyor,
       defaultDate: defaultDate.trim() || null,
+      fileHash: null,
     };
     onContinue(config);
   }, [selectedIndices, defaultSurveyor, defaultDate, onContinue, setLastUsedSurveyor]);
