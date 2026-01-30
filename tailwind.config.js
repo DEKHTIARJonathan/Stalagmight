@@ -16,8 +16,9 @@ export default {
       colors: {
         // UI Chrome colors (CSS variable references)
         // NOTE: Tailwind opacity modifiers (e.g. bg-accent/10) do NOT work with
-        // CSS variable color values. Existing slash-style usages will be migrated
-        // to dash-style tokens (e.g. bg-accent-10) in task fn-51-g8j.11.
+        // raw CSS variable color values. All slash-style usages must be migrated
+        // to the dash-style opacity variant tokens below (e.g. bg-accent-10).
+        // See "Complete Opacity Modifier Inventory" in the theme epic spec.
         background: 'var(--cc-background)',
         panel: 'var(--cc-panel)',
         border: 'var(--cc-border)',
@@ -46,10 +47,11 @@ export default {
         // virtual-shot stays as rgba literal (semi-transparent overlay, works on any background)
         'virtual-shot': 'rgba(255, 255, 255, 0.25)',
 
-        // Opacity variant tokens: 25 unique entries covering all 29 codebase
-        // usage patterns (some tokens serve multiple utility prefixes, e.g.
-        // accent-20 is used for both bg-accent/20 and border-accent/20).
-        // Task fn-51-g8j.11 will migrate all slash-style usages to these tokens.
+        // Opacity variant tokens: 25 unique color entries covering all 29
+        // slash-style usage patterns in the codebase. Some tokens serve
+        // multiple utility prefixes (e.g. accent-20 maps to both
+        // bg-accent/20 and border-accent/20). Use these dash-style tokens
+        // instead of slash-style opacity modifiers with CSS variable colors.
 
         // Opacity variants: accent (8 entries)
         'accent-5': 'var(--cc-accent-5)',
