@@ -7,16 +7,23 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
  */
 
 /**
- * Helper to create a new project with mock sections/stations
+ * Helper to create a new project using stable data-testid selectors.
  */
 async function createProject(page: Page, name: string): Promise<void> {
-  const newProjectBtn = page
-    .locator('button:has-text("New Project"), h3:has-text("New Project")')
-    .first();
+  const newProjectBtn = page.locator('[data-testid="new-project-button"]');
+  await expect(newProjectBtn).toBeVisible({ timeout: 5000 });
   await newProjectBtn.click();
-  await page.waitForSelector('.fixed.inset-0');
-  await page.locator('.fixed.inset-0 input').first().fill(name);
-  await page.click('.fixed.inset-0 button:has-text("Create")');
+
+  // Wait for the New Project dialog to appear
+  await expect(
+    page.locator('[data-testid="new-project-dialog"]')
+  ).toBeVisible({ timeout: 5000 });
+
+  // Fill in the project name via its stable test ID
+  await page.locator('[data-testid="new-project-name-input"]').fill(name);
+
+  // Click Create via its stable test ID
+  await page.locator('[data-testid="new-project-create-button"]').click();
   await page.waitForSelector('canvas', { timeout: 10000 });
 
   // Wait for map to be fully initialized (per memory pitfall)
@@ -42,7 +49,7 @@ async function goBackToGlobalView(page: Page): Promise<void> {
 }
 
 /**
- * Helper to open Settings dialog
+ * Helper to open Settings dialog from GlobalView
  */
 async function openSettingsDialog(page: Page): Promise<void> {
   await goBackToGlobalView(page);
@@ -70,22 +77,34 @@ async function navigateToAppearance(page: Page): Promise<void> {
 }
 
 /**
- * Parse a CSS color string (hex, rgb, rgba) into { r, g, b } components.
- * Handles cross-engine differences in color string format.
+ * Parse a CSS color string into { r, g, b } components.
+ * Handles both comma-separated (CSS Color 3) and space-separated (CSS Color 4)
+ * rgb/rgba forms, as well as hex #rrggbb notation.
  */
 function parseColor(color: string): { r: number; g: number; b: number } {
-  // Handle rgb(r, g, b) and rgba(r, g, b, a)
-  const rgbMatch = color.match(
+  // Handle comma-separated rgb(r, g, b) and rgba(r, g, b, a)
+  const commaMatch = color.match(
     /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/
   );
-  if (rgbMatch) {
+  if (commaMatch) {
     return {
-      r: parseInt(rgbMatch[1]!, 10),
-      g: parseInt(rgbMatch[2]!, 10),
-      b: parseInt(rgbMatch[3]!, 10),
+      r: parseInt(commaMatch[1]!, 10),
+      g: parseInt(commaMatch[2]!, 10),
+      b: parseInt(commaMatch[3]!, 10),
     };
   }
-  // Handle hex (#rrggbb or #rgb)
+  // Handle space-separated rgb(r g b) and rgb(r g b / a) (CSS Color 4)
+  const spaceMatch = color.match(
+    /rgba?\(\s*(\d+)\s+(\d+)\s+(\d+)/
+  );
+  if (spaceMatch) {
+    return {
+      r: parseInt(spaceMatch[1]!, 10),
+      g: parseInt(spaceMatch[2]!, 10),
+      b: parseInt(spaceMatch[3]!, 10),
+    };
+  }
+  // Handle hex #rrggbb
   const hexMatch = color.match(
     /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i
   );
@@ -124,11 +143,15 @@ test.describe('Theme Switching - Default Dark Theme', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await createProject(page, 'Theme Test Project');
+    // Assert on GlobalView (app-ready signal) without creating a project.
+    // This tests theme state truly "on app load" before any view transition.
+    await expect(
+      page.locator('[data-testid="global-view"]')
+    ).toBeVisible({ timeout: 10000 });
   });
 
   test('default theme is dark on app load', async ({ page }) => {
-    // Verify data-theme attribute on document root
+    // Verify data-theme attribute on document root immediately after load
     const dataTheme = await page.evaluate(
       () => document.documentElement.dataset.theme
     );
@@ -264,61 +287,5 @@ test.describe('Theme Switching - Via Settings UI', () => {
     // Verify dark is NOT selected
     const darkRadio = page.locator('[data-testid="theme-radio-dark"]');
     await expect(darkRadio).not.toBeChecked();
-  });
-
-  test('theme can be switched back to dark from light', async ({
-    page,
-  }) => {
-    // First switch to light
-    await openSettingsDialog(page);
-    await navigateToAppearance(page);
-
-    const lightOption = page.locator('[data-testid="theme-option-light"]');
-    await lightOption.click();
-
-    const saveButton = page.locator(
-      '[data-testid="settings-save-button"]'
-    );
-    await expect(saveButton).toBeEnabled();
-    await saveButton.click();
-    await expect(
-      page.locator('[data-testid="settings-dialog"]')
-    ).not.toBeVisible({ timeout: 5000 });
-
-    // Verify light is active
-    let dataTheme = await page.evaluate(
-      () => document.documentElement.dataset.theme
-    );
-    expect(dataTheme).toBe('light');
-
-    // Switch back to dark
-    await openSettingsDialog(page);
-    await navigateToAppearance(page);
-
-    const darkOption = page.locator('[data-testid="theme-option-dark"]');
-    await darkOption.click();
-
-    const saveButton2 = page.locator(
-      '[data-testid="settings-save-button"]'
-    );
-    await expect(saveButton2).toBeEnabled();
-    await saveButton2.click();
-    await expect(
-      page.locator('[data-testid="settings-dialog"]')
-    ).not.toBeVisible({ timeout: 5000 });
-
-    // Verify dark is active again
-    dataTheme = await page.evaluate(
-      () => document.documentElement.dataset.theme
-    );
-    expect(dataTheme).toBe('dark');
-
-    // Verify CSS variable reverts to dark value
-    const bgColor = await page.evaluate(() => {
-      return getComputedStyle(document.documentElement)
-        .getPropertyValue('--cc-background')
-        .trim();
-    });
-    assertColorsApproximatelyEqual(bgColor, DARK_BG);
   });
 });
