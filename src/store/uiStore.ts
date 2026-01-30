@@ -3,14 +3,14 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 import type { PanelsConfig } from '../types/config';
 import type { DisplaySettings } from '../types/loading';
-
-export type ResolvedTheme = 'dark' | 'light';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 
 // Import tool utilities for internal use and re-export for convenience
 import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
 import { getGroupForTool } from '../utils/toolGroups';
 export { NON_INTERACTIVE_TOOLS, isNonInteractiveTool };
+
+export type ResolvedTheme = 'dark' | 'light';
 
 export type ViewType = 'global' | 'single';
 
