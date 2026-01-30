@@ -252,3 +252,6 @@ DOM ancestry walks that stop at container (current !== container) miss checking 
 
 ## 2026-01-30 manual [pitfall]
 Never fall back to inerting a parent container (#root) when the expected sibling container (#dialog-root) is missing — this inerts all descendants including the dialog itself
+
+## 2026-01-30 manual [pitfall]
+When moving event handlers from document capture phase to element-level onKeyDown, use useLayoutEffect (not useEffect) to focus the container before paint, and guard with el.contains(document.activeElement) to avoid overriding autoFocus on inner elements
