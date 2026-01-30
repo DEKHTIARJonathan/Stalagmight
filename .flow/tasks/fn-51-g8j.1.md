@@ -38,9 +38,8 @@ Add a comprehensive set of `--cc-*` CSS custom properties to `src/index.css` wit
 - [ ] No existing styles broken (this task only adds new CSS, doesn't replace yet)
 
 ## Done summary
-
-(To be filled on completion)
-
+Added comprehensive --cc-* CSS custom property tokens to src/index.css with dark (default, matching existing hardcoded palette) and light (derived from brand_tokens.css per epic mapping table) theme blocks. Includes 74 unique variables: UI chrome, MapLibre controls, map visualization, canvas preview, and all 25 opacity variant tokens for both themes.
 ## Evidence
-
-(To be filled on completion)
+- Commits: 5844388b52918ed0f65b719502fa5a260660d355, 4d5bcd6
+- Tests: pnpm tsc --noEmit
+- PRs:
