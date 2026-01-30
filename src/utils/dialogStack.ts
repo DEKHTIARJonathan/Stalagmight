@@ -20,26 +20,34 @@ function emitChange(): void {
 /**
  * Set `inert` on all siblings of `#dialog-root` (i.e., the app root and any
  * other siblings). This makes the entire app non-interactive when a dialog is open.
+ *
+ * Falls back to setting `inert` directly on `#root` if `#dialog-root` does not
+ * exist yet (it is added by the portal migration task fn-50-3j7.2).
  */
 function setAppInert(inert: boolean): void {
   const dialogRoot = document.getElementById('dialog-root');
-  if (!dialogRoot?.parentElement) {
-    if (import.meta.env.DEV) {
-      console.warn(
-        '[dialogStack] #dialog-root element not found in DOM. ' +
-        'Add <div id="dialog-root"></div> to index.html after #root.',
-      );
+
+  if (dialogRoot?.parentElement) {
+    // Preferred path: inert all siblings of #dialog-root
+    const siblings = dialogRoot.parentElement.children;
+    for (const sibling of siblings) {
+      if (sibling === dialogRoot) continue;
+      if (inert) {
+        sibling.setAttribute('inert', '');
+      } else {
+        sibling.removeAttribute('inert');
+      }
     }
     return;
   }
 
-  const siblings = dialogRoot.parentElement.children;
-  for (const sibling of siblings) {
-    if (sibling === dialogRoot) continue;
+  // Fallback: #dialog-root not yet in DOM — inert #root directly
+  const appRoot = document.getElementById('root');
+  if (appRoot) {
     if (inert) {
-      sibling.setAttribute('inert', '');
+      appRoot.setAttribute('inert', '');
     } else {
-      sibling.removeAttribute('inert');
+      appRoot.removeAttribute('inert');
     }
   }
 }

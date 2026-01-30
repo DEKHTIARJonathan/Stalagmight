@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { pushDialog, popDialog, isTopmost } from '../dialogStack';
 
 /**
@@ -58,6 +58,10 @@ describe('dialogStack', () => {
   beforeEach(() => {
     resetStack();
     vi.clearAllMocks();
+  });
+
+  afterAll(() => {
+    vi.unstubAllGlobals();
   });
 
   describe('pushDialog', () => {

@@ -4,10 +4,17 @@
 
 Replace all Tailwind opacity modifier patterns (e.g., `bg-accent/10`, `bg-background/80`) with dedicated CSS variable references. Tailwind's `/N` opacity syntax does NOT work when the color value is a CSS variable (`var(...)`).
 
+**Division of work with tasks 1 and 2:**
+- Task 1 defines the `--cc-*-N` opacity CSS variables in both theme blocks (already included in task 1 spec)
+- Task 2 defines the Tailwind color entries for opacity variants (added in this task since task 2 only handles base colors)
+- **This task** handles: (a) adding opacity variant entries to `tailwind.config.js`, and (b) replacing all component-side `bg-color/N` patterns with `bg-color-N`
+
 ## Files to modify
 
-All files using Tailwind opacity modifiers on theme colors (36+ instances). Key files:
+- `tailwind.config.js` — Add opacity variant color entries
+- All component files using Tailwind opacity modifiers on theme colors (36+ instances)
 
+Key component files:
 - `src/components/Dialogs/ExportPreview.tsx` — `bg-background/80`
 - `src/components/Dialogs/SettingsDialog.tsx` — `bg-panel/50`
 - `src/components/SingleSystemView/DisplayMenu.tsx` — `hover:bg-background/80`
@@ -24,46 +31,19 @@ All files using Tailwind opacity modifiers on theme colors (36+ instances). Key 
 
 ### Step 1: Catalog all opacity modifier usage
 
-Run: `grep -rn 'bg-\(background\|panel\|accent\|warning\|error\|success\|border\)/[0-9]' src/`
-Also: `grep -rn 'border-\(background\|panel\|accent\|warning\|error\|success\|border\)/[0-9]' src/`
-Also: `grep -rn 'text-\(text-primary\|text-secondary\|accent\|warning\|error\|success\)/[0-9]' src/`
-
-### Step 2: Define opacity variant CSS variables
-
-In task 1's CSS variable blocks, add all needed opacity variants. The exact set is determined by the grep results. Expected variants:
-
-```css
-:root, [data-theme="dark"] {
-  /* Opacity variants */
-  --cc-background-80: rgba(26, 26, 46, 0.8);
-  --cc-panel-50: rgba(22, 33, 62, 0.5);
-  --cc-panel-90: rgba(22, 33, 62, 0.9);
-  --cc-accent-10: rgba(78, 205, 196, 0.1);
-  --cc-accent-20: rgba(78, 205, 196, 0.2);
-  --cc-accent-90: rgba(78, 205, 196, 0.9);
-  --cc-warning-10: rgba(255, 203, 119, 0.1);
-  --cc-warning-30: rgba(255, 203, 119, 0.3);
-  /* ... additional as needed from grep results */
-}
-
-[data-theme="light"] {
-  --cc-background-80: rgba(245, 240, 232, 0.8);
-  --cc-panel-50: rgba(255, 255, 255, 0.5);
-  --cc-panel-90: rgba(255, 255, 255, 0.9);
-  --cc-accent-10: rgba(58, 138, 130, 0.1);
-  --cc-accent-20: rgba(58, 138, 130, 0.2);
-  --cc-accent-90: rgba(58, 138, 130, 0.9);
-  --cc-warning-10: rgba(196, 144, 26, 0.1);
-  --cc-warning-30: rgba(196, 144, 26, 0.3);
-}
+Run comprehensive grep to find ALL instances:
+```bash
+grep -rn '/[0-9]\+' src/ --include='*.tsx' --include='*.ts' | grep -E '(bg|border|text)-(background|panel|accent|warning|error|success|border)/'
 ```
 
-### Step 3: Add Tailwind color entries for opacity variants
+### Step 2: Add Tailwind color entries for opacity variants
 
-In `tailwind.config.js`:
+In `tailwind.config.js`, add to the `colors` object (after the base color entries set in task 2):
 ```js
 colors: {
-  // ... existing
+  // ... base colors from task 2 ...
+  
+  // Opacity variants (resolves Tailwind /N modifier breakage)
   'background-80': 'var(--cc-background-80)',
   'panel-50': 'var(--cc-panel-50)',
   'panel-90': 'var(--cc-panel-90)',
@@ -72,10 +52,13 @@ colors: {
   'accent-90': 'var(--cc-accent-90)',
   'warning-10': 'var(--cc-warning-10)',
   'warning-30': 'var(--cc-warning-30)',
+  // ... additional as determined by grep scan
 }
 ```
 
-### Step 4: Replace in components
+**Note**: The corresponding `--cc-*-N` CSS variables are defined in task 1's theme blocks.
+
+### Step 3: Replace in components
 
 ```typescript
 // Before
@@ -85,7 +68,7 @@ className="bg-accent/10"
 className="bg-accent-10"
 ```
 
-For hover variants:
+For hover/state variants:
 ```typescript
 // Before
 className="hover:bg-accent/10"
@@ -94,12 +77,22 @@ className="hover:bg-accent/10"
 className="hover:bg-accent-10"
 ```
 
+For border variants:
+```typescript
+// Before
+className="border-warning/30"
+
+// After
+className="border-warning-30"
+```
+
 ## Acceptance
 
-- [ ] All Tailwind opacity modifier patterns (`/N`) on theme colors are replaced
-- [ ] Dedicated `--cc-*-N` opacity CSS variables defined in both dark and light theme blocks
-- [ ] Corresponding Tailwind color entries added in tailwind.config.js
-- [ ] Components use new color class names (e.g., `bg-accent-10` instead of `bg-accent/10`)
+- [ ] Comprehensive grep confirms all opacity modifier instances found
+- [ ] Opacity variant Tailwind color entries added to tailwind.config.js
+- [ ] All component `bg-color/N` patterns replaced with `bg-color-N`
+- [ ] All component `border-color/N` patterns replaced with `border-color-N`
+- [ ] All component `text-color/N` patterns replaced (if any exist)
 - [ ] `pnpm tsc --noEmit` passes
 - [ ] No visual regression in dark theme
 - [ ] Correct opacity colors in light theme
