@@ -51,12 +51,12 @@ Add a new `appearance` config section with a `theme` field (`'dark' | 'light' | 
 Added AppearanceConfig with ThemeMode to both TypeScript and Rust config systems:
 
 - TypeScript: Added ThemeMode type alias, AppearanceConfig interface, and appearance field to Config with default { theme: 'dark' }
-- Rust: Added ThemeMode enum with #[serde(default)], AppearanceConfig struct with normalize(), appearance field on Config struct with #[serde(default)] for backward compatibility
-- SettingsDialog.tsx: Added appearance field to mergeConfig() deep copy and merge logic
+- Rust: Added ThemeMode enum with #[serde(default)] and #[serde(other)] for lenient deserialization, AppearanceConfig struct with normalize(), appearance field on Config struct with #[serde(default)] for backward compatibility
+- SettingsDialog.tsx: Added appearance case to getCategoryDefaults() and mergeConfig() deep copy/merge logic
 - E2E mock: Added appearance: { theme: 'dark' } to both get_config and reload_config handlers
 - Tests: Updated config.test.ts with appearance in top-level keys check, added appearance defaults and type-safety tests
-- All existing config files without [appearance] section load correctly via #[serde(default)]
+- All checks pass: pnpm tsc --noEmit, cargo test
 ## Evidence
 - Commits:
-- Tests:
+- Tests: pnpm tsc --noEmit (pass), cargo test --manifest-path src-tauri/Cargo.toml (80 passed, 0 failed)
 - PRs:

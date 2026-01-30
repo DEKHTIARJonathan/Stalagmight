@@ -270,3 +270,9 @@ Rollback paths that re-acquire a mutex will silently fail if the mutex is poison
 
 ## 2026-01-30 manual [pitfall]
 E2E tests asserting UI behavior must verify actual DOM/feature state, not just that IPC mocks return expected data - reviewers reject fallback-to-mock assertions
+
+## 2026-01-30 manual [pitfall]
+When adding a new serde enum variant to Rust config, use #[serde(other)] on an Unknown variant so invalid TOML values don't prevent config loading; normalize() should then coerce Unknown to the default
+
+## 2026-01-30 manual [pitfall]
+When adding a new required field to Config type in TypeScript, search ALL hardcoded mock config objects across E2E test files (not just tauri-ipc.ts) and add the field to every one
