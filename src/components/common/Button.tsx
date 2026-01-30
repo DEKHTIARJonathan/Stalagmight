@@ -43,6 +43,7 @@ export function Button({
         ${className}
       `}
       disabled={disabled}
+      {...(variant === 'primary' || variant === 'danger' ? { 'data-primary-action': '' } : {})}
       {...props}
     >
       {icon && <span className="flex-shrink-0">{icon}</span>}

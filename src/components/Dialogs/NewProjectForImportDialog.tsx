@@ -108,7 +108,6 @@ export default function NewProjectForImportDialog() {
             onChange={(e) => setName(e.target.value)}
             className="w-full"
             placeholder="e.g., Lechuguilla Cave"
-            autoFocus
             data-testid="project-name-input"
           />
         </div>
