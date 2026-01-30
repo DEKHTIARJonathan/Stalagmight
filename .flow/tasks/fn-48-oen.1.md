@@ -19,9 +19,8 @@ Add `fileHash: string | null` field to the `DmpSelectionConfig` interface in Dmp
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-TBD
-
+Added `fileHash: string | null` field to the `DmpSelectionConfig` interface and initialized it to `null` in `handleContinue`. This carries the SHA256 hash from Step 1 through to the parent for import tracking (actual hash wired in task 2).
 ## Evidence
-- Commits:
-- Tests:
+- Commits: ae463abd0902d3040094778ebead1ea886d1b7e2
+- Tests: pnpm tsc --noEmit
 - PRs:

@@ -5,7 +5,8 @@ Show a non-blocking warning banner in DmpSelectionDialog when `isDuplicate` is t
 **Files:** `src/components/Dialogs/DmpSelectionDialog.tsx`
 
 ## Approach
-- When `isDuplicate` is true, render a warning banner after the file metadata header (after line 254, before line 256)
+- When `isDuplicate` is true, render a warning banner after the file metadata header (after line 257, before line 259)
+<!-- Updated by plan-sync: fn-48-oen.1 added fileHash field to DmpSelectionConfig interface, shifting line numbers by ~3 -->
 - Use existing warning styling pattern: `bg-warning/10 border border-warning/20 rounded text-warning text-sm`
 - Exact text per SPEC.md line 810: "⚠ File may have been imported before (same hash detected)"
 - Add `data-testid="duplicate-hash-warning"` for E2E testability
