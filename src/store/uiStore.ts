@@ -219,12 +219,6 @@ interface UIStore {
   importContext: 'new-project' | 'existing-project' | null;
   setImportContext: (context: 'new-project' | 'existing-project' | null) => void;
 
-  // Track imported DMP file paths for duplicate detection (session-based)
-  importedDmpPaths: Set<string>;
-  addImportedDmpPath: (path: string) => void;
-  hasImportedDmpPath: (path: string) => boolean;
-  clearImportedDmpPaths: () => void;
-
   // Session surveyor memory (not persisted to config)
   lastUsedSurveyor: string;
   setLastUsedSurveyor: (surveyor: string) => void;
@@ -602,19 +596,6 @@ export const useUIStore = create<UIStore>((set) => ({
   // Import flow context
   importContext: null,
   setImportContext: (importContext) => set({ importContext }),
-
-  // Track imported DMP file paths for duplicate detection (session-based)
-  importedDmpPaths: new Set<string>(),
-  addImportedDmpPath: (path) =>
-    set((state) => {
-      const newSet = new Set(state.importedDmpPaths);
-      newSet.add(path);
-      return { importedDmpPaths: newSet };
-    }),
-  hasImportedDmpPath: (path): boolean => {
-    return useUIStore.getState().importedDmpPaths.has(path);
-  },
-  clearImportedDmpPaths: () => set({ importedDmpPaths: new Set<string>() }),
 
   // Session surveyor memory (not persisted to config)
   lastUsedSurveyor: '',

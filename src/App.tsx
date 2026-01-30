@@ -7,7 +7,7 @@ import { useUIStore } from './store/uiStore';
 import { useBeforeUnload, useLoadingProgress } from './hooks';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, DuplicateImportDialog, SettingsDialog, SplitSectionDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
@@ -62,7 +62,7 @@ function calculateStationPositions(shots: ImportedSectionConfig['shots']): Array
 
 function App() {
   const { project, stations, loadConfig, config, isDirty, createSection, createSectionAndMerge, setZeroDatum, mergeStations, moveSection, importDmp, trackImportedFile } = useProjectStore();
-  const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, hasImportedDmpPath, addImportedDmpPath, triggerFitToBounds, toast, selectionAnnouncement } = useUIStore();
+  const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, triggerFitToBounds, toast, selectionAnnouncement } = useUIStore();
 
   // Listen for loading progress events from backend
   useLoadingProgress();
@@ -391,23 +391,12 @@ function App() {
     const currentProject = useProjectStore.getState().project;
 
     if (currentProject) {
-      // Check for duplicate import
-      if (hasImportedDmpPath(filePath)) {
-        // Show confirmation dialog for duplicate import
-        openDialog('confirm-duplicate-import', {
-          filePath,
-        });
-        return;
-      }
-
       // Existing project: parse DMP and open Step 1 (selection) directly
       setImportContext('existing-project');
 
       try {
         const dmpFile = await importDmp(filePath);
         if (dmpFile) {
-          // Track this file as imported
-          addImportedDmpPath(filePath);
           openDialog('dmp-selection', {
             dmpFile,
             filePath,
@@ -426,8 +415,6 @@ function App() {
       try {
         const dmpFile = await importDmp(filePath);
         if (dmpFile) {
-          // Track this file as imported
-          addImportedDmpPath(filePath);
           // Extract filename for default project name
           const fileName = filePath.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
           openDialog('new-project-for-import', {
@@ -443,7 +430,7 @@ function App() {
         });
       }
     }
-  }, [importDmp, openDialog, setImportContext, hasImportedDmpPath, addImportedDmpPath]);
+  }, [importDmp, openDialog, setImportContext]);
 
   // Set up drag-drop event listener for DMP files
   useEffect(() => {
@@ -575,7 +562,6 @@ function App() {
       {activeDialog === 'confirm-overwrite' && <OverwriteConfirmDialog />}
       {activeDialog === 'context-menu' && <ContextMenu />}
       {activeDialog === 'section-adjust' && <SectionAdjustDialog />}
-      {activeDialog === 'confirm-duplicate-import' && <DuplicateImportDialog />}
       {activeDialog === 'settings' && <SettingsDialog />}
       {activeDialog === 'split-section' && <SplitSectionDialog />}
 

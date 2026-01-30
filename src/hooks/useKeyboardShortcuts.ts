@@ -277,7 +277,7 @@ export function useKeyboardShortcuts() {
     showToast,
   } = useUIStore();
   const { undo, redo, saveProject, project, stations, importDmp, config } = useProjectStore();
-  const { setImportContext, hasImportedDmpPath, addImportedDmpPath } = useUIStore();
+  const { setImportContext } = useUIStore();
 
   // Ref for shortcut map - uses ref to avoid stale closures in event handlers
   // Initialize with defaults to handle first render before useEffect runs
@@ -634,23 +634,11 @@ export function useKeyboardShortcuts() {
                 return;
               }
 
-              // Check for duplicate import (existing project only)
-              const currentProject = useProjectStore.getState().project;
-              if (currentProject && hasImportedDmpPath(selected)) {
-                // Show confirmation dialog for duplicate import
-                openDialog('confirm-duplicate-import', {
-                  filePath: selected,
-                });
-                return;
-              }
-
               const dmpFile = await importDmp(selected);
               if (!dmpFile) return;
 
-              // Track this file as imported
-              addImportedDmpPath(selected);
-
               // Determine context: are we creating a new project or adding to existing?
+              const currentProject = useProjectStore.getState().project;
               if (currentProject) {
                 // Existing project: open Step 1 (selection) directly
                 setImportContext('existing-project');
@@ -696,8 +684,6 @@ export function useKeyboardShortcuts() {
       selection,
       openDialog,
       project,
-      hasImportedDmpPath,
-      addImportedDmpPath,
       importDmp,
       setImportContext,
       showStations,

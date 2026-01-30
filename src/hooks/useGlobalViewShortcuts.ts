@@ -95,7 +95,7 @@ export function useGlobalViewShortcuts({
   handleRemoveFromRecent,
 }: UseGlobalViewShortcutsOptions): void {
   const { clearSelection, selectSystem, setSelectedSystems } = useGlobalViewStore();
-  const { openDialog, setImportContext, hasImportedDmpPath, addImportedDmpPath } = useUIStore();
+  const { openDialog, setImportContext } = useUIStore();
   const { importDmp, config } = useProjectStore();
 
   // File shortcut map - config-aware, updated when config changes
@@ -373,20 +373,10 @@ export function useGlobalViewShortcuts({
                 return;
               }
 
-              // Check for duplicate import (existing project only)
-              const currentProject = useProjectStore.getState().project;
-              if (currentProject && hasImportedDmpPath(selected)) {
-                openDialog('confirm-duplicate-import', {
-                  filePath: selected,
-                });
-                return;
-              }
-
               const dmpFile = await importDmp(selected);
               if (!dmpFile) return;
 
-              addImportedDmpPath(selected);
-
+              const currentProject = useProjectStore.getState().project;
               if (currentProject) {
                 setImportContext('existing-project');
                 openDialog('dmp-selection', {
@@ -414,7 +404,7 @@ export function useGlobalViewShortcuts({
       }
     },
     [clearSelection, selectSystem, setContextMenu, setMultiSelectedIds, setSelectedProjectId, mapRef,
-     openDialog, setImportContext, hasImportedDmpPath, addImportedDmpPath, importDmp]
+     openDialog, setImportContext, importDmp]
   );
 
   // Register single keyboard event listener

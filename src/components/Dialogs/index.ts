@@ -16,6 +16,5 @@ export { default as UnsavedChangesDialog } from './UnsavedChangesDialog';
 export { default as ErrorDialog } from './ErrorDialog';
 export { default as OverwriteConfirmDialog } from './OverwriteConfirmDialog';
 export { default as SectionAdjustDialog } from './SectionAdjustDialog';
-export { default as DuplicateImportDialog } from './DuplicateImportDialog';
 export { default as SettingsDialog } from './SettingsDialog';
 export { default as SplitSectionDialog } from './SplitSectionDialog';
