@@ -184,7 +184,7 @@ Based on codebase analysis as of 2026-01-29.
 |-------|--------|
 | Focus Management | 🟡 WIP — useFocusTrap hook in DialogWrapper; initial focus (first input for forms, primary action for confirms); return focus on close; --cc-focus-ring CSS variable |
 | Screen Reader Announcements | ✅ (aria-live regions, announceSelection(), 28 occurrences) |
-| Theme Infrastructure | ❌ (Only dark mode hardcoded, no useTheme/ThemeProvider) |
+| Theme Infrastructure | 🟡 WIP — CSS variables (--cc-*), ThemeProvider, Appearance settings tab, dark+light themes, full migration of hardcoded colors |
 | Keyboard Navigation | ✅ (useKeyboardShortcuts hook, ShortcutRecorder, ShortcutsSettings) |
 
 ### Phase E: i18n Foundation
