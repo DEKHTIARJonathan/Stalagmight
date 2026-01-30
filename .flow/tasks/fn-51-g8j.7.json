@@ -1,0 +1,17 @@
+{
+  "assignee": null,
+  "claim_note": "",
+  "claimed_at": null,
+  "created_at": "2026-01-30T02:22:55.189638Z",
+  "depends_on": [
+    "fn-51-g8j.1",
+    "fn-51-g8j.3"
+  ],
+  "epic": "fn-51-g8j",
+  "id": "fn-51-g8j.7",
+  "priority": null,
+  "spec_path": ".flow/tasks/fn-51-g8j.7.md",
+  "status": "todo",
+  "title": "Handle MapLibre controls and third-party widget theming",
+  "updated_at": "2026-01-30T02:24:57.012316Z"
+}

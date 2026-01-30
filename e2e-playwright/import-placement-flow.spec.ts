@@ -78,15 +78,15 @@ test.describe('Import Placement Flow', () => {
       await createProjectAndOpenImportDialog(page);
       await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
 
-      // First section should show "not placed" status (empty circle)
+      // First section should show warning status (azimuth discrepancies, not placed)
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('○');
-      await expect(status0).toHaveClass(/text-text-secondary/);
+      await expect(status0).toContainText('⚠');
+      await expect(status0).toHaveClass(/text-warning/);
 
-      // Second section should also show "not placed"
+      // Second section should also show warning status
       const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toContainText('○');
-      await expect(status1).toHaveClass(/text-text-secondary/);
+      await expect(status1).toContainText('⚠');
+      await expect(status1).toHaveClass(/text-warning/);
     });
 
     /**
@@ -133,9 +133,9 @@ test.describe('Import Placement Flow', () => {
       await createProjectAndOpenImportDialog(page);
       await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
 
-      // Verify first section starts as not placed
+      // Verify first section starts with warning status (azimuth discrepancies, not placed)
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('○');
+      await expect(status0).toContainText('⚠');
 
       // Click "Place section"
       await page.locator('[data-testid="place-section-button"]').click();
@@ -202,23 +202,23 @@ test.describe('Import Placement Flow', () => {
       await page.locator('[data-testid="section-list-item-1"]').click();
       await waitForMapIdle(page);
 
-      // First section should still be "not placed"
+      // First section should still show warning status (not placed, has azimuth discrepancies)
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('○');
+      await expect(status0).toContainText('⚠');
 
       // Navigate to third section
       await page.locator('[data-testid="section-list-item-2"]').click();
       await waitForMapIdle(page);
 
-      // Both first and second should still be "not placed"
-      await expect(status0).toContainText('○');
+      // Both first and second should still show warning status (not placed)
+      await expect(status0).toContainText('⚠');
       const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toContainText('○');
+      await expect(status1).toContainText('⚠');
 
       // Navigate back to first and all should still be unplaced
       await page.locator('[data-testid="section-list-item-0"]').click();
       await waitForMapIdle(page);
-      await expect(status0).toContainText('○');
+      await expect(status0).toContainText('⚠');
     });
 
     /**
@@ -314,10 +314,10 @@ test.describe('Import Placement Flow', () => {
       await includeBtn.click();
       await waitForMapIdle(page);
 
-      // Should show "not placed" status again
+      // Should show warning status again (not placed, has azimuth discrepancies)
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('○');
-      await expect(status0).toHaveClass(/text-text-secondary/);
+      await expect(status0).toContainText('⚠');
+      await expect(status0).toHaveClass(/text-warning/);
 
       // Exclude button should be visible again
       await expect(page.locator('[data-testid="exclude-button"]')).toBeVisible();
@@ -479,15 +479,16 @@ test.describe('Import Placement Flow', () => {
 
   test.describe('Status Icons', () => {
     /**
-     * Test: Not placed section shows empty circle.
+     * Test: Not placed section with warnings shows yellow warning icon.
+     * (Mock sections have azimuth discrepancies, triggering the warning state.)
      */
     test('should show empty circle for not placed sections', async ({ page }) => {
       await createProjectAndOpenImportDialog(page);
       await selectSectionsAndProceed(page, [0]); // Main Passage only
 
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('○');
-      await expect(status0).toHaveClass(/text-text-secondary/);
+      await expect(status0).toContainText('⚠');
+      await expect(status0).toHaveClass(/text-warning/);
     });
 
     /**
@@ -531,9 +532,9 @@ test.describe('Import Placement Flow', () => {
       // Select Main Passage (no errors) and Validation Test Section (has errors)
       await selectSectionsAndProceed(page, [0, 5]);
 
-      // Main Passage should show not placed (no errors)
+      // Main Passage should show warning status (azimuth discrepancies, no errors)
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('○');
+      await expect(status0).toContainText('⚠');
 
       // Validation Test Section should show error
       const status1 = page.locator('[data-testid="section-status-1"]');
@@ -762,7 +763,7 @@ test.describe('Import Placement Flow', () => {
       await expect(status1).toContainText('✕'); // excluded
 
       const status2 = page.locator('[data-testid="section-status-2"]');
-      await expect(status2).toContainText('○'); // not placed
+      await expect(status2).toContainText('⚠'); // not placed, has azimuth warnings
 
       // Should show "Place and finish" since this is the last unplaced
       const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');

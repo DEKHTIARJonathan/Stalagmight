@@ -131,6 +131,7 @@ export default function DmpSectionConfigDialog({
     getAllConfigs,
     getPlacedSectionConfigs,
     getSectionDataErrorCount,
+    getSectionWarningCount,
     getTotalDataErrorCount,
     getNextUnplacedSection,
     allSectionsExcluded,
@@ -1047,8 +1048,15 @@ export default function DmpSectionConfigDialog({
                   const isActive = arrayIdx === currentIndex;
                   // Use data error count (excluding placement errors) for status display
                   const sectionDataErrors = getSectionDataErrorCount(sectionIdx, existingSections);
+                  // Warning count for azimuth/pitch discrepancies
+                  const sectionWarnings = getSectionWarningCount(sectionIdx, validationConfig);
+                  // Show warnings only on unplaced sections with no errors
+                  const showWarnings = sectionWarnings > 0
+                    && sectionDataErrors === 0
+                    && status !== 'excluded'
+                    && status !== 'placed';
 
-                  // Status icon - based on data errors only, not placement errors
+                  // Status icon - priority: excluded > errors > warnings > placed > default
                   let statusIcon: string;
                   let statusColor: string;
                   if (status === 'excluded') {
@@ -1057,6 +1065,9 @@ export default function DmpSectionConfigDialog({
                   } else if (status === 'errors' || sectionDataErrors > 0) {
                     statusIcon = '!';
                     statusColor = 'text-error';
+                  } else if (showWarnings) {
+                    statusIcon = '\u26A0';
+                    statusColor = 'text-warning';
                   } else if (status === 'placed') {
                     statusIcon = '✓';
                     statusColor = 'text-success';
@@ -1079,6 +1090,16 @@ export default function DmpSectionConfigDialog({
                         {statusIcon}
                       </span>
                       <span className="truncate flex-1">{section?.name ?? `Section ${arrayIdx + 1}`}</span>
+                      {/* Warning count badge - only when warnings exist with no errors */}
+                      {showWarnings && (
+                        <span
+                          className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 bg-warning text-black rounded-full text-[10px] font-medium"
+                          data-testid={`section-warning-count-${arrayIdx}`}
+                          title={`${sectionWarnings} warning${sectionWarnings > 1 ? 's' : ''}`}
+                        >
+                          {sectionWarnings}
+                        </span>
+                      )}
                       {/* Error count badge - data errors only */}
                       {sectionDataErrors > 0 && (
                         <span

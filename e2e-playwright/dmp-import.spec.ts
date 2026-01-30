@@ -518,10 +518,10 @@ test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
     await page.locator('[data-testid="continue-button"]').click();
     await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
 
-    // First section (Main Passage) is NOT placed yet - should show empty circle (not placed)
+    // First section (Main Passage) is NOT placed yet - has azimuth warnings, shows warning icon
     const status0 = page.locator('[data-testid="section-status-0"]');
-    await expect(status0).toContainText('○');
-    await expect(status0).toHaveClass(/text-text-secondary/);
+    await expect(status0).toContainText('⚠');
+    await expect(status0).toHaveClass(/text-warning/);
 
     // Second section (Validation Test) should show error icon
     const status1 = page.locator('[data-testid="section-status-1"]');
