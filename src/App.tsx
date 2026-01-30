@@ -106,7 +106,7 @@ function App() {
    * Handle importing sections from the DMP Section Config Dialog.
    * Processes each section based on its placement type.
    */
-  const handleImportSections = useCallback(async (sections: ImportedSectionConfig[]) => {
+  const handleImportSections = useCallback(async (sections: ImportedSectionConfig[]): Promise<boolean> => {
     const errors: string[] = [];
     const warnings: string[] = [];
 
@@ -537,7 +537,7 @@ function App() {
       {activeDialog === 'dmp-section-config' && dialogData.dmpFile && dialogData.selectionConfig ? (
         <DmpSectionConfigDialog
           dmpFile={dialogData.dmpFile as import('./types/commands').DmpFile}
-          selectionConfig={dialogData.selectionConfig as import('./components/Dialogs/DmpSelectionDialog').DmpSelectionConfig}
+          selectionConfig={dialogData.selectionConfig as DmpSelectionConfig}
           project={project}
           stations={stations}
           onCancel={closeDialog}
