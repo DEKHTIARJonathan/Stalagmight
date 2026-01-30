@@ -79,9 +79,18 @@ Replace `text-background` with `text-accent-on` in primary variant (line 14). In
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
+Migrated inline hex colors in TSX component files to CSS variables via the new themeColors utility.
 
-(To be filled on completion)
-
+## Changes
+- Created `src/utils/themeColors.ts` with `getThemeColor()`, `MapThemeColors` interface, and `getMapThemeColors()`
+- Modified `src/components/Map/surveyLayer/features.ts` — `buildSurveyFeatures()` now accepts optional `themeColors` parameter
+- Modified `src/components/Map/SurveyLayer.tsx` — added `applyThemeColors()` method with feature rebuild
+- Modified `src/components/Map/MapCanvas.tsx` — wired `resolvedTheme` subscription
+- Modified `src/components/Dialogs/SectionPreview.tsx` — replaced 12 hardcoded colors
+- Modified `src/components/common/Button.tsx` — changed `text-background` to `text-accent-on`
+- Modified 7 more files replacing hardcoded colors with theme reads
+- Updated test assertion for new `--cc-error` color value
 ## Evidence
-
-(To be filled on completion)
+- Commits:
+- Tests:
+- PRs:
