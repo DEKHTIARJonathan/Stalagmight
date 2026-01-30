@@ -54,8 +54,9 @@ export default function DrawShotDialog() {
     return station?.coordinates.z ?? 0;
   }, [fromStation, stations]);
 
-  // Track if depth was auto-initialized (for isDirty calculation)
+  // Track if depth/length were auto-initialized (for isDirty calculation)
   const depthAutoInitialized = useRef(!!sourceGeometry);
+  const lengthAutoInitialized = useRef(!!(prependMode || appendMode));
 
   // Initialize depth_in with current station depth on mount
   useEffect(() => {
@@ -98,11 +99,13 @@ export default function DrawShotDialog() {
 
     try {
       // Build shot data with normalized azimuths
-      // In prepend mode, reverse the azimuth by 180° (user enters forward direction, shot stores backward)
+      // In prepend mode with existing shots, reverse the azimuth by 180° (user enters forward direction, shot stores backward)
+      // For empty sections (no reference shot), skip reversal — the first shot added is just a normal shot
       const rawAzimuthIn = parseFloat(azimuthIn);
       const rawAzimuthOut = azimuthOut ? parseFloat(azimuthOut) : rawAzimuthIn;
-      const normalizedAzimuthIn = normalizeAzimuth(prependMode ? rawAzimuthIn + 180 : rawAzimuthIn);
-      const normalizedAzimuthOut = normalizeAzimuth(prependMode ? rawAzimuthOut + 180 : rawAzimuthOut);
+      const shouldReverse = prependMode && section.shots.length > 0;
+      const normalizedAzimuthIn = normalizeAzimuth(shouldReverse ? rawAzimuthIn + 180 : rawAzimuthIn);
+      const normalizedAzimuthOut = normalizeAzimuth(shouldReverse ? rawAzimuthOut + 180 : rawAzimuthOut);
       const shotData: ShotData = {
         azimuth_in: normalizedAzimuthIn,
         azimuth_out: normalizedAzimuthOut,
@@ -178,9 +181,10 @@ export default function DrawShotDialog() {
     }
   };
 
-  // Track if form has been modified (exclude auto-initialized depth from making dirty)
+  // Track if form has been modified (exclude auto-initialized depth/length from making dirty)
   const userModifiedDepth = depthIn !== '' && !depthAutoInitialized.current;
-  const isDirty = azimuthIn !== '' || length !== '' || userModifiedDepth || isVirtual || left !== '' || right !== '' || up !== '' || down !== '';
+  const userModifiedLength = length !== '' && !lengthAutoInitialized.current;
+  const isDirty = azimuthIn !== '' || userModifiedLength || userModifiedDepth || isVirtual || left !== '' || right !== '' || up !== '' || down !== '';
 
   if (!fromStation) {
     return null;
@@ -242,7 +246,7 @@ export default function DrawShotDialog() {
             min={allowZeroLength ? '0' : '0.01'}
             step="0.01"
             value={length}
-            onChange={(e) => setLength(e.target.value)}
+            onChange={(e) => { lengthAutoInitialized.current = false; setLength(e.target.value); }}
             className="w-full"
             placeholder="Shot distance"
           />

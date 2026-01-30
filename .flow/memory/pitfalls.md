@@ -228,3 +228,6 @@ When capturing before/after snapshots for atomic undo, take the AFTER snapshot i
 
 ## 2026-01-29 manual [pitfall]
 When passing dialog flags (e.g. allowZeroLength, prependMode) via openDialog data, ensure the target dialog component actually reads and applies them — passing data is insufficient if the consumer ignores it
+
+## 2026-01-30 manual [pitfall]
+Auto-initialized form fields (e.g. prefilling length=0) make isDirty true immediately, causing unsaved-changes prompts on close -- exclude auto-initialized values from isDirty calculation using a ref flag
