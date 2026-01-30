@@ -29,9 +29,8 @@ Track the file hash after a successful import in App.tsx. Make `handleImportSect
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-TBD
-
+Made handleImportSections return Promise<boolean> (true when no errors), added onImport wrapper in App.tsx that captures fileHash from selectionConfig before dialog closes, then calls trackImportedFile on success with try/catch for non-blocking failure handling.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 92433e3, f779ffb
+- Tests: pnpm tsc --noEmit
 - PRs:
