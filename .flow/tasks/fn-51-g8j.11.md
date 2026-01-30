@@ -2,7 +2,7 @@
 
 ## Description
 
-Replace ALL 30 Tailwind opacity modifier patterns that use theme colors (e.g., `bg-accent/10`, `bg-background/80`, `border-error/30`, `ring-accent/30`, `text-accent/80`) with dedicated CSS variable references. Tailwind's `/N` opacity syntax does NOT work when the color value is a CSS variable (`var(...)`).
+Replace ALL 29 Tailwind opacity modifier patterns that use theme colors (e.g., `bg-accent/10`, `bg-background/80`, `border-error/30`, `ring-accent/30`, `text-accent/80`) with dedicated CSS variable references. Tailwind's `/N` opacity syntax does NOT work when the color value is a CSS variable (`var(...)`).
 
 **Division of work with tasks 1 and 2:**
 - Task 1 defines the `--cc-*-N` opacity CSS variables in both theme blocks
@@ -10,7 +10,7 @@ Replace ALL 30 Tailwind opacity modifier patterns that use theme colors (e.g., `
 - **This task** replaces all component-side `color/N` patterns with `color-N`
 
 **Size:** M
-**Files:** All component files using Tailwind opacity modifiers on theme colors (30 patterns across many files)
+**Files:** All component files using Tailwind opacity modifiers on theme colors (29 patterns across many files)
 
 ## Approach
 
@@ -42,7 +42,7 @@ These use standard Tailwind colors (not CSS variables) so opacity modifiers stil
 - `bg-red-500/20`, `bg-red-500/30` — standard Tailwind red
 - `bg-yellow-500/20` — standard Tailwind yellow
 
-## Complete inventory (30 patterns requiring migration)
+## Complete inventory (29 patterns requiring migration)
 
 ### accent family (11)
 - `bg-accent/5`, `bg-accent/10`, `bg-accent/20`, `bg-accent/30`, `bg-accent/50`, `bg-accent/70`, `bg-accent/80`, `bg-accent/90`
@@ -83,7 +83,7 @@ These use standard Tailwind colors (not CSS variables) so opacity modifiers stil
 
 ## Acceptance
 
-- [ ] Comprehensive grep confirms ALL 30 theme-color opacity patterns found and replaced
+- [ ] Comprehensive grep confirms ALL 29 theme-color opacity patterns found and replaced
 - [ ] All `bg-color/N` patterns → `bg-color-N`
 - [ ] All `border-color/N` patterns → `border-color-N`
 - [ ] All `text-color/N` patterns → `text-color-N`
