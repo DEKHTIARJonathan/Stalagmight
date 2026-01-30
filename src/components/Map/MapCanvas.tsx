@@ -71,10 +71,16 @@ export default function MapCanvas() {
   const pendingCenterOnShotRef = useRef<{ sectionId: number; shotId: number } | null>(null);
   // Anchored section IDs (cached when Move Segment tool is active)
   const [anchoredSectionIds, setAnchoredSectionIds] = useState<Set<number>>(new Set());
+  // Whether anchored section IDs have been loaded for the current move_segment activation
+  // Blocks segment drag until the set is populated to prevent moving anchored segments
+  const [anchoredIdsLoaded, setAnchoredIdsLoaded] = useState(false);
   // Segment drag offset for real-time preview (meters)
   const [segmentDragOffset, setSegmentDragOffset] = useState<{ x: number; y: number } | null>(null);
   // Connected section IDs currently being dragged (for segment preview)
   const [dragConnectedSectionIds, setDragConnectedSectionIds] = useState<Set<number>>(new Set());
+  // Token to invalidate stale getConnectedSectionIds results (incremented on each drag start,
+  // checked in .then()/.catch() to discard late async results after mouseup)
+  const segmentDragTokenRef = useRef(0);
 
   const { project, stations, stats, config, moveSection, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
 
@@ -308,11 +314,20 @@ export default function MapCanvas() {
         setMoveDrag({ ...baseDragState, type: 'station', stationRef: data.stationRef });
       } else if (data.type === 'segment' && data.sectionId !== undefined) {
         const segmentSectionId = data.sectionId;
+        // Block segment drag until anchored IDs have been fetched (prevents
+        // moving anchored segments during the window after tool activation)
+        if (!anchoredIdsLoaded) return;
         // Check if section is anchored — silent no-op if so
         if (anchoredSectionIds.has(segmentSectionId)) return;
 
+        // Set a pending drag token to detect stale async results
+        const dragToken = ++segmentDragTokenRef.current;
+
         // Fetch connected section IDs at drag start
         getConnectedSectionIds(segmentSectionId).then((ids) => {
+          // Discard late results if a newer drag started or drag was cancelled
+          if (segmentDragTokenRef.current !== dragToken) return;
+
           // Filter out anchored sections
           const movable = ids.filter((id) => !anchoredSectionIds.has(id));
           const connectedSet = new Set(movable);
@@ -324,6 +339,9 @@ export default function MapCanvas() {
             connectedSectionIds: movable,
           });
         }).catch(() => {
+          // Discard late results if a newer drag started or drag was cancelled
+          if (segmentDragTokenRef.current !== dragToken) return;
+
           // On failure, just move the single section
           setDragConnectedSectionIds(new Set([segmentSectionId]));
           setMoveDrag({
@@ -342,7 +360,7 @@ export default function MapCanvas() {
         });
       }
     },
-    [anchoredSectionIds, getConnectedSectionIds]
+    [anchoredSectionIds, anchoredIdsLoaded, getConnectedSectionIds]
   );
 
   // Get map tool callbacks
@@ -554,6 +572,10 @@ export default function MapCanvas() {
   );
 
   const handleMoveDragEnd = useCallback(async () => {
+    // Invalidate any pending getConnectedSectionIds async results so late
+    // .then() callbacks cannot call setMoveDrag after drag has ended.
+    segmentDragTokenRef.current++;
+
     if (!moveDrag || !map.current) {
       setMoveDrag(null);
       setSegmentDragOffset(null);
@@ -1007,16 +1029,22 @@ export default function MapCanvas() {
     }
   }, [activeTool]);
 
-  // Fetch anchored section IDs when Move Segment tool becomes active
+  // Fetch anchored section IDs when Move Segment tool becomes active.
+  // Sets anchoredIdsLoaded=false immediately on activation, then true once fetched,
+  // so drag start is blocked until the anchored set is populated.
   useEffect(() => {
     if (activeTool === 'move_segment') {
+      setAnchoredIdsLoaded(false);
       getAnchoredSectionIds().then((ids) => {
         setAnchoredSectionIds(new Set(ids));
+        setAnchoredIdsLoaded(true);
       }).catch(() => {
         setAnchoredSectionIds(new Set());
+        setAnchoredIdsLoaded(true);
       });
     } else {
       setAnchoredSectionIds(new Set());
+      setAnchoredIdsLoaded(false);
     }
   }, [activeTool, getAnchoredSectionIds, project]);
 
