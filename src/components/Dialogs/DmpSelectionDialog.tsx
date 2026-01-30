@@ -277,7 +277,7 @@ export default function DmpSelectionDialog({
     >
       <div className="space-y-4">
         {/* File metadata header */}
-        <div className="bg-background/50 rounded p-3 text-sm">
+        <div className="bg-background-50 rounded p-3 text-sm">
           <div className="font-medium text-text-primary mb-1" data-testid="dmp-filename">
             File: {fileName} (v{dmpFile.version})
           </div>
@@ -297,7 +297,7 @@ export default function DmpSelectionDialog({
         {/* Duplicate hash warning banner */}
         {isDuplicate && hashSettled && (
           <div
-            className="p-3 bg-warning/10 border border-warning/20 rounded text-warning text-sm"
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
             data-testid="duplicate-hash-warning"
           >
             {'\u26A0'} File may have been imported before (same hash detected)
@@ -367,7 +367,7 @@ export default function DmpSelectionDialog({
         <div className="border border-border rounded overflow-hidden">
           <div className="max-h-64 overflow-auto">
             <table className="w-full text-sm">
-              <thead className="bg-background/50 sticky top-0">
+              <thead className="bg-background-50 sticky top-0">
                 <tr>
                   <th className="w-10 px-3 py-2 text-left"></th>
                   <th className="px-3 py-2 text-left">Name</th>
@@ -389,8 +389,8 @@ export default function DmpSelectionDialog({
                       key={index}
                       className={`
                         border-t border-border
-                        ${isEmpty ? 'opacity-50 bg-background/30' : ''}
-                        ${isSelected && !isEmpty ? 'bg-accent/10' : ''}
+                        ${isEmpty ? 'opacity-50 bg-background-30' : ''}
+                        ${isSelected && !isEmpty ? 'bg-accent-10' : ''}
                       `}
                       data-testid={`section-row-${index}`}
                     >

@@ -772,6 +772,12 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
 
+    const strokeColor = getThemeColor('--cc-stroke-color');
+    const strokeLight = getThemeColor('--cc-stroke-light');
+    const shadow = getThemeColor('--cc-map-ctrl-shadow');
+    const tooltipBg = getThemeColor('--cc-preview-bg');
+    const tooltipText = getThemeColor('--cc-depth-text');
+
     // Remove old markers
     markersRef.current.forEach((marker) => marker.remove());
     markersRef.current.clear();
@@ -787,15 +793,15 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     markerTooltipRef.current.style.cssText = `
       position: absolute;
       pointer-events: none;
-      background-color: ${getThemeColor('--cc-preview-bg')};
-      color: ${getThemeColor('--cc-depth-text')};
+      background-color: ${tooltipBg};
+      color: ${tooltipText};
       padding: 8px 12px;
       border-radius: 4px;
       font-size: 12px;
       line-height: 1.4;
       z-index: 1000;
       white-space: nowrap;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      box-shadow: 0 2px 8px ${shadow};
       display: none;
     `;
 
@@ -827,8 +833,6 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       `;
 
       // Create inner visual marker (can scale from center)
-      const strokeColor = getThemeColor('--cc-stroke-color');
-      const strokeLight = getThemeColor('--cc-stroke-light');
       const inner = document.createElement('div');
       inner.className = 'marker-inner';
       inner.style.cssText = `
@@ -837,7 +841,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         border-radius: 50%;
         background-color: ${systemColor};
         border: 2px solid ${isSelected ? strokeColor : strokeLight};
-        box-shadow: ${isSelected ? `0 0 0 3px ${strokeLight}, ` : ''}0 2px 4px rgba(0,0,0,0.3);
+        box-shadow: ${isSelected ? `0 0 0 3px ${strokeLight}, ` : ''}0 2px 4px ${shadow};
         transition: transform 0.15s ease-out, border-color 0.2s, box-shadow 0.2s;
         display: flex;
         align-items: center;
@@ -849,13 +853,11 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       if (loadingState === 'loading') {
         const spinner = document.createElement('div');
         spinner.className = 'marker-spinner';
-        const spinnerTrack = getThemeColor('--cc-stroke-light');
-        const spinnerHead = getThemeColor('--cc-stroke-color');
         spinner.style.cssText = `
           width: 10px;
           height: 10px;
-          border: 2px solid ${spinnerTrack};
-          border-top-color: ${spinnerHead};
+          border: 2px solid ${strokeLight};
+          border-top-color: ${strokeColor};
           border-radius: 50%;
           animation: spin 0.8s linear infinite;
         `;
@@ -1005,6 +1007,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     const strokeColor = getThemeColor('--cc-stroke-color');
     const strokeLight = getThemeColor('--cc-stroke-light');
     const errorColor = getThemeColor('--cc-error');
+    const shadow = getThemeColor('--cc-map-ctrl-shadow');
 
     markersRef.current.forEach((marker, filePath) => {
       const el = marker.getElement();
@@ -1022,8 +1025,14 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       inner.style.backgroundColor = systemColor;
       inner.style.borderColor = isSelected ? strokeColor : strokeLight;
       inner.style.boxShadow = isSelected
-        ? `0 0 0 3px ${strokeLight}, 0 2px 4px rgba(0,0,0,0.3)`
-        : '0 2px 4px rgba(0,0,0,0.3)';
+        ? `0 0 0 3px ${strokeLight}, 0 2px 4px ${shadow}`
+        : `0 2px 4px ${shadow}`;
+
+      const spinner = inner.querySelector('.marker-spinner') as HTMLElement | null;
+      if (spinner) {
+        spinner.style.borderColor = strokeLight;
+        spinner.style.borderTopColor = strokeColor;
+      }
     });
   }, [selectedProjectId, geometryStates, resolvedTheme]);
 
@@ -1128,7 +1137,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       </div>
 
       {/* Project count indicator */}
-      <div className="absolute bottom-2 right-2 bg-panel/90 border border-border rounded px-2 py-1 text-xs">
+      <div className="absolute bottom-2 right-2 bg-panel-90 border border-border rounded px-2 py-1 text-xs">
         {gpsProjects.length} system{gpsProjects.length !== 1 ? 's' : ''} on map
         {isThrottled && (
           <span className="ml-2 text-yellow-500" title="Detail reduced for performance">

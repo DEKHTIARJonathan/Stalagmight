@@ -169,7 +169,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
         <h2 className="font-medium">Sections</h2>
         <button
           onClick={handleAddSection}
-          className="text-accent hover:text-accent/80 text-lg"
+          className="text-accent hover:text-accent-80 text-lg"
           title="Add section"
           data-testid="sections-add-button"
         >
@@ -214,7 +214,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                   data-testid={`section-row-${section.id}`}
                   title="Double-click to zoom (Ctrl+G)"
                   className={`px-3 py-2 cursor-pointer group transition-colors outline-none focus:ring-2 focus:ring-accent focus:ring-inset ${
-                    isSelected || hoveredSectionId === section.id ? 'bg-accent/20' : 'hover:bg-accent/20'
+                    isSelected || hoveredSectionId === section.id ? 'bg-accent-20' : 'hover:bg-accent-20'
                   }`}
                   onMouseDown={(e) => handleSectionClick(section, e)}
                   onDoubleClick={(e) => handleSectionDoubleClick(section, e)}

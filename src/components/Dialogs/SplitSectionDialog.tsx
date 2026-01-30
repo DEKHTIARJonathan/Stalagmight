@@ -69,7 +69,7 @@ export default function SplitSectionDialog() {
         </p>
 
         {error && (
-          <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">
+          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
             {error}
           </div>
         )}

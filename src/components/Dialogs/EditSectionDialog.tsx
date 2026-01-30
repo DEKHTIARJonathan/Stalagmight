@@ -277,7 +277,7 @@ export default function EditSectionDialog() {
     <DialogWrapper title="Edit Section" onClose={closeDialog} size="5xl" isDirty={isDirty} data-testid="edit-section-dialog">
       <div className="space-y-4">
         {error && (
-          <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">
+          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
             {error}
           </div>
         )}

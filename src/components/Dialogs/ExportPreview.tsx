@@ -633,7 +633,7 @@ export default function ExportPreview({ options, theme, presetColors }: ExportPr
       {isLoading && (
         <div
           data-testid="export-preview-loading"
-          className="absolute inset-0 flex items-center justify-center bg-background/80"
+          className="absolute inset-0 flex items-center justify-center bg-background-80"
         >
           <div className="flex flex-col items-center gap-2">
             <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />

@@ -25,7 +25,7 @@ export function Panel({
         <div
           className={`
             flex items-center justify-between px-3 py-2 border-b border-border
-            ${collapsible ? 'cursor-pointer hover:bg-background/50' : ''}
+            ${collapsible ? 'cursor-pointer hover:bg-background-50' : ''}
           `}
           onClick={collapsible ? () => setIsOpen(!isOpen) : undefined}
         >
@@ -154,7 +154,7 @@ export function ResizablePanel({
     >
       {children}
       <div
-        className={`absolute bg-transparent hover:bg-accent/50 transition-colors ${handleStyle} ${isResizing ? 'bg-accent/50' : ''}`}
+        className={`absolute bg-transparent hover:bg-accent-50 transition-colors ${handleStyle} ${isResizing ? 'bg-accent-50' : ''}`}
         onMouseDown={handleMouseDown}
       >
         <div className={direction === 'horizontal' ? 'w-full h-full' : 'w-full h-full'} />

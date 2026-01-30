@@ -574,7 +574,7 @@ export default function SettingsDialog() {
               {/* Content area */}
               <div className="flex-1 flex flex-col overflow-hidden">
                 {/* Content header with Reset to Defaults */}
-                <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-panel/50">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-panel-50">
                   <span className="text-sm text-text-secondary">
                     {getCategoryLabel(activeCategory)} Settings
                   </span>

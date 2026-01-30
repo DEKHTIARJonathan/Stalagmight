@@ -454,7 +454,7 @@ export function Select({
     return (
       <div key={option.value}>
         {groupLabel && isFirstInGroup && (
-          <div className="px-3 py-1 text-xs text-text-secondary font-semibold bg-background/50">
+          <div className="px-3 py-1 text-xs text-text-secondary font-semibold bg-background-50">
             {groupLabel}
           </div>
         )}
@@ -465,9 +465,9 @@ export function Select({
           aria-selected={isSelected}
           aria-disabled={option.disabled || undefined}
           className={`w-full px-3 py-2 text-left text-sm cursor-pointer ${
-            isHighlighted ? 'bg-accent/30' : ''
-          } ${isSelected ? 'bg-accent/10 text-accent' : ''} ${
-            option.disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-accent/20'
+            isHighlighted ? 'bg-accent-30' : ''
+          } ${isSelected ? 'bg-accent-10 text-accent' : ''} ${
+            option.disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-accent-20'
           }`}
           onClick={() => handleSelect(option.value, option.disabled)}
           onMouseEnter={() => {

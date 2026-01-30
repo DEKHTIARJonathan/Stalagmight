@@ -75,7 +75,7 @@ export default function ClosureDialog() {
           <p className="text-sm text-text-secondary">{reason}</p>
         )}
         {error && (
-          <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">{error}</div>
+          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">{error}</div>
         )}
 
         {/* Station details */}

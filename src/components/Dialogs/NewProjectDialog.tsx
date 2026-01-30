@@ -62,7 +62,7 @@ export default function NewProjectDialog() {
     <DialogWrapper title="New Project" onClose={closeDialog} size="md" isDirty={isDirty} data-testid="new-project-dialog">
       <div className="space-y-4">
         {error && (
-          <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">
+          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
             {error}
           </div>
         )}

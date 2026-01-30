@@ -40,7 +40,7 @@ export default function OverwriteConfirmDialog() {
           Do you want to replace it?
         </p>
 
-        <div className="p-3 bg-warning/10 border border-warning/20 rounded text-warning text-sm">
+        <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
           This will overwrite the existing file. This action cannot be undone.
         </div>
 

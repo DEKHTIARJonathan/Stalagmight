@@ -130,7 +130,7 @@ export default function ConfirmDialog() {
         <p className="text-text-secondary">{message ?? getDefaultMessage()}</p>
 
         {type === 'station' && (
-          <div className="p-3 bg-warning/10 border border-warning/20 rounded text-warning text-sm">
+          <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
             Note: To delete a station, delete the shots connected to it instead.
           </div>
         )}
@@ -161,7 +161,7 @@ export default function ConfirmDialog() {
         )}
 
         {removesSection && hasRelationships && (
-          <div className="p-3 bg-warning/10 border border-warning/20 rounded text-sm space-y-1">
+          <div className="p-3 bg-warning-10 border border-warning-20 rounded text-sm space-y-1">
             <p className="font-medium text-warning">The following relationships will also be removed:</p>
             <ul className="list-disc list-inside text-text-secondary">
               {relationships!.merges.length > 0 && (

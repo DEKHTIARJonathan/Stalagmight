@@ -206,7 +206,7 @@ export function SettingsSidebar({
                 className={`
                   relative px-4 py-2 text-sm cursor-pointer select-none
                   transition-colors outline-none
-                  ${isActive ? 'bg-accent/20 text-accent font-medium' : 'text-text-primary hover:bg-accent/10'}
+                  ${isActive ? 'bg-accent-20 text-accent font-medium' : 'text-text-primary hover:bg-accent-10'}
                   ${isFocused ? 'ring-2 ring-inset ring-accent' : ''}
                 `}
                 onClick={() => handleClick(category.id, index)}

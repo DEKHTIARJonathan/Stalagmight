@@ -505,7 +505,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
             onClick={toggleTileBoundaries}
             className={`px-1.5 py-0.5 rounded text-[10px] border ${
               showTileBoundaries
-                ? 'bg-accent/30 border-accent text-accent'
+                ? 'bg-accent-30 border-accent text-accent'
                 : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'
             }`}
             title="Show tile boundaries and IDs"
@@ -516,7 +516,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
             onClick={toggleCollisionBoxes}
             className={`px-1.5 py-0.5 rounded text-[10px] border ${
               showCollisionBoxes
-                ? 'bg-accent/30 border-accent text-accent'
+                ? 'bg-accent-30 border-accent text-accent'
                 : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'
             }`}
             title="Show symbol collision boxes"
@@ -527,7 +527,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
             onClick={toggleOverdraw}
             className={`px-1.5 py-0.5 rounded text-[10px] border ${
               showOverdraw
-                ? 'bg-accent/30 border-accent text-accent'
+                ? 'bg-accent-30 border-accent text-accent'
                 : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'
             }`}
             title="Show overdraw (fragment shader calls)"

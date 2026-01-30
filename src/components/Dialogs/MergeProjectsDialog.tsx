@@ -122,7 +122,7 @@ export default function MergeProjectsDialog() {
     >
       <div className="space-y-4">
         {error && (
-          <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">
+          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
             {error}
           </div>
         )}
@@ -136,7 +136,7 @@ export default function MergeProjectsDialog() {
             {selectedProjects.map((project) => (
               <div
                 key={project.file_path}
-                className="flex justify-between items-center py-1 px-2 bg-background/50 rounded"
+                className="flex justify-between items-center py-1 px-2 bg-background-50 rounded"
               >
                 <div className="truncate flex-1">
                   <span className="font-medium">{project.name}</span>
@@ -204,7 +204,7 @@ export default function MergeProjectsDialog() {
         </div>
 
         {/* Info about merge behavior */}
-        <div className="p-3 bg-accent/10 border border-accent/20 rounded text-sm">
+        <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
           <p className="text-text-secondary">
             Merging will combine all sections from the selected projects into a new project file.
             Section IDs will be renumbered to avoid conflicts. Zero datums will be preserved.

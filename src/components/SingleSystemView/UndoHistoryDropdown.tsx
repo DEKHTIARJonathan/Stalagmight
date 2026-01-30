@@ -757,7 +757,7 @@ export default function UndoHistoryDropdown({
           px-3 py-1.5 text-sm rounded transition-colors
           ${disabled
             ? 'opacity-50 cursor-not-allowed'
-            : 'bg-background hover:bg-background/80'
+            : 'bg-background hover:bg-background-80'
           }
         `}
         data-testid={testId}
@@ -829,7 +829,7 @@ export default function UndoHistoryDropdown({
                     }}
                     className={`
                       w-full px-3 py-1.5 flex items-center gap-2 transition-colors text-left
-                      ${isHighlighted ? 'bg-background/50' : 'hover:bg-background/50'}
+                      ${isHighlighted ? 'bg-background-50' : 'hover:bg-background-50'}
                       ${isActionInProgress ? 'opacity-50' : ''}
                     `}
                     data-testid={`${testId}-item-${item.index}`}

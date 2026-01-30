@@ -129,7 +129,7 @@ export function LoadingProgress({
             <button
               type="button"
               onClick={onRetry}
-              className="px-3 py-1.5 bg-accent text-white rounded hover:bg-accent/90 transition-colors"
+              className="px-3 py-1.5 bg-accent text-white rounded hover:bg-accent-90 transition-colors"
             >
               Retry
             </button>
@@ -204,14 +204,14 @@ export function LoadingProgress({
         <div className="h-1 bg-border rounded-full overflow-hidden">
           {isIndeterminate ? (
             <div
-              className="h-full bg-accent/70 animate-pulse-shimmer"
+              className="h-full bg-accent-70 animate-pulse-shimmer"
               role="progressbar"
               aria-label="Phase progress"
               aria-valuetext="Loading"
             />
           ) : (
             <div
-              className="h-full bg-accent/70 transition-all duration-150"
+              className="h-full bg-accent-70 transition-all duration-150"
               style={{ width: `${clampedPhase}%` }}
               role="progressbar"
               aria-label="Phase progress"

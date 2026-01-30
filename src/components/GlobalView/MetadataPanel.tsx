@@ -119,7 +119,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
       >
         <button
           onClick={handleCollapseToggle}
-          className="p-2 hover:bg-background/50 rounded"
+          className="p-2 hover:bg-background-50 rounded"
           aria-label="Expand project details panel"
           aria-expanded="false"
           data-testid="metadata-panel-expand-button"
@@ -163,7 +163,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
           </h2>
           <button
             onClick={handleCollapseToggle}
-            className="p-1 hover:bg-background/50 rounded"
+            className="p-1 hover:bg-background-50 rounded"
             aria-label="Collapse project details panel"
             aria-expanded="true"
             data-testid="metadata-panel-collapse-button"

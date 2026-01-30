@@ -387,7 +387,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
                 className={`
                   flex items-center gap-2 w-full px-3 py-1.5 text-sm text-left
                   transition-colors
-                  ${isActive ? 'bg-accent/20 text-accent' : 'text-text-primary hover:bg-border'}
+                  ${isActive ? 'bg-accent-20 text-accent' : 'text-text-primary hover:bg-border'}
                   ${isFocused ? 'outline outline-2 outline-accent outline-offset-[-2px]' : ''}
                 `}
                 onClick={() => handleSubtoolClick(tool)}

@@ -286,7 +286,7 @@ export function ShortcutRecorder({
         relative inline-flex items-center gap-1.5 px-3 py-2 min-w-[8rem] min-h-[2.5rem]
         bg-background border rounded cursor-pointer transition-all
         ${isRecording
-          ? 'border-accent ring-2 ring-accent/30 bg-accent/5'
+          ? 'border-accent ring-2 ring-accent-30 bg-accent-5'
           : 'border-border hover:border-text-secondary'
         }
         ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
