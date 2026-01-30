@@ -26,9 +26,8 @@ In `DmpSectionConfigDialog.tsx`, derive the `ShotTableEditor.ValidationConfig` f
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-TBD
-
+Passed validation config (azimuth/pitch thresholds) from project store to ShotTableEditor in DmpSectionConfigDialog, with defaultConfig fallback via useMemo.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: b1537ef, 1fde79a
+- Tests: pnpm tsc --noEmit
 - PRs:
