@@ -1048,13 +1048,13 @@ export default function DmpSectionConfigDialog({
                   const isActive = arrayIdx === currentIndex;
                   // Use data error count (excluding placement errors) for status display
                   const sectionDataErrors = getSectionDataErrorCount(sectionIdx, existingSections);
-                  // Warning count for azimuth/pitch discrepancies
-                  const sectionWarnings = getSectionWarningCount(sectionIdx, validationConfig);
-                  // Show warnings only on unplaced sections with no errors
-                  const showWarnings = sectionWarnings > 0
-                    && sectionDataErrors === 0
-                    && status !== 'excluded'
-                    && status !== 'placed';
+                  // Compute warning count lazily: only when section could show warnings
+                  // (not placed, no errors, not excluded/placed)
+                  const canShowWarnings = sectionDataErrors === 0 && status === 'not_placed';
+                  const sectionWarnings = canShowWarnings
+                    ? getSectionWarningCount(sectionIdx, validationConfig)
+                    : 0;
+                  const showWarnings = sectionWarnings > 0;
 
                   // Status icon - priority: excluded > errors > warnings > placed > default
                   let statusIcon: string;
