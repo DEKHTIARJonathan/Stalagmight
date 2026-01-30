@@ -2,12 +2,12 @@
 
 ## Problem
 
-CaveChef has a single hardcoded dark theme with all colors as literal hex values spread across `tailwind.config.js`, `src/index.css`, and inline component styles. There is no mechanism for users to switch themes, no CSS variable system, and no infrastructure for future high-contrast or custom themes.
+CaveChef has a single hardcoded dark theme with all colors as literal hex values spread across `tailwind.config.js`, `src/index.css`, and 42+ inline component styles in TSX files. There is no mechanism for users to switch themes, no CSS variable system, and no infrastructure for future high-contrast or custom themes.
 
 ## Goals
 
-1. Migrate all hardcoded UI chrome colors to CSS custom properties (`--cc-*` prefix)
-2. Ship two working themes: **dark** (existing palette) and **light** (inspired by `brand_tokens.css`)
+1. Migrate **all** hardcoded UI and visualization colors to CSS custom properties (`--cc-*` prefix)
+2. Ship two working themes: **dark** (existing palette) and **light** (derived from `brand_tokens.css`)
 3. Add `[data-theme]` attribute switching on the document root
 4. Persist theme preference in app-level config (Rust TOML backend)
 5. Add **Appearance** settings tab with theme selector (Dark / Light / Auto)
@@ -20,6 +20,9 @@ CaveChef has a single hardcoded dark theme with all colors as literal hex values
 - All UI chrome colors: backgrounds, panels, borders, text, accent, scrollbars, inputs, checkboxes, focus rings
 - Third-party widget overrides: React DatePicker, MapLibre controls
 - Tailwind config color tokens → CSS variable references
+- **Map visualization colors**: snap indicators, hover highlights, selection highlights, stroke colors, depth defaults
+- **Canvas preview colors**: SectionPreview, PlacementOverlay, DepthLegend, GridOverlay
+- **Tailwind opacity modifier migration**: 36+ instances of `bg-color/opacity` syntax → dedicated opacity tokens
 - `color-scheme` CSS property on root (affects native select/date inputs)
 - MapLibre icon inversion filter made conditional on theme
 - Theme influences default color palettes offered in display settings color pickers
@@ -27,7 +30,9 @@ CaveChef has a single hardcoded dark theme with all colors as literal hex values
 ### Out of scope
 - High-contrast theme (v2.0)
 - Per-project theme settings (theme is global/app-level only)
-- Section colors, map grid color, depth gradient colors (remain per-project display settings)
+- **ExportPreview.tsx**: Export rendering always uses dark palette (exports are visual artifacts, not UI)
+- Section palette colors in `src/utils/colors.ts` SECTION_COLORS (per-project display settings)
+- Error severity colors in `getErrorColor()` (functional, not aesthetic)
 
 ## Key Decisions
 
@@ -39,118 +44,125 @@ CaveChef has a single hardcoded dark theme with all colors as literal hex values
 | Dark as default | Existing users see no change on update |
 | Full migration in one pass | No mixed hardcoded/variable state; clean cut |
 | Light theme derived from brand_tokens.css | Leverages existing brand palette; warm tones differentiate from generic light themes |
+| Dedicated opacity variant tokens | Tailwind opacity modifiers (`bg-accent/10`) break with CSS variable colors. Define explicit `--cc-accent-10` etc. tokens instead |
+| Full token set (40+ tokens) | Verbose but explicit. Each color has a semantic name. Future themes just fill in values |
+| Exports always dark palette | Export renders are saved visual artifacts, not interactive UI |
+| Preview canvases follow theme | Previews in dialogs are interactive UI, should match app theme |
+| Default to dark on boot | Config loads async; `:root` CSS defaults to dark; no flash of wrong theme |
+| Auto-derive light map colors | Pick light-theme variants that maintain visibility on light backgrounds |
 
-## Technical Approach
+## Interview Findings (Codebase Scan)
 
-### CSS Variable Definitions
+### Critical Issue: Tailwind Opacity Modifiers (36+ instances)
 
-Define all tokens in `src/index.css` under theme selectors:
+These patterns will break when Tailwind colors become CSS variables:
+- `bg-background/80` → needs `--cc-background-80`
+- `bg-panel/50` → needs `--cc-panel-50`
+- `bg-accent/90`, `bg-accent/20`, `bg-accent/10` → needs `--cc-accent-90`, `--cc-accent-20`, `--cc-accent-10`
+- `hover:bg-accent/10` → needs `--cc-accent-10`
+- `bg-warning/10`, `border-warning/30` → needs opacity tokens
+- `bg-panel/90` → needs `--cc-panel-90`
 
-```css
-:root, [data-theme="dark"] {
-  --cc-background: #1a1a2e;
-  --cc-panel: #16213e;
-  --cc-border: #0f3460;
-  --cc-text-primary: #f5f5f5;
-  --cc-text-secondary: #a0a0a0;
-  --cc-accent: #4ecdc4;
-  --cc-accent-on: #1a1a2e;       /* text on accent bg */
-  --cc-warning: #ffcb77;
-  --cc-error: #ff6b6b;
-  --cc-success: #95e1d3;
-  --cc-hover: rgba(78, 205, 196, 0.1);
-  --cc-focus-ring: #4ecdc4;
-  --cc-scrollbar-track: #16213e;
-  --cc-scrollbar-thumb: #0f3460;
-  --cc-scrollbar-hover: #4ecdc4;
-  --cc-input-bg: #16213e;
-  --cc-input-border: #0f3460;
-  --cc-outside-month: #666;
-  color-scheme: dark;
-}
+**Solution**: Define explicit opacity variant CSS variables and replace Tailwind opacity syntax with these tokens.
 
-[data-theme="light"] {
-  --cc-background: #f5f0e8;       /* warm limestone-inspired */
-  --cc-panel: #ffffff;
-  --cc-border: #d4c5a9;
-  --cc-text-primary: #1a120b;     /* basalt dark */
-  --cc-text-secondary: #6b5b4a;
-  --cc-accent: #3a8a82;           /* darker teal for contrast on light */
-  --cc-accent-on: #ffffff;
-  --cc-warning: #c4901a;
-  --cc-error: #c44040;
-  --cc-success: #2a7a6a;
-  --cc-hover: rgba(58, 138, 130, 0.08);
-  --cc-focus-ring: #3a8a82;
-  --cc-scrollbar-track: #ebe4d8;
-  --cc-scrollbar-thumb: #c1a07a;
-  --cc-scrollbar-hover: #3a8a82;
-  --cc-input-bg: #ffffff;
-  --cc-input-border: #d4c5a9;
-  --cc-outside-month: #aaa;
-  color-scheme: light;
-}
+### Inline Hex Colors in Components (42+ instances)
+
+Major files with hardcoded colors requiring migration:
+- `SurveyLayer.tsx` (13 colors: station colors, strokes, hover/select highlights, text halos)
+- `GlobalSurveyLayer.ts` (8 colors: strokes, fallbacks, gray text)
+- `ExportPreview.tsx` (8 colors: **EXCLUDED** - always uses dark palette)
+- `SectionPreview.tsx` (12 colors: background, lines, circles, strokes, compass)
+- `PlacementOverlay.tsx` (6 colors: snap indicators, anchors)
+- `GlobalViewMap.tsx` (8 colors: text, borders, error indicators)
+- `MapCanvas.tsx` (1: background default)
+- `GridOverlay.tsx` (1: grid color default)
+- `DepthLegend.tsx` (3: depth defaults, text)
+- `SectionMetadataForm.tsx` (1: placeholder color)
+- `EditSectionDialog.tsx` (1: default section color)
+
+### Config Loading Timing
+
+Config loads asynchronously via `useEffect` in App.tsx. The `useTheme` hook must handle `config === null` by defaulting to `'dark'`. Since `:root` CSS already defaults to dark theme, there is no flash of incorrect theme.
+
+## CSS Variable Token Inventory
+
+### UI Chrome Tokens (existing plan)
+```
+--cc-background, --cc-panel, --cc-border
+--cc-text-primary, --cc-text-secondary
+--cc-accent, --cc-accent-on
+--cc-warning, --cc-error, --cc-success
+--cc-hover, --cc-focus-ring, --cc-focus-glow
+--cc-scrollbar-track, --cc-scrollbar-thumb, --cc-scrollbar-hover
+--cc-input-bg, --cc-input-border
+--cc-outside-month
 ```
 
-### Tailwind Integration
-
-Update `tailwind.config.js` to reference CSS variables:
-
-```js
-colors: {
-  background: 'var(--cc-background)',
-  panel: 'var(--cc-panel)',
-  border: 'var(--cc-border)',
-  'text-primary': 'var(--cc-text-primary)',
-  // ... etc
-}
+### MapLibre Tokens (existing plan)
+```
+--cc-map-ctrl-bg, --cc-map-ctrl-border, --cc-map-ctrl-hover, --cc-map-ctrl-active
+--cc-map-ctrl-icon-filter
+--cc-map-scale-bg, --cc-map-scale-border, --cc-map-scale-text
 ```
 
-### Config System
-
-**TypeScript** (`src/types/config.ts`):
-```typescript
-export type ThemeMode = 'dark' | 'light' | 'auto';
-export interface AppearanceConfig {
-  theme: ThemeMode;
-}
+### Map Visualization Tokens (NEW from interview)
+```
+--cc-snap-color           (dark: #00ffcc, light: auto-derive)
+--cc-hover-highlight      (dark: #0066ff, light: auto-derive)
+--cc-select-highlight     (dark: #00aaff, light: auto-derive)
+--cc-stroke-color         (dark: #000000, light: #000000 — works on both)
+--cc-stroke-light         (dark: #ffffff, light: auto-derive)
+--cc-text-halo            (dark: #000000 / #1a1a2e, light: auto-derive)
+--cc-station-default      (dark: #4ecdc4, light: auto-derive)
+--cc-gray-line            (dark: #888888, light: auto-derive)
+--cc-gray-text            (dark: #aaa, light: auto-derive)
+--cc-grid-default         (dark: #333366, light: auto-derive)
+--cc-zero-datum           (dark: #ffd700, light: #ffd700 — gold works on both)
+--cc-compass-color        (dark: #ffcc00, light: auto-derive)
+--cc-depth-shallow        (dark: #00bfff, light: auto-derive)
+--cc-depth-deep           (dark: #ff4444, light: auto-derive)
+--cc-depth-text           (dark: rgba(255,255,255,0.7), light: auto-derive)
 ```
 
-**Rust** (`src-tauri/src/config/types.rs`):
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppearanceConfig {
-    #[serde(default = "default_theme")]
-    pub theme: String, // "dark" | "light" | "auto"
-}
+### Canvas Preview Tokens (NEW from interview)
+```
+--cc-preview-bg           (dark: #1a1a2e, light: follows --cc-background)
+--cc-preview-text         (dark: #ffffff, light: follows --cc-text-primary)
 ```
 
-### Theme Application
-
-A `useTheme` hook reads `config.appearance.theme` from the project store, resolves `auto` via `window.matchMedia('(prefers-color-scheme: dark)')`, and sets `document.documentElement.dataset.theme` accordingly.
-
-### Settings UI
-
-New `AppearanceSettings.tsx` tab following existing `SettingsCategoryProps` pattern with a theme selector (radio group or select).
+### Opacity Variant Tokens (NEW from interview)
+```
+--cc-background-80        (dark: rgba(26, 26, 46, 0.8))
+--cc-panel-50             (dark: rgba(22, 33, 62, 0.5))
+--cc-panel-90             (dark: rgba(22, 33, 62, 0.9))
+--cc-accent-10            (dark: rgba(78, 205, 196, 0.1))
+--cc-accent-20            (dark: rgba(78, 205, 196, 0.2))
+--cc-accent-90            (dark: rgba(78, 205, 196, 0.9))
+--cc-warning-10           (dark: rgba(255, 203, 119, 0.1))
+--cc-warning-30           (dark: rgba(255, 203, 119, 0.3))
+```
+(Exact set to be determined by grepping all Tailwind opacity modifier usage)
 
 ## Task Breakdown
 
-1. **Define CSS variable tokens and theme definitions** — Add `--cc-*` variables to `index.css` with dark and light theme blocks
-2. **Update tailwind.config.js** — Reference CSS variables instead of hardcoded hex values
-3. **Migrate index.css hardcoded colors** — Replace all hex values in scrollbar, input, checkbox, table, focus, DatePicker, and MapLibre styles with `var(--cc-*)` references
-4. **Add AppearanceConfig to config system** — TypeScript types, Rust struct + defaults, wire into Config
-5. **Create useTheme hook** — Reads config, resolves auto mode, applies `data-theme` attribute and `color-scheme` property
-6. **Create AppearanceSettings tab** — Settings UI with theme selector, wire into SettingsDialog and SettingsSidebar
-7. **Handle MapLibre controls theming** — Make icon inversion filter conditional; adjust control styles for light theme
-8. **Update default color palettes for light theme** — Ensure DisplaySettings color pickers offer theme-appropriate defaults
-9. **Add tests** — E2E test for theme switching, verify CSS variables applied correctly
+1. **Define CSS variable tokens and theme definitions** — All `--cc-*` variables in index.css including UI chrome, map visualization, canvas preview, opacity variants, with dark and light theme blocks
+2. **Update tailwind.config.js** — Reference CSS variables; add opacity variant color entries
+3. **Migrate index.css hardcoded colors** — Replace all hex values with `var(--cc-*)` references
+4. **Add AppearanceConfig to config system** — TypeScript types + Rust struct + defaults
+5. **Create useTheme hook** — Reads config, resolves auto mode, applies data-theme attribute
+6. **Create AppearanceSettings tab** — Settings UI with theme selector
+7. **Handle MapLibre controls and third-party widget theming** — Conditional icon filter, DatePicker
+8. **Migrate inline hex colors in TSX components** — SurveyLayer, SectionPreview, PlacementOverlay, GlobalSurveyLayer, GlobalViewMap, GridOverlay, DepthLegend, MapCanvas, etc. Exclude ExportPreview.
+9. **Migrate Tailwind opacity modifier usage** — Replace all `bg-color/N` patterns with dedicated opacity tokens across 36+ component locations
+10. **Update default color palettes for light theme** — DisplaySettings color pickers offer theme-appropriate defaults
+11. **Add E2E tests for theme switching** — Verify theme attribute, CSS variables, Settings UI
 
 ## Files Modified
 
 | File | Change |
 |------|--------|
-| `src/index.css` | Add CSS variable definitions, migrate all hardcoded colors |
-| `tailwind.config.js` | Reference CSS variables |
+| `src/index.css` | Add CSS variable definitions (60+ tokens), migrate all hardcoded colors |
+| `tailwind.config.js` | Reference CSS variables, add opacity variant entries |
 | `src/types/config.ts` | Add `AppearanceConfig`, `ThemeMode` |
 | `src-tauri/src/config/types.rs` | Add `AppearanceConfig` struct |
 | `src-tauri/src/config/defaults.rs` | Add `Default` impl |
@@ -160,9 +172,29 @@ New `AppearanceSettings.tsx` tab following existing `SettingsCategoryProps` patt
 | `src/components/Dialogs/settings/SettingsDialog.tsx` | Add Appearance category |
 | `src/components/Dialogs/settings/SettingsSidebar.tsx` | Add to sidebar |
 | `src/components/Dialogs/settings/types.ts` | Add 'appearance' to SettingsCategory |
+| `src/components/Map/SurveyLayer.tsx` | Replace 13 hardcoded colors with CSS variables |
+| `src/components/Map/surveyLayer/features.ts` | Replace depth/station colors |
+| `src/components/GlobalView/GlobalSurveyLayer.ts` | Replace 8 hardcoded colors |
+| `src/components/GlobalView/GlobalViewMap.tsx` | Replace 8 hardcoded colors |
+| `src/components/Dialogs/SectionPreview.tsx` | Replace 12 hardcoded colors |
+| `src/components/Map/PlacementOverlay.tsx` | Replace 6 snap/anchor colors |
+| `src/components/Map/MapCanvas.tsx` | Replace background default |
+| `src/components/Map/GridOverlay.tsx` | Replace grid color default |
+| `src/components/Map/DepthLegend.tsx` | Replace 3 depth/text colors |
+| `src/components/common/SectionMetadataForm.tsx` | Replace placeholder color |
+| `src/components/Dialogs/EditSectionDialog.tsx` | Replace default section color |
+| `src/components/common/Button.tsx` | Replace opacity modifier usage |
+| `src/components/common/ContextMenu.tsx` | Replace opacity modifier usage |
+| `src/components/common/OfflineIndicator.tsx` | Replace opacity modifier usage |
+| `src/components/SingleSystemView/DisplayMenu.tsx` | Replace opacity modifier usage |
+| `src/components/SingleSystemView/UndoHistoryDropdown.tsx` | Replace opacity modifier usage |
+| `src/components/Dialogs/ExportPreview.tsx` | Replace opacity modifier usage (keep render colors dark) |
+| `e2e-playwright/tests/theme.spec.ts` | New: E2E tests for theme switching |
 
 ## Risks
 
-- **Tailwind + CSS variables**: CSS variables in Tailwind colors lose opacity modifier support (`bg-background/50` won't work). Mitigation: define separate `--cc-hover` etc. tokens for common opacity variants.
-- **Third-party widget overrides**: DatePicker and MapLibre use `!important` overrides that must all be converted. Mitigation: systematic grep for all hex values in index.css.
-- **Component inline styles**: Some components may use hardcoded colors in JSX `style` props. Mitigation: grep for hex color patterns in `.tsx` files.
+- **Tailwind + CSS variables**: Opacity modifiers break. Mitigated by dedicated opacity tokens.
+- **Large scope**: 60+ CSS variables, 20+ files to modify. Mitigated by systematic task breakdown and grep-driven migration.
+- **Canvas rendering**: Components using `getComputedStyle` to read CSS variables in canvas contexts may need special handling.
+- **MapLibre style expressions**: SurveyLayer uses MapLibre GL JS style expressions which may not support CSS variables directly. May need to read variables via JS and pass as values.
+- **Third-party widget overrides**: DatePicker and MapLibre use `!important`. All must be converted.
