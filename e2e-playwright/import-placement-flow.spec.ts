@@ -482,7 +482,7 @@ test.describe('Import Placement Flow', () => {
      * Test: Not placed section with warnings shows yellow warning icon.
      * (Mock sections have azimuth discrepancies, triggering the warning state.)
      */
-    test('should show empty circle for not placed sections', async ({ page }) => {
+    test('should show warning icon for not placed sections with warnings', async ({ page }) => {
       await createProjectAndOpenImportDialog(page);
       await selectSectionsAndProceed(page, [0]); // Main Passage only
 
