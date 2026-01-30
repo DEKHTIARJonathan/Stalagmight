@@ -2,133 +2,28 @@
 
 ## Description
 
-Create a React hook that reads the theme preference from config, resolves `auto` mode via OS preference, applies the resolved theme by setting `data-theme` attribute on `document.documentElement`, and **returns the resolved theme** so MapLibre and canvas components can react to theme changes.
+Create a React hook that reads the theme preference from config, resolves `auto` mode via OS preference, applies the resolved theme by setting `data-theme` attribute on `document.documentElement`, and stores the resolved theme in uiStore so MapLibre and canvas components can react to theme changes.
 
-## Files to create
+**Size:** M
+**Files:**
+- `src/hooks/useTheme.ts` (new)
+- `src/App.tsx`
+- `src/store/uiStore.ts`
 
-- `src/hooks/useTheme.ts` — The theme hook
+## Approach
 
-## Files to modify
+- Hook reads theme from `useProjectStore().config?.appearance?.theme ?? 'dark'`
+- For `'auto'` mode, listen to `window.matchMedia('(prefers-color-scheme: dark)')` and update on OS changes
+- Set `document.documentElement.dataset.theme` to resolved value
+- Store resolved theme in `uiStore` via `setResolvedTheme()` — this is how MapLibre components subscribe to theme changes
+- Call `useTheme()` at top of `App` component
+- Default to `'dark'` when config is null (async loading)
 
-- `src/App.tsx` — Call `useTheme()` at the app root level
+## Key context
 
-## Implementation
-
-### `src/hooks/useTheme.ts`
-
-```typescript
-import { useEffect, useState } from 'react';
-import { useProjectStore } from '../store/projectStore';
-import type { ThemeMode } from '../types/config';
-
-export type ResolvedTheme = 'dark' | 'light';
-
-/**
- * Resolves the effective theme from config preference.
- * - 'dark' / 'light' → used directly
- * - 'auto' → follows OS prefers-color-scheme
- *
- * Returns the resolved theme so MapLibre/canvas components can react.
- */
-export function useTheme(): ResolvedTheme {
-  const theme = useProjectStore(
-    (state) => state.config?.appearance?.theme ?? 'dark'
-  ) as ThemeMode;
-
-  const [resolved, setResolved] = useState<ResolvedTheme>(() => {
-    if (theme === 'auto') {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches
-        ? 'dark'
-        : 'light';
-    }
-    return theme;
-  });
-
-  useEffect(() => {
-    const apply = (r: ResolvedTheme) => {
-      document.documentElement.dataset.theme = r;
-      setResolved(r);
-    };
-
-    if (theme === 'auto') {
-      const mq = window.matchMedia('(prefers-color-scheme: dark)');
-      apply(mq.matches ? 'dark' : 'light');
-
-      const handler = (e: MediaQueryListEvent) => {
-        apply(e.matches ? 'dark' : 'light');
-      };
-      mq.addEventListener('change', handler);
-      return () => mq.removeEventListener('change', handler);
-    } else {
-      apply(theme);
-    }
-  }, [theme]);
-
-  return resolved;
-}
-```
-
-### Why return the resolved theme?
-
-MapLibre GL JS does NOT read CSS variables. Colors are passed as literal values to `setPaintProperty()`, `addLayer()`, etc. When the theme changes, MapLibre layers must be explicitly re-styled. By returning `resolved`, any component can do:
-
-```typescript
-const resolvedTheme = useTheme();
-// or for child components that don't call useTheme directly:
-// read from a shared store/context
-```
-
-### Sharing resolved theme with child components
-
-To avoid calling `useTheme()` in every component, store the resolved theme in the UI store:
-
-```typescript
-// In useTheme.ts — also set uiStore
-import { useUIStore } from '../store/uiStore';
-
-// Inside the apply function:
-useUIStore.getState().setResolvedTheme(r);
-```
-
-Then MapLibre components read from `useUIStore`:
-```typescript
-const resolvedTheme = useUIStore((s) => s.resolvedTheme);
-```
-
-### `src/App.tsx`
-
-Add `useTheme()` call at the top of the App component:
-
-```typescript
-import { useTheme } from './hooks/useTheme';
-
-function App() {
-  useTheme(); // applies data-theme, stores resolved theme
-  // ... rest of component
-}
-```
-
-### UI Store addition
-
-Add to `src/store/uiStore.ts`:
-```typescript
-resolvedTheme: 'dark' | 'light';
-setResolvedTheme: (theme: 'dark' | 'light') => void;
-```
-
-### Key behaviors
-
-1. Default to `'dark'` if config not yet loaded (null-safe with `?? 'dark'`)
-2. For `'auto'` mode, listen for OS theme changes via `matchMedia`
-3. Clean up media query listener on unmount or theme change
-4. Set `data-theme` attribute which CSS variable selectors respond to
-5. Return resolved theme for MapLibre/canvas components
-6. Store resolved theme in uiStore for child component access
-7. No flash of wrong theme — dark is default in CSS (`:root` = dark)
-
-## Files also modified
-
-- `src/store/uiStore.ts` — Add `resolvedTheme` state and `setResolvedTheme` action
+- MapLibre GL JS does NOT read CSS variables. The resolved theme in uiStore is the trigger for MapCanvas to call `surveyLayer.applyThemeColors()` (wired in task 10)
+- No flash of wrong theme because `:root` CSS defaults to dark (task 1) and hook defaults to `'dark'`
+- Media query listener must be cleaned up on unmount or theme change
 
 ## Acceptance
 
@@ -144,3 +39,11 @@ setResolvedTheme: (theme: 'dark' | 'light') => void;
 - [ ] `useTheme()` called in App.tsx root
 - [ ] No flash of incorrect theme on load (dark is CSS default)
 - [ ] `pnpm tsc --noEmit` passes
+
+## Done summary
+
+(To be filled on completion)
+
+## Evidence
+
+(To be filled on completion)

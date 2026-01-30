@@ -2,84 +2,31 @@
 
 ## Description
 
-Add a new `appearance` config section with a `theme` field (`'dark' | 'light' | 'auto'`) to both the TypeScript and Rust config systems.
+Add a new `appearance` config section with a `theme` field (`'dark' | 'light' | 'auto'`) to both the TypeScript and Rust config systems. Also update the config deep-merge plumbing in SettingsDialog and the E2E mock config.
 
-## Files to modify
+**Size:** M
+**Files:**
+- `src/types/config.ts`
+- `src-tauri/src/config/types.rs`
+- `src-tauri/src/config/defaults.rs`
+- `src/components/Dialogs/SettingsDialog.tsx` (internal `mergeConfig()` and `getCategoryDefaults()`)
+- `e2e-playwright/mocks/tauri-ipc.ts`
 
-- `src/types/config.ts` — Add `AppearanceConfig` interface and `ThemeMode` type, add to `Config` interface and `defaultConfig`
-- `src-tauri/src/config/types.rs` — Add `AppearanceConfig` struct, add to `Config` struct
-- `src-tauri/src/config/defaults.rs` — Add `Default` impl for `AppearanceConfig`
+## Approach
 
-## Implementation
+- Add `ThemeMode` type and `AppearanceConfig` interface to TypeScript config
+- Add corresponding Rust struct with `#[serde(default)]` for backward compatibility
+- Add `'appearance'` case to `getCategoryDefaults()` (internal function at ~lines 65-105 in SettingsDialog.tsx)
+- Add `appearance` branch to `mergeConfig()` (internal function at ~lines 183-283 in SettingsDialog.tsx)
+- Add `appearance: { theme: 'dark' }` to the mock config object in `e2e-playwright/mocks/tauri-ipc.ts` `get_config` handler
+- Both `mergeConfig()` and `getCategoryDefaults()` are **internal functions** (not exported) within SettingsDialog.tsx
 
-### TypeScript (`src/types/config.ts`)
+## Key context
 
-Add type and interface:
-```typescript
-export type ThemeMode = 'dark' | 'light' | 'auto';
-
-export interface AppearanceConfig {
-  theme: ThemeMode;
-}
-```
-
-Add to `Config` interface:
-```typescript
-export interface Config {
-  // ... existing fields ...
-  appearance: AppearanceConfig;
-}
-```
-
-Add to `defaultConfig`:
-```typescript
-export const defaultConfig: Config = {
-  // ... existing fields ...
-  appearance: {
-    theme: 'dark',
-  },
-};
-```
-
-### Rust (`src-tauri/src/config/types.rs`)
-
-Add struct:
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppearanceConfig {
-    #[serde(default = "default_theme")]
-    pub theme: String,
-}
-
-fn default_theme() -> String {
-    "dark".to_string()
-}
-```
-
-Add to `Config` struct:
-```rust
-pub struct Config {
-    // ... existing fields ...
-    #[serde(default)]
-    pub appearance: AppearanceConfig,
-}
-```
-
-### Rust Defaults (`src-tauri/src/config/defaults.rs`)
-
-```rust
-impl Default for AppearanceConfig {
-    fn default() -> Self {
-        Self {
-            theme: "dark".to_string(),
-        }
-    }
-}
-```
-
-### Normalization
-
-Add to `Config::normalize()` method: validate that `appearance.theme` is one of `"dark"`, `"light"`, `"auto"`, defaulting to `"dark"` if invalid.
+- `mergeConfig()` does field-by-field deep merging; `appearance` needs its own branch
+- `getCategoryDefaults()` uses a switch statement; add `'appearance'` case returning `{ appearance: defaultConfig.appearance }`
+- E2E mock at `e2e-playwright/mocks/tauri-ipc.ts` hardcodes `get_config` return — must add `appearance` field or tests crash when `Config` type requires it
+- Rust uses `#[serde(default)]` so existing TOML configs without `[appearance]` still load
 
 ## Acceptance
 
@@ -89,6 +36,17 @@ Add to `Config::normalize()` method: validate that `appearance.theme` is one of 
 - [ ] Rust `AppearanceConfig` struct matches TypeScript
 - [ ] `#[serde(default)]` on the field so existing config files without `[appearance]` section load correctly
 - [ ] Normalization rejects invalid theme values
+- [ ] `mergeConfig()` in SettingsDialog.tsx handles `appearance` field
+- [ ] `getCategoryDefaults()` in SettingsDialog.tsx returns appearance defaults
+- [ ] E2E mock config in `e2e-playwright/mocks/tauri-ipc.ts` includes `appearance: { theme: 'dark' }`
 - [ ] `pnpm tsc --noEmit` passes
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 - [ ] Existing config files load without error (backward compatible)
+
+## Done summary
+
+(To be filled on completion)
+
+## Evidence
+
+(To be filled on completion)

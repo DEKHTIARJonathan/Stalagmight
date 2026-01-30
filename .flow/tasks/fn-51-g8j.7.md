@@ -48,3 +48,11 @@ Search for any other third-party components with hardcoded dark theme overrides 
 - [ ] DatePicker calendar renders correctly in light theme
 - [ ] No hardcoded hex colors remain in third-party widget overrides (except in theme blocks)
 - [ ] No inline styles in components override theme variables for third-party widgets
+
+## Done summary
+
+(To be filled on completion)
+
+## Evidence
+
+(To be filled on completion)
