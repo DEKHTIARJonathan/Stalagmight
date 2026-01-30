@@ -995,9 +995,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       markersRef.current.set(project.file_path, marker);
     }
-  }, [gpsProjects, selectedProjectId, mapLoaded, onProjectSelect, onProjectOpen, geometryStates]);
+  }, [gpsProjects, selectedProjectId, mapLoaded, onProjectSelect, onProjectOpen, geometryStates, resolvedTheme]);
 
-  // Update marker styles when selection or loading states change
+  // Update marker styles when selection, loading states, or theme changes
   useEffect(() => {
     markersRef.current.forEach((marker, filePath) => {
       const el = marker.getElement();
@@ -1020,7 +1020,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         ? `0 0 0 3px ${strokeLight}, 0 2px 4px rgba(0,0,0,0.3)`
         : '0 2px 4px rgba(0,0,0,0.3)';
     });
-  }, [selectedProjectId, geometryStates]);
+  }, [selectedProjectId, geometryStates, resolvedTheme]);
 
   // Sync marker visibility when view mode or geometry states change
   // In survey mode, hide markers for systems whose geometry has loaded successfully.

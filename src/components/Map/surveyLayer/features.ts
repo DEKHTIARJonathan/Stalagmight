@@ -107,15 +107,15 @@ export function buildSurveyFeatures(
   gpsOrigin: GpsOrigin | null,
   showDepthGradient: boolean,
   depthRange: DepthRange,
-  themeColors?: MapThemeColors
+  themeColors: MapThemeColors
 ): SurveyFeatureSets {
-  // Theme colors with fallbacks for backward compatibility
-  const depthShallow = themeColors?.depthShallow ?? '#00bfff';
-  const depthDeep = themeColors?.depthDeep ?? '#ff4444';
-  const labelColor = themeColors?.labelColor ?? '#ffffff';
-  const zeroDatum = themeColors?.zeroDatum ?? '#ffd700';
-  const strokeColor = themeColors?.strokeColor ?? '#000000';
-  const sectionDefault = themeColors?.stationDefault ?? '#ffffff';
+  // Theme colors (resolved from CSS variables by the caller)
+  const depthShallow = themeColors.depthShallow;
+  const depthDeep = themeColors.depthDeep;
+  const labelColor = themeColors.labelColor;
+  const zeroDatum = themeColors.zeroDatum;
+  const strokeColor = themeColors.strokeColor;
+  const sectionDefault = themeColors.stationDefault;
   const shotFeatures: GeoJSON.Feature[] = [];
   const shotLabelFeatures: GeoJSON.Feature[] = [];
   const stationFeatures: GeoJSON.Feature[] = [];

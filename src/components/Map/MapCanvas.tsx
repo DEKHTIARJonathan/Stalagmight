@@ -779,12 +779,13 @@ export default function MapCanvas() {
   // Apply theme colors to SurveyLayer and map background when resolvedTheme changes
   // MapLibre GL JS does NOT read CSS variables — colors must be re-applied explicitly
   useEffect(() => {
+    const colors = getMapThemeColors();
     if (surveyLayerRef.current) {
-      surveyLayerRef.current.applyThemeColors(getMapThemeColors());
+      surveyLayerRef.current.applyThemeColors(colors);
     }
     // Re-apply map background color (only if no custom color is configured)
     if (map.current && mapLoaded && !config?.display.default_background) {
-      map.current.setPaintProperty('background', 'background-color', getMapThemeColors().background);
+      map.current.setPaintProperty('background', 'background-color', colors.background);
     }
   }, [resolvedTheme, mapLoaded, config?.display.default_background]);
 
