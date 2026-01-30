@@ -470,6 +470,9 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
                 log_hit_detection: false,
               },
             },
+            appearance: {
+              theme: 'dark',
+            },
           };
 
         case 'get_recent_projects':

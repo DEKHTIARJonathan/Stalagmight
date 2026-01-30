@@ -12,7 +12,8 @@ export type SettingsCategory =
   | 'export'
   | 'shortcuts'
   | 'cache'
-  | 'advanced';
+  | 'advanced'
+  | 'appearance';
 
 /**
  * Category configuration with display labels.

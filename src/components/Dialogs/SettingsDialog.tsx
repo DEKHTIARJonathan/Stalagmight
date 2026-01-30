@@ -93,6 +93,8 @@ function getCategoryDefaults(category: SettingsCategory): Partial<Config> {
       return { shortcuts: { ...defaultConfig.shortcuts } };
     case 'cache':
       return { cache: { ...defaultConfig.cache } };
+    case 'appearance':
+      return { appearance: { ...defaultConfig.appearance } };
     case 'advanced':
       return {
         debug: { map: { ...defaultConfig.debug.map } },

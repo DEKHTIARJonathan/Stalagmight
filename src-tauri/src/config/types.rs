@@ -350,7 +350,10 @@ impl Default for GlobalViewConfig {
     }
 }
 
-/// Theme mode for the application
+/// Theme mode for the application.
+/// Uses `#[serde(other)]` on Unknown variant so that invalid/unrecognized
+/// theme values in TOML don't prevent config loading; they are coerced to
+/// Dark during normalize().
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeMode {
@@ -358,6 +361,9 @@ pub enum ThemeMode {
     Dark,
     Light,
     Auto,
+    /// Catch-all for unrecognized theme values; normalized to Dark
+    #[serde(other, rename = "unknown")]
+    Unknown,
 }
 
 /// Appearance configuration
@@ -368,10 +374,12 @@ pub struct AppearanceConfig {
 }
 
 impl AppearanceConfig {
-    /// Normalize appearance values: invalid theme resets to "dark"
+    /// Normalize appearance values: invalid/unknown theme resets to "dark"
     pub fn normalize(&mut self) {
-        // ThemeMode enum handles validation via serde; if deserialized successfully it's valid.
-        // This method exists for future extensibility and to match the normalize pattern.
+        if self.theme == ThemeMode::Unknown {
+            tracing::warn!("Unknown theme value in config, normalizing to \"dark\"");
+            self.theme = ThemeMode::Dark;
+        }
     }
 }
 
