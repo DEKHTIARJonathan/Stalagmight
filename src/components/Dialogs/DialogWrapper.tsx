@@ -23,6 +23,23 @@ function getPortalTarget(): HTMLElement | null {
 }
 
 /**
+ * Check if an element is visible (has layout) and not inside an
+ * [aria-hidden="true"] ancestor within the given container.
+ */
+function isVisibleAndAccessible(el: HTMLElement, container: HTMLElement): boolean {
+  // Check the element has layout (is rendered and visible)
+  if (el.getClientRects().length === 0) return false;
+
+  // Walk ancestors up to the container, checking for aria-hidden
+  let current: Element | null = el.parentElement;
+  while (current && current !== container) {
+    if (current.getAttribute('aria-hidden') === 'true') return false;
+    current = current.parentElement;
+  }
+  return true;
+}
+
+/**
  * Focus an element and, for text inputs/textareas, place the cursor
  * at the end of the value (no auto-select).
  */
@@ -188,31 +205,35 @@ export function DialogWrapper({
     const rafId = requestAnimationFrame(() => {
       // Priority 1: element with [data-autofocus]
       const autofocus = el.querySelector<HTMLElement>('[data-autofocus]');
-      if (autofocus) {
+      if (autofocus && isVisibleAndAccessible(autofocus, el)) {
         focusElement(autofocus);
         return;
       }
 
-      // Priority 2: first visible input, textarea, or select in the dialog body
-      const formInput = el.querySelector<HTMLElement>(
+      // Priority 2: first visible, accessible input, textarea, or select
+      const formCandidates = el.querySelectorAll<HTMLElement>(
         'input:not(:disabled):not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), textarea:not(:disabled), select:not(:disabled)',
       );
-      if (formInput) {
-        focusElement(formInput);
-        return;
+      for (const candidate of formCandidates) {
+        if (isVisibleAndAccessible(candidate, el)) {
+          focusElement(candidate);
+          return;
+        }
       }
 
-      // Priority 3: element with [data-primary-action]
-      const primaryAction = el.querySelector<HTMLElement>('[data-primary-action]');
-      if (primaryAction) {
-        focusElement(primaryAction);
-        return;
+      // Priority 3: enabled element with [data-primary-action]
+      const primaryCandidates = el.querySelectorAll<HTMLElement>('[data-primary-action]:not(:disabled)');
+      for (const candidate of primaryCandidates) {
+        if (isVisibleAndAccessible(candidate, el)) {
+          focusElement(candidate);
+          return;
+        }
       }
 
-      // Priority 4: first button that is NOT the close X button
+      // Priority 4: first enabled button that is NOT the close X button
       const buttons = el.querySelectorAll<HTMLElement>('button:not(:disabled)');
       for (const btn of buttons) {
-        if (btn.getAttribute('aria-label') !== 'Close dialog') {
+        if (btn.getAttribute('aria-label') !== 'Close dialog' && isVisibleAndAccessible(btn, el)) {
           focusElement(btn);
           return;
         }

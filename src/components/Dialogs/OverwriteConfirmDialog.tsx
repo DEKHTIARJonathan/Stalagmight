@@ -48,7 +48,7 @@ export default function OverwriteConfirmDialog() {
           <Button onClick={closeDialog} disabled={isLoading}>
             Cancel
           </Button>
-          <Button variant="danger" onClick={handleConfirm} disabled={isLoading}>
+          <Button variant="danger" onClick={handleConfirm} disabled={isLoading} data-primary-action="">
             {isLoading ? 'Saving...' : 'Overwrite'}
           </Button>
         </div>
