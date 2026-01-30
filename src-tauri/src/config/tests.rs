@@ -1317,6 +1317,221 @@ fn test_load_from_path_invalid_toml_errors() {
 }
 
 // ========================================================================
+// Appearance Config Tests
+// ========================================================================
+
+#[test]
+fn test_appearance_config_defaults() {
+    let config = AppearanceConfig::default();
+    assert_eq!(config.theme, ThemeMode::Dark);
+}
+
+#[test]
+fn test_theme_mode_deserialize_valid_values() {
+    #[derive(Deserialize)]
+    struct Wrapper { theme: ThemeMode }
+    let dark: Wrapper = toml::from_str("theme = \"dark\"").expect("dark should parse");
+    assert_eq!(dark.theme, ThemeMode::Dark);
+    let light: Wrapper = toml::from_str("theme = \"light\"").expect("light should parse");
+    assert_eq!(light.theme, ThemeMode::Light);
+    let auto: Wrapper = toml::from_str("theme = \"auto\"").expect("auto should parse");
+    assert_eq!(auto.theme, ThemeMode::Auto);
+}
+
+#[test]
+fn test_theme_mode_deserialize_unknown_value() {
+    // Unknown theme values should deserialize as Unknown (not error)
+    #[derive(Deserialize)]
+    struct Wrapper { theme: ThemeMode }
+    let unknown: Wrapper = toml::from_str("theme = \"neon\"").expect("unknown theme should parse via #[serde(other)]");
+    assert_eq!(unknown.theme, ThemeMode::Unknown);
+}
+
+#[test]
+fn test_appearance_normalize_unknown_to_dark() {
+    let mut config = AppearanceConfig { theme: ThemeMode::Unknown };
+    config.normalize();
+    assert_eq!(config.theme, ThemeMode::Dark);
+}
+
+#[test]
+fn test_appearance_normalize_valid_themes_unchanged() {
+    let mut dark = AppearanceConfig { theme: ThemeMode::Dark };
+    dark.normalize();
+    assert_eq!(dark.theme, ThemeMode::Dark);
+
+    let mut light = AppearanceConfig { theme: ThemeMode::Light };
+    light.normalize();
+    assert_eq!(light.theme, ThemeMode::Light);
+
+    let mut auto = AppearanceConfig { theme: ThemeMode::Auto };
+    auto.normalize();
+    assert_eq!(auto.theme, ThemeMode::Auto);
+}
+
+#[test]
+fn test_config_without_appearance_section_loads() {
+    // Existing config without [appearance] should parse and default to dark
+    let toml_str = r##"
+[general]
+auto_save = true
+auto_save_interval_seconds = 30
+recent_projects_max = 20
+
+[units]
+length = "meters"
+depth = "meters"
+angle = "degrees"
+decimal_precision = 1
+
+[display]
+default_background = "#1a1a2e"
+grid_color = "#333366"
+font_size = 12
+font_color = "#f5f5f5"
+
+[display.depth_gradient]
+enabled = false
+shallow_color = "#00bfff"
+deep_color = "#ff4444"
+shallow_depth = 0.0
+deep_depth = 50.0
+
+[section_colors]
+palette = ["#4ecdc4"]
+
+[map]
+satellite_provider = "esri"
+satellite_enabled = false
+zoom_default = 15
+zoom_min = 0
+zoom_max = 22
+
+[map.controls]
+pan_speed = 1.0
+zoom_speed = 1.0
+invert_scroll = false
+
+[validation]
+warn_shot_length_min = 0.1
+warn_shot_length_max = 50.0
+warn_depth_change_per_shot_max = 10.0
+warn_azimuth_deviation_max = 30.0
+
+[export]
+default_image_format = "png"
+default_dpi = 300
+default_include_satellite = true
+default_include_grid = false
+default_include_labels = true
+
+[logging]
+level = "info"
+max_directory_size_mb = 128
+
+[shortcuts]
+select = "S"
+pan = "P"
+zoom = "Z"
+draw = "D"
+delete = "X"
+merge = "M"
+measure = "R"
+move_section = "V"
+move_station = "T"
+undo = "Ctrl+Z"
+redo = "Ctrl+Y"
+save = "Ctrl+S"
+"##;
+
+    let config: Config = toml::from_str(toml_str).expect("Config without [appearance] should parse");
+    assert_eq!(config.appearance.theme, ThemeMode::Dark);
+}
+
+#[test]
+fn test_config_with_invalid_theme_normalizes() {
+    let toml_str = r##"
+[general]
+auto_save = true
+auto_save_interval_seconds = 30
+recent_projects_max = 20
+
+[units]
+length = "meters"
+depth = "meters"
+angle = "degrees"
+decimal_precision = 1
+
+[display]
+default_background = "#1a1a2e"
+grid_color = "#333366"
+font_size = 12
+font_color = "#f5f5f5"
+
+[display.depth_gradient]
+enabled = false
+shallow_color = "#00bfff"
+deep_color = "#ff4444"
+shallow_depth = 0.0
+deep_depth = 50.0
+
+[section_colors]
+palette = ["#4ecdc4"]
+
+[map]
+satellite_provider = "esri"
+satellite_enabled = false
+zoom_default = 15
+zoom_min = 0
+zoom_max = 22
+
+[map.controls]
+pan_speed = 1.0
+zoom_speed = 1.0
+invert_scroll = false
+
+[validation]
+warn_shot_length_min = 0.1
+warn_shot_length_max = 50.0
+warn_depth_change_per_shot_max = 10.0
+warn_azimuth_deviation_max = 30.0
+
+[export]
+default_image_format = "png"
+default_dpi = 300
+default_include_satellite = true
+default_include_grid = false
+default_include_labels = true
+
+[logging]
+level = "info"
+max_directory_size_mb = 128
+
+[shortcuts]
+select = "S"
+pan = "P"
+zoom = "Z"
+draw = "D"
+delete = "X"
+merge = "M"
+measure = "R"
+move_section = "V"
+move_station = "T"
+undo = "Ctrl+Z"
+redo = "Ctrl+Y"
+save = "Ctrl+S"
+
+[appearance]
+theme = "neon"
+"##;
+
+    let mut config: Config = toml::from_str(toml_str).expect("Config with invalid theme should still parse");
+    assert_eq!(config.appearance.theme, ThemeMode::Unknown);
+    config.normalize();
+    assert_eq!(config.appearance.theme, ThemeMode::Dark);
+}
+
+// ========================================================================
 // Satellite Provider Normalization Tests
 // ========================================================================
 
