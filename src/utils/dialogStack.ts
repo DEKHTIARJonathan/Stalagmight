@@ -23,7 +23,15 @@ function emitChange(): void {
  */
 function setAppInert(inert: boolean): void {
   const dialogRoot = document.getElementById('dialog-root');
-  if (!dialogRoot?.parentElement) return;
+  if (!dialogRoot?.parentElement) {
+    if (import.meta.env.DEV) {
+      console.warn(
+        '[dialogStack] #dialog-root element not found in DOM. ' +
+        'Add <div id="dialog-root"></div> to index.html after #root.',
+      );
+    }
+    return;
+  }
 
   const siblings = dialogRoot.parentElement.children;
   for (const sibling of siblings) {
@@ -44,12 +52,21 @@ function setAppInert(inert: boolean): void {
  *   so only the topmost dialog is interactive
  */
 export function pushDialog(element: HTMLElement): void {
+  // De-duplicate: if already in stack, move to top
+  const existing = stack.indexOf(element);
+  if (existing !== -1) {
+    stack.splice(existing, 1);
+  }
+
   // Set inert on all previously-stacked dialog containers
   for (const prev of stack) {
     prev.setAttribute('inert', '');
   }
 
   stack.push(element);
+
+  // Ensure the new topmost dialog is interactive
+  element.removeAttribute('inert');
 
   // Always set app siblings inert when any dialog is open
   setAppInert(true);
@@ -68,6 +85,9 @@ export function popDialog(element: HTMLElement): void {
   if (index === -1) return;
 
   stack.splice(index, 1);
+
+  // Clear inert from the popped element to avoid stale attributes
+  element.removeAttribute('inert');
 
   if (stack.length === 0) {
     // No dialogs left — restore app interactivity

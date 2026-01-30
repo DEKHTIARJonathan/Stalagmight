@@ -21,13 +21,14 @@ const FOCUSABLE_SELECTOR = [
  */
 function isInHiddenSubtree(element: Element, container: HTMLElement): boolean {
   let current: Element | null = element;
-  while (current && current !== container) {
+  while (current) {
     if (
       current.hasAttribute('inert') ||
       current.getAttribute('aria-hidden') === 'true'
     ) {
       return true;
     }
+    if (current === container) break;
     current = current.parentElement;
   }
   return false;
