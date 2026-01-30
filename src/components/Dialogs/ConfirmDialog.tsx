@@ -34,16 +34,23 @@ export default function ConfirmDialog() {
 
   const [relationships, setRelationships] = useState<SectionRelationships | null>(null);
 
-  // Fetch relationships when dialog opens for section or last-shot deletion
+  // Whether this deletion removes an entire section (explicit last-shot type
+  // or legacy shot type with totalShots === 1)
+  const removesSection =
+    type === 'last-shot' ||
+    type === 'section' ||
+    (type === 'shot' && totalShots === 1);
+
+  // Fetch relationships when dialog opens for any deletion that removes a section
   useEffect(() => {
-    if ((type === 'section' || type === 'last-shot') && sectionId !== undefined) {
+    if (removesSection && sectionId !== undefined) {
       invoke<SectionRelationships>('get_section_relationships', { sectionId })
         .then(setRelationships)
         .catch(() => setRelationships(null));
     } else {
       setRelationships(null);
     }
-  }, [type, sectionId]);
+  }, [removesSection, sectionId]);
 
   const handleConfirm = async () => {
     if (type === 'last-shot' && sectionId !== undefined && shotId !== undefined) {
@@ -153,7 +160,7 @@ export default function ConfirmDialog() {
           </div>
         )}
 
-        {(type === 'section' || type === 'last-shot') && hasRelationships && (
+        {removesSection && hasRelationships && (
           <div className="p-3 bg-warning/10 border border-warning/20 rounded text-sm space-y-1">
             <p className="font-medium text-warning">The following relationships will also be removed:</p>
             <ul className="list-disc list-inside text-text-secondary">

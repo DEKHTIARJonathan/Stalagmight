@@ -4,8 +4,9 @@ import type { SectionId, ShotId } from '../types/project';
  * Determines which dialog to open for a Delete Shot action based on the shot's
  * position within its section.
  *
+ * - totalShots <= 0: invalid state -> falls through to edge-shot confirm
  * - totalShots === 1: last remaining shot -> confirm delete entire section
- * - mid-section (not first, not last): -> split-section dialog
+ * - mid-section (not first, not last, totalShots >= 3): -> split-section dialog
  * - edge shot (first or last): -> simple confirm delete
  *
  * Both the DataTable context menu and the map context menu call this function
@@ -20,7 +21,8 @@ export function getDeleteShotDialog(
   sectionName: string,
 ): { dialog: string; data: Record<string, unknown> } {
   if (totalShots === 1) {
-    // Last remaining shot: confirm removal of entire section
+    // Last remaining shot: confirm removal of entire section.
+    // ConfirmDialog provides the default message for 'last-shot' type.
     return {
       dialog: 'confirm-delete',
       data: {
@@ -28,13 +30,14 @@ export function getDeleteShotDialog(
         sectionId,
         shotId,
         sectionName,
-        message:
-          'This is the only shot in the section. Deleting it will remove the entire section. Continue?',
       },
     };
   }
 
-  const isMidShot = !isFirst && !isLast;
+  // Mid-section shot requires at least 3 shots (so the shot is truly between
+  // first and last). Also guards against invalid state (totalShots <= 0) where
+  // isFirst and isLast are both false but there is no real mid-shot.
+  const isMidShot = totalShots >= 3 && !isFirst && !isLast;
   if (isMidShot) {
     // Mid-section shot: open split-section dialog
     return {
