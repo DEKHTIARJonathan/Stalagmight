@@ -152,8 +152,8 @@ test.describe('GlobalView Map', () => {
       const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
       const inner = marker.locator('.marker-inner');
 
-      // Verify initial unselected state (semi-transparent border)
-      await expect(inner).toHaveCSS('border-color', 'rgba(255, 255, 255, 0.5)');
+      // Verify initial unselected state (semi-transparent border from --cc-stroke-light)
+      await expect(inner).toHaveCSS('border-color', 'rgba(255, 255, 255, 0.25)');
 
       // Dispatch click event directly
       await marker.dispatchEvent('click');
