@@ -1,5 +1,7 @@
-import { useEffect, useId, ReactNode, useCallback, useState } from 'react';
+import { useEffect, useId, useRef, ReactNode, useCallback, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from '../common/Button';
+import { pushDialog, popDialog } from '../../utils/dialogStack';
 
 type DialogSize = 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl' | '5xl';
 
@@ -51,6 +53,7 @@ export function DialogWrapper({
   fixedSize,
 }: DialogWrapperProps) {
   const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [showConfirm, setShowConfirm] = useState(false);
 
   const requestClose = useCallback(() => {
@@ -70,8 +73,18 @@ export function DialogWrapper({
     setShowConfirm(false);
   }, []);
 
+  // Register with dialogStack for inert management
   useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
+    const el = dialogRef.current;
+    if (!el) return;
+    pushDialog(el);
+    return () => {
+      popDialog(el);
+    };
+  }, []);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
       if ((e.key === 'Escape' || e.key === 'Esc') && !e.repeat && !e.defaultPrevented) {
         // Don't close dialog if a dropdown is open - let the dropdown close first
         const openDropdown = document.querySelector('[data-dropdown-open]');
@@ -87,10 +100,9 @@ export function DialogWrapper({
           requestClose();
         }
       }
-    };
-    document.addEventListener('keydown', handleEscape, true);
-    return () => document.removeEventListener('keydown', handleEscape, true);
-  }, [requestClose, showConfirm, handleCancelDiscard]);
+    },
+    [requestClose, showConfirm, handleCancelDiscard],
+  );
 
   const handleBackdropClick = useCallback(() => {
     if (closeOnBackdropClick) {
@@ -98,8 +110,24 @@ export function DialogWrapper({
     }
   }, [closeOnBackdropClick, requestClose]);
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+  const portalTarget = document.getElementById('dialog-root');
+  if (!portalTarget) {
+    if (import.meta.env.DEV) {
+      console.warn(
+        '[DialogWrapper] #dialog-root element not found in DOM. ' +
+        'Ensure <div id="dialog-root"></div> exists in index.html after #root.',
+      );
+    }
+    return null;
+  }
+
+  return createPortal(
+    <div
+      ref={dialogRef}
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      tabIndex={-1}
+      onKeyDown={handleKeyDown}
+    >
       <div className="absolute inset-0 bg-black/50" onClick={handleBackdropClick} />
       <div
         role="dialog"
@@ -151,6 +179,7 @@ export function DialogWrapper({
           </div>
         </div>
       )}
-    </div>
+    </div>,
+    portalTarget,
   );
 }
