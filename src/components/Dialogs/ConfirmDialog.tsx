@@ -8,8 +8,8 @@ import type { StationRef } from '../../types/project';
 import type { SectionRelationships } from '../../types/commands';
 
 export default function ConfirmDialog() {
-  const { closeDialog, dialogData, clearSelection } = useUIStore();
-  const { deleteShot, deleteSection, deleteLastShotAndSection } = useProjectStore();
+  const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
+  const { deleteShot, deleteSection, deleteLastShotAndSection, deleteShotAndSplit } = useProjectStore();
 
   const type = dialogData.type as 'station' | 'shot' | 'section' | undefined;
   const message = dialogData.message as string | undefined;
@@ -18,6 +18,19 @@ export default function ConfirmDialog() {
   const shotId = dialogData.shotId as number | undefined;
   const totalShots = dialogData.totalShots as number | undefined;
   const splitRequired = dialogData.splitRequired as boolean | undefined;
+  const sectionName = dialogData.sectionName as string | undefined;
+
+  // Split section names for mid-shot deletion
+  const [splitNameA, setSplitNameA] = useState('');
+  const [splitNameB, setSplitNameB] = useState('');
+
+  // Initialize split names when dialog opens
+  useEffect(() => {
+    if (splitRequired && sectionName) {
+      setSplitNameA(`${sectionName}-A`);
+      setSplitNameB(`${sectionName}-B`);
+    }
+  }, [splitRequired, sectionName]);
 
   const [relationships, setRelationships] = useState<SectionRelationships | null>(null);
 
@@ -34,14 +47,20 @@ export default function ConfirmDialog() {
 
   const handleConfirm = async () => {
     if (type === 'shot' && sectionId !== undefined && shotId !== undefined) {
-      if (totalShots === 1) {
+      if (splitRequired) {
+        // Mid-section shot: delete and split section
+        await deleteShotAndSplit(sectionId, shotId, splitNameA.trim() || 'Section A', splitNameB.trim() || 'Section B');
+        // Select section A (keeps original ID) after split
+        setSelection({ type: 'section', sectionId });
+      } else if (totalShots === 1) {
         // Last remaining shot: delete shot + section
         await deleteLastShotAndSection(sectionId, shotId);
+        clearSelection();
       } else {
         // Edge shot (or legacy caller without position data): simple delete
         await deleteShot(sectionId, shotId);
+        clearSelection();
       }
-      clearSelection();
     } else if (type === 'section' && sectionId !== undefined) {
       await deleteSection(sectionId);
       clearSelection();
@@ -58,7 +77,7 @@ export default function ConfirmDialog() {
       case 'station':
         return 'Delete Station';
       case 'shot':
-        return 'Delete Shot';
+        return splitRequired ? 'Delete Shot & Split Section' : 'Delete Shot';
       case 'section':
         return 'Delete Section';
       default:
@@ -99,8 +118,27 @@ export default function ConfirmDialog() {
         )}
 
         {type === 'shot' && splitRequired && (
-          <div className="p-3 bg-warning/10 border border-warning/20 rounded text-warning text-sm">
-            Mid-section shot deletion requires section splitting. This feature is coming soon.
+          <div className="space-y-3">
+            <div>
+              <label className="block text-sm text-text-secondary mb-1">Section A name (first half)</label>
+              <input
+                type="text"
+                value={splitNameA}
+                onChange={(e) => setSplitNameA(e.target.value)}
+                className="w-full"
+                data-testid="split-name-a"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-text-secondary mb-1">Section B name (second half)</label>
+              <input
+                type="text"
+                value={splitNameB}
+                onChange={(e) => setSplitNameB(e.target.value)}
+                className="w-full"
+                data-testid="split-name-b"
+              />
+            </div>
           </div>
         )}
 
@@ -129,8 +167,8 @@ export default function ConfirmDialog() {
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={closeDialog}>Cancel</Button>
-          <Button variant="danger" onClick={handleConfirm} disabled={type === 'station' || !!splitRequired}>
-            Delete
+          <Button variant="danger" onClick={handleConfirm} disabled={type === 'station'}>
+            {splitRequired ? 'Delete & Split' : 'Delete'}
           </Button>
         </div>
       </div>
