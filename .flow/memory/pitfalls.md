@@ -240,3 +240,6 @@ Gate dialog onClose and closeOnBackdropClick during async operations to prevent 
 
 ## 2026-01-30 manual [pitfall]
 When extracting shared helper functions from inline logic, re-validate edge-case guards (e.g. index >= 0, count > 0) that were implicit in the original context but are not guaranteed by the helper's generic parameters
+
+## 2026-01-30 manual [pitfall]
+useEffect that computes async state must reset all derived state at the top of the effect body when dependencies change, to avoid stale values from the previous run being visible during the new computation

@@ -5,17 +5,21 @@ Show a non-blocking warning banner in DmpSelectionDialog when `isDuplicate` is t
 **Files:** `src/components/Dialogs/DmpSelectionDialog.tsx`
 
 ## Approach
-- When `isDuplicate` is true, render a warning banner after the file metadata header (after line 257, before line 259)
+- First, change the `isDuplicate` destructuring from `const [, setIsDuplicate] = useState(false)` to `const [isDuplicate, setIsDuplicate] = useState(false)` so the value is accessible (task 2 left it unnamed since it wasn't consumed yet)
+<!-- Updated by plan-sync: fn-48-oen.2 used `const [, setIsDuplicate]` (unnamed) since task 3 hadn't consumed it yet -->
+- When `isDuplicate` is true, render a warning banner after the file metadata header (after line 296, before line 298 — the Default Values panel)
 <!-- Updated by plan-sync: fn-48-oen.1 added fileHash field to DmpSelectionConfig interface, shifting line numbers by ~3 -->
+<!-- Updated by plan-sync: fn-48-oen.2 added hashSettled state/useEffect/store selectors, shifting line numbers further; metadata header now ends at ~line 296, Default Values starts ~line 298 -->
 - Use existing warning styling pattern: `bg-warning/10 border border-warning/20 rounded text-warning text-sm`
 - Exact text per SPEC.md line 810: "⚠ File may have been imported before (same hash detected)"
 - Add `data-testid="duplicate-hash-warning"` for E2E testability
 - Non-blocking — user can proceed normally, no button/dismiss needed
 
 ## Key context
-- `isDuplicate` state is set in task 2's useEffect
+- `isDuplicate` state is set in task 2's useEffect (line 125-149 in DmpSelectionDialog.tsx), but currently destructured without a name — change `[, setIsDuplicate]` to `[isDuplicate, setIsDuplicate]`
+- Task 2 also added a `hashSettled` state that gates the Continue button (disabled while hash is computing, shows "Computing file hash..." text) — the warning banner should only appear after hash settles, so consider gating on `isDuplicate && hashSettled`
 - The warning styling pattern is used elsewhere in the codebase — follow existing convention
-- Banner placement: between file metadata header and Default Values panel in DmpSelectionDialog
+- Banner placement: between file metadata header (ends ~line 296) and Default Values panel (starts ~line 298) in DmpSelectionDialog
 
 ## Acceptance
 - [ ] Warning banner visible when `isDuplicate` is true
