@@ -1193,6 +1193,93 @@ await page.click('[data-testid="globalview-search-clear"]');
 await expect(page.locator('[data-testid="globalview-search-input"]')).toHaveValue('');
 ```
 
+## Focus Management Test Patterns
+
+### Focus Trap Testing
+
+Dialogs use `useFocusTrap` to constrain Tab/Shift+Tab within the dialog boundary.
+
+```typescript
+// Open a dialog
+await page.click('[data-testid="new-project-button"]');
+const dialog = page.locator('[data-testid="new-project-dialog"]');
+await expect(dialog).toBeVisible();
+
+// Tab through all focusable elements — focus should wrap
+const firstFocusable = dialog.locator('input, button, select, textarea, [tabindex]').first();
+const lastFocusable = dialog.locator('input, button, select, textarea, [tabindex]').last();
+
+await lastFocusable.focus();
+await page.keyboard.press('Tab');
+// Focus should wrap to first focusable element
+await expect(firstFocusable).toBeFocused();
+
+await firstFocusable.focus();
+await page.keyboard.press('Shift+Tab');
+// Focus should wrap to last focusable element
+await expect(lastFocusable).toBeFocused();
+```
+
+### Initial Focus Heuristic Testing
+
+The dialog initial focus follows a priority order: `[data-autofocus]` > `input` > `[data-primary-action]` > first non-close button > close X button.
+
+```typescript
+// Dialog with an input field — input should receive focus
+await page.click('[data-testid="new-project-button"]');
+const input = page.locator('[data-testid="project-name-input"]');
+await expect(input).toBeFocused();
+
+// Dialog without input but with data-primary-action — that button gets focus
+// (e.g., confirmation dialogs)
+```
+
+### Return Focus Testing
+
+When a dialog closes, focus returns to the element that triggered it.
+
+```typescript
+const trigger = page.locator('[data-testid="new-project-button"]');
+await trigger.click();
+await expect(page.locator('[data-testid="new-project-dialog"]')).toBeVisible();
+
+// Close the dialog
+await page.keyboard.press('Escape');
+await expect(page.locator('[data-testid="new-project-dialog"]')).not.toBeVisible();
+
+// Focus should return to the trigger
+await expect(trigger).toBeFocused();
+```
+
+### Escape Key Closes Dialog
+
+```typescript
+await page.click('[data-testid="new-project-button"]');
+await expect(page.locator('[data-testid="new-project-dialog"]')).toBeVisible();
+
+await page.keyboard.press('Escape');
+await expect(page.locator('[data-testid="new-project-dialog"]')).not.toBeVisible();
+```
+
+### Nested Dialog Focus
+
+When a nested dialog opens on top of another, only the topmost dialog traps focus. The `dialogStack` utility manages layer ordering.
+
+```typescript
+// Open parent dialog
+await page.click('[data-testid="settings-button"]');
+await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible();
+
+// Open nested confirmation dialog
+await page.click('[data-testid="reset-defaults-button"]');
+await expect(page.locator('[data-testid="confirm-reset-dialog"]')).toBeVisible();
+
+// Escape closes only the topmost dialog
+await page.keyboard.press('Escape');
+await expect(page.locator('[data-testid="confirm-reset-dialog"]')).not.toBeVisible();
+await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible();
+```
+
 ## Troubleshooting
 
 ### Playwright Tests Failing

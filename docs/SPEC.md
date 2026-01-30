@@ -1763,14 +1763,34 @@ Both dialogs:
 - Tab cycles within modal dialogs only
 - Shift+Tab at first element goes to last
 - Tab at last element goes to first
+- Implemented via `useFocusTrap` hook with `dialogStack` for nested dialog support
 
-#### Initial Focus
-- First interactive element on dialog open
-- Confirmation dialogs: focus Cancel button (safer default)
+#### Initial Focus Heuristic
+On dialog open, focus is placed on the first matching element in priority order:
+1. `[data-autofocus]` — explicit autofocus target
+2. `input` / `select` / `textarea` — first form field
+3. `[data-primary-action]` — primary action button
+4. First non-close `button` — any button that is not the close/X button
+5. Close X button — fallback to the dialog's close button
 
 #### Return Focus
-- On dialog close, return focus to trigger element
-- Handle case where trigger no longer exists
+- On dialog close, return focus to the element that triggered the dialog
+- If the trigger element no longer exists in the DOM, focus is not forcibly moved (browser default applies)
+
+#### Dialog Portal Architecture
+- All dialogs render via a `DialogWrapper` component
+- `DialogWrapper` handles focus trapping, initial focus placement, return focus, and Escape key
+- Nested dialogs are managed via a `dialogStack` utility (`src/utils/dialogStack.ts`) that tracks open dialog layers
+- Only the topmost dialog in the stack receives keyboard events
+
+#### CSS Custom Properties for Focus Ring
+```css
+:root {
+  --cc-focus-ring: #4ecdc4;
+  --cc-focus-ring-offset: 2px;
+}
+```
+All `:focus-visible` outlines use `var(--cc-focus-ring)` and `var(--cc-focus-ring-offset)` instead of hardcoded values. See also Section 11.4.
 
 ### 11.2 Keyboard Navigation
 
