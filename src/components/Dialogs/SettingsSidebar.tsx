@@ -25,6 +25,7 @@ interface CategoryConfig {
 
 const CATEGORIES: CategoryConfig[] = [
   { id: 'general', label: 'General' },
+  { id: 'appearance', label: 'Appearance' },
   { id: 'units', label: 'Units' },
   { id: 'display', label: 'Display' },
   { id: 'map', label: 'Map' },
