@@ -108,3 +108,10 @@ if (result.success && result.shot_id !== undefined) {
 - [ ] New shot selected after add (via `result.shot_id` + `uiStore.setSelection`)
 - [ ] Map Delete Shot uses position-aware logic (split dialog for mid-section)
 - [ ] `pnpm tsc --noEmit` passes
+
+## Done summary
+Aligned map context menu with DataTable: restricted shot add to first/last only, added station-based add options, implemented prepend mode in DrawShotDialog with azimuth reversal, position-aware Delete Shot (edge=simple confirm, mid=split dialog with name inputs, last=remove section), and prefilled length=0 for add-row mode.
+## Evidence
+- Commits: 100ac370f1f2c477a5a79ba139cd65c86fd352e2, 33648c8, 327aec5, 18014d5, 914d491, 2551e82
+- Tests: pnpm tsc --noEmit, pnpm test:ui (592 passed), cargo test --manifest-path src-tauri/Cargo.toml (80 passed)
+- PRs:
