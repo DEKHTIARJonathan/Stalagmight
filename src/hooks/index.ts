@@ -5,3 +5,4 @@ export { useNetworkStatus } from './useNetworkStatus';
 export { useLoadingProgress } from './useLoadingProgress';
 export { useFpsMonitor, type FpsMonitorConfig, type FpsMonitorResult } from './useFpsMonitor';
 export { useFocusTrap } from './useFocusTrap';
+export { useTheme } from './useTheme';

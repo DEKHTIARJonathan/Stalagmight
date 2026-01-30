@@ -4,7 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
-import { useBeforeUnload, useLoadingProgress } from './hooks';
+import { useBeforeUnload, useLoadingProgress, useTheme } from './hooks';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog } from './components/Dialogs';
@@ -63,6 +63,9 @@ function calculateStationPositions(shots: ImportedSectionConfig['shots']): Array
 function App() {
   const { project, stations, loadConfig, config, isDirty, createSection, createSectionAndMerge, setZeroDatum, mergeStations, moveSection, importDmp, trackImportedFile } = useProjectStore();
   const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, triggerFitToBounds, toast, selectionAnnouncement } = useUIStore();
+
+  // Apply theme from config (resolves auto mode, sets data-theme attribute)
+  useTheme();
 
   // Listen for loading progress events from backend
   useLoadingProgress();

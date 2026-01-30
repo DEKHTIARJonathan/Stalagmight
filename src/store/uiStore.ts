@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 import type { PanelsConfig } from '../types/config';
 import type { DisplaySettings } from '../types/loading';
+
+export type ResolvedTheme = 'dark' | 'light';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 
 // Import tool utilities for internal use and re-export for convenience
@@ -241,6 +243,10 @@ interface UIStore {
   mapViewportCenterProject: { x: number; y: number } | null;
   setMapViewportCenterProject: (center: { x: number; y: number } | null) => void;
   getMapViewportCenter: () => { x: number; y: number };
+
+  // Theme state
+  resolvedTheme: ResolvedTheme;
+  setResolvedTheme: (theme: ResolvedTheme) => void;
 
   // ARIA selection announcements for screen readers
   selectionAnnouncement: string;
@@ -652,6 +658,10 @@ export const useUIStore = create<UIStore>((set) => ({
     const center = useUIStore.getState().mapViewportCenterProject;
     return center ?? { x: 0, y: 0 };
   },
+
+  // Theme state
+  resolvedTheme: 'dark' as ResolvedTheme,
+  setResolvedTheme: (resolvedTheme: ResolvedTheme) => set({ resolvedTheme }),
 
   // ARIA selection announcements for screen readers
   selectionAnnouncement: '',
