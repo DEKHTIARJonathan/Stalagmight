@@ -199,24 +199,70 @@ impl AppState {
         // Step 3: Merge the stations
         let merge_result = self.merge_stations(import_station_ref, target_station);
         if !merge_result.success {
-            // If merge fails, we need to undo the section creation by restoring the snapshot
-            // For simplicity, we'll just report the error and let the user manually undo
-            // In practice, we could restore the snapshot here, but that adds complexity
+            // Merge failed after section was created — rollback to pre-mutation snapshot
+            // to avoid leaving a created section with no undo entry.
+            tracing::error!("Merge failed after section creation; rolling back to pre-mutation snapshot");
+            match serde_json::from_str::<crate::models::Project>(&snapshot) {
+                Ok(restored) => {
+                    if let Ok(mut proj) = self.project.lock() {
+                        *proj = Some(restored);
+                        tracing::info!("Successfully rolled back create_and_merge after merge failure");
+                    } else {
+                        tracing::error!("Failed to lock project for rollback after merge failure");
+                    }
+                }
+                Err(e) => tracing::error!("Failed to deserialize snapshot for rollback: {e}"),
+            }
             return merge_result;
         }
 
         // Step 4: Capture the after snapshot and push undo entry with before+after
         let after_snapshot = {
-            let proj_guard = match self.project.lock() {
+            let mut proj_guard = match self.project.lock() {
                 Ok(g) => g,
-                Err(_) => return CommandResult::failure("Failed to lock project for after snapshot".to_string()),
+                Err(_) => {
+                    // After-snapshot lock failure — rollback to pre-mutation snapshot
+                    tracing::error!("Failed to lock project for after snapshot; rolling back");
+                    match serde_json::from_str::<crate::models::Project>(&snapshot) {
+                        Ok(restored) => {
+                            if let Ok(mut proj) = self.project.lock() {
+                                *proj = Some(restored);
+                                tracing::info!("Successfully rolled back create_and_merge after lock failure");
+                            }
+                        }
+                        Err(e) => tracing::error!("Failed to deserialize snapshot for rollback: {e}"),
+                    }
+                    return CommandResult::failure("Failed to lock project for after snapshot".to_string());
+                }
             };
             match proj_guard.as_ref() {
                 Some(p) => match serde_json::to_string(p) {
                     Ok(json) => json,
-                    Err(e) => return CommandResult::failure(format!("Failed to serialize after snapshot: {}", e)),
+                    Err(e) => {
+                        // Serialization failure — rollback to pre-mutation snapshot
+                        tracing::error!("Failed to serialize after snapshot: {e}; rolling back");
+                        drop(proj_guard);
+                        match serde_json::from_str::<crate::models::Project>(&snapshot) {
+                            Ok(restored) => {
+                                if let Ok(mut proj) = self.project.lock() {
+                                    *proj = Some(restored);
+                                    tracing::info!("Successfully rolled back create_and_merge after serialization failure");
+                                }
+                            }
+                            Err(re) => tracing::error!("Failed to deserialize snapshot for rollback: {re}"),
+                        }
+                        return CommandResult::failure(format!("Failed to serialize after snapshot: {}", e));
+                    }
                 },
-                None => return CommandResult::failure("No project for after snapshot".to_string()),
+                None => {
+                    // Project became None — rollback to pre-mutation snapshot
+                    tracing::error!("Project became None after mutation; rolling back");
+                    match serde_json::from_str::<crate::models::Project>(&snapshot) {
+                        Ok(restored) => *proj_guard = Some(restored),
+                        Err(e) => tracing::error!("Failed to deserialize snapshot for rollback: {e}"),
+                    }
+                    return CommandResult::failure("No project for after snapshot".to_string());
+                }
             }
         };
 
