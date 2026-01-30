@@ -10,6 +10,7 @@ import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, DuplicateImportDialog, SettingsDialog, SplitSectionDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
+import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
 import type { SectionData, ShotData } from './types/project';
 
 /**
@@ -60,7 +61,7 @@ function calculateStationPositions(shots: ImportedSectionConfig['shots']): Array
 }
 
 function App() {
-  const { project, stations, loadConfig, config, isDirty, createSection, createSectionAndMerge, setZeroDatum, mergeStations, moveSection, importDmp } = useProjectStore();
+  const { project, stations, loadConfig, config, isDirty, createSection, createSectionAndMerge, setZeroDatum, mergeStations, moveSection, importDmp, trackImportedFile } = useProjectStore();
   const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, hasImportedDmpPath, addImportedDmpPath, triggerFitToBounds, toast, selectionAnnouncement } = useUIStore();
 
   // Listen for loading progress events from backend
@@ -338,6 +339,8 @@ function App() {
         message: warnings.join('\n'),
       });
     }
+
+    return errors.length === 0;
   }, [createSection, createSectionAndMerge, setZeroDatum, mergeStations, moveSection, closeDialog, openDialog, setView, triggerFitToBounds]);
 
   useEffect(() => {
@@ -545,7 +548,18 @@ function App() {
               filePath: dialogData.filePath,
             });
           }}
-          onImport={handleImportSections}
+          onImport={async (sections) => {
+            // Capture hash before handleImportSections closes dialog (clears dialogData)
+            const hash = (dialogData.selectionConfig as DmpSelectionConfig)?.fileHash;
+            const succeeded = await handleImportSections(sections);
+            if (hash && succeeded) {
+              try {
+                await trackImportedFile(hash);
+              } catch (e) {
+                console.warn('Failed to track imported file hash:', e);
+              }
+            }
+          }}
         />
       ) : null}
       {activeDialog === 'confirm-delete' && <ConfirmDialog />}
