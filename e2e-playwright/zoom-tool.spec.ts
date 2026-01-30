@@ -432,25 +432,25 @@ test.describe('Zoom Tool', () => {
   });
 
   test.describe('Toolbar Interaction', () => {
-    test('clicking zoom button in toolbar activates zoom tool', async ({ page }) => {
+    test('Z key shortcut activates zoom tool via navigate group', async ({ page }) => {
       // First ensure we're not in zoom mode by switching to select
       await page.keyboard.press('s');
       await page.waitForTimeout(50);
 
-      const selectButton = page.locator('button[title="Select (S)"]');
+      const selectButton = page.locator('[data-testid="tool-select"]');
       await expect(selectButton).toHaveClass(/ring-accent/);
 
-      // Click the zoom button in toolbar
-      const zoomButton = page.locator('button[title="Zoom (Z)"]');
-      await zoomButton.click();
+      // Activate zoom tool via keyboard shortcut (zoom is now in Navigate group)
+      await page.keyboard.press('z');
       await page.waitForTimeout(50);
 
-      // Verify zoom tool is now active
-      await expect(zoomButton).toHaveClass(/ring-accent/);
+      // Verify navigate group is active (zoom is a subtool of navigate)
+      const navGroup = page.locator('[data-testid="tool-group-navigate"]');
+      await expect(navGroup).toHaveClass(/ring-accent/);
       await expect(selectButton).not.toHaveClass(/ring-accent/);
     });
 
-    test('switching between tools via toolbar updates cursor', async ({ page }) => {
+    test('switching between tools via keyboard updates cursor', async ({ page }) => {
       // Start in select mode
       await page.keyboard.press('s');
       await page.waitForTimeout(50);
@@ -462,9 +462,8 @@ test.describe('Zoom Tool', () => {
       });
       expect(cursor).toBe('default');
 
-      // Click zoom button
-      const zoomButton = page.locator('button[title="Zoom (Z)"]');
-      await zoomButton.click();
+      // Activate zoom via keyboard (zoom is in Navigate group)
+      await page.keyboard.press('z');
       await page.waitForTimeout(50);
 
       // Verify zoom cursor
@@ -474,9 +473,8 @@ test.describe('Zoom Tool', () => {
       });
       expect(cursor).toBe('zoom-in');
 
-      // Click pan button
-      const panButton = page.locator('button[title="Pan (P)"]');
-      await panButton.click();
+      // Activate pan via keyboard (pan is in Navigate group)
+      await page.keyboard.press('p');
       await page.waitForTimeout(50);
 
       // Verify pan cursor

@@ -66,6 +66,13 @@ function getShortcutForTool(tool: ToolType, shortcuts: Record<string, string[]>)
   return '';
 }
 
+/**
+ * Format a tooltip string for a tool, including shortcut key if available.
+ */
+function formatTooltip(label: string, shortcut: string): string {
+  return shortcut ? `${label} (${shortcut})` : label;
+}
+
 /** Human-readable tool labels */
 const TOOL_LABELS: Record<ToolType, string> = {
   select: 'Select',
@@ -205,7 +212,6 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
-  const closingRef = useRef(false);
 
   const lastSubtoolByGroup = useUIStore((s) => s.lastSubtoolByGroup);
   const config = useProjectStore((s) => s.config);
@@ -216,6 +222,14 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
   const displayTool: ToolType = isGroupActive
     ? activeTool
     : (lastSubtoolByGroup[group.id] ?? group.defaultTool);
+
+  // Centralized close helper: closes flyout and restores focus to group button
+  const closeFlyout = useCallback(() => {
+    setFlyoutOpen(false);
+    requestAnimationFrame(() => {
+      buttonRef.current?.focus();
+    });
+  }, []);
 
   // Left-click: If group inactive, activate last-used subtool. If active, cycle.
   const handleClick = useCallback(() => {
@@ -247,7 +261,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
       if (!(target instanceof Node)) return;
       if (buttonRef.current?.contains(target)) return;
       if (flyoutRef.current?.contains(target)) return;
-      setFlyoutOpen(false);
+      closeFlyout();
     };
 
     // Use a microtask delay to avoid the click that opened the flyout from
@@ -260,7 +274,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
       clearTimeout(timeoutId);
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [flyoutOpen]);
+  }, [flyoutOpen, closeFlyout]);
 
   // Focus management: when flyout opens, focus the active subtool item
   useEffect(() => {
@@ -303,35 +317,26 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
         const selectedTool = group.tools[focusedIndex];
         if (focusedIndex >= 0 && focusedIndex < group.tools.length && selectedTool !== undefined) {
           onActivateTool(selectedTool);
-          closingRef.current = true;
-          setFlyoutOpen(false);
-          // Return focus to the group button after closing
-          requestAnimationFrame(() => {
-            buttonRef.current?.focus();
-            closingRef.current = false;
-          });
+          closeFlyout();
         }
         break;
       }
       case 'Escape': {
         e.preventDefault();
         e.stopPropagation();
-        closingRef.current = true;
-        setFlyoutOpen(false);
-        requestAnimationFrame(() => {
-          buttonRef.current?.focus();
-          closingRef.current = false;
-        });
+        closeFlyout();
         break;
       }
     }
-  }, [focusedIndex, group.tools, onActivateTool]);
+  }, [focusedIndex, group.tools, onActivateTool, closeFlyout]);
 
-  // Handle clicking a subtool in the flyout
+  // Handle clicking a subtool in the flyout (mouse path also restores focus)
   const handleSubtoolClick = useCallback((tool: ToolType) => {
     onActivateTool(tool);
-    setFlyoutOpen(false);
-  }, [onActivateTool]);
+    closeFlyout();
+  }, [onActivateTool, closeFlyout]);
+
+  const displayShortcut = getShortcutForTool(displayTool, shortcuts as unknown as Record<string, string[]>);
 
   return (
     <div className="relative">
@@ -346,7 +351,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
         `}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
-        title={`${TOOL_LABELS[displayTool]} (${getShortcutForTool(displayTool, shortcuts as unknown as Record<string, string[]>)})`}
+        title={formatTooltip(TOOL_LABELS[displayTool], displayShortcut)}
         aria-pressed={isGroupActive}
         aria-haspopup="true"
         aria-expanded={flyoutOpen}
@@ -415,7 +420,7 @@ function ToolIcon({ tool }: { tool: ToolType }) {
     move_section: '↔',
     move_station: '⤢',
     move_segment: '⇔',
-    move_shot: '⇄',
+    move_shot: '↗',
   };
 
   return <span className="text-sm">{icons[tool]}</span>;
