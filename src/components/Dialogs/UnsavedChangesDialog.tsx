@@ -29,7 +29,7 @@ export default function UnsavedChangesDialog() {
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={handleCancel}>Cancel</Button>
-          <Button variant="danger" onClick={handleDiscard}>
+          <Button variant="danger" onClick={handleDiscard} data-primary-action="">
             Discard Changes
           </Button>
         </div>
