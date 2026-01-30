@@ -59,7 +59,7 @@ test.describe('Map Tools', () => {
     await expect(canvas).toBeVisible();
 
     // Test each tool shortcut as defined in DEFAULT_SHORTCUTS:
-    // s: 'select', p: 'pan', z: 'zoom', d: 'draw', x: 'delete', m: 'merge', r: 'measure', v: 'move_section', t: 'move_station'
+    // s: 'select', p: 'pan', z: 'zoom', d: 'draw', x: 'delete', m: 'merge', r: 'measure', v: 'move_segment', t: 'move_station'
     const toolShortcuts = [
       { key: 's', tool: 'select' },
       { key: 'p', tool: 'pan' },

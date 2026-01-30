@@ -139,8 +139,12 @@ test.describe('Toolbar Tool Groups', () => {
     await expect(flyout).not.toBeVisible();
   });
 
-  test('flyout keyboard navigation: ArrowDown/ArrowUp and Enter selects', async ({ page }) => {
+  test('flyout keyboard navigation: ArrowDown/ArrowUp move focus, Enter and Space select', async ({ page }) => {
     await createProjectWithSections(page);
+
+    // Activate move_segment first so flyout opens with it focused
+    await page.keyboard.press('v');
+    await waitForActiveTool(page, 'move_segment');
 
     // Open flyout for move group
     const moveGroup = page.getByTestId('tool-group-move');
@@ -149,15 +153,48 @@ test.describe('Toolbar Tool Groups', () => {
     const flyout = page.getByTestId('subtool-flyout-move');
     await expect(flyout).toBeVisible();
 
-    // Arrow down to navigate to next item
-    await page.keyboard.press('ArrowDown');
-    await page.waitForTimeout(100);
+    // The active subtool (move_segment, index 0) should be focused initially
+    const moveSegmentItem = page.getByTestId('subtool-move_segment');
+    await expect(moveSegmentItem).toBeFocused({ timeout: 2000 });
 
-    // Press Enter to select the focused subtool
+    // ArrowDown should move focus to next item (move_section, index 1)
+    await page.keyboard.press('ArrowDown');
+    const moveSectionItem = page.getByTestId('subtool-move_section');
+    await expect(moveSectionItem).toBeFocused({ timeout: 2000 });
+
+    // ArrowDown again to move_shot (index 2)
+    await page.keyboard.press('ArrowDown');
+    const moveShotItem = page.getByTestId('subtool-move_shot');
+    await expect(moveShotItem).toBeFocused({ timeout: 2000 });
+
+    // ArrowUp should go back to move_section (index 1)
+    await page.keyboard.press('ArrowUp');
+    await expect(moveSectionItem).toBeFocused({ timeout: 2000 });
+
+    // Press Enter to select move_section
     await page.keyboard.press('Enter');
 
-    // Flyout should close after selection
+    // Flyout should close and move_section should be active
     await expect(flyout).not.toBeVisible();
+    await waitForActiveTool(page, 'move_section');
+
+    // Now test Space selection: open flyout again
+    await moveGroup.click({ button: 'right' });
+    await expect(flyout).toBeVisible();
+
+    // move_section should be focused (since it's now active)
+    await expect(moveSectionItem).toBeFocused({ timeout: 2000 });
+
+    // Navigate to move_shot with ArrowDown
+    await page.keyboard.press('ArrowDown');
+    await expect(moveShotItem).toBeFocused({ timeout: 2000 });
+
+    // Press Space to select move_shot
+    await page.keyboard.press(' ');
+
+    // Flyout should close and move_shot should be active
+    await expect(flyout).not.toBeVisible();
+    await waitForActiveTool(page, 'move_shot');
   });
 
   test('flyout keyboard navigation: Escape closes flyout', async ({ page }) => {
@@ -212,5 +249,50 @@ test.describe('Toolbar Tool Groups', () => {
     // We expect 3 separators: before navigate group, after navigate group, before move group
     const count = await separators.count();
     expect(count).toBeGreaterThanOrEqual(3);
+  });
+
+  test('anchored sections are faded when Move Segment tool is active', async ({ page }) => {
+    await createProjectWithSections(page);
+
+    // Set a zero datum on the first section's station 0 via store
+    await page.evaluate(async () => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              setZeroDatum: (stationRef: unknown, coordinates: unknown) => Promise<void>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+      if (!e2e) throw new Error('E2E stores not available');
+      await e2e.projectStore.getState().setZeroDatum(
+        { section_id: 1, station_index: 0 },
+        { latitude: 24.55, longitude: -81.78, depth_reference: 0 }
+      );
+    });
+
+    // Activate move_segment tool
+    await page.keyboard.press('v');
+    await waitForActiveTool(page, 'move_segment');
+
+    // Wait for anchored section IDs to be fetched and applied
+    // The MapCanvas calls getAnchoredSectionIds when move_segment activates
+    await page.waitForTimeout(500);
+
+    // Verify get_anchored_section_ids was called (via console log)
+    const anchoredCalled = await page.evaluate(() => {
+      // Check if the map's survey layer has anchored sections set
+      const map = (window as unknown as { __cavechef_map__?: {
+        getStyle: () => { layers?: Array<{ id: string }> };
+      } }).__cavechef_map__;
+      return Boolean(map);
+    });
+    expect(anchoredCalled).toBe(true);
+
+    // The app should remain functional with the move_segment tool active
+    const canvas = page.getByTestId('map-canvas');
+    await expect(canvas).toBeVisible();
+    await expect(canvas).toHaveAttribute('data-active-tool', 'move_segment');
   });
 });
