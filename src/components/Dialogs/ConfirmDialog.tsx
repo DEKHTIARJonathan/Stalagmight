@@ -17,6 +17,7 @@ export default function ConfirmDialog() {
   const sectionId = dialogData.sectionId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
   const totalShots = dialogData.totalShots as number | undefined;
+  const splitRequired = dialogData.splitRequired as boolean | undefined;
 
   const [relationships, setRelationships] = useState<SectionRelationships | null>(null);
 
@@ -97,6 +98,12 @@ export default function ConfirmDialog() {
           </div>
         )}
 
+        {type === 'shot' && splitRequired && (
+          <div className="p-3 bg-warning/10 border border-warning/20 rounded text-warning text-sm">
+            Mid-section shot deletion requires section splitting. This feature is coming soon.
+          </div>
+        )}
+
         {type === 'section' && hasRelationships && (
           <div className="p-3 bg-warning/10 border border-warning/20 rounded text-sm space-y-1">
             <p className="font-medium text-warning">The following relationships will also be removed:</p>
@@ -122,7 +129,7 @@ export default function ConfirmDialog() {
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={closeDialog}>Cancel</Button>
-          <Button variant="danger" onClick={handleConfirm} disabled={type === 'station'}>
+          <Button variant="danger" onClick={handleConfirm} disabled={type === 'station' || !!splitRequired}>
             Delete
           </Button>
         </div>
