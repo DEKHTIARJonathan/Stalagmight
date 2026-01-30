@@ -237,3 +237,6 @@ When creating a new dialog component, always wire at least one code path to open
 
 ## 2026-01-30 manual [pitfall]
 Gate dialog onClose and closeOnBackdropClick during async operations to prevent state updates after unmount
+
+## 2026-01-30 manual [pitfall]
+When extracting shared helper functions from inline logic, re-validate edge-case guards (e.g. index >= 0, count > 0) that were implicit in the original context but are not guaranteed by the helper's generic parameters
