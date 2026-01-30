@@ -22,7 +22,7 @@ CaveChef has a single hardcoded dark theme with all colors as literal hex values
 - Tailwind config color tokens → CSS variable references
 - **Map visualization colors**: snap indicators, hover highlights, selection highlights, stroke colors, depth defaults
 - **Canvas preview colors**: SectionPreview, PlacementOverlay, DepthLegend, GridOverlay
-- **Tailwind opacity modifier migration**: 37 unique patterns across `bg|text|border|ring` utilities → dedicated opacity tokens (see full inventory below)
+- **Tailwind opacity modifier migration**: 34 unique patterns (29 theme + 5 non-theme) across `bg|text|border|ring` utilities → dedicated opacity tokens for theme colors (see full inventory below)
 - `color-scheme` CSS property on root (affects native select/date inputs)
 - MapLibre icon inversion filter made conditional on theme
 - Theme influences default color palettes offered in display settings color pickers
@@ -58,17 +58,25 @@ CaveChef has a single hardcoded dark theme with all colors as literal hex values
 
 ## Light Theme Brand Token Mapping
 
-Light theme values are derived from `docs/branding/tokens/brand_tokens.css` with these mappings:
+Light theme values are derived from `docs/branding/tokens/brand_tokens.css`. Only tokens that exist in the brand file are referenced directly; others are design decisions documented below.
 
-| CSS Variable | Brand Token Source | Derived Value | Transformation |
+**Tokens available in brand_tokens.css:**
+- `--sm-limestone-50`: #F3E8D8
+- `--sm-sandstone-200`: #C1A07A
+- `--sm-silt-300`: #AE8D67
+- `--sm-cave-ember-700`: #3A251A
+- `--sm-cave-ember-900`: #1A120B
+- `--sm-basalt-950`: #0F0906
+
+| CSS Variable | Source | Derived Value | Transformation |
 |---|---|---|---|
-| `--cc-background` | `--sm-limestone-50` (#F3E8D8) | `#f5f0e8` | Slightly cooled to reduce warmth for large surfaces |
-| `--cc-panel` | white | `#ffffff` | Clean white for card/panel surfaces |
-| `--cc-border` | `--sm-sandstone-200` (#C1A07A) | `#d4c5a9` | Lightened 20% for subtler borders |
+| `--cc-background` | `--sm-limestone-50` (#F3E8D8) | `#f5f0e8` | Slightly cooled (HSL shift -5 warmth) to reduce warmth for large surfaces |
+| `--cc-panel` | Design decision (white) | `#ffffff` | Clean white for card/panel surfaces; no brand token exists for white |
+| `--cc-border` | `--sm-sandstone-200` (#C1A07A) | `#d4c5a9` | Lightened 20% via HSL for subtler borders |
 | `--cc-text-primary` | `--sm-cave-ember-900` (#1A120B) | `#1a120b` | Direct use |
-| `--cc-text-secondary` | `--sm-silt-400` area | `#6b5b4a` | Warm mid-tone for secondary text |
-| `--cc-accent` | `--sm-teal-700` (#3A8A82) | `#3a8a82` | Darkened accent for light bg contrast |
-| `--cc-accent-on` | white | `#ffffff` | White text on darkened accent |
+| `--cc-text-secondary` | `--sm-silt-300` (#AE8D67) | `#6b5b4a` | Darkened from silt-300 for WCAG AA contrast on limestone bg |
+| `--cc-accent` | Design decision (darkened teal) | `#3a8a82` | No teal token in brand file; darkened from dark-theme accent #4ecdc4 for light bg contrast |
+| `--cc-accent-on` | Design decision (white) | `#ffffff` | White text on darkened accent; no brand token needed |
 
 All light values must pass WCAG AA (4.5:1 text contrast, 3:1 UI contrast).
 
@@ -83,15 +91,16 @@ MapLibre GL JS does NOT read CSS variables. Colors must be literal values. The r
 **Integration points for re-apply on theme change:**
 
 - **`MapCanvas.tsx`** (React component): Subscribes to `useUIStore((s) => s.resolvedTheme)`. On change, calls `surveyLayer.applyThemeColors(getMapThemeColors())` for all theme-dependent paint/layout properties.
-- **`SurveyLayer.tsx`** (class): Receives `applyThemeColors(colors)` method call from MapCanvas. Iterates all theme-dependent layers and calls `map.setPaintProperty()` / `map.setLayoutProperty()` for each.
+- **`SurveyLayer.tsx`** (class): Receives `applyThemeColors(colors)` method call from MapCanvas. Iterates all theme-dependent layers and calls `map.setPaintProperty()` / `map.setLayoutProperty()` for each. **Also rebuilds feature data** because `buildSurveyFeatures()` in `features.ts` embeds theme-dependent colors (depth defaults, label colors, stroke colors, zero-datum gold) directly in GeoJSON feature properties. On theme change, must call `update()` with cached sections/stations/loopClosures to regenerate features with new theme colors.
+- **`features.ts`**: `buildSurveyFeatures()` receives theme colors as a parameter instead of using hardcoded hex values. Default label color, depth gradient colors, zero-datum color, and stroke color are all passed from the theme color map.
 - **`SectionPreview.tsx`** (owns MapLibre instance): Adds `useEffect` on `resolvedTheme` that re-reads colors via `getMapThemeColors()` and updates background + all constant paint props (gray lines, compass, strokes, halos).
-- **`GlobalSurveyLayer.ts`** (class): Same pattern as SurveyLayer — receives theme colors from parent component.
+- **`GlobalSurveyLayer.ts`** (class): Same pattern as SurveyLayer — receives theme colors from parent component and rebuilds features on theme change.
 
 ## Complete Opacity Modifier Inventory
 
-37 unique patterns found across the codebase. **30** use theme colors and must be migrated:
+34 unique patterns found across the codebase. **29** use theme colors and must be migrated:
 
-### accent family (11 patterns)
+### accent family (11 patterns — confirmed by grep)
 `bg-accent/5`, `bg-accent/10`, `bg-accent/20`, `bg-accent/30`, `bg-accent/50`, `bg-accent/70`, `bg-accent/80`, `bg-accent/90`, `border-accent/20`, `ring-accent/30`, `text-accent/80`
 
 ### background family (3 patterns)
@@ -112,7 +121,7 @@ MapLibre GL JS does NOT read CSS variables. Colors must be literal values. The r
 ### border (additional, already counted above)
 All `border-*` patterns are listed in their respective families above.
 
-### Non-theme colors (no migration needed — 7 patterns)
+### Non-theme colors (no migration needed — 5 patterns)
 `bg-black/50`, `bg-black/85`, `bg-red-500/20`, `bg-red-500/30`, `bg-yellow-500/20` — these use standard Tailwind colors, not CSS variable colors, so opacity modifiers still work.
 
 ## Interview Findings (Codebase Scan)
@@ -181,7 +190,7 @@ Config loads asynchronously via `useEffect` in App.tsx. The `useTheme` hook must
 --cc-preview-bg, --cc-preview-text
 ```
 
-### Opacity Variant Tokens (30 tokens)
+### Opacity Variant Tokens (29 unique values — some serve multiple utility prefixes)
 ```
 accent: --cc-accent-5, --cc-accent-10, --cc-accent-20, --cc-accent-30, --cc-accent-50, --cc-accent-70, --cc-accent-80, --cc-accent-90
 background: --cc-background-30, --cc-background-50, --cc-background-80
@@ -196,8 +205,8 @@ Note: Some tokens serve multiple utility prefixes (e.g. `--cc-accent-20` is used
 
 ## Task Breakdown
 
-1. **Define CSS variable tokens and theme definitions** — All `--cc-*` variables in index.css including full 30-pattern opacity inventory, shadow token, accent-on, with dark and light theme blocks
-2. **Update tailwind.config.js** — Reference CSS variables; add ALL 30 opacity variant entries + `accent-on`
+1. **Define CSS variable tokens and theme definitions** — All `--cc-*` variables in index.css including full 29-pattern opacity inventory, shadow token, accent-on, with dark and light theme blocks
+2. **Update tailwind.config.js** — Reference CSS variables; add ALL 29 opacity variant entries + `accent-on`
 3. **Migrate index.css hardcoded colors** — Replace all hex values with `var(--cc-*)` references; use explicit alpha tokens for shadows
 4. **Add AppearanceConfig to config system** — TypeScript types + Rust struct + defaults + mergeConfig + getCategoryDefaults + e2e mock
 5. **Create useTheme hook** — Reads config, resolves auto mode, applies data-theme attribute, stores resolvedTheme in uiStore
@@ -206,7 +215,7 @@ Note: Some tokens serve multiple utility prefixes (e.g. `--cc-accent-20` is used
 8. **Update default color palettes for light theme** — DisplaySettings color pickers offer theme-appropriate defaults
 9. **Add E2E tests for theme switching** — At `e2e-playwright/theme.spec.ts` (NOT in tests/ subdirectory)
 10. **Migrate inline hex colors in TSX components** — Create `themeColors.ts` utility with fallback map; wire MapCanvas→SurveyLayer.applyThemeColors() and SectionPreview re-apply; replace Button.tsx `text-background` with `text-accent-on`; exclude ExportPreview
-11. **Migrate Tailwind opacity modifier usage** — Replace ALL 30 theme-color opacity patterns across `bg|text|border|ring` utilities
+11. **Migrate Tailwind opacity modifier usage** — Replace ALL 29 theme-color opacity patterns across `bg|text|border|ring` utilities
 
 ## Files Modified
 
@@ -226,7 +235,7 @@ Note: Some tokens serve multiple utility prefixes (e.g. `--cc-accent-20` is used
 | `src/components/Dialogs/SettingsSidebar.tsx` | Add to SettingsCategory type + CATEGORIES array |
 | `src/components/Map/SurveyLayer.tsx` | Replace 13 hardcoded colors; add `applyThemeColors()` method |
 | `src/components/Map/MapCanvas.tsx` | Subscribe to resolvedTheme; call surveyLayer.applyThemeColors on change |
-| `src/components/Map/surveyLayer/features.ts` | Replace depth/station colors |
+| `src/components/Map/surveyLayer/features.ts` | Accept theme colors parameter; replace hardcoded depth/station/label colors |
 | `src/components/GlobalView/GlobalSurveyLayer.ts` | Replace 8 hardcoded colors; add theme re-apply method |
 | `src/components/GlobalView/GlobalViewMap.tsx` | Replace 8 hardcoded colors |
 | `src/components/Dialogs/SectionPreview.tsx` | Replace 12 colors; add useEffect on resolvedTheme for re-apply |
@@ -241,7 +250,7 @@ Note: Some tokens serve multiple utility prefixes (e.g. `--cc-accent-20` is used
 
 ## Risks
 
-- **Tailwind + CSS variables**: Opacity modifiers break. Mitigated by dedicated opacity tokens covering all 30 patterns (tasks 1, 11).
+- **Tailwind + CSS variables**: Opacity modifiers break. Mitigated by dedicated opacity tokens covering all 29 theme-color patterns (tasks 1, 11).
 - **Large scope**: 70+ CSS variables, 20+ files to modify. Mitigated by systematic task breakdown and grep-driven migration.
 - **MapLibre style expressions**: MapLibre GL JS does NOT read CSS variables. Concrete integration points defined: MapCanvas→SurveyLayer.applyThemeColors(), SectionPreview useEffect on resolvedTheme, GlobalSurveyLayer theme re-apply method.
 - **Third-party widget overrides**: DatePicker and MapLibre use `!important`. All must be converted (task 7).
@@ -251,4 +260,5 @@ Note: Some tokens serve multiple utility prefixes (e.g. `--cc-accent-20` is used
 - **Button on-accent text**: `text-background` breaks in light theme. Must migrate to `text-accent-on` (task 10).
 - **getThemeColor early mount**: Can return empty string before CSS loads. Mitigated by fallback map with dark-theme defaults (task 10).
 - **Alpha values in index.css**: Some CSS rules use rgba for shadows/overlays. Cannot apply alpha to `var()`. Mitigated by explicit alpha tokens (`--cc-map-ctrl-shadow`, opacity variant tokens).
-- **Brand token traceability**: Light theme values must map back to `docs/branding/tokens/brand_tokens.css`. Mapping table included in spec.
+- **Brand token traceability**: Light theme values must map back to `docs/branding/tokens/brand_tokens.css`. Mapping table included in spec. Non-brand-sourced values documented as design decisions.
+- **GeoJSON feature rebuild**: `buildSurveyFeatures()` in `features.ts` embeds theme-dependent colors (depth defaults, label colors, stroke, zero-datum) in GeoJSON properties. Theme change requires feature data rebuild, not just paint property updates. SurveyLayer must cache last input data and call `update()` on theme change.
