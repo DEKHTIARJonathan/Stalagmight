@@ -244,19 +244,11 @@ test.describe('DMP Import Dialog', () => {
     // Dialog should close
     await expect(dialog).not.toBeVisible({ timeout: 3000 });
 
-    // Re-open - since the same file is being imported again, we'll see the duplicate warning
+    // Re-open - with hash-based duplicate detection, re-import goes directly
+    // to DmpSelectionDialog (no session-based path tracking)
     await page.keyboard.press('Control+i');
 
-    // Now we get the duplicate import warning dialog instead of the selection dialog
-    // because the mock file picker returns the same path
-    const duplicateDialog = page.locator('[data-testid="duplicate-import-dialog"]');
-    await page.waitForSelector('[data-testid="duplicate-import-dialog"]', { timeout: 5000 });
-    await expect(duplicateDialog).toBeVisible();
-
-    // Confirm to import anyway
-    await page.locator('[data-testid="confirm-duplicate-import-button"]').click();
-
-    // Now the selection dialog should appear
+    // Should go directly to the selection dialog again
     await page.waitForSelector('[data-testid="dmp-selection-dialog"]');
     const dialogAfter = page.locator('[data-testid="dmp-selection-dialog"]');
     await expect(dialogAfter).toBeVisible();
@@ -292,12 +284,14 @@ test.describe('DMP Import Dialog', () => {
   });
 
   /**
-   * Test 6.7: Duplicate file import warning
+   * Test 6.7: Re-importing same file goes directly to selection dialog
    *
-   * Verifies that re-importing the same DMP file shows a warning dialog
-   * and allows the user to import anyway or cancel.
+   * Verifies that re-importing the same DMP file no longer shows a
+   * session-based duplicate warning dialog. Hash-based duplicate detection
+   * (inline warning banner in DmpSelectionDialog) replaces the old
+   * session-based path tracking.
    */
-  test('should show warning for duplicate file import', async ({ page }) => {
+  test('should allow re-importing same file without session-based duplicate warning', async ({ page }) => {
     // Create a project first
     await createProject(page, 'Duplicate Import Test');
 
@@ -311,26 +305,8 @@ test.describe('DMP Import Dialog', () => {
     await page.locator('[data-testid="cancel-button"]').click();
     await expect(page.locator('[data-testid="dmp-selection-dialog"]')).not.toBeVisible({ timeout: 3000 });
 
-    // Try to import the same file again
+    // Try to import the same file again - should go directly to selection dialog
     await page.keyboard.press('Control+i');
-
-    // Should show duplicate import warning
-    const duplicateDialog = page.locator('[data-testid="duplicate-import-dialog"]');
-    await page.waitForSelector('[data-testid="duplicate-import-dialog"]', { timeout: 5000 });
-    await expect(duplicateDialog).toBeVisible();
-    await expect(duplicateDialog).toContainText('already been imported');
-    await expect(duplicateDialog).toContainText('test-survey.dmp');
-
-    // Test canceling the duplicate import
-    await duplicateDialog.locator('button:has-text("Cancel")').click();
-    await expect(duplicateDialog).not.toBeVisible({ timeout: 3000 });
-
-    // Try again and confirm import anyway
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[data-testid="duplicate-import-dialog"]');
-    await page.locator('[data-testid="confirm-duplicate-import-button"]').click();
-
-    // Should now show the selection dialog
     await page.waitForSelector('[data-testid="dmp-selection-dialog"]');
     await expect(page.locator('[data-testid="dmp-selection-dialog"]')).toBeVisible();
     await expect(page.locator('text=Main Passage')).toBeVisible();
