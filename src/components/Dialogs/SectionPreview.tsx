@@ -4,6 +4,8 @@ import type { DmpSection, DmpShot } from '../../types/commands';
 import type { Section, Station, Shot } from '../../types/project';
 import { metersToMapCoords, getBounds } from '../../utils/coordinates';
 import { circularMeanDegrees } from '../../utils/angles';
+import { useUIStore } from '../../store/uiStore';
+import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 
 /**
  * Merge preview configuration for "From Existing" placement mode.
@@ -132,7 +134,7 @@ interface SectionPreviewProps {
  */
 export default function SectionPreview({
   section,
-  color = '#4ecdc4',
+  color = getThemeColor('--cc-accent'),
   existingStation,
   importStationIndex,
   mergePreview,
@@ -144,6 +146,7 @@ export default function SectionPreview({
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const onStationClickRef = useRef(onStationClick);
+  const resolvedTheme = useUIStore((s) => s.resolvedTheme);
 
   // Keep ref updated
   useEffect(() => {
@@ -174,6 +177,7 @@ export default function SectionPreview({
     const minZoom = baseZoom - 2; // 0.25x (zoom level 12)
     const maxZoom = 22; // Maximum zoom for detailed inspection
 
+    const initialThemeColors = getMapThemeColors();
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: {
@@ -184,7 +188,7 @@ export default function SectionPreview({
             id: 'background',
             type: 'background',
             paint: {
-              'background-color': '#1a1a2e',
+              'background-color': initialThemeColors.previewBg,
             },
           },
         ],
@@ -256,7 +260,7 @@ export default function SectionPreview({
         type: 'line',
         source: 'preview-target-shots',
         paint: {
-          'line-color': '#888888',
+          'line-color': initialThemeColors.grayLine,
           'line-width': 1.5,
           'line-opacity': 0.6,
         },
@@ -269,9 +273,9 @@ export default function SectionPreview({
         source: 'preview-target-stations',
         paint: {
           'circle-radius': 3,
-          'circle-color': '#888888',
+          'circle-color': initialThemeColors.grayLine,
           'circle-stroke-width': 1,
-          'circle-stroke-color': '#000000',
+          'circle-stroke-color': initialThemeColors.strokeColor,
           'circle-opacity': 0.6,
         },
       });
@@ -293,7 +297,7 @@ export default function SectionPreview({
         type: 'line',
         source: 'preview-connection',
         paint: {
-          'line-color': '#ffcc00',
+          'line-color': initialThemeColors.zeroDatum,
           'line-width': 2,
           'line-dasharray': [4, 4],
         },
@@ -308,7 +312,7 @@ export default function SectionPreview({
           'circle-radius': 4,
           'circle-color': ['get', 'color'],
           'circle-stroke-width': 1,
-          'circle-stroke-color': '#000000',
+          'circle-stroke-color': initialThemeColors.strokeColor,
         },
       });
 
@@ -319,9 +323,9 @@ export default function SectionPreview({
         source: 'preview-existing-station',
         paint: {
           'circle-radius': 6,
-          'circle-color': '#ffcc00',
+          'circle-color': initialThemeColors.zeroDatum,
           'circle-stroke-width': 2,
-          'circle-stroke-color': '#000000',
+          'circle-stroke-color': initialThemeColors.strokeColor,
         },
       });
 
@@ -334,7 +338,7 @@ export default function SectionPreview({
           'circle-radius': 8,
           'circle-color': 'transparent',
           'circle-stroke-width': 3,
-          'circle-stroke-color': '#ffffff',
+          'circle-stroke-color': initialThemeColors.compassColor,
         },
       });
 
@@ -345,9 +349,9 @@ export default function SectionPreview({
         source: 'preview-merge-highlight',
         paint: {
           'circle-radius': 7,
-          'circle-color': '#4ecdc4',
+          'circle-color': initialThemeColors.selectHighlight,
           'circle-stroke-width': 2,
-          'circle-stroke-color': '#ffffff',
+          'circle-stroke-color': initialThemeColors.compassColor,
         },
       });
 
@@ -731,6 +735,48 @@ export default function SectionPreview({
       });
     }
   }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, selectedStationIndex]);
+
+  // Re-apply theme colors when resolvedTheme changes
+  useEffect(() => {
+    if (!mapRef.current || !mapLoaded) return;
+    const map = mapRef.current;
+    const colors = getMapThemeColors();
+
+    // Update background color
+    if (map.getLayer('background')) {
+      map.setPaintProperty('background', 'background-color', colors.previewBg);
+    }
+    // Target section layers
+    if (map.getLayer('preview-target-shots-layer')) {
+      map.setPaintProperty('preview-target-shots-layer', 'line-color', colors.grayLine);
+    }
+    if (map.getLayer('preview-target-stations-layer')) {
+      map.setPaintProperty('preview-target-stations-layer', 'circle-color', colors.grayLine);
+      map.setPaintProperty('preview-target-stations-layer', 'circle-stroke-color', colors.strokeColor);
+    }
+    // Connection line
+    if (map.getLayer('preview-connection-layer')) {
+      map.setPaintProperty('preview-connection-layer', 'line-color', colors.zeroDatum);
+    }
+    // Stations
+    if (map.getLayer('preview-stations-layer')) {
+      map.setPaintProperty('preview-stations-layer', 'circle-stroke-color', colors.strokeColor);
+    }
+    // Existing station
+    if (map.getLayer('preview-existing-station-layer')) {
+      map.setPaintProperty('preview-existing-station-layer', 'circle-color', colors.zeroDatum);
+      map.setPaintProperty('preview-existing-station-layer', 'circle-stroke-color', colors.strokeColor);
+    }
+    // Selected station highlight
+    if (map.getLayer('preview-selected-station-layer')) {
+      map.setPaintProperty('preview-selected-station-layer', 'circle-stroke-color', colors.compassColor);
+    }
+    // Merge highlight
+    if (map.getLayer('preview-merge-highlight-layer')) {
+      map.setPaintProperty('preview-merge-highlight-layer', 'circle-color', colors.selectHighlight);
+      map.setPaintProperty('preview-merge-highlight-layer', 'circle-stroke-color', colors.compassColor);
+    }
+  }, [resolvedTheme, mapLoaded]);
 
   // Always render the container, overlay placeholder when no section
   return (

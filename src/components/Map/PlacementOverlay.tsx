@@ -1,5 +1,7 @@
 import { useMemo } from 'react';
 import type { SectionData, Coordinates, ShotData } from '../../types/project';
+import { getThemeColor } from '../../utils/themeColors';
+import { useUIStore } from '../../store/uiStore';
 
 interface PlacementOverlayProps {
   /** Section data to preview */
@@ -88,9 +90,15 @@ export default function PlacementOverlay({
     })
     .join(' ');
 
+  // Subscribe to theme for reactive color updates (value triggers re-render)
+  useUIStore((s) => s.resolvedTheme);
+  const snapColor = getThemeColor('--cc-snap-color');
+  const crosshairColor = getThemeColor('--cc-compass-color');
+  const stationStrokeColor = getThemeColor('--cc-stroke-color');
+
   // Color for preview (use section color with transparency)
   const strokeColor = sectionData.color;
-  const fillColor = isSnapped ? '#00ffcc' : sectionData.color;
+  const fillColor = isSnapped ? snapColor : sectionData.color;
 
   return (
     <svg
@@ -120,7 +128,7 @@ export default function PlacementOverlay({
             r={isAnchor ? 8 : 4}
             fill={isAnchor ? fillColor : strokeColor}
             fillOpacity={0.8}
-            stroke={isSnapped && isAnchor ? '#00ffcc' : '#000'}
+            stroke={isSnapped && isAnchor ? snapColor : stationStrokeColor}
             strokeWidth={isAnchor ? 2 : 1}
           />
         );
@@ -133,7 +141,7 @@ export default function PlacementOverlay({
           y1={cursorPosition.y}
           x2={cursorPosition.x - 5}
           y2={cursorPosition.y}
-          stroke={isSnapped ? '#00ffcc' : '#fff'}
+          stroke={isSnapped ? snapColor : crosshairColor}
           strokeWidth={2}
         />
         <line
@@ -141,7 +149,7 @@ export default function PlacementOverlay({
           y1={cursorPosition.y}
           x2={cursorPosition.x + 12}
           y2={cursorPosition.y}
-          stroke={isSnapped ? '#00ffcc' : '#fff'}
+          stroke={isSnapped ? snapColor : crosshairColor}
           strokeWidth={2}
         />
         <line
@@ -149,7 +157,7 @@ export default function PlacementOverlay({
           y1={cursorPosition.y - 12}
           x2={cursorPosition.x}
           y2={cursorPosition.y - 5}
-          stroke={isSnapped ? '#00ffcc' : '#fff'}
+          stroke={isSnapped ? snapColor : crosshairColor}
           strokeWidth={2}
         />
         <line
@@ -157,7 +165,7 @@ export default function PlacementOverlay({
           y1={cursorPosition.y + 5}
           x2={cursorPosition.x}
           y2={cursorPosition.y + 12}
-          stroke={isSnapped ? '#00ffcc' : '#fff'}
+          stroke={isSnapped ? snapColor : crosshairColor}
           strokeWidth={2}
         />
       </g>

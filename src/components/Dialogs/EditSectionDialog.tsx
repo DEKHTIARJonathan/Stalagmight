@@ -3,6 +3,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { getThemeColor } from '../../utils/themeColors';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import type { Shot, ShotData } from '../../types/project';
@@ -21,7 +22,7 @@ export default function EditSectionDialog() {
   const [name, setName] = useState('');
   const [surveyor, setSurveyor] = useState('');
   const [date, setDate] = useState('');
-  const [color, setColor] = useState('#4ecdc4');
+  const [color, setColor] = useState(getThemeColor('--cc-accent'));
   const [direction, setDirection] = useState<'in' | 'out'>('in');
 
   // Shots state
