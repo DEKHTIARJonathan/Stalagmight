@@ -88,7 +88,7 @@ export function AppearanceSettings({
                   className={`
                     flex items-start gap-3 p-2 rounded cursor-pointer
                     border transition-colors
-                    ${isSelected ? 'border-accent bg-accent/10' : 'border-transparent hover:bg-accent/5'}
+                    ${isSelected ? 'border-accent bg-accent-10' : 'border-transparent hover:bg-accent-5'}
                   `}
                   data-testid={`theme-option-${option.value}`}
                 >
