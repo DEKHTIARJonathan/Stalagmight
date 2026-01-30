@@ -231,3 +231,9 @@ When passing dialog flags (e.g. allowZeroLength, prependMode) via openDialog dat
 
 ## 2026-01-30 manual [pitfall]
 Auto-initialized form fields (e.g. prefilling length=0) make isDirty true immediately, causing unsaved-changes prompts on close -- exclude auto-initialized values from isDirty calculation using a ref flag
+
+## 2026-01-30 manual [pitfall]
+When creating a new dialog component, always wire at least one code path to open it (e.g., openDialog('new-key')) so the dialog is reachable; otherwise it's dead code
+
+## 2026-01-30 manual [pitfall]
+Gate dialog onClose and closeOnBackdropClick during async operations to prevent state updates after unmount
