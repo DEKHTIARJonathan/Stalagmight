@@ -1,4 +1,4 @@
-import { useLayoutEffect, useId, useRef, type ReactNode, useCallback, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useLayoutEffect, useEffect, useId, useRef, type ReactNode, useCallback, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '../common/Button';
 import { pushDialog, popDialog } from '../../utils/dialogStack';
@@ -20,6 +20,27 @@ function getPortalTarget(): HTMLElement | null {
     );
   }
   return portalTargetCache;
+}
+
+/**
+ * Focus an element and, for text inputs/textareas, place the cursor
+ * at the end of the value (no auto-select).
+ */
+function focusElement(el: HTMLElement): void {
+  el.focus();
+  if (
+    (el instanceof HTMLInputElement && (el.type === 'text' || el.type === 'number' || el.type === 'search' || el.type === 'url' || el.type === 'email' || el.type === 'tel')) ||
+    el instanceof HTMLTextAreaElement
+  ) {
+    const len = el.value.length;
+    // setSelectionRange is not supported on number inputs in some browsers;
+    // guard with try/catch to avoid throwing.
+    try {
+      el.setSelectionRange(len, len);
+    } catch {
+      // Ignore — some input types (e.g., number) don't support selection
+    }
+  }
 }
 
 type DialogSize = 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl' | '5xl';
@@ -134,6 +155,10 @@ export function DialogWrapper({
     setShowConfirm(false);
   }, []);
 
+  // Store the element that had focus before the dialog opened so we can
+  // return focus to it on unmount. Captured once at mount time.
+  const triggerRef = useRef<Element | null>(document.activeElement);
+
   // Register with dialogStack for inert management and focus the container.
   // useLayoutEffect ensures inert + focus are applied before the browser paints,
   // preventing timing windows where key presses reach global handlers.
@@ -150,6 +175,74 @@ export function DialogWrapper({
     }
     return () => {
       popDialog(el);
+    };
+  }, []);
+
+  // Initial focus placement using heuristic priority order.
+  // Runs after mount with requestAnimationFrame so the DOM is fully rendered.
+  // Cleanup: cancels pending rAF on unmount (React Strict Mode safety).
+  useEffect(() => {
+    const el = dialogContentRef.current;
+    if (!el) return;
+
+    const rafId = requestAnimationFrame(() => {
+      // Priority 1: element with [data-autofocus]
+      const autofocus = el.querySelector<HTMLElement>('[data-autofocus]');
+      if (autofocus) {
+        focusElement(autofocus);
+        return;
+      }
+
+      // Priority 2: first visible input, textarea, or select in the dialog body
+      const formInput = el.querySelector<HTMLElement>(
+        'input:not(:disabled):not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), textarea:not(:disabled), select:not(:disabled)',
+      );
+      if (formInput) {
+        focusElement(formInput);
+        return;
+      }
+
+      // Priority 3: element with [data-primary-action]
+      const primaryAction = el.querySelector<HTMLElement>('[data-primary-action]');
+      if (primaryAction) {
+        focusElement(primaryAction);
+        return;
+      }
+
+      // Priority 4: first button that is NOT the close X button
+      const buttons = el.querySelectorAll<HTMLElement>('button:not(:disabled)');
+      for (const btn of buttons) {
+        if (btn.getAttribute('aria-label') !== 'Close dialog') {
+          focusElement(btn);
+          return;
+        }
+      }
+
+      // Priority 5: fallback to the close X button
+      const closeBtn = el.querySelector<HTMLElement>('button[aria-label="Close dialog"]');
+      if (closeBtn) {
+        focusElement(closeBtn);
+      }
+    });
+
+    return () => {
+      cancelAnimationFrame(rafId);
+    };
+  }, []);
+
+  // Return focus to the trigger element on unmount.
+  // popDialog() removes inert from app siblings before this runs,
+  // so the trigger element can receive focus.
+  useEffect(() => {
+    const trigger = triggerRef.current;
+    return () => {
+      if (
+        trigger &&
+        trigger instanceof HTMLElement &&
+        document.body.contains(trigger)
+      ) {
+        trigger.focus();
+      }
     };
   }, []);
 
