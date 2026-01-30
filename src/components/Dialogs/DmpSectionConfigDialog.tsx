@@ -75,6 +75,12 @@ export default function DmpSectionConfigDialog({
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
   const depthUnit = config?.units?.depth ?? defaultConfig.units.depth;
 
+  // Derive validation config for ShotTableEditor (azimuth/pitch thresholds)
+  const validationConfig = useMemo(() => ({
+    azimuth_diff_threshold: config?.validation?.azimuth_diff_threshold ?? defaultConfig.validation.azimuth_diff_threshold,
+    pitch_diff_threshold: config?.validation?.pitch_diff_threshold ?? defaultConfig.validation.pitch_diff_threshold,
+  }), [config?.validation?.azimuth_diff_threshold, config?.validation?.pitch_diff_threshold]);
+
   // Check for saved state from dialogData (for restoring after placement mode)
   const savedSectionConfigs = dialogData.savedSectionConfigs as Array<[number, SectionConfig]> | undefined;
   const savedPlacedSections = dialogData.savedPlacedSections as number[] | undefined;
@@ -1561,6 +1567,7 @@ export default function DmpSectionConfigDialog({
                       onRowSelect={setSelectedShotIndex}
                       maxHeight="calc(100% - 2rem)"
                       readOnly={isCurrentPlaced || isCurrentExcluded}
+                      validationConfig={validationConfig}
                     />
                   </div>
                 </Panel>
