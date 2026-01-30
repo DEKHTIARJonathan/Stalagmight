@@ -199,7 +199,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_SET_CHECK_DUPLICATE_RESULT__ = (result: boolean) => {
         mockCheckDuplicateResult = result;
       };
-      (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ = () => trackImportedFileCalls;
+      (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ = () => [...trackImportedFileCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ = () => {
         trackImportedFileCalls = [];
       };
