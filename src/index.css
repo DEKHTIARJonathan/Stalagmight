@@ -220,16 +220,16 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #16213e;
+  background: var(--cc-scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #0f3460;
+  background: var(--cc-scrollbar-thumb);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #4ecdc4;
+  background: var(--cc-scrollbar-hover);
 }
 
 /* Focus ring variables (--cc-focus-ring and --cc-focus-glow defined in theme blocks above) */
@@ -265,31 +265,26 @@ body {
 
 /* Input styles */
 input, select, textarea {
-  background-color: #16213e;
-  border: 1px solid #0f3460;
-  color: #f5f5f5;
+  background-color: var(--cc-input-bg);
+  border: 1px solid var(--cc-input-border);
+  color: var(--cc-text-primary);
   border-radius: 4px;
   padding: 0.5rem;
 }
 
 input:focus, select:focus, textarea:focus {
-  border-color: #4ecdc4;
+  border-color: var(--cc-accent);
 }
 
-/* Force dark theme for native controls (dropdowns, date pickers) */
-select, input[type="date"] {
-  color-scheme: dark;
-}
-
-/* Dark theme for checkboxes and radio buttons */
+/* Themed checkboxes and radio buttons */
 input[type="checkbox"],
 input[type="radio"] {
   -webkit-appearance: none;
   appearance: none;
   width: 16px;
   height: 16px;
-  background-color: #16213e;
-  border: 1px solid #0f3460;
+  background-color: var(--cc-input-bg);
+  border: 1px solid var(--cc-input-border);
   border-radius: 3px;
   cursor: pointer;
   position: relative;
@@ -302,8 +297,8 @@ input[type="radio"] {
 
 input[type="checkbox"]:checked,
 input[type="radio"]:checked {
-  background-color: #4ecdc4;
-  border-color: #4ecdc4;
+  background-color: var(--cc-accent);
+  border-color: var(--cc-accent);
 }
 
 input[type="checkbox"]:checked::after {
@@ -313,7 +308,7 @@ input[type="checkbox"]:checked::after {
   top: 50%;
   width: 4px;
   height: 8px;
-  border: solid #1a1a2e;
+  border: solid var(--cc-accent-on);
   border-width: 0 2px 2px 0;
   transform: translate(-50%, -60%) rotate(45deg);
 }
@@ -325,7 +320,7 @@ input[type="radio"]:checked::after {
   top: 50%;
   width: 6px;
   height: 6px;
-  background-color: #1a1a2e;
+  background-color: var(--cc-accent-on);
   border-radius: 50%;
   transform: translate(-50%, -50%);
 }
@@ -338,7 +333,7 @@ input[type="radio"]:disabled {
 
 input[type="checkbox"]:hover:not(:disabled),
 input[type="radio"]:hover:not(:disabled) {
-  border-color: #4ecdc4;
+  border-color: var(--cc-accent);
 }
 
 input[type="checkbox"]:focus-visible,
@@ -348,9 +343,8 @@ input[type="radio"]:focus-visible {
   box-shadow: 0 0 0 2px var(--cc-focus-ring-shadow);
 }
 
-/* Color picker dark theme */
+/* Color picker */
 input[type="color"] {
-  color-scheme: dark;
   padding: 0;
   cursor: pointer;
 }
@@ -383,16 +377,16 @@ table {
 th, td {
   text-align: left;
   padding: 0.5rem;
-  border-bottom: 1px solid #0f3460;
+  border-bottom: 1px solid var(--cc-border);
 }
 
 th {
-  background-color: #16213e;
+  background-color: var(--cc-panel);
   font-weight: 600;
 }
 
 tr:hover {
-  background-color: rgba(78, 205, 196, 0.1);
+  background-color: var(--cc-accent-10);
 }
 
 /* Selection indicator gradient bar */
@@ -407,54 +401,54 @@ tr:hover {
   bottom: 0;
   left: 0;
   width: 8px;
-  background: linear-gradient(to right, rgba(78, 205, 196, 0.3), transparent);
+  background: linear-gradient(to right, var(--cc-selection-gradient), transparent);
   pointer-events: none;
 }
 
-/* React DatePicker dark theme styles */
+/* React DatePicker theme styles */
 .react-datepicker {
-  background-color: #1a1a2e !important;
-  border-color: #0f3460 !important;
-  color: #f5f5f5 !important;
+  background-color: var(--cc-background) !important;
+  border-color: var(--cc-border) !important;
+  color: var(--cc-text-primary) !important;
   font-family: inherit !important;
 }
 
 .react-datepicker__header {
-  background-color: #16213e !important;
-  border-bottom-color: #0f3460 !important;
+  background-color: var(--cc-panel) !important;
+  border-bottom-color: var(--cc-border) !important;
 }
 
 .react-datepicker__current-month,
 .react-datepicker__day-name,
 .react-datepicker-time__header {
-  color: #f5f5f5 !important;
+  color: var(--cc-text-primary) !important;
 }
 
 .react-datepicker__day {
-  color: #f5f5f5 !important;
+  color: var(--cc-text-primary) !important;
 }
 
 .react-datepicker__day:hover {
-  background-color: #0f3460 !important;
+  background-color: var(--cc-border) !important;
 }
 
 .react-datepicker__day--selected,
 .react-datepicker__day--keyboard-selected {
-  background-color: #4ecdc4 !important;
-  color: #1a1a2e !important;
+  background-color: var(--cc-accent) !important;
+  color: var(--cc-accent-on) !important;
 }
 
 .react-datepicker__day--today {
   font-weight: bold;
-  border: 1px solid #4ecdc4 !important;
+  border: 1px solid var(--cc-accent) !important;
 }
 
 .react-datepicker__day--outside-month {
-  color: #666 !important;
+  color: var(--cc-outside-month) !important;
 }
 
 .react-datepicker__navigation-icon::before {
-  border-color: #f5f5f5 !important;
+  border-color: var(--cc-text-primary) !important;
 }
 
 .react-datepicker__triangle {
@@ -465,17 +459,17 @@ tr:hover {
   z-index: 100 !important;
 }
 
-/* MapLibre controls - dark theme */
+/* MapLibre controls - themed */
 .maplibregl-ctrl {
-  color: #f5f5f5;
+  color: var(--cc-text-primary);
   font-family: inherit;
 }
 
 .maplibregl-ctrl-group {
-  background: #16213e !important;
-  border: 1px solid #0f3460 !important;
+  background: var(--cc-map-ctrl-bg) !important;
+  border: 1px solid var(--cc-map-ctrl-border) !important;
   border-radius: 4px !important;
-  box-shadow: 0 0 0 2px rgba(15, 52, 96, 0.3) !important;
+  box-shadow: 0 0 0 2px var(--cc-map-ctrl-shadow) !important;
 }
 
 .maplibregl-ctrl-group button {
@@ -485,25 +479,25 @@ tr:hover {
 }
 
 .maplibregl-ctrl-group button:hover {
-  background-color: #1a1a2e !important;
+  background-color: var(--cc-map-ctrl-hover) !important;
 }
 
 .maplibregl-ctrl-group button:active {
-  background-color: #0f3460 !important;
+  background-color: var(--cc-map-ctrl-active) !important;
 }
 
 .maplibregl-ctrl-group button + button {
-  border-top: 1px solid #0f3460 !important;
+  border-top: 1px solid var(--cc-map-ctrl-border) !important;
 }
 
 .maplibregl-ctrl-icon {
-  filter: brightness(0) invert(1) !important;
+  filter: var(--cc-map-ctrl-icon-filter) !important;
 }
 
 .maplibregl-ctrl-scale {
-  background-color: rgba(26, 26, 46, 0.85) !important;
-  border-color: rgba(255, 255, 255, 0.7) !important;
-  color: #ffffff !important;
+  background-color: var(--cc-map-scale-bg) !important;
+  border-color: var(--cc-map-scale-border) !important;
+  color: var(--cc-map-scale-text) !important;
   font-family: inherit !important;
   border-width: medium 2px 2px !important;
   border-style: none solid solid !important;
