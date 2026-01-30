@@ -25,9 +25,8 @@ See epic spec Task 5 section for exact line numbers.
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-TBD
-
+Removed all session-based duplicate import detection (DuplicateImportDialog, importedDmpPaths, hasImportedDmpPath, addImportedDmpPath, clearImportedDmpPaths) from uiStore, App.tsx, useGlobalViewShortcuts, and useKeyboardShortcuts. All import entry points (Ctrl+I, file drop, keyboard shortcut) now go directly to DmpSelectionDialog without session-based path interception. Updated E2E tests to reflect the new behavior.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 106bf904, e6bae32f
+- Tests: pnpm tsc --noEmit
 - PRs:
