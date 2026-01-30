@@ -780,23 +780,24 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     if (!markerTooltipRef.current) {
       const tooltip = document.createElement('div');
       tooltip.className = 'globalview-marker-tooltip';
-      tooltip.style.cssText = `
-        position: absolute;
-        pointer-events: none;
-        background-color: ${getThemeColor('--cc-preview-bg')};
-        color: ${getThemeColor('--cc-depth-text')};
-        padding: 8px 12px;
-        border-radius: 4px;
-        font-size: 12px;
-        line-height: 1.4;
-        z-index: 1000;
-        white-space: nowrap;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        display: none;
-      `;
       map.current.getContainer().appendChild(tooltip);
       markerTooltipRef.current = tooltip;
     }
+    // Always re-apply tooltip styles so theme changes are reflected
+    markerTooltipRef.current.style.cssText = `
+      position: absolute;
+      pointer-events: none;
+      background-color: ${getThemeColor('--cc-preview-bg')};
+      color: ${getThemeColor('--cc-depth-text')};
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      line-height: 1.4;
+      z-index: 1000;
+      white-space: nowrap;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      display: none;
+    `;
 
     // Add markers for each GPS project
     for (const project of gpsProjects) {
@@ -848,11 +849,13 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       if (loadingState === 'loading') {
         const spinner = document.createElement('div');
         spinner.className = 'marker-spinner';
+        const spinnerTrack = getThemeColor('--cc-stroke-light');
+        const spinnerHead = getThemeColor('--cc-stroke-color');
         spinner.style.cssText = `
           width: 10px;
           height: 10px;
-          border: 2px solid rgba(255,255,255,0.3);
-          border-top-color: white;
+          border: 2px solid ${spinnerTrack};
+          border-top-color: ${spinnerHead};
           border-radius: 50%;
           animation: spin 0.8s linear infinite;
         `;
@@ -999,6 +1002,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
   // Update marker styles when selection, loading states, or theme changes
   useEffect(() => {
+    const strokeColor = getThemeColor('--cc-stroke-color');
+    const strokeLight = getThemeColor('--cc-stroke-light');
+    const errorColor = getThemeColor('--cc-error');
+
     markersRef.current.forEach((marker, filePath) => {
       const el = marker.getElement();
       const inner = el.querySelector('.marker-inner') as HTMLElement | null;
@@ -1009,11 +1016,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       // Use same color as survey mode, with error override
       const systemColor = loadingState === 'error'
-        ? getThemeColor('--cc-error')
+        ? errorColor
         : generateSystemColor(filePath);
 
-      const strokeColor = getThemeColor('--cc-stroke-color');
-      const strokeLight = getThemeColor('--cc-stroke-light');
       inner.style.backgroundColor = systemColor;
       inner.style.borderColor = isSelected ? strokeColor : strokeLight;
       inner.style.boxShadow = isSelected
