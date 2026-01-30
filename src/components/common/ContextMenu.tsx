@@ -253,10 +253,13 @@ export default function ContextMenu() {
         danger: true,
       });
       items.push({ label: '', action: () => {}, separator: true });
-      // Position-aware Delete Shot using shared helper
+      // Position-aware Delete Shot using shared helper.
+      // Disabled when section/shot lookup fails (stale target).
+      const canDelete = shotIndex >= 0 && totalShots > 0;
       items.push({
         label: 'Delete Shot',
         action: () => {
+          if (!canDelete) return;
           const { dialog, data } = getDeleteShotDialog(
             target.sectionId,
             target.shotId,
@@ -268,6 +271,7 @@ export default function ContextMenu() {
           openDialog(dialog, data);
         },
         danger: true,
+        disabled: !canDelete,
       });
 
       return items;
