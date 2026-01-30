@@ -1,7 +1,24 @@
-import { useEffect, useId, useRef, ReactNode, useCallback, useState } from 'react';
+import { useLayoutEffect, useId, useRef, type ReactNode, useCallback, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '../common/Button';
 import { pushDialog, popDialog } from '../../utils/dialogStack';
+
+/** Resolve portal target once at module level to avoid per-render getElementById calls. */
+let portalTargetCache: HTMLElement | null = null;
+let portalTargetWarned = false;
+
+function getPortalTarget(): HTMLElement | null {
+  if (portalTargetCache) return portalTargetCache;
+  portalTargetCache = document.getElementById('dialog-root');
+  if (!portalTargetCache && !portalTargetWarned && import.meta.env.DEV) {
+    portalTargetWarned = true;
+    console.warn(
+      '[DialogWrapper] #dialog-root element not found in DOM. ' +
+      'Ensure <div id="dialog-root"></div> exists in index.html after #root.',
+    );
+  }
+  return portalTargetCache;
+}
 
 type DialogSize = 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl' | '5xl';
 
@@ -73,18 +90,23 @@ export function DialogWrapper({
     setShowConfirm(false);
   }, []);
 
-  // Register with dialogStack for inert management
-  useEffect(() => {
+  // Register with dialogStack for inert management and focus the container.
+  // useLayoutEffect ensures inert + focus are applied before the browser paints,
+  // preventing timing windows where key presses reach global handlers.
+  useLayoutEffect(() => {
     const el = dialogRef.current;
     if (!el) return;
     pushDialog(el);
+    // Focus the dialog container so keyboard events (Escape) are reliably
+    // intercepted by onKeyDown rather than falling through to global handlers.
+    el.focus();
     return () => {
       popDialog(el);
     };
   }, []);
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
       if ((e.key === 'Escape' || e.key === 'Esc') && !e.repeat && !e.defaultPrevented) {
         // Don't close dialog if a dropdown is open - let the dropdown close first
         const openDropdown = document.querySelector('[data-dropdown-open]');
@@ -110,14 +132,8 @@ export function DialogWrapper({
     }
   }, [closeOnBackdropClick, requestClose]);
 
-  const portalTarget = document.getElementById('dialog-root');
+  const portalTarget = getPortalTarget();
   if (!portalTarget) {
-    if (import.meta.env.DEV) {
-      console.warn(
-        '[DialogWrapper] #dialog-root element not found in DOM. ' +
-        'Ensure <div id="dialog-root"></div> exists in index.html after #root.',
-      );
-    }
     return null;
   }
 
