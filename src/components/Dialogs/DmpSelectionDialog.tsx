@@ -115,8 +115,7 @@ export default function DmpSelectionDialog({
 
   // File hash and duplicate detection state
   const [fileHash, setFileHash] = useState<string | null>(null);
-  // isDuplicate state is consumed by the duplicate warning banner (Task 3)
-  const [, setIsDuplicate] = useState(false);
+  const [isDuplicate, setIsDuplicate] = useState(false);
 
   // Track whether hash computation has settled (resolved or failed)
   const [hashSettled, setHashSettled] = useState(false);
@@ -294,6 +293,16 @@ export default function DmpSelectionDialog({
             <span data-testid="stats-depth-range">Depth: {formatDepthRange(metadata.minDepth, metadata.maxDepth, depthUnit)}</span>
           </div>
         </div>
+
+        {/* Duplicate hash warning banner */}
+        {isDuplicate && hashSettled && (
+          <div
+            className="p-3 bg-warning/10 border border-warning/20 rounded text-warning text-sm"
+            data-testid="duplicate-hash-warning"
+          >
+            {'\u26A0'} File may have been imported before (same hash detected)
+          </div>
+        )}
 
         {/* Default values section */}
         <Panel title="Default Values (apply to all sections)">
