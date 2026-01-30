@@ -258,3 +258,6 @@ When moving event handlers from document capture phase to element-level onKeyDow
 
 ## 2026-01-30 manual [pitfall]
 Auto-applying data attributes based on component variant (e.g. data-primary-action on all danger buttons) can unintentionally focus destructive controls -- use opt-in for dangerous variants and auto-add only for safe ones
+
+## 2026-01-30 manual [pitfall]
+When writing test examples in docs, always grep the actual codebase for data-testid values instead of guessing — wrong test IDs make documentation examples non-executable
