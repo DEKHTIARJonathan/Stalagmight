@@ -115,22 +115,34 @@ export default function DmpSelectionDialog({
 
   // File hash and duplicate detection state
   const [fileHash, setFileHash] = useState<string | null>(null);
-  // _isDuplicate will be consumed by the duplicate warning banner (Task 3)
-  const [_isDuplicate, setIsDuplicate] = useState(false);
+  // isDuplicate state is consumed by the duplicate warning banner (Task 3)
+  const [, setIsDuplicate] = useState(false);
 
-  // Compute file hash and check for duplicates on mount
+  // Track whether hash computation has settled (resolved or failed)
+  const [hashSettled, setHashSettled] = useState(false);
+
+  // Compute file hash and check for duplicates on mount / filePath change
   useEffect(() => {
     let cancelled = false;
+    // Reset state when filePath changes to avoid stale values
+    setFileHash(null);
+    setIsDuplicate(false);
+    setHashSettled(false);
     (async () => {
       try {
         const hash = await calculateFileHash(filePath);
         if (cancelled) return;
         setFileHash(hash);
+        if (cancelled) return;
         const isDup = await checkDuplicateImport(hash);
         if (cancelled) return;
         setIsDuplicate(isDup);
       } catch {
         // Graceful degradation: proceed without warning
+      } finally {
+        if (!cancelled) {
+          setHashSettled(true);
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -409,10 +421,10 @@ export default function DmpSelectionDialog({
           <Button
             variant="primary"
             onClick={handleContinue}
-            disabled={selectedIndices.size === 0}
+            disabled={selectedIndices.size === 0 || !hashSettled}
             data-testid="continue-button"
           >
-            Continue to Section Setup
+            {hashSettled ? 'Continue to Section Setup' : 'Computing file hash...'}
           </Button>
         </div>
       </div>
