@@ -330,7 +330,7 @@ test.describe('GlobalView Map', () => {
 
       // Error marker inner circle should be red
       const inner = marker.locator('.marker-inner');
-      await expect(inner).toHaveCSS('background-color', 'rgb(239, 68, 68)', { timeout: 10000 }); // #ef4444
+      await expect(inner).toHaveCSS('background-color', 'rgb(255, 107, 107)', { timeout: 10000 }); // --cc-error (#ff6b6b)
     });
 
     test('should show all markers in markers mode', async ({ page }) => {

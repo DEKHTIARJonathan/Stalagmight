@@ -16,6 +16,7 @@ import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
 import { DepthLegend } from './DepthLegend';
 import { MapDevStats } from './MapDevStats';
+import { getMapThemeColors } from '../../utils/themeColors';
 
 // Tools that support Ctrl+drag for panning (excludes tools with their own drag behaviors)
 const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure'];
@@ -152,6 +153,7 @@ export default function MapCanvas() {
     clearCenterOnStationRequest,
     requestCenterOnShot,
     clearCenterOnShotRequest,
+    resolvedTheme,
   } = useUIStore();
 
   // Snap-to-station detection
@@ -641,7 +643,7 @@ export default function MapCanvas() {
             id: 'background',
             type: 'background',
             paint: {
-              'background-color': config?.display.default_background ?? '#1a1a2e',
+              'background-color': config?.display.default_background ?? getMapThemeColors().background,
             },
           },
         ],
@@ -773,6 +775,14 @@ export default function MapCanvas() {
       surveyLayerRef.current.setConfig(config);
     }
   }, [config, mapLoaded]);
+
+  // Apply theme colors to SurveyLayer when resolvedTheme changes
+  // MapLibre GL JS does NOT read CSS variables — colors must be re-applied explicitly
+  useEffect(() => {
+    if (surveyLayerRef.current) {
+      surveyLayerRef.current.applyThemeColors(getMapThemeColors());
+    }
+  }, [resolvedTheme, mapLoaded]);
 
   // Sync selection state with SurveyLayer for visual feedback
   useEffect(() => {

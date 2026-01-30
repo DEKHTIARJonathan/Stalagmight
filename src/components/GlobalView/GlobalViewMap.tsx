@@ -9,6 +9,8 @@ import { ViewModeToggle, useViewMode, type ViewMode } from './ViewModeToggle';
 import { useFpsMonitor } from '../../hooks/useFpsMonitor';
 import { defaultConfig } from '../../types/config';
 import { getTileConfig } from '../../utils/tileConfig';
+import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
+import { useUIStore } from '../../store/uiStore';
 
 /** Local storage key for persisting map position/zoom. */
 const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
@@ -132,6 +134,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   const markerTooltipRef = useRef<HTMLDivElement | null>(null);
   const contextMenuOpenRef = useRef(false);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   // Buffer for geometry data that arrives before map is ready
   const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
   // Store searchTerm in ref for access during map initialization (avoids stale closure)
@@ -621,6 +624,13 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     surveyLayerRef.current?.setSelectedSystems(selectedSystemIds);
   }, [selectedSystemIds]);
 
+  // Apply theme colors to survey layer when theme changes
+  useEffect(() => {
+    if (surveyLayerRef.current) {
+      surveyLayerRef.current.applyThemeColors(getMapThemeColors());
+    }
+  }, [resolvedTheme, mapLoaded]);
+
   // Sync search filter to survey layer (searchTerm is owned by GlobalView, passed as prop)
   useEffect(() => {
     surveyLayerRef.current?.setSearchFilter(searchTerm || null);
@@ -730,20 +740,20 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
     // Build popup content using DOM to prevent XSS (per memory: use textContent, not innerHTML)
     const container = document.createElement('div');
-    container.style.cssText = 'color: #1a1a2e; padding: 8px; max-width: 300px;';
+    container.style.cssText = `color: ${getThemeColor('--cc-text-primary')}; padding: 8px; max-width: 300px;`;
 
     const title = document.createElement('div');
-    title.style.cssText = 'font-weight: 600; margin-bottom: 4px; color: #ef4444;';
+    title.style.cssText = `font-weight: 600; margin-bottom: 4px; color: ${getThemeColor('--cc-error')};`;
     title.textContent = `Error loading ${name}`;
     container.appendChild(title);
 
     const errorDiv = document.createElement('div');
-    errorDiv.style.cssText = 'font-size: 0.85em; color: #666; word-wrap: break-word;';
+    errorDiv.style.cssText = `font-size: 0.85em; color: ${getThemeColor('--cc-gray-line')}; word-wrap: break-word;`;
     errorDiv.textContent = error;
     container.appendChild(errorDiv);
 
     const pathDiv = document.createElement('div');
-    pathDiv.style.cssText = 'font-size: 0.75em; color: #888; margin-top: 8px; word-wrap: break-word;';
+    pathDiv.style.cssText = `font-size: 0.75em; color: ${getThemeColor('--cc-gray-text')}; margin-top: 8px; word-wrap: break-word;`;
     pathDiv.textContent = filePath;
     container.appendChild(pathDiv);
 
@@ -773,8 +783,8 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       tooltip.style.cssText = `
         position: absolute;
         pointer-events: none;
-        background-color: rgba(26, 26, 46, 0.95);
-        color: white;
+        background-color: ${getThemeColor('--cc-preview-bg')};
+        color: ${getThemeColor('--cc-depth-text')};
         padding: 8px 12px;
         border-radius: 4px;
         font-size: 12px;
@@ -799,7 +809,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       // Use same color as survey mode (deterministic based on file path)
       // Error state overrides with red
       const systemColor = loadingState === 'error'
-        ? '#ef4444'
+        ? getThemeColor('--cc-error')
         : generateSystemColor(project.file_path);
 
       // Create container element (fixed size, handles positioning)
@@ -880,13 +890,13 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
           // Length row
           const lengthDiv = document.createElement('div');
-          lengthDiv.style.color = '#aaa';
+          lengthDiv.style.color = getThemeColor('--cc-gray-text');
           lengthDiv.textContent = `Length: ${lengthStr}`;
           tooltip.appendChild(lengthDiv);
 
           // Station count row
           const stationDiv = document.createElement('div');
-          stationDiv.style.color = '#aaa';
+          stationDiv.style.color = getThemeColor('--cc-gray-text');
           stationDiv.textContent = `Stations: ${stationCount}`;
           tooltip.appendChild(stationDiv);
 
@@ -997,7 +1007,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       // Use same color as survey mode, with error override
       const systemColor = loadingState === 'error'
-        ? '#ef4444'
+        ? getThemeColor('--cc-error')
         : generateSystemColor(filePath);
 
       inner.style.backgroundColor = systemColor;

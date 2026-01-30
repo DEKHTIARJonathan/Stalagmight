@@ -2,6 +2,7 @@ import type { Map as MaplibreMap } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
 import type { GeometryShot, SurveyGeometry } from '../../types/survey';
+import type { MapThemeColors } from '../../utils/themeColors';
 
 /**
  * System geometry data with associated metadata for the global view.
@@ -115,6 +116,9 @@ export default class GlobalSurveyLayer {
 
   // Track if context menu is open (suppress tooltip while open)
   private contextMenuOpen = false;
+
+  // Theme colors for MapLibre paint properties
+  private themeColors: MapThemeColors | undefined;
 
   // Bound event handlers for cleanup
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
@@ -802,16 +806,38 @@ export default class GlobalSurveyLayer {
   }
 
   /**
+   * Apply new theme colors to MapLibre paint properties.
+   * Called from GlobalViewMap when resolvedTheme changes.
+   */
+  applyThemeColors(colors: MapThemeColors): void {
+    this.themeColors = colors;
+    const strokeColor = colors.strokeColor;
+
+    // Update station stroke color
+    if (this.map.getLayer(this.stationsLayerId)) {
+      this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-color', strokeColor);
+    }
+
+    // Update tooltip colors
+    if (this.tooltip) {
+      this.tooltip.style.backgroundColor = colors.previewBg;
+      this.tooltip.style.color = colors.labelColor;
+    }
+  }
+
+  /**
    * Initialize the tooltip element.
    */
   private initializeTooltip(): void {
     this.tooltip = document.createElement('div');
     this.tooltip.className = 'globalview-survey-tooltip';
+    const bg = this.themeColors?.previewBg ?? 'rgba(26, 26, 46, 0.95)';
+    const fg = this.themeColors?.labelColor ?? 'white';
     this.tooltip.style.cssText = `
       position: absolute;
       pointer-events: none;
-      background-color: rgba(26, 26, 46, 0.95);
-      color: white;
+      background-color: ${bg};
+      color: ${fg};
       padding: 8px 12px;
       border-radius: 4px;
       font-size: 12px;
@@ -869,14 +895,15 @@ export default class GlobalSurveyLayer {
     this.tooltip.appendChild(nameDiv);
 
     // Length row
+    const grayText = this.themeColors?.grayText ?? '#aaa';
     const lengthDiv = document.createElement('div');
-    lengthDiv.style.color = '#aaa';
+    lengthDiv.style.color = grayText;
     lengthDiv.textContent = `Length: ${lengthStr}`;
     this.tooltip.appendChild(lengthDiv);
 
     // Station count row
     const stationDiv = document.createElement('div');
-    stationDiv.style.color = '#aaa';
+    stationDiv.style.color = grayText;
     stationDiv.textContent = `Stations: ${stationCount}`;
     this.tooltip.appendChild(stationDiv);
 

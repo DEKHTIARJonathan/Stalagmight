@@ -4,6 +4,7 @@ import { metersToMapCoords } from '../../utils/coordinates';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { hasLiveStyle } from './mapUtils';
+import { getThemeColor } from '../../utils/themeColors';
 
 interface GridOverlayProps {
   map: maplibregl.Map;
@@ -21,7 +22,7 @@ export default function GridOverlay({ map }: GridOverlayProps) {
   const { showGrid, gridSpacing } = useUIStore();
   const { stations, config } = useProjectStore();
 
-  const gridColor = config?.display.grid_color ?? '#333366';
+  const gridColor = config?.display.grid_color ?? getThemeColor('--cc-grid-default');
 
   // Generate grid GeoJSON based on current station bounds
   const generateGridGeoJSON = useCallback((): GeoJSON.FeatureCollection => {

@@ -112,7 +112,7 @@ export function SectionMetadataForm({
               value={color}
               onChange={(e) => onColorChange(e.target.value)}
               className="w-20 px-2 py-1.5 bg-background border border-border rounded text-sm"
-              placeholder="#4ecdc4"
+              placeholder="#hex"
               disabled={disabled}
               data-testid="section-color-hex-input"
             />

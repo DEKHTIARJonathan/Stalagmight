@@ -19,6 +19,7 @@ import {
   type DepthRange,
   type GhostSectionData,
 } from './surveyLayer/features';
+import type { MapThemeColors } from '../../utils/themeColors';
 import {
   distanceToLineSegment,
   resolveNearestShot,
@@ -113,6 +114,14 @@ export default class SurveyLayer {
   // Depth gradient mode state (used during update() for feature color calculation)
   private showDepthGradient: boolean = false;
   private depthRange: DepthRange = { min: 0, max: 50 };
+
+  // Theme colors for MapLibre paint properties (MapLibre cannot read CSS vars)
+  private themeColors: MapThemeColors | undefined;
+
+  // Cached input data for feature rebuild on theme change
+  private cachedSections: Section[] = [];
+  private cachedStations: Station[] = [];
+  private cachedLoopClosures: LoopClosure[] | undefined;
 
   // Bound event handlers stored for proper cleanup in destroy()
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
@@ -1709,6 +1718,11 @@ export default class SurveyLayer {
     this.showDepthGradient = showDepthGradient;
     this.depthRange = normalizeDepthRange(depthRange);
 
+    // Cache input data for feature rebuild on theme change
+    this.cachedSections = sections;
+    this.cachedStations = stations;
+    this.cachedLoopClosures = loopClosures;
+
     const {
       shotFeatures,
       shotLabelFeatures,
@@ -1722,7 +1736,8 @@ export default class SurveyLayer {
       loopClosures,
       this.gpsOrigin,
       this.showDepthGradient,
-      this.depthRange
+      this.depthRange,
+      this.themeColors
     );
 
     // Cache features for segment drag preview
@@ -1797,6 +1812,66 @@ export default class SurveyLayer {
     this.prevSelectedSectionStationIds = new Set();
     this.invalidateSectionCaches();
     this.updateVisualState();
+  }
+
+  /**
+   * Apply new theme colors to all MapLibre paint/layout properties
+   * AND rebuild features (because buildSurveyFeatures embeds theme colors in GeoJSON properties).
+   * Called from MapCanvas when resolvedTheme changes.
+   */
+  applyThemeColors(colors: MapThemeColors): void {
+    this.themeColors = colors;
+
+    if (!hasLiveStyle(this.map)) return;
+
+    // Update paint properties that use constant theme colors
+    // Section label halo
+    if (this.map.getLayer(this.labelsLayerId)) {
+      this.map.setPaintProperty(this.labelsLayerId, 'text-halo-color', colors.textHalo);
+    }
+    // Shot label halo
+    if (this.map.getLayer(this.shotLabelsLayerId)) {
+      this.map.setPaintProperty(this.shotLabelsLayerId, 'text-halo-color', colors.textHaloAlt);
+    }
+    // Station label halo
+    if (this.map.getLayer(this.stationLabelsLayerId)) {
+      this.map.setPaintProperty(this.stationLabelsLayerId, 'text-halo-color', colors.textHaloAlt);
+    }
+    // Ghost station stroke
+    if (this.map.getLayer(this.ghostStationsLayerId)) {
+      this.map.setPaintProperty(this.ghostStationsLayerId, 'circle-stroke-color', colors.strokeColor);
+    }
+    // Ghost merge station
+    if (this.map.getLayer(this.ghostMergeLayerId)) {
+      this.map.setPaintProperty(this.ghostMergeLayerId, 'circle-color', colors.selectHighlight);
+      this.map.setPaintProperty(this.ghostMergeLayerId, 'circle-stroke-color', colors.strokeColor);
+    }
+    // Station highlight (snap color)
+    if (this.map.getLayer(this.stationsHighlightLayerId)) {
+      this.map.setPaintProperty(this.stationsHighlightLayerId, 'circle-color', colors.snapColor);
+      this.map.setPaintProperty(this.stationsHighlightLayerId, 'circle-stroke-color', colors.snapColor);
+    }
+    // Station stroke-color expression (hover/selected colors)
+    if (this.map.getLayer(this.stationsLayerId)) {
+      this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-color', [
+        'case',
+        ['boolean', ['feature-state', 'hover'], false], colors.hoverHighlight,
+        ['boolean', ['feature-state', 'selected'], false], colors.selectHighlight,
+        ['get', 'strokeColor'],
+      ]);
+    }
+
+    // Rebuild features with new theme colors (colors are embedded in GeoJSON properties)
+    if (this.cachedSections.length > 0 || this.cachedStations.length > 0) {
+      this.update(
+        this.cachedSections,
+        this.cachedStations,
+        this.cachedLoopClosures,
+        this.gpsOrigin,
+        this.showDepthGradient,
+        this.depthRange
+      );
+    }
   }
 
   destroy() {

@@ -7,6 +7,7 @@ import type {
 } from '../../../types/project';
 import { getDepthColor, getErrorColor } from '../../../utils/colors';
 import { metersToMapCoords } from '../../../utils/coordinates';
+import type { MapThemeColors } from '../../../utils/themeColors';
 
 export type DepthRange = { min: number; max: number };
 
@@ -105,8 +106,16 @@ export function buildSurveyFeatures(
   loopClosures: LoopClosure[] | undefined,
   gpsOrigin: GpsOrigin | null,
   showDepthGradient: boolean,
-  depthRange: DepthRange
+  depthRange: DepthRange,
+  themeColors?: MapThemeColors
 ): SurveyFeatureSets {
+  // Theme colors with fallbacks for backward compatibility
+  const depthShallow = themeColors?.depthShallow ?? '#00bfff';
+  const depthDeep = themeColors?.depthDeep ?? '#ff4444';
+  const labelColor = themeColors?.labelColor ?? '#ffffff';
+  const zeroDatum = themeColors?.zeroDatum ?? '#ffd700';
+  const strokeColor = themeColors?.strokeColor ?? '#000000';
+  const sectionDefault = themeColors?.stationDefault ?? '#ffffff';
   const shotFeatures: GeoJSON.Feature[] = [];
   const shotLabelFeatures: GeoJSON.Feature[] = [];
   const stationFeatures: GeoJSON.Feature[] = [];
@@ -129,7 +138,7 @@ export function buildSurveyFeatures(
       if (fromStation && toStation && shot) {
         const avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
         const depthColor = showDepthGradient
-          ? getDepthColor(avgDepth, '#00bfff', '#ff4444', depthRange.min, depthRange.max)
+          ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
           : null;
         const shotColor = depthColor ?? section.color;
 
@@ -162,9 +171,9 @@ export function buildSurveyFeatures(
         const label = `${shot.azimuth_in.toFixed(0)}° ${shot.length.toFixed(1)}m ${labelDepth.toFixed(1)}m`;
 
         const shotLabelDepthColor = showDepthGradient
-          ? getDepthColor(avgDepth, '#00bfff', '#ff4444', depthRange.min, depthRange.max)
+          ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
           : null;
-        const shotLabelColor = shotLabelDepthColor ?? '#ffffff';
+        const shotLabelColor = shotLabelDepthColor ?? labelColor;
 
         shotLabelFeatures.push({
           type: 'Feature',
@@ -188,7 +197,7 @@ export function buildSurveyFeatures(
 
   for (const station of stations) {
     const section = sections.find((s) => s.id === station.station_ref.section_id);
-    const sectionColor = section?.color ?? '#ffffff';
+    const sectionColor = section?.color ?? sectionDefault;
 
     const isZeroDatum = station.is_zero_datum;
     const stationDepth = station.coordinates.z;
@@ -196,13 +205,13 @@ export function buildSurveyFeatures(
     let color: string;
     if (showDepthGradient) {
       color =
-        getDepthColor(stationDepth, '#00bfff', '#ff4444', depthRange.min, depthRange.max) ??
+        getDepthColor(stationDepth, depthShallow, depthDeep, depthRange.min, depthRange.max) ??
         sectionColor;
     } else {
-      color = isZeroDatum ? '#ffd700' : sectionColor;
+      color = isZeroDatum ? zeroDatum : sectionColor;
     }
 
-    const strokeColor = showDepthGradient && isZeroDatum ? '#ffd700' : '#000000';
+    const featureStrokeColor = showDepthGradient && isZeroDatum ? zeroDatum : strokeColor;
     const featureId = station.station_ref.section_id * 100000 + station.station_ref.station_index;
 
     stationFeatures.push({
@@ -223,7 +232,7 @@ export function buildSurveyFeatures(
         isMerged: station.merged_with.length > 0,
         depth: station.coordinates.z,
         color,
-        strokeColor,
+        strokeColor: featureStrokeColor,
       },
     });
   }
@@ -279,13 +288,13 @@ export function buildSurveyFeatures(
     const stationLabelDepthColor = showDepthGradient
       ? getDepthColor(
           station.coordinates.z,
-          '#00bfff',
-          '#ff4444',
+          depthShallow,
+          depthDeep,
           depthRange.min,
           depthRange.max
         )
       : null;
-    const stationLabelColor = stationLabelDepthColor ?? '#ffffff';
+    const stationLabelColor = stationLabelDepthColor ?? labelColor;
 
     stationLabelFeatures.push({
       type: 'Feature',

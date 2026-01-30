@@ -1,5 +1,7 @@
 import { useId, useMemo } from 'react';
 import { getDepthColor } from '../../utils/colors';
+import { getThemeColor } from '../../utils/themeColors';
+import { useUIStore } from '../../store/uiStore';
 
 interface DepthLegendProps {
   minDepth: number;
@@ -23,28 +25,34 @@ const GRADIENT_STOPS = 10;
 export function DepthLegend({
   minDepth,
   maxDepth,
-  shallowColor = '#00bfff',
-  deepColor = '#ff4444',
+  shallowColor,
+  deepColor,
   visible,
 }: DepthLegendProps) {
   const gradientId = useId();
+  // Subscribe to theme for reactive color updates (value triggers re-render)
+  useUIStore((s) => s.resolvedTheme);
+  const effectiveShallow = shallowColor ?? getThemeColor('--cc-depth-shallow');
+  const effectiveDeep = deepColor ?? getThemeColor('--cc-depth-deep');
+  const depthTextColor = getThemeColor('--cc-depth-text');
+  const textHaloAlt = getThemeColor('--cc-text-halo-alt');
 
   // Generate gradient stops using the same getDepthColor function as the map
   const gradientStops = useMemo(() => {
     const isFlat = minDepth === maxDepth;
     if (isFlat) {
-      return [{ offset: 0, color: shallowColor }, { offset: 100, color: shallowColor }];
+      return [{ offset: 0, color: effectiveShallow }, { offset: 100, color: effectiveShallow }];
     }
 
     const stops: { offset: number; color: string }[] = [];
     for (let i = 0; i <= GRADIENT_STOPS; i++) {
       const t = i / GRADIENT_STOPS;
       const depth = minDepth + t * (maxDepth - minDepth);
-      const color = getDepthColor(depth, shallowColor, deepColor, minDepth, maxDepth) ?? shallowColor;
+      const color = getDepthColor(depth, effectiveShallow, effectiveDeep, minDepth, maxDepth) ?? effectiveShallow;
       stops.push({ offset: t * 100, color });
     }
     return stops;
-  }, [minDepth, maxDepth, shallowColor, deepColor]);
+  }, [minDepth, maxDepth, effectiveShallow, effectiveDeep]);
 
   if (!visible) return null;
 
@@ -58,7 +66,7 @@ export function DepthLegend({
         position: 'absolute',
         bottom: 50,
         left: 10,
-        background: 'rgba(0, 0, 0, 0.7)',
+        background: textHaloAlt,
         borderRadius: 4,
         padding: 8,
         zIndex: 1,
@@ -88,13 +96,13 @@ export function DepthLegend({
           flexDirection: 'column',
           justifyContent: 'space-between',
           fontSize: 11,
-          color: 'white',
-          textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+          color: depthTextColor,
+          textShadow: `0 1px 2px ${textHaloAlt}`,
         }}
       >
         <span data-testid="depth-legend-min">{minDepth.toFixed(1)}m</span>
         {isFlat && (
-          <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>
+          <span style={{ fontSize: 10, opacity: 0.7 }}>
             (Flat)
           </span>
         )}
