@@ -11,6 +11,12 @@ export type AngleUnit = 'degrees' | 'gradians';
  */
 export type ShortcutFeedback = 'none' | 'non_obvious' | 'all';
 
+export type ThemeMode = 'dark' | 'light' | 'auto';
+
+export interface AppearanceConfig {
+  theme: ThemeMode;
+}
+
 export interface Config {
   general: GeneralConfig;
   units: UnitsConfig;
@@ -25,6 +31,7 @@ export interface Config {
   cache: CacheConfig;
   debug: DebugConfig;
   global_view: GlobalViewConfig;
+  appearance: AppearanceConfig;
 }
 
 export interface GeneralConfig {
@@ -409,5 +416,8 @@ export const defaultConfig: Config = {
     fps_threshold: 30,
     tolerance: 0.5,
     throttle_tolerance: 1.0,
+  },
+  appearance: {
+    theme: 'dark',
   },
 };

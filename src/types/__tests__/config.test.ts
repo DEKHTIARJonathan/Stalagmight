@@ -12,6 +12,8 @@ import {
   type MapSnapConfig,
   type DebugConfig,
   type MapDebugConfig,
+  type AppearanceConfig,
+  type ThemeMode,
 } from '../config';
 
 describe('defaultConfig structure', () => {
@@ -29,6 +31,7 @@ describe('defaultConfig structure', () => {
       expect(defaultConfig).toHaveProperty('panels');
       expect(defaultConfig).toHaveProperty('cache');
       expect(defaultConfig).toHaveProperty('debug');
+      expect(defaultConfig).toHaveProperty('appearance');
     });
   });
 
@@ -158,6 +161,22 @@ describe('defaultConfig structure', () => {
       expect(defaultConfig.cache.tile_cache_enabled).toBe(true);
       expect(defaultConfig.cache.tile_cache_max_mb).toBe(500);
       expect(defaultConfig.cache.tile_ttl_days).toBe(30);
+    });
+  });
+
+  describe('appearance config', () => {
+    it('has correct appearance defaults', () => {
+      expect(defaultConfig.appearance.theme).toBe('dark');
+    });
+
+    it('appearance is a valid AppearanceConfig', () => {
+      const appearance: AppearanceConfig = defaultConfig.appearance;
+      expect(typeof appearance.theme).toBe('string');
+    });
+
+    it('theme is a valid ThemeMode', () => {
+      const theme: ThemeMode = defaultConfig.appearance.theme;
+      expect(['dark', 'light', 'auto']).toContain(theme);
     });
   });
 });
