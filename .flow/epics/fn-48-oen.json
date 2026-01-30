@@ -10,7 +10,7 @@
   "plan_review_status": "ship",
   "plan_reviewed_at": "2026-01-29T17:53:56.128388Z",
   "spec_path": ".flow/specs/fn-48-oen.md",
-  "status": "open",
+  "status": "done",
   "title": "Wire file hash tracking into DMP import flow",
-  "updated_at": "2026-01-29T17:53:56.128400Z"
+  "updated_at": "2026-01-30T08:36:21.808241Z"
 }
