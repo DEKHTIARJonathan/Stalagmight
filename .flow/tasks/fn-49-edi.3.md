@@ -6,7 +6,8 @@ Update the section list sidebar in `DmpSectionConfigDialog` to show yellow warni
 
 ### Implementation
 
-- In the section list `map()` (~line 1038), compute `sectionWarnings` using `getSectionWarningCount(sectionIdx, validationConfig)`.
+<!-- Updated by plan-sync: fn-49-edi.2 map() moved to ~line 1044 -->
+- In the section list `map()` (~line 1044), compute `sectionWarnings` using `getSectionWarningCount(sectionIdx, validationConfig)`. Note: `getSectionWarningCount` must be destructured from `importState` (it is not currently destructured in the component's destructuring block at ~line 104).
 - Determine whether to show warnings based on visibility rules:
   ```typescript
   const showWarnings = sectionWarnings > 0

@@ -243,3 +243,6 @@ When extracting shared helper functions from inline logic, re-validate edge-case
 
 ## 2026-01-30 manual [pitfall]
 useEffect that computes async state must reset all derived state at the top of the effect body when dependencies change, to avoid stale values from the previous run being visible during the new computation
+
+## 2026-01-30 manual [pitfall]
+When a numeric threshold of 0 means 'disabled' in the settings UI, guard all threshold checks with > 0 to avoid treating 0 as 'warn on any non-zero difference'
