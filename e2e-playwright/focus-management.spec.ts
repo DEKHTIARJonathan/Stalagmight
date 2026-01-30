@@ -323,14 +323,19 @@ test.describe('Focus Management', () => {
       await expect(generalTab).toBeFocused({ timeout: 1000 });
       await expect(generalTab).toHaveAttribute('aria-selected', 'true');
 
-      // Arrow Down should move focus to Units tab
+      // Arrow Down should move focus to Appearance tab (second in sidebar)
       await page.keyboard.press('ArrowDown');
-      const unitsTab = page.getByTestId('settings-tab-units');
-      await expect(unitsTab).toBeFocused({ timeout: 1000 });
+      const appearanceTab = page.getByTestId('settings-tab-appearance');
+      await expect(appearanceTab).toBeFocused({ timeout: 1000 });
       // Arrow Down alone moves focus, does not activate (manual activation pattern)
       // The active category should still be General
       await expect(generalTab).toHaveAttribute('aria-selected', 'true');
-      await expect(unitsTab).toHaveAttribute('aria-selected', 'false');
+      await expect(appearanceTab).toHaveAttribute('aria-selected', 'false');
+
+      // Arrow Down again to Units
+      await page.keyboard.press('ArrowDown');
+      const unitsTab = page.getByTestId('settings-tab-units');
+      await expect(unitsTab).toBeFocused({ timeout: 1000 });
 
       // Arrow Down again to Display
       await page.keyboard.press('ArrowDown');
