@@ -37,9 +37,8 @@ Add a `getSectionWarningCount()` function to `useImportState.ts` that counts azi
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-TBD
-
+Added getSectionWarningCount() callback to useImportState hook that counts azimuth/pitch discrepancy warnings for non-deleted shots using configurable validation thresholds, with threshold=0 meaning disabled.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 8ab469c, cf41bc3
+- Tests: pnpm tsc --noEmit
 - PRs:
