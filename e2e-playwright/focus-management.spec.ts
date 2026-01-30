@@ -49,13 +49,11 @@ test.describe('Focus Management', () => {
       // NewProjectDialog is a form dialog – initial focus lands on the first text input
       await expect(page.getByTestId('new-project-name-input')).toBeFocused({ timeout: 3000 });
 
-      // The focus trap container (dialogRef) wraps the dialog content (dialogContentRef).
-      // We verify wrapping by tabbing through all elements and confirming focus cycles
-      // back to a previously-visited element without ever leaving the dialog.
-      const outerContainer = page.locator('.fixed.inset-0.z-50').first();
+      // The focus trap container (dialogRef) is the parent of the dialog content.
+      // Locate it structurally via the dialog content's parentElement.
+      const outerContainer = page.getByTestId('new-project-dialog').locator('..');
 
-      // Record each focused element's identity (via an index in DOM order).
-      // Tab through enough times to complete one full cycle plus one.
+      // Count focusable elements inside the trap container.
       const focusableCount = await outerContainer.evaluate((el) => {
         const selector =
           'a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])';
@@ -87,21 +85,20 @@ test.describe('Focus Management', () => {
 
       const dialog = page.getByTestId('new-project-dialog');
 
-      // Move focus to the first focusable element (close button or first input)
-      // The focus trap treats the container itself at first position.
+      // Move focus to the first focusable element (close button or first input).
       // Put focus explicitly on the first focusable inside the dialog content.
-      const firstFocusable = await dialog.evaluateHandle((el) => {
+      await dialog.evaluate((el) => {
         const selector =
           'a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])';
         const candidates = el.querySelectorAll(selector);
         for (const c of candidates) {
-          if (c.getClientRects().length > 0) return c;
+          if (c.getClientRects().length > 0) {
+            (c as HTMLElement).focus();
+            return;
+          }
         }
-        return null;
+        throw new Error('No focusable element found in dialog');
       });
-      if (firstFocusable) {
-        await firstFocusable.asElement()?.focus();
-      }
 
       // Shift+Tab from the first element should wrap to the last
       await page.keyboard.press('Shift+Tab');
@@ -166,12 +163,13 @@ test.describe('Focus Management', () => {
 
       // Focus should return to the delete button (the trigger element).
       // The button may have become hidden again (opacity-0) but should still be
-      // in the DOM and focusable. Check activeElement is within the sections panel.
-      const focusReturnedToPanel = await page.evaluate(() => {
-        const panel = document.querySelector('[data-testid="sections-panel"]');
-        return panel?.contains(document.activeElement) ?? false;
+      // in the DOM and focusable. Assert the actual trigger element is focused.
+      const focusedOnTrigger = await page.evaluate(() => {
+        const ae = document.activeElement;
+        const testId = ae?.getAttribute('data-testid') ?? '';
+        return testId.startsWith('section-delete-');
       });
-      expect(focusReturnedToPanel).toBe(true);
+      expect(focusedOnTrigger).toBe(true);
     });
   });
 
@@ -207,21 +205,18 @@ test.describe('Focus Management', () => {
       });
       expect(alertFocusableCount).toBeGreaterThan(0);
 
-      // Focus something inside the alertdialog, then Tab through all elements
+      // Focus something inside the alertdialog, then Tab through all elements.
+      // The focus trap container is the parent of [role="alertdialog"] (the
+      // alertDialogRef div with tabIndex={-1}).
+      const trapContainer = alertDialog.locator('..');
       await page.keyboard.press('Tab');
       for (let i = 0; i < alertFocusableCount + 1; i++) {
-        const insideAlertDialog = await alertDialog.evaluate(
+        // Focus must be inside the trap container (alertDialogRef) or the
+        // alertdialog itself — never outside.
+        const insideTrap = await trapContainer.evaluate(
           (el) => el.contains(document.activeElement),
         );
-        // After the alertdialog receives focus, the focus trap container (the
-        // wrapping div with tabIndex={-1}) also counts.  It's acceptable for
-        // activeElement to be the container itself.
-        const insideAlertOrContainer = insideAlertDialog || await page.evaluate(() => {
-          const ae = document.activeElement;
-          return ae?.closest('[role="alertdialog"]') !== null ||
-                 ae?.querySelector('[role="alertdialog"]') !== null;
-        });
-        expect(insideAlertOrContainer).toBe(true);
+        expect(insideTrap).toBe(true);
         await page.keyboard.press('Tab');
       }
 
@@ -233,18 +228,13 @@ test.describe('Focus Management', () => {
       const hasInert = await outerDialogContent.evaluate((el) => el.hasAttribute('inert'));
       expect(hasInert).toBe(false);
 
-      // Focus should be back inside the outer dialog
-      const focusInOuterDialog = await page.evaluate(() => {
-        const dialog = document.querySelector('[data-testid="new-project-dialog"]');
-        return dialog?.contains(document.activeElement) ?? false;
-      });
-      // Focus may be on the dialog wrapper (parent) rather than inside the content div,
-      // which is also acceptable.
-      const focusInDialogWrapper = focusInOuterDialog || await page.evaluate(() => {
-        const ae = document.activeElement;
-        return ae?.querySelector('[data-testid="new-project-dialog"]') !== null;
-      });
-      expect(focusInDialogWrapper).toBe(true);
+      // Focus should be back inside the outer dialog trap container (dialogRef),
+      // which is the parent of the dialog content div.
+      const outerTrapContainer = outerDialogContent.locator('..');
+      const focusInOuterTrap = await outerTrapContainer.evaluate(
+        (el) => el.contains(document.activeElement),
+      );
+      expect(focusInOuterTrap).toBe(true);
     });
   });
 
@@ -281,8 +271,9 @@ test.describe('Focus Management', () => {
 
       await expect(page.getByTestId('confirm-dialog')).toBeVisible({ timeout: 5000 });
 
-      // Wait for the initial focus heuristic (runs via requestAnimationFrame)
-      await page.waitForTimeout(200);
+      // Wait for the initial focus heuristic (runs via requestAnimationFrame).
+      // Use deterministic wait: poll until the primary action button is focused.
+      await expect(page.locator('[data-primary-action]')).toBeFocused({ timeout: 3000 });
 
       // The ConfirmDialog has a Delete button with data-primary-action attribute.
       // According to DialogWrapper's initial focus heuristic (priority 3), this
@@ -328,11 +319,8 @@ test.describe('Focus Management', () => {
       // Click on the general tab to focus it
       await generalTab.click();
 
-      // Wait for aria-activedescendant/focus to settle (per memory pitfall)
-      await page.waitForTimeout(100);
-
-      // Verify initial state: General tab is focused and selected
-      await expect(generalTab).toBeFocused();
+      // Verify initial state: General tab is focused and selected (deterministic wait)
+      await expect(generalTab).toBeFocused({ timeout: 1000 });
       await expect(generalTab).toHaveAttribute('aria-selected', 'true');
 
       // Arrow Down should move focus to Units tab
