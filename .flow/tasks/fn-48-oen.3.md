@@ -31,9 +31,8 @@ Show a non-blocking warning banner in DmpSelectionDialog when `isDuplicate` is t
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-TBD
-
+Added duplicate hash warning banner to DmpSelectionDialog. The banner appears between the file metadata header and Default Values panel when isDuplicate && hashSettled is true, using existing warning styling pattern and spec-matching text with data-testid for E2E testability.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 0c44a03b27b2f21da8f8444584de0432ca72fa41
+- Tests: pnpm tsc --noEmit
 - PRs:
