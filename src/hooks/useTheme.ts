@@ -1,6 +1,31 @@
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore, type ResolvedTheme } from '../store/uiStore';
+
+/**
+ * Subscribe to a MediaQueryList change event, with fallback for older
+ * WebView implementations that only support the deprecated addListener API.
+ * Returns a cleanup function to remove the listener.
+ */
+function subscribeMediaQuery(
+  mql: MediaQueryList,
+  handler: (e: MediaQueryListEvent) => void
+): () => void {
+  // Modern browsers and Tauri WebView2 support addEventListener.
+  // Cast to unknown first to allow runtime check for older WebViews
+  // that only expose the deprecated addListener/removeListener API.
+  if (typeof mql.addEventListener === 'function') {
+    mql.addEventListener('change', handler);
+    return () => mql.removeEventListener('change', handler);
+  }
+  // Fallback for older WebView/browser implementations
+  const legacy = mql as unknown as {
+    addListener: (cb: (e: MediaQueryListEvent) => void) => void;
+    removeListener: (cb: (e: MediaQueryListEvent) => void) => void;
+  };
+  legacy.addListener(handler);
+  return () => legacy.removeListener(handler);
+}
 
 /**
  * Hook that reads the theme preference from config, resolves 'auto' mode
@@ -8,9 +33,15 @@ import { useUIStore, type ResolvedTheme } from '../store/uiStore';
  * data-theme attribute on document.documentElement, and stores the
  * resolved theme in uiStore for MapLibre and canvas components.
  *
+ * Uses useLayoutEffect so the data-theme attribute is committed before
+ * paint, preventing a flash of the wrong theme.
+ *
  * Call this once at the top level of the App component.
  *
- * @returns The resolved theme ('dark' | 'light')
+ * @returns The last resolved theme from uiStore ('dark' | 'light').
+ *   Note: on the very first render the store value may be the initial
+ *   default ('dark') until the layout effect runs. This is intentional --
+ *   the CSS :root defaults to dark so there is no visual mismatch.
  */
 export function useTheme(): ResolvedTheme {
   const themePreference = useProjectStore(
@@ -22,7 +53,7 @@ export function useTheme(): ResolvedTheme {
   // Track media query listener cleanup
   const mediaListenerCleanupRef = useRef<(() => void) | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     // Clean up any previous media query listener
     if (mediaListenerCleanupRef.current) {
       mediaListenerCleanupRef.current();
@@ -39,6 +70,12 @@ export function useTheme(): ResolvedTheme {
     }
 
     if (themePreference === 'auto') {
+      // Guard against environments where matchMedia is unavailable
+      if (typeof window.matchMedia !== 'function') {
+        applyTheme('dark');
+        return;
+      }
+
       // Resolve from OS preference
       const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
       const resolved: ResolvedTheme = mediaQuery.matches ? 'dark' : 'light';
@@ -49,11 +86,7 @@ export function useTheme(): ResolvedTheme {
         const newTheme: ResolvedTheme = e.matches ? 'dark' : 'light';
         applyTheme(newTheme);
       };
-      mediaQuery.addEventListener('change', handler);
-
-      mediaListenerCleanupRef.current = () => {
-        mediaQuery.removeEventListener('change', handler);
-      };
+      mediaListenerCleanupRef.current = subscribeMediaQuery(mediaQuery, handler);
     } else {
       // Direct theme: 'dark' or 'light'
       const resolved: ResolvedTheme = themePreference === 'light' ? 'light' : 'dark';
