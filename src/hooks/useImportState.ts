@@ -7,6 +7,8 @@ import {
   validateEditableShot,
   validatePlacement,
   validateMergeTarget,
+  hasAzimuthDiscrepancy,
+  hasPitchDiscrepancy,
 } from '../utils/validation';
 
 /**
@@ -1059,6 +1061,26 @@ export function useImportState(
   }, [getSectionErrors]);
 
   /**
+   * Get the warning count for a specific section (azimuth/pitch discrepancies).
+   * Counts non-deleted shots with azimuth or pitch discrepancies using the
+   * provided validation config thresholds.
+   */
+  const getSectionWarningCount = useCallback((
+    sectionIndex: number,
+    valConfig: { azimuth_diff_threshold: number; pitch_diff_threshold: number }
+  ): number => {
+    const sectionConfig = state.sectionConfigs.get(sectionIndex);
+    if (!sectionConfig) return 0;
+    let warnings = 0;
+    for (const shot of sectionConfig.shots) {
+      if (shot.isDeleted) continue;
+      if (hasAzimuthDiscrepancy(shot.azimuth_in, shot.azimuth_out, valConfig.azimuth_diff_threshold)) warnings++;
+      if (hasPitchDiscrepancy(shot.pitch_in, shot.pitch_out, valConfig.pitch_diff_threshold)) warnings++;
+    }
+    return warnings;
+  }, [state.sectionConfigs]);
+
+  /**
    * Get total error count across all sections.
    */
   const getTotalErrorCount = useCallback((
@@ -1201,6 +1223,7 @@ export function useImportState(
     getAllSectionErrors,
     getSectionErrorCount,
     getSectionDataErrorCount,
+    getSectionWarningCount,
     getTotalErrorCount,
     getTotalDataErrorCount,
     canImport,
