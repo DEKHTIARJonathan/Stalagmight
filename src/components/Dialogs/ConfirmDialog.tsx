@@ -11,7 +11,7 @@ export default function ConfirmDialog() {
   const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
   const { deleteShot, deleteSection, deleteLastShotAndSection, deleteShotAndSplit } = useProjectStore();
 
-  const type = dialogData.type as 'station' | 'shot' | 'section' | undefined;
+  const type = dialogData.type as 'station' | 'shot' | 'section' | 'last-shot' | undefined;
   const message = dialogData.message as string | undefined;
   const stationRef = dialogData.stationRef as StationRef | undefined;
   const sectionId = dialogData.sectionId as number | undefined;
@@ -34,9 +34,9 @@ export default function ConfirmDialog() {
 
   const [relationships, setRelationships] = useState<SectionRelationships | null>(null);
 
-  // Fetch relationships when dialog opens for section deletion
+  // Fetch relationships when dialog opens for section or last-shot deletion
   useEffect(() => {
-    if (type === 'section' && sectionId !== undefined) {
+    if ((type === 'section' || type === 'last-shot') && sectionId !== undefined) {
       invoke<SectionRelationships>('get_section_relationships', { sectionId })
         .then(setRelationships)
         .catch(() => setRelationships(null));
@@ -46,6 +46,13 @@ export default function ConfirmDialog() {
   }, [type, sectionId]);
 
   const handleConfirm = async () => {
+    if (type === 'last-shot' && sectionId !== undefined && shotId !== undefined) {
+      // Last remaining shot: delete shot + entire section
+      await deleteLastShotAndSection(sectionId, shotId);
+      clearSelection();
+      closeDialog();
+      return;
+    }
     if (type === 'shot' && sectionId !== undefined && shotId !== undefined) {
       if (splitRequired) {
         // Mid-section shot: delete and split section
@@ -78,6 +85,8 @@ export default function ConfirmDialog() {
         return 'Delete Station';
       case 'shot':
         return splitRequired ? 'Delete Shot & Split Section' : 'Delete Shot';
+      case 'last-shot':
+        return 'Delete Shot & Section';
       case 'section':
         return 'Delete Section';
       default:
@@ -91,6 +100,8 @@ export default function ConfirmDialog() {
         return 'Deleting a station will delete all connected shots. Are you sure?';
       case 'shot':
         return 'Are you sure you want to delete this shot?';
+      case 'last-shot':
+        return 'Deleting the last shot will remove the entire section. Continue?';
       case 'section':
         return 'Are you sure you want to delete this section and all its shots?';
       default:
@@ -142,7 +153,7 @@ export default function ConfirmDialog() {
           </div>
         )}
 
-        {type === 'section' && hasRelationships && (
+        {(type === 'section' || type === 'last-shot') && hasRelationships && (
           <div className="p-3 bg-warning/10 border border-warning/20 rounded text-sm space-y-1">
             <p className="font-medium text-warning">The following relationships will also be removed:</p>
             <ul className="list-disc list-inside text-text-secondary">

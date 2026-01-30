@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import type { StationRef, SectionId, ShotId } from '../../types/project';
+import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 
 interface ContextMenuItem {
   label: string;
@@ -252,35 +253,19 @@ export default function ContextMenu() {
         danger: true,
       });
       items.push({ label: '', action: () => {}, separator: true });
-      // Position-aware Delete Shot:
-      // - Edge shot (first/last, section has >1 shot): simple confirm → deleteShot
-      // - Mid-section shot: opens SplitSectionDialog for naming + split
-      // - Last remaining shot (totalShots === 1): confirm → deleteLastShotAndSection
-      const isMidShot = shotIndex >= 0 && !isFirst && !isLast && totalShots > 2;
-      const isLastRemaining = totalShots === 1;
+      // Position-aware Delete Shot using shared helper
       items.push({
         label: 'Delete Shot',
         action: () => {
-          if (isMidShot) {
-            openDialog('split-section', {
-              sectionId: target.sectionId,
-              shotId: target.shotId,
-              sectionName: section?.name ?? `Section ${target.sectionId}`,
-            });
-          } else {
-            openDialog('confirm-delete', {
-              type: 'shot',
-              sectionId: target.sectionId,
-              shotId: target.shotId,
-              isFirst,
-              isLast,
-              totalShots,
-              sectionName: section?.name ?? `Section ${target.sectionId}`,
-              message: isLastRemaining
-                ? 'This is the only shot in the section. Deleting it will remove the entire section. Continue?'
-                : undefined,
-            });
-          }
+          const { dialog, data } = getDeleteShotDialog(
+            target.sectionId,
+            target.shotId,
+            isFirst,
+            isLast,
+            totalShots,
+            section?.name ?? `Section ${target.sectionId}`,
+          );
+          openDialog(dialog, data);
         },
         danger: true,
       });
@@ -377,11 +362,19 @@ export default function ContextMenu() {
         items.push({ label: '', action: () => {}, separator: true });
       }
 
-      // "Delete Shot" - always visible, danger-styled
+      // "Delete Shot" - position-aware using shared helper
       items.push({
         label: 'Delete Shot',
         action: () => {
-          openDialog('confirm-delete', { type: 'shot', sectionId: target.sectionId, shotId: target.shotId });
+          const { dialog, data } = getDeleteShotDialog(
+            target.sectionId,
+            target.shotId,
+            target.isFirst,
+            target.isLast,
+            target.totalShots,
+            target.sectionName,
+          );
+          openDialog(dialog, data);
         },
         danger: true,
       });
