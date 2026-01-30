@@ -6,6 +6,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   defaultConfig,
+  lightDisplayDefaults,
+  lightSectionColorDefaults,
+  getThemedDisplayDefaults,
+  getThemedSectionColorDefaults,
   type Config,
   type StationConfig,
   type ShotConfig,
@@ -261,5 +265,97 @@ describe('Config value consistency', () => {
   it('snap threshold is within valid bounds (1-50)', () => {
     expect(defaultConfig.map.snap.threshold).toBeGreaterThanOrEqual(1);
     expect(defaultConfig.map.snap.threshold).toBeLessThanOrEqual(50);
+  });
+});
+
+describe('theme-aware display defaults', () => {
+  describe('lightDisplayDefaults', () => {
+    it('has light-appropriate background color', () => {
+      expect(lightDisplayDefaults.default_background).toBe('#f5f0e8');
+    });
+
+    it('has light-appropriate grid color', () => {
+      expect(lightDisplayDefaults.grid_color).toBe('#c1a07a');
+    });
+
+    it('has light-appropriate font color', () => {
+      expect(lightDisplayDefaults.font_color).toBe('#1a120b');
+    });
+
+    it('uses correct field names matching DisplayConfig', () => {
+      expect(lightDisplayDefaults).toHaveProperty('default_background');
+      expect(lightDisplayDefaults).toHaveProperty('grid_color');
+      expect(lightDisplayDefaults).toHaveProperty('font_color');
+      expect(lightDisplayDefaults).toHaveProperty('grid_spacing');
+      expect(lightDisplayDefaults).toHaveProperty('font_size');
+      expect(lightDisplayDefaults).toHaveProperty('depth_gradient');
+    });
+
+    it('has depth gradient settings', () => {
+      expect(lightDisplayDefaults.depth_gradient).toHaveProperty('enabled');
+      expect(lightDisplayDefaults.depth_gradient).toHaveProperty('shallow_color');
+      expect(lightDisplayDefaults.depth_gradient).toHaveProperty('deep_color');
+    });
+  });
+
+  describe('lightSectionColorDefaults', () => {
+    it('has 8 palette colors', () => {
+      expect(lightSectionColorDefaults.palette).toHaveLength(8);
+    });
+
+    it('has all valid hex colors', () => {
+      for (const color of lightSectionColorDefaults.palette) {
+        expect(color).toMatch(/^#[0-9a-fA-F]{6}$/);
+      }
+    });
+
+    it('has different colors from dark palette', () => {
+      const darkPalette = defaultConfig.section_colors.palette;
+      const lightPalette = lightSectionColorDefaults.palette;
+      // At least some colors should differ between themes
+      const hasDifference = lightPalette.some((c, i) => c !== darkPalette[i]);
+      expect(hasDifference).toBe(true);
+    });
+  });
+
+  describe('getThemedDisplayDefaults', () => {
+    it('returns dark defaults for dark theme', () => {
+      const result = getThemedDisplayDefaults('dark');
+      expect(result.default_background).toBe(defaultConfig.display.default_background);
+      expect(result.grid_color).toBe(defaultConfig.display.grid_color);
+      expect(result.font_color).toBe(defaultConfig.display.font_color);
+    });
+
+    it('returns light defaults for light theme', () => {
+      const result = getThemedDisplayDefaults('light');
+      expect(result.default_background).toBe(lightDisplayDefaults.default_background);
+      expect(result.grid_color).toBe(lightDisplayDefaults.grid_color);
+      expect(result.font_color).toBe(lightDisplayDefaults.font_color);
+    });
+
+    it('returns deep copies (not references)', () => {
+      const result1 = getThemedDisplayDefaults('light');
+      const result2 = getThemedDisplayDefaults('light');
+      expect(result1).not.toBe(result2);
+      expect(result1.depth_gradient).not.toBe(result2.depth_gradient);
+    });
+  });
+
+  describe('getThemedSectionColorDefaults', () => {
+    it('returns dark palette for dark theme', () => {
+      const result = getThemedSectionColorDefaults('dark');
+      expect(result.palette).toEqual(defaultConfig.section_colors.palette);
+    });
+
+    it('returns light palette for light theme', () => {
+      const result = getThemedSectionColorDefaults('light');
+      expect(result.palette).toEqual(lightSectionColorDefaults.palette);
+    });
+
+    it('returns deep copies (not references)', () => {
+      const result1 = getThemedSectionColorDefaults('dark');
+      const result2 = getThemedSectionColorDefaults('dark');
+      expect(result1.palette).not.toBe(result2.palette);
+    });
   });
 });

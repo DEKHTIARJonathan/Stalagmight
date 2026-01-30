@@ -19,7 +19,12 @@ import { CacheSettings } from './settings/CacheSettings';
 import { AdvancedSettings } from './settings/AdvancedSettings';
 import { AppearanceSettings } from './settings/AppearanceSettings';
 import type { Config } from '../../types/config';
-import { defaultConfig } from '../../types/config';
+import {
+  defaultConfig,
+  getThemedDisplayDefaults,
+  getThemedSectionColorDefaults,
+} from '../../types/config';
+import type { ResolvedTheme } from '../../store/uiStore';
 
 /**
  * Deep comparison of two config objects to detect changed field paths.
@@ -63,7 +68,7 @@ function getChangedFields(originalConfig: Config, currentConfig: Config): Set<st
 /**
  * Get category-specific defaults from defaultConfig.
  */
-function getCategoryDefaults(category: SettingsCategory): Partial<Config> {
+function getCategoryDefaults(category: SettingsCategory, resolvedTheme: ResolvedTheme = 'dark'): Partial<Config> {
   switch (category) {
     case 'general':
       return { general: { ...defaultConfig.general } };
@@ -71,8 +76,8 @@ function getCategoryDefaults(category: SettingsCategory): Partial<Config> {
       return { units: { ...defaultConfig.units } };
     case 'display':
       return {
-        display: { ...defaultConfig.display, depth_gradient: { ...defaultConfig.display.depth_gradient } },
-        section_colors: { palette: [...defaultConfig.section_colors.palette] },
+        display: getThemedDisplayDefaults(resolvedTheme),
+        section_colors: getThemedSectionColorDefaults(resolvedTheme),
       };
     case 'map':
       return {
@@ -291,6 +296,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
 
 export default function SettingsDialog() {
   const { closeDialog } = useUIStore();
+  const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   const { config, updateConfig } = useProjectStore();
 
   // Panel ID base for ARIA associations
@@ -452,10 +458,10 @@ export default function SettingsDialog() {
   const handleConfirmReset = useCallback(() => {
     if (!localConfig) return;
 
-    const defaults = getCategoryDefaults(activeCategory);
+    const defaults = getCategoryDefaults(activeCategory, resolvedTheme);
     setLocalConfig(mergeConfig(localConfig, defaults));
     setShowResetConfirm(false);
-  }, [localConfig, activeCategory]);
+  }, [localConfig, activeCategory, resolvedTheme]);
 
   // Cancel reset
   const handleCancelReset = useCallback(() => {
