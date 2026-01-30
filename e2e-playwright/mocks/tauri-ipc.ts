@@ -1270,6 +1270,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   log_hit_detection: false,
                 },
               },
+              appearance: {
+                theme: 'dark',
+              },
             };
 
           case 'update_config':
@@ -1421,6 +1424,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   show_hitboxes: mockConfigOverrides.debug?.map?.show_hitboxes ?? false,
                   log_hit_detection: mockConfigOverrides.debug?.map?.log_hit_detection ?? false,
                 },
+              },
+              appearance: {
+                theme: 'dark',
               },
             };
             return baseConfig;

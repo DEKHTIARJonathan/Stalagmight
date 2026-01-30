@@ -204,6 +204,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
     cache: { ...base.cache },
     debug: { map: { ...base.debug.map } },
     global_view: { ...base.global_view },
+    appearance: { ...base.appearance },
   };
 
   // Apply updates with deep merge for each key
@@ -277,6 +278,9 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   }
   if (updates.global_view) {
     result.global_view = { ...result.global_view, ...updates.global_view };
+  }
+  if (updates.appearance) {
+    result.appearance = { ...result.appearance, ...updates.appearance };
   }
 
   return result;

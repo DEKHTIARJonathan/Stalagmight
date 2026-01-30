@@ -22,6 +22,8 @@ pub struct Config {
     pub debug: DebugConfig,
     #[serde(default)]
     pub global_view: GlobalViewConfig,
+    #[serde(default)]
+    pub appearance: AppearanceConfig,
 
     // Legacy fields for backwards compatibility (deserialize only, never serialize)
     // Uses alias to match old TOML key name while keeping internal field name distinct
@@ -344,6 +346,39 @@ impl Default for GlobalViewConfig {
             fps_threshold: default_fps_threshold(),
             tolerance: default_tolerance(),
             throttle_tolerance: default_throttle_tolerance(),
+        }
+    }
+}
+
+/// Theme mode for the application
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    #[default]
+    Dark,
+    Light,
+    Auto,
+}
+
+/// Appearance configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppearanceConfig {
+    #[serde(default)]
+    pub theme: ThemeMode,
+}
+
+impl AppearanceConfig {
+    /// Normalize appearance values: invalid theme resets to "dark"
+    pub fn normalize(&mut self) {
+        // ThemeMode enum handles validation via serde; if deserialized successfully it's valid.
+        // This method exists for future extensibility and to match the normalize pattern.
+    }
+}
+
+impl Default for AppearanceConfig {
+    fn default() -> Self {
+        Self {
+            theme: ThemeMode::default(),
         }
     }
 }
@@ -1049,6 +1084,7 @@ impl Config {
         self.map.normalize();
         self.shortcuts.normalize();
         self.global_view.normalize();
+        self.appearance.normalize();
     }
 
     /// Migrate legacy config fields to new structure

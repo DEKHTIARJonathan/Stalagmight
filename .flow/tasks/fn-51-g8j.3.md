@@ -33,9 +33,8 @@ Replace every hardcoded hex color in `src/index.css` (scrollbar, focus, inputs, 
 - [ ] Focus rings visible and correct color
 
 ## Done summary
-
-(To be filled on completion)
-
+Migrated all hardcoded hex colors in src/index.css (scrollbar, focus, inputs, checkboxes, tables, selection indicator, DatePicker, MapLibre controls) to var(--cc-*) CSS variable references, using explicit alpha tokens for rgba shadow values. Removed color-scheme: dark from individual selectors since it is now handled by root-level theme blocks.
 ## Evidence
-
-(To be filled on completion)
+- Commits: da67f04f8d8bbfa76331192b00b1fbb30d1a0be8
+- Tests: pnpm tsc --noEmit, cargo test --manifest-path src-tauri/Cargo.toml
+- PRs:

@@ -16,6 +16,7 @@ impl Default for Config {
             cache: CacheConfig::default(),
             debug: DebugConfig::default(),
             global_view: GlobalViewConfig::default(),
+            appearance: AppearanceConfig::default(),
             legacy_snap: None,
         }
     }
