@@ -193,8 +193,8 @@ Config loads asynchronously via `useEffect` in App.tsx. The `useTheme` hook must
 
 ## Risks
 
-- **Tailwind + CSS variables**: Opacity modifiers break. Mitigated by dedicated opacity tokens.
+- **Tailwind + CSS variables**: Opacity modifiers break. Mitigated by dedicated opacity tokens (tasks 1, 11).
 - **Large scope**: 60+ CSS variables, 20+ files to modify. Mitigated by systematic task breakdown and grep-driven migration.
-- **Canvas rendering**: Components using `getComputedStyle` to read CSS variables in canvas contexts may need special handling.
-- **MapLibre style expressions**: SurveyLayer uses MapLibre GL JS style expressions which may not support CSS variables directly. May need to read variables via JS and pass as values.
-- **Third-party widget overrides**: DatePicker and MapLibre use `!important`. All must be converted.
+- **MapLibre style expressions**: MapLibre GL JS does NOT read CSS variables. Colors must be read via `getComputedStyle()` and passed as literal values. **When theme changes, MapLibre styles must be explicitly re-applied.** Mitigated by: `useTheme` returning resolved theme + storing in uiStore; MapLibre components subscribe to `resolvedTheme` and re-apply paint properties via `useEffect` (tasks 5, 10).
+- **Third-party widget overrides**: DatePicker and MapLibre use `!important`. All must be converted (task 7).
+- **SettingsCategory type**: Defined in `SettingsSidebar.tsx` (not a separate types.ts file). Task 6 must modify the correct file.

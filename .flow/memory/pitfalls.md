@@ -246,3 +246,6 @@ useEffect that computes async state must reset all derived state at the top of t
 
 ## 2026-01-30 manual [pitfall]
 When a numeric threshold of 0 means 'disabled' in the settings UI, guard all threshold checks with > 0 to avoid treating 0 as 'warn on any non-zero difference'
+
+## 2026-01-30 manual [pitfall]
+DOM ancestry walks that stop at container (current !== container) miss checking the container itself for attributes like inert/aria-hidden — use a break-after-check pattern instead
