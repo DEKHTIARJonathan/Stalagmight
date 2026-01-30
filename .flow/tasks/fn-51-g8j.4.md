@@ -11,6 +11,7 @@ Add a new `appearance` config section with a `theme` field (`'dark' | 'light' | 
 - `src-tauri/src/config/defaults.rs`
 - `src/components/Dialogs/SettingsDialog.tsx` (internal `mergeConfig()` and `getCategoryDefaults()`)
 - `e2e-playwright/mocks/tauri-ipc.ts`
+- `src/types/__tests__/config.test.ts` (update test expectations for new `appearance` key)
 
 ## Approach
 
@@ -18,14 +19,16 @@ Add a new `appearance` config section with a `theme` field (`'dark' | 'light' | 
 - Add corresponding Rust struct with `#[serde(default)]` for backward compatibility
 - Add `'appearance'` case to `getCategoryDefaults()` (internal function at ~lines 65-105 in SettingsDialog.tsx)
 - Add `appearance` branch to `mergeConfig()` (internal function at ~lines 183-283 in SettingsDialog.tsx)
-- Add `appearance: { theme: 'dark' }` to the mock config object in `e2e-playwright/mocks/tauri-ipc.ts` `get_config` handler
+- Add `appearance: { theme: 'dark' }` to **both** `get_config` and `reload_config` mock handlers in `e2e-playwright/mocks/tauri-ipc.ts` (both return full config objects)
 - Both `mergeConfig()` and `getCategoryDefaults()` are **internal functions** (not exported) within SettingsDialog.tsx
+- Add `AppearanceConfig::normalize()` in Rust: invalid theme values reset to `"dark"`. Call from `Config::normalize()`
+- Update `src/types/__tests__/config.test.ts` to include `appearance` in expected top-level keys
 
 ## Key context
 
 - `mergeConfig()` does field-by-field deep merging; `appearance` needs its own branch
 - `getCategoryDefaults()` uses a switch statement; add `'appearance'` case returning `{ appearance: defaultConfig.appearance }`
-- E2E mock at `e2e-playwright/mocks/tauri-ipc.ts` hardcodes `get_config` return — must add `appearance` field or tests crash when `Config` type requires it
+- E2E mock at `e2e-playwright/mocks/tauri-ipc.ts` hardcodes config return values in **both** `get_config` and `reload_config` handlers — must add `appearance` field to both or tests crash when `Config` type requires it
 - Rust uses `#[serde(default)]` so existing TOML configs without `[appearance]` still load
 
 ## Acceptance
@@ -35,13 +38,14 @@ Add a new `appearance` config section with a `theme` field (`'dark' | 'light' | 
 - [ ] `defaultConfig.appearance.theme` is `'dark'`
 - [ ] Rust `AppearanceConfig` struct matches TypeScript
 - [ ] `#[serde(default)]` on the field so existing config files without `[appearance]` section load correctly
-- [ ] Normalization rejects invalid theme values
+- [ ] Rust `AppearanceConfig::normalize()` resets invalid theme values to `"dark"`, called from `Config::normalize()`
 - [ ] `mergeConfig()` in SettingsDialog.tsx handles `appearance` field
 - [ ] `getCategoryDefaults()` in SettingsDialog.tsx returns appearance defaults
-- [ ] E2E mock config in `e2e-playwright/mocks/tauri-ipc.ts` includes `appearance: { theme: 'dark' }`
+- [ ] E2E mock config in `e2e-playwright/mocks/tauri-ipc.ts` includes `appearance: { theme: 'dark' }` in **both** `get_config` and `reload_config` handlers
 - [ ] `pnpm tsc --noEmit` passes
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes
 - [ ] Existing config files load without error (backward compatible)
+- [ ] `src/types/__tests__/config.test.ts` updated to include `appearance` in expected keys
 
 ## Done summary
 

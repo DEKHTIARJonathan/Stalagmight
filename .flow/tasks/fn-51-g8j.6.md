@@ -16,7 +16,7 @@ Create a new Appearance settings tab component and integrate it into the existin
 - **IMPORTANT**: `SettingsCategory` type is defined in `src/components/Dialogs/SettingsSidebar.tsx` (NOT in a `settings/` subdirectory). The `CATEGORIES` array is also in this file.
 - Place Appearance tab second in the sidebar (after General, before Units)
 - Theme selector: radio group with Dark / Light / Auto options, each with description
-- Import `SettingsCategoryProps` from `./settings/types` (relative to Dialogs/)
+- `AppearanceSettings.tsx` lives inside `settings/`, so import `SettingsCategoryProps` from `./types` (relative to `settings/`), matching the pattern used by other settings tab components (e.g., `GeneralSettings.tsx` imports from `./types`)
 
 ## Key context
 

@@ -38,6 +38,7 @@ body {
 :root {
   --cc-focus-ring: #4ecdc4;
   --cc-focus-ring-offset: 2px;
+  --cc-focus-ring-shadow: rgba(78, 205, 196, 0.5);
 }
 
 /* Focus styles */
@@ -147,7 +148,7 @@ input[type="checkbox"]:focus-visible,
 input[type="radio"]:focus-visible {
   outline: 2px solid var(--cc-focus-ring);
   outline-offset: var(--cc-focus-ring-offset);
-  box-shadow: 0 0 0 2px rgba(78, 205, 196, 0.5);
+  box-shadow: 0 0 0 2px var(--cc-focus-ring-shadow);
 }
 
 /* Color picker dark theme */

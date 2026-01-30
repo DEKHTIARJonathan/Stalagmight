@@ -1773,6 +1773,8 @@ On dialog open, focus is placed on the first matching element in priority order:
 4. First non-close `button` — any button that is not the close/X button
 5. Close X button — fallback to the dialog's close button
 
+Confirmation dialogs: focus the primary action button (marked with `[data-primary-action]`).
+
 #### Return Focus
 - On dialog close, return focus to the element that triggered the dialog
 - If the trigger element no longer exists in the DOM, focus is not forcibly moved (browser default applies)
@@ -1788,9 +1790,10 @@ On dialog open, focus is placed on the first matching element in priority order:
 :root {
   --cc-focus-ring: #4ecdc4;
   --cc-focus-ring-offset: 2px;
+  --cc-focus-ring-shadow: rgba(78, 205, 196, 0.5);
 }
 ```
-All `:focus-visible` outlines use `var(--cc-focus-ring)` and `var(--cc-focus-ring-offset)` instead of hardcoded values. See also Section 11.4.
+All `:focus-visible` outlines use `var(--cc-focus-ring)` and `var(--cc-focus-ring-offset)` instead of hardcoded values. The focus ring box-shadow uses `var(--cc-focus-ring-shadow)`. See also Section 11.4.
 
 ### 11.2 Keyboard Navigation
 
@@ -1839,7 +1842,7 @@ All shortcuts configurable and disableable:
 
 #### Focus Indicators
 - Clear outline on all focusable elements
-- Custom focus ring: `--cc-focus-ring`
+- Custom focus ring: `--cc-focus-ring`, `--cc-focus-ring-offset`, `--cc-focus-ring-shadow`
 - Never suppressed with `outline: none`
 
 #### Contrast Ratios (WCAG AA)
