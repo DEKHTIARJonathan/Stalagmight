@@ -41,9 +41,8 @@ Create a React hook that reads the theme preference from config, resolves `auto`
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-
-(To be filled on completion)
-
+Created useTheme hook that reads theme preference from config, resolves auto mode via OS prefers-color-scheme media query, applies data-theme attribute on document root before paint using useLayoutEffect, and stores resolved theme in uiStore for downstream MapLibre/canvas components. Hook is called at App.tsx root; defaults to dark when config is loading.
 ## Evidence
-
-(To be filled on completion)
+- Commits: 86c0e2643cd94e1b0b100edef24a8e1f80e8f7e8, f97cb7ae981ec075e90f02149dd1d42eab43f1f5
+- Tests: pnpm tsc --noEmit, cargo test --manifest-path src-tauri/Cargo.toml, pnpm test:ui
+- PRs:

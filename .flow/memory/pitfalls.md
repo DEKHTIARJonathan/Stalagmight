@@ -276,3 +276,6 @@ When adding a new serde enum variant to Rust config, use #[serde(other)] on an U
 
 ## 2026-01-30 manual [pitfall]
 When adding a new required field to Config type in TypeScript, search ALL hardcoded mock config objects across E2E test files (not just tauri-ipc.ts) and add the field to every one
+
+## 2026-01-30 manual [pitfall]
+Hooks that set DOM attributes (data-theme, className) affecting CSS must use useLayoutEffect not useEffect to avoid flash of wrong styles before paint
