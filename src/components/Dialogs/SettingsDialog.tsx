@@ -17,6 +17,7 @@ import { ExportSettings } from './settings/ExportSettings';
 import { ShortcutsSettings } from './settings/ShortcutsSettings';
 import { CacheSettings } from './settings/CacheSettings';
 import { AdvancedSettings } from './settings/AdvancedSettings';
+import { AppearanceSettings } from './settings/AppearanceSettings';
 import type { Config } from '../../types/config';
 import { defaultConfig } from '../../types/config';
 
@@ -527,6 +528,8 @@ export default function SettingsDialog() {
         return <ShortcutsSettings {...commonProps} />;
       case 'cache':
         return <CacheSettings {...commonProps} />;
+      case 'appearance':
+        return <AppearanceSettings {...commonProps} />;
       case 'advanced':
         return <AdvancedSettings {...commonProps} />;
       default:
