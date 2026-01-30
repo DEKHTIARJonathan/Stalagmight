@@ -545,9 +545,12 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     await createProject(page, 'Hash Test No Banner');
     await openDmpSelectionDialog(page);
 
-    // Wait for hash computation to settle (the dialog runs useEffect on mount)
+    // Wait for hash computation to settle before asserting banner absence.
+    // The Continue button being enabled indicates hash check has completed
+    // and the dialog is fully ready (avoids false positive from checking too early).
     const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
     await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="continue-button"]')).toBeEnabled({ timeout: 5000 });
 
     // The duplicate-hash-warning banner should NOT be visible
     // since check_duplicate_import returns false by default
@@ -624,8 +627,8 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
         return getter ? getter() : [];
       });
       expect(calls.length).toBeGreaterThan(0);
-      // The hash should be the mock hash based on the file path
-      expect(calls[0]?.hash).toContain('mock_hash_');
+      // At least one call should contain the mock hash (avoids fragile index-based assertion)
+      expect(calls.some(c => c.hash.includes('mock_hash_'))).toBe(true);
     }).toPass({ timeout: 5000 });
   });
 
