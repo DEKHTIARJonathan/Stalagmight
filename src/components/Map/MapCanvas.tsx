@@ -1032,21 +1032,29 @@ export default function MapCanvas() {
   // Fetch anchored section IDs when Move Segment tool becomes active.
   // Sets anchoredIdsLoaded=false immediately on activation, then true once fetched,
   // so drag start is blocked until the anchored set is populated.
+  // Uses a cancelled flag to ignore stale results from late promise resolution
+  // when activeTool or project changes before the fetch completes.
   useEffect(() => {
+    let cancelled = false;
     if (activeTool === 'move_segment') {
       setAnchoredIdsLoaded(false);
       getAnchoredSectionIds().then((ids) => {
+        if (cancelled) return;
         setAnchoredSectionIds(new Set(ids));
         setAnchoredIdsLoaded(true);
       }).catch(() => {
+        if (cancelled) return;
+        // Fail closed: keep anchoredIdsLoaded=false so segment drag remains blocked.
+        // This prevents moving anchored segments when the IPC fails.
         setAnchoredSectionIds(new Set());
-        setAnchoredIdsLoaded(true);
+        showToast('Failed to load anchored segments. Move Segment is temporarily blocked.', 'anchored-ids-error');
       });
     } else {
       setAnchoredSectionIds(new Set());
       setAnchoredIdsLoaded(false);
     }
-  }, [activeTool, getAnchoredSectionIds, project]);
+    return () => { cancelled = true; };
+  }, [activeTool, getAnchoredSectionIds, project, showToast]);
 
   // Wire up setActiveTool - depend on mapLoaded to ensure it runs after layer creation
   useEffect(() => {

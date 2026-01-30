@@ -201,14 +201,20 @@ impl AppState {
         if !merge_result.success {
             // Merge failed after section was created — rollback to pre-mutation snapshot
             // to avoid leaving a created section with no undo entry.
+            // Use unwrap_or_else to recover from poisoned mutex (rollback must succeed).
             tracing::error!("Merge failed after section creation; rolling back to pre-mutation snapshot");
             match serde_json::from_str::<crate::models::Project>(&snapshot) {
                 Ok(restored) => {
-                    if let Ok(mut proj) = self.project.lock() {
-                        *proj = Some(restored);
-                        tracing::info!("Successfully rolled back create_and_merge after merge failure");
-                    } else {
-                        tracing::error!("Failed to lock project for rollback after merge failure");
+                    match self.project.lock() {
+                        Ok(mut proj) => {
+                            *proj = Some(restored);
+                            tracing::info!("Successfully rolled back create_and_merge after merge failure");
+                        }
+                        Err(poisoned) => {
+                            let mut proj = poisoned.into_inner();
+                            *proj = Some(restored);
+                            tracing::warn!("Rolled back create_and_merge via poisoned mutex after merge failure");
+                        }
                     }
                 }
                 Err(e) => tracing::error!("Failed to deserialize snapshot for rollback: {e}"),
@@ -216,23 +222,15 @@ impl AppState {
             return merge_result;
         }
 
-        // Step 4: Capture the after snapshot and push undo entry with before+after
+        // Step 4: Capture the after snapshot and push undo entry with before+after.
+        // Use unwrap_or_else on lock to handle poisoned mutex — rollback must apply.
         let after_snapshot = {
             let mut proj_guard = match self.project.lock() {
                 Ok(g) => g,
-                Err(_) => {
-                    // After-snapshot lock failure — rollback to pre-mutation snapshot
-                    tracing::error!("Failed to lock project for after snapshot; rolling back");
-                    match serde_json::from_str::<crate::models::Project>(&snapshot) {
-                        Ok(restored) => {
-                            if let Ok(mut proj) = self.project.lock() {
-                                *proj = Some(restored);
-                                tracing::info!("Successfully rolled back create_and_merge after lock failure");
-                            }
-                        }
-                        Err(e) => tracing::error!("Failed to deserialize snapshot for rollback: {e}"),
-                    }
-                    return CommandResult::failure("Failed to lock project for after snapshot".to_string());
+                Err(poisoned) => {
+                    // Mutex was poisoned — recover the guard so we can still capture snapshot
+                    tracing::warn!("Project mutex poisoned during after-snapshot; recovering");
+                    poisoned.into_inner()
                 }
             };
             match proj_guard.as_ref() {
@@ -241,13 +239,10 @@ impl AppState {
                     Err(e) => {
                         // Serialization failure — rollback to pre-mutation snapshot
                         tracing::error!("Failed to serialize after snapshot: {e}; rolling back");
-                        drop(proj_guard);
                         match serde_json::from_str::<crate::models::Project>(&snapshot) {
                             Ok(restored) => {
-                                if let Ok(mut proj) = self.project.lock() {
-                                    *proj = Some(restored);
-                                    tracing::info!("Successfully rolled back create_and_merge after serialization failure");
-                                }
+                                *proj_guard = Some(restored);
+                                tracing::info!("Successfully rolled back create_and_merge after serialization failure");
                             }
                             Err(re) => tracing::error!("Failed to deserialize snapshot for rollback: {re}"),
                         }
