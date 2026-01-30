@@ -26,9 +26,8 @@ Update E2E tests and mocks to reflect the new hash-based duplicate detection sys
 - [ ] All E2E tests pass: `pnpm test:ui`
 
 ## Done summary
-TBD
-
+Updated E2E mocks and tests for hash-based duplicate import detection. Made check_duplicate_import mock return value configurable, added call tracking for track_imported_file, and added four new test cases verifying banner visibility and hash tracking behavior. Fixed create_section mock to return section_id in CommandResult format.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: d3477f6, a76af35
+- Tests: pnpm test:ui --grep 'Hash Tracking', pnpm test:ui --grep 'DMP Import Dialog', pnpm test:ui, pnpm tsc --noEmit
 - PRs:
