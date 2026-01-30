@@ -267,3 +267,6 @@ Async-loaded guard sets (e.g. anchored IDs) must fail closed on fetch error -- k
 
 ## 2026-01-30 manual [pitfall]
 Rollback paths that re-acquire a mutex will silently fail if the mutex is poisoned -- use into_inner() on the PoisonError to recover the guard and ensure rollback applies
+
+## 2026-01-30 manual [pitfall]
+E2E tests asserting UI behavior must verify actual DOM/feature state, not just that IPC mocks return expected data - reviewers reject fallback-to-mock assertions
