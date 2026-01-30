@@ -8,7 +8,8 @@ let portalTargetCache: HTMLElement | null = null;
 let portalTargetWarned = false;
 
 function getPortalTarget(): HTMLElement | null {
-  if (portalTargetCache) return portalTargetCache;
+  // Re-resolve if cached element is detached (HMR/test cleanup can remove it)
+  if (portalTargetCache && portalTargetCache.isConnected) return portalTargetCache;
   portalTargetCache = document.getElementById('dialog-root');
   if (!portalTargetCache && !portalTargetWarned && import.meta.env.DEV) {
     portalTargetWarned = true;
@@ -99,7 +100,11 @@ export function DialogWrapper({
     pushDialog(el);
     // Focus the dialog container so keyboard events (Escape) are reliably
     // intercepted by onKeyDown rather than falling through to global handlers.
-    el.focus();
+    // Only focus if current active element is outside the dialog to avoid
+    // overriding autoFocus on inputs inside dialogs.
+    if (!el.contains(document.activeElement)) {
+      el.focus();
+    }
     return () => {
       popDialog(el);
     };
