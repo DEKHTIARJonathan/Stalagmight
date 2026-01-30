@@ -31,9 +31,8 @@ Compute the SHA256 file hash and check for duplicates when DmpSelectionDialog mo
 - [ ] `pnpm tsc --noEmit` passes
 
 ## Done summary
-TBD
-
+Added useEffect to DmpSelectionDialog that computes SHA256 file hash via calculateFileHash and checks for duplicates via checkDuplicateImport on mount. Manages fileHash and isDuplicate state with proper cancellation cleanup, state reset on filePath change, and hashSettled gating on the Continue button. The computed fileHash is included in the DmpSelectionConfig returned by handleContinue.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 53ec668, ae75361
+- Tests: pnpm tsc --noEmit
 - PRs:
