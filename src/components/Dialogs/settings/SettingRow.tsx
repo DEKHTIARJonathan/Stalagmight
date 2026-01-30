@@ -31,7 +31,7 @@ export function SettingRow({
 
   return (
     <div
-      className={`py-3 ${isChanged ? 'bg-accent/5 -mx-2 px-2 rounded' : ''}`}
+      className={`py-3 ${isChanged ? 'bg-accent-5 -mx-2 px-2 rounded' : ''}`}
       data-testid={dataTestId}
     >
       <div className="flex items-start justify-between gap-4">
@@ -43,7 +43,7 @@ export function SettingRow({
             </span>
             {requiresRestart && (
               <span
-                className="text-xs px-1.5 py-0.5 bg-warning/20 text-warning rounded"
+                className="text-xs px-1.5 py-0.5 bg-warning-20 text-warning rounded"
                 title="Requires app restart to take effect"
               >
                 Restart

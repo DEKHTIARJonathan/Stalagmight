@@ -292,7 +292,7 @@ export function ShotTableEditor({
           <button
             type="button"
             onClick={onAddShot}
-            className="text-sm px-2 py-1 bg-accent text-white rounded hover:bg-accent/80 transition-colors"
+            className="text-sm px-2 py-1 bg-accent text-white rounded hover:bg-accent-80 transition-colors"
             data-testid="add-shot-button"
           >
             + Add Shot
@@ -333,9 +333,9 @@ export function ShotTableEditor({
               return (
                 <tr
                   key={shot.tempId ?? shot.id}
-                  className={`border-b border-border last:border-0 hover:bg-background/50 ${
-                    isSelected ? 'bg-accent/10' : ''
-                  } ${shot.isNew ? 'bg-success/5' : ''}`}
+                  className={`border-b border-border last:border-0 hover:bg-background-50 ${
+                    isSelected ? 'bg-accent-10' : ''
+                  } ${shot.isNew ? 'bg-success-5' : ''}`}
                   onClick={() => handleRowClick(visibleIdx)}
                   onContextMenu={(e) => handleContextMenu(e, visibleIdx)}
                   onKeyDown={(e) => handleKeyDown(e, visibleIdx)}
@@ -524,7 +524,7 @@ export function ShotTableEditor({
                           e.stopPropagation();
                           onDeleteShot(actualIndex);
                         }}
-                        className="text-error hover:text-error/80 text-xs px-1"
+                        className="text-error hover:text-error-80 text-xs px-1"
                         title="Delete shot"
                         data-testid={`shot-delete-${visibleIdx}`}
                       >
@@ -566,7 +566,7 @@ export function ShotTableEditor({
               <button
                 type="button"
                 onClick={() => handleContextMenuAction('insert-before')}
-                className="w-full px-3 py-2 text-left text-sm hover:bg-accent/10"
+                className="w-full px-3 py-2 text-left text-sm hover:bg-accent-10"
                 data-testid="context-menu-insert-before"
               >
                 Insert row before
@@ -576,7 +576,7 @@ export function ShotTableEditor({
               <button
                 type="button"
                 onClick={() => handleContextMenuAction('insert-after')}
-                className="w-full px-3 py-2 text-left text-sm hover:bg-accent/10"
+                className="w-full px-3 py-2 text-left text-sm hover:bg-accent-10"
                 data-testid="context-menu-insert-after"
               >
                 Insert row after
@@ -588,7 +588,7 @@ export function ShotTableEditor({
             <button
               type="button"
               onClick={() => handleContextMenuAction('delete')}
-              className="w-full px-3 py-2 text-left text-sm text-error hover:bg-error/10"
+              className="w-full px-3 py-2 text-left text-sm text-error hover:bg-error-10"
               data-testid="context-menu-delete"
             >
               Delete row

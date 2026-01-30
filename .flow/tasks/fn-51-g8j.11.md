@@ -94,9 +94,8 @@ These use standard Tailwind colors (not CSS variables) so opacity modifiers stil
 - [ ] Correct opacity colors in light theme
 
 ## Done summary
-
-(To be filled on completion)
-
+Migrated all 29 theme-color Tailwind opacity modifier patterns (color/N → color-N) across the codebase. Replaced bg-accent/10 → bg-accent-10 style patterns for all theme color families (accent, background, panel, error, warning, success) across all utility prefixes (bg, text, border, ring) including hover/focus variants. Non-theme opacity patterns (black/50, red-500/20, yellow-500/20) were correctly left unchanged. TypeScript check passes.
 ## Evidence
-
-(To be filled on completion)
+- Commits:
+- Tests:
+- PRs:

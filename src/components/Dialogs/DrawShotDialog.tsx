@@ -194,7 +194,7 @@ export default function DrawShotDialog() {
     <DialogWrapper title={prependMode ? 'Add Shot Before Section' : appendMode ? `Add Shot After Station #${fromStation.station_index}` : 'Draw New Shot'} onClose={handleClose} size="md" isDirty={isDirty} data-testid="draw-shot-dialog">
       <div className="space-y-4">
         {error && (
-          <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">{error}</div>
+          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">{error}</div>
         )}
 
         {/* From station info */}

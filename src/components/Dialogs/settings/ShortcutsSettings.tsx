@@ -304,7 +304,7 @@ export function ShortcutsSettings({
         <div className="mb-4">
           <h3 className="text-sm font-medium mb-2 text-text-secondary">Reserved Shortcuts</h3>
           <div
-            className="bg-background/50 rounded-lg p-3 grid grid-cols-2 gap-2 text-sm"
+            className="bg-background-50 rounded-lg p-3 grid grid-cols-2 gap-2 text-sm"
             data-testid="reserved-shortcuts"
           >
             {RESERVED_DISPLAY_ENTRIES.map(({ shortcuts, description }) => (
@@ -356,7 +356,7 @@ export function ShortcutsSettings({
           <div
             role="alert"
             aria-live="assertive"
-            className="p-2 bg-error/10 border border-error/30 rounded text-error text-sm"
+            className="p-2 bg-error-10 border border-error-30 rounded text-error text-sm"
             data-testid="shortcut-error"
           >
             {shortcutError}
@@ -411,7 +411,7 @@ export function ShortcutsSettings({
                       return (
                         <div
                           key={action}
-                          className={`flex items-center gap-3 py-0.5 rounded ${isOdd ? 'bg-panel/20' : 'bg-transparent'}`}
+                          className={`flex items-center gap-3 py-0.5 rounded ${isOdd ? 'bg-panel-20' : 'bg-transparent'}`}
                           data-testid={`shortcut-row-${action}`}
                         >
                           {/* Action name */}

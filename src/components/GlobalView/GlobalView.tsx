@@ -527,7 +527,7 @@ export default function GlobalView() {
           data-testid="project-context-menu"
         >
           <button
-            className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 flex items-center gap-2"
+            className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"
             onClick={() => {
               if (contextMenu.projectPath) {
                 handleProjectOpen(contextMenu.projectPath);
@@ -540,7 +540,7 @@ export default function GlobalView() {
             Open
           </button>
           <button
-            className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 flex items-center gap-2"
+            className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"
             onClick={handleZoomToSystem}
             role="menuitem"
             data-testid="context-menu-zoom"
@@ -548,7 +548,7 @@ export default function GlobalView() {
             Zoom to System
           </button>
           <button
-            className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 flex items-center gap-2"
+            className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"
             onClick={handleShowInFolder}
             role="menuitem"
             data-testid="context-menu-show-in-folder"
@@ -557,7 +557,7 @@ export default function GlobalView() {
           </button>
           {selectedCount >= 2 && (
             <button
-              className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 flex items-center gap-2"
+              className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"
               onClick={handleMergeProjects}
               role="menuitem"
               data-testid="context-menu-merge"
@@ -567,7 +567,7 @@ export default function GlobalView() {
           )}
           <div className="border-t border-border my-1" />
           <button
-            className="w-full px-4 py-2 text-left text-sm hover:bg-background/50 text-error flex items-center gap-2"
+            className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 text-error flex items-center gap-2"
             onClick={async () => {
               // Handle multi-selection remove with count
               try {
@@ -657,8 +657,8 @@ function EmptyStateCard({ icon, title, description, onClick, primary, testId }: 
         p-6 rounded-lg border text-left transition-all
         hover:scale-105 hover:shadow-lg
         ${primary
-          ? 'bg-accent/10 border-accent hover:bg-accent/20'
-          : 'bg-panel border-border hover:bg-background/50'
+          ? 'bg-accent-10 border-accent hover:bg-accent-20'
+          : 'bg-panel border-border hover:bg-background-50'
         }
       `}
       data-testid={testId}

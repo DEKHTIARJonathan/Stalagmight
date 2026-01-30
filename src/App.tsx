@@ -485,7 +485,7 @@ function App() {
       {/* Drop indicator overlay */}
       {isDraggingDmp && (
         <div
-          className="absolute inset-0 z-50 bg-accent/20 border-4 border-dashed border-accent flex items-center justify-center pointer-events-none"
+          className="absolute inset-0 z-50 bg-accent-20 border-4 border-dashed border-accent flex items-center justify-center pointer-events-none"
           data-testid="dmp-drop-indicator"
         >
           <div className="bg-panel p-6 rounded-lg shadow-xl text-center">

@@ -186,7 +186,7 @@ export default function ImportDialog() {
                     <td>
                       <button
                         onClick={() => handleRemoveShot(index)}
-                        className="text-error hover:text-error/80"
+                        className="text-error hover:text-error-80"
                       >
                         ×
                       </button>

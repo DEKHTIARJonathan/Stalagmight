@@ -128,7 +128,7 @@ export default function DisplayMenu() {
           px-3 py-1.5 text-sm rounded transition-colors
           ${isOpen
             ? 'bg-accent text-white'
-            : 'bg-background hover:bg-background/80 text-text-primary'
+            : 'bg-background hover:bg-background-80 text-text-primary'
           }
         `}
         title="Display Options"
@@ -165,7 +165,7 @@ export default function DisplayMenu() {
                       aria-disabled={disabled || undefined}
                       className={`
                         w-full px-3 py-2 flex items-center justify-between transition-colors
-                        ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-background/50'}
+                        ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-background-50'}
                       `}
                       data-testid={`display-toggle-${item.key}`}
                     >
@@ -189,7 +189,7 @@ export default function DisplayMenu() {
                     </button>
                     {/* Grid spacing options - shown when grid is enabled */}
                     {item.key === 'showGrid' && showGrid && (
-                      <div className="px-3 py-2 pl-6 bg-background/30">
+                      <div className="px-3 py-2 pl-6 bg-background-30">
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-text-secondary">Spacing:</span>
                           <select

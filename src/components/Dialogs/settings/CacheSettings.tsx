@@ -200,7 +200,7 @@ export function CacheSettings({
       <SettingsSection title="Tile Cache" data-testid="section-tile-cache">
         {/* Cache Statistics - Preserve data-testid="cache-stats" */}
         <div
-          className="bg-background/50 rounded-lg p-4 space-y-3 mb-4"
+          className="bg-background-50 rounded-lg p-4 space-y-3 mb-4"
           data-testid="cache-stats"
         >
           {isLoadingStats ? (

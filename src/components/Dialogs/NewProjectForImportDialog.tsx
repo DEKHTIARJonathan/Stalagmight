@@ -79,7 +79,7 @@ export default function NewProjectForImportDialog() {
       <div className="space-y-4">
         {/* Show info about the DMP file being imported */}
         {dmpFile && (
-          <div className="p-3 bg-accent/10 border border-accent/20 rounded text-sm">
+          <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
             <div className="font-medium mb-1">Importing from DMP file:</div>
             <div className="text-text-secondary">
               {dmpFile.sections.length} sections •{' '}
@@ -93,7 +93,7 @@ export default function NewProjectForImportDialog() {
         )}
 
         {error && (
-          <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">
+          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
             {error}
           </div>
         )}

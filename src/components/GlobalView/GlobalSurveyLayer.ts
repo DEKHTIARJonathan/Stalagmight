@@ -204,7 +204,7 @@ export default class GlobalSurveyLayer {
       source: this.sourceId,
       filter: ['==', ['get', 'featureType'], 'shot'],
       paint: {
-        'line-color': '#888888', // Fallback, replaced by match expression on update()
+        'line-color': this.themeColors.grayLine, // Fallback, replaced by match expression on update()
         'line-width': [
           'case',
           ['boolean', ['get', 'isVirtual'], false],
@@ -229,7 +229,7 @@ export default class GlobalSurveyLayer {
       filter: ['==', ['get', 'featureType'], 'station'],
       paint: {
         'circle-radius': 4,
-        'circle-color': '#888888', // Fallback, replaced by match expression on update()
+        'circle-color': this.themeColors.grayLine, // Fallback, replaced by match expression on update()
         'circle-stroke-width': 1,
         'circle-stroke-color': this.themeColors.strokeColor,
       },
@@ -502,7 +502,16 @@ export default class GlobalSurveyLayer {
    * Uses systemColors map to generate efficient match expressions.
    */
   private updateColorExpressions(): void {
-    if (this.systemColors.size === 0) return;
+    const fallback = this.themeColors.grayLine;
+    if (this.systemColors.size === 0) {
+      if (this.map.getLayer(this.shotsLayerId)) {
+        this.map.setPaintProperty(this.shotsLayerId, 'line-color', fallback);
+      }
+      if (this.map.getLayer(this.stationsLayerId)) {
+        this.map.setPaintProperty(this.stationsLayerId, 'circle-color', fallback);
+      }
+      return;
+    }
 
     // Build match expression: ['match', ['get', 'systemId'], 'path1', 'color1', 'path2', 'color2', ..., fallback]
     const matchArgs: (string | maplibregl.ExpressionSpecification)[] = [
@@ -515,7 +524,7 @@ export default class GlobalSurveyLayer {
     }
 
     // Fallback color for unknown systems
-    matchArgs.push('#888888');
+    matchArgs.push(fallback);
 
     const colorExpr = matchArgs as maplibregl.ExpressionSpecification;
 
@@ -822,6 +831,8 @@ export default class GlobalSurveyLayer {
     if (this.map.getLayer(this.stationsLayerId)) {
       this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-color', strokeColor);
     }
+    // Update per-system color expressions (fallback uses theme gray)
+    this.updateColorExpressions();
 
     // Update tooltip colors
     if (this.tooltip) {

@@ -80,7 +80,7 @@ export function Table<T extends object>({
                   key={String(key)}
                   className={`
                     ${onRowClick ? 'cursor-pointer' : ''}
-                    ${isSelected ? 'bg-accent/20' : ''}
+                    ${isSelected ? 'bg-accent-20' : ''}
                   `}
                   onClick={() => onRowClick?.(item, index)}
                 >
@@ -367,12 +367,12 @@ export function EditableTable<T extends object>({
     // Default styling: hovered has subtle background
     const classes: string[] = [];
 
-    // External hover state takes precedence, otherwise use default hover:bg-accent/10
+    // External hover state takes precedence, otherwise use default hover:bg-accent-10
     if (isHovered) {
-      classes.push('bg-accent/10');
+      classes.push('bg-accent-10');
     } else if (hoveredKey === undefined) {
-      // Only add hover:bg-accent/10 when no external hover state is being managed
-      classes.push('hover:bg-accent/10');
+      // Only add hover:bg-accent-10 when no external hover state is being managed
+      classes.push('hover:bg-accent-10');
     }
 
     if (onRowClick || onRowDoubleClick) {

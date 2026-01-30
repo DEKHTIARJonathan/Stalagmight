@@ -421,8 +421,8 @@ export default function ContextMenu() {
               disabled={item.disabled}
               className={`
                 w-full px-3 py-2 text-left text-sm
-                ${item.disabled ? 'text-text-secondary cursor-not-allowed' : 'hover:bg-accent/10'}
-                ${item.danger && !item.disabled ? 'text-error hover:bg-error/10' : ''}
+                ${item.disabled ? 'text-text-secondary cursor-not-allowed' : 'hover:bg-accent-10'}
+                ${item.danger && !item.disabled ? 'text-error hover:bg-error-10' : ''}
               `}
             >
               {item.label}

@@ -1081,8 +1081,8 @@ export default function DmpSectionConfigDialog({
                       key={sectionIdx}
                       type="button"
                       onClick={() => navigateToArrayIndex(arrayIdx)}
-                      className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 hover:bg-background/50 ${
-                        isActive ? 'bg-accent/10 border-l-2 border-accent' : ''
+                      className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 hover:bg-background-50 ${
+                        isActive ? 'bg-accent-10 border-l-2 border-accent' : ''
                       }`}
                       data-testid={`section-list-item-${arrayIdx}`}
                     >
@@ -1161,12 +1161,12 @@ export default function DmpSectionConfigDialog({
                   </span>
                   {/* Status badges */}
                   {isCurrentPlaced && (
-                    <span className="px-2 py-1 bg-success/10 text-success text-xs rounded" data-testid="placed-badge">
+                    <span className="px-2 py-1 bg-success-10 text-success text-xs rounded" data-testid="placed-badge">
                       ✓ Placed
                     </span>
                   )}
                   {isCurrentExcluded && (
-                    <span className="px-2 py-1 bg-error/10 text-error text-xs rounded" data-testid="excluded-badge">
+                    <span className="px-2 py-1 bg-error-10 text-error text-xs rounded" data-testid="excluded-badge">
                       ✕ Excluded
                     </span>
                   )}
@@ -1185,14 +1185,14 @@ export default function DmpSectionConfigDialog({
 
                 {/* Read-only banner for placed sections */}
                 {isCurrentPlaced && (
-                  <div className="mb-4 p-3 bg-success/10 border border-success/30 rounded text-sm text-success" data-testid="placed-section-banner">
+                  <div className="mb-4 p-3 bg-success-10 border border-success-30 rounded text-sm text-success" data-testid="placed-section-banner">
                     This section has been placed and cannot be edited. Navigate to an unplaced section to continue.
                   </div>
                 )}
 
                 {/* Excluded banner */}
                 {isCurrentExcluded && (
-                  <div className="mb-4 p-3 bg-error/10 border border-error/30 rounded text-sm text-error" data-testid="excluded-section-banner">
+                  <div className="mb-4 p-3 bg-error-10 border border-error-30 rounded text-sm text-error" data-testid="excluded-section-banner">
                     This section is excluded from import. Click "Include" to add it back.
                   </div>
                 )}
@@ -1238,7 +1238,7 @@ export default function DmpSectionConfigDialog({
                     <div
                       className={`p-3 rounded border ${
                         currentConfig.placement.type === 'origin'
-                          ? 'border-accent bg-accent/5'
+                          ? 'border-accent bg-accent-5'
                           : 'border-border'
                       } ${isCurrentPlaced || isCurrentExcluded ? 'opacity-50' : ''}`}
                       data-testid="placement-mode-origin"
@@ -1267,7 +1267,7 @@ export default function DmpSectionConfigDialog({
                     <div
                       className={`p-3 rounded border ${
                         currentConfig.placement.type === 'zeroDatum'
-                          ? 'border-accent bg-accent/5'
+                          ? 'border-accent bg-accent-5'
                           : 'border-border'
                       } ${isCurrentPlaced || isCurrentExcluded ? 'opacity-50' : ''}`}
                       data-testid="placement-mode-zero-datum"
@@ -1305,7 +1305,7 @@ export default function DmpSectionConfigDialog({
                             />
                             {gpsFormat && (
                               <span
-                                className="text-xs px-2 py-1 bg-accent/10 text-accent rounded"
+                                className="text-xs px-2 py-1 bg-accent-10 text-accent rounded"
                                 data-testid="gps-format-indicator"
                               >
                                 {gpsFormat}
@@ -1343,7 +1343,7 @@ export default function DmpSectionConfigDialog({
                     <div
                       className={`p-3 rounded border ${
                         currentConfig.placement.type === 'fromExisting' || currentConfig.placement.type === 'fromImporting'
-                          ? 'border-accent bg-accent/5'
+                          ? 'border-accent bg-accent-5'
                           : 'border-border'
                       } ${(existingSections.length === 0 && importingSectionOptions.length === 0) || isCurrentPlaced || isCurrentExcluded ? 'opacity-50' : ''}`}
                       data-testid="placement-mode-existing"
@@ -1525,7 +1525,7 @@ export default function DmpSectionConfigDialog({
                     <div
                       className={`p-3 rounded border ${
                         currentConfig.placement.type === 'manual'
-                          ? 'border-accent bg-accent/5'
+                          ? 'border-accent bg-accent-5'
                           : 'border-border'
                       } ${isCurrentPlaced || isCurrentExcluded ? 'opacity-50' : ''}`}
                       data-testid="placement-mode-manual"

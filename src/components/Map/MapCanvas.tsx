@@ -1949,7 +1949,7 @@ export default function MapCanvas() {
       {/* Box select overlay */}
       {boxSelectStyle && (
         <div
-          className="absolute border-2 border-accent border-dashed bg-accent/10 pointer-events-none"
+          className="absolute border-2 border-accent border-dashed bg-accent-10 pointer-events-none"
           style={boxSelectStyle}
         />
       )}
@@ -1957,7 +1957,7 @@ export default function MapCanvas() {
       {/* Zoom box overlay */}
       {zoomBox.start && zoomBox.end && (
         <div
-          className="absolute border-2 border-accent bg-accent/20 pointer-events-none"
+          className="absolute border-2 border-accent bg-accent-20 pointer-events-none"
           style={{
             left: Math.min(zoomBox.start.x, zoomBox.end.x),
             top: Math.min(zoomBox.start.y, zoomBox.end.y),

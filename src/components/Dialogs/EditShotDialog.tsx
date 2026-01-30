@@ -142,7 +142,7 @@ export default function EditShotDialog() {
     <DialogWrapper title="Edit Shot" onClose={closeDialog} size="lg" isDirty={isDirty} data-testid="edit-shot-dialog">
       <div className="space-y-4">
         {error && (
-          <div className="p-3 bg-error/10 border border-error/20 rounded text-error text-sm">
+          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
             {error}
           </div>
         )}

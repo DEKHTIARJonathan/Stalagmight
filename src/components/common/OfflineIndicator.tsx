@@ -22,7 +22,7 @@ export function OfflineIndicator({ className = '' }: OfflineIndicatorProps) {
   return (
     <div
       data-testid="offline-indicator"
-      className={`flex items-center gap-2 px-3 py-1.5 bg-warning/10 border border-warning/30 rounded text-warning text-sm ${className}`}
+      className={`flex items-center gap-2 px-3 py-1.5 bg-warning-10 border border-warning-30 rounded text-warning text-sm ${className}`}
       role="status"
       aria-live="polite"
     >

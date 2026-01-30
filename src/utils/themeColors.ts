@@ -23,6 +23,7 @@ const FALLBACK_MAP: Record<string, string> = {
   '--cc-accent-on': '#1a1a2e',
   '--cc-stroke-color': '#ffffff',
   '--cc-stroke-light': 'rgba(255, 255, 255, 0.25)',
+  '--cc-map-ctrl-shadow': 'rgba(15, 52, 96, 0.3)',
   '--cc-text-halo': '#1a1a2e',
   '--cc-text-halo-alt': 'rgba(0, 0, 0, 0.7)',
   '--cc-station-default': '#a0a0a0',

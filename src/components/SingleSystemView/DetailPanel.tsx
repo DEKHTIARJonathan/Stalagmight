@@ -217,7 +217,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
             className={`
               p-2 rounded transition-colors
               ${warning.isResolved ? 'opacity-50' : ''}
-              hover:bg-background/50
+              hover:bg-background-50
             `}
           >
             <div className="flex items-start gap-2">
@@ -241,7 +241,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               </button>
               <button
                 onClick={(e) => handleToggleResolved(e, warning)}
-                className="text-xs px-2 py-1 rounded bg-background/50 hover:bg-background text-text-secondary"
+                className="text-xs px-2 py-1 rounded bg-background-50 hover:bg-background text-text-secondary"
                 title={warning.isResolved ? 'Mark as unresolved' : 'Mark as resolved'}
               >
                 {warning.isResolved ? 'Undo' : 'Resolve'}
@@ -333,7 +333,7 @@ function StationDetail({ station }: { station: Station }) {
     <button
       type="button"
       onClick={handleCenterOnStation}
-      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background/50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
+      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
       aria-label={`Center map on station ${formatStationId(sectionId, stationPosition)}`}
       data-testid="center-station-button"
     >
@@ -546,7 +546,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
     <button
       type="button"
       onClick={handleCenterOnShot}
-      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background/50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
+      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
       aria-label={`Center map on shot ${section.id}:${shotPosition}`}
       data-testid="center-shot-button"
     >
@@ -729,7 +729,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
     <button
       type="button"
       onClick={handleCenterOnSection}
-      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background/50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
+      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
       aria-label={`Center map on section ${section.id}: ${sectionDisplayName}`}
       data-testid="center-section-button"
     >
