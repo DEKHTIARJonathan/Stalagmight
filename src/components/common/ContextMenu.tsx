@@ -269,10 +269,11 @@ export default function ContextMenu() {
             isLast,
             totalShots,
             splitRequired: isMidShot,
+            sectionName: section?.name ?? `Section ${target.sectionId}`,
             message: isLastRemaining
               ? 'This is the only shot in the section. Deleting it will remove the entire section. Continue?'
               : isMidShot
-                ? 'Deleting this mid-section shot will split the section into two parts.'
+                ? 'Deleting this shot will split the section into two parts. Name the resulting sections:'
                 : undefined,
           });
         },
