@@ -10,6 +10,7 @@ import {
   hasAzimuthDiscrepancy,
   hasPitchDiscrepancy,
 } from '../utils/validation';
+import type { ValidationConfig } from '../types/config';
 
 /**
  * Configuration from Step 1 (DmpSelectionDialog).
@@ -1062,20 +1063,21 @@ export function useImportState(
 
   /**
    * Get the warning count for a specific section (azimuth/pitch discrepancies).
-   * Counts non-deleted shots with azimuth or pitch discrepancies using the
-   * provided validation config thresholds.
+   * Counts discrepancy warnings across non-deleted shots; a single shot can
+   * contribute up to 2 warnings (one azimuth, one pitch).
+   * A threshold of 0 means that warning type is disabled.
    */
   const getSectionWarningCount = useCallback((
     sectionIndex: number,
-    valConfig: { azimuth_diff_threshold: number; pitch_diff_threshold: number }
+    valConfig: Pick<ValidationConfig, 'azimuth_diff_threshold' | 'pitch_diff_threshold'>
   ): number => {
     const sectionConfig = state.sectionConfigs.get(sectionIndex);
     if (!sectionConfig) return 0;
     let warnings = 0;
     for (const shot of sectionConfig.shots) {
       if (shot.isDeleted) continue;
-      if (hasAzimuthDiscrepancy(shot.azimuth_in, shot.azimuth_out, valConfig.azimuth_diff_threshold)) warnings++;
-      if (hasPitchDiscrepancy(shot.pitch_in, shot.pitch_out, valConfig.pitch_diff_threshold)) warnings++;
+      if (valConfig.azimuth_diff_threshold > 0 && hasAzimuthDiscrepancy(shot.azimuth_in, shot.azimuth_out, valConfig.azimuth_diff_threshold)) warnings++;
+      if (valConfig.pitch_diff_threshold > 0 && hasPitchDiscrepancy(shot.pitch_in, shot.pitch_out, valConfig.pitch_diff_threshold)) warnings++;
     }
     return warnings;
   }, [state.sectionConfigs]);
