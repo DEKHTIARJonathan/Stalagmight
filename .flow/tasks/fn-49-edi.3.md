@@ -67,9 +67,8 @@ Update the section list sidebar in `DmpSectionConfigDialog` to show yellow warni
 - [ ] `pnpm test:ui` passes
 
 ## Done summary
-TBD
-
+Rendered yellow warning badges and status icons in the DMP import section list sidebar. Sections with azimuth/pitch discrepancies (but no errors) now show a yellow warning icon and count badge. Warning display is suppressed for placed, excluded, and error sections. Updated E2E tests to account for the new warning state.
 ## Evidence
-- Commits:
-- Tests:
+- Commits: 4da1affa9af2e7f9c3dbc3fb1d3e6b22e5c99fe2, 97605172a6846f9994dd7763661d2f551d15b969
+- Tests: pnpm tsc --noEmit, pnpm test:ui
 - PRs:
