@@ -39,9 +39,8 @@ Create a new Appearance settings tab component and integrate it into the existin
 - [ ] ARIA: radio group has proper role and labeling
 
 ## Done summary
-
-(To be filled on completion)
-
+Created AppearanceSettings tab component with Dark/Light/Auto theme radio group and wired it into SettingsDialog. Added 'appearance' entry to CATEGORIES array in SettingsSidebar (second position after General). Updated E2E focus-management test for new sidebar order.
 ## Evidence
-
-(To be filled on completion)
+- Commits: 76ce6407aacece8e6cfc11efa506ff2e2e90ba38, 473e18a0fd179c64f77d2d643e0d826b34efd5dd
+- Tests: pnpm tsc --noEmit, cargo test --manifest-path src-tauri/Cargo.toml
+- PRs:

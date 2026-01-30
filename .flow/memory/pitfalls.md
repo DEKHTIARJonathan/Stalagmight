@@ -279,3 +279,6 @@ When adding a new required field to Config type in TypeScript, search ALL hardco
 
 ## 2026-01-30 manual [pitfall]
 Hooks that set DOM attributes (data-theme, className) affecting CSS must use useLayoutEffect not useEffect to avoid flash of wrong styles before paint
+
+## 2026-01-30 manual [pitfall]
+When inserting a new settings sidebar tab between existing tabs, E2E tests asserting keyboard navigation order (ArrowDown focus sequence) will break -- grep for existing tab test-IDs in E2E specs before committing

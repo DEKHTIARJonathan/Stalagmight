@@ -554,7 +554,7 @@ export function Select({
         aria-owns={isOpen ? listboxId : undefined}
         aria-activedescendant={isOpen && highlightedIndex >= 0 ? getOptionId(highlightedIndex) : undefined}
       >
-        <span className={selectedLabel ? 'text-foreground' : 'text-text-secondary'}>
+        <span className={selectedLabel ? 'text-text-primary' : 'text-text-secondary'}>
           {selectedLabel || placeholder}
         </span>
         <svg
