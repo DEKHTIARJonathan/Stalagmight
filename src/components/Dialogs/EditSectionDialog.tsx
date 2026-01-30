@@ -22,7 +22,7 @@ export default function EditSectionDialog() {
   const [name, setName] = useState('');
   const [surveyor, setSurveyor] = useState('');
   const [date, setDate] = useState('');
-  const [color, setColor] = useState(getThemeColor('--cc-accent'));
+  const [color, setColor] = useState(getThemeColor('--cc-station-default'));
   const [direction, setDirection] = useState<'in' | 'out'>('in');
 
   // Shots state

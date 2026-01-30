@@ -2,7 +2,8 @@ import type { Map as MaplibreMap } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
 import type { GeometryShot, SurveyGeometry } from '../../types/survey';
-import type { MapThemeColors } from '../../utils/themeColors';
+import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
+import { hasLiveStyle } from '../Map/mapUtils';
 
 /**
  * System geometry data with associated metadata for the global view.
@@ -118,7 +119,8 @@ export default class GlobalSurveyLayer {
   private contextMenuOpen = false;
 
   // Theme colors for MapLibre paint properties
-  private themeColors: MapThemeColors | undefined;
+  // Seeded at construction so first paint uses current theme, not legacy fallbacks
+  private themeColors: MapThemeColors = getMapThemeColors();
 
   // Bound event handlers for cleanup
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
@@ -229,7 +231,7 @@ export default class GlobalSurveyLayer {
         'circle-radius': 4,
         'circle-color': '#888888', // Fallback, replaced by match expression on update()
         'circle-stroke-width': 1,
-        'circle-stroke-color': '#000000',
+        'circle-stroke-color': this.themeColors.strokeColor,
       },
     });
   }
@@ -811,6 +813,9 @@ export default class GlobalSurveyLayer {
    */
   applyThemeColors(colors: MapThemeColors): void {
     this.themeColors = colors;
+
+    if (!hasLiveStyle(this.map)) return;
+
     const strokeColor = colors.strokeColor;
 
     // Update station stroke color

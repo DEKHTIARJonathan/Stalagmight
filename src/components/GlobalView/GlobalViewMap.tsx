@@ -826,6 +826,8 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       `;
 
       // Create inner visual marker (can scale from center)
+      const strokeColor = getThemeColor('--cc-stroke-color');
+      const strokeLight = getThemeColor('--cc-stroke-light');
       const inner = document.createElement('div');
       inner.className = 'marker-inner';
       inner.style.cssText = `
@@ -833,8 +835,8 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         height: 20px;
         border-radius: 50%;
         background-color: ${systemColor};
-        border: 2px solid ${isSelected ? '#ffffff' : 'rgba(255,255,255,0.5)'};
-        box-shadow: ${isSelected ? '0 0 0 3px rgba(255,255,255,0.5), ' : ''}0 2px 4px rgba(0,0,0,0.3);
+        border: 2px solid ${isSelected ? strokeColor : strokeLight};
+        box-shadow: ${isSelected ? `0 0 0 3px ${strokeLight}, ` : ''}0 2px 4px rgba(0,0,0,0.3);
         transition: transform 0.15s ease-out, border-color 0.2s, box-shadow 0.2s;
         display: flex;
         align-items: center;
@@ -1010,10 +1012,12 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         ? getThemeColor('--cc-error')
         : generateSystemColor(filePath);
 
+      const strokeColor = getThemeColor('--cc-stroke-color');
+      const strokeLight = getThemeColor('--cc-stroke-light');
       inner.style.backgroundColor = systemColor;
-      inner.style.borderColor = isSelected ? '#ffffff' : 'rgba(255,255,255,0.5)';
+      inner.style.borderColor = isSelected ? strokeColor : strokeLight;
       inner.style.boxShadow = isSelected
-        ? '0 0 0 3px rgba(255,255,255,0.5), 0 2px 4px rgba(0,0,0,0.3)'
+        ? `0 0 0 3px ${strokeLight}, 0 2px 4px rgba(0,0,0,0.3)`
         : '0 2px 4px rgba(0,0,0,0.3)';
     });
   }, [selectedProjectId, geometryStates]);

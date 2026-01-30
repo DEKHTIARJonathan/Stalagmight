@@ -19,7 +19,7 @@ import {
   type DepthRange,
   type GhostSectionData,
 } from './surveyLayer/features';
-import type { MapThemeColors } from '../../utils/themeColors';
+import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import {
   distanceToLineSegment,
   resolveNearestShot,
@@ -116,7 +116,8 @@ export default class SurveyLayer {
   private depthRange: DepthRange = { min: 0, max: 50 };
 
   // Theme colors for MapLibre paint properties (MapLibre cannot read CSS vars)
-  private themeColors: MapThemeColors | undefined;
+  // Seeded at construction so first paint uses current theme, not legacy fallbacks
+  private themeColors: MapThemeColors = getMapThemeColors();
 
   // Cached input data for feature rebuild on theme change
   private cachedSections: Section[] = [];
@@ -408,7 +409,7 @@ export default class SurveyLayer {
         'circle-radius': this.getStationRadius(),
         'circle-color': ['get', 'color'],
         'circle-stroke-width': 1,
-        'circle-stroke-color': '#000000',
+        'circle-stroke-color': this.themeColors.strokeColor,
         'circle-opacity': 0.5,
       },
     });
@@ -420,9 +421,9 @@ export default class SurveyLayer {
       source: this.sourceId + '-ghost-merge',
       paint: {
         'circle-radius': 8,
-        'circle-color': '#4ecdc4',
+        'circle-color': this.themeColors.selectHighlight,
         'circle-stroke-width': 2,
-        'circle-stroke-color': '#ffffff',
+        'circle-stroke-color': this.themeColors.strokeColor,
         'circle-opacity': 0.8,
       },
     });
@@ -503,11 +504,11 @@ export default class SurveyLayer {
           ['get', 'isZeroDatum'], 2,
           1,
         ],
-        // Stroke color: hover=blue, selected=lightblue, else from property
+        // Stroke color: hover=highlight, selected=select, else from property
         'circle-stroke-color': [
           'case',
-          ['boolean', ['feature-state', 'hover'], false], '#0066ff',
-          ['boolean', ['feature-state', 'selected'], false], '#00aaff',
+          ['boolean', ['feature-state', 'hover'], false], this.themeColors.hoverHighlight,
+          ['boolean', ['feature-state', 'selected'], false], this.themeColors.selectHighlight,
           ['get', 'strokeColor'],
         ],
         // Stroke opacity: reduced for anchored sections
@@ -529,9 +530,9 @@ export default class SurveyLayer {
       filter: ['==', ['get', 'sectionId'], -9999], // Filter to nothing initially
       paint: {
         'circle-radius': this.getStationRadius() + 3, // Snapped state: radius + 3
-        'circle-color': '#00ffcc',
+        'circle-color': this.themeColors.snapColor,
         'circle-stroke-width': 4,
-        'circle-stroke-color': '#00ffcc',
+        'circle-stroke-color': this.themeColors.snapColor,
       },
     });
 
@@ -560,7 +561,7 @@ export default class SurveyLayer {
       },
       paint: {
         'text-color': ['get', 'color'], // Dynamic color for depth gradient support
-        'text-halo-color': '#000000',
+        'text-halo-color': this.themeColors.textHaloAlt,
         'text-halo-width': 2, // Increased for readability with depth colors
         'text-opacity': [
           'interpolate',
@@ -610,7 +611,7 @@ export default class SurveyLayer {
       },
       paint: {
         'text-color': ['get', 'color'],
-        'text-halo-color': '#1a1a2e', // Dark halo for contrast with any section color
+        'text-halo-color': this.themeColors.textHalo,
         'text-halo-width': 1.5,
         'text-opacity': 1,
       },
@@ -640,7 +641,7 @@ export default class SurveyLayer {
       },
       paint: {
         'text-color': ['get', 'color'], // Dynamic color for depth gradient support
-        'text-halo-color': '#000000',
+        'text-halo-color': this.themeColors.textHaloAlt,
         'text-halo-width': 2, // Increased for readability with depth colors
         'text-opacity': [
           'interpolate',
