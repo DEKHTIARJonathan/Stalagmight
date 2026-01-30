@@ -2,131 +2,78 @@
 
 ## Description
 
-Replace hardcoded hex colors in JSX `style` props and string literals across 10+ TSX/TS component files with CSS variable references. These are map visualization, canvas preview, and UI indicator colors.
+Replace hardcoded hex colors in JSX `style` props and string literals across 10+ TSX/TS component files with CSS variable references. Create the `themeColors.ts` utility with fallback map. Wire the concrete MapLibre re-styling integration points.
 
-**EXCLUDE**: `ExportPreview.tsx` render colors (exports always use dark palette). Only migrate its Tailwind opacity classes (handled in task 11), not its canvas drawing colors.
+**EXCLUDE**: `ExportPreview.tsx` render colors (exports always use dark palette).
 
-**CRITICAL**: MapLibre GL JS does NOT read CSS variables. Colors passed to `setPaintProperty()`, `addLayer()`, and style expressions must be literal values read from CSS variables via JS. When the theme changes, MapLibre styles must be explicitly re-applied.
+**CRITICAL**: MapLibre GL JS does NOT read CSS variables. Colors passed to `setPaintProperty()`, `addLayer()`, and style expressions must be literal values read from CSS variables via JS. When the theme changes, MapLibre styles must be explicitly re-applied via concrete integration points.
 
-## Files to modify
+**Size:** L (split candidate, but component coupling makes splitting impractical — all MapLibre theme wiring must be coherent)
 
-### Map visualization components (MapLibre — need re-apply on theme change)
-- `src/components/Map/SurveyLayer.tsx` — 13 colors: station default (#4ecdc4), strokes (#000000), hover (#0066ff), selected (#00aaff), snap (#00ffcc), text halos (#1a1a2e, #000000)
-- `src/components/Map/surveyLayer/features.ts` — Depth defaults (#00bfff, #ff4444), station label (#ffffff), section color (#ffffff), zero datum (#ffd700), strokes (#000000)
-- `src/components/GlobalView/GlobalSurveyLayer.ts` — Strokes (#000000), fallback lines (#888888), fallback circles (#888888), gray text (#aaa)
-- `src/components/GlobalView/GlobalViewMap.tsx` — Text (#1a1a2e), error (#ef4444), gray text (#666, #888), borders (#ffffff), light gray (#aaa)
-- `src/components/Map/PlacementOverlay.tsx` — Snap colors (#00ffcc), anchor colors (#000, #fff)
-- `src/components/Map/MapCanvas.tsx` — Background default (#1a1a2e)
-- `src/components/Map/GridOverlay.tsx` — Grid color default (#333366)
-- `src/components/Map/DepthLegend.tsx` — Depth shallow (#00bfff), deep (#ff4444), text (rgba(255,255,255,0.7))
+**Files:**
+- `src/utils/themeColors.ts` (new)
+- `src/components/Map/SurveyLayer.tsx` — Replace 13 colors + add `applyThemeColors()` method
+- `src/components/Map/MapCanvas.tsx` — Subscribe to `resolvedTheme`, call `surveyLayer.applyThemeColors()` on change
+- `src/components/Map/surveyLayer/features.ts` — Replace depth/station colors
+- `src/components/GlobalView/GlobalSurveyLayer.ts` — Replace 8 colors + add theme re-apply method
+- `src/components/GlobalView/GlobalViewMap.tsx` — Replace 8 colors, wire GlobalSurveyLayer theme re-apply
+- `src/components/Dialogs/SectionPreview.tsx` — Replace 12 colors + add `useEffect` on `resolvedTheme` for re-apply
+- `src/components/Map/PlacementOverlay.tsx` — Replace 6 snap/anchor colors
+- `src/components/Map/MapCanvas.tsx` — Replace background default
+- `src/components/Map/GridOverlay.tsx` — Replace grid color default
+- `src/components/Map/DepthLegend.tsx` — Replace 3 depth/text colors
+- `src/components/common/SectionMetadataForm.tsx` — Replace placeholder color
+- `src/components/Dialogs/EditSectionDialog.tsx` — Replace default section color
+- `src/components/common/Button.tsx` — Replace `text-background` with `text-accent-on`
 
-### Canvas preview components (MapLibre-based — need re-apply on theme change)
-- `src/components/Dialogs/SectionPreview.tsx` — Background (#1a1a2e), lines (#888888), circles (#888888), strokes (#000000), compass (#ffcc00), station default (#4ecdc4), text (#ffffff)
+## Approach
 
-### Simple component defaults
-- `src/components/common/SectionMetadataForm.tsx` — Placeholder color (#4ecdc4) → use `--cc-accent`
-- `src/components/Dialogs/EditSectionDialog.tsx` — Default section color (#4ecdc4) → use `--cc-station-default`
+### Theme color helper utility (`src/utils/themeColors.ts`)
 
-## Implementation
+- `getThemeColor(varName: string): string` — reads CSS custom property via `getComputedStyle()`. Includes a **fallback map** with dark-theme defaults for each `--cc-*` variable, preventing empty strings if called before CSS loads or during unusual mount timing.
+- `getMapThemeColors()` — returns complete color map object for MapLibre paint properties. Called once on mount and again when `resolvedTheme` changes.
 
-### Theme color helper utility
+### MapLibre re-styling integration points
 
-Create `src/utils/themeColors.ts`:
-```typescript
-/**
- * Reads a CSS custom property value from the document root.
- * Used for MapLibre and canvas contexts that can't read CSS variables directly.
- */
-export function getThemeColor(varName: string): string {
-  return getComputedStyle(document.documentElement)
-    .getPropertyValue(varName).trim();
-}
+1. **`MapCanvas.tsx`** (React component): Subscribes to `useUIStore((s) => s.resolvedTheme)`. On change, calls `surveyLayer.applyThemeColors(getMapThemeColors())` to update all theme-dependent paint/layout properties.
 
-/**
- * Returns a complete color map for MapLibre paint properties.
- * Called once on mount and again when resolvedTheme changes.
- */
-export function getMapThemeColors() {
-  return {
-    snapColor: getThemeColor('--cc-snap-color'),
-    hoverHighlight: getThemeColor('--cc-hover-highlight'),
-    selectHighlight: getThemeColor('--cc-select-highlight'),
-    strokeColor: getThemeColor('--cc-stroke-color'),
-    strokeLight: getThemeColor('--cc-stroke-light'),
-    textHalo: getThemeColor('--cc-text-halo'),
-    textHaloAlt: getThemeColor('--cc-text-halo-alt'),
-    stationDefault: getThemeColor('--cc-station-default'),
-    grayLine: getThemeColor('--cc-gray-line'),
-    grayText: getThemeColor('--cc-gray-text'),
-    gridDefault: getThemeColor('--cc-grid-default'),
-    zeroDatum: getThemeColor('--cc-zero-datum'),
-    compassColor: getThemeColor('--cc-compass-color'),
-    depthShallow: getThemeColor('--cc-depth-shallow'),
-    depthDeep: getThemeColor('--cc-depth-deep'),
-    depthText: getThemeColor('--cc-depth-text'),
-    previewBg: getThemeColor('--cc-preview-bg'),
-    previewText: getThemeColor('--cc-preview-text'),
-    background: getThemeColor('--cc-background'),
-    accent: getThemeColor('--cc-accent'),
-    textPrimary: getThemeColor('--cc-text-primary'),
-  };
-}
-```
+2. **`SurveyLayer.tsx`** (class): Add `applyThemeColors(colors: ReturnType<typeof getMapThemeColors>)` method that iterates all theme-dependent layers and calls `map.setPaintProperty()` / `map.setLayoutProperty()` for each. Initial colors also set via this method.
 
-### MapLibre component pattern — re-apply on theme change
+3. **`SectionPreview.tsx`** (owns MapLibre instance): Add `useEffect` on `resolvedTheme` (from `useUIStore`) that calls `getMapThemeColors()` and updates background color + all constant paint properties (gray lines `#888`, compass `#ffcc00`, strokes, halos) — not just the `color` prop for feature data.
 
-Each MapLibre component must:
-1. Read `resolvedTheme` from `useUIStore`
-2. Call `getMapThemeColors()` to get current color values
-3. Re-apply paint/layout properties when `resolvedTheme` changes
+4. **`GlobalSurveyLayer.ts`** (class): Same pattern as SurveyLayer — add theme re-apply method called from parent `GlobalViewMap.tsx` when `resolvedTheme` changes.
 
-```typescript
-// In SurveyLayer.tsx (or similar)
-const resolvedTheme = useUIStore((s) => s.resolvedTheme);
+### Button.tsx on-accent fix
 
-useEffect(() => {
-  if (!map) return;
-  const colors = getMapThemeColors();
-  
-  // Re-apply all paint properties that use theme colors
-  map.setPaintProperty('stations-highlight', 'circle-color', colors.snapColor);
-  map.setPaintProperty('ghost-merge', 'circle-color', colors.stationDefault);
-  // ... etc for all themed paint properties
-}, [resolvedTheme, map]);
-```
+Replace `text-background` with `text-accent-on` in primary variant (line 14). In dark theme `accent-on` is `#1a1a2e` (same as current `background`). In light theme `accent-on` is `#ffffff` (visible on darkened accent).
 
-### SectionPreview.tsx pattern
+## Key context
 
-SectionPreview uses MapLibre internally. Its color prop defaults to `#4ecdc4`:
-```typescript
-// Before
-color = '#4ecdc4'
-
-// After — read from CSS variable
-color = getThemeColor('--cc-station-default')
-```
-
-Parent components passing `color` prop should also use theme-aware values.
-
-### Simple component defaults
-
-For non-MapLibre components (EditSectionDialog, SectionMetadataForm), use CSS variable reads:
-```typescript
-// Before
-const [color, setColor] = useState('#4ecdc4');
-
-// After
-const [color, setColor] = useState(() => getThemeColor('--cc-station-default'));
-```
+- `SurveyLayer.tsx` is a class, not a function component — it receives theme updates via method call from MapCanvas, not via hooks
+- `getThemeColor()` fallback map prevents empty strings that could leak into MapLibre paint props
+- Colors are computed once per theme change, not per feature/per frame
+- ExportPreview.tsx canvas render colors stay hardcoded (dark palette for exported artifacts)
 
 ## Acceptance
 
-- [ ] `src/utils/themeColors.ts` utility created with `getThemeColor()` and `getMapThemeColors()`
+- [ ] `src/utils/themeColors.ts` utility created with `getThemeColor()` (with fallback map) and `getMapThemeColors()`
 - [ ] All listed files have hardcoded hex colors replaced with theme color reads
 - [ ] ExportPreview.tsx canvas render colors remain hardcoded (dark palette)
-- [ ] MapLibre components re-apply paint/layout properties when `resolvedTheme` changes
-- [ ] SectionPreview color prop uses theme-aware default
-- [ ] EditSectionDialog default color uses `--cc-station-default`
+- [ ] MapCanvas subscribes to `resolvedTheme` and calls `surveyLayer.applyThemeColors()` on change
+- [ ] SurveyLayer has `applyThemeColors()` method that updates all theme-dependent paint/layout properties
+- [ ] SectionPreview has `useEffect` on `resolvedTheme` that updates background + constant paint props
+- [ ] GlobalSurveyLayer has theme re-apply method called from GlobalViewMap
+- [ ] Button.tsx primary variant uses `text-accent-on` instead of `text-background`
+- [ ] SectionPreview color prop uses theme-aware default via `getThemeColor()`
+- [ ] EditSectionDialog default color uses `getThemeColor('--cc-station-default')`
 - [ ] Colors render correctly in dark theme (no visual regression)
 - [ ] Colors render correctly in light theme (readable, visible)
 - [ ] `pnpm tsc --noEmit` passes
+
+## Done summary
+
+(To be filled on completion)
+
+## Evidence
+
+(To be filled on completion)

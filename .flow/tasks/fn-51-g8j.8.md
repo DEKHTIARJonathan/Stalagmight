@@ -56,3 +56,11 @@ The `getCategoryDefaults('display')` in SettingsDialog should call this with the
 - [ ] Switching themes does NOT auto-change existing display settings
 - [ ] Light theme section palette colors are visually distinct on light backgrounds
 - [ ] `pnpm tsc --noEmit` passes
+
+## Done summary
+
+(To be filled on completion)
+
+## Evidence
+
+(To be filled on completion)
