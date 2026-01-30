@@ -53,3 +53,25 @@ Pass `isDirty` to DialogWrapper if either name has been modified from defaults.
 - [ ] Loading state during split operation
 - [ ] `data-testid` attributes: `split-section-dialog`, `split-name-a`, `split-name-b`, `split-confirm`
 - [ ] `pnpm tsc --noEmit` passes
+
+## Done summary
+## Summary
+Created `SplitSectionDialog` frontend component for mid-section shot deletion. The dialog:
+- Pre-fills two text inputs with `<sectionName>-A` and `<sectionName>-B`
+- Validates both names are non-empty
+- Calls `deleteShotAndSplit(sectionId, shotId, nameA, nameB)` on confirm
+- Selects section A (original ID) after successful split
+- Shows inline error on failure, loading state during operation
+- Passes `isDirty` to DialogWrapper when names are modified from defaults
+- All required `data-testid` attributes present
+
+### Files Created
+- `src/components/Dialogs/SplitSectionDialog.tsx`
+
+### Files Modified
+- `src/components/Dialogs/index.ts` — Added barrel export
+- `src/App.tsx` — Added import and `activeDialog === 'split-section'` rendering
+## Evidence
+- Commits:
+- Tests:
+- PRs:
