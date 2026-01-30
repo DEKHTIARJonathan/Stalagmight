@@ -60,3 +60,10 @@ Place this in a shared location (e.g., `src/utils/contextMenuHelpers.ts` or with
 - [ ] Shared helper function avoids duplication
 - [ ] `pnpm tsc --noEmit` passes
 - [ ] `pnpm test:ui` passes
+
+## Done summary
+Wired position-aware Delete Shot flows in both DataTable and map context menus using a shared getDeleteShotDialog helper, and added last-shot type handling to ConfirmDialog with relationship display.
+## Evidence
+- Commits: 54ee586, e6f3772
+- Tests: pnpm tsc --noEmit, pnpm test:ui (592 passed)
+- PRs:
