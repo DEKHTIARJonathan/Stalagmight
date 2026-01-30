@@ -27,7 +27,7 @@ CaveChef has a single hardcoded dark theme with all colors as literal hex values
 - MapLibre icon inversion filter made conditional on theme
 - Theme influences default color palettes offered in display settings color pickers
 - **Config deep-merge plumbing**: `mergeConfig()` and `getCategoryDefaults()` in SettingsDialog.tsx must handle `appearance`
-- **E2E mock updates**: `e2e-playwright/mocks/tauri-ipc.ts` must return `appearance` in mock config
+- **E2E mock updates**: `e2e-playwright/mocks/tauri-ipc.ts` must return `appearance` in **both** `get_config` and `reload_config` mock handlers
 
 ### Out of scope
 - High-contrast theme (v2.0)
@@ -135,7 +135,7 @@ Adding `config.appearance` requires updates to internal functions in `src/compon
 
 ### E2E Mock Config
 
-`e2e-playwright/mocks/tauri-ipc.ts` hardcodes `get_config` return values. Must add `appearance: { theme: 'dark' }` to the mock config object to prevent test failures when `Config` type requires the field.
+`e2e-playwright/mocks/tauri-ipc.ts` hardcodes config return values in **both** `get_config` and `reload_config` handlers. Must add `appearance: { theme: 'dark' }` to both mock config objects to prevent test failures when `Config` type requires the field. `reload_config` is used by Advanced settings and must return the same shape as `get_config`.
 
 ### Correct File Paths
 
@@ -147,6 +147,14 @@ Adding `config.appearance` requires updates to internal functions in `src/compon
 ### Button.tsx On-Accent Pattern
 
 `src/components/common/Button.tsx` line 14 uses `text-background` as on-accent text color: `primary: 'bg-accent text-background hover:bg-accent/90'`. In light theme, `background` becomes light (#f5f0e8), making text invisible on accent. Must migrate to `text-accent-on` which maps to `--cc-accent-on` (dark in dark theme, white in light theme).
+
+### Config Normalization
+
+`Config::normalize()` in Rust currently handles other config sections. `AppearanceConfig` must add its own normalization: invalid `theme` values (anything other than `"dark"`, `"light"`, `"auto"`) should be reset to `"dark"`. Call `appearance.normalize()` from `Config::normalize()`. On the TypeScript side, `defaultConfig` and type checking provide sufficient validation.
+
+### Config Tests
+
+`src/types/__tests__/config.test.ts` asserts `defaultConfig`'s top-level keys. Adding `appearance` will break this test. Task 4 must update test expectations.
 
 ### Config Loading Timing
 
@@ -256,7 +264,7 @@ Note: Some tokens serve multiple utility prefixes (e.g. `--cc-accent-20` is used
 - **Third-party widget overrides**: DatePicker and MapLibre use `!important`. All must be converted (task 7).
 - **SettingsCategory type**: Defined in `src/components/Dialogs/SettingsSidebar.tsx` (NOT in settings/ subdirectory). Task 6 must modify the correct file.
 - **Config deep-merge plumbing**: `mergeConfig()` and `getCategoryDefaults()` are internal to SettingsDialog.tsx. Must add `appearance` branch to both (task 4).
-- **E2E mock config**: `e2e-playwright/mocks/tauri-ipc.ts` hardcodes config return values. Must add `appearance` field (task 4).
+- **E2E mock config**: `e2e-playwright/mocks/tauri-ipc.ts` hardcodes config return values in both `get_config` and `reload_config` handlers. Must add `appearance` field to both (task 4).
 - **Button on-accent text**: `text-background` breaks in light theme. Must migrate to `text-accent-on` (task 10).
 - **getThemeColor early mount**: Can return empty string before CSS loads. Mitigated by fallback map with dark-theme defaults (task 10).
 - **Alpha values in index.css**: Some CSS rules use rgba for shadows/overlays. Cannot apply alpha to `var()`. Mitigated by explicit alpha tokens (`--cc-map-ctrl-shadow`, opacity variant tokens).

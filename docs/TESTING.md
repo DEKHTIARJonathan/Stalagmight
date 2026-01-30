@@ -1227,7 +1227,7 @@ The dialog initial focus follows a priority order: `[data-autofocus]` > `input` 
 ```typescript
 // Dialog with an input field — input should receive focus
 await page.click('[data-testid="new-project-button"]');
-const input = page.locator('[data-testid="project-name-input"]');
+const input = page.locator('[data-testid="new-project-name-input"]');
 await expect(input).toBeFocused();
 
 // Dialog without input but with data-primary-action — that button gets focus
@@ -1271,12 +1271,12 @@ await page.click('[data-testid="settings-button"]');
 await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible();
 
 // Open nested confirmation dialog
-await page.click('[data-testid="reset-defaults-button"]');
-await expect(page.locator('[data-testid="confirm-reset-dialog"]')).toBeVisible();
+await page.click('[data-testid="reset-category-defaults"]');
+await expect(page.locator('[data-testid="reset-confirm-dialog"]')).toBeVisible();
 
 // Escape closes only the topmost dialog
 await page.keyboard.press('Escape');
-await expect(page.locator('[data-testid="confirm-reset-dialog"]')).not.toBeVisible();
+await expect(page.locator('[data-testid="reset-confirm-dialog"]')).not.toBeVisible();
 await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible();
 ```
 
