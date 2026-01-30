@@ -8,9 +8,9 @@
   "id": "fn-51-g8j",
   "next_task": 1,
   "plan_review_status": "ship",
-  "plan_reviewed_at": "2026-01-30T02:49:58.162761Z",
+  "plan_reviewed_at": "2026-01-30T04:04:51.164005Z",
   "spec_path": ".flow/specs/fn-51-g8j.md",
   "status": "open",
   "title": "Theme Infrastructure: CSS variables, ThemeProvider, dark+light themes",
-  "updated_at": "2026-01-30T04:01:47.073962Z"
+  "updated_at": "2026-01-30T04:04:51.164022Z"
 }
