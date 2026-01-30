@@ -1047,6 +1047,29 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] move_section called with:', args);
             return { success: true };
 
+          case 'move_segment':
+            // Mock move segment - just return success
+            console.log('[Mock IPC] move_segment called with:', args);
+            return { success: true };
+
+          case 'move_shot':
+            // Mock move shot - just return success
+            console.log('[Mock IPC] move_shot called with:', args);
+            return { success: true };
+
+          case 'get_anchored_section_ids':
+            // Return section IDs that have zero datums
+            console.log('[Mock IPC] get_anchored_section_ids called');
+            if (currentProject) {
+              const datums = (currentProject.zero_datums ?? []) as Array<{
+                station_ref: { section_id: number; station_index: number };
+              }>;
+              const anchoredIds = [...new Set(datums.map(d => d.station_ref.section_id))];
+              anchoredIds.sort((a, b) => a - b);
+              return anchoredIds;
+            }
+            return [];
+
           case 'set_zero_datum': {
             console.log('[Mock IPC] set_zero_datum called with:', args);
             // Update currentProject's zero_datums to reflect the change
@@ -1208,14 +1231,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 delete_tool: ['X'],
                 merge: ['M'],
                 measure: ['R'],
-                move_section: ['V'],
+                move_segment: ['V'],
+                move_shot: ['G'],
+                move_section: ['Shift+V'],
                 move_station: ['T'],
                 // Edit
                 undo: ['Ctrl+Z'],
                 redo: ['Ctrl+Y', 'Ctrl+Shift+Z'],
                 save: ['Ctrl+S'],
                 // View
-                toggle_depth_gradient: ['G'],
+                toggle_depth_gradient: ['Shift+D'],
                 toggle_grid: ['Shift+G'],
                 toggle_satellite: ['B'],
                 toggle_station_labels: ['L'],
@@ -1358,14 +1383,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 delete_tool: ['X'],
                 merge: ['M'],
                 measure: ['R'],
-                move_section: ['V'],
+                move_segment: ['V'],
+                move_shot: ['G'],
+                move_section: ['Shift+V'],
                 move_station: ['T'],
                 // Edit
                 undo: ['Ctrl+Z'],
                 redo: ['Ctrl+Y', 'Ctrl+Shift+Z'],
                 save: ['Ctrl+S'],
                 // View
-                toggle_depth_gradient: ['G'],
+                toggle_depth_gradient: ['Shift+D'],
                 toggle_grid: ['Shift+G'],
                 toggle_satellite: ['B'],
                 toggle_station_labels: ['L'],

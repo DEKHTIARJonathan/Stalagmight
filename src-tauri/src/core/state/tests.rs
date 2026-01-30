@@ -5182,6 +5182,151 @@ fn test_move_segment_closure_connectivity() {
     );
 }
 
+#[test]
+fn test_move_segment_isolated() {
+    // An unconnected section should NOT be moved when moving a segment
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Create two sections WITHOUT merging them
+    let r1 = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let sid_a = r1.section_id.unwrap();
+
+    let r2 = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+    let sid_b = r2.section_id.unwrap();
+
+    // Record offsets before move
+    let project = state.get_project_state().unwrap();
+    let a_before = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let b_before = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
+
+    // Move segment starting from section A (B is NOT connected)
+    let result = state.execute(Command::MoveSegment {
+        section_id: sid_a,
+        offset: Coordinates::new(10.0, 20.0, 0.0),
+    });
+    assert!(result.success);
+
+    // Section A should have moved
+    let project = state.get_project_state().unwrap();
+    let a_after = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let b_after = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
+
+    assert!(
+        (a_after.0 - a_before.0 - 10.0).abs() < 0.001,
+        "Section A x should increase by 10"
+    );
+    assert!(
+        (a_after.1 - a_before.1 - 20.0).abs() < 0.001,
+        "Section A y should increase by 20"
+    );
+
+    // Section B should NOT have moved (not connected)
+    assert!(
+        (b_after.0 - b_before.0).abs() < 0.001,
+        "Isolated Section B x should NOT change"
+    );
+    assert!(
+        (b_after.1 - b_before.1).abs() < 0.001,
+        "Isolated Section B y should NOT change"
+    );
+}
+
+#[test]
+fn test_move_segment_accumulates() {
+    // Multiple MoveSegment calls should accumulate offsets
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let r1 = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let sid_a = r1.section_id.unwrap();
+
+    // Record initial offset
+    let project = state.get_project_state().unwrap();
+    let initial = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+
+    // First move
+    let result1 = state.execute(Command::MoveSegment {
+        section_id: sid_a,
+        offset: Coordinates::new(10.0, 5.0, 0.0),
+    });
+    assert!(result1.success);
+
+    let project = state.get_project_state().unwrap();
+    let after_first = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    assert!(
+        (after_first.0 - initial.0 - 10.0).abs() < 0.001,
+        "After first move, x should increase by 10"
+    );
+    assert!(
+        (after_first.1 - initial.1 - 5.0).abs() < 0.001,
+        "After first move, y should increase by 5"
+    );
+
+    // Second move
+    let result2 = state.execute(Command::MoveSegment {
+        section_id: sid_a,
+        offset: Coordinates::new(3.0, 7.0, 0.0),
+    });
+    assert!(result2.success);
+
+    let project = state.get_project_state().unwrap();
+    let after_second = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    assert!(
+        (after_second.0 - initial.0 - 13.0).abs() < 0.001,
+        "After second move, x should be initial + 10 + 3 = +13"
+    );
+    assert!(
+        (after_second.1 - initial.1 - 12.0).abs() < 0.001,
+        "After second move, y should be initial + 5 + 7 = +12"
+    );
+
+    // Third move with negative offset
+    let result3 = state.execute(Command::MoveSegment {
+        section_id: sid_a,
+        offset: Coordinates::new(-5.0, -2.0, 0.0),
+    });
+    assert!(result3.success);
+
+    let project = state.get_project_state().unwrap();
+    let after_third = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    assert!(
+        (after_third.0 - initial.0 - 8.0).abs() < 0.001,
+        "After third move, x should be initial + 13 - 5 = +8"
+    );
+    assert!(
+        (after_third.1 - initial.1 - 10.0).abs() < 0.001,
+        "After third move, y should be initial + 12 - 2 = +10"
+    );
+}
+
 // === Batch Tests ===
 
 #[test]
