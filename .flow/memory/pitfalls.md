@@ -249,3 +249,6 @@ When a numeric threshold of 0 means 'disabled' in the settings UI, guard all thr
 
 ## 2026-01-30 manual [pitfall]
 DOM ancestry walks that stop at container (current !== container) miss checking the container itself for attributes like inert/aria-hidden — use a break-after-check pattern instead
+
+## 2026-01-30 manual [pitfall]
+Never fall back to inerting a parent container (#root) when the expected sibling container (#dialog-root) is missing — this inerts all descendants including the dialog itself
