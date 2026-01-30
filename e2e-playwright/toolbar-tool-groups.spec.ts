@@ -277,47 +277,30 @@ test.describe('Toolbar Tool Groups', () => {
     await waitForActiveTool(page, 'move_segment');
 
     // Wait for anchored section IDs to be fetched and feature-state applied.
-    // Poll for a station feature in section 1 to have anchored=true.
-    const hasAnchoredFeature = await page.waitForFunction(() => {
+    // Poll until a station feature in section 1 has anchored=true in feature-state.
+    await page.waitForFunction(() => {
       const map = (window as unknown as { __cavechef_map__?: {
-        querySourceFeatures: (source: string) => Array<{ id?: number; properties?: { sectionId?: number } }>;
+        querySourceFeatures: (source: string) => Array<{ id?: number | string; properties?: { sectionId?: number } }>;
         getFeatureState: (opts: { source: string; id: number }) => { anchored?: boolean };
       } }).__cavechef_map__;
       if (!map) return false;
 
-      // Find the stations source - it's named "<sourceId>-stations"
-      // SurveyLayer uses "survey-<layerId>-stations" but we look for any source with '-stations'
       try {
         const features = map.querySourceFeatures('survey-data-stations');
         for (const f of features) {
           if (f.properties?.sectionId === 1 && f.id != null) {
-            const state = map.getFeatureState({ source: 'survey-data-stations', id: f.id as number });
-            if (state?.anchored === true) return true;
+            const featureId = typeof f.id === 'number' ? f.id : parseInt(String(f.id), 10);
+            if (!isNaN(featureId)) {
+              const state = map.getFeatureState({ source: 'survey-data-stations', id: featureId });
+              if (state?.anchored === true) return true;
+            }
           }
         }
       } catch {
-        // Source name may differ; try alternate
+        // Source may not be loaded yet
       }
       return false;
-    }, { timeout: 5000 }).catch(() => null);
-
-    // If we found anchored features, great; if not, verify the IPC was at least called
-    // (the feature-state approach depends on features being rendered on the map)
-    if (hasAnchoredFeature) {
-      expect(hasAnchoredFeature).toBeTruthy();
-    } else {
-      // Fallback: verify the tool is active and anchored IDs were fetched
-      // (features may not be rendered in the mock viewport)
-      const anchoredIds = await page.evaluate(async () => {
-        const internals = (window as unknown as {
-          __TAURI_INTERNALS__?: { invoke: (cmd: string) => Promise<unknown> };
-        }).__TAURI_INTERNALS__;
-        if (!internals) return null;
-        return internals.invoke('get_anchored_section_ids');
-      });
-      // The mock returns section IDs from zero_datums - section 1 should be anchored
-      expect(anchoredIds).toEqual([1]);
-    }
+    }, { timeout: 10000 });
 
     // The app should remain functional with the move_segment tool active
     const canvas = page.getByTestId('map-canvas');
