@@ -39,9 +39,8 @@ Add Playwright E2E tests that verify theme switching works correctly: the data-t
 - [ ] `pnpm test:ui` passes with new tests included
 
 ## Done summary
-
-(To be filled on completion)
-
+Added 5 Playwright E2E tests for theme switching at e2e-playwright/theme.spec.ts: verifying default dark theme on load, CSS variable resolution in both themes, theme switching via Settings Appearance tab, and theme persistence across dialog close/reopen.
 ## Evidence
-
-(To be filled on completion)
+- Commits: a9dfb16, a21f941
+- Tests: pnpm exec playwright test e2e-playwright/theme.spec.ts (5 passed), pnpm tsc --noEmit (passed)
+- PRs:
