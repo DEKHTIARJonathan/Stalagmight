@@ -674,7 +674,7 @@ Each item shows:
   - `⊖` Unmerge stations
   - `◉` Set zero datum
   - `○` Remove zero datum
-  - `↔` Move section/station
+  - `↔` Move station
   - `┄` Set shot virtual
   - `▤` Batch operation
   - `•` Default/other
@@ -743,7 +743,6 @@ When an action is performed while the dropdown is open:
 | **Delete** | X | Delete station (confirm) | Delete shot (confirm) | - | - |
 | **Merge** | M | Select for merge | - | - | - |
 | **Measure** | R | Start measurement | - | Start measurement | - |
-| **Move Section** | V | - | - | - | Drag unanchored section |
 | **Move Station** | T | - | - | - | Drag unanchored station |
 
 ### 6.5 Map Features
@@ -1139,16 +1138,7 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 
 ### 7.9 Moving Unanchored Sections
 
-**Section is unanchored** (not connected to zero datum):
-1. Select Move Section tool (V)
-2. Click and drag section to new position
-3. Release to place
-4. Can still move until connected to anchored section/station
-
-**Section becomes anchored** (connected to zero datum through shots):
-1. Move Section tool no longer works on this section
-2. Individual stations can be moved with Move Station tool (if unanchored)
-3. This preserves zero datum integrity
+Unanchored sections can be repositioned via the **Section Adjust Dialog** (right-click section → "Adjust Position"). Individual unanchored stations can be moved with the Move Station tool (T).
 
 ### 7.10 Setting a Zero Datum
 
@@ -1586,7 +1576,6 @@ draw = "D"
 delete = "X"
 merge = "M"
 measure = "R"
-move_section = "V"
 move_station = "T"
 undo = "Ctrl+Z"
 redo = "Ctrl+Y"
@@ -1812,7 +1801,7 @@ All `:focus-visible` outlines use `var(--cc-focus-ring)` and `var(--cc-focus-rin
 All shortcuts configurable and disableable:
 - S: Select, P: Pan, Z: Zoom, D: Draw
 - X: Delete, M: Merge, R: Measure
-- V: Move Section, T: Move Station
+- T: Move Station
 
 #### Skip Links
 - "Skip to main content"
@@ -2678,7 +2667,6 @@ cavechef/
 | Delete Tool | X |
 | Merge Tool | M |
 | Measure Tool | R |
-| Move Section Tool | V |
 | Move Station Tool | T |
 | Undo | Ctrl+Z |
 | Redo | Ctrl+Y / Ctrl+Shift+Z |

@@ -24,7 +24,6 @@ export type ToolType =
   | 'delete'
   | 'merge'
   | 'measure'
-  | 'move_section'
   | 'move_station'
   | 'move_segment'
   | 'move_shot';

@@ -29,7 +29,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 - [x] Dirty state indicator and prompt on close (but no auto-save)
 
 ### Map Interactions
-- [x] All tools: Select, Pan, Zoom, Draw, Delete, Merge, Measure, Move Section/Station
+- [x] All tools: Select, Pan, Zoom, Draw, Delete, Merge, Measure, Move Station/Segment/Shot
 - [x] Multi-select (Shift/Ctrl+click), box select, selection in DetailPanel
 - [x] Context menu, snap-to-station, hover highlighting, drag preview
 - [x] Scale bar (MapLibre ScaleControl)
