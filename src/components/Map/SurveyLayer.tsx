@@ -63,6 +63,7 @@ export default class SurveyLayer {
   private shotLabelsLayerId = 'survey-shot-labels';
   private stationLabelsLayerId = 'survey-station-labels';
   private loopClosuresLayerId = 'survey-loop-closures';
+  private dragClosuresLayerId = 'survey-drag-loop-closures';
   private ghostShotsLayerId = 'survey-ghost-shots';
   private ghostStationsLayerId = 'survey-ghost-stations';
   private ghostMergeLayerId = 'survey-ghost-merge';
@@ -1093,6 +1094,12 @@ export default class SurveyLayer {
     return Math.floor(featureId / 100000) === Number(sectionIdStr);
   }
 
+  // Check if a feature belongs to an anchored section (suppresses hover/interaction)
+  private isFeatureAnchored(featureId: number): boolean {
+    return this.anchoredSectionIds.size > 0 &&
+      this.anchoredSectionIds.has(Math.floor(featureId / 100000));
+  }
+
   // Update visual state using setFeatureState (much faster than setPaintProperty)
   // Only updates the specific features that changed, not the entire layer
   private updateVisualState() {
@@ -1113,8 +1120,8 @@ export default class SurveyLayer {
           { hover: restoreSection }
         );
       }
-      // Set new hover
-      if (newHoveredStationFeatureId !== null) {
+      // Set new hover (suppress for anchored features — no interaction feedback)
+      if (newHoveredStationFeatureId !== null && !this.isFeatureAnchored(newHoveredStationFeatureId)) {
         this.map.setFeatureState(
           { source: stationsSource, id: newHoveredStationFeatureId },
           { hover: true }
@@ -1137,8 +1144,8 @@ export default class SurveyLayer {
           { hover: restoreSection }
         );
       }
-      // Set new hover
-      if (newHoveredShotFeatureId !== null) {
+      // Set new hover (suppress for anchored features — no interaction feedback)
+      if (newHoveredShotFeatureId !== null && !this.isFeatureAnchored(newHoveredShotFeatureId)) {
         this.map.setFeatureState(
           { source: shotsSource, id: newHoveredShotFeatureId },
           { hover: true }
@@ -1643,6 +1650,64 @@ export default class SurveyLayer {
     }
 
     this.prevAnchoredFeatureIds = newAnchoredFeatureIds;
+
+    // Update label layer opacity via setPaintProperty (labels use separate sources
+    // without promoteId, so feature-state isn't available — use data-driven expressions)
+    this.updateLabelAnchoredOpacity(sectionIds);
+
+    // Update loop closure line opacity — gray out closures where both endpoints are anchored
+    this.updateClosureAnchoredOpacity(sectionIds);
+  }
+
+  // Set text-opacity on label layers: 0.25 for features in anchored sections, normal otherwise
+  private updateLabelAnchoredOpacity(anchoredIds: Set<number>): void {
+    const idsArray = [...anchoredIds];
+    const anchoredCheck: maplibregl.ExpressionSpecification =
+      ['in', ['get', 'sectionId'], ['literal', idsArray]] as maplibregl.ExpressionSpecification;
+
+    // Zoom-interpolated base opacity for shot/station labels
+    const zoomOpacity: maplibregl.ExpressionSpecification = [
+      'interpolate', ['linear'], ['zoom'], 14, 0.7, 18, 1,
+    ] as maplibregl.ExpressionSpecification;
+
+    if (idsArray.length > 0) {
+      // Shot labels: anchored → 0.25, else zoom-interpolated
+      this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', [
+        'case', anchoredCheck, 0.25, zoomOpacity,
+      ] as maplibregl.ExpressionSpecification);
+      // Section name labels: anchored → 0.25, else 1
+      this.map.setPaintProperty(this.labelsLayerId, 'text-opacity', [
+        'case', anchoredCheck, 0.25, 1,
+      ] as maplibregl.ExpressionSpecification);
+      // Station index labels: anchored → 0.25, else zoom-interpolated
+      this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', [
+        'case', anchoredCheck, 0.25, zoomOpacity,
+      ] as maplibregl.ExpressionSpecification);
+    } else {
+      // Restore original opacity (no anchored sections)
+      this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', zoomOpacity);
+      this.map.setPaintProperty(this.labelsLayerId, 'text-opacity', 1);
+      this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', zoomOpacity);
+    }
+  }
+
+  // Set line-opacity on loop closures layer: 0.25 when both endpoints are in anchored sections
+  private updateClosureAnchoredOpacity(anchoredIds: Set<number>): void {
+    const idsArray = [...anchoredIds];
+
+    if (idsArray.length > 0) {
+      // Both endpoints must be anchored to gray out the closure line
+      const bothAnchored: maplibregl.ExpressionSpecification = ['all',
+        ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
+        ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
+      ] as maplibregl.ExpressionSpecification;
+
+      this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', [
+        'case', bothAnchored, 0.25, 0.8,
+      ] as maplibregl.ExpressionSpecification);
+    } else {
+      this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', 0.8);
+    }
   }
 
   /**
@@ -1738,6 +1803,48 @@ export default class SurveyLayer {
       }
     }
 
+    // Loop closures: hide closures that have ANY endpoint in the connected set from
+    // the main layer, then create a temp layer for closures with BOTH endpoints in the
+    // set (those translate uniformly). Closures bridging dragged/stationary sections are
+    // hidden during drag and reappear with correct geometry after commit.
+    {
+      const closureSourceId = this.sourceId + '-loop-closures';
+      const existingFilter = this.map.getFilter(this.loopClosuresLayerId);
+      this.dragSavedFilters.set(this.loopClosuresLayerId, existingFilter ?? undefined);
+
+      // Hide closures where EITHER endpoint is in the connected set
+      const eitherEndpointExclusion: maplibregl.FilterSpecification = ['!', ['any',
+        ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
+        ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
+      ]] as unknown as maplibregl.FilterSpecification;
+      const composedClosure: maplibregl.FilterSpecification = (existingFilter && typeof existingFilter === 'object')
+        ? (['all', existingFilter, eitherEndpointExclusion] as unknown as maplibregl.FilterSpecification)
+        : eitherEndpointExclusion;
+      this.map.setFilter(this.loopClosuresLayerId, composedClosure);
+
+      // Temp layer: closures where BOTH endpoints are in connected set (translate together)
+      const bothEndpointInclusion: maplibregl.FilterSpecification = ['all',
+        ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
+        ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
+      ] as unknown as maplibregl.FilterSpecification;
+
+      this.map.addLayer({
+        id: this.dragClosuresLayerId,
+        type: 'line',
+        source: closureSourceId,
+        filter: bothEndpointInclusion,
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 3,
+          'line-opacity': 0.85,
+          'line-dasharray': [6, 4],
+          'line-translate': [0, 0] as [number, number],
+          'line-translate-anchor': 'viewport',
+          'line-translate-transition': { duration: 0, delay: 0 },
+        },
+      });
+    }
+
     this.dragPreviewActive = true;
   }
 
@@ -1750,6 +1857,10 @@ export default class SurveyLayer {
     const offset: [number, number] = [dx, dy];
     for (const def of SurveyLayer.DRAG_LAYER_DEFS) {
       this.map.setPaintProperty(def.tempLayerId, def.translateProp, offset);
+    }
+    // Update closure drag layer
+    if (this.map.getLayer(this.dragClosuresLayerId)) {
+      this.map.setPaintProperty(this.dragClosuresLayerId, 'line-translate', offset);
     }
   }
 
@@ -1765,6 +1876,9 @@ export default class SurveyLayer {
       if (this.map.getLayer(def.tempLayerId)) {
         this.map.removeLayer(def.tempLayerId);
       }
+    }
+    if (this.map.getLayer(this.dragClosuresLayerId)) {
+      this.map.removeLayer(this.dragClosuresLayerId);
     }
   }
 
@@ -1784,6 +1898,15 @@ export default class SurveyLayer {
       // Restore original filter on main layer
       const saved = this.dragSavedFilters.get(def.mainLayerId);
       this.map.setFilter(def.mainLayerId, saved ?? null);
+    }
+
+    // Remove closure temp layer and restore filter
+    if (this.map.getLayer(this.dragClosuresLayerId)) {
+      this.map.removeLayer(this.dragClosuresLayerId);
+    }
+    const savedClosureFilter = this.dragSavedFilters.get(this.loopClosuresLayerId);
+    if (savedClosureFilter !== undefined) {
+      this.map.setFilter(this.loopClosuresLayerId, savedClosureFilter ?? null);
     }
 
     this.dragSavedFilters.clear();
