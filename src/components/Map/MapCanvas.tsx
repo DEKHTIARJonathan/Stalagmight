@@ -89,6 +89,10 @@ export default function MapCanvas() {
   const dragOriginStationRef = useRef<StationRef | null>(null);
   // Current snap target during segment drag (ref, not state — updated per mousemove)
   const segmentDragSnapRef = useRef<StationRef | null>(null);
+  // Last raw (pre-snap) pixel offset — used to restore preview if snap-merge is cancelled
+  const lastRawDragOffsetRef = useRef<{ dx: number; dy: number } | null>(null);
+  // True while snap-to-merge dialog is open — blocks mouseup from ending drag
+  const snapMergeDialogPendingRef = useRef(false);
 
   const { project, stations, stats, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
 
@@ -309,6 +313,12 @@ export default function MapCanvas() {
   const handleMoveDragStart = useCallback(
     (data: { type: 'station' | 'segment' | 'shot'; sectionId?: number; stationRef?: { section_id: number; station_index: number }; shotIndex?: number; screenX?: number; screenY?: number }) => {
       if (!map.current) return;
+
+      // Guard: when dragPan is disabled (move_segment tool), MapLibre's `click`
+      // event fires even after long drags. After a snap-to-merge mouseup, the
+      // click event hits the snap-target station and would start a spurious drag
+      // for the target section. Block it while the merge dialog is pending.
+      if (snapMergeDialogPendingRef.current) return;
 
       // Use actual click position if available, otherwise fall back to map center
       let startLng: number, startLat: number;
@@ -603,6 +613,7 @@ export default function MapCanvas() {
       if (moveDrag.type === 'segment' && surveyLayerRef.current && dragStartScreenRef.current) {
         const dx = e.clientX - dragStartScreenRef.current.x;
         const dy = e.clientY - dragStartScreenRef.current.y;
+        lastRawDragOffsetRef.current = { dx, dy };
 
         // Snap-to-station detection during segment drag (only if drag started from a station)
         const snapThreshold = config?.map.snap.threshold ?? 10;
@@ -676,46 +687,69 @@ export default function MapCanvas() {
   // Separate from checkAndOpenMergeDialog in useMapTools because the active tool is
   // move_segment (not merge) and we don't set mergeStationA/B in the UI store.
   const promptMergeAfterSegmentDrag = useCallback(
-    async (originStation: StationRef, targetStation: StationRef) => {
+    async (
+      originStation: StationRef,
+      targetStation: StationRef,
+      moveCallbacks?: {
+        onBeforeConfirm: () => Promise<void>;
+        onCancel: () => void;
+      }
+    ) => {
       const { checkMergeConnectivity } = useProjectStore.getState();
       const { openDialog, showToast } = useUIStore.getState();
 
       showToast('Checking merge compatibility...', 'segment-drag-merge-check');
       try {
         const result = await checkMergeConnectivity(originStation, targetStation);
+        const extra = moveCallbacks
+          ? { onBeforeConfirm: moveCallbacks.onBeforeConfirm, onCancel: moveCallbacks.onCancel }
+          : {};
         if (result.can_merge) {
-          openDialog('merge', { stationA: originStation, stationB: targetStation });
+          openDialog('merge', { stationA: originStation, stationB: targetStation, ...extra });
         } else if (result.connected) {
           openDialog('closure', {
             stationA: originStation,
             stationB: targetStation,
             preview: result.preview,
             reason: result.reason,
+            ...extra,
           });
         } else {
           showToast(result.reason ?? 'Merge not possible.', 'segment-drag-merge-blocked');
+          moveCallbacks?.onCancel?.();
         }
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         showToast(message, 'segment-drag-merge-error');
+        moveCallbacks?.onCancel?.();
       }
     },
     []
   );
 
   const handleMoveDragEnd = useCallback(async () => {
+    // Block while snap-to-merge dialog is pending. The guard in handleMouseUp
+    // should already prevent this call, but act as defense-in-depth in case
+    // the mouseup reaches us through an unexpected path (e.g., portal event
+    // propagation, inert removal timing).
+    if (snapMergeDialogPendingRef.current) {
+      return;
+    }
+
     // Invalidate any pending getConnectedSectionIds async results so late
     // .then() callbacks cannot call setMoveDrag after drag has ended.
     segmentDragTokenRef.current++;
 
-    // Capture and clear snap refs before any early returns
+    // Capture snap refs
     const snapTarget = segmentDragSnapRef.current;
     const originStationRef = dragOriginStationRef.current;
     segmentDragSnapRef.current = null;
-    dragOriginStationRef.current = null;
 
     if (!moveDrag || !map.current) {
       // Early bail — clean up everything
+      snapMergeDialogPendingRef.current = false;
+      dragOriginStationRef.current = null;
+      lastRawDragOffsetRef.current = null;
       if (surveyLayerRef.current) surveyLayerRef.current.endDragPreview();
       setMoveDrag(null);
       dragConnectedSectionIdsRef.current = new Set();
@@ -725,7 +759,64 @@ export default function MapCanvas() {
       return;
     }
 
-    // Clear segment preview state before committing
+    // Snap-to-merge path: keep the entire drag state alive so that Cancel
+    // simply dismisses the dialog and the user can continue dragging.
+    if (moveDrag.type === 'segment' && moveDrag.sectionId !== undefined && snapTarget && originStationRef) {
+      const originSt = stations.find(
+        (s) =>
+          s.station_ref.section_id === originStationRef.section_id &&
+          s.station_ref.station_index === originStationRef.station_index
+      );
+      const targetSt = stations.find(
+        (s) =>
+          s.station_ref.section_id === snapTarget.section_id &&
+          s.station_ref.station_index === snapTarget.station_index
+      );
+
+      if (originSt && targetSt) {
+        const snapOffset = {
+          x: targetSt.coordinates.x - originSt.coordinates.x,
+          y: targetSt.coordinates.y - originSt.coordinates.y,
+          z: 0,
+        };
+        const sectionId = moveDrag.sectionId;
+        setSnappedStation(null);
+        snapMergeDialogPendingRef.current = true;
+
+        // Don't clear moveDrag, dragStartScreenRef, dragConnectedSectionIdsRef,
+        // or dragOriginStationRef — these keep the drag alive after Cancel.
+        promptMergeAfterSegmentDrag(originStationRef, snapTarget, {
+          onBeforeConfirm: async () => {
+            // Commit: move segment, end preview, clear all drag state
+            snapMergeDialogPendingRef.current = false;
+            dragOriginStationRef.current = null;
+            lastRawDragOffsetRef.current = null;
+            surveyLayerRef.current?.onNextUpdate(() => {
+              surveyLayerRef.current?.endDragPreview();
+            });
+            await moveSegment(sectionId, snapOffset);
+            dragConnectedSectionIdsRef.current = new Set();
+            moveDragLngLatRef.current = null;
+            dragStartScreenRef.current = null;
+            setMoveDrag(null);
+          },
+          onCancel: () => {
+            // Resume drag: restore preview to the raw (pre-snap) offset so the
+            // segment appears where the user's mouse was, not at the snap target.
+            const raw = lastRawDragOffsetRef.current;
+            if (raw && surveyLayerRef.current) {
+              surveyLayerRef.current.updateDragPreview(raw.dx, raw.dy);
+            }
+            snapMergeDialogPendingRef.current = false;
+          },
+        });
+        return;
+      }
+    }
+
+    // --- Normal (non-snap) path: clear everything and commit ---
+    dragOriginStationRef.current = null;
+    lastRawDragOffsetRef.current = null;
     dragConnectedSectionIdsRef.current = new Set();
 
     // Read final position from ref (updated imperatively during drag)
@@ -746,40 +837,7 @@ export default function MapCanvas() {
       if (moveDrag.type === 'station' && moveDrag.stationRef) {
         await moveStation(moveDrag.stationRef, offset);
       } else if (moveDrag.type === 'segment' && moveDrag.sectionId !== undefined) {
-        // Snap-to-merge path: compute exact offset to align origin with target
-        if (snapTarget && originStationRef) {
-          const originSt = stations.find(
-            (s) =>
-              s.station_ref.section_id === originStationRef.section_id &&
-              s.station_ref.station_index === originStationRef.station_index
-          );
-          const targetSt = stations.find(
-            (s) =>
-              s.station_ref.section_id === snapTarget.section_id &&
-              s.station_ref.station_index === snapTarget.station_index
-          );
-
-          if (originSt && targetSt) {
-            const snapOffset = {
-              x: targetSt.coordinates.x - originSt.coordinates.x,
-              y: targetSt.coordinates.y - originSt.coordinates.y,
-              z: 0,
-            };
-
-            surveyLayerRef.current?.onNextUpdate(() => {
-              surveyLayerRef.current?.endDragPreview();
-            });
-            await moveSegment(moveDrag.sectionId, snapOffset);
-            setSnappedStation(null);
-            setMoveDrag(null);
-
-            // After move completes, prompt merge dialog
-            promptMergeAfterSegmentDrag(originStationRef, snapTarget);
-            return;
-          }
-        }
-
-        // Non-snap segment move (existing behavior)
+        // Non-snap segment move
         surveyLayerRef.current?.onNextUpdate(() => {
           surveyLayerRef.current?.endDragPreview();
         });
@@ -2094,6 +2152,10 @@ export default function MapCanvas() {
 
   const handleMouseUp = useCallback(() => {
     if (moveDrag) {
+      // Block while snap-to-merge dialog is open
+      if (snapMergeDialogPendingRef.current) {
+        return;
+      }
       handleMoveDragEnd();
     } else if (zoomBox.start) {
       handleZoomBoxEnd();
@@ -2101,6 +2163,12 @@ export default function MapCanvas() {
       handleBoxSelectEnd();
     }
   }, [moveDrag, zoomBox.start, boxSelect.start, handleMoveDragEnd, handleZoomBoxEnd, handleBoxSelectEnd]);
+
+  // Mouse leave: keep segment drag alive so user can return the cursor
+  const handleMouseLeave = useCallback(() => {
+    if (moveDrag?.type === 'segment') return;
+    handleMouseUp();
+  }, [moveDrag, handleMouseUp]);
 
   // Handle placement mode click
   const handlePlacementClick = useCallback(
@@ -2161,7 +2229,7 @@ export default function MapCanvas() {
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      onMouseLeave={handleMouseLeave}
       onContextMenu={handleContextMenu}
     >
       <div ref={mapContainer} className="w-full h-full" data-testid="maplibre-container" />
