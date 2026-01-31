@@ -241,6 +241,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           options.onMoveDragStart?.({
             type: 'segment',
             sectionId: ref.section_id,
+            stationRef: ref,
             screenX: mouseEvent.clientX,
             screenY: mouseEvent.clientY,
           });
@@ -323,6 +324,17 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
               });
             }
           }
+          break;
+        }
+
+        case 'move_segment': {
+          // Start segment move drag from a shot click (same as station click)
+          options.onMoveDragStart?.({
+            type: 'segment',
+            sectionId,
+            screenX: mouseEvent.clientX,
+            screenY: mouseEvent.clientY,
+          });
           break;
         }
 
