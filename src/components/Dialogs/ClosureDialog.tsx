@@ -38,7 +38,12 @@ export default function ClosureDialog() {
     return project?.sections.find((s) => s.id === stationB.section_id)?.name ?? `Section ${stationB.section_id}`;
   }, [stationB, project]);
 
+  // Optional callbacks from snap-to-merge drag flow
+  const onBeforeConfirm = dialogData.onBeforeConfirm as (() => Promise<void>) | undefined;
+  const onCancel = dialogData.onCancel as (() => void) | undefined;
+
   const handleClose = () => {
+    onCancel?.();
     clearMergeStations();
     closeDialog();
   };
@@ -50,6 +55,7 @@ export default function ClosureDialog() {
     setError(null);
 
     try {
+      if (onBeforeConfirm) await onBeforeConfirm();
       const result = await createLoopClosure(stationA, stationB, strategy);
       if (result.success) {
         clearMergeStations();
