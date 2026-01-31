@@ -65,12 +65,8 @@ test.describe('Toolbar Tool Groups', () => {
     await page.keyboard.press('v');
     await waitForActiveTool(page, 'move_segment');
 
-    // Click the move group button - should cycle to next subtool (move_section)
+    // Click the move group button - should cycle to next subtool (move_shot)
     const moveGroup = page.getByTestId('tool-group-move');
-    await moveGroup.click();
-    await waitForActiveTool(page, 'move_section');
-
-    // Click again - should cycle to move_shot
     await moveGroup.click();
     await waitForActiveTool(page, 'move_shot');
 
@@ -96,7 +92,6 @@ test.describe('Toolbar Tool Groups', () => {
 
     // Subtool items should be visible
     await expect(page.getByTestId('subtool-move_segment')).toBeVisible();
-    await expect(page.getByTestId('subtool-move_section')).toBeVisible();
     await expect(page.getByTestId('subtool-move_shot')).toBeVisible();
     await expect(page.getByTestId('subtool-move_station')).toBeVisible();
   });
@@ -157,44 +152,44 @@ test.describe('Toolbar Tool Groups', () => {
     const moveSegmentItem = page.getByTestId('subtool-move_segment');
     await expect(moveSegmentItem).toBeFocused({ timeout: 2000 });
 
-    // ArrowDown should move focus to next item (move_section, index 1)
-    await page.keyboard.press('ArrowDown');
-    const moveSectionItem = page.getByTestId('subtool-move_section');
-    await expect(moveSectionItem).toBeFocused({ timeout: 2000 });
-
-    // ArrowDown again to move_shot (index 2)
+    // ArrowDown should move focus to next item (move_shot, index 1)
     await page.keyboard.press('ArrowDown');
     const moveShotItem = page.getByTestId('subtool-move_shot');
     await expect(moveShotItem).toBeFocused({ timeout: 2000 });
 
-    // ArrowUp should go back to move_section (index 1)
-    await page.keyboard.press('ArrowUp');
-    await expect(moveSectionItem).toBeFocused({ timeout: 2000 });
+    // ArrowDown again to move_station (index 2)
+    await page.keyboard.press('ArrowDown');
+    const moveStationItem = page.getByTestId('subtool-move_station');
+    await expect(moveStationItem).toBeFocused({ timeout: 2000 });
 
-    // Press Enter to select move_section
+    // ArrowUp should go back to move_shot (index 1)
+    await page.keyboard.press('ArrowUp');
+    await expect(moveShotItem).toBeFocused({ timeout: 2000 });
+
+    // Press Enter to select move_shot
     await page.keyboard.press('Enter');
 
-    // Flyout should close and move_section should be active
+    // Flyout should close and move_shot should be active
     await expect(flyout).not.toBeVisible();
-    await waitForActiveTool(page, 'move_section');
+    await waitForActiveTool(page, 'move_shot');
 
     // Now test Space selection: open flyout again
     await moveGroup.click({ button: 'right' });
     await expect(flyout).toBeVisible();
 
-    // move_section should be focused (since it's now active)
-    await expect(moveSectionItem).toBeFocused({ timeout: 2000 });
-
-    // Navigate to move_shot with ArrowDown
-    await page.keyboard.press('ArrowDown');
+    // move_shot should be focused (since it's now active)
     await expect(moveShotItem).toBeFocused({ timeout: 2000 });
 
-    // Press Space to select move_shot
+    // Navigate to move_station with ArrowDown
+    await page.keyboard.press('ArrowDown');
+    await expect(moveStationItem).toBeFocused({ timeout: 2000 });
+
+    // Press Space to select move_station
     await page.keyboard.press(' ');
 
-    // Flyout should close and move_shot should be active
+    // Flyout should close and move_station should be active
     await expect(flyout).not.toBeVisible();
-    await waitForActiveTool(page, 'move_shot');
+    await waitForActiveTool(page, 'move_station');
   });
 
   test('flyout keyboard navigation: Escape closes flyout', async ({ page }) => {
@@ -217,16 +212,12 @@ test.describe('Toolbar Tool Groups', () => {
     await expect(flyout).not.toBeVisible();
   });
 
-  test('keyboard shortcuts: V activates move_segment, Shift+V activates move_section, G activates move_shot', async ({ page }) => {
+  test('keyboard shortcuts: V activates move_segment, G activates move_shot, T activates move_station', async ({ page }) => {
     await createProjectWithSections(page);
 
     // V should activate move_segment
     await page.keyboard.press('v');
     await waitForActiveTool(page, 'move_segment');
-
-    // Shift+V should activate move_section
-    await page.keyboard.press('Shift+v');
-    await waitForActiveTool(page, 'move_section');
 
     // T should activate move_station
     await page.keyboard.press('t');

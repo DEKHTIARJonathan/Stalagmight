@@ -197,7 +197,6 @@ export interface ShortcutsConfig {
   delete_tool: string[];
   merge: string[];
   measure: string[];
-  move_section: string[];
   move_station: string[];
   move_segment: string[];
   move_shot: string[];
@@ -363,7 +362,6 @@ export const defaultConfig: Config = {
     delete_tool: ['X'],
     merge: ['M'],
     measure: ['R'],
-    move_section: ['Shift+V'],
     move_station: ['T'],
     move_segment: ['V'],
     move_shot: ['G'],

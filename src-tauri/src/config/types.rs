@@ -633,8 +633,6 @@ pub struct ShortcutsConfig {
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub measure: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
-    pub move_section: Vec<String>,
-    #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub move_station: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub move_segment: Vec<String>,
@@ -726,13 +724,7 @@ impl ShortcutsConfig {
         }
 
         // Migrate shortcut reassignments from pre-move-segment era:
-        // V was move_section, now it's move_segment; move_section moves to Shift+V
         // G was toggle_depth_gradient, now it's move_shot; toggle_depth_gradient moves to Shift+D
-        if self.move_segment.is_empty() && self.move_section == vec!["V".to_string()] {
-            self.move_section = vec!["Shift+V".to_string()];
-            self.move_segment = vec!["V".to_string()];
-            tracing::info!("Migrated move_section shortcut: V -> Shift+V (V now used by move_segment)");
-        }
         if self.move_shot.is_empty() && self.toggle_depth_gradient == vec!["G".to_string()] {
             self.toggle_depth_gradient = vec!["Shift+D".to_string()];
             self.move_shot = vec!["G".to_string()];
@@ -747,7 +739,6 @@ impl ShortcutsConfig {
         normalize_shortcut_field(&mut self.delete_tool, &defaults.delete_tool, "delete_tool");
         normalize_shortcut_field(&mut self.merge, &defaults.merge, "merge");
         normalize_shortcut_field(&mut self.measure, &defaults.measure, "measure");
-        normalize_shortcut_field(&mut self.move_section, &defaults.move_section, "move_section");
         normalize_shortcut_field(&mut self.move_station, &defaults.move_station, "move_station");
         normalize_shortcut_field(&mut self.move_segment, &defaults.move_segment, "move_segment");
         normalize_shortcut_field(&mut self.move_shot, &defaults.move_shot, "move_shot");

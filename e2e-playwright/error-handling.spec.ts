@@ -433,7 +433,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               delete_tool: ['X'],
               merge: ['M'],
               measure: ['R'],
-              move_section: ['V'],
               move_station: ['T'],
               // Edit
               undo: ['Ctrl+Z'],

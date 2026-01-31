@@ -98,7 +98,6 @@ draw = ["D"]
 delete_tool = ["X"]
 merge = ["M"]
 measure = ["R"]
-move_section = ["V"]
 move_station = ["T"]
 
 # Edit - standard modifier combinations
@@ -136,7 +135,6 @@ toggle_data_table = ["Ctrl+3"]
 | | `delete_tool` | `X` | Delete tool |
 | | `merge` | `M` | Merge tool |
 | | `measure` | `R` | Measure tool |
-| | `move_section` | `V` | Move section tool |
 | | `move_station` | `T` | Move station tool |
 | **Edit** | `undo` | `Ctrl+Z` | Undo last action |
 | | `redo` | `Ctrl+Y`, `Ctrl+Shift+Z` | Redo last undone action |

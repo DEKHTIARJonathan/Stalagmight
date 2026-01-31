@@ -21,7 +21,6 @@ type ShortcutAction =
   | 'delete_tool'
   | 'merge'
   | 'measure'
-  | 'move_section'
   | 'move_station'
   | 'move_segment'
   | 'move_shot'
@@ -61,7 +60,6 @@ const TOOL_ACTIONS: Partial<Record<ShortcutAction, ToolType>> = {
   delete_tool: 'delete',
   merge: 'merge',
   measure: 'measure',
-  move_section: 'move_section',
   move_station: 'move_station',
   move_segment: 'move_segment',
   move_shot: 'move_shot',
@@ -108,7 +106,6 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   delete_tool: 'Delete tool',
   merge: 'Merge tool',
   measure: 'Measure tool',
-  move_section: 'Move section tool',
   move_station: 'Move station tool',
   move_segment: 'Move segment tool',
   move_shot: 'Move shot tool',
@@ -160,7 +157,6 @@ function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutActio
     'delete_tool',
     'merge',
     'measure',
-    'move_section',
     'move_station',
     'move_segment',
     'move_shot',
@@ -437,7 +433,6 @@ export function useKeyboardShortcuts() {
         case 'delete_tool':
         case 'merge':
         case 'measure':
-        case 'move_section':
         case 'move_station':
         case 'move_segment':
         case 'move_shot': {

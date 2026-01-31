@@ -6,7 +6,7 @@ import type { SectionId, ShotId, StationRef, Coordinates } from '../types/projec
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 
 interface MoveDragStartData {
-  type: 'section' | 'station' | 'segment' | 'shot';
+  type: 'station' | 'segment' | 'shot';
   sectionId?: number;
   stationRef?: StationRef;
   shotIndex?: number;
@@ -235,20 +235,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           break;
         }
 
-        case 'move_section': {
-          // Find the section for this station
-          const section = project?.sections.find((s) => s.id === ref.section_id);
-          if (section) {
-            setSelection({ type: 'section', sectionId: ref.section_id });
-            options.onMoveDragStart?.({
-              type: 'section',
-              sectionId: ref.section_id,
-              screenX: mouseEvent.clientX,
-              screenY: mouseEvent.clientY,
-            });
-          }
-          break;
-        }
 
         case 'move_segment': {
           // Start segment move drag - anchored sections are silently ignored

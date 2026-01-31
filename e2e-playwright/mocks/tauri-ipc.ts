@@ -1042,11 +1042,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] unmerge_stations called with:', args);
             return { success: true };
 
-          case 'move_section':
-            // Mock move section - just return success
-            console.log('[Mock IPC] move_section called with:', args);
-            return { success: true };
-
           case 'move_segment':
             // Mock move segment - just return success
             console.log('[Mock IPC] move_segment called with:', args);
@@ -1233,7 +1228,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 measure: ['R'],
                 move_segment: ['V'],
                 move_shot: ['G'],
-                move_section: ['Shift+V'],
                 move_station: ['T'],
                 // Edit
                 undo: ['Ctrl+Z'],
@@ -1388,7 +1382,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 measure: ['R'],
                 move_segment: ['V'],
                 move_shot: ['G'],
-                move_section: ['Shift+V'],
                 move_station: ['T'],
                 // Edit
                 undo: ['Ctrl+Z'],
