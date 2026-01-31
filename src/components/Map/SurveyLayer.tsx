@@ -89,6 +89,8 @@ export default class SurveyLayer {
   private snappedStationId: string | null = null;
   private hoveredSectionId: string | null = null;
   private selectedSectionId: string | null = null;
+  // Multi-section hover for Move Segment tool (highlights all connected sections)
+  private hoveredSegmentSectionIds: string[] = [];
 
   // Active tool state (for disabling interactions when non-interactive tools are active)
   private activeTool: ToolType = 'select';
@@ -161,7 +163,8 @@ export default class SurveyLayer {
   private prevSelectedSectionStationIds: Set<number> = new Set();
 
   // Cached section feature IDs to avoid re-scanning querySourceFeatures on every updateVisualState()
-  private cachedHoveredSectionId: string | null = null;
+  // Key is comma-joined section IDs (handles both single-section and multi-section/segment hover)
+  private cachedHoveredSectionKey: string = '';
   private cachedHoveredSectionShotIds: Set<number> = new Set();
   private cachedHoveredSectionStationIds: Set<number> = new Set();
   private cachedSelectedSectionId: string | null = null;
@@ -1024,13 +1027,37 @@ export default class SurveyLayer {
     return ids;
   }
 
-  // Get cached section feature IDs for hover, recomputing only when section ID changes
+  // Get the effective section IDs for hover highlighting.
+  // Segment hover (multi-section) takes priority over single-section hover.
+  private getEffectiveHoverSectionIds(): string[] {
+    if (this.hoveredSegmentSectionIds.length > 0) return this.hoveredSegmentSectionIds;
+    if (this.hoveredSectionId) return [this.hoveredSectionId];
+    return [];
+  }
+
+  // Check if a feature belongs to any section in the current effective hover set
+  private featureBelongsToHoveredSections(featureId: number): boolean {
+    const ids = this.getEffectiveHoverSectionIds();
+    if (ids.length === 0) return false;
+    const fSectionId = String(Math.floor(featureId / 100000));
+    return ids.includes(fSectionId);
+  }
+
+  // Get cached section feature IDs for hover, recomputing only when effective section IDs change
   private getCachedHoveredSectionIds(shotsSource: string, stationsSource: string): { shots: Set<number>; stations: Set<number> } {
-    if (this.cachedHoveredSectionId !== this.hoveredSectionId) {
-      this.cachedHoveredSectionId = this.hoveredSectionId;
-      if (this.hoveredSectionId) {
-        this.cachedHoveredSectionShotIds = this.getSectionFeatureIds(shotsSource, this.hoveredSectionId);
-        this.cachedHoveredSectionStationIds = this.getSectionFeatureIds(stationsSource, this.hoveredSectionId);
+    const ids = this.getEffectiveHoverSectionIds();
+    const key = ids.join(',');
+    if (this.cachedHoveredSectionKey !== key) {
+      this.cachedHoveredSectionKey = key;
+      if (ids.length > 0) {
+        const shotIds = new Set<number>();
+        const stationIds = new Set<number>();
+        for (const secId of ids) {
+          for (const id of this.getSectionFeatureIds(shotsSource, secId)) shotIds.add(id);
+          for (const id of this.getSectionFeatureIds(stationsSource, secId)) stationIds.add(id);
+        }
+        this.cachedHoveredSectionShotIds = shotIds;
+        this.cachedHoveredSectionStationIds = stationIds;
       } else {
         this.cachedHoveredSectionShotIds = new Set();
         this.cachedHoveredSectionStationIds = new Set();
@@ -1056,7 +1083,7 @@ export default class SurveyLayer {
 
   // Invalidate section ID caches (called after data updates that reset feature-state)
   private invalidateSectionCaches(): void {
-    this.cachedHoveredSectionId = null;
+    this.cachedHoveredSectionKey = '';
     this.cachedSelectedSectionId = null;
   }
 
@@ -1075,9 +1102,12 @@ export default class SurveyLayer {
     // Update station hover state
     const newHoveredStationFeatureId = this.parseFeatureId(this.hoveredStationId);
     if (newHoveredStationFeatureId !== this.prevHoveredStationFeatureId) {
-      // Clear previous hover — but restore section hover if feature belongs to hovered section
+      // Clear previous hover — but restore section/segment hover if feature belongs to hovered sections.
+      // Check both the section ID derivation AND the actual section hover set, because featureId
+      // encoding may not match sectionId for shots spanning multiple sections.
       if (this.prevHoveredStationFeatureId !== null) {
-        const restoreSection = this.featureBelongsToSection(this.prevHoveredStationFeatureId, this.hoveredSectionId);
+        const restoreSection = this.featureBelongsToHoveredSections(this.prevHoveredStationFeatureId)
+          || this.prevHoveredSectionStationIds.has(this.prevHoveredStationFeatureId);
         this.map.setFeatureState(
           { source: stationsSource, id: this.prevHoveredStationFeatureId },
           { hover: restoreSection }
@@ -1096,9 +1126,12 @@ export default class SurveyLayer {
     // Update shot hover state
     const newHoveredShotFeatureId = this.parseFeatureId(this.hoveredShotId);
     if (newHoveredShotFeatureId !== this.prevHoveredShotFeatureId) {
-      // Clear previous hover — but restore section hover if feature belongs to hovered section
+      // Clear previous hover — but restore section/segment hover if feature belongs to hovered sections.
+      // Check both the section ID derivation AND the actual section hover set, because featureId
+      // encoding may not match sectionId for shots spanning multiple sections.
       if (this.prevHoveredShotFeatureId !== null) {
-        const restoreSection = this.featureBelongsToSection(this.prevHoveredShotFeatureId, this.hoveredSectionId);
+        const restoreSection = this.featureBelongsToHoveredSections(this.prevHoveredShotFeatureId)
+          || this.prevHoveredSectionShotIds.has(this.prevHoveredShotFeatureId);
         this.map.setFeatureState(
           { source: shotsSource, id: this.prevHoveredShotFeatureId },
           { hover: restoreSection }
@@ -1373,6 +1406,21 @@ export default class SurveyLayer {
   }
 
   /**
+   * Set multi-section hover for Move Segment tool.
+   * Highlights all shots and stations in the given sections (the connected segment).
+   * Takes priority over single-section hover when non-empty.
+   * @param sectionIds - Array of section IDs in the connected segment, or empty to clear
+   */
+  setHoveredSegment(sectionIds: number[]): void {
+    const stringIds = sectionIds.map(String);
+    // Quick equality check (arrays are small, typically <10 sections)
+    if (stringIds.length === this.hoveredSegmentSectionIds.length &&
+        stringIds.every((id, i) => id === this.hoveredSegmentSectionIds[i])) return;
+    this.hoveredSegmentSectionIds = stringIds;
+    this.updateVisualState();
+  }
+
+  /**
    * Set the hovered shot for visual highlighting (external hover, e.g. from DataTable).
    * This allows external components to trigger shot hover highlighting without mouse interaction.
    * @param sectionId - The SectionId of the shot, or null to clear
@@ -1543,6 +1591,7 @@ export default class SurveyLayer {
     this.hoveredStationId = null;
     this.hoveredShotId = null;
     this.hoveredSectionId = null;
+    this.hoveredSegmentSectionIds = [];
     this.snappedStationId = null;
     this.selectedStationId = null;
     this.selectedShotId = null;
@@ -1637,7 +1686,7 @@ export default class SurveyLayer {
           filter: inclusion,
           paint: {
             'line-color': ['get', 'color'],
-            'line-width': this.getShotWidth(),
+            'line-width': this.getShotSelectionWidth(),
             'line-opacity': 0.85,
             ...paintBase,
           },
@@ -1650,29 +1699,34 @@ export default class SurveyLayer {
           filter: inclusion,
           paint: {
             'circle-color': ['get', 'color'],
-            'circle-radius': this.getStationRadius(),
-            'circle-stroke-color': ['get', 'strokeColor'],
-            'circle-stroke-width': 1,
+            'circle-radius': this.getStationSelectionRadius(),
+            'circle-stroke-color': this.themeColors.selectHighlight,
+            'circle-stroke-width': 2.5,
             'circle-opacity': 0.85,
             ...paintBase,
           },
         });
       } else if (def.type === 'symbol') {
-        // Copy visibility from main layer
-        const mainLayer = this.map.getLayer(def.mainLayerId);
-        const vis = mainLayer ? this.map.getLayoutProperty(def.mainLayerId, 'visibility') : 'visible';
+        // Copy layout properties from main layer so labels keep their position/size
+        const vis = this.map.getLayoutProperty(def.mainLayerId, 'visibility') ?? 'visible';
+        const textSize = this.map.getLayoutProperty(def.mainLayerId, 'text-size') ?? 11;
+        const textOffset = this.map.getLayoutProperty(def.mainLayerId, 'text-offset');
+        const textAnchor = this.map.getLayoutProperty(def.mainLayerId, 'text-anchor');
+        const layoutProps: Record<string, unknown> = {
+          'text-field': def.sourceId.includes('section') ? ['get', 'name'] : ['get', 'label'],
+          'text-font': ['Open Sans Regular'],
+          'text-size': textSize,
+          'text-allow-overlap': true,
+          'visibility': vis as 'visible' | 'none',
+        };
+        if (textOffset != null) layoutProps['text-offset'] = textOffset;
+        if (textAnchor != null) layoutProps['text-anchor'] = textAnchor;
         this.map.addLayer({
           id: def.tempLayerId,
           type: 'symbol',
           source: def.sourceId,
           filter: inclusion,
-          layout: {
-            'text-field': def.sourceId.includes('section') ? ['get', 'name'] : ['get', 'label'],
-            'text-font': ['Open Sans Regular'],
-            'text-size': 11,
-            'text-allow-overlap': true,
-            'visibility': vis as 'visible' | 'none',
-          },
+          layout: layoutProps as NonNullable<maplibregl.SymbolLayerSpecification['layout']>,
           paint: {
             'text-color': ['get', 'color'],
             'text-halo-color': this.themeColors.textHalo,

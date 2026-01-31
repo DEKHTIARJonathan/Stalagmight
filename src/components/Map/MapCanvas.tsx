@@ -85,6 +85,10 @@ export default function MapCanvas() {
   const dragStartScreenRef = useRef<{ x: number; y: number } | null>(null);
   // Connected section IDs being dragged (used by rAF callback for segment preview)
   const dragConnectedSectionIdsRef = useRef<Set<number>>(new Set());
+  // Origin station that initiated the segment drag (for snap-to-merge)
+  const dragOriginStationRef = useRef<StationRef | null>(null);
+  // Current snap target during segment drag (ref, not state — updated per mousemove)
+  const segmentDragSnapRef = useRef<StationRef | null>(null);
 
   const { project, stations, stats, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
 
@@ -282,7 +286,7 @@ export default function MapCanvas() {
 
   // Clear snap when tool changes to non-snap tool
   useEffect(() => {
-    const isSnapTool = activeTool === 'draw' || activeTool === 'merge' || activeTool === 'measure';
+    const isSnapTool = activeTool === 'draw' || activeTool === 'merge' || activeTool === 'measure' || activeTool === 'move_segment';
     if (!isSnapTool && snappedStation) {
       setSnappedStation(null);
     }
@@ -324,6 +328,8 @@ export default function MapCanvas() {
         setMoveDrag({ ...baseDragState, type: 'station', stationRef: data.stationRef });
       } else if (data.type === 'segment' && data.sectionId !== undefined) {
         const segmentSectionId = data.sectionId;
+        // Store origin station for snap-to-merge during drag
+        dragOriginStationRef.current = data.stationRef ?? null;
         // Block segment drag until anchored IDs have been fetched (prevents
         // moving anchored segments during the window after tool activation)
         if (!anchoredIdsLoaded) return;
@@ -342,6 +348,8 @@ export default function MapCanvas() {
           const movable = ids.filter((id) => !anchoredSectionIds.has(id));
           const connectedSet = new Set(movable);
           dragConnectedSectionIdsRef.current = connectedSet;
+          // Clear segment hover before starting drag preview (temp layers take over)
+          surveyLayerRef.current?.setHoveredSegment([]);
           // Begin drag preview — creates temp layers with *-translate paint property
           surveyLayerRef.current?.beginDragPreview(connectedSet);
           setMoveDrag({
@@ -357,6 +365,7 @@ export default function MapCanvas() {
           // On failure, just move the single section
           const fallbackSet = new Set([segmentSectionId]);
           dragConnectedSectionIdsRef.current = fallbackSet;
+          surveyLayerRef.current?.setHoveredSegment([]);
           surveyLayerRef.current?.beginDragPreview(fallbackSet);
           setMoveDrag({
             ...baseDragState,
@@ -579,16 +588,116 @@ export default function MapCanvas() {
       if (moveDrag.type === 'segment' && surveyLayerRef.current && dragStartScreenRef.current) {
         const dx = e.clientX - dragStartScreenRef.current.x;
         const dy = e.clientY - dragStartScreenRef.current.y;
+
+        // Snap-to-station detection during segment drag (only if drag started from a station)
+        const snapThreshold = config?.map.snap.threshold ?? 10;
+        if (dragOriginStationRef.current && snapThreshold > 0) {
+          // Find origin station's screen position and apply drag offset
+          const originSt = stations.find(
+            (s) =>
+              s.station_ref.section_id === dragOriginStationRef.current!.section_id &&
+              s.station_ref.station_index === dragOriginStationRef.current!.station_index
+          );
+          if (originSt) {
+            const originMapCoords = metersToMapCoords(originSt.coordinates.x, originSt.coordinates.y, gpsOrigin);
+            const originScreen = map.current.project(originMapCoords as [number, number]);
+            const projectedX = originScreen.x + dx;
+            const projectedY = originScreen.y + dy;
+
+            // Find nearest non-segment station to the projected origin position
+            let nearestRef: StationRef | null = null;
+            let nearestDist = Infinity;
+            const connectedIds = dragConnectedSectionIdsRef.current;
+            for (const st of stations) {
+              if (connectedIds.has(st.station_ref.section_id)) continue;
+              const mc = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin);
+              const sp = map.current!.project(mc as [number, number]);
+              const sdx = sp.x - projectedX;
+              const sdy = sp.y - projectedY;
+              const dist = Math.sqrt(sdx * sdx + sdy * sdy);
+              if (dist < snapThreshold && dist < nearestDist) {
+                nearestDist = dist;
+                nearestRef = st.station_ref;
+              }
+            }
+
+            // Update snap state only when target changes (avoids React churn)
+            const prev = segmentDragSnapRef.current;
+            if (
+              nearestRef?.section_id !== prev?.section_id ||
+              nearestRef?.station_index !== prev?.station_index
+            ) {
+              segmentDragSnapRef.current = nearestRef;
+              setSnappedStation(nearestRef);
+            }
+
+            // If snapped, compute aligned offset so origin station lands on target
+            if (nearestRef) {
+              const targetSt = stations.find(
+                (s) =>
+                  s.station_ref.section_id === nearestRef!.section_id &&
+                  s.station_ref.station_index === nearestRef!.station_index
+              );
+              if (targetSt) {
+                const targetMapCoords = metersToMapCoords(targetSt.coordinates.x, targetSt.coordinates.y, gpsOrigin);
+                const targetScreen = map.current.project(targetMapCoords as [number, number]);
+                const snapDx = targetScreen.x - originScreen.x;
+                const snapDy = targetScreen.y - originScreen.y;
+                surveyLayerRef.current.updateDragPreview(snapDx, snapDy);
+                return;
+              }
+            }
+          }
+        }
+
+        // No snap (or no origin station): use raw offset
         surveyLayerRef.current.updateDragPreview(dx, dy);
       }
     },
-    [moveDrag]
+    [moveDrag, config, stations, gpsOrigin, setSnappedStation]
+  );
+
+  // After a snap-to-merge segment drag, check connectivity and open merge/closure dialog.
+  // Separate from checkAndOpenMergeDialog in useMapTools because the active tool is
+  // move_segment (not merge) and we don't set mergeStationA/B in the UI store.
+  const promptMergeAfterSegmentDrag = useCallback(
+    async (originStation: StationRef, targetStation: StationRef) => {
+      const { checkMergeConnectivity } = useProjectStore.getState();
+      const { openDialog, showToast } = useUIStore.getState();
+
+      showToast('Checking merge compatibility...', 'segment-drag-merge-check');
+      try {
+        const result = await checkMergeConnectivity(originStation, targetStation);
+        if (result.can_merge) {
+          openDialog('merge', { stationA: originStation, stationB: targetStation });
+        } else if (result.connected) {
+          openDialog('closure', {
+            stationA: originStation,
+            stationB: targetStation,
+            preview: result.preview,
+            reason: result.reason,
+          });
+        } else {
+          showToast(result.reason ?? 'Merge not possible.', 'segment-drag-merge-blocked');
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        showToast(message, 'segment-drag-merge-error');
+      }
+    },
+    []
   );
 
   const handleMoveDragEnd = useCallback(async () => {
     // Invalidate any pending getConnectedSectionIds async results so late
     // .then() callbacks cannot call setMoveDrag after drag has ended.
     segmentDragTokenRef.current++;
+
+    // Capture and clear snap refs before any early returns
+    const snapTarget = segmentDragSnapRef.current;
+    const originStationRef = dragOriginStationRef.current;
+    segmentDragSnapRef.current = null;
+    dragOriginStationRef.current = null;
 
     if (!moveDrag || !map.current) {
       // Early bail — clean up everything
@@ -597,6 +706,7 @@ export default function MapCanvas() {
       dragConnectedSectionIdsRef.current = new Set();
       moveDragLngLatRef.current = null;
       dragStartScreenRef.current = null;
+      if (snapTarget) setSnappedStation(null);
       return;
     }
 
@@ -621,9 +731,40 @@ export default function MapCanvas() {
       if (moveDrag.type === 'station' && moveDrag.stationRef) {
         await moveStation(moveDrag.stationRef, offset);
       } else if (moveDrag.type === 'segment' && moveDrag.sectionId !== undefined) {
-        // Keep temp layers visible during IPC (they show the segment at the
-        // correct dragged position). Register callback so endDragPreview fires
-        // inside update() right after setData() — same sync block, zero paint gap.
+        // Snap-to-merge path: compute exact offset to align origin with target
+        if (snapTarget && originStationRef) {
+          const originSt = stations.find(
+            (s) =>
+              s.station_ref.section_id === originStationRef.section_id &&
+              s.station_ref.station_index === originStationRef.station_index
+          );
+          const targetSt = stations.find(
+            (s) =>
+              s.station_ref.section_id === snapTarget.section_id &&
+              s.station_ref.station_index === snapTarget.station_index
+          );
+
+          if (originSt && targetSt) {
+            const snapOffset = {
+              x: targetSt.coordinates.x - originSt.coordinates.x,
+              y: targetSt.coordinates.y - originSt.coordinates.y,
+              z: 0,
+            };
+
+            surveyLayerRef.current?.onNextUpdate(() => {
+              surveyLayerRef.current?.endDragPreview();
+            });
+            await moveSegment(moveDrag.sectionId, snapOffset);
+            setSnappedStation(null);
+            setMoveDrag(null);
+
+            // After move completes, prompt merge dialog
+            promptMergeAfterSegmentDrag(originStationRef, snapTarget);
+            return;
+          }
+        }
+
+        // Non-snap segment move (existing behavior)
         surveyLayerRef.current?.onNextUpdate(() => {
           surveyLayerRef.current?.endDragPreview();
         });
@@ -645,7 +786,7 @@ export default function MapCanvas() {
     // (no-op if beginDragPreview was never called)
     if (surveyLayerRef.current) surveyLayerRef.current.endDragPreview();
     setMoveDrag(null);
-  }, [moveDrag, moveStation, moveSegment, executeBatch, gpsOrigin]);
+  }, [moveDrag, moveStation, moveSegment, executeBatch, gpsOrigin, stations, promptMergeAfterSegmentDrag, setSnappedStation]);
 
   // Initialize map
   useEffect(() => {
@@ -872,6 +1013,55 @@ export default function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setHoveredStation(hoveredStation);
   }, [hoveredStation, mapLoaded]);
+
+  // Resolve connected segment on hover when Move Segment tool is active.
+  // Extracts section ID from hovered station/shot, fetches connected sections,
+  // and highlights the entire segment via setHoveredSegment().
+  const segmentHoverTokenRef = useRef(0);
+  useEffect(() => {
+    if (!surveyLayerRef.current) return undefined;
+
+    // Only resolve segment hover when move_segment tool is active
+    if (activeTool !== 'move_segment') {
+      surveyLayerRef.current.setHoveredSegment([]);
+      return undefined;
+    }
+
+    // Extract section ID from whichever feature is hovered (station or shot)
+    const sectionId = hoveredStation?.section_id ?? hoveredShot?.sectionId ?? null;
+
+    if (sectionId === null) {
+      // Debounce clearing: when mouse transitions between shot↔station, hover
+      // briefly passes through "no feature" territory. Without debounce, the
+      // segment highlight flickers off because the async IPC re-resolution
+      // hasn't completed yet when the mouse reaches the next feature.
+      segmentHoverTokenRef.current++; // Cancel any pending async results
+      const timer = setTimeout(() => {
+        surveyLayerRef.current?.setHoveredSegment([]);
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+
+    // Don't highlight anchored sections
+    if (anchoredSectionIds.has(sectionId)) {
+      surveyLayerRef.current.setHoveredSegment([]);
+      return undefined;
+    }
+
+    // Fetch connected sections (async IPC) — use token to discard stale results
+    const token = ++segmentHoverTokenRef.current;
+    getConnectedSectionIds(sectionId).then((ids) => {
+      if (segmentHoverTokenRef.current !== token) return;
+      // Filter out anchored sections
+      const movable = ids.filter((id) => !anchoredSectionIds.has(id));
+      surveyLayerRef.current?.setHoveredSegment(movable);
+    }).catch(() => {
+      if (segmentHoverTokenRef.current !== token) return;
+      // On failure, highlight just the single section
+      surveyLayerRef.current?.setHoveredSegment([sectionId]);
+    });
+    return undefined;
+  }, [activeTool, hoveredStation, hoveredShot, anchoredSectionIds, getConnectedSectionIds, mapLoaded]);
 
   // Sync highlight layer with snap/draw/merge state
   // Shows snapped/origin stations even when stations layer is hidden
@@ -1874,8 +2064,9 @@ export default function MapCanvas() {
         handleBoxSelectMove(e);
       }
 
-      // Always check snap when moving (snap logic internally checks if tool requires snap)
-      if (mapContainer.current) {
+      // Always check snap when moving (snap logic internally checks if tool requires snap).
+      // During active drag, segment drag has its own snap logic in handleMoveDragMove.
+      if (mapContainer.current && !moveDrag) {
         const rect = mapContainer.current.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
