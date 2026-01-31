@@ -1443,9 +1443,9 @@ impl AppState {
         Ok(result)
     }
 
-    /// Get all section IDs belonging to segments that contain a zero datum
-    /// Note: Uses merge-group semantics (not merge+closure connectivity) because
-    /// a zero datum anchors only the rigidly merged group, not loosely connected segments.
+    /// Get all section IDs anchored by a zero datum.
+    /// A zero datum anchors every section reachable through merges AND closures,
+    /// since the entire connected network is positioned relative to the fixed point.
     pub fn get_anchored_section_ids(&self) -> Result<Vec<SectionId>, String> {
         // Serialize with command execution to avoid observing intermediate batch state
         let _cmd_guard = self
@@ -1460,13 +1460,13 @@ impl AppState {
             .as_ref()
             .ok_or_else(|| "No project open".to_string())?;
 
-        // Filter to existing sections (stale merges may reference deleted sections)
+        // Filter to existing sections (stale merges/closures may reference deleted sections)
         let existing: std::collections::HashSet<SectionId> =
             project.sections.iter().map(|s| s.id).collect();
         let mut anchored = std::collections::HashSet::new();
         for zd in &project.zero_datums {
-            let merged = project.get_merged_section_ids(zd.station_ref.section_id);
-            anchored.extend(merged.into_iter().filter(|id| existing.contains(id)));
+            let connected = project.get_connected_section_ids(zd.station_ref.section_id);
+            anchored.extend(connected.into_iter().filter(|id| existing.contains(id)));
         }
         let mut result: Vec<SectionId> = anchored.into_iter().collect();
         result.sort_unstable();

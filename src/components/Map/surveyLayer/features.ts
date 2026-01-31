@@ -335,6 +335,8 @@ export function buildSurveyFeatures(
           properties: {
             stationA: `${closure.station_a.section_id}:${closure.station_a.station_index}`,
             stationB: `${closure.station_b.section_id}:${closure.station_b.station_index}`,
+            sectionIdA: closure.station_a.section_id,
+            sectionIdB: closure.station_b.section_id,
             errorPercentage: closure.error_percentage,
             misclosureDistance: closure.misclosure_distance,
             pathLength: closure.path_length,
