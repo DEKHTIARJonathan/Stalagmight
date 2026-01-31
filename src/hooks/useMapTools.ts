@@ -396,6 +396,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       // No snapped station, handle as regular empty click
       switch (activeTool) {
         case 'select':
+        case 'move_segment':
           clearSelection();
           break;
 

@@ -163,6 +163,19 @@ export default function MapCanvas() {
     resolvedTheme,
   } = useUIStore();
 
+  // Clear selection from both the Zustand store and the SurveyLayer map visuals.
+  // The direct SurveyLayer calls are needed because the useEffect that syncs
+  // store → SurveyLayer runs after the next React render, leaving stale highlights
+  // visible during operations that start immediately (e.g. drag preview).
+  const clearSelectionAndVisuals = useCallback(() => {
+    clearSelection();
+    if (surveyLayerRef.current) {
+      surveyLayerRef.current.setSelectedStation(null);
+      surveyLayerRef.current.setSelectedShot(null, null);
+      surveyLayerRef.current.setSelectedSection(null);
+    }
+  }, [clearSelection]);
+
   // Snap-to-station detection
   // Note: Snap detection works even when stations are hidden - the highlight layer
   // will show the snapped station. Merge tool is an exception (blocked when hidden).
@@ -328,6 +341,8 @@ export default function MapCanvas() {
         setMoveDrag({ ...baseDragState, type: 'station', stationRef: data.stationRef });
       } else if (data.type === 'segment' && data.sectionId !== undefined) {
         const segmentSectionId = data.sectionId;
+        // Always clear selection on any segment click, even if drag is blocked
+        clearSelectionAndVisuals();
         // Store origin station for snap-to-merge during drag
         dragOriginStationRef.current = data.stationRef ?? null;
         // Block segment drag until anchored IDs have been fetched (prevents
@@ -383,7 +398,7 @@ export default function MapCanvas() {
         });
       }
     },
-    [anchoredSectionIds, anchoredIdsLoaded, getConnectedSectionIds]
+    [anchoredSectionIds, anchoredIdsLoaded, clearSelectionAndVisuals, getConnectedSectionIds]
   );
 
   // Get map tool callbacks
@@ -1255,6 +1270,7 @@ export default function MapCanvas() {
   useEffect(() => {
     let cancelled = false;
     if (activeTool === 'move_segment') {
+      clearSelectionAndVisuals();
       setAnchoredIdsLoaded(false);
       getAnchoredSectionIds().then((ids) => {
         if (cancelled) return;
@@ -1272,7 +1288,7 @@ export default function MapCanvas() {
       setAnchoredIdsLoaded(false);
     }
     return () => { cancelled = true; };
-  }, [activeTool, getAnchoredSectionIds, project, showToast]);
+  }, [activeTool, clearSelectionAndVisuals, getAnchoredSectionIds, project, showToast]);
 
   // Wire up setActiveTool - depend on mapLoaded to ensure it runs after layer creation
   useEffect(() => {
