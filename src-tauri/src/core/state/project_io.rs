@@ -125,9 +125,14 @@ impl AppState {
             *proj = Some(project);
         }
 
-        // Load undo stack from database before replacing database reference (with timestamps)
+        // Load undo/redo stacks from database before replacing database reference
         let loaded_undo = db.load_undo_stack_with_timestamps().unwrap_or_default();
         let undo_entries: Vec<_> = loaded_undo
+            .into_iter()
+            .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+            .collect();
+        let loaded_redo = db.load_redo_stack_with_timestamps().unwrap_or_default();
+        let redo_entries: Vec<_> = loaded_redo
             .into_iter()
             .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
             .collect();
@@ -139,13 +144,13 @@ impl AppState {
         // Clear display settings cache (settings will be loaded from DB by frontend)
         self.clear_display_settings_cache();
 
-        // Restore persisted undo stack
+        // Restore persisted undo/redo stacks
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            if undo_entries.is_empty() {
+            if undo_entries.is_empty() && redo_entries.is_empty() {
                 undo_stack.clear();
             } else {
-                undo_stack.load_from_persisted_with_timestamps(undo_entries);
-                tracing::info!(count = undo_stack.len(), "Restored undo stack from database");
+                undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
+                tracing::info!(undo = undo_stack.len(), "Restored undo/redo stacks from database");
             }
         }
 
@@ -266,7 +271,7 @@ impl AppState {
             }
         };
 
-        // Persist undo stack to database (with timestamps)
+        // Persist undo/redo stacks to database (with timestamps)
         let persist_limit = self
             .config
             .lock()
@@ -274,13 +279,22 @@ impl AppState {
             .unwrap_or(20);
 
         if let Ok(undo_stack) = self.undo_stack.lock() {
-            let entries: Vec<_> = undo_stack
+            let undo_entries: Vec<_> = undo_stack
                 .entries_to_persist(persist_limit)
                 .filter_map(|e| UndoStack::serialize_entry_with_timestamp(e))
                 .collect();
 
-            if let Err(e) = db.save_undo_stack_with_timestamps(entries) {
+            if let Err(e) = db.save_undo_stack_with_timestamps(undo_entries) {
                 tracing::warn!(error = %e, "Failed to persist undo stack (project was saved)");
+            }
+
+            let redo_entries: Vec<_> = undo_stack
+                .redo_entries_to_persist(persist_limit)
+                .filter_map(|e| UndoStack::serialize_entry_with_timestamp(e))
+                .collect();
+
+            if let Err(e) = db.save_redo_stack_with_timestamps(redo_entries) {
+                tracing::warn!(error = %e, "Failed to persist redo stack (project was saved)");
             }
         }
 
@@ -743,9 +757,14 @@ impl AppState {
         // === PHASE 7: Finalizing (10%) - ALL STATE MUTATIONS GUARDED ===
         progress.start_phase(LoadingPhase::Finalizing);
 
-        // Load undo stack from database BEFORE storing db (with timestamps)
+        // Load undo/redo stacks from database BEFORE storing db
         let loaded_undo = db.load_undo_stack_with_timestamps().unwrap_or_default();
         let undo_entries: Vec<_> = loaded_undo
+            .into_iter()
+            .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+            .collect();
+        let loaded_redo = db.load_redo_stack_with_timestamps().unwrap_or_default();
+        let redo_entries: Vec<_> = loaded_redo
             .into_iter()
             .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
             .collect();
@@ -762,14 +781,14 @@ impl AppState {
         check_cancelled!();
         self.clear_display_settings_cache();
 
-        // Guard 4: Undo stack restore (with timestamps)
+        // Guard 4: Undo/redo stack restore
         check_cancelled!();
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            if undo_entries.is_empty() {
+            if undo_entries.is_empty() && redo_entries.is_empty() {
                 undo_stack.clear();
             } else {
-                undo_stack.load_from_persisted_with_timestamps(undo_entries);
-                tracing::info!(count = undo_stack.len(), "Restored undo stack from database");
+                undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
+                tracing::info!(undo = undo_stack.len(), "Restored undo/redo stacks from database");
             }
         }
 

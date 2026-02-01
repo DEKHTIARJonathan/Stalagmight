@@ -296,6 +296,16 @@ impl UndoStack {
         self.undo_stack.iter().skip(skip)
     }
 
+    /// Get redo entries to persist (last N entries up to persist_limit)
+    pub fn redo_entries_to_persist(&self, persist_limit: usize) -> impl Iterator<Item = &UndoEntry> {
+        let skip = if self.redo_stack.len() > persist_limit {
+            self.redo_stack.len() - persist_limit
+        } else {
+            0
+        };
+        self.redo_stack.iter().skip(skip)
+    }
+
     /// Serialize an entry to JSON for persistence
     /// Returns (command_json, undo_data_json, timestamp_iso8601)
     pub fn serialize_entry(entry: &UndoEntry) -> Option<(String, String)> {
@@ -359,11 +369,15 @@ impl UndoStack {
     }
 
     /// Load entries from persisted data with timestamps
-    pub fn load_from_persisted_with_timestamps(&mut self, entries: Vec<(String, String, Option<String>)>) {
+    pub fn load_from_persisted_with_timestamps(
+        &mut self,
+        undo_entries: Vec<(String, String, Option<String>)>,
+        redo_entries: Vec<(String, String, Option<String>)>,
+    ) {
         self.undo_stack.clear();
         self.redo_stack.clear();
 
-        for (command_json, undo_data_json, timestamp_str) in entries {
+        for (command_json, undo_data_json, timestamp_str) in undo_entries {
             if let Some(entry) = Self::deserialize_entry_with_timestamp(
                 &command_json,
                 &undo_data_json,
@@ -373,9 +387,22 @@ impl UndoStack {
             }
         }
 
+        for (command_json, undo_data_json, timestamp_str) in redo_entries {
+            if let Some(entry) = Self::deserialize_entry_with_timestamp(
+                &command_json,
+                &undo_data_json,
+                timestamp_str.as_deref(),
+            ) {
+                self.redo_stack.push(entry);
+            }
+        }
+
         // Trim to history limit
         while self.undo_stack.len() > self.history_limit {
             self.undo_stack.remove(0);
+        }
+        while self.redo_stack.len() > self.history_limit {
+            self.redo_stack.remove(0);
         }
     }
 
