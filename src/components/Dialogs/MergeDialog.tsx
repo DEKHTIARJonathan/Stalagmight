@@ -4,10 +4,11 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
+import type { BatchCommand } from '../../types/commands';
 
 export default function MergeDialog() {
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
-  const { mergeStations, project } = useProjectStore();
+  const { mergeStations, executeBatch, project } = useProjectStore();
 
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;
@@ -29,6 +30,8 @@ export default function MergeDialog() {
   // Optional callbacks from snap-to-merge drag flow
   const onBeforeConfirm = dialogData.onBeforeConfirm as (() => Promise<void>) | undefined;
   const onCancel = dialogData.onCancel as (() => void) | undefined;
+  // Move commands to batch with merge for single-undo snap-to-merge
+  const preCommands = dialogData.preCommands as BatchCommand[] | undefined;
 
   const handleClose = () => {
     onCancel?.();
@@ -44,7 +47,11 @@ export default function MergeDialog() {
 
     try {
       if (onBeforeConfirm) await onBeforeConfirm();
-      const result = await mergeStations(stationA, stationB);
+      // When preCommands exist (snap-to-merge), batch move + merge as single undo operation
+      const mergeCmd: BatchCommand = { type: 'merge_stations', station_a: stationA, station_b: stationB };
+      const result = preCommands
+        ? await executeBatch([...preCommands, mergeCmd])
+        : await mergeStations(stationA, stationB);
       if (result.success) {
         clearMergeStations();
         closeDialog();

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo } from 'react';
 import maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef } from '../../types/project';
+import type { BatchCommand } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import {
@@ -866,6 +867,7 @@ export default function MapCanvas() {
       moveCallbacks?: {
         onBeforeConfirm: () => Promise<void>;
         onCancel: () => void;
+        preCommands?: BatchCommand[];
       }
     ) => {
       const { checkMergeConnectivity } = useProjectStore.getState();
@@ -875,7 +877,7 @@ export default function MapCanvas() {
       try {
         const result = await checkMergeConnectivity(originStation, targetStation);
         const extra = moveCallbacks
-          ? { onBeforeConfirm: moveCallbacks.onBeforeConfirm, onCancel: moveCallbacks.onCancel }
+          ? { onBeforeConfirm: moveCallbacks.onBeforeConfirm, onCancel: moveCallbacks.onCancel, preCommands: moveCallbacks.preCommands }
           : {};
         if (result.can_merge) {
           openDialog('merge', { stationA: originStation, stationB: targetStation, ...extra });
@@ -957,18 +959,21 @@ export default function MapCanvas() {
         setSnappedStation(null);
         snapMergeDialogPendingRef.current = true;
 
+        // Build move command for batching with merge/closure (single undo entry)
+        const segmentMoveCmd: BatchCommand = { type: 'move_segment', section_id: sectionId, offset: snapOffset };
+
         // Don't clear moveDrag, dragStartScreenRef, dragConnectedSectionIdsRef,
         // or dragOriginStationRef — these keep the drag alive after Cancel.
         promptSnapMerge(originStationRef, snapTarget, {
+          preCommands: [segmentMoveCmd],
           onBeforeConfirm: async () => {
-            // Commit: move segment, end preview, clear all drag state
+            // UI cleanup only — backend move is batched with merge/closure by the dialog
             snapMergeDialogPendingRef.current = false;
             dragOriginStationRef.current = null;
             lastRawDragOffsetRef.current = null;
             surveyLayerRef.current?.onNextUpdate(() => {
               surveyLayerRef.current?.endDragPreview();
             });
-            await moveSegment(sectionId, snapOffset);
             dragConnectedSectionIdsRef.current = new Set();
             moveDragLngLatRef.current = null;
             dragStartScreenRef.current = null;
@@ -1010,28 +1015,26 @@ export default function MapCanvas() {
         setSnappedStation(null);
         snapMergeDialogPendingRef.current = true;
 
+        // Build move commands for batching with merge/closure (single undo entry)
+        const colocated = stationDragColocatedRefsRef.current;
+        const moveCommands: BatchCommand[] = colocated.map(ref => ({
+          type: 'move_station' as const, station_ref: ref, offset: snapOffset,
+        }));
+
         // Don't clear moveDrag, dragStartScreenRef, or dragOriginStationRef —
         // these keep the drag alive after Cancel.
         promptSnapMerge(originStationRef, snapTarget, {
+          preCommands: moveCommands,
           onBeforeConfirm: async () => {
-            // Commit: move co-located stations to snap position, end preview, clear drag state
+            // UI cleanup only — backend move is batched with merge/closure by the dialog
             snapMergeDialogPendingRef.current = false;
             dragOriginStationRef.current = null;
             lastRawDragOffsetRef.current = null;
+            stationDragColocatedRefsRef.current = [];
             surveyLayerRef.current?.onNextUpdate(() => {
               surveyLayerRef.current?.endDragPreview();
             });
             surveyLayerRef.current?.commitDragPreview();
-
-            const colocated = stationDragColocatedRefsRef.current;
-            stationDragColocatedRefsRef.current = [];
-            if (colocated.length > 1) {
-              await executeBatch(
-                colocated.map(ref => ({ type: 'move_station' as const, station_ref: ref, offset: snapOffset }))
-              );
-            } else {
-              await moveStation(moveDrag.stationRef!, snapOffset);
-            }
             moveDragLngLatRef.current = null;
             dragStartScreenRef.current = null;
             setMoveDrag(null);

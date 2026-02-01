@@ -5,7 +5,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { getErrorColor } from '../../utils/colors';
 import type { StationRef, ClosureStrategy } from '../../types/project';
-import type { ClosurePreview } from '../../types/commands';
+import type { ClosurePreview, BatchCommand } from '../../types/commands';
 
 const STRATEGY_OPTIONS: { value: ClosureStrategy; label: string }[] = [
   { value: 'ProportionalByLength', label: 'Proportional by Length' },
@@ -16,7 +16,7 @@ const STRATEGY_OPTIONS: { value: ClosureStrategy; label: string }[] = [
 
 export default function ClosureDialog() {
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
-  const { createLoopClosure, project } = useProjectStore();
+  const { createLoopClosure, executeBatch, project } = useProjectStore();
 
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;
@@ -41,6 +41,8 @@ export default function ClosureDialog() {
   // Optional callbacks from snap-to-merge drag flow
   const onBeforeConfirm = dialogData.onBeforeConfirm as (() => Promise<void>) | undefined;
   const onCancel = dialogData.onCancel as (() => void) | undefined;
+  // Move commands to batch with closure for single-undo snap-to-merge
+  const preCommands = dialogData.preCommands as BatchCommand[] | undefined;
 
   const handleClose = () => {
     onCancel?.();
@@ -56,7 +58,11 @@ export default function ClosureDialog() {
 
     try {
       if (onBeforeConfirm) await onBeforeConfirm();
-      const result = await createLoopClosure(stationA, stationB, strategy);
+      // When preCommands exist (snap-to-merge), batch move + closure as single undo operation
+      const closureCmd: BatchCommand = { type: 'create_loop_closure', station_a: stationA, station_b: stationB, closure_strategy: strategy };
+      const result = preCommands
+        ? await executeBatch([...preCommands, closureCmd])
+        : await createLoopClosure(stationA, stationB, strategy);
       if (result.success) {
         clearMergeStations();
         closeDialog();
