@@ -1600,9 +1600,9 @@ export default function MapCanvas() {
         ctrlDragActiveRef.current = true;
         ctrlPanStart = { x: e.clientX, y: e.clientY };
 
-        // Stop propagation to prevent MapLibre from seeing this mousedown,
-        // which would cause it to generate a 'click' event on mouseup
+        // Suppress default browser behavior during custom pan
         e.stopPropagation();
+        e.preventDefault();
 
         // Change cursor to indicate panning
         map.current.getCanvas().style.cursor = 'grabbing';
@@ -1626,9 +1626,10 @@ export default function MapCanvas() {
     const handleMouseUpCapture = (e: MouseEvent) => {
       if (ctrlPanStart && map.current) {
         ctrlPanStart = null;
-        // Stop propagation to prevent MapLibre from generating a 'click' event,
-        // which would trigger move/select actions on features under the cursor
+        // Suppress default browser behavior; the Ctrl+click guard in
+        // SurveyLayer.handleMapClick prevents move/select actions
         e.stopPropagation();
+        e.preventDefault();
         // Restore cursor: if Ctrl still held, show grab cursor for next potential pan
         // Otherwise restore the tool cursor
         if (e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool)) {
