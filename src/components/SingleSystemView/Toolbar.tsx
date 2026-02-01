@@ -210,6 +210,8 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
+  const hoverOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const lastSubtoolByGroup = useUIStore((s) => s.lastSubtoolByGroup);
   const config = useProjectStore((s) => s.config);
@@ -242,12 +244,36 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
         onActivateTool(nextTool);
       }
     }
+    setFlyoutOpen(false);
   }, [isGroupActive, displayTool, activeTool, group.tools, onActivateTool]);
 
   // Right-click: Toggle flyout
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setFlyoutOpen((prev) => !prev);
+  }, []);
+
+  // Hover: Open flyout after short delay, close after short delay (to survive gap)
+  const handleMouseEnter = useCallback(() => {
+    if (hoverCloseTimerRef.current) {
+      clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+    if (!flyoutOpen) {
+      hoverOpenTimerRef.current = setTimeout(() => {
+        setFlyoutOpen(true);
+      }, 300);
+    }
+  }, [flyoutOpen]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (hoverOpenTimerRef.current) {
+      clearTimeout(hoverOpenTimerRef.current);
+      hoverOpenTimerRef.current = null;
+    }
+    hoverCloseTimerRef.current = setTimeout(() => {
+      setFlyoutOpen(false);
+    }, 150);
   }, []);
 
   // Close flyout when clicking outside
@@ -296,6 +322,14 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
     items[focusedIndex]?.focus();
   }, [flyoutOpen, focusedIndex]);
 
+  // Cleanup hover timers on unmount
+  useEffect(() => {
+    return () => {
+      if (hoverOpenTimerRef.current) clearTimeout(hoverOpenTimerRef.current);
+      if (hoverCloseTimerRef.current) clearTimeout(hoverCloseTimerRef.current);
+    };
+  }, []);
+
   // Keyboard handler for the flyout
   const handleFlyoutKeyDown = useCallback((e: React.KeyboardEvent) => {
     switch (e.key) {
@@ -337,7 +371,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
   const displayShortcut = getShortcutForTool(displayTool, shortcuts as unknown as Record<string, string[]>);
 
   return (
-    <div className="relative">
+    <div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
       <button
         ref={buttonRef}
         className={`
@@ -368,7 +402,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
       {flyoutOpen && (
         <div
           ref={flyoutRef}
-          className="absolute top-full left-0 mt-1 z-50 bg-panel border border-border rounded shadow-lg py-1 min-w-[10rem]"
+          className="absolute top-full right-0 mt-1 z-50 bg-panel border border-border rounded shadow-lg py-1 min-w-[10rem]"
           role="menu"
           aria-label={`${group.id} tools`}
           onKeyDown={handleFlyoutKeyDown}
