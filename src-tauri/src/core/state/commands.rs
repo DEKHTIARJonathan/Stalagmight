@@ -762,6 +762,7 @@ impl AppState {
         matches!(
             cmd,
             Command::CreateSection { .. }
+                | Command::CreateLoopClosure { .. }
                 | Command::MergeStations { .. }
                 | Command::MoveSection { .. }
                 | Command::MoveSegment { .. }
