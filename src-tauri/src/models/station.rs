@@ -201,6 +201,8 @@ pub enum ClosureStrategy {
     KeepRaw,
     /// Manual adjustment later
     ManualAdjustment,
+    /// Created by snap-to-merge move (station was physically moved to align)
+    Move,
 }
 
 impl ClosureStrategy {
@@ -211,6 +213,7 @@ impl ClosureStrategy {
             Self::EqualDistribution => "EqualDistribution",
             Self::KeepRaw => "KeepRaw",
             Self::ManualAdjustment => "ManualAdjustment",
+            Self::Move => "Move",
         }
     }
 
@@ -221,6 +224,7 @@ impl ClosureStrategy {
             "EqualDistribution" => Self::EqualDistribution,
             "KeepRaw" => Self::KeepRaw,
             "ManualAdjustment" => Self::ManualAdjustment,
+            "Move" => Self::Move,
             _ => Self::default(),
         }
     }

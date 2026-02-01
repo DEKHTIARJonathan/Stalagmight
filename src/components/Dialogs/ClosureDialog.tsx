@@ -43,6 +43,7 @@ export default function ClosureDialog() {
   const onCancel = dialogData.onCancel as (() => void) | undefined;
   // Move commands to batch with closure for single-undo snap-to-merge
   const preCommands = dialogData.preCommands as BatchCommand[] | undefined;
+  const isFromMove = !!preCommands;
 
   const handleClose = () => {
     onCancel?.();
@@ -59,10 +60,11 @@ export default function ClosureDialog() {
     try {
       if (onBeforeConfirm) await onBeforeConfirm();
       // When preCommands exist (snap-to-merge), batch move + closure as single undo operation
-      const closureCmd: BatchCommand = { type: 'create_loop_closure', station_a: stationA, station_b: stationB, closure_strategy: strategy };
+      const effectiveStrategy = isFromMove ? 'Move' as ClosureStrategy : strategy;
+      const closureCmd: BatchCommand = { type: 'create_loop_closure', station_a: stationA, station_b: stationB, closure_strategy: effectiveStrategy };
       const result = preCommands
         ? await executeBatch([...preCommands, closureCmd])
-        : await createLoopClosure(stationA, stationB, strategy);
+        : await createLoopClosure(stationA, stationB, effectiveStrategy);
       if (result.success) {
         clearMergeStations();
         closeDialog();
@@ -130,25 +132,27 @@ export default function ClosureDialog() {
           </div>
         )}
 
-        {/* Strategy selector */}
-        <div className="space-y-2">
-          <label className="text-sm text-text-secondary font-medium">Closure Strategy</label>
-          <div className="space-y-1">
-            {STRATEGY_OPTIONS.map((opt) => (
-              <label key={opt.value} className="flex items-center gap-2 py-1 cursor-pointer">
-                <input
-                  type="radio"
-                  name="closure-strategy"
-                  value={opt.value}
-                  checked={strategy === opt.value}
-                  onChange={() => setStrategy(opt.value)}
-                  className="accent-accent"
-                />
-                <span className="text-sm">{opt.label}</span>
-              </label>
-            ))}
+        {/* Strategy selector — hidden for move-triggered closures (auto-assigned Move) */}
+        {!isFromMove && (
+          <div className="space-y-2">
+            <label className="text-sm text-text-secondary font-medium">Closure Strategy</label>
+            <div className="space-y-1">
+              {STRATEGY_OPTIONS.map((opt) => (
+                <label key={opt.value} className="flex items-center gap-2 py-1 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="closure-strategy"
+                    value={opt.value}
+                    checked={strategy === opt.value}
+                    onChange={() => setStrategy(opt.value)}
+                    className="accent-accent"
+                  />
+                  <span className="text-sm">{opt.label}</span>
+                </label>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
