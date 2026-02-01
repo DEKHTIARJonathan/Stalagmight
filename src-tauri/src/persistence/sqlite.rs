@@ -361,6 +361,14 @@ impl Database {
                 executed_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS redo_stack (
+                id INTEGER PRIMARY KEY,
+                sequence INTEGER NOT NULL,
+                command_json TEXT NOT NULL,
+                undo_data_json TEXT NOT NULL,
+                executed_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS loop_closures (
                 id INTEGER PRIMARY KEY,
                 station_a_section INTEGER NOT NULL,
@@ -950,6 +958,37 @@ impl Database {
         }
 
         tracing::info!(count = entries.len(), "Saved undo stack with timestamps to database");
+        Ok(())
+    }
+
+    /// Load redo stack from database with timestamps
+    pub fn load_redo_stack_with_timestamps(&self) -> Result<Vec<(i64, String, String, Option<String>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT sequence, command_json, undo_data_json, executed_at FROM redo_stack ORDER BY sequence")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row?);
+        }
+        Ok(entries)
+    }
+
+    /// Save redo stack with timestamps (clear existing and save new entries)
+    pub fn save_redo_stack_with_timestamps(&self, entries: Vec<(String, String, Option<String>)>) -> Result<()> {
+        self.conn.execute("DELETE FROM redo_stack", [])?;
+
+        for (seq, (command_json, undo_data_json, timestamp_str)) in entries.iter().enumerate() {
+            let executed_at = timestamp_str.clone().unwrap_or_else(|| Utc::now().to_rfc3339());
+            self.conn.execute(
+                "INSERT INTO redo_stack (sequence, command_json, undo_data_json, executed_at) VALUES (?1, ?2, ?3, ?4)",
+                params![seq as i64, command_json, undo_data_json, executed_at],
+            )?;
+        }
+
         Ok(())
     }
 

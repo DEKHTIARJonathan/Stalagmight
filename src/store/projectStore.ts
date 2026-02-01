@@ -366,6 +366,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       await get().loadRecentProjects();
 
       get().resetLoading();
+      await get().refreshUndoState();
       return { success: true };
     } catch (e) {
       const error = parseLoadError(e);
@@ -374,6 +375,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       if (error.code === 'ALREADY_OPEN') {
         useUIStore.getState().setView('single');
         get().resetLoading();
+        await get().refreshUndoState();
         return { success: true };
       }
 
