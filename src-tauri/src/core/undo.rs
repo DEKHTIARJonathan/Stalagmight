@@ -1338,6 +1338,7 @@ mod tests {
             error_percentage: 2.6,
             horizontal_misclosure: 1.0,
             vertical_misclosure: 0.7,
+            strategy: crate::models::ClosureStrategy::ProportionalByLength,
         };
 
         let entry = UndoEntry {

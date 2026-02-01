@@ -190,7 +190,7 @@ pub struct ZeroDatum {
 }
 
 /// Strategy for distributing loop closure errors
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum ClosureStrategy {
     /// Distribute proportionally by shot length (Bowditch method)
     #[default]
@@ -201,6 +201,29 @@ pub enum ClosureStrategy {
     KeepRaw,
     /// Manual adjustment later
     ManualAdjustment,
+}
+
+impl ClosureStrategy {
+    /// Convert to a string suitable for SQLite storage
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ProportionalByLength => "ProportionalByLength",
+            Self::EqualDistribution => "EqualDistribution",
+            Self::KeepRaw => "KeepRaw",
+            Self::ManualAdjustment => "ManualAdjustment",
+        }
+    }
+
+    /// Parse from a SQLite string value, defaulting to ProportionalByLength
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "ProportionalByLength" => Self::ProportionalByLength,
+            "EqualDistribution" => Self::EqualDistribution,
+            "KeepRaw" => Self::KeepRaw,
+            "ManualAdjustment" => Self::ManualAdjustment,
+            _ => Self::default(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -276,6 +299,9 @@ pub struct LoopClosure {
     pub horizontal_misclosure: f64,
     /// Vertical misclosure component (meters)
     pub vertical_misclosure: f64,
+    /// Strategy for distributing the closure error
+    #[serde(default)]
+    pub strategy: ClosureStrategy,
 }
 
 /// Reference to a loop closure from a station's perspective

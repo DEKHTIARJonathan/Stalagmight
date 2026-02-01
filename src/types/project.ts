@@ -144,6 +144,7 @@ export interface LoopClosure {
   error_percentage: number;
   horizontal_misclosure: number;
   vertical_misclosure: number;
+  strategy: ClosureStrategy;
 }
 
 export interface ClosureRef {

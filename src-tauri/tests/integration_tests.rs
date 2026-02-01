@@ -1778,6 +1778,7 @@ fn test_save_load_with_loop_closures() {
         error_percentage: 2.5,
         horizontal_misclosure: 2.0,
         vertical_misclosure: 1.5,
+        strategy: ClosureStrategy::default(),
     });
 
     let mut db = Database::in_memory().unwrap();

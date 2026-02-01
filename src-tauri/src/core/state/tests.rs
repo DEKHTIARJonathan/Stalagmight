@@ -6,8 +6,8 @@ use std::sync::Mutex;
 use crate::core::undo::{UndoData, UndoEntry};
 use crate::core::Command;
 use crate::models::{
-    Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData, ShotUpdates,
-    StationRef, SurveyDirection,
+    ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
+    ShotUpdates, StationRef, SurveyDirection,
 };
 use crate::persistence::Database;
 use tempfile::TempDir;
@@ -3411,6 +3411,7 @@ fn test_undo_unmerge_restores_removed_closures() {
             error_percentage: 2.0,
             horizontal_misclosure: 0.2,
             vertical_misclosure: 0.1,
+        strategy: ClosureStrategy::default(),
         });
     }
 
@@ -4615,6 +4616,7 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
             error_percentage: 2.5,
             horizontal_misclosure: 0.2,
             vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
         });
         project.next_closure_id += 1;
     }
@@ -4735,6 +4737,7 @@ fn test_transitive_closures_in_computed_stations() {
             error_percentage: 2.5,
             horizontal_misclosure: 0.4,
             vertical_misclosure: 0.3,
+        strategy: ClosureStrategy::default(),
         });
         project.next_closure_id += 1;
     }
@@ -4862,6 +4865,7 @@ fn test_transitive_closures_serialization_preserves_data() {
             error_percentage: 2.0,
             horizontal_misclosure: 0.2,
             vertical_misclosure: 0.2,
+        strategy: ClosureStrategy::default(),
         });
         project.next_closure_id += 1;
     }
@@ -5143,6 +5147,7 @@ fn test_move_segment_closure_connectivity() {
             error_percentage: 1.0,
             horizontal_misclosure: 0.08,
             vertical_misclosure: 0.06,
+        strategy: ClosureStrategy::default(),
         });
         project.next_closure_id += 1;
     }
@@ -6184,6 +6189,7 @@ fn test_delete_last_shot_cleans_up_closures() {
             error_percentage: 5.0,
             horizontal_misclosure: 0.4,
             vertical_misclosure: 0.3,
+        strategy: ClosureStrategy::default(),
         });
         project.next_closure_id += 1;
     }
@@ -6256,6 +6262,7 @@ fn test_delete_last_shot_undo_restores_references() {
             error_percentage: 5.0,
             horizontal_misclosure: 0.4,
             vertical_misclosure: 0.3,
+        strategy: ClosureStrategy::default(),
         });
         project.next_closure_id += 1;
     }

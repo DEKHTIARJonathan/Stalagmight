@@ -310,6 +310,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'move_shot': {
+          // Select the shot and clear other selection effects
+          setSelection({ type: 'shot', sectionId, shotId });
           // Find the shot index within the section
           const section = project?.sections.find((s) => s.id === sectionId);
           if (section) {

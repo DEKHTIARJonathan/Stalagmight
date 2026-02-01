@@ -661,6 +661,7 @@ fn test_save_load_loop_closures() {
         error_percentage: 1.0,
         horizontal_misclosure: 0.4,
         vertical_misclosure: 0.3,
+        strategy: ClosureStrategy::default(),
     });
 
     // Save and load
