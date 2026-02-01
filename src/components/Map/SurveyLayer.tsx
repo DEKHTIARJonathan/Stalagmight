@@ -102,6 +102,11 @@ export default class SurveyLayer {
   private anchoredSectionIds: Set<number> = new Set();
   private prevAnchoredFeatureIds: Set<number> = new Set();
 
+  // Immovable feature IDs for Move Station / Move Shot tools
+  // (per-feature granularity, unlike anchoredSectionIds which is per-section)
+  private immovableStationFeatureIds: Set<number> = new Set();
+  private immovableShotFeatureIds: Set<number> = new Set();
+
   // Drag preview state — uses temporary layers with *-translate paint properties
   // instead of rebuilding GeoJSON on every frame
   private dragPreviewActive = false;
@@ -244,6 +249,15 @@ export default class SurveyLayer {
       this.callbacks.onFeatureHover?.(false);
       this.callbacks.onStationHover?.(null);
       this.callbacks.onShotHover?.(null);
+    }
+
+    // Move Station/Shot tools: set arrow cursor immediately on activation
+    // (prevents MapLibre's grab cursor from showing before any hover event fires)
+    if (tool === 'move_station' || tool === 'move_shot') {
+      this.map.getCanvas().style.cursor = 'default';
+    } else if (!isNonInteractive) {
+      // Reset cursor when switching away from move tools to other interactive tools
+      this.map.getCanvas().style.cursor = '';
     }
   }
 
@@ -754,16 +768,24 @@ export default class SurveyLayer {
       const nearestStation = resolveNearestStation(this.map, e, stationFeatures);
       const nearestShot = resolveNearestShot(this.map, e, shotFeatures);
 
-      // Determine what to highlight (stations always take priority)
+      // Determine what to highlight (stations take priority unless suppressed by tool)
       let newHoveredStationId: string | null = null;
       let newHoveredShotId: string | null = null;
 
-      if (nearestStation) {
+      // Tool-specific hover suppression:
+      // - move_station: only stations hover (suppress shot hover)
+      // - move_shot: only shots hover (suppress station hover)
+      const suppressStationHover = this.activeTool === 'move_shot';
+      const suppressShotHover = this.activeTool === 'move_station';
+
+      if (nearestStation && !suppressStationHover) {
         const { sectionId, stationIndex } = nearestStation.properties ?? {};
         if (sectionId !== undefined && stationIndex !== undefined) {
           newHoveredStationId = `${sectionId}:${stationIndex}`;
         }
-      } else if (nearestShot) {
+      }
+      // Show shot hover when no station is hovered (or station was suppressed) and shots not suppressed
+      if (!newHoveredStationId && nearestShot && !suppressShotHover) {
         const { sectionId, shotId } = nearestShot.properties ?? {};
         if (sectionId !== undefined && shotId !== undefined) {
           newHoveredShotId = `${sectionId}:${shotId}`;
@@ -778,7 +800,7 @@ export default class SurveyLayer {
         this.hoveredStationId = newHoveredStationId;
         this.hoveredShotId = newHoveredShotId;
 
-        // Update cursor - suppress for anchored sections when Move Segment tool is active
+        // Update cursor - suppress for anchored/immovable features
         let showPointer = Boolean(newHoveredStationId || newHoveredShotId);
         if (showPointer && this.activeTool === 'move_segment' && this.anchoredSectionIds.size > 0) {
           // Check if hovered feature belongs to an anchored section
@@ -790,7 +812,22 @@ export default class SurveyLayer {
             }
           }
         }
-        this.map.getCanvas().style.cursor = showPointer ? 'pointer' : '';
+        // Suppress cursor for immovable features in Move Station / Move Shot tools
+        if (showPointer && (this.activeTool === 'move_station' || this.activeTool === 'move_shot')) {
+          if (newHoveredStationId) {
+            const [secStr, idxStr] = newHoveredStationId.split(':');
+            const featureId = Number(secStr) * 100000 + Number(idxStr);
+            if (this.isStationImmovable(featureId)) showPointer = false;
+          } else if (newHoveredShotId) {
+            const [secStr, idxStr] = newHoveredShotId.split(':');
+            const featureId = Number(secStr) * 100000 + Number(idxStr);
+            if (this.isShotImmovable(featureId)) showPointer = false;
+          }
+        }
+        // Move Station/Shot tools: use arrow cursor when not over a movable feature
+        // (prevents MapLibre's default grab cursor from showing through)
+        const useArrowFallback = this.activeTool === 'move_station' || this.activeTool === 'move_shot';
+        this.map.getCanvas().style.cursor = showPointer ? 'pointer' : (useArrowFallback ? 'default' : '');
 
         // Update MapLibre visual state
         this.updateVisualState();
@@ -1128,6 +1165,16 @@ export default class SurveyLayer {
       this.anchoredSectionIds.has(Math.floor(featureId / 100000));
   }
 
+  // Check if a station feature is individually immovable (zero-datum or transitively connected)
+  private isStationImmovable(featureId: number): boolean {
+    return this.immovableStationFeatureIds.has(featureId);
+  }
+
+  // Check if a shot feature is individually immovable (endpoint is zero-datum or transitively connected)
+  private isShotImmovable(featureId: number): boolean {
+    return this.immovableShotFeatureIds.has(featureId);
+  }
+
   // Update visual state using setFeatureState (much faster than setPaintProperty)
   // Only updates the specific features that changed, not the entire layer
   private updateVisualState() {
@@ -1148,8 +1195,10 @@ export default class SurveyLayer {
           { hover: restoreSection }
         );
       }
-      // Set new hover (suppress for anchored features — no interaction feedback)
-      if (newHoveredStationFeatureId !== null && !this.isFeatureAnchored(newHoveredStationFeatureId)) {
+      // Set new hover (suppress for anchored/immovable features — no interaction feedback)
+      if (newHoveredStationFeatureId !== null &&
+          !this.isFeatureAnchored(newHoveredStationFeatureId) &&
+          !this.isStationImmovable(newHoveredStationFeatureId)) {
         this.map.setFeatureState(
           { source: stationsSource, id: newHoveredStationFeatureId },
           { hover: true }
@@ -1172,8 +1221,10 @@ export default class SurveyLayer {
           { hover: restoreSection }
         );
       }
-      // Set new hover (suppress for anchored features — no interaction feedback)
-      if (newHoveredShotFeatureId !== null && !this.isFeatureAnchored(newHoveredShotFeatureId)) {
+      // Set new hover (suppress for anchored/immovable features — no interaction feedback)
+      if (newHoveredShotFeatureId !== null &&
+          !this.isFeatureAnchored(newHoveredShotFeatureId) &&
+          !this.isShotImmovable(newHoveredShotFeatureId)) {
         this.map.setFeatureState(
           { source: shotsSource, id: newHoveredShotFeatureId },
           { hover: true }
@@ -1732,6 +1783,180 @@ export default class SurveyLayer {
 
       this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', [
         'case', bothAnchored, 0.25, 0.8,
+      ] as maplibregl.ExpressionSpecification);
+    } else {
+      this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', 0.8);
+    }
+  }
+
+  /**
+   * Set individual feature-level immovable state for move_station / move_shot tools.
+   * Uses setPaintProperty with data-driven expressions to dim immovable features.
+   * Unlike setAnchoredSections (which uses setFeatureState), this approach is reliable
+   * on initial tool activation because it doesn't depend on feature tiling state.
+   */
+  setImmovableFeatures(stationIds: Set<number>, shotIds: Set<number>): void {
+    this.immovableStationFeatureIds = stationIds;
+    this.immovableShotFeatureIds = shotIds;
+
+    // Update main layer paint properties (stations + shots)
+    this.updateImmovableLayerOpacity(stationIds, shotIds);
+
+    // Update label and closure opacity
+    this.updateImmovableLabelOpacity(stationIds, shotIds);
+    this.updateImmovableClosureOpacity(stationIds);
+  }
+
+  // Set circle-opacity/line-opacity on main layers using data-driven expressions.
+  // Uses setPaintProperty (not setFeatureState) for reliable initial-activation dimming.
+  private updateImmovableLayerOpacity(stationIds: Set<number>, shotIds: Set<number>): void {
+    if (stationIds.size > 0 || shotIds.size > 0) {
+      // Station circles: dim immovable stations
+      if (stationIds.size > 0) {
+        const stationIdsArray = [...stationIds];
+        const immovableCheck: maplibregl.ExpressionSpecification = [
+          'in', ['get', 'featureId'], ['literal', stationIdsArray],
+        ] as maplibregl.ExpressionSpecification;
+        this.map.setPaintProperty(this.stationsLayerId, 'circle-opacity', [
+          'case',
+          immovableCheck, 0.25,
+          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          1,
+        ] as maplibregl.ExpressionSpecification);
+        this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-opacity', [
+          'case',
+          immovableCheck, 0.25,
+          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          1,
+        ] as maplibregl.ExpressionSpecification);
+      } else {
+        // Restore default (feature-state only)
+        this.map.setPaintProperty(this.stationsLayerId, 'circle-opacity', [
+          'case',
+          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          1,
+        ] as maplibregl.ExpressionSpecification);
+        this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-opacity', [
+          'case',
+          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          1,
+        ] as maplibregl.ExpressionSpecification);
+      }
+
+      // Shot lines: dim immovable shots
+      if (shotIds.size > 0) {
+        const shotIdsArray = [...shotIds];
+        const immovableCheck: maplibregl.ExpressionSpecification = [
+          'in', ['get', 'featureId'], ['literal', shotIdsArray],
+        ] as maplibregl.ExpressionSpecification;
+        this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', [
+          'case',
+          immovableCheck, 0.25,
+          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          ['get', 'isVirtual'], 0.5,
+          1,
+        ] as maplibregl.ExpressionSpecification);
+      } else {
+        // Restore default (feature-state only)
+        this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', [
+          'case',
+          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          ['get', 'isVirtual'], 0.5,
+          1,
+        ] as maplibregl.ExpressionSpecification);
+      }
+    } else {
+      // No immovable features — restore original paint properties
+      this.map.setPaintProperty(this.stationsLayerId, 'circle-opacity', [
+        'case',
+        ['boolean', ['feature-state', 'anchored'], false], 0.25,
+        1,
+      ] as maplibregl.ExpressionSpecification);
+      this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-opacity', [
+        'case',
+        ['boolean', ['feature-state', 'anchored'], false], 0.25,
+        1,
+      ] as maplibregl.ExpressionSpecification);
+      this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', [
+        'case',
+        ['boolean', ['feature-state', 'anchored'], false], 0.25,
+        ['get', 'isVirtual'], 0.5,
+        1,
+      ] as maplibregl.ExpressionSpecification);
+    }
+  }
+
+  // Set text-opacity on label layers: 0.25 for immovable features, normal otherwise.
+  // Uses per-feature ID matching (sectionId * 100000 + stationIndex/shotId) since
+  // immovable features are per-station, not per-section.
+  private updateImmovableLabelOpacity(
+    stationIds: Set<number>,
+    shotIds: Set<number>
+  ): void {
+    const zoomOpacity: maplibregl.ExpressionSpecification = [
+      'interpolate', ['linear'], ['zoom'], 14, 0.7, 18, 1,
+    ] as maplibregl.ExpressionSpecification;
+
+    if (stationIds.size > 0 || shotIds.size > 0) {
+      // Station labels: compute featureId from sectionId * 100000 + stationIndex
+      if (stationIds.size > 0) {
+        const stationIdsArray = [...stationIds];
+        const stationAnchoredCheck: maplibregl.ExpressionSpecification = [
+          'in',
+          ['+', ['*', ['get', 'sectionId'], 100000], ['get', 'stationIndex']],
+          ['literal', stationIdsArray],
+        ] as maplibregl.ExpressionSpecification;
+        this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', [
+          'case', stationAnchoredCheck, 0.25, zoomOpacity,
+        ] as maplibregl.ExpressionSpecification);
+      } else {
+        this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', zoomOpacity);
+      }
+
+      // Shot labels: compute featureId from sectionId * 100000 + shotId
+      if (shotIds.size > 0) {
+        const shotIdsArray = [...shotIds];
+        const shotAnchoredCheck: maplibregl.ExpressionSpecification = [
+          'in',
+          ['+', ['*', ['get', 'sectionId'], 100000], ['get', 'shotId']],
+          ['literal', shotIdsArray],
+        ] as maplibregl.ExpressionSpecification;
+        this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', [
+          'case', shotAnchoredCheck, 0.25, zoomOpacity,
+        ] as maplibregl.ExpressionSpecification);
+      } else {
+        this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', zoomOpacity);
+      }
+
+      // Section name labels: leave at full opacity (not meaningful to dim per-station)
+      this.map.setPaintProperty(this.labelsLayerId, 'text-opacity', 1);
+    } else {
+      // Restore original opacity
+      this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', zoomOpacity);
+      this.map.setPaintProperty(this.labelsLayerId, 'text-opacity', 1);
+      this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', zoomOpacity);
+    }
+  }
+
+  // Set line-opacity on loop closures layer: 0.25 when either endpoint is immovable
+  private updateImmovableClosureOpacity(immovableStationIds: Set<number>): void {
+    if (immovableStationIds.size > 0) {
+      // Build station key strings matching closure feature "sectionId:stationIndex" format
+      const immovableKeyStrings: string[] = [];
+      for (const fid of immovableStationIds) {
+        const sectionId = Math.floor(fid / 100000);
+        const stationIndex = fid % 100000;
+        immovableKeyStrings.push(`${sectionId}:${stationIndex}`);
+      }
+
+      // Dim closure if either endpoint is immovable
+      const eitherImmovable: maplibregl.ExpressionSpecification = ['any',
+        ['in', ['get', 'stationA'], ['literal', immovableKeyStrings]],
+        ['in', ['get', 'stationB'], ['literal', immovableKeyStrings]],
+      ] as maplibregl.ExpressionSpecification;
+
+      this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', [
+        'case', eitherImmovable, 0.25, 0.8,
       ] as maplibregl.ExpressionSpecification);
     } else {
       this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', 0.8);

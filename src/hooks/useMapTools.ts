@@ -19,6 +19,8 @@ interface MapToolsOptions {
   onMeasureComplete?: (distance: number, depthDiff: number) => void;
   onMoveDragStart?: (data: MoveDragStartData) => void;
   onFeatureHover?: (isHovering: boolean) => void;
+  /** Station keys ("sectionId:stationIndex") that cannot be moved (zero-datum or transitively connected) */
+  immovableStationKeys?: Set<string>;
 }
 
 export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks {
@@ -224,6 +226,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'move_station': {
+          // Guard: block interaction with immovable stations (zero-datum or transitively connected)
+          const stationKey = `${ref.section_id}:${ref.station_index}`;
+          if (options.immovableStationKeys?.has(stationKey)) break;
+
           // Start drag operation - handled by MapCanvas
           setSelection({ type: 'station', stationRef: ref });
           options.onMoveDragStart?.({
@@ -310,12 +316,25 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'move_shot': {
+          // Guard: block interaction if either shot endpoint is immovable
+          if (options.immovableStationKeys) {
+            const section = project?.sections.find((s) => s.id === sectionId);
+            if (section) {
+              const shotIndex = section.shots.findIndex((s) => s.id === shotId);
+              if (shotIndex !== -1) {
+                const fromKey = `${sectionId}:${shotIndex}`;
+                const toKey = `${sectionId}:${shotIndex + 1}`;
+                if (options.immovableStationKeys.has(fromKey) || options.immovableStationKeys.has(toKey)) break;
+              }
+            }
+          }
+
           // Select the shot and clear other selection effects
           setSelection({ type: 'shot', sectionId, shotId });
           // Find the shot index within the section
-          const section = project?.sections.find((s) => s.id === sectionId);
-          if (section) {
-            const shotIndex = section.shots.findIndex((s) => s.id === shotId);
+          const shotSection = project?.sections.find((s) => s.id === sectionId);
+          if (shotSection) {
+            const shotIndex = shotSection.shots.findIndex((s) => s.id === shotId);
             if (shotIndex !== -1) {
               options.onMoveDragStart?.({
                 type: 'shot',

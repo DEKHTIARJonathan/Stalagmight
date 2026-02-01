@@ -169,6 +169,70 @@ export default function MapCanvas() {
     resolvedTheme,
   } = useUIStore();
 
+  // Compute immovable station keys for move_station and move_shot tools.
+  // A station is immovable if it is zero-datum, or transitively reachable from a
+  // zero-datum station via merged_with and non-KeepRaw closures_with links.
+  const immovableStationKeys = useMemo(() => {
+    if (activeTool !== 'move_station' && activeTool !== 'move_shot') return new Set<string>();
+    const stationByKey = new Map(
+      stations.map(s => [`${s.station_ref.section_id}:${s.station_ref.station_index}`, s])
+    );
+    const closureStrategyById = new Map<number, string>();
+    for (const lc of project?.loop_closures ?? []) {
+      closureStrategyById.set(lc.id, lc.strategy);
+    }
+    const immovable = new Set<string>();
+    const queue: string[] = [];
+    for (const s of stations) {
+      if (s.is_zero_datum) {
+        queue.push(`${s.station_ref.section_id}:${s.station_ref.station_index}`);
+      }
+    }
+    while (queue.length > 0) {
+      const key = queue.pop()!;
+      if (immovable.has(key)) continue;
+      immovable.add(key);
+      const st = stationByKey.get(key);
+      if (!st) continue;
+      for (const ref of st.merged_with) {
+        queue.push(`${ref.section_id}:${ref.station_index}`);
+      }
+      for (const cr of st.closures_with ?? []) {
+        const strat = closureStrategyById.get(cr.closure_id);
+        if (strat && strat !== 'KeepRaw') {
+          queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
+        }
+      }
+    }
+    return immovable;
+  }, [activeTool, stations, project?.loop_closures]);
+
+  // Convert immovable station keys to feature IDs and compute immovable shot IDs.
+  // For move_shot: a shot is immovable if either endpoint is immovable.
+  const immovableFeatureIds = useMemo(() => {
+    if (immovableStationKeys.size === 0) {
+      return { stationIds: new Set<number>(), shotIds: new Set<number>() };
+    }
+    const stationIds = new Set<number>();
+    for (const key of immovableStationKeys) {
+      const [sec, idx] = key.split(':');
+      stationIds.add(Number(sec) * 100000 + Number(idx));
+    }
+    const shotIds = new Set<number>();
+    if (activeTool === 'move_shot') {
+      for (const section of project?.sections ?? []) {
+        for (let i = 0; i < section.shots.length; i++) {
+          const fromKey = `${section.id}:${i}`;
+          const toKey = `${section.id}:${i + 1}`;
+          if (immovableStationKeys.has(fromKey) || immovableStationKeys.has(toKey)) {
+            shotIds.add(section.id * 100000 + section.shots[i]!.id);
+          }
+        }
+      }
+    }
+    return { stationIds, shotIds };
+  }, [immovableStationKeys, activeTool, project?.sections]);
+
   // Clear selection from both the Zustand store and the SurveyLayer map visuals.
   // The direct SurveyLayer calls are needed because the useEffect that syncs
   // store → SurveyLayer runs after the next React render, leaving stale highlights
@@ -350,6 +414,10 @@ export default function MapCanvas() {
 
       // Build the drag state conditionally to avoid undefined values
       if (data.type === 'station' && data.stationRef !== undefined) {
+        // Guard: block drag on immovable stations (zero-datum or transitively connected)
+        const stationKey = `${data.stationRef.section_id}:${data.stationRef.station_index}`;
+        if (immovableStationKeys.has(stationKey)) return;
+
         setMoveDrag({ ...baseDragState, type: 'station', stationRef: data.stationRef });
         // Begin drag preview — returns co-located stations (merged/closured at same coords)
         const colocated = surveyLayerRef.current?.beginStationDragPreview(
@@ -408,6 +476,11 @@ export default function MapCanvas() {
           });
         });
       } else if (data.type === 'shot' && data.sectionId !== undefined && data.shotIndex !== undefined) {
+        // Guard: block drag if either endpoint is immovable
+        const fromKey = `${data.sectionId}:${data.shotIndex}`;
+        const toKey = `${data.sectionId}:${data.shotIndex + 1}`;
+        if (immovableStationKeys.has(fromKey) || immovableStationKeys.has(toKey)) return;
+
         setMoveDrag({
           ...baseDragState,
           type: 'shot',
@@ -423,7 +496,7 @@ export default function MapCanvas() {
         stationDragColocatedRefsRef.current = colocated;
       }
     },
-    [anchoredSectionIds, anchoredIdsLoaded, clearSelectionAndVisuals, getConnectedSectionIds]
+    [anchoredSectionIds, anchoredIdsLoaded, clearSelectionAndVisuals, getConnectedSectionIds, immovableStationKeys]
   );
 
   // Get map tool callbacks
@@ -435,6 +508,7 @@ export default function MapCanvas() {
     },
     onMoveDragStart: handleMoveDragStart,
     onFeatureHover: setIsHoveringFeature,
+    immovableStationKeys,
   });
 
   // Combine with hidden feature callbacks for toast feedback
@@ -1257,6 +1331,14 @@ export default function MapCanvas() {
     surveyLayerRef.current.setAnchoredSections(anchoredSectionIds);
   }, [anchoredSectionIds, mapLoaded]);
 
+  // Sync immovable feature IDs with SurveyLayer for disabled visual
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setImmovableFeatures(
+      immovableFeatureIds.stationIds,
+      immovableFeatureIds.shotIds
+    );
+  }, [immovableFeatureIds, mapLoaded]);
 
   // Clear station selection, hover, and cancel merge when stations hidden
   // Note: Draw/Measure/Snap operations continue to work - highlight layer shows snapped stations
