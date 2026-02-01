@@ -163,7 +163,8 @@ export type ClosureStrategy =
   | 'ProportionalByLength'
   | 'EqualDistribution'
   | 'KeepRaw'
-  | 'ManualAdjustment';
+  | 'ManualAdjustment'
+  | 'Move';
 
 export interface Project {
   name: string;
