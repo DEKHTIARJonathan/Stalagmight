@@ -57,6 +57,8 @@ export default function MapCanvas() {
   const [ctrlHeld, setCtrlHeld] = useState(false);
   // Ref to track if we're in a Ctrl+drag operation (to filter spurious keyup events from Tauri/WebKit)
   const ctrlDragActiveRef = useRef(false);
+  // Timestamp of the last mouse event during a Ctrl+drag (for filtering spurious keyup events)
+  const ctrlDragMouseEventTimeRef = useRef(0);
   const [isHoveringFeature, setIsHoveringFeature] = useState(false);
   // Placement mode cursor position (screen pixels)
   const [placementCursor, setPlacementCursor] = useState<{ x: number; y: number } | null>(null);
@@ -1514,9 +1516,11 @@ export default function MapCanvas() {
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Control') {
-        // WORKAROUND: Tauri/WebKit fires spurious keyup events when clicking while holding Ctrl
-        // If we're in an active Ctrl+drag, ignore the keyup
-        if (ctrlDragActiveRef.current) {
+        // WORKAROUND: Tauri/WebKit fires spurious Ctrl keyup events at the moment of
+        // mousedown/mouseup while holding Ctrl. Only suppress keyups that occur within
+        // 50ms of a mouse event during a Ctrl+drag — genuine Ctrl releases go through
+        // immediately so the cursor resets without delay.
+        if (ctrlDragActiveRef.current && Date.now() - ctrlDragMouseEventTimeRef.current < 50) {
           return;
         }
         setCtrlHeld(false);
@@ -1598,6 +1602,7 @@ export default function MapCanvas() {
       if (e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool) && map.current) {
         // Mark that we're starting a Ctrl+drag (to filter spurious keyup events from Tauri/WebKit)
         ctrlDragActiveRef.current = true;
+        ctrlDragMouseEventTimeRef.current = Date.now();
         ctrlPanStart = { x: e.clientX, y: e.clientY };
 
         // Suppress default browser behavior during custom pan
@@ -1620,16 +1625,25 @@ export default function MapCanvas() {
           map.current.panBy([-dx, -dy], { animate: false });
           ctrlPanStart = { x: e.clientX, y: e.clientY };
         }
+        // Stop propagation to prevent MapLibre from updating hover state during pan
+        e.stopPropagation();
       }
     };
 
     const handleMouseUpCapture = (e: MouseEvent) => {
       if (ctrlPanStart && map.current) {
         ctrlPanStart = null;
+        // Record timestamp for spurious keyup filter (Tauri/WebKit can fire one near mouseup too)
+        ctrlDragMouseEventTimeRef.current = Date.now();
         // Suppress default browser behavior; the Ctrl+click guard in
         // SurveyLayer.handleMapClick prevents move/select actions
         e.stopPropagation();
         e.preventDefault();
+        // Clear ctrlDragActive after a small delay (can't rely on handleMouseUpGlobal
+        // because stopPropagation prevents it from firing on window bubble)
+        setTimeout(() => {
+          ctrlDragActiveRef.current = false;
+        }, 50);
         // Restore cursor: if Ctrl still held, show grab cursor for next potential pan
         // Otherwise restore the tool cursor
         if (e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool)) {
@@ -1653,6 +1667,33 @@ export default function MapCanvas() {
       }
     };
 
+    // Capture the DOM click event during/after a Ctrl+drag pan.
+    // The browser fires 'click' as a separate event after mouseup — stopping propagation
+    // on mousedown/mouseup does NOT prevent click from being dispatched. MapLibre listens
+    // for 'click' on the canvas, so we must capture it to prevent spurious map clicks.
+    const handleClickCapture = (e: MouseEvent) => {
+      if (ctrlDragActiveRef.current) {
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    };
+
+    // Capture pointer events during Ctrl+drag pan — MapLibre may use pointer events
+    // internally, so capturing only mouse events is insufficient to prevent click leakage
+    const handlePointerDownCapture = (e: PointerEvent) => {
+      if (e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool) && map.current && e.pointerType === 'mouse') {
+        e.stopPropagation();
+      }
+    };
+
+    const handlePointerUpCapture = (e: PointerEvent) => {
+      // If we're in a Ctrl+drag pan, stop pointer events from reaching MapLibre
+      // (ctrlPanStart is still set at this point — cleared by handleMouseUpCapture which fires after)
+      if (ctrlPanStart && e.pointerType === 'mouse') {
+        e.stopPropagation();
+      }
+    };
+
     // Track if mouse is currently down (for filtering spurious keyup)
     let mouseIsDown = false;
 
@@ -1662,11 +1703,13 @@ export default function MapCanvas() {
 
     const handleMouseUpGlobal = () => {
       mouseIsDown = false;
-      // When mouse is released, clear the ctrlDragActive flag after a small delay
-      // to allow any final spurious keyup events from Tauri/WebKit to be filtered
+      // Clear pan state in case mouse was released outside the map container
+      // (handleMouseUpCapture only fires for events on the container element)
+      ctrlPanStart = null;
+      // Fallback: clear ctrlDragActive for mouseups outside the map container
+      // (handleMouseUpCapture handles the in-container case)
       if (ctrlDragActiveRef.current) {
         setTimeout(() => {
-          // Only clear if mouse is still up (not in a new drag)
           if (!mouseIsDown) {
             ctrlDragActiveRef.current = false;
           }
@@ -1678,6 +1721,9 @@ export default function MapCanvas() {
     mapElement.addEventListener('mousedown', handleMouseDownCapture, { capture: true });
     mapElement.addEventListener('mousemove', handleMouseMoveCapture, { capture: true });
     mapElement.addEventListener('mouseup', handleMouseUpCapture, { capture: true });
+    mapElement.addEventListener('click', handleClickCapture, { capture: true });
+    mapElement.addEventListener('pointerdown', handlePointerDownCapture, { capture: true });
+    mapElement.addEventListener('pointerup', handlePointerUpCapture, { capture: true });
     window.addEventListener('mousedown', handleMouseDownGlobal, { capture: true });
     window.addEventListener('mouseup', handleMouseUpGlobal);
 
@@ -1685,6 +1731,9 @@ export default function MapCanvas() {
       mapElement.removeEventListener('mousedown', handleMouseDownCapture, { capture: true });
       mapElement.removeEventListener('mousemove', handleMouseMoveCapture, { capture: true });
       mapElement.removeEventListener('mouseup', handleMouseUpCapture, { capture: true });
+      mapElement.removeEventListener('click', handleClickCapture, { capture: true });
+      mapElement.removeEventListener('pointerdown', handlePointerDownCapture, { capture: true });
+      mapElement.removeEventListener('pointerup', handlePointerUpCapture, { capture: true });
       window.removeEventListener('mousedown', handleMouseDownGlobal, { capture: true });
       window.removeEventListener('mouseup', handleMouseUpGlobal);
     };

@@ -784,7 +784,7 @@ export default class SurveyLayer {
           newHoveredStationId = `${sectionId}:${stationIndex}`;
         }
       }
-      // Show shot hover when no station is hovered (or station was suppressed) and shots not suppressed
+      // Show shot hover when no station is hovered (or station was suppressed) and shots not suppressed.
       if (!newHoveredStationId && nearestShot && !suppressShotHover) {
         const { sectionId, shotId } = nearestShot.properties ?? {};
         if (sectionId !== undefined && shotId !== undefined) {
@@ -1291,9 +1291,12 @@ export default class SurveyLayer {
           this.map.setFeatureState({ source: shotsSource, id }, { hover: false });
         }
       }
-      // Set new section-hovered shots not in prev set
+      // Set new section-hovered shots not in prev set.
+      // During move_segment: always re-apply hover on all section shots to ensure visual
+      // consistency (individual hover interactions can leave stale feature-state).
+      const forceReapply = this.activeTool === 'move_segment';
       for (const id of newHoveredShotIds) {
-        if (!this.prevHoveredSectionShotIds.has(id) && id !== newHoveredShotFeatureId) {
+        if (forceReapply || (!this.prevHoveredSectionShotIds.has(id) && id !== newHoveredShotFeatureId)) {
           this.map.setFeatureState({ source: shotsSource, id }, { hover: true });
         }
       }
@@ -1307,7 +1310,7 @@ export default class SurveyLayer {
       }
       // Set new section-hovered stations not in prev set
       for (const id of newHoveredStationIds) {
-        if (!this.prevHoveredSectionStationIds.has(id) && id !== newHoveredStationFeatureId) {
+        if (forceReapply || (!this.prevHoveredSectionStationIds.has(id) && id !== newHoveredStationFeatureId)) {
           this.map.setFeatureState({ source: stationsSource, id }, { hover: true });
         }
       }
