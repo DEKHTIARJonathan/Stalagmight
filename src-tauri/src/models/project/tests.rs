@@ -997,6 +997,7 @@ fn unmerge_stations_removes_matching_closure_and_preserves_others() {
         error_percentage: 2.0,
         horizontal_misclosure: 0.15,
         vertical_misclosure: 0.05,
+        strategy: ClosureStrategy::default(),
     });
 
     // Also inject an unrelated closure for B-C pair
@@ -1009,6 +1010,7 @@ fn unmerge_stations_removes_matching_closure_and_preserves_others() {
         error_percentage: 3.3,
         horizontal_misclosure: 0.1,
         vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
     });
 
     assert_eq!(project.loop_closures.len(), 2);
@@ -1061,6 +1063,7 @@ fn unmerge_stations_preserves_unrelated_closures() {
         error_percentage: 3.3,
         horizontal_misclosure: 0.1,
         vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
     });
 
     assert_eq!(project.loop_closures.len(), 1);
@@ -1116,6 +1119,7 @@ fn closure_expands_connected_sections_with_existing_merges() {
         error_percentage: 2.0,
         horizontal_misclosure: 0.1,
         vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
     });
     project.next_closure_id += 1;
 
@@ -1210,6 +1214,7 @@ fn new_merge_expands_existing_closure_connectivity() {
         error_percentage: 2.0,
         horizontal_misclosure: 0.1,
         vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
     });
     project.next_closure_id += 1;
 
@@ -1300,6 +1305,7 @@ fn transitive_closure_computation_correct() {
         error_percentage: 2.5,
         horizontal_misclosure: 0.2,
         vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
     });
     let closure_id = project.next_closure_id;
     project.next_closure_id += 1;
@@ -1429,6 +1435,7 @@ fn transitive_closure_both_endpoints_merged() {
         error_percentage: 2.5,
         horizontal_misclosure: 0.2,
         vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
     });
     let closure_id = project.next_closure_id;
     project.next_closure_id += 1;
@@ -2059,6 +2066,7 @@ fn build_project_with_relationships() -> (Project, SectionId, SectionId, Section
         error_percentage: 2.0,
         horizontal_misclosure: 0.08,
         vertical_misclosure: 0.06,
+        strategy: ClosureStrategy::default(),
     });
     project.next_closure_id = 2;
 

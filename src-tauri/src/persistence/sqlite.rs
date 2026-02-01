@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::models::{
-    GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot, StationMerge, StationRef,
-    SurveyDirection, ZeroDatum,
+    ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot,
+    StationMerge, StationRef, SurveyDirection, ZeroDatum,
 };
 
 
@@ -181,6 +181,32 @@ impl Database {
             }
         }
 
+        // Add strategy column to loop_closures table if it doesn't exist
+        let has_strategy: bool = self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='strategy'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_strategy {
+            let loop_table_exists: bool = self.conn.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='loop_closures'",
+                [],
+                |row| row.get::<_, i64>(0),
+            ).map(|c| c > 0).unwrap_or(false);
+
+            if loop_table_exists {
+                self.conn.execute(
+                    "ALTER TABLE loop_closures ADD COLUMN strategy TEXT NOT NULL DEFAULT 'ProportionalByLength'",
+                    [],
+                )?;
+                tracing::info!("Added strategy column to loop_closures table");
+            }
+        }
+
         // Add next_closure_id column to project table if it doesn't exist (persists monotonic counter)
         let has_next_closure_id: bool = self.conn
             .query_row(
@@ -346,7 +372,8 @@ impl Database {
                 error_percentage REAL NOT NULL,
                 horizontal_misclosure REAL NOT NULL,
                 vertical_misclosure REAL NOT NULL,
-                closure_id INTEGER NOT NULL DEFAULT 0
+                closure_id INTEGER NOT NULL DEFAULT 0,
+                strategy TEXT NOT NULL DEFAULT 'ProportionalByLength'
             );
 
             -- Display settings
@@ -539,11 +566,27 @@ impl Database {
             )?;
         }
 
+        // Ensure strategy column exists
+        let has_strategy: bool = tx
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='strategy'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_strategy {
+            tx.execute(
+                "ALTER TABLE loop_closures ADD COLUMN strategy TEXT NOT NULL DEFAULT 'ProportionalByLength'",
+                [],
+            )?;
+        }
+
         for lc in &project.loop_closures {
             let closure_id_i64 = i64::try_from(lc.id)
                 .map_err(|_| anyhow::anyhow!("Closure ID {} exceeds i64 range", lc.id))?;
             tx.execute(
-                "INSERT INTO loop_closures (station_a_section, station_a_index, station_b_section, station_b_index, path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure, closure_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO loop_closures (station_a_section, station_a_index, station_b_section, station_b_index, path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure, closure_id, strategy) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     lc.station_a.section_id,
                     lc.station_a.station_index,
@@ -554,7 +597,8 @@ impl Database {
                     lc.error_percentage,
                     lc.horizontal_misclosure,
                     lc.vertical_misclosure,
-                    closure_id_i64
+                    closure_id_i64,
+                    lc.strategy.as_str()
                 ],
             )?;
         }
@@ -924,7 +968,7 @@ impl Database {
             return Ok(closures);
         }
 
-        // Check if closure_id column exists (added for closure ID tracking)
+        // Check which optional columns exist
         let has_closure_id: bool = self.conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='closure_id'",
@@ -933,54 +977,58 @@ impl Database {
             )
             .map(|c| c > 0)
             .unwrap_or(false);
+        let has_strategy: bool = self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='strategy'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
 
-        if has_closure_id {
-            let mut stmt = self.conn.prepare(
-                "SELECT station_a_section, station_a_index, station_b_section, station_b_index, \
-                 path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure, \
-                 closure_id \
-                 FROM loop_closures",
-            )?;
+        // Build SELECT dynamically based on available columns
+        let extra_cols = match (has_closure_id, has_strategy) {
+            (true, true) => ", closure_id, strategy",
+            (true, false) => ", closure_id",
+            (false, true) => ", strategy",
+            (false, false) => "",
+        };
+        let query = format!(
+            "SELECT station_a_section, station_a_index, station_b_section, station_b_index, \
+             path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure{} \
+             FROM loop_closures",
+            extra_cols
+        );
 
-            let rows = stmt.query_map([], |row| {
-                Ok(LoopClosure {
-                    id: row.get::<_, i64>(9).unwrap_or(0).max(0) as u64,
-                    station_a: StationRef::new(row.get(0)?, row.get(1)?),
-                    station_b: StationRef::new(row.get(2)?, row.get(3)?),
-                    path_length: row.get(4)?,
-                    misclosure_distance: row.get(5)?,
-                    error_percentage: row.get(6)?,
-                    horizontal_misclosure: row.get(7)?,
-                    vertical_misclosure: row.get(8)?,
-                })
-            })?;
+        let mut stmt = self.conn.prepare(&query)?;
+        let rows = stmt.query_map([], |row| {
+            let mut col = 9usize; // next column index after the 9 base columns
+            let id = if has_closure_id {
+                let v = row.get::<_, i64>(col).unwrap_or(0).max(0) as u64;
+                col += 1;
+                v
+            } else { 0 };
+            let strategy = if has_strategy {
+                let s: String = row.get::<_, String>(col).unwrap_or_default();
+                ClosureStrategy::from_str_lossy(&s)
+            } else {
+                ClosureStrategy::default()
+            };
+            Ok(LoopClosure {
+                id,
+                station_a: StationRef::new(row.get(0)?, row.get(1)?),
+                station_b: StationRef::new(row.get(2)?, row.get(3)?),
+                path_length: row.get(4)?,
+                misclosure_distance: row.get(5)?,
+                error_percentage: row.get(6)?,
+                horizontal_misclosure: row.get(7)?,
+                vertical_misclosure: row.get(8)?,
+                strategy,
+            })
+        })?;
 
-            for row in rows {
-                closures.push(row?);
-            }
-        } else {
-            let mut stmt = self.conn.prepare(
-                "SELECT station_a_section, station_a_index, station_b_section, station_b_index, \
-                 path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure \
-                 FROM loop_closures",
-            )?;
-
-            let rows = stmt.query_map([], |row| {
-                Ok(LoopClosure {
-                    id: 0,
-                    station_a: StationRef::new(row.get(0)?, row.get(1)?),
-                    station_b: StationRef::new(row.get(2)?, row.get(3)?),
-                    path_length: row.get(4)?,
-                    misclosure_distance: row.get(5)?,
-                    error_percentage: row.get(6)?,
-                    horizontal_misclosure: row.get(7)?,
-                    vertical_misclosure: row.get(8)?,
-                })
-            })?;
-
-            for row in rows {
-                closures.push(row?);
-            }
+        for row in rows {
+            closures.push(row?);
         }
 
         Ok(closures)

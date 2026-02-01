@@ -20,6 +20,8 @@ import {
   type GhostSectionData,
 } from './surveyLayer/features';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
+import { metersToMapCoords } from '../../utils/coordinates';
+import { getErrorColor } from '../../utils/colors';
 import {
   distanceToLineSegment,
   resolveNearestShot,
@@ -122,6 +124,31 @@ export default class SurveyLayer {
     { mainLayerId: 'survey-labels', tempLayerId: 'survey-drag-labels', sourceId: 'survey-data-section-labels', type: 'symbol', translateProp: 'text-translate', translateAnchorProp: 'text-translate-anchor' },
     { mainLayerId: 'survey-station-labels', tempLayerId: 'survey-drag-station-labels', sourceId: 'survey-data-station-labels', type: 'symbol', translateProp: 'text-translate', translateAnchorProp: 'text-translate-anchor' },
   ];
+
+  // Station drag preview — dynamic geometry rebuild for connected shots
+  // (translate is insufficient because only one endpoint of each shot moves)
+  private stationDragShots: Array<{
+    properties: Record<string, unknown>;
+    fromCoord: [number, number]; // original [lng, lat]
+    toCoord: [number, number];
+    movingEnd: 'from' | 'to' | 'both';
+    shotLabelProperties: Record<string, unknown>;
+  }> | null = null;
+  private static readonly STATION_DRAG_SHOT_SOURCE = 'survey-drag-station-shots-src';
+  private static readonly STATION_DRAG_SHOT_LAYER = 'survey-drag-station-shots-layer';
+  private static readonly STATION_DRAG_SHOT_LABEL_SOURCE = 'survey-drag-station-shot-labels-src';
+  private static readonly STATION_DRAG_SHOT_LABEL_LAYER = 'survey-drag-station-shot-labels-layer';
+
+  // Station drag preview — dynamic geometry rebuild for connected closure indicator lines
+  // (translate is insufficient because only one endpoint of each closure line may move)
+  private stationDragClosures: Array<{
+    properties: Record<string, unknown>;
+    fromCoord: [number, number]; // original [lng, lat] — station_a
+    toCoord: [number, number];   // original [lng, lat] — station_b
+    movingEnd: 'from' | 'to' | 'both';
+  }> | null = null;
+  private static readonly STATION_DRAG_CLOSURE_SOURCE = 'survey-drag-station-closures-src';
+  private static readonly STATION_DRAG_CLOSURE_LAYER = 'survey-drag-station-closures-layer';
 
   // Visibility state (for hidden feature detection)
   private stationsVisible: boolean = true;
@@ -798,6 +825,7 @@ export default class SurveyLayer {
     // preventing event queue buildup when queryRenderedFeatures is slow
     this.boundMouseMove = (e: maplibregl.MapMouseEvent) => {
       if (isNonInteractiveTool(this.activeTool)) return;
+      if (this.dragPreviewActive) return; // Suppress hover during active drag
 
       // Store latest event (overwrites any pending)
       this.pendingHoverEvent = e;
@@ -1849,14 +1877,493 @@ export default class SurveyLayer {
   }
 
   /**
+   * Begin station drag preview — finds all co-located stations (merged/closured),
+   * hides them and their connected shots from main layers, then creates:
+   *   1. Translate-based temp layers for station circles + labels (GPU-efficient)
+   *   2. Dynamic GeoJSON sources + layers for connected shots + shot labels
+   *      (geometry is rebuilt per-frame since only one endpoint of each shot moves)
+   *
+   * Returns the list of co-located StationRefs so MapCanvas can batch-move them.
+   */
+  beginStationDragPreview(sectionId: number, stationIndex: number, additionalSeeds?: StationRef[]): StationRef[] {
+    if (this.dragPreviewActive) this.endDragPreview();
+
+    // 1. Find clicked station and all co-located stations via BFS:
+    //    - merged_with: always co-located
+    //    - closures_with: co-located only if the closure strategy is NOT KeepRaw
+    //    additionalSeeds allows shot drag to seed from both endpoints simultaneously
+    const stationByKey = new Map(
+      this.cachedStations.map(s => [`${s.station_ref.section_id}:${s.station_ref.station_index}`, s])
+    );
+    const clickedKey = `${sectionId}:${stationIndex}`;
+    const clickedStation = stationByKey.get(clickedKey);
+    if (!clickedStation) return [];
+
+    // Build closure strategy lookup (closure_id → strategy)
+    const closureStrategyById = new Map<number, string>();
+    for (const lc of this.cachedLoopClosures ?? []) {
+      closureStrategyById.set(lc.id, lc.strategy);
+    }
+
+    // Seed BFS from primary station + any additional seeds (e.g., shot's other endpoint)
+    const seedKeys = [clickedKey];
+    if (additionalSeeds) {
+      for (const seed of additionalSeeds) {
+        const key = `${seed.section_id}:${seed.station_index}`;
+        if (stationByKey.has(key)) seedKeys.push(key);
+      }
+    }
+
+    const movingRefKeys = new Set<string>();
+    const queue: string[] = [...seedKeys];
+    while (queue.length > 0) {
+      const key = queue.pop()!;
+      if (movingRefKeys.has(key)) continue;
+      movingRefKeys.add(key);
+      const st = stationByKey.get(key);
+      if (!st) continue;
+      for (const ref of st.merged_with) {
+        queue.push(`${ref.section_id}:${ref.station_index}`);
+      }
+      for (const cr of st.closures_with ?? []) {
+        const strategy = closureStrategyById.get(cr.closure_id);
+        if (strategy && strategy !== 'KeepRaw') {
+          queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
+        }
+      }
+    }
+    const movingStations = this.cachedStations.filter(
+      s => movingRefKeys.has(`${s.station_ref.section_id}:${s.station_ref.station_index}`)
+    );
+
+    // 2. Build station inclusion/exclusion filters (covers all co-located stations)
+    const stationInclusion: maplibregl.FilterSpecification = (movingStations.length === 1
+      ? ['all',
+          ['==', ['get', 'sectionId'], sectionId],
+          ['==', ['get', 'stationIndex'], stationIndex],
+        ]
+      : ['any',
+          ...movingStations.map(s => ['all',
+            ['==', ['get', 'sectionId'], s.station_ref.section_id],
+            ['==', ['get', 'stationIndex'], s.station_ref.station_index],
+          ]),
+        ]
+    ) as unknown as maplibregl.FilterSpecification;
+    const stationExclusion: maplibregl.FilterSpecification =
+      ['!', stationInclusion] as unknown as maplibregl.FilterSpecification;
+
+    // 3. Find connected shots for all moving stations
+    type ShotInfo = typeof this.stationDragShots extends (infer T)[] | null ? T : never;
+    const shotInfos: ShotInfo[] = [];
+    const seenShotKeys = new Set<string>();
+
+    for (const movingSt of movingStations) {
+      const section = this.cachedSections.find(s => s.id === movingSt.station_ref.section_id);
+      if (!section) continue;
+
+      const sectionStations = this.cachedStations
+        .filter(s => s.station_ref.section_id === section.id)
+        .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index);
+
+      for (let i = 0; i < section.shots.length; i++) {
+        const fromSt = sectionStations[i];
+        const toSt = sectionStations[i + 1];
+        if (!fromSt || !toSt) continue;
+
+        const fromKey = `${fromSt.station_ref.section_id}:${fromSt.station_ref.station_index}`;
+        const toKey = `${toSt.station_ref.section_id}:${toSt.station_ref.station_index}`;
+        const fromIsMoving = movingRefKeys.has(fromKey);
+        const toIsMoving = movingRefKeys.has(toKey);
+        if (!fromIsMoving && !toIsMoving) continue;
+
+        const shot = section.shots[i];
+        if (!shot) continue;
+        const shotKey = `${section.id}:${shot.id}`;
+        if (seenShotKeys.has(shotKey)) continue;
+        seenShotKeys.add(shotKey);
+
+        const fromCoord = metersToMapCoords(
+          fromSt.coordinates.x, fromSt.coordinates.y, this.gpsOrigin
+        ) as [number, number];
+        const toCoord = metersToMapCoords(
+          toSt.coordinates.x, toSt.coordinates.y, this.gpsOrigin
+        ) as [number, number];
+
+        shotInfos.push({
+          properties: {
+            sectionId: section.id,
+            shotId: shot.id,
+            color: section.color,
+            isVirtual: shot.is_virtual,
+          },
+          fromCoord,
+          toCoord,
+          movingEnd: fromIsMoving && toIsMoving ? 'both' : fromIsMoving ? 'from' : 'to',
+          shotLabelProperties: {
+            label: `${shot.azimuth_in.toFixed(0)}° ${shot.length.toFixed(1)}m`,
+            sectionId: section.id,
+            shotId: shot.id,
+            color: section.color,
+          },
+        });
+      }
+    }
+
+    // 4. Create translate-based temp layers for stations + station labels
+    const stationDefs = SurveyLayer.DRAG_LAYER_DEFS.filter(
+      d => d.mainLayerId === 'survey-stations' || d.mainLayerId === 'survey-station-labels'
+    );
+
+    for (const def of stationDefs) {
+      const existing = this.map.getFilter(def.mainLayerId);
+      this.dragSavedFilters.set(def.mainLayerId, existing ?? undefined);
+      const composed: maplibregl.FilterSpecification = (existing && typeof existing === 'object')
+        ? (['all', existing, stationExclusion] as unknown as maplibregl.FilterSpecification)
+        : stationExclusion;
+      this.map.setFilter(def.mainLayerId, composed);
+
+      const paintBase: Record<string, unknown> = {
+        [def.translateProp]: [0, 0] as [number, number],
+        [def.translateAnchorProp]: 'viewport',
+        [`${def.translateProp}-transition`]: { duration: 0, delay: 0 },
+      };
+
+      if (def.type === 'circle') {
+        this.map.addLayer({
+          id: def.tempLayerId,
+          type: 'circle',
+          source: def.sourceId,
+          filter: stationInclusion,
+          paint: {
+            'circle-color': ['get', 'color'],
+            'circle-radius': this.getStationSelectionRadius(),
+            'circle-stroke-color': this.themeColors.selectHighlight,
+            'circle-stroke-width': 2.5,
+            'circle-opacity': 0.85,
+            ...paintBase,
+          },
+        });
+      } else if (def.type === 'symbol') {
+        const vis = this.map.getLayoutProperty(def.mainLayerId, 'visibility') ?? 'visible';
+        const textSize = this.map.getLayoutProperty(def.mainLayerId, 'text-size') ?? 11;
+        const textOffset = this.map.getLayoutProperty(def.mainLayerId, 'text-offset');
+        const textAnchor = this.map.getLayoutProperty(def.mainLayerId, 'text-anchor');
+        const layoutProps: Record<string, unknown> = {
+          'text-field': ['get', 'label'],
+          'text-font': ['Open Sans Regular'],
+          'text-size': textSize,
+          'text-allow-overlap': true,
+          'visibility': vis as 'visible' | 'none',
+        };
+        if (textOffset != null) layoutProps['text-offset'] = textOffset;
+        if (textAnchor != null) layoutProps['text-anchor'] = textAnchor;
+        this.map.addLayer({
+          id: def.tempLayerId,
+          type: 'symbol',
+          source: def.sourceId,
+          filter: stationInclusion,
+          layout: layoutProps as NonNullable<maplibregl.SymbolLayerSpecification['layout']>,
+          paint: {
+            'text-color': ['get', 'color'],
+            'text-halo-color': this.themeColors.textHalo,
+            'text-halo-width': 1.5,
+            'text-opacity': 0.85,
+            ...paintBase,
+          },
+        });
+      }
+    }
+
+    // 5. Create dynamic sources + layers for connected shots + shot labels
+    if (shotInfos.length > 0) {
+      // Build shot exclusion filter and apply to main shot + shot-label layers
+      const firstShot = shotInfos[0]!;
+      const shotInclusion: maplibregl.FilterSpecification = (shotInfos.length === 1
+        ? ['all',
+            ['==', ['get', 'sectionId'], firstShot.properties.sectionId],
+            ['==', ['get', 'shotId'], firstShot.properties.shotId],
+          ]
+        : ['any',
+            ...shotInfos.map(s => ['all',
+              ['==', ['get', 'sectionId'], s.properties.sectionId],
+              ['==', ['get', 'shotId'], s.properties.shotId],
+            ]),
+          ]
+      ) as unknown as maplibregl.FilterSpecification;
+      const shotExclusion: maplibregl.FilterSpecification =
+        ['!', shotInclusion] as unknown as maplibregl.FilterSpecification;
+
+      for (const layerId of ['survey-shots', 'survey-shot-labels']) {
+        const existing = this.map.getFilter(layerId);
+        this.dragSavedFilters.set(layerId, existing ?? undefined);
+        const composed: maplibregl.FilterSpecification = (existing && typeof existing === 'object')
+          ? (['all', existing, shotExclusion] as unknown as maplibregl.FilterSpecification)
+          : shotExclusion;
+        this.map.setFilter(layerId, composed);
+      }
+
+      // Build initial GeoJSON for shots
+      const shotFeatures: GeoJSON.Feature[] = shotInfos.map(s => ({
+        type: 'Feature' as const,
+        geometry: { type: 'LineString' as const, coordinates: [s.fromCoord, s.toCoord] },
+        properties: s.properties,
+      }));
+
+      this.map.addSource(SurveyLayer.STATION_DRAG_SHOT_SOURCE, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: shotFeatures },
+      });
+      this.map.addLayer({
+        id: SurveyLayer.STATION_DRAG_SHOT_LAYER,
+        type: 'line',
+        source: SurveyLayer.STATION_DRAG_SHOT_SOURCE,
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': this.getShotSelectionWidth(),
+          'line-opacity': 0.85,
+        },
+      });
+
+      // Build initial GeoJSON for shot labels
+      const shotLabelFeatures: GeoJSON.Feature[] = shotInfos.map(s => ({
+        type: 'Feature' as const,
+        geometry: {
+          type: 'Point' as const,
+          coordinates: [(s.fromCoord[0] + s.toCoord[0]) / 2, (s.fromCoord[1] + s.toCoord[1]) / 2],
+        },
+        properties: s.shotLabelProperties,
+      }));
+
+      this.map.addSource(SurveyLayer.STATION_DRAG_SHOT_LABEL_SOURCE, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: shotLabelFeatures },
+      });
+      const shotLabelVis = this.map.getLayoutProperty('survey-shot-labels', 'visibility') ?? 'visible';
+      const shotLabelSize = this.map.getLayoutProperty('survey-shot-labels', 'text-size') ?? 11;
+      this.map.addLayer({
+        id: SurveyLayer.STATION_DRAG_SHOT_LABEL_LAYER,
+        type: 'symbol',
+        source: SurveyLayer.STATION_DRAG_SHOT_LABEL_SOURCE,
+        layout: {
+          'text-field': ['get', 'label'],
+          'text-font': ['Open Sans Regular'],
+          'text-size': shotLabelSize as number,
+          'text-allow-overlap': true,
+          'visibility': shotLabelVis as 'visible' | 'none',
+        },
+        paint: {
+          'text-color': ['get', 'color'],
+          'text-halo-color': this.themeColors.textHalo,
+          'text-halo-width': 1.5,
+          'text-opacity': 0.85,
+        },
+      });
+    }
+
+    this.stationDragShots = shotInfos.length > 0 ? shotInfos : null;
+
+    // 6. Find closure indicator lines with at least one endpoint in the moving set
+    type ClosureInfo = NonNullable<typeof this.stationDragClosures>[number];
+    const closureInfos: ClosureInfo[] = [];
+    if (this.cachedLoopClosures && this.cachedLoopClosures.length > 0) {
+      for (const lc of this.cachedLoopClosures) {
+        const keyA = `${lc.station_a.section_id}:${lc.station_a.station_index}`;
+        const keyB = `${lc.station_b.section_id}:${lc.station_b.station_index}`;
+        const aMoving = movingRefKeys.has(keyA);
+        const bMoving = movingRefKeys.has(keyB);
+        if (!aMoving && !bMoving) continue;
+
+        const stA = stationByKey.get(keyA);
+        const stB = stationByKey.get(keyB);
+        if (!stA || !stB) continue;
+
+        const fromCoord = metersToMapCoords(
+          stA.coordinates.x, stA.coordinates.y, this.gpsOrigin
+        ) as [number, number];
+        const toCoord = metersToMapCoords(
+          stB.coordinates.x, stB.coordinates.y, this.gpsOrigin
+        ) as [number, number];
+
+        closureInfos.push({
+          properties: {
+            stationA: keyA,
+            stationB: keyB,
+            sectionIdA: lc.station_a.section_id,
+            sectionIdB: lc.station_b.section_id,
+            errorPercentage: lc.error_percentage,
+            misclosureDistance: lc.misclosure_distance,
+            pathLength: lc.path_length,
+            color: getErrorColor(lc.error_percentage),
+          },
+          fromCoord,
+          toCoord,
+          movingEnd: aMoving && bMoving ? 'both' : aMoving ? 'from' : 'to',
+        });
+      }
+    }
+
+    if (closureInfos.length > 0) {
+      // Build exclusion filter for closures with ANY endpoint in moving set
+      const closureExclusion: maplibregl.FilterSpecification = ['!', ['any',
+        ...closureInfos.map(c => ['all',
+          ['==', ['get', 'stationA'], c.properties.stationA],
+          ['==', ['get', 'stationB'], c.properties.stationB],
+        ]),
+      ]] as unknown as maplibregl.FilterSpecification;
+
+      const existingClosureFilter = this.map.getFilter(this.loopClosuresLayerId);
+      this.dragSavedFilters.set(this.loopClosuresLayerId, existingClosureFilter ?? undefined);
+      const composedClosure: maplibregl.FilterSpecification = (existingClosureFilter && typeof existingClosureFilter === 'object')
+        ? (['all', existingClosureFilter, closureExclusion] as unknown as maplibregl.FilterSpecification)
+        : closureExclusion;
+      this.map.setFilter(this.loopClosuresLayerId, composedClosure);
+
+      // Create dynamic GeoJSON source + layer for closure lines
+      const closureFeatures: GeoJSON.Feature[] = closureInfos.map(c => ({
+        type: 'Feature' as const,
+        geometry: { type: 'LineString' as const, coordinates: [c.fromCoord, c.toCoord] },
+        properties: c.properties,
+      }));
+
+      this.map.addSource(SurveyLayer.STATION_DRAG_CLOSURE_SOURCE, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: closureFeatures },
+      });
+      this.map.addLayer({
+        id: SurveyLayer.STATION_DRAG_CLOSURE_LAYER,
+        type: 'line',
+        source: SurveyLayer.STATION_DRAG_CLOSURE_SOURCE,
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 3,
+          'line-opacity': 0.85,
+          'line-dasharray': [6, 4],
+        },
+      });
+    }
+
+    this.stationDragClosures = closureInfos.length > 0 ? closureInfos : null;
+    this.dragPreviewActive = true;
+    return movingStations.map(s => s.station_ref);
+  }
+
+  /**
+   * Update station drag preview — translates station circles/labels AND
+   * rebuilds connected shot geometries so they stretch to follow the cursor.
+   * Shot geometry rebuild is cheap (typically 1-5 features).
+   */
+  updateStationDragPreview(dx: number, dy: number): void {
+    if (!this.dragPreviewActive) return;
+
+    // Update station circles + labels via translate (GPU shader uniform)
+    const offset: [number, number] = [dx, dy];
+    for (const def of SurveyLayer.DRAG_LAYER_DEFS) {
+      if (this.map.getLayer(def.tempLayerId)) {
+        this.map.setPaintProperty(def.tempLayerId, def.translateProp, offset);
+      }
+    }
+
+    // Rebuild connected shot geometries
+    if (!this.stationDragShots) return;
+
+    const shotFeatures: GeoJSON.Feature[] = [];
+    const shotLabelFeatures: GeoJSON.Feature[] = [];
+
+    for (const s of this.stationDragShots) {
+      let fromLng = s.fromCoord[0], fromLat = s.fromCoord[1];
+      let toLng = s.toCoord[0], toLat = s.toCoord[1];
+
+      if (s.movingEnd === 'from' || s.movingEnd === 'both') {
+        const p = this.map.project([fromLng, fromLat]);
+        const np = this.map.unproject([p.x + dx, p.y + dy]);
+        fromLng = np.lng;
+        fromLat = np.lat;
+      }
+      if (s.movingEnd === 'to' || s.movingEnd === 'both') {
+        const p = this.map.project([toLng, toLat]);
+        const np = this.map.unproject([p.x + dx, p.y + dy]);
+        toLng = np.lng;
+        toLat = np.lat;
+      }
+
+      shotFeatures.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: [[fromLng, fromLat], [toLng, toLat]] },
+        properties: s.properties,
+      });
+
+      shotLabelFeatures.push({
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: [(fromLng + toLng) / 2, (fromLat + toLat) / 2],
+        },
+        properties: s.shotLabelProperties,
+      });
+    }
+
+    const shotSource = this.map.getSource(SurveyLayer.STATION_DRAG_SHOT_SOURCE);
+    if (shotSource && 'setData' in shotSource) {
+      (shotSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection', features: shotFeatures,
+      });
+    }
+    const shotLabelSource = this.map.getSource(SurveyLayer.STATION_DRAG_SHOT_LABEL_SOURCE);
+    if (shotLabelSource && 'setData' in shotLabelSource) {
+      (shotLabelSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection', features: shotLabelFeatures,
+      });
+    }
+
+    // Rebuild closure indicator line geometries
+    if (this.stationDragClosures) {
+      const closureFeatures: GeoJSON.Feature[] = [];
+      for (const c of this.stationDragClosures) {
+        let fromLng = c.fromCoord[0], fromLat = c.fromCoord[1];
+        let toLng = c.toCoord[0], toLat = c.toCoord[1];
+
+        if (c.movingEnd === 'from' || c.movingEnd === 'both') {
+          const p = this.map.project([fromLng, fromLat]);
+          const np = this.map.unproject([p.x + dx, p.y + dy]);
+          fromLng = np.lng;
+          fromLat = np.lat;
+        }
+        if (c.movingEnd === 'to' || c.movingEnd === 'both') {
+          const p = this.map.project([toLng, toLat]);
+          const np = this.map.unproject([p.x + dx, p.y + dy]);
+          toLng = np.lng;
+          toLat = np.lat;
+        }
+
+        closureFeatures.push({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: [[fromLng, fromLat], [toLng, toLat]] },
+          properties: c.properties,
+        });
+      }
+
+      const closureSource = this.map.getSource(SurveyLayer.STATION_DRAG_CLOSURE_SOURCE);
+      if (closureSource && 'setData' in closureSource) {
+        (closureSource as maplibregl.GeoJSONSource).setData({
+          type: 'FeatureCollection', features: closureFeatures,
+        });
+      }
+    }
+  }
+
+  /**
    * Update drag preview offset — just updates *-translate paint properties.
    * This is a shader uniform update (essentially free, no GeoJSON rebuild).
+   * Guards against missing layers so it works for both full segment drag
+   * (5 temp layers) and single station drag (2 temp layers).
    */
   updateDragPreview(dx: number, dy: number): void {
     if (!this.dragPreviewActive) return;
     const offset: [number, number] = [dx, dy];
     for (const def of SurveyLayer.DRAG_LAYER_DEFS) {
-      this.map.setPaintProperty(def.tempLayerId, def.translateProp, offset);
+      if (this.map.getLayer(def.tempLayerId)) {
+        this.map.setPaintProperty(def.tempLayerId, def.translateProp, offset);
+      }
     }
     // Update closure drag layer
     if (this.map.getLayer(this.dragClosuresLayerId)) {
@@ -1880,6 +2387,8 @@ export default class SurveyLayer {
     if (this.map.getLayer(this.dragClosuresLayerId)) {
       this.map.removeLayer(this.dragClosuresLayerId);
     }
+    // Station drag dynamic layers + sources
+    this.removeStationDragLayers();
   }
 
   /**
@@ -1895,22 +2404,56 @@ export default class SurveyLayer {
         this.map.removeLayer(def.tempLayerId);
       }
 
-      // Restore original filter on main layer
-      const saved = this.dragSavedFilters.get(def.mainLayerId);
-      this.map.setFilter(def.mainLayerId, saved ?? null);
+      // Restore original filter on main layer — only if we saved one
+      // (station drag only modifies 2 of 5 layers)
+      if (this.dragSavedFilters.has(def.mainLayerId)) {
+        const saved = this.dragSavedFilters.get(def.mainLayerId);
+        this.map.setFilter(def.mainLayerId, saved ?? null);
+      }
     }
 
     // Remove closure temp layer and restore filter
     if (this.map.getLayer(this.dragClosuresLayerId)) {
       this.map.removeLayer(this.dragClosuresLayerId);
     }
-    const savedClosureFilter = this.dragSavedFilters.get(this.loopClosuresLayerId);
-    if (savedClosureFilter !== undefined) {
+    if (this.dragSavedFilters.has(this.loopClosuresLayerId)) {
+      const savedClosureFilter = this.dragSavedFilters.get(this.loopClosuresLayerId);
       this.map.setFilter(this.loopClosuresLayerId, savedClosureFilter ?? null);
     }
 
+    // Station drag dynamic layers + sources
+    this.removeStationDragLayers();
+
+    // Restore shot/shot-label filters if saved (station drag modifies these)
+    for (const layerId of ['survey-shots', 'survey-shot-labels']) {
+      if (this.dragSavedFilters.has(layerId)) {
+        const saved = this.dragSavedFilters.get(layerId);
+        this.map.setFilter(layerId, saved ?? null);
+      }
+    }
+
+    this.stationDragShots = null;
+    this.stationDragClosures = null;
     this.dragSavedFilters.clear();
     this.dragPreviewActive = false;
+  }
+
+  /** Remove station drag dynamic layers and sources (idempotent). */
+  private removeStationDragLayers(): void {
+    for (const layerId of [
+      SurveyLayer.STATION_DRAG_SHOT_LAYER,
+      SurveyLayer.STATION_DRAG_SHOT_LABEL_LAYER,
+      SurveyLayer.STATION_DRAG_CLOSURE_LAYER,
+    ]) {
+      if (this.map.getLayer(layerId)) this.map.removeLayer(layerId);
+    }
+    for (const sourceId of [
+      SurveyLayer.STATION_DRAG_SHOT_SOURCE,
+      SurveyLayer.STATION_DRAG_SHOT_LABEL_SOURCE,
+      SurveyLayer.STATION_DRAG_CLOSURE_SOURCE,
+    ]) {
+      if (this.map.getSource(sourceId)) this.map.removeSource(sourceId);
+    }
   }
 
   /**

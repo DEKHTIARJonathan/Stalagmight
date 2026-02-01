@@ -499,6 +499,7 @@ impl AppState {
                         error_percentage: closure.error_percentage,
                         horizontal_misclosure: closure.horizontal_misclosure,
                         vertical_misclosure: closure.vertical_misclosure,
+                        strategy: closure.strategy,
                     });
                 }
             }

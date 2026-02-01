@@ -687,7 +687,7 @@ impl Project {
         &mut self,
         station_a: StationRef,
         station_b: StationRef,
-        _strategy: ClosureStrategy,
+        strategy: ClosureStrategy,
     ) -> Result<LoopClosure, String> {
         // Check that both stations exist
         if !self.station_exists(station_a) || !self.station_exists(station_b) {
@@ -732,6 +732,7 @@ impl Project {
             error_percentage: metrics.error_percentage,
             horizontal_misclosure: metrics.horizontal_misclosure,
             vertical_misclosure: metrics.vertical_misclosure,
+            strategy,
         };
 
         self.loop_closures.push(closure.clone());

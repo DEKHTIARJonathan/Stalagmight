@@ -93,6 +93,8 @@ export default function MapCanvas() {
   const lastRawDragOffsetRef = useRef<{ dx: number; dy: number } | null>(null);
   // True while snap-to-merge dialog is open — blocks mouseup from ending drag
   const snapMergeDialogPendingRef = useRef(false);
+  // Co-located station refs for station drag (includes merged/closured stations)
+  const stationDragColocatedRefsRef = useRef<StationRef[]>([]);
 
   const { project, stations, stats, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
 
@@ -349,6 +351,12 @@ export default function MapCanvas() {
       // Build the drag state conditionally to avoid undefined values
       if (data.type === 'station' && data.stationRef !== undefined) {
         setMoveDrag({ ...baseDragState, type: 'station', stationRef: data.stationRef });
+        // Begin drag preview — returns co-located stations (merged/closured at same coords)
+        const colocated = surveyLayerRef.current?.beginStationDragPreview(
+          data.stationRef.section_id,
+          data.stationRef.station_index
+        ) ?? [];
+        stationDragColocatedRefsRef.current = colocated;
       } else if (data.type === 'segment' && data.sectionId !== undefined) {
         const segmentSectionId = data.sectionId;
         // Always clear selection on any segment click, even if drag is blocked
@@ -406,6 +414,13 @@ export default function MapCanvas() {
           sectionId: data.sectionId,
           shotIndex: data.shotIndex,
         });
+        // Begin drag preview seeded from both shot endpoints — returns all co-located stations
+        // (merged/closured at same coordinates) that should move together
+        const otherEndpoint = { section_id: data.sectionId, station_index: data.shotIndex + 1 };
+        const colocated = surveyLayerRef.current?.beginStationDragPreview(
+          data.sectionId, data.shotIndex, [otherEndpoint]
+        ) ?? [];
+        stationDragColocatedRefsRef.current = colocated;
       }
     },
     [anchoredSectionIds, anchoredIdsLoaded, clearSelectionAndVisuals, getConnectedSectionIds]
@@ -607,6 +622,20 @@ export default function MapCanvas() {
       // Store in ref (no React state update — avoids re-render per mousemove)
       moveDragLngLatRef.current = { lng: lngLat.lng, lat: lngLat.lat };
 
+      // Station drag preview — translate station circles/labels + rebuild shot geometries
+      if (moveDrag.type === 'station' && surveyLayerRef.current && dragStartScreenRef.current) {
+        const dx = e.clientX - dragStartScreenRef.current.x;
+        const dy = e.clientY - dragStartScreenRef.current.y;
+        surveyLayerRef.current.updateStationDragPreview(dx, dy);
+      }
+
+      // Shot drag preview — same pipeline as station drag (both endpoints + co-located stations move)
+      if (moveDrag.type === 'shot' && surveyLayerRef.current && dragStartScreenRef.current) {
+        const dx = e.clientX - dragStartScreenRef.current.x;
+        const dy = e.clientY - dragStartScreenRef.current.y;
+        surveyLayerRef.current.updateStationDragPreview(dx, dy);
+      }
+
       // For segment drags, update preview synchronously (no rAF needed).
       // Uses pixel offsets (clientX/Y delta from drag start) because the temporary
       // layers use *-translate with viewport anchor — just a shader uniform update.
@@ -750,6 +779,7 @@ export default function MapCanvas() {
       snapMergeDialogPendingRef.current = false;
       dragOriginStationRef.current = null;
       lastRawDragOffsetRef.current = null;
+      stationDragColocatedRefsRef.current = [];
       if (surveyLayerRef.current) surveyLayerRef.current.endDragPreview();
       setMoveDrag(null);
       dragConnectedSectionIdsRef.current = new Set();
@@ -835,7 +865,25 @@ export default function MapCanvas() {
       const offset = { x: dx, y: dy, z: 0 };
 
       if (moveDrag.type === 'station' && moveDrag.stationRef) {
-        await moveStation(moveDrag.stationRef, offset);
+        // Commit preview: remove temp layers but keep exclusion filters so
+        // features stay hidden until React re-renders with new coordinates.
+        surveyLayerRef.current?.onNextUpdate(() => {
+          surveyLayerRef.current?.endDragPreview();
+        });
+        surveyLayerRef.current?.commitDragPreview();
+
+        // Move all co-located stations (merged/closured at same coordinates)
+        const colocated = stationDragColocatedRefsRef.current;
+        stationDragColocatedRefsRef.current = [];
+        if (colocated.length > 1) {
+          await executeBatch(
+            colocated.map(ref => ({ type: 'move_station' as const, station_ref: ref, offset }))
+          );
+        } else {
+          await moveStation(moveDrag.stationRef, offset);
+        }
+        setMoveDrag(null);
+        return;
       } else if (moveDrag.type === 'segment' && moveDrag.sectionId !== undefined) {
         // Non-snap segment move
         surveyLayerRef.current?.onNextUpdate(() => {
@@ -845,18 +893,27 @@ export default function MapCanvas() {
         setMoveDrag(null);
         return;
       } else if (moveDrag.type === 'shot' && moveDrag.sectionId !== undefined && moveDrag.shotIndex !== undefined) {
-        // Move both stations atomically via executeBatch
-        const fromRef = { section_id: moveDrag.sectionId, station_index: moveDrag.shotIndex };
-        const toRef = { section_id: moveDrag.sectionId, station_index: moveDrag.shotIndex + 1 };
-        await executeBatch([
-          { type: 'move_station', station_ref: fromRef, offset },
-          { type: 'move_station', station_ref: toRef, offset },
-        ]);
+        // Commit preview: remove temp layers but keep exclusion filters so
+        // features stay hidden until React re-renders with new coordinates.
+        surveyLayerRef.current?.onNextUpdate(() => {
+          surveyLayerRef.current?.endDragPreview();
+        });
+        surveyLayerRef.current?.commitDragPreview();
+
+        // Move all co-located stations (includes both shot endpoints + merged/closured)
+        const colocated = stationDragColocatedRefsRef.current;
+        stationDragColocatedRefsRef.current = [];
+        await executeBatch(
+          colocated.map(ref => ({ type: 'move_station' as const, station_ref: ref, offset }))
+        );
+        setMoveDrag(null);
+        return;
       }
     }
 
     // For non-segment drags or no meaningful movement, end preview immediately
     // (no-op if beginDragPreview was never called)
+    stationDragColocatedRefsRef.current = [];
     if (surveyLayerRef.current) surveyLayerRef.current.endDragPreview();
     setMoveDrag(null);
   }, [moveDrag, moveStation, moveSegment, executeBatch, gpsOrigin, stations, promptMergeAfterSegmentDrag, setSnappedStation]);
@@ -1416,6 +1473,34 @@ export default function MapCanvas() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [zoomBox.start]);
+
+  // Escape key cancels move drag operations (station, segment, shot)
+  useEffect(() => {
+    if (!moveDrag) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        // Clean up drag preview (temp layers, filters, sources)
+        surveyLayerRef.current?.endDragPreview();
+        // Clear all drag-related refs
+        snapMergeDialogPendingRef.current = false;
+        dragOriginStationRef.current = null;
+        lastRawDragOffsetRef.current = null;
+        stationDragColocatedRefsRef.current = [];
+        dragConnectedSectionIdsRef.current = new Set();
+        moveDragLngLatRef.current = null;
+        dragStartScreenRef.current = null;
+        segmentDragSnapRef.current = null;
+        segmentDragTokenRef.current++;
+        setSnappedStation(null);
+        setMoveDrag(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [moveDrag, setSnappedStation]);
 
   // Custom Ctrl+drag panning implementation
   // MapLibre's dragPan doesn't work reliably with Ctrl modifier in Tauri/WebKit,
@@ -2164,9 +2249,9 @@ export default function MapCanvas() {
     }
   }, [moveDrag, zoomBox.start, boxSelect.start, handleMoveDragEnd, handleZoomBoxEnd, handleBoxSelectEnd]);
 
-  // Mouse leave: keep segment drag alive so user can return the cursor
+  // Mouse leave: keep all move drags alive so user can return the cursor
   const handleMouseLeave = useCallback(() => {
-    if (moveDrag?.type === 'segment') return;
+    if (moveDrag) return;
     handleMouseUp();
   }, [moveDrag, handleMouseUp]);
 
