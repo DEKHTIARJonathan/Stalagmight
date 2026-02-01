@@ -228,9 +228,10 @@ Based on codebase analysis as of 2026-01-29.
 | Title | Status |
 |-------|--------|
 | Tool Panel Redesign | 🟡 WIP (fn-46-37m) — Photoshop-style subtools via right-click; group Pan + Zoom |
-| Move Segment Tool | 🟡 WIP (fn-46-37m) — Move whole segment: everything connected by shots/stations/merges/closures |
-| Move Shot Subtool | 🟡 WIP (fn-46-37m) — Move a single shot |
-| Move Station Subtool | 🟡 WIP (fn-46-37m) — Move a single station |
+| Move Segment Tool | ✅ |
+| Move Shot Subtool | ✅ |
+| Move Station Subtool | ✅ |
+| Add Comment Tool | ❌ — Tool for adding text comments/annotations to stations or arbitrary map positions |
 
 ### Phase J: Closure Error Distribution
 
