@@ -910,6 +910,11 @@ export default class SurveyLayer {
    * when multiple features overlap.
    */
   private handleMapClick = (e: MapMouseEvent): void => {
+    // Ctrl+click in move tools is for panning, not interacting with features
+    if (e.originalEvent.ctrlKey &&
+        (this.activeTool === 'move_station' || this.activeTool === 'move_shot' || this.activeTool === 'move_segment')) {
+      return;
+    }
     // Query both hitbox layers in a single call for better performance
     const allFeatures = this.map.queryRenderedFeatures(e.point, {
       layers: [this.stationsHitboxLayerId, this.shotsHitboxLayerId],
