@@ -906,8 +906,8 @@ export default class SurveyLayer {
 
   /**
    * UNIFIED click handler - queries both hitbox layers and resolves priority.
-   * Stations always take priority over shots. Uses nearest-to-click resolution
-   * when multiple features overlap.
+   * Stations take priority over shots unless the active tool suppresses one type
+   * (move_shot suppresses stations, move_station suppresses shots).
    */
   private handleMapClick = (e: MapMouseEvent): void => {
     // Ctrl+click in move tools is for panning, not interacting with features
@@ -915,6 +915,11 @@ export default class SurveyLayer {
         (this.activeTool === 'move_station' || this.activeTool === 'move_shot' || this.activeTool === 'move_segment')) {
       return;
     }
+
+    // Tool-specific suppression (consistent with hover in processHoverUpdate)
+    const suppressStationClick = this.activeTool === 'move_shot';
+    const suppressShotClick = this.activeTool === 'move_station';
+
     // Query both hitbox layers in a single call for better performance
     const allFeatures = this.map.queryRenderedFeatures(e.point, {
       layers: [this.stationsHitboxLayerId, this.shotsHitboxLayerId],
@@ -923,7 +928,7 @@ export default class SurveyLayer {
     const shotFeatures = allFeatures.filter((f) => f.layer.id === this.shotsHitboxLayerId);
 
     // Stations take priority - resolve nearest station first
-    const nearestStation = resolveNearestStation(this.map, e, stationFeatures);
+    const nearestStation = !suppressStationClick ? resolveNearestStation(this.map, e, stationFeatures) : null;
     if (nearestStation) {
       const { sectionId, stationIndex } = nearestStation.properties ?? {};
       if (sectionId !== undefined && stationIndex !== undefined) {
@@ -946,7 +951,7 @@ export default class SurveyLayer {
     }
 
     // Then shots - resolve nearest shot
-    const nearestShot = resolveNearestShot(this.map, e, shotFeatures);
+    const nearestShot = !suppressShotClick ? resolveNearestShot(this.map, e, shotFeatures) : null;
     if (nearestShot) {
       const { sectionId, shotId } = nearestShot.properties ?? {};
       if (sectionId !== undefined && shotId !== undefined) {
