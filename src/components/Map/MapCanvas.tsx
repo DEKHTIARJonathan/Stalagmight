@@ -18,8 +18,8 @@ import { DepthLegend } from './DepthLegend';
 import { MapDevStats } from './MapDevStats';
 import { getMapThemeColors } from '../../utils/themeColors';
 
-// Tools that support Ctrl+drag for panning (excludes tools with their own drag behaviors)
-const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure'];
+// Tools that support Ctrl+drag for panning
+const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment'];
 
 interface BoxSelectState {
   start: { x: number; y: number } | null;
@@ -1636,9 +1636,9 @@ export default function MapCanvas() {
             merge: 'cell',
             measure: 'crosshair',
             move_section: 'move',
-            move_station: 'move',
+            move_station: 'default',
             move_segment: 'move',
-            move_shot: 'move',
+            move_shot: 'default',
           };
           map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
         }
