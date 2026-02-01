@@ -23,8 +23,8 @@ Click a station to begin dragging it. If the station shares coordinates with oth
 **Drag flow**:
 1. Click on station &rarr; `handleMoveDragStart` (MapCanvas) &rarr; immovable guard check
 2. `beginStationDragPreview()` (SurveyLayer) &rarr; BFS to find co-located stations, create temp layers + dynamic sources for connected shots
-3. Per-mousemove: `updateStationDragPreview(dx, dy)` updates *-translate and rebuilds connected shot geometry
-4. On mouseup: if movement > 1mm, `commitDragPreview()` + `moveStation()` backend call (batched for co-located stations)
+3. Per-mousemove: `updateStationDragPreview(dx, dy)` updates *-translate and rebuilds connected shot geometry. Snap-to-merge detection runs each frame (see [Snap-to-Merge](#snap-to-merge)).
+4. On mouseup: if snapped, opens merge/closure dialog. Otherwise if movement > 1mm, `commitDragPreview()` + `moveStation()` backend call (batched for co-located stations)
 
 ## Move Shot
 
@@ -56,11 +56,11 @@ Sections that cannot be moved (e.g., externally constrained). Fetched from backe
 
 ### Snap-to-Merge
 
-During segment drag, the user can drop onto a station from another segment to merge them:
+During station or segment drag, the user can drop onto another station to merge them:
 
-1. **Detection**: Origin station's screen position is tracked + offset by drag amount. Non-segment stations within a snap threshold are candidates.
+1. **Detection**: Origin station's screen position is tracked + offset by drag amount. For station drag, co-located stations (being dragged together) are excluded from candidates. For segment drag, stations in the dragged segment are excluded.
 2. **Preview**: When a snap target is found, drag preview offset is adjusted so origin station lands exactly on the target. A visual snap indicator is shown.
-3. **Drop**: On mouseup with snap target, a merge/closure dialog opens (`snapMergeDialogPendingRef` set to block further interactions).
+3. **Drop**: On mouseup with snap target, `promptSnapMerge()` checks connectivity via the backend (`checkMergeConnectivity`) and opens the appropriate merge or closure dialog (`snapMergeDialogPendingRef` set to block further interactions).
 4. **Cancel**: Restores preview to raw offset; user can continue dragging.
 
 ### Segment Hover Resolution

@@ -89,8 +89,8 @@ export default function MapCanvas() {
   const dragConnectedSectionIdsRef = useRef<Set<number>>(new Set());
   // Origin station that initiated the segment drag (for snap-to-merge)
   const dragOriginStationRef = useRef<StationRef | null>(null);
-  // Current snap target during segment drag (ref, not state — updated per mousemove)
-  const segmentDragSnapRef = useRef<StationRef | null>(null);
+  // Current snap target during drag (ref, not state — updated per mousemove)
+  const dragSnapRef = useRef<StationRef | null>(null);
   // Last raw (pre-snap) pixel offset — used to restore preview if snap-merge is cancelled
   const lastRawDragOffsetRef = useRef<{ dx: number; dy: number } | null>(null);
   // True while snap-to-merge dialog is open — blocks mouseup from ending drag
@@ -420,6 +420,8 @@ export default function MapCanvas() {
         const stationKey = `${data.stationRef.section_id}:${data.stationRef.station_index}`;
         if (immovableStationKeys.has(stationKey)) return;
 
+        // Store origin station for snap-to-merge during drag
+        dragOriginStationRef.current = data.stationRef;
         setMoveDrag({ ...baseDragState, type: 'station', stationRef: data.stationRef });
         // Begin drag preview — returns co-located stations (merged/closured at same coords)
         const colocated = surveyLayerRef.current?.beginStationDragPreview(
@@ -702,6 +704,72 @@ export default function MapCanvas() {
       if (moveDrag.type === 'station' && surveyLayerRef.current && dragStartScreenRef.current) {
         const dx = e.clientX - dragStartScreenRef.current.x;
         const dy = e.clientY - dragStartScreenRef.current.y;
+        lastRawDragOffsetRef.current = { dx, dy };
+
+        // Snap-to-station detection during station drag
+        const snapThreshold = config?.map.snap.threshold ?? 10;
+        if (dragOriginStationRef.current && snapThreshold > 0) {
+          const originSt = stations.find(
+            (s) =>
+              s.station_ref.section_id === dragOriginStationRef.current!.section_id &&
+              s.station_ref.station_index === dragOriginStationRef.current!.station_index
+          );
+          if (originSt) {
+            const originMapCoords = metersToMapCoords(originSt.coordinates.x, originSt.coordinates.y, gpsOrigin);
+            const originScreen = map.current.project(originMapCoords as [number, number]);
+            const projectedX = originScreen.x + dx;
+            const projectedY = originScreen.y + dy;
+
+            // Find nearest non-co-located station to the projected origin position
+            let nearestRef: StationRef | null = null;
+            let nearestDist = Infinity;
+            const colocatedKeys = new Set(
+              stationDragColocatedRefsRef.current.map(r => `${r.section_id}:${r.station_index}`)
+            );
+            for (const st of stations) {
+              const key = `${st.station_ref.section_id}:${st.station_ref.station_index}`;
+              if (colocatedKeys.has(key)) continue;
+              const mc = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin);
+              const sp = map.current!.project(mc as [number, number]);
+              const sdx = sp.x - projectedX;
+              const sdy = sp.y - projectedY;
+              const dist = Math.sqrt(sdx * sdx + sdy * sdy);
+              if (dist < snapThreshold && dist < nearestDist) {
+                nearestDist = dist;
+                nearestRef = st.station_ref;
+              }
+            }
+
+            // Update snap state only when target changes (avoids React churn)
+            const prev = dragSnapRef.current;
+            if (
+              nearestRef?.section_id !== prev?.section_id ||
+              nearestRef?.station_index !== prev?.station_index
+            ) {
+              dragSnapRef.current = nearestRef;
+              setSnappedStation(nearestRef);
+            }
+
+            // If snapped, compute aligned offset so origin station lands on target
+            if (nearestRef) {
+              const targetSt = stations.find(
+                (s) =>
+                  s.station_ref.section_id === nearestRef!.section_id &&
+                  s.station_ref.station_index === nearestRef!.station_index
+              );
+              if (targetSt) {
+                const targetMapCoords = metersToMapCoords(targetSt.coordinates.x, targetSt.coordinates.y, gpsOrigin);
+                const targetScreen = map.current.project(targetMapCoords as [number, number]);
+                const snapDx = targetScreen.x - originScreen.x;
+                const snapDy = targetScreen.y - originScreen.y;
+                surveyLayerRef.current.updateStationDragPreview(snapDx, snapDy);
+                return;
+              }
+            }
+          }
+        }
+
+        // No snap (or no origin station): use raw offset
         surveyLayerRef.current.updateStationDragPreview(dx, dy);
       }
 
@@ -753,12 +821,12 @@ export default function MapCanvas() {
             }
 
             // Update snap state only when target changes (avoids React churn)
-            const prev = segmentDragSnapRef.current;
+            const prev = dragSnapRef.current;
             if (
               nearestRef?.section_id !== prev?.section_id ||
               nearestRef?.station_index !== prev?.station_index
             ) {
-              segmentDragSnapRef.current = nearestRef;
+              dragSnapRef.current = nearestRef;
               setSnappedStation(nearestRef);
             }
 
@@ -788,10 +856,10 @@ export default function MapCanvas() {
     [moveDrag, config, stations, gpsOrigin, setSnappedStation]
   );
 
-  // After a snap-to-merge segment drag, check connectivity and open merge/closure dialog.
-  // Separate from checkAndOpenMergeDialog in useMapTools because the active tool is
-  // move_segment (not merge) and we don't set mergeStationA/B in the UI store.
-  const promptMergeAfterSegmentDrag = useCallback(
+  // After a snap-to-merge drag (station or segment), check connectivity and open merge/closure dialog.
+  // Separate from checkAndOpenMergeDialog in useMapTools because the active tool is a
+  // move tool (not merge) and we don't set mergeStationA/B in the UI store.
+  const promptSnapMerge = useCallback(
     async (
       originStation: StationRef,
       targetStation: StationRef,
@@ -803,7 +871,7 @@ export default function MapCanvas() {
       const { checkMergeConnectivity } = useProjectStore.getState();
       const { openDialog, showToast } = useUIStore.getState();
 
-      showToast('Checking merge compatibility...', 'segment-drag-merge-check');
+      showToast('Checking merge compatibility...', 'snap-merge-check');
       try {
         const result = await checkMergeConnectivity(originStation, targetStation);
         const extra = moveCallbacks
@@ -820,12 +888,12 @@ export default function MapCanvas() {
             ...extra,
           });
         } else {
-          showToast(result.reason ?? 'Merge not possible.', 'segment-drag-merge-blocked');
+          showToast(result.reason ?? 'Merge not possible.', 'snap-merge-blocked');
           moveCallbacks?.onCancel?.();
         }
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        showToast(message, 'segment-drag-merge-error');
+        showToast(message, 'snap-merge-error');
         moveCallbacks?.onCancel?.();
       }
     },
@@ -846,9 +914,9 @@ export default function MapCanvas() {
     segmentDragTokenRef.current++;
 
     // Capture snap refs
-    const snapTarget = segmentDragSnapRef.current;
+    const snapTarget = dragSnapRef.current;
     const originStationRef = dragOriginStationRef.current;
-    segmentDragSnapRef.current = null;
+    dragSnapRef.current = null;
 
     if (!moveDrag || !map.current) {
       // Early bail — clean up everything
@@ -891,7 +959,7 @@ export default function MapCanvas() {
 
         // Don't clear moveDrag, dragStartScreenRef, dragConnectedSectionIdsRef,
         // or dragOriginStationRef — these keep the drag alive after Cancel.
-        promptMergeAfterSegmentDrag(originStationRef, snapTarget, {
+        promptSnapMerge(originStationRef, snapTarget, {
           onBeforeConfirm: async () => {
             // Commit: move segment, end preview, clear all drag state
             snapMergeDialogPendingRef.current = false;
@@ -912,6 +980,68 @@ export default function MapCanvas() {
             const raw = lastRawDragOffsetRef.current;
             if (raw && surveyLayerRef.current) {
               surveyLayerRef.current.updateDragPreview(raw.dx, raw.dy);
+            }
+            snapMergeDialogPendingRef.current = false;
+          },
+        });
+        return;
+      }
+    }
+
+    // Snap-to-merge path for station drag: keep drag state alive so Cancel resumes drag.
+    if (moveDrag.type === 'station' && moveDrag.stationRef && snapTarget && originStationRef) {
+      const originSt = stations.find(
+        (s) =>
+          s.station_ref.section_id === originStationRef.section_id &&
+          s.station_ref.station_index === originStationRef.station_index
+      );
+      const targetSt = stations.find(
+        (s) =>
+          s.station_ref.section_id === snapTarget.section_id &&
+          s.station_ref.station_index === snapTarget.station_index
+      );
+
+      if (originSt && targetSt) {
+        const snapOffset = {
+          x: targetSt.coordinates.x - originSt.coordinates.x,
+          y: targetSt.coordinates.y - originSt.coordinates.y,
+          z: 0,
+        };
+        setSnappedStation(null);
+        snapMergeDialogPendingRef.current = true;
+
+        // Don't clear moveDrag, dragStartScreenRef, or dragOriginStationRef —
+        // these keep the drag alive after Cancel.
+        promptSnapMerge(originStationRef, snapTarget, {
+          onBeforeConfirm: async () => {
+            // Commit: move co-located stations to snap position, end preview, clear drag state
+            snapMergeDialogPendingRef.current = false;
+            dragOriginStationRef.current = null;
+            lastRawDragOffsetRef.current = null;
+            surveyLayerRef.current?.onNextUpdate(() => {
+              surveyLayerRef.current?.endDragPreview();
+            });
+            surveyLayerRef.current?.commitDragPreview();
+
+            const colocated = stationDragColocatedRefsRef.current;
+            stationDragColocatedRefsRef.current = [];
+            if (colocated.length > 1) {
+              await executeBatch(
+                colocated.map(ref => ({ type: 'move_station' as const, station_ref: ref, offset: snapOffset }))
+              );
+            } else {
+              await moveStation(moveDrag.stationRef!, snapOffset);
+            }
+            moveDragLngLatRef.current = null;
+            dragStartScreenRef.current = null;
+            setMoveDrag(null);
+          },
+          onCancel: () => {
+            // Resume drag: restore preview to the raw (pre-snap) offset so the
+            // station appears where the user's mouse was, not at the snap target.
+            const raw = lastRawDragOffsetRef.current;
+            if (raw && surveyLayerRef.current) {
+              surveyLayerRef.current.updateStationDragPreview(raw.dx, raw.dy);
             }
             snapMergeDialogPendingRef.current = false;
           },
@@ -992,7 +1122,7 @@ export default function MapCanvas() {
     stationDragColocatedRefsRef.current = [];
     if (surveyLayerRef.current) surveyLayerRef.current.endDragPreview();
     setMoveDrag(null);
-  }, [moveDrag, moveStation, moveSegment, executeBatch, gpsOrigin, stations, promptMergeAfterSegmentDrag, setSnappedStation]);
+  }, [moveDrag, moveStation, moveSegment, executeBatch, gpsOrigin, stations, promptSnapMerge, setSnappedStation]);
 
   // Initialize map
   useEffect(() => {
@@ -1577,7 +1707,7 @@ export default function MapCanvas() {
         dragConnectedSectionIdsRef.current = new Set();
         moveDragLngLatRef.current = null;
         dragStartScreenRef.current = null;
-        segmentDragSnapRef.current = null;
+        dragSnapRef.current = null;
         segmentDragTokenRef.current++;
         setSnappedStation(null);
         setMoveDrag(null);
