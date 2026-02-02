@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
 import type { DmpFile } from '../../types/commands';
@@ -8,6 +8,8 @@ import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { Select, type SelectOptionGroup } from '../common/Select';
 import SectionPreview, { type MergePreviewConfig } from './SectionPreview';
+import { DialogWrapper } from './DialogWrapper';
+import { AlertDialog } from './AlertDialog';
 import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -908,25 +910,14 @@ export default function DmpSectionConfigDialog({
   }, [isCurrentExcluded, selectedIndices, currentSectionIndex, getSectionStatus]);
 
   /**
-   * Keyboard shortcuts handler.
+   * Dialog-level keyboard shortcuts handler.
    */
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Escape - cancel (with confirmation)
-      if (e.key === 'Escape' && !e.repeat) {
-        e.preventDefault();
-        if (showCancelConfirm || showBackConfirm) {
-          setShowCancelConfirm(false);
-          setShowBackConfirm(false);
-        } else {
-          handleCancel();
-        }
-        return;
-      }
-
+  const handleDialogKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
       // Ctrl+Enter - place current section
       if (e.key === 'Enter' && e.ctrlKey && !e.repeat) {
         e.preventDefault();
+        e.stopPropagation();
         // Don't allow if current section is already placed or has errors
         if (currentSectionIndex !== undefined) {
           const status = getSectionStatus(currentSectionIndex);
@@ -941,6 +932,7 @@ export default function DmpSectionConfigDialog({
       // Ctrl+ArrowLeft - previous section
       if (e.key === 'ArrowLeft' && e.ctrlKey && !e.repeat) {
         e.preventDefault();
+        e.stopPropagation();
         handlePrevious();
         return;
       }
@@ -948,6 +940,7 @@ export default function DmpSectionConfigDialog({
       // Ctrl+ArrowRight - next section
       if (e.key === 'ArrowRight' && e.ctrlKey && !e.repeat) {
         e.preventDefault();
+        e.stopPropagation();
         if (currentIndex < selectedIndices.length - 1) {
           navigateToSection(currentIndex + 1);
         }
@@ -957,6 +950,7 @@ export default function DmpSectionConfigDialog({
       // Ctrl+Z - undo (shot table changes)
       if (e.key === 'z' && e.ctrlKey && !e.shiftKey && !e.repeat) {
         e.preventDefault();
+        e.stopPropagation();
         handleUndo();
         return;
       }
@@ -965,61 +959,34 @@ export default function DmpSectionConfigDialog({
       if (((e.key === 'z' || e.key === 'Z') && e.ctrlKey && e.shiftKey) ||
           (e.key === 'y' && e.ctrlKey && !e.repeat)) {
         e.preventDefault();
+        e.stopPropagation();
         handleRedo();
-        return;
       }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [
-    currentIndex,
-    selectedIndices.length,
-    currentSectionIndex,
-    handleCancel,
-    handlePlaceSection,
-    handlePrevious,
-    navigateToSection,
-    showCancelConfirm,
-    showBackConfirm,
-    handleUndo,
-    handleRedo,
-    getSectionStatus,
-  ]);
+    },
+    [
+      currentIndex,
+      selectedIndices.length,
+      currentSectionIndex,
+      handlePlaceSection,
+      handlePrevious,
+      navigateToSection,
+      handleUndo,
+      handleRedo,
+      getSectionStatus,
+    ],
+  );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/50"
-        onClick={handleCancel}
-      />
-
-      {/* Dialog */}
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="dmp-section-config-dialog-title"
-        data-testid="dmp-section-config-dialog"
-        className="relative bg-panel border border-border rounded-lg shadow-xl flex flex-col"
-        style={{ width: 'min(900px, 95vw)', height: 'min(700px, 90vh)' }}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 id="dmp-section-config-dialog-title" className="text-lg font-medium">
-            Import DMP File (Step 2)
-          </h2>
-          <button
-            type="button"
-            onClick={handleCancel}
-            className="text-text-secondary hover:text-text-primary text-xl"
-            aria-label="Close dialog"
-          >
-            ×
-          </button>
-        </div>
-
-        {/* Body */}
+    <DialogWrapper
+      title="Import DMP File (Step 2)"
+      onClose={handleCancel}
+      fixedSize={{ width: 'min(900px, 95vw)', height: 'min(700px, 90vh)' }}
+      overflow="hidden"
+      bodyClassName="flex-1 flex flex-col p-0"
+      data-testid="dmp-section-config-dialog"
+      onKeyDown={handleDialogKeyDown}
+    >
+      <div className="flex-1 flex flex-col">
         <div className="flex-1 flex overflow-hidden">
           {/* Left Panel - Section List */}
           <div
@@ -1671,102 +1638,73 @@ export default function DmpSectionConfigDialog({
         </div>
       </div>
 
-      {/* Cancel confirmation dialog */}
-      {showCancelConfirm && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setShowCancelConfirm(false)} />
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="cancel-confirm-title"
-            className="relative bg-panel border border-border rounded-lg shadow-xl max-w-sm w-full mx-4"
-            data-testid="cancel-confirm-dialog"
-          >
-            <div className="px-4 py-3 border-b border-border">
-              <h2 id="cancel-confirm-title" className="text-lg font-medium">Cancel Import?</h2>
-            </div>
-            <div className="p-4 space-y-4">
-              <p>Are you sure you want to cancel the import?</p>
-              <p className="text-text-secondary text-sm">All section configurations will be lost.</p>
-              <div className="flex justify-end gap-2 pt-4 border-t border-border">
-                <Button onClick={() => setShowCancelConfirm(false)}>Continue Editing</Button>
-                <Button variant="danger" onClick={onCancel} data-testid="confirm-cancel-button">
-                  Cancel Import
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <AlertDialog
+        open={showCancelConfirm}
+        title="Cancel Import?"
+        onClose={() => setShowCancelConfirm(false)}
+        data-testid="cancel-confirm-dialog"
+        actions={
+          <>
+            <Button onClick={() => setShowCancelConfirm(false)}>Continue Editing</Button>
+            <Button variant="danger" onClick={onCancel} data-testid="confirm-cancel-button">
+              Cancel Import
+            </Button>
+          </>
+        }
+      >
+        <>
+          <p>Are you sure you want to cancel the import?</p>
+          <p className="text-text-secondary text-sm">All section configurations will be lost.</p>
+        </>
+      </AlertDialog>
 
-      {/* Back confirmation dialog */}
-      {showBackConfirm && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setShowBackConfirm(false)} />
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="back-confirm-title"
-            className="relative bg-panel border border-border rounded-lg shadow-xl max-w-sm w-full mx-4"
-            data-testid="back-confirm-dialog"
-          >
-            <div className="px-4 py-3 border-b border-border">
-              <h2 id="back-confirm-title" className="text-lg font-medium">Go Back?</h2>
-            </div>
-            <div className="p-4 space-y-4">
-              <p>Go back to section selection?</p>
-              <p className="text-text-secondary text-sm">All section configurations will be lost.</p>
-              <div className="flex justify-end gap-2 pt-4 border-t border-border">
-                <Button onClick={() => setShowBackConfirm(false)}>Continue Editing</Button>
-                <Button variant="danger" onClick={onBack} data-testid="confirm-back-button">
-                  Go Back
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <AlertDialog
+        open={showBackConfirm}
+        title="Go Back?"
+        onClose={() => setShowBackConfirm(false)}
+        data-testid="back-confirm-dialog"
+        actions={
+          <>
+            <Button onClick={() => setShowBackConfirm(false)}>Continue Editing</Button>
+            <Button variant="danger" onClick={onBack} data-testid="confirm-back-button">
+              Go Back
+            </Button>
+          </>
+        }
+      >
+        <>
+          <p>Go back to section selection?</p>
+          <p className="text-text-secondary text-sm">All section configurations will be lost.</p>
+        </>
+      </AlertDialog>
 
-      {/* Delete shot confirmation dialog (for mid-section shots) */}
-      {deleteConfirmState.visible && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-black/50"
-            onClick={() => setDeleteConfirmState({ visible: false, shotIndex: -1, isMidSection: false })}
-          />
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="delete-shot-confirm-title"
-            className="relative bg-panel border border-border rounded-lg shadow-xl max-w-sm w-full mx-4"
-            data-testid="delete-shot-confirm-dialog"
-          >
-            <div className="px-4 py-3 border-b border-border">
-              <h2 id="delete-shot-confirm-title" className="text-lg font-medium">Delete Shot?</h2>
-            </div>
-            <div className="p-4 space-y-4">
-              <p>Are you sure you want to delete this shot?</p>
-              <p className="text-text-secondary text-sm">
-                This is a mid-section shot. Deleting it will affect the survey chain.
-              </p>
-              <div className="flex justify-end gap-2 pt-4 border-t border-border">
-                <Button
-                  onClick={() => setDeleteConfirmState({ visible: false, shotIndex: -1, isMidSection: false })}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="danger"
-                  onClick={handleConfirmDelete}
-                  data-testid="confirm-delete-shot-button"
-                >
-                  Delete Shot
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <AlertDialog
+        open={deleteConfirmState.visible}
+        title="Delete Shot?"
+        onClose={() => setDeleteConfirmState({ visible: false, shotIndex: -1, isMidSection: false })}
+        data-testid="delete-shot-confirm-dialog"
+        actions={
+          <>
+            <Button onClick={() => setDeleteConfirmState({ visible: false, shotIndex: -1, isMidSection: false })}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={handleConfirmDelete}
+              data-testid="confirm-delete-shot-button"
+            >
+              Delete Shot
+            </Button>
+          </>
+        }
+      >
+        <>
+          <p>Are you sure you want to delete this shot?</p>
+          <p className="text-text-secondary text-sm">
+            This is a mid-section shot. Deleting it will affect the survey chain.
+          </p>
+        </>
+      </AlertDialog>
+    </DialogWrapper>
   );
 }
