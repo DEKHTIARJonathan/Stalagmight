@@ -132,6 +132,8 @@ export interface DeleteShotImpact {
   replacement_closure_updates: ClosureUpdate[];
   merge_rewire_skipped: boolean;
   closure_rewire_skipped: boolean;
+  shift_blocked: boolean;
+  shift_blocked_reasons: string[];
 }
 
 // Station connectivity check result

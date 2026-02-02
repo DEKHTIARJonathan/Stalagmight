@@ -547,26 +547,10 @@ impl AppState {
             UndoData::CreatedShotSnapshot {
                 section_id,
                 shot_id,
-                shot_data,
-                position,
-                station_shift_from,
+                ..
             } => {
                 // Undo a CreateShot by deleting the shot
-                let result = self.delete_shot(*section_id, *shot_id);
-                // For insert_before at pos=0, reverse the section offset adjustment
-                // that was applied during the original insert
-                if result.success && *position == 0 && *station_shift_from == 0 {
-                    if let Ok(mut proj_guard) = self.project.lock() {
-                        if let Some(project) = proj_guard.as_mut() {
-                            let (dx, dy) = Project::shot_displacement(shot_data);
-                            if dx != 0.0 || dy != 0.0 {
-                                let current = project.section_offsets.get(section_id).copied().unwrap_or((0.0, 0.0));
-                                project.section_offsets.insert(*section_id, (current.0 + dx, current.1 + dy));
-                            }
-                        }
-                    }
-                }
-                result
+                self.delete_shot(*section_id, *shot_id)
             }
 
             UndoData::MergeInfo {

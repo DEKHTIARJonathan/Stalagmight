@@ -35,6 +35,8 @@ export default function EditSectionDialog() {
   const [pendingMidDelete, setPendingMidDelete] = useState<{ index: number; shotId: number } | null>(null);
   const [pendingImpact, setPendingImpact] = useState<DeleteShotImpact | null>(null);
   const [pendingImpactError, setPendingImpactError] = useState<string | null>(null);
+  const shiftBlocked = pendingImpact?.shift_blocked ?? false;
+  const shiftBlockedReasons = pendingImpact?.shift_blocked_reasons ?? [];
 
   // Initialize form with section data
   useEffect(() => {
@@ -391,6 +393,19 @@ export default function EditSectionDialog() {
               </div>
             )}
 
+            {shiftBlocked && (
+              <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
+                <p className="font-medium">Shift Geometry is not available for this shot.</p>
+                {shiftBlockedReasons.length > 0 && (
+                  <ul className="list-disc list-inside">
+                    {shiftBlockedReasons.map((reason, index) => (
+                      <li key={`shift-blocked-${index}`}>{reason}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
             <DeleteShotImpactDetails
               impact={pendingImpact}
               title="If you choose Shift Geometry, these relationships will update:"
@@ -399,7 +414,7 @@ export default function EditSectionDialog() {
             <div className="flex justify-end gap-2">
               <Button onClick={() => setPendingMidDelete(null)}>Cancel</Button>
               <Button onClick={confirmSplitMidDelete}>Split Section</Button>
-              <Button variant="danger" onClick={confirmShiftMidDelete}>
+              <Button variant="danger" onClick={confirmShiftMidDelete} disabled={shiftBlocked}>
                 Shift Geometry
               </Button>
             </div>

@@ -19,6 +19,8 @@ export default function DeleteShotChoiceDialog() {
   const [impactError, setImpactError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const shiftBlocked = impact?.shift_blocked ?? false;
+  const shiftBlockedReasons = impact?.shift_blocked_reasons ?? [];
 
   useEffect(() => {
     if (sectionId !== undefined && shotId !== undefined) {
@@ -84,6 +86,19 @@ export default function DeleteShotChoiceDialog() {
           </div>
         )}
 
+        {shiftBlocked && (
+          <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
+            <p className="font-medium">Shift Geometry is not available for this shot.</p>
+            {shiftBlockedReasons.length > 0 && (
+              <ul className="list-disc list-inside">
+                {shiftBlockedReasons.map((reason, index) => (
+                  <li key={`shift-blocked-${index}`}>{reason}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         <DeleteShotImpactDetails
           impact={impact}
           title="If you choose Shift Geometry, these relationships will update:"
@@ -96,7 +111,12 @@ export default function DeleteShotChoiceDialog() {
           <Button onClick={handleSplit} disabled={isLoading}>
             Split Section
           </Button>
-          <Button variant="danger" onClick={handleShift} disabled={isLoading} data-primary-action="">
+          <Button
+            variant="danger"
+            onClick={handleShift}
+            disabled={isLoading || shiftBlocked}
+            data-primary-action=""
+          >
             {isLoading ? 'Deleting...' : 'Shift Geometry'}
           </Button>
         </div>
