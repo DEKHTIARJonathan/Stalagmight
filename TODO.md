@@ -8,13 +8,11 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 - Core functionality ✅ COMPLETE
 - Minor items remaining: file hash tracking (command exists but unused)
 
-**v1.0 Completion Tasks**: 15/39 complete (38%)
-- ✅ COMPLETE: Loop Closure (3/3), Settings/Configuration (4/4)
+**v1.0 Completion Tasks**: 17/39 complete (44%)
+- ✅ COMPLETE: Loop Closure (3/3), Settings/Configuration (4/4), Accessibility (4/4), Tool Panel & Move (4/4)
 - 🟡 PARTIAL: Data Table (3/4 - inline editing ✅, delete row w/ split ✅, add row remaining)
-- 🟡 PARTIAL: Accessibility (2/4 - screen reader/keyboard ✅, no focus management/theme)
 - 🟡 PARTIAL: Performance (1/4 - loading states ✅, no virtual scrolling/auto-save)
 - 🟡 PARTIAL: Error Handling (1/4 - basic network error tracking, no error boundaries)
-- 🟡 PARTIAL: Tool Panel & Move (1/4 - tool panel redesign ✅, remaining items open)
 - ❌ NOT STARTED: i18n (0/3), Final polish (1/6 - only tile caching done)
 
 **Last Updated**: 2026-01-29
@@ -183,9 +181,9 @@ Based on codebase analysis as of 2026-01-29.
 
 | Title | Status |
 |-------|--------|
-| Focus Management | 🟡 WIP — useFocusTrap hook in DialogWrapper; initial focus (first input for forms, primary action for confirms); return focus on close; --cc-focus-ring CSS variable |
+| Focus Management | ✅ |
 | Screen Reader Announcements | ✅ (aria-live regions, announceSelection(), 28 occurrences) |
-| Theme Infrastructure | 🟡 WIP — CSS variables (--cc-*), ThemeProvider, Appearance settings tab, dark+light themes, full migration of hardcoded colors |
+| Theme Infrastructure | ✅ |
 | Keyboard Navigation | ✅ (useKeyboardShortcuts hook, ShortcutRecorder, ShortcutsSettings) |
 
 ### Phase E: i18n Foundation
@@ -272,23 +270,23 @@ Based on codebase analysis as of 2026-01-29.
 | A: Loop Closure | 3 | 3 | 0 |
 | B: Settings | 4 | 4 | 0 |
 | C: Data Table | 4 | 3 | 1 |
-| D: Accessibility | 4 | 2 | 2 |
+| D: Accessibility | 4 | 4 | 0 |
 | E: i18n | 3 | 0 | 3 |
 | F: Performance | 3 | 1 | 2 |
 | G: Error Handling | 4 | 0 | 4 |
 | H: Polish | 6 | 1 | 5 |
-| I: Tool Panel & Move | 4 | 1 | 3 |
+| I: Tool Panel & Move | 5 | 4 | 1 |
 | J: Closure Distribution | 2 | 0 | 2 |
 | K: Import & Reporting | 2 | 0 | 2 |
-| **v1.0 Total** | **39** | **15** | **24** |
+| **v1.0 Total** | **40** | **20** | **20** |
 
 ### Grand Total
 
 | Category | Tasks | Completed | Remaining |
 |----------|-------|-----------|-----------|
-| DMP Import Refactoring | 22 | 20 | 2 |
-| v1.0 Completion | 39 | 13 | 26 |
-| **Grand Total** | **61** | **36** | **25** |
+| DMP Import Refactoring | 22 | 21 | 1 |
+| v1.0 Completion | 40 | 20 | 20 |
+| **Grand Total** | **62** | **41** | **21** |
 
 ---
 
@@ -361,7 +359,7 @@ Settings Shell ──┬──> Display Tab ✅
 Inline Edit ✅ ──┬──> Add Row ❌
                   └──> Delete Row ✅
 
-Focus ❌ ────────┬──> Screen Reader ✅
+Focus ✅ ────────┬──> Screen Reader ✅
                   └──> Keyboard Nav ✅
 
 i18n Infra ❌ ───┬──> Extract Strings ❌

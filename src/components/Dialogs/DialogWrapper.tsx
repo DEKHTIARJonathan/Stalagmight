@@ -94,6 +94,8 @@ interface DialogWrapperProps {
   bodyClassName?: string;
   /** Fixed dimensions that override size and maxHeight. Uses CSS min()/clamp() for responsive fallback. */
   fixedSize?: FixedSize;
+  /** Additional keydown handler for dialog-level shortcuts. */
+  onKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
 }
 
 export function DialogWrapper({
@@ -108,6 +110,7 @@ export function DialogWrapper({
   overflow = 'auto',
   bodyClassName = 'p-4',
   fixedSize,
+  onKeyDown,
 }: DialogWrapperProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -283,9 +286,12 @@ export function DialogWrapper({
         } else {
           requestClose();
         }
+        return;
       }
+
+      onKeyDown?.(e);
     },
-    [requestClose, showConfirm, handleCancelDiscard],
+    [requestClose, showConfirm, handleCancelDiscard, onKeyDown],
   );
 
   const handleBackdropClick = useCallback(() => {
