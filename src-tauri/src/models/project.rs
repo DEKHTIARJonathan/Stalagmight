@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use tracing::{debug, info};
 
@@ -24,6 +24,37 @@ pub struct SectionRelationships {
     pub station_offset_count: usize,
     /// Number of zero datums referencing the section
     pub zero_datum_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct StationPair {
+    pub station_a: StationRef,
+    pub station_b: StationRef,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ClosurePair {
+    pub closure_id: u64,
+    pub station_a: StationRef,
+    pub station_b: StationRef,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ClosureUpdate {
+    pub closure_id: u64,
+    pub old_station: StationRef,
+    pub new_station: StationRef,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteShotImpact {
+    pub removed_station: StationRef,
+    pub removed_merges: Vec<StationPair>,
+    pub removed_closures: Vec<ClosurePair>,
+    pub replacement_merges: Vec<StationPair>,
+    pub replacement_closure_updates: Vec<ClosureUpdate>,
+    pub merge_rewire_skipped: bool,
+    pub closure_rewire_skipped: bool,
 }
 
 /// A complete cave survey project
@@ -318,6 +349,95 @@ impl Project {
         }
     }
 
+    fn station_ref_key(station_ref: &StationRef) -> (SectionId, u32) {
+        (station_ref.section_id, station_ref.station_index)
+    }
+
+    fn has_direct_merge(&self, a: StationRef, b: StationRef) -> bool {
+        self.station_merges.iter().any(|m| {
+            (m.station_a == a && m.station_b == b) || (m.station_a == b && m.station_b == a)
+        })
+    }
+
+    fn get_merge_group(&self, station_ref: StationRef) -> HashSet<StationRef> {
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        visited.insert(station_ref);
+        queue.push_back(station_ref);
+
+        while let Some(current) = queue.pop_front() {
+            for merge in &self.station_merges {
+                let neighbor = if merge.station_a == current {
+                    Some(merge.station_b)
+                } else if merge.station_b == current {
+                    Some(merge.station_a)
+                } else {
+                    None
+                };
+                if let Some(next) = neighbor {
+                    if visited.insert(next) {
+                        queue.push_back(next);
+                    }
+                }
+            }
+        }
+
+        visited
+    }
+
+    fn build_merge_components(
+        &self,
+        stations: &HashSet<StationRef>,
+        removed_station: StationRef,
+    ) -> Vec<Vec<StationRef>> {
+        let mut adjacency: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for station in stations {
+            adjacency.entry(*station).or_default();
+        }
+
+        for merge in &self.station_merges {
+            if merge.station_a == removed_station || merge.station_b == removed_station {
+                continue;
+            }
+            if stations.contains(&merge.station_a) && stations.contains(&merge.station_b) {
+                adjacency.entry(merge.station_a).or_default().push(merge.station_b);
+                adjacency.entry(merge.station_b).or_default().push(merge.station_a);
+            }
+        }
+
+        let mut components = Vec::new();
+        let mut visited = HashSet::new();
+
+        let mut station_list: Vec<StationRef> = stations.iter().copied().collect();
+        station_list.sort_by_key(Self::station_ref_key);
+
+        for station in station_list {
+            if visited.contains(&station) {
+                continue;
+            }
+            let mut component = Vec::new();
+            let mut queue = VecDeque::new();
+            visited.insert(station);
+            queue.push_back(station);
+
+            while let Some(current) = queue.pop_front() {
+                component.push(current);
+                if let Some(neighbors) = adjacency.get(&current) {
+                    for neighbor in neighbors {
+                        if visited.insert(*neighbor) {
+                            queue.push_back(*neighbor);
+                        }
+                    }
+                }
+            }
+
+            component.sort_by_key(Self::station_ref_key);
+            components.push(component);
+        }
+
+        components
+    }
+
     // === Shot operations ===
 
     /// Add a shot to a section
@@ -399,17 +519,219 @@ impl Project {
         self.get_section(section_id)?.get_shot(shot_id)
     }
 
+    pub fn preview_delete_shot(
+        &self,
+        section_id: SectionId,
+        shot_id: ShotId,
+    ) -> Result<DeleteShotImpact, String> {
+        let section = self
+            .get_section(section_id)
+            .ok_or_else(|| format!("Section {} not found", section_id))?;
+        let pos = section
+            .shots
+            .iter()
+            .position(|s| s.id == shot_id)
+            .ok_or_else(|| format!("Shot {} not found in section {}", shot_id, section_id))?;
+
+        let removed_station = if pos == 0 {
+            StationRef::new(section_id, 0)
+        } else {
+            StationRef::new(section_id, (pos + 1) as u32)
+        };
+
+        let mut impact = DeleteShotImpact {
+            removed_station,
+            removed_merges: Vec::new(),
+            removed_closures: Vec::new(),
+            replacement_merges: Vec::new(),
+            replacement_closure_updates: Vec::new(),
+            merge_rewire_skipped: false,
+            closure_rewire_skipped: false,
+        };
+
+        for merge in &self.station_merges {
+            if merge.station_a == removed_station || merge.station_b == removed_station {
+                impact.removed_merges.push(StationPair {
+                    station_a: merge.station_a,
+                    station_b: merge.station_b,
+                });
+            }
+        }
+
+        for closure in &self.loop_closures {
+            if closure.station_a == removed_station || closure.station_b == removed_station {
+                impact.removed_closures.push(ClosurePair {
+                    closure_id: closure.id,
+                    station_a: closure.station_a,
+                    station_b: closure.station_b,
+                });
+            }
+        }
+
+        let merge_group = self.get_merge_group(removed_station);
+        let mut merge_group_without = merge_group.clone();
+        merge_group_without.remove(&removed_station);
+
+        if merge_group_without.len() > 1 {
+            let components = self.build_merge_components(&merge_group_without, removed_station);
+            if components.len() > 1 {
+                let base_component = &components[0];
+
+                let mut planned_pairs: Vec<StationPair> = Vec::new();
+                for component in components.iter().skip(1) {
+                    let mut found_pair: Option<StationPair> = None;
+                    for station_a in base_component {
+                        for station_b in component {
+                            if station_a.section_id != station_b.section_id {
+                                found_pair = Some(StationPair {
+                                    station_a: *station_a,
+                                    station_b: *station_b,
+                                });
+                                break;
+                            }
+                        }
+                        if found_pair.is_some() {
+                            break;
+                        }
+                    }
+
+                    if let Some(pair) = found_pair {
+                        if !self.has_direct_merge(pair.station_a, pair.station_b)
+                            && !planned_pairs.iter().any(|p| {
+                                (p.station_a == pair.station_a && p.station_b == pair.station_b)
+                                    || (p.station_a == pair.station_b
+                                        && p.station_b == pair.station_a)
+                            })
+                        {
+                            planned_pairs.push(pair);
+                        }
+                    } else {
+                        impact.merge_rewire_skipped = true;
+                    }
+                }
+
+                impact.replacement_merges = planned_pairs;
+            }
+        }
+
+        if !impact.removed_closures.is_empty() {
+            let mut candidates: Vec<StationRef> = merge_group_without.into_iter().collect();
+            candidates.sort_by_key(Self::station_ref_key);
+            let replacement = candidates.first().copied();
+
+            for closure in &impact.removed_closures {
+                if let Some(replacement_station) = replacement {
+                    let other = if closure.station_a == removed_station {
+                        closure.station_b
+                    } else {
+                        closure.station_a
+                    };
+
+                    if replacement_station == other
+                        || self.are_stations_merged(replacement_station, other)
+                        || self.are_stations_in_closure(replacement_station, other)
+                    {
+                        impact.closure_rewire_skipped = true;
+                    } else {
+                        impact.replacement_closure_updates.push(ClosureUpdate {
+                            closure_id: closure.closure_id,
+                            old_station: removed_station,
+                            new_station: replacement_station,
+                        });
+                    }
+                } else {
+                    impact.closure_rewire_skipped = true;
+                }
+            }
+        }
+
+        Ok(impact)
+    }
+
+    pub fn remove_shot_with_rewire(
+        &mut self,
+        section_id: SectionId,
+        shot_id: ShotId,
+    ) -> Result<(Shot, DeleteShotImpact), String> {
+        let section = self
+            .get_section(section_id)
+            .ok_or_else(|| format!("Section {} not found", section_id))?;
+        let pos = section
+            .shots
+            .iter()
+            .position(|s| s.id == shot_id)
+            .ok_or_else(|| format!("Shot {} not found in section {}", shot_id, section_id))?;
+
+        let impact = self.preview_delete_shot(section_id, shot_id)?;
+        let removed_station = impact.removed_station;
+
+        self.station_offsets.remove(&removed_station);
+        self.zero_datums.retain(|zd| zd.station_ref != removed_station);
+
+        self.station_merges.retain(|m| {
+            m.station_a != removed_station && m.station_b != removed_station
+        });
+
+        let mut closure_updates: HashMap<u64, StationRef> = HashMap::new();
+        for update in &impact.replacement_closure_updates {
+            closure_updates.insert(update.closure_id, update.new_station);
+        }
+
+        let mut updated_closures = Vec::with_capacity(self.loop_closures.len());
+        for mut closure in self.loop_closures.drain(..) {
+            if closure.station_a == removed_station || closure.station_b == removed_station {
+                if let Some(new_station) = closure_updates.get(&closure.id).copied() {
+                    if closure.station_a == removed_station {
+                        closure.station_a = new_station;
+                    } else {
+                        closure.station_b = new_station;
+                    }
+                    updated_closures.push(closure);
+                }
+            } else {
+                updated_closures.push(closure);
+            }
+        }
+        self.loop_closures = updated_closures;
+
+        for pair in &impact.replacement_merges {
+            if !self.has_direct_merge(pair.station_a, pair.station_b) {
+                self.station_merges.push(StationMerge {
+                    station_a: pair.station_a,
+                    station_b: pair.station_b,
+                    merged_at: Utc::now(),
+                });
+            }
+        }
+
+        let deleted_shot = {
+            let section_mut = self
+                .get_section_mut(section_id)
+                .ok_or_else(|| format!("Section {} not found", section_id))?;
+            section_mut
+                .remove_shot(shot_id)
+                .ok_or_else(|| format!("Shot {} not found in section {}", shot_id, section_id))?
+        };
+
+        self.shift_station_refs(section_id, (pos + 1) as u32, -1);
+
+        if pos == 0 {
+            let (dx, dy) = Self::shot_displacement(&deleted_shot.to_shot_data());
+            if dx != 0.0 || dy != 0.0 {
+                let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+                self.section_offsets.insert(section_id, (current.0 + dx, current.1 + dy));
+            }
+        }
+
+        self.touch();
+        Ok((deleted_shot, impact))
+    }
+
     /// Remove a shot
     pub fn remove_shot(&mut self, section_id: SectionId, shot_id: ShotId) -> Option<Shot> {
-        // Look up position before mutable borrow
-        let pos = self.get_section(section_id)?
-            .shots.iter().position(|s| s.id == shot_id)?;
-        let section = self.get_section_mut(section_id)?;
-        let shot = section.remove_shot(shot_id)?;
-        // remove at pos: station pos+1 collapses, shift refs >= pos+1 by -1
-        self.shift_station_refs(section_id, (pos + 1) as u32, -1);
-        self.touch();
-        Some(shot)
+        self.remove_shot_with_rewire(section_id, shot_id)
+            .ok()
+            .map(|(shot, _)| shot)
     }
 
     /// Set a shot as virtual or not

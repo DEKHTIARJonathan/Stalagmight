@@ -427,6 +427,7 @@ pub fn run() {
             // Shot commands
             commands::shot::create_shot,
             commands::shot::update_shot,
+            commands::shot::preview_delete_shot,
             commands::shot::delete_shot,
             commands::shot::set_shot_virtual,
             commands::shot::delete_shot_and_split,

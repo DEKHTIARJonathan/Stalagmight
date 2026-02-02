@@ -7,6 +7,7 @@ import { DetailLink } from '../common/DetailLink';
 import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId, formatStationId } from '../../utils/formatters';
+import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 
 export default function DetailPanel() {
   const { selection, detailPanelTab, setDetailPanelTab, setSelection } = useUIStore();
@@ -522,12 +523,18 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
   };
 
   const handleDelete = () => {
-    openDialog('confirm-delete', {
-      type: 'shot',
-      sectionId: section.id,
-      shotId: shot.id,
-      message: 'Are you sure you want to delete this shot?',
-    });
+    const totalShots = section.shots.length;
+    const isFirst = shotIndex === 0;
+    const isLast = shotIndex === totalShots - 1;
+    const { dialog, data } = getDeleteShotDialog(
+      section.id,
+      shot.id,
+      isFirst,
+      isLast,
+      totalShots,
+      section.name ?? `Section ${section.id}`,
+    );
+    openDialog(dialog, data);
   };
 
   const handleSelectStartStation = () => {

@@ -5,7 +5,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
-import type { SectionRelationships } from '../../types/commands';
+import type { DeleteShotImpact, SectionRelationships } from '../../types/commands';
+import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 
 export default function ConfirmDialog() {
   const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
@@ -33,6 +34,8 @@ export default function ConfirmDialog() {
   }, [splitRequired, sectionName]);
 
   const [relationships, setRelationships] = useState<SectionRelationships | null>(null);
+  const [shotImpact, setShotImpact] = useState<DeleteShotImpact | null>(null);
+  const [shotImpactError, setShotImpactError] = useState<string | null>(null);
 
   // Whether this deletion removes an entire section (explicit last-shot type
   // or legacy shot type with totalShots === 1)
@@ -51,6 +54,24 @@ export default function ConfirmDialog() {
       setRelationships(null);
     }
   }, [removesSection, sectionId]);
+
+  // Fetch delete impact for shot deletions (edge shots)
+  useEffect(() => {
+    if (type === 'shot' && !removesSection && !splitRequired && sectionId !== undefined && shotId !== undefined) {
+      invoke<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId })
+        .then((result) => {
+          setShotImpact(result);
+          setShotImpactError(null);
+        })
+        .catch((e) => {
+          setShotImpact(null);
+          setShotImpactError(e instanceof Error ? e.message : 'Failed to load shot impacts');
+        });
+    } else {
+      setShotImpact(null);
+      setShotImpactError(null);
+    }
+  }, [type, removesSection, splitRequired, sectionId, shotId]);
 
   const handleConfirm = async () => {
     if (type === 'last-shot' && sectionId !== undefined && shotId !== undefined) {
@@ -181,6 +202,20 @@ export default function ConfirmDialog() {
               )}
             </ul>
           </div>
+        )}
+
+        {type === 'shot' && !removesSection && !splitRequired && (
+          <>
+            {shotImpactError && (
+              <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
+                {shotImpactError}
+              </div>
+            )}
+            <DeleteShotImpactDetails
+              impact={shotImpact}
+              title="Deleting this shot will update station relationships:"
+            />
+          </>
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">

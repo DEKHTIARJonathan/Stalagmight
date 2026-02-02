@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
-use crate::models::{SectionId, ShotData, ShotId, ShotUpdates};
+use crate::models::{DeleteShotImpact, SectionId, ShotData, ShotId, ShotUpdates};
 
 /// Create a new shot
 #[tauri::command]
@@ -52,6 +52,27 @@ pub(crate) fn update_shot_impl(
         shot_id,
         updates,
     })
+}
+
+/// Preview impacts of deleting a shot (read-only)
+#[tauri::command]
+pub fn preview_delete_shot(
+    state: State<AppState>,
+    section_id: SectionId,
+    shot_id: ShotId,
+) -> Result<DeleteShotImpact, String> {
+    preview_delete_shot_impl(state.inner(), section_id, shot_id)
+}
+
+pub(crate) fn preview_delete_shot_impl(
+    state: &AppState,
+    section_id: SectionId,
+    shot_id: ShotId,
+) -> Result<DeleteShotImpact, String> {
+    let project = state
+        .get_project_state()
+        .ok_or_else(|| "No project open".to_string())?;
+    project.preview_delete_shot(section_id, shot_id)
 }
 
 /// Delete a shot

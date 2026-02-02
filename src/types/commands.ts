@@ -107,6 +107,33 @@ export interface SectionRelationships {
   zero_datum_count: number;
 }
 
+export interface StationPair {
+  station_a: StationRef;
+  station_b: StationRef;
+}
+
+export interface ClosurePair {
+  closure_id: number;
+  station_a: StationRef;
+  station_b: StationRef;
+}
+
+export interface ClosureUpdate {
+  closure_id: number;
+  old_station: StationRef;
+  new_station: StationRef;
+}
+
+export interface DeleteShotImpact {
+  removed_station: StationRef;
+  removed_merges: StationPair[];
+  removed_closures: ClosurePair[];
+  replacement_merges: StationPair[];
+  replacement_closure_updates: ClosureUpdate[];
+  merge_rewire_skipped: boolean;
+  closure_rewire_skipped: boolean;
+}
+
 // Station connectivity check result
 export interface ConnectivityResult {
   connected: boolean;

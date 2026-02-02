@@ -6,7 +6,7 @@ import type { SectionId, ShotId } from '../types/project';
  *
  * - totalShots <= 0: invalid state -> falls through to edge-shot confirm
  * - totalShots === 1: last remaining shot -> confirm delete entire section
- * - mid-section (not first, not last, totalShots >= 3): -> split-section dialog
+ * - mid-section (not first, not last, totalShots >= 3): -> delete-shot-choice dialog
  * - edge shot (first or last): -> simple confirm delete
  *
  * Both the DataTable context menu and the map context menu call this function
@@ -39,9 +39,9 @@ export function getDeleteShotDialog(
   // isFirst and isLast are both false but there is no real mid-shot.
   const isMidShot = totalShots >= 3 && !isFirst && !isLast;
   if (isMidShot) {
-    // Mid-section shot: open split-section dialog
+    // Mid-section shot: choose split vs shift geometry
     return {
-      dialog: 'split-section',
+      dialog: 'delete-shot-choice',
       data: {
         sectionId,
         shotId,
