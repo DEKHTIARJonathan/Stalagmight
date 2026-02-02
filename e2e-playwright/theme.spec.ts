@@ -250,6 +250,78 @@ test.describe('Theme Switching - Via Settings UI', () => {
     assertColorsApproximatelyEqual(bgColor, LIGHT_BG);
   });
 
+  test('theme applies immediately on selection before saving', async ({
+    page,
+  }) => {
+    await openSettingsDialog(page);
+    await navigateToAppearance(page);
+
+    // Verify dark theme is active before change
+    const dataThemeBefore = await page.evaluate(
+      () => document.documentElement.dataset.theme
+    );
+    expect(dataThemeBefore).toBe('dark');
+
+    // Select light theme (but do NOT save)
+    const lightOption = page.locator('[data-testid="theme-option-light"]');
+    await lightOption.click();
+
+    // Theme should apply immediately (live preview)
+    const dataThemeAfter = await page.evaluate(
+      () => document.documentElement.dataset.theme
+    );
+    expect(dataThemeAfter).toBe('light');
+
+    // CSS variables should also resolve to light values
+    const bgColor = await page.evaluate(() => {
+      return getComputedStyle(document.documentElement)
+        .getPropertyValue('--cc-background')
+        .trim();
+    });
+    assertColorsApproximatelyEqual(bgColor, LIGHT_BG);
+  });
+
+  test('theme reverts when canceling unsaved changes', async ({ page }) => {
+    await openSettingsDialog(page);
+    await navigateToAppearance(page);
+
+    // Select light theme (do NOT save)
+    const lightOption = page.locator('[data-testid="theme-option-light"]');
+    await lightOption.click();
+
+    // Verify live preview is active
+    const dataThemeDuring = await page.evaluate(
+      () => document.documentElement.dataset.theme
+    );
+    expect(dataThemeDuring).toBe('light');
+
+    // Cancel the dialog (click Cancel, then Discard in unsaved changes dialog)
+    const cancelButton = page.locator(
+      '[data-testid="settings-cancel-button"]'
+    );
+    await cancelButton.click();
+
+    // Unsaved changes dialog should appear
+    await expect(
+      page.locator('[data-testid="unsaved-changes-dialog"]')
+    ).toBeVisible({ timeout: 3000 });
+
+    // Discard changes
+    const discardButton = page.locator('[data-testid="unsaved-discard"]');
+    await discardButton.click();
+
+    // Settings dialog should close
+    await expect(
+      page.locator('[data-testid="settings-dialog"]')
+    ).not.toBeVisible({ timeout: 5000 });
+
+    // Theme should revert to dark
+    const dataThemeAfter = await page.evaluate(
+      () => document.documentElement.dataset.theme
+    );
+    expect(dataThemeAfter).toBe('dark');
+  });
+
   test('theme persists across Settings dialog close and reopen', async ({
     page,
   }) => {
