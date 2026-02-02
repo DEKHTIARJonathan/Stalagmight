@@ -14,6 +14,7 @@
  * Prevents empty strings if called before CSS loads or during unusual mount timing.
  */
 const FALLBACK_MAP: Record<string, string> = {
+  '--cc-map-background': '#1a1a2e',
   '--cc-background': '#1a1a2e',
   '--cc-panel': '#16213e',
   '--cc-border': '#0f3460',
@@ -86,7 +87,7 @@ export interface MapThemeColors {
  */
 export function getMapThemeColors(): MapThemeColors {
   return {
-    background: getThemeColor('--cc-background'),
+    background: getThemeColor('--cc-map-background'),
     strokeColor: getThemeColor('--cc-stroke-color'),
     textHalo: getThemeColor('--cc-text-halo'),
     textHaloAlt: getThemeColor('--cc-text-halo-alt'),
