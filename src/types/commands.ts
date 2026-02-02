@@ -1,6 +1,6 @@
 // Command types for Tauri IPC
 
-import type { ShotData, StationRef, Coordinates, ClosureStrategy } from './project';
+import type { ShotData, StationRef, Coordinates, GpsCoordinates, ClosureStrategy } from './project';
 
 export interface CommandResult {
   success: boolean;
@@ -75,6 +75,28 @@ export type BatchCommand =
   | { type: 'move_segment'; section_id: number; offset: Coordinates }
   | { type: 'move_station'; station_ref: StationRef; offset: Coordinates }
   | { type: 'set_zero_datum'; station_ref: StationRef; coordinates: { latitude: number; longitude: number; depth_reference: number } };
+
+// Import batch types for import_sections IPC
+// These match the Rust ImportSectionConfig and ImportPlacement types
+
+export interface ImportSectionConfig {
+  section_index: number;
+  name: string | null;
+  surveyor: string | null;
+  date: string | null;
+  color: string;
+  direction?: 'in' | 'out';
+  shots: ShotData[];
+  placement: ImportPlacement;
+}
+
+export type ImportPlacement =
+  | { type: 'origin' }
+  | { type: 'zero_datum'; coordinates: GpsCoordinates; station_index: number }
+  | { type: 'from_existing'; import_station: number; existing_station: StationRef }
+  | { type: 'from_importing'; import_station: number; target_section_index: number; target_station_index: number }
+  | { type: 'manual'; align_station_index: number; offset?: Coordinates }
+  | { type: 'manual_snap'; align_station_index: number; snapped_to_station: StationRef };
 
 // Section relationships (for section deletion dialog)
 export interface SectionRelationships {

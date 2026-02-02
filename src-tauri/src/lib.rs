@@ -453,6 +453,7 @@ pub fn run() {
             commands::import::calculate_file_hash,
             commands::import::check_duplicate_import,
             commands::import::track_imported_file,
+            commands::import::import_sections,
             commands::export::export_csv,
             commands::export::export_json,
             commands::export::export_image,

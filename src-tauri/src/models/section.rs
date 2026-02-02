@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-use super::{Shot, ShotData, ShotId};
+use super::{Coordinates, GpsCoordinates, Shot, ShotData, ShotId, StationRef};
 
 /// Unique identifier for a section
 pub type SectionId = u32;
@@ -95,6 +95,56 @@ pub struct SectionStats {
     pub min_depth: f64,
     pub max_depth: f64,
     pub virtual_shot_count: usize,
+}
+
+/// Configuration for a single section being imported via the batch import command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportSectionConfig {
+    /// Index of this section in the import array (used for fromImporting references)
+    pub section_index: u32,
+    pub name: Option<String>,
+    pub surveyor: Option<String>,
+    pub date: Option<NaiveDate>,
+    pub color: String,
+    #[serde(default)]
+    pub direction: Option<SurveyDirection>,
+    pub shots: Vec<ShotData>,
+    pub placement: ImportPlacement,
+}
+
+/// Placement strategy for an imported section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ImportPlacement {
+    /// Place at origin (0, 0) — no additional operations needed.
+    Origin,
+    /// Set a GPS zero datum on a specific station.
+    ZeroDatum {
+        coordinates: GpsCoordinates,
+        station_index: u32,
+    },
+    /// Merge a station with an existing project station.
+    FromExisting {
+        import_station: u32,
+        existing_station: StationRef,
+    },
+    /// Merge a station with a station in another section being imported in the same batch.
+    FromImporting {
+        import_station: u32,
+        target_section_index: u32,
+        target_station_index: u32,
+    },
+    /// Place at a manual offset (pre-computed by the frontend).
+    Manual {
+        align_station_index: u32,
+        #[serde(default)]
+        offset: Option<Coordinates>,
+    },
+    /// Merge a station with an existing station (manual placement with snap).
+    ManualSnap {
+        align_station_index: u32,
+        snapped_to_station: StationRef,
+    },
 }
 
 impl Default for SectionData {

@@ -304,6 +304,291 @@ impl AppState {
         }
     }
 
+    /// Execute a batch import of sections as a single atomic undo/redo unit.
+    /// Creates all sections with their placements (merges, zero datums, moves)
+    /// and optionally tracks the file hash. Uses `ProjectSnapshotPair` so a
+    /// single undo reverts everything including the hash.
+    pub fn execute_import_sections(
+        &self,
+        sections: Vec<crate::models::ImportSectionConfig>,
+        file_hash: Option<String>,
+    ) -> CommandResult {
+        use std::collections::HashMap;
+        use crate::models::{ImportPlacement, StationRef};
+
+        // Serialize command execution to prevent concurrent interleaving
+        let _cmd_guard = match self.command_lock.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
+        };
+
+        if sections.is_empty() {
+            return CommandResult::success();
+        }
+
+        tracing::info!(count = sections.len(), "Executing import_sections as single undo unit");
+
+        // Take a project snapshot BEFORE any modifications
+        let before_snapshot = {
+            let proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+            };
+            match proj_guard.as_ref() {
+                Some(p) => match serde_json::to_string(p) {
+                    Ok(json) => json,
+                    Err(e) => return CommandResult::failure(format!("Failed to serialize project: {e}")),
+                },
+                None => return CommandResult::failure("No project open".to_string()),
+            }
+        };
+
+        // Mapping from import section_index to created SectionId
+        let mut created_ids: HashMap<u32, u32> = HashMap::new();
+        let mut all_section_ids: Vec<u32> = Vec::new();
+        let mut all_warnings = Vec::new();
+        // Collect commands for the undo entry description
+        let mut batch_commands: Vec<Command> = Vec::new();
+
+        for config in &sections {
+            // Build SectionData from ImportSectionConfig
+            let section_data = SectionData {
+                name: config.name.clone(),
+                surveyor: config.surveyor.clone(),
+                date: config.date,
+                color: config.color.clone(),
+                direction: config.direction,
+                shots: config.shots.clone(),
+            };
+
+            // Step 1: Create the section
+            let create_result = self.create_section(section_data.clone());
+            if !create_result.success {
+                // Rollback to before-snapshot
+                self.rollback_to_snapshot(&before_snapshot);
+                return CommandResult::failure(format!(
+                    "Failed to create section \"{}\": {}",
+                    config.name.as_deref().unwrap_or("unnamed"),
+                    create_result.error.unwrap_or_default()
+                ));
+            }
+
+            let section_id = match create_result.section_id {
+                Some(id) => id,
+                None => {
+                    self.rollback_to_snapshot(&before_snapshot);
+                    return CommandResult::failure("Section created but no ID returned".to_string());
+                }
+            };
+
+            created_ids.insert(config.section_index, section_id);
+            all_section_ids.push(section_id);
+            all_warnings.extend(create_result.warnings);
+
+            batch_commands.push(Command::CreateSection {
+                name: config.name.clone(),
+                surveyor: config.surveyor.clone(),
+                date: config.date,
+                color: config.color.clone(),
+                direction: config.direction,
+                shots: config.shots.clone(),
+            });
+
+            // Step 2: Apply placement
+            match &config.placement {
+                ImportPlacement::Origin => {
+                    // No-op — section starts at origin
+                }
+
+                ImportPlacement::ZeroDatum { coordinates, station_index } => {
+                    let station_ref = StationRef::new(section_id, *station_index);
+                    let result = self.set_zero_datum(station_ref, *coordinates);
+                    if !result.success {
+                        self.rollback_to_snapshot(&before_snapshot);
+                        return CommandResult::failure(format!(
+                            "Failed to set zero datum for section \"{}\": {}",
+                            config.name.as_deref().unwrap_or("unnamed"),
+                            result.error.unwrap_or_default()
+                        ));
+                    }
+                    all_warnings.extend(result.warnings);
+                    batch_commands.push(Command::SetZeroDatum {
+                        station_ref,
+                        coordinates: *coordinates,
+                    });
+                }
+
+                ImportPlacement::FromExisting { import_station, existing_station } => {
+                    let import_ref = StationRef::new(section_id, *import_station);
+                    let result = self.merge_stations(import_ref, *existing_station);
+                    if !result.success {
+                        self.rollback_to_snapshot(&before_snapshot);
+                        return CommandResult::failure(format!(
+                            "Failed to merge section \"{}\": {}",
+                            config.name.as_deref().unwrap_or("unnamed"),
+                            result.error.unwrap_or_default()
+                        ));
+                    }
+                    all_warnings.extend(result.warnings);
+                    batch_commands.push(Command::MergeStations {
+                        station_a: import_ref,
+                        station_b: *existing_station,
+                    });
+                }
+
+                ImportPlacement::FromImporting { import_station, target_section_index, target_station_index } => {
+                    let target_section_id = match created_ids.get(target_section_index) {
+                        Some(id) => *id,
+                        None => {
+                            self.rollback_to_snapshot(&before_snapshot);
+                            return CommandResult::failure(format!(
+                                "Section \"{}\" references import section index {} which has not been created yet",
+                                config.name.as_deref().unwrap_or("unnamed"),
+                                target_section_index
+                            ));
+                        }
+                    };
+                    let import_ref = StationRef::new(section_id, *import_station);
+                    let target_ref = StationRef::new(target_section_id, *target_station_index);
+                    let result = self.merge_stations(import_ref, target_ref);
+                    if !result.success {
+                        self.rollback_to_snapshot(&before_snapshot);
+                        return CommandResult::failure(format!(
+                            "Failed to merge section \"{}\" with imported section: {}",
+                            config.name.as_deref().unwrap_or("unnamed"),
+                            result.error.unwrap_or_default()
+                        ));
+                    }
+                    all_warnings.extend(result.warnings);
+                    batch_commands.push(Command::MergeStations {
+                        station_a: import_ref,
+                        station_b: target_ref,
+                    });
+                }
+
+                ImportPlacement::Manual { align_station_index: _, offset } => {
+                    if let Some(offset) = offset {
+                        let result = self.move_section(section_id, *offset);
+                        if !result.success {
+                            self.rollback_to_snapshot(&before_snapshot);
+                            return CommandResult::failure(format!(
+                                "Failed to move section \"{}\": {}",
+                                config.name.as_deref().unwrap_or("unnamed"),
+                                result.error.unwrap_or_default()
+                            ));
+                        }
+                        all_warnings.extend(result.warnings);
+                        batch_commands.push(Command::MoveSection {
+                            section_id,
+                            offset: *offset,
+                        });
+                    }
+                }
+
+                ImportPlacement::ManualSnap { align_station_index, snapped_to_station } => {
+                    let snap_index = (*align_station_index).min(config.shots.len() as u32);
+                    let import_ref = StationRef::new(section_id, snap_index);
+                    let result = self.merge_stations(import_ref, *snapped_to_station);
+                    if !result.success {
+                        self.rollback_to_snapshot(&before_snapshot);
+                        return CommandResult::failure(format!(
+                            "Failed to snap section \"{}\": {}",
+                            config.name.as_deref().unwrap_or("unnamed"),
+                            result.error.unwrap_or_default()
+                        ));
+                    }
+                    all_warnings.extend(result.warnings);
+                    batch_commands.push(Command::MergeStations {
+                        station_a: import_ref,
+                        station_b: *snapped_to_station,
+                    });
+                }
+            }
+        }
+
+        // Track file hash if provided (before after-snapshot so it's part of the undo)
+        if let Some(ref hash) = file_hash {
+            let track_result = self.track_imported_file(hash.clone());
+            if !track_result.success {
+                tracing::warn!("Failed to track imported file hash: {:?}", track_result.error);
+                // Non-fatal: don't rollback the entire import for a hash tracking failure
+            }
+        }
+
+        // Capture after-snapshot for redo support
+        let after_snapshot = {
+            let proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(poisoned) => {
+                    tracing::warn!("Project mutex poisoned during after-snapshot; recovering");
+                    poisoned.into_inner()
+                }
+            };
+            match proj_guard.as_ref() {
+                Some(p) => match serde_json::to_string(p) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        tracing::error!("Failed to serialize after-snapshot: {e}; rolling back");
+                        drop(proj_guard);
+                        self.rollback_to_snapshot(&before_snapshot);
+                        return CommandResult::failure(format!("Failed to capture after-snapshot: {e}"));
+                    }
+                },
+                None => {
+                    tracing::error!("Project became None after import; rolling back");
+                    drop(proj_guard);
+                    self.rollback_to_snapshot(&before_snapshot);
+                    return CommandResult::failure("No project after import".to_string());
+                }
+            }
+        };
+
+        // Push a single undo entry covering all sections + hash
+        if let Ok(mut undo_stack) = self.undo_stack.lock() {
+            undo_stack.push_with_data(
+                Command::Batch { commands: batch_commands },
+                UndoData::ProjectSnapshotPair {
+                    before: before_snapshot,
+                    after: after_snapshot,
+                },
+            );
+        }
+
+        // Auto-save if enabled
+        let should_auto_save = self.config.lock().map(|c| c.general.auto_save).unwrap_or(false);
+        if should_auto_save {
+            let _ = self.save_project(None);
+        }
+
+        if all_warnings.is_empty() {
+            CommandResult::success_with_section_ids_and_warnings(all_section_ids, vec![])
+        } else {
+            CommandResult::success_with_section_ids_and_warnings(all_section_ids, all_warnings)
+        }
+    }
+
+    /// Rollback project state to a serialized snapshot.
+    fn rollback_to_snapshot(&self, snapshot: &str) {
+        match serde_json::from_str::<crate::models::Project>(snapshot) {
+            Ok(restored) => {
+                match self.project.lock() {
+                    Ok(mut proj) => {
+                        *proj = Some(restored);
+                        tracing::info!("Successfully rolled back to snapshot");
+                    }
+                    Err(poisoned) => {
+                        let mut proj = poisoned.into_inner();
+                        *proj = Some(restored);
+                        tracing::warn!("Rolled back via poisoned mutex");
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to deserialize snapshot for rollback: {e}");
+            }
+        }
+    }
+
     pub(super) fn create_section(&self, data: SectionData) -> CommandResult {
         let config = self.config.lock().ok();
 
