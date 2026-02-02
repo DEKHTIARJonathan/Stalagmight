@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,
-    ShotUpdates, StationRef, SurveyDirection,
+    shot_display_position, ClosureStrategy, Coordinates, GpsCoordinates, SectionId,
+    SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef, SurveyDirection,
 };
 
 /// All persistent commands that modify project state
@@ -286,20 +286,21 @@ impl Command {
                 section_id,
                 shot_id,
                 ..
-            } => format!("Update shot {}:{}", section_id, shot_id),
+            } => format!("Update shot {}:{}", section_id, shot_display_position(*shot_id, *section_id)),
             Command::DeleteShot {
                 section_id,
                 shot_id,
-            } => format!("Delete shot {}:{}", section_id, shot_id),
+            } => format!("Delete shot {}:{}", section_id, shot_display_position(*shot_id, *section_id)),
             Command::SetShotVirtual {
                 section_id,
                 shot_id,
                 is_virtual,
             } => {
+                let pos = shot_display_position(*shot_id, *section_id);
                 if *is_virtual {
-                    format!("Mark shot {}:{} as virtual", section_id, shot_id)
+                    format!("Mark shot {}:{} as virtual", section_id, pos)
                 } else {
-                    format!("Mark shot {}:{} as real", section_id, shot_id)
+                    format!("Mark shot {}:{} as real", section_id, pos)
                 }
             }
             Command::MergeStations {
@@ -513,14 +514,14 @@ mod tests {
                     shot_id: 2,
                     updates: shot_updates,
                 },
-                "Update shot 4:2",
+                "Update shot 4:3",
             ),
             (
                 Command::DeleteShot {
                     section_id: 4,
                     shot_id: 2,
                 },
-                "Delete shot 4:2",
+                "Delete shot 4:3",
             ),
             (
                 Command::SetShotVirtual {
@@ -528,7 +529,7 @@ mod tests {
                     shot_id: 2,
                     is_virtual: true,
                 },
-                "Mark shot 4:2 as virtual",
+                "Mark shot 4:3 as virtual",
             ),
             (
                 Command::SetShotVirtual {
@@ -536,7 +537,7 @@ mod tests {
                     shot_id: 2,
                     is_virtual: false,
                 },
-                "Mark shot 4:2 as real",
+                "Mark shot 4:3 as real",
             ),
             (
                 Command::MergeStations {

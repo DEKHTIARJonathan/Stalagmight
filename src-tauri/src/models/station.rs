@@ -130,6 +130,43 @@ impl Coordinates {
         let dy = other.y - self.y;
         (dx * dx + dy * dy).sqrt()
     }
+
+    /// Format this offset as a human-readable string with 16-point compass direction.
+    ///
+    /// x = East, y = North, z = Depth (positive = below surface).
+    /// Examples: "5.3m NNW", "5.3m NNW, 1.2m down", "1.2m up", "no movement"
+    pub fn display_offset(&self) -> String {
+        const COMPASS: [&str; 16] = [
+            "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+        ];
+
+        let horiz_dist = (self.x * self.x + self.y * self.y).sqrt();
+        let has_horiz = horiz_dist >= 0.01;
+        let vert_abs = self.z.abs();
+        let has_vert = vert_abs >= 0.01;
+
+        if !has_horiz && !has_vert {
+            return "no movement".to_string();
+        }
+
+        let mut parts = Vec::with_capacity(2);
+
+        if has_horiz {
+            // Bearing from North: atan2(East, North) in degrees [0, 360)
+            let bearing_rad = self.x.atan2(self.y);
+            let bearing_deg = bearing_rad.to_degrees().rem_euclid(360.0);
+            let sector = ((bearing_deg + 11.25) / 22.5).floor() as usize % 16;
+            parts.push(format!("{:.1}m {}", horiz_dist, COMPASS[sector]));
+        }
+
+        if has_vert {
+            let direction = if self.z > 0.0 { "down" } else { "up" };
+            parts.push(format!("{:.1}m {}", vert_abs, direction));
+        }
+
+        parts.join(", ")
+    }
 }
 
 /// A computed station in the cave survey
@@ -280,6 +317,56 @@ mod tests {
 
         let horizontal = a.horizontal_distance_to(&b);
         assert!((horizontal - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn display_offset_no_movement() {
+        assert_eq!(Coordinates::new(0.0, 0.0, 0.0).display_offset(), "no movement");
+        assert_eq!(Coordinates::new(0.005, 0.005, 0.005).display_offset(), "no movement");
+    }
+
+    #[test]
+    fn display_offset_cardinal_directions() {
+        // Pure North
+        assert_eq!(Coordinates::new(0.0, 5.0, 0.0).display_offset(), "5.0m N");
+        // Pure East
+        assert_eq!(Coordinates::new(5.0, 0.0, 0.0).display_offset(), "5.0m E");
+        // Pure South
+        assert_eq!(Coordinates::new(0.0, -5.0, 0.0).display_offset(), "5.0m S");
+        // Pure West
+        assert_eq!(Coordinates::new(-5.0, 0.0, 0.0).display_offset(), "5.0m W");
+    }
+
+    #[test]
+    fn display_offset_intercardinal_directions() {
+        // NE (equal x and y positive)
+        let d = Coordinates::new(5.0, 5.0, 0.0).display_offset();
+        assert!(d.contains("NE"), "expected NE in '{}'", d);
+        // SW (equal x and y negative)
+        let d = Coordinates::new(-5.0, -5.0, 0.0).display_offset();
+        assert!(d.contains("SW"), "expected SW in '{}'", d);
+    }
+
+    #[test]
+    fn display_offset_16_point_compass() {
+        // NNE: bearing ~22.5° (small east, large north)
+        let d = Coordinates::new(1.0, 2.5, 0.0).display_offset();
+        assert!(d.contains("NNE"), "expected NNE in '{}'", d);
+        // SSW: bearing ~202.5° (small west, large south)
+        let d = Coordinates::new(-1.0, -2.5, 0.0).display_offset();
+        assert!(d.contains("SSW"), "expected SSW in '{}'", d);
+    }
+
+    #[test]
+    fn display_offset_vertical_only() {
+        assert_eq!(Coordinates::new(0.0, 0.0, 3.0).display_offset(), "3.0m down");
+        assert_eq!(Coordinates::new(0.0, 0.0, -2.5).display_offset(), "2.5m up");
+    }
+
+    #[test]
+    fn display_offset_combined_horizontal_and_vertical() {
+        let d = Coordinates::new(0.0, 5.0, -1.2).display_offset();
+        assert_eq!(d, "5.0m N, 1.2m up");
     }
 }
 
