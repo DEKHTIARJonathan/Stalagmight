@@ -4,16 +4,17 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 ## Summary
 
-**DMP Import Refactoring**: 20/22 complete (91%)
+**DMP Import Refactoring**: 21/22 complete (95%)
 - Core functionality ✅ COMPLETE
-- Minor items remaining: file hash tracking (command exists but unused), validation thresholds (settings exist but not in DMP import)
+- Minor items remaining: file hash tracking (command exists but unused)
 
-**v1.0 Completion Tasks**: 13/40 complete (33%)
+**v1.0 Completion Tasks**: 15/39 complete (38%)
 - ✅ COMPLETE: Loop Closure (3/3), Settings/Configuration (4/4)
-- 🟡 PARTIAL: Data Table (2/4 - inline editing ✅, but no add/delete row buttons)
+- 🟡 PARTIAL: Data Table (3/4 - inline editing ✅, delete row w/ split ✅, add row remaining)
 - 🟡 PARTIAL: Accessibility (2/4 - screen reader/keyboard ✅, no focus management/theme)
 - 🟡 PARTIAL: Performance (1/4 - loading states ✅, no virtual scrolling/auto-save)
 - 🟡 PARTIAL: Error Handling (1/4 - basic network error tracking, no error boundaries)
+- 🟡 PARTIAL: Tool Panel & Move (1/4 - tool panel redesign ✅, remaining items open)
 - ❌ NOT STARTED: i18n (0/3), Final polish (1/6 - only tile caching done)
 
 **Last Updated**: 2026-01-29
@@ -109,7 +110,7 @@ All components are implemented and working:
 | Shot Table Integration | ✅ |
 | Import State Management | ✅ |
 | Session Surveyor Memory | ✅ |
-| Validation Thresholds in DMP Import | 🟡 WIP — Wire config.validation into DmpSectionConfigDialog → ShotTableEditor; add warning count badges to section list |
+| Validation Thresholds in DMP Import | ✅ |
 
 ### Phase 3: Placement Features
 
@@ -175,7 +176,7 @@ Based on codebase analysis as of 2026-01-29.
 |-------|--------|
 | Inline Editing | ✅ (EditableTable component with EditableCell) |
 | Add Row | 🟡 WIP (fn-47-ok1) — Context menu on DataTable + map; DrawShotDialog; prepend mode |
-| Delete Row with Split | 🟡 WIP (fn-47-ok1) — Position-aware delete: edge/mid-split/last-shot; section cleanup bug fix |
+| Delete Row with Split | ✅ |
 | Row Highlighting Sync | ✅ |
 
 ### Phase D: Accessibility
@@ -227,7 +228,7 @@ Based on codebase analysis as of 2026-01-29.
 
 | Title | Status |
 |-------|--------|
-| Tool Panel Redesign | 🟡 WIP (fn-46-37m) — Photoshop-style subtools via right-click; group Pan + Zoom |
+| Tool Panel Redesign | ✅ |
 | Move Segment Tool | ✅ |
 | Move Shot Subtool | ✅ |
 | Move Station Subtool | ✅ |
@@ -256,13 +257,13 @@ Based on codebase analysis as of 2026-01-29.
 | Phase | Tasks | Completed | Remaining |
 |-------|-------|-----------|-----------|
 | Shared Components | 5 | 4 | 1 |
-| Dialog Core | 7 | 6 | 1 |
+| Dialog Core | 7 | 7 | 0 |
 | Placement Features | 3 | 3 | 0 |
 | Navigation & Integration | 3 | 3 | 0 |
 | Cleanup & Testing | 4 | 4 | 0 |
-| **Import Total** | **22** | **20** | **2** |
+| **Import Total** | **22** | **21** | **1** |
 
-**Note**: Main functionality is complete. Remaining items are minor (file hash tracking, validation thresholds).
+**Note**: Main functionality is complete. Remaining items are minor (file hash tracking).
 
 ### v1.0 Completion Tasks
 
@@ -270,16 +271,16 @@ Based on codebase analysis as of 2026-01-29.
 |-------|-------|-----------|-----------|
 | A: Loop Closure | 3 | 3 | 0 |
 | B: Settings | 4 | 4 | 0 |
-| C: Data Table | 4 | 2 | 2 |
+| C: Data Table | 4 | 3 | 1 |
 | D: Accessibility | 4 | 2 | 2 |
 | E: i18n | 3 | 0 | 3 |
 | F: Performance | 3 | 1 | 2 |
 | G: Error Handling | 4 | 0 | 4 |
 | H: Polish | 6 | 1 | 5 |
-| I: Tool Panel & Move | 4 | 0 | 4 |
+| I: Tool Panel & Move | 4 | 1 | 3 |
 | J: Closure Distribution | 2 | 0 | 2 |
 | K: Import & Reporting | 2 | 0 | 2 |
-| **v1.0 Total** | **39** | **13** | **26** |
+| **v1.0 Total** | **39** | **15** | **24** |
 
 ### Grand Total
 
@@ -287,7 +288,7 @@ Based on codebase analysis as of 2026-01-29.
 |----------|-------|-----------|-----------|
 | DMP Import Refactoring | 22 | 20 | 2 |
 | v1.0 Completion | 39 | 13 | 26 |
-| **Grand Total** | **61** | **33** | **28** |
+| **Grand Total** | **61** | **36** | **25** |
 
 ---
 
@@ -338,7 +339,7 @@ Phase 2: Dialog Core
 
 Phase 3: Integration
 ├── ContextAwareTriggering (depends: DmpSelectionDialog, DmpSectionConfigDialog)
-├── ValidationThresholds (depends: ShotTableEditor)
+├── ValidationThresholds ✅ (depends: ShotTableEditor)
 └── UpdateEditSectionDialog (depends: ShotTableEditor, SectionMetadataForm)
 
 Phase 4: Cleanup
@@ -358,7 +359,7 @@ Settings Shell ──┬──> Display Tab ✅
                   └──> Export Tab ✅
 
 Inline Edit ✅ ──┬──> Add Row ❌
-                  └──> Delete Row ❌
+                  └──> Delete Row ✅
 
 Focus ❌ ────────┬──> Screen Reader ✅
                   └──> Keyboard Nav ✅
@@ -376,7 +377,7 @@ About Dialog ❌ ───> Bug Reporter ❌
 1. **DMP Import Refactoring**: Mostly complete, minor cleanup remaining
 2. **Phase A** (Loop Closure): ✅ COMPLETE
 3. **Phase B** (Settings): ✅ COMPLETE
-4. **Phase C** (Data Table): Add Row/Delete Row features remaining
+4. **Phase C** (Data Table): Add Row feature remaining
 5. **Phase D** (Accessibility): Focus management and theme switching remaining
 6. **Phase E** (i18n): Full infrastructure needed
 7. **Phase G** (Error Handling): Error boundaries needed for stability

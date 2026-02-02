@@ -777,6 +777,20 @@ impl AppState {
             None => return CommandResult::failure("No project open".to_string()),
         };
 
+        if let Ok(impact) = project.preview_delete_shot(section_id, shot_id) {
+            if impact.shift_blocked {
+                let reasons = if impact.shift_blocked_reasons.is_empty() {
+                    "Shift geometry is not allowed for this shot.".to_string()
+                } else {
+                    impact.shift_blocked_reasons.join(" ")
+                };
+                return CommandResult::failure(format!(
+                    "{} Use split instead.",
+                    reasons
+                ));
+            }
+        }
+
         match project.remove_shot_with_rewire(section_id, shot_id) {
             Ok(_) => {
                 tracing::info!(section_id, shot_id, "Shot deleted");

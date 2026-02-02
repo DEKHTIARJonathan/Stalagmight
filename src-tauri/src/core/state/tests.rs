@@ -4526,6 +4526,67 @@ fn test_insert_shot_before_first_position_and_undo_redo() {
 }
 
 #[test]
+fn test_prepend_shot_undo_preserves_geometry() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let section_result = state.execute(Command::CreateSection {
+        name: Some("Prepend Geometry".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        }],
+    });
+    let section_id = section_result.section_id.unwrap();
+
+    let before = state.get_project_state().unwrap();
+    let before_station_0 = before.compute_station_raw_coords(StationRef::new(section_id, 0)).unwrap();
+    let before_station_1 = before.compute_station_raw_coords(StationRef::new(section_id, 1)).unwrap();
+    let first_shot_id = before.sections[0].shots[0].id;
+
+    let result = state.execute(Command::CreateShot {
+        section_id,
+        shot: ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        },
+        after_shot_id: None,
+        before_shot_id: Some(first_shot_id),
+    });
+    assert!(result.success);
+
+    let after_prepend = state.get_project_state().unwrap();
+    let station_1_after = after_prepend.compute_station_raw_coords(StationRef::new(section_id, 1)).unwrap();
+    let station_2_after = after_prepend.compute_station_raw_coords(StationRef::new(section_id, 2)).unwrap();
+    assert_coords_close(station_1_after, before_station_0);
+    assert_coords_close(station_2_after, before_station_1);
+
+    let undo_result = state.undo();
+    assert!(undo_result.success);
+    let after_undo = state.get_project_state().unwrap();
+    let undo_station_0 = after_undo.compute_station_raw_coords(StationRef::new(section_id, 0)).unwrap();
+    let undo_station_1 = after_undo.compute_station_raw_coords(StationRef::new(section_id, 1)).unwrap();
+    assert_coords_close(undo_station_0, before_station_0);
+    assert_coords_close(undo_station_1, before_station_1);
+}
+
+#[test]
 fn test_create_shot_rejects_both_after_and_before() {
     let state = AppState::new().unwrap();
 

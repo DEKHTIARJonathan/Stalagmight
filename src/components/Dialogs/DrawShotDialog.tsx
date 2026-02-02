@@ -25,9 +25,30 @@ export default function DrawShotDialog() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Normalize azimuth to 0-360 range
+  const normalizeAzimuth = (value: number): number => {
+    let normalized = value % 360;
+    if (normalized < 0) normalized += 360;
+    return normalized;
+  };
+
+  const initialAzimuthIn = useMemo(() => {
+    if (!sourceGeometry) return '';
+    const base = sourceGeometry.azimuth_in;
+    const reversed = prependMode ? normalizeAzimuth(base + 180) : base;
+    return String(reversed);
+  }, [sourceGeometry, prependMode]);
+
+  const initialAzimuthOut = useMemo(() => {
+    if (!sourceGeometry) return '';
+    const base = sourceGeometry.azimuth_out;
+    const reversed = prependMode ? normalizeAzimuth(base + 180) : base;
+    return String(reversed);
+  }, [sourceGeometry, prependMode]);
+
   // Form state — prefill from source geometry if provided
-  const [azimuthIn, setAzimuthIn] = useState(sourceGeometry ? String(sourceGeometry.azimuth_in) : '');
-  const [azimuthOut, setAzimuthOut] = useState(sourceGeometry ? String(sourceGeometry.azimuth_out) : '');
+  const [azimuthIn, setAzimuthIn] = useState(initialAzimuthIn);
+  const [azimuthOut, setAzimuthOut] = useState(initialAzimuthOut);
   const [length, setLength] = useState((prependMode || appendMode) ? '0' : '');
   const [depthIn, setDepthIn] = useState(sourceGeometry ? String(sourceGeometry.depth_in) : '');
   const [depthOut, setDepthOut] = useState(sourceGeometry ? String(sourceGeometry.depth_out) : '');
@@ -156,13 +177,6 @@ export default function DrawShotDialog() {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  // Normalize azimuth to 0-360 range
-  const normalizeAzimuth = (value: number): number => {
-    let normalized = value % 360;
-    if (normalized < 0) normalized += 360;
-    return normalized;
   };
 
   // Auto-fill azimuth out when azimuth in changes

@@ -55,6 +55,10 @@ pub struct DeleteShotImpact {
     pub replacement_closure_updates: Vec<ClosureUpdate>,
     pub merge_rewire_skipped: bool,
     pub closure_rewire_skipped: bool,
+    #[serde(default)]
+    pub shift_blocked: bool,
+    #[serde(default)]
+    pub shift_blocked_reasons: Vec<String>,
 }
 
 /// A complete cave survey project
@@ -438,6 +442,111 @@ impl Project {
         components
     }
 
+    fn station_neighbors_excluding_shot(
+        &self,
+        station_ref: StationRef,
+        excluded_shot: Option<(SectionId, usize)>,
+    ) -> Vec<StationRef> {
+        let mut neighbors = Vec::new();
+        let section = match self.get_section(station_ref.section_id) {
+            Some(s) => s,
+            None => return neighbors,
+        };
+        let idx = station_ref.station_index as usize;
+        if idx > section.shots.len() {
+            return neighbors;
+        }
+
+        // Adjacent stations via shots (skip the excluded shot)
+        if idx > 0 {
+            let shot_idx = idx - 1;
+            if excluded_shot != Some((station_ref.section_id, shot_idx)) {
+                neighbors.push(StationRef::new(station_ref.section_id, (idx - 1) as u32));
+            }
+        }
+        if idx < section.shots.len() {
+            let shot_idx = idx;
+            if excluded_shot != Some((station_ref.section_id, shot_idx)) {
+                neighbors.push(StationRef::new(station_ref.section_id, (idx + 1) as u32));
+            }
+        }
+
+        // Merges
+        for merge in &self.station_merges {
+            if merge.station_a == station_ref {
+                neighbors.push(merge.station_b);
+            } else if merge.station_b == station_ref {
+                neighbors.push(merge.station_a);
+            }
+        }
+
+        // Closures (all strategies)
+        for closure in &self.loop_closures {
+            if closure.station_a == station_ref {
+                neighbors.push(closure.station_b);
+            } else if closure.station_b == station_ref {
+                neighbors.push(closure.station_a);
+            }
+        }
+
+        neighbors
+    }
+
+    fn are_stations_connected_excluding_shot(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+        excluded_shot: Option<(SectionId, usize)>,
+    ) -> bool {
+        if station_a == station_b {
+            return true;
+        }
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        visited.insert(station_a);
+        queue.push_back(station_a);
+
+        while let Some(current) = queue.pop_front() {
+            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot) {
+                if visited.insert(neighbor) {
+                    if neighbor == station_b {
+                        return true;
+                    }
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        false
+    }
+
+    fn station_reaches_zero_datum_excluding_shot(
+        &self,
+        station_ref: StationRef,
+        excluded_shot: Option<(SectionId, usize)>,
+    ) -> bool {
+        let zero_datum_set: HashSet<StationRef> =
+            self.zero_datums.iter().map(|zd| zd.station_ref).collect();
+        if zero_datum_set.contains(&station_ref) {
+            return true;
+        }
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        visited.insert(station_ref);
+        queue.push_back(station_ref);
+
+        while let Some(current) = queue.pop_front() {
+            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot) {
+                if visited.insert(neighbor) {
+                    if zero_datum_set.contains(&neighbor) {
+                        return true;
+                    }
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        false
+    }
+
     // === Shot operations ===
 
     /// Add a shot to a section
@@ -547,6 +656,8 @@ impl Project {
             replacement_closure_updates: Vec::new(),
             merge_rewire_skipped: false,
             closure_rewire_skipped: false,
+            shift_blocked: false,
+            shift_blocked_reasons: Vec::new(),
         };
 
         for merge in &self.station_merges {
@@ -643,6 +754,29 @@ impl Project {
                     impact.closure_rewire_skipped = true;
                 }
             }
+        }
+
+        let is_mid_shot = pos > 0 && pos < section.shots.len() - 1;
+        if is_mid_shot {
+            let station_before = StationRef::new(section_id, pos as u32);
+            let station_after = StationRef::new(section_id, (pos + 1) as u32);
+            let excluded = Some((section_id, pos));
+
+            if self.are_stations_connected_excluding_shot(station_before, station_after, excluded) {
+                impact.shift_blocked_reasons.push(
+                    "This shot is part of a loop (the two sides are already connected).".to_string(),
+                );
+            }
+
+            let anchored_before = self.station_reaches_zero_datum_excluding_shot(station_before, excluded);
+            let anchored_after = self.station_reaches_zero_datum_excluding_shot(station_after, excluded);
+            if anchored_before && anchored_after {
+                impact.shift_blocked_reasons.push(
+                    "Both sides are anchored to a zero datum.".to_string(),
+                );
+            }
+
+            impact.shift_blocked = !impact.shift_blocked_reasons.is_empty();
         }
 
         Ok(impact)
