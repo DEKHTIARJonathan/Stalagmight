@@ -45,6 +45,7 @@
   --cc-map-scale-text: #ffffff;
 
   /* --- Map Visualization --- */
+  --cc-map-background: #1a1a2e;
   --cc-snap-color: #ff6b6b;
   --cc-hover-highlight: #ffcb77;
   --cc-select-highlight: #4ecdc4;
@@ -140,27 +141,9 @@
   --cc-map-scale-border: rgba(0, 0, 0, 0.4);
   --cc-map-scale-text: #1a120b;
 
-  /* --- Map Visualization --- */
-  --cc-snap-color: #c0392b;
-  --cc-hover-highlight: #b8860b;
-  --cc-select-highlight: #3a8a82;
-  --cc-stroke-color: #1a120b;
-  --cc-stroke-light: rgba(26, 18, 11, 0.25);
-  --cc-text-halo: #ffffff;
-  --cc-text-halo-alt: rgba(255, 255, 255, 0.8);
-  --cc-station-default: #6b5b4a;
-  --cc-gray-line: #b0a090;
-  --cc-gray-text: #8a7a6a;
-  --cc-grid-default: #c1a07a;
-  --cc-zero-datum: #b8860b;
-  --cc-compass-color: #1a120b;
-  --cc-depth-shallow: #3a8a82;
-  --cc-depth-deep: #c0392b;
-  --cc-depth-text: #1a120b;
-
-  /* --- Canvas Preview --- */
-  --cc-preview-bg: #f5f0e8;
-  --cc-preview-text: #1a120b;
+  /* --- Map Visualization ---
+     Map canvas always uses dark-mode colors (inherited from :root).
+     Only MapLibre UI controls above are themed for light mode. */
 
   /* --- Opacity Variants: accent --- */
   --cc-accent-5: rgba(58, 138, 130, 0.05);
