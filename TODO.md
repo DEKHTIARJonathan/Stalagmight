@@ -97,7 +97,7 @@ All components are implemented and working:
 | Shared SectionMetadataForm | ✅ |
 | Enhanced SectionPreview | ✅ |
 | DmpSelectionDialog Shell | ✅ |
-| File Hash Tracking | 🟡 WIP — Wire existing Rust commands into DMP import flow; duplicate warning banner in Step 1; track hash after successful import |
+| File Hash Tracking | ✅ |
 
 ### Phase 2: Dialog Core (Sequential)
 
