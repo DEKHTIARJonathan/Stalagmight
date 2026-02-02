@@ -3,6 +3,8 @@ import {
   setupMockedPage,
   createProject,
   openNewProjectDialog,
+  openDmpSelectionDialog,
+  proceedToDmpSectionConfig,
   seedProjectWithSections,
   waitForMapReady,
   waitForNoDialogs,
@@ -372,6 +374,46 @@ test.describe('Focus Management', () => {
       // Home key jumps back to first tab (General)
       await page.keyboard.press('Home');
       await expect(generalTab).toBeFocused({ timeout: 1000 });
+    });
+  });
+  test.describe('DMP Section Config – confirm overlay focus', () => {
+    test.beforeEach(async ({ page }) => {
+      await setupMockedPage(page);
+      await createProject(page, 'Import Focus');
+      await openDmpSelectionDialog(page);
+      await proceedToDmpSectionConfig(page);
+    });
+
+    test('cancel confirm traps focus and inerts the outer dialog', async ({ page }) => {
+      const dialog = page.getByTestId('dmp-section-config-dialog');
+      await expect(dialog).toBeVisible({ timeout: 5000 });
+
+      // Trigger cancel confirmation
+      await page.keyboard.press('Escape');
+
+      const alertDialog = page.getByTestId('cancel-confirm-dialog');
+      await expect(alertDialog).toBeVisible({ timeout: 3000 });
+
+      // Outer dialog container should be inert while the confirm is open
+      const outerDialogContainer = dialog.locator('..');
+      await expect(outerDialogContainer).toHaveAttribute('inert', '');
+
+      // Tab should be trapped within the confirm overlay container
+      const focusableCount = await alertDialog.evaluate((el) => {
+        const buttons = el.querySelectorAll('button:not(:disabled)');
+        return buttons.length;
+      });
+      expect(focusableCount).toBeGreaterThan(0);
+
+      const trapContainer = alertDialog.locator('..');
+      await page.keyboard.press('Tab');
+      for (let i = 0; i < focusableCount + 1; i += 1) {
+        const insideTrap = await trapContainer.evaluate(
+          (el) => el.contains(document.activeElement),
+        );
+        expect(insideTrap).toBe(true);
+        await page.keyboard.press('Tab');
+      }
     });
   });
 });

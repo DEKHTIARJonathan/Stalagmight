@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useMemo, useId } from 'react';
-import { createPortal } from 'react-dom';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper, type FixedSize } from './DialogWrapper';
+import { AlertDialog } from './AlertDialog';
 import {
   SettingsSidebar,
   CATEGORIES,
@@ -476,27 +476,6 @@ export default function SettingsDialog() {
     setShowResetConfirm(false);
   }, []);
 
-  // Escape key handler for custom overlays
-  useEffect(() => {
-    if (!showUnsavedDialog && !showResetConfirm) {
-      return;
-    }
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        if (showUnsavedDialog) {
-          setShowUnsavedDialog(false);
-        } else if (showResetConfirm) {
-          setShowResetConfirm(false);
-        }
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown, true);
-    return () => document.removeEventListener('keydown', handleKeyDown, true);
-  }, [showUnsavedDialog, showResetConfirm]);
-
   // Show loading state if config hasn't loaded yet
   if (!localConfig) {
     return (
@@ -620,96 +599,72 @@ export default function SettingsDialog() {
         )}
       </DialogWrapper>
 
-      {/* Custom unsaved changes dialog - portaled to #dialog-root to avoid
-          being inside the inert #root set by dialogStack */}
-      {showUnsavedDialog && createPortal(
-        <div className="fixed inset-0 z-[60] flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50" onClick={handleCancelClose} />
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="unsaved-changes-title"
-            className="relative bg-panel border border-border rounded-lg shadow-xl max-w-sm w-full mx-4"
-            data-testid="unsaved-changes-dialog"
-          >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-              <h2 id="unsaved-changes-title" className="text-lg font-medium">
-                Unsaved Changes
-              </h2>
-            </div>
-            <div className="p-4 space-y-4">
-              <p>You have unsaved changes. What would you like to do?</p>
-              <p className="text-sm text-text-secondary">
-                Your changes will be lost if you discard them.
-              </p>
-              <div className="flex justify-end gap-2 pt-4 border-t border-border">
-                <Button onClick={handleCancelClose} data-testid="unsaved-cancel">
-                  Cancel
-                </Button>
-                <Button
-                  variant="danger"
-                  onClick={handleDiscardAndClose}
-                  data-testid="unsaved-discard"
-                >
-                  Discard Changes
-                </Button>
-                <Button
-                  variant="primary"
-                  onClick={handleSaveAndClose}
-                  disabled={hasAnyError}
-                  data-testid="unsaved-save"
-                >
-                  Save
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.getElementById('dialog-root') ?? document.body,
-      )}
+      <AlertDialog
+        open={showUnsavedDialog}
+        title="Unsaved Changes"
+        onClose={handleCancelClose}
+        data-testid="unsaved-changes-dialog"
+        actions={
+          <>
+            <Button onClick={handleCancelClose} data-testid="unsaved-cancel">
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={handleDiscardAndClose}
+              data-testid="unsaved-discard"
+            >
+              Discard Changes
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleSaveAndClose}
+              disabled={hasAnyError}
+              data-testid="unsaved-save"
+            >
+              Save
+            </Button>
+          </>
+        }
+      >
+        <>
+          <p>You have unsaved changes. What would you like to do?</p>
+          <p className="text-sm text-text-secondary">
+            Your changes will be lost if you discard them.
+          </p>
+        </>
+      </AlertDialog>
 
-      {/* Reset to defaults confirmation dialog - portaled to #dialog-root to avoid
-          being inside the inert #root set by dialogStack */}
-      {showResetConfirm && createPortal(
-        <div className="fixed inset-0 z-[60] flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50" onClick={handleCancelReset} />
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="reset-confirm-title"
-            className="relative bg-panel border border-border rounded-lg shadow-xl max-w-sm w-full mx-4"
-            data-testid="reset-confirm-dialog"
-          >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-              <h2 id="reset-confirm-title" className="text-lg font-medium">
-                Reset to Defaults
-              </h2>
-            </div>
-            <div className="p-4 space-y-4">
-              <p>
-                Reset all {getCategoryLabel(activeCategory)} settings to their default values?
-              </p>
-              <p className="text-sm text-text-secondary">
-                This will only affect the current category. Changes are not saved until you click
-                Save.
-              </p>
-              <div className="flex justify-end gap-2 pt-4 border-t border-border">
-                <Button onClick={handleCancelReset} data-testid="reset-cancel">
-                  Cancel
-                </Button>
-                <Button
-                  variant="danger"
-                  onClick={handleConfirmReset}
-                  data-testid="reset-confirm"
-                >
-                  Reset
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.getElementById('dialog-root') ?? document.body,
-      )}
+      <AlertDialog
+        open={showResetConfirm}
+        title="Reset to Defaults"
+        onClose={handleCancelReset}
+        data-testid="reset-confirm-dialog"
+        actions={
+          <>
+            <Button onClick={handleCancelReset} data-testid="reset-cancel">
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={handleConfirmReset}
+              data-testid="reset-confirm"
+            >
+              Reset
+            </Button>
+          </>
+        }
+      >
+        <>
+          <p>
+            Reset all {getCategoryLabel(activeCategory)} settings to their default values?
+          </p>
+          <p className="text-sm text-text-secondary">
+            This will only affect the current category. Changes are not saved until you click
+            Save.
+          </p>
+        </>
+      </AlertDialog>
     </>
   );
 }

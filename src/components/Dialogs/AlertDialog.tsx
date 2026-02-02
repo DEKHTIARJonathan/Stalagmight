@@ -1,4 +1,4 @@
-import { useLayoutEffect, useEffect, useRef, useCallback, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useLayoutEffect, useEffect, useRef, useCallback, useId, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { pushDialog, popDialog } from '../../utils/dialogStack';
@@ -41,6 +41,7 @@ export function AlertDialog({
   const containerRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<Element | null>(null);
+  const titleId = useId();
 
   useFocusTrap(containerRef, { enabled: open });
 
@@ -76,7 +77,11 @@ export function AlertDialog({
         e.preventDefault();
         e.stopPropagation();
         onClose();
+        return;
       }
+
+      // Prevent shortcut leakage to underlying dialogs.
+      e.stopPropagation();
     },
     [onClose],
   );
@@ -101,12 +106,12 @@ export function AlertDialog({
         ref={dialogRef}
         role="alertdialog"
         aria-modal="true"
-        aria-labelledby="alert-dialog-title"
+        aria-labelledby={titleId}
         className="relative bg-panel border border-border rounded-lg shadow-xl max-w-sm w-full mx-4"
         data-testid={testId}
       >
         <div className="px-4 py-3 border-b border-border">
-          <h2 id="alert-dialog-title" className="text-lg font-medium">{title}</h2>
+          <h2 id={titleId} className="text-lg font-medium">{title}</h2>
         </div>
         <div className="p-4 space-y-4">
           {children}
