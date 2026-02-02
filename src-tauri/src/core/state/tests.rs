@@ -24,6 +24,13 @@ fn test_shot_data(length: f64) -> ShotData {
     }
 }
 
+fn assert_coords_close(a: Coordinates, b: Coordinates) {
+    let eps = 1e-6;
+    assert!((a.x - b.x).abs() < eps, "x mismatch: {} vs {}", a.x, b.x);
+    assert!((a.y - b.y).abs() < eps, "y mismatch: {} vs {}", a.y, b.y);
+    assert!((a.z - b.z).abs() < eps, "z mismatch: {} vs {}", a.z, b.z);
+}
+
 fn poison_mutex<T>(mutex: &Mutex<T>) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = mutex.lock().unwrap();
@@ -531,6 +538,117 @@ fn test_delete_shot() {
 
     let project = state.get_project_state().unwrap();
     assert_eq!(project.sections[0].shots.len(), 1);
+}
+
+#[test]
+fn test_delete_first_shot_preserves_station_positions() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let create_result = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+    });
+
+    let section_id = create_result.section_id.unwrap();
+    let project_before = state.get_project_state().unwrap();
+    let station_1_before = project_before
+        .compute_station_raw_coords(StationRef::new(section_id, 1))
+        .unwrap();
+    let station_2_before = project_before
+        .compute_station_raw_coords(StationRef::new(section_id, 2))
+        .unwrap();
+
+    let first_shot_id = project_before.sections[0].shots[0].id;
+    let delete_result = state.execute(Command::DeleteShot {
+        section_id,
+        shot_id: first_shot_id,
+    });
+    assert!(delete_result.success);
+
+    let project_after = state.get_project_state().unwrap();
+    let station_0_after = project_after
+        .compute_station_raw_coords(StationRef::new(section_id, 0))
+        .unwrap();
+    let station_1_after = project_after
+        .compute_station_raw_coords(StationRef::new(section_id, 1))
+        .unwrap();
+
+    assert_coords_close(station_0_after, station_1_before);
+    assert_coords_close(station_1_after, station_2_before);
+}
+
+#[test]
+fn test_delete_shot_rewires_merges() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let sec_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+    }).section_id.unwrap();
+
+    let sec_b = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(6.0)],
+    }).section_id.unwrap();
+
+    let sec_c = state.execute(Command::CreateSection {
+        name: Some("C".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#0000ff".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(8.0)],
+    }).section_id.unwrap();
+
+    let merge_ab = state.execute(Command::MergeStations {
+        station_a: StationRef::new(sec_a, 0),
+        station_b: StationRef::new(sec_b, 0),
+    });
+    assert!(merge_ab.success);
+
+    let merge_ac = state.execute(Command::MergeStations {
+        station_a: StationRef::new(sec_a, 0),
+        station_b: StationRef::new(sec_c, 0),
+    });
+    assert!(merge_ac.success);
+
+    let project_before = state.get_project_state().unwrap();
+    let first_shot_id = project_before.sections.iter().find(|s| s.id == sec_a).unwrap().shots[0].id;
+
+    let delete_result = state.execute(Command::DeleteShot {
+        section_id: sec_a,
+        shot_id: first_shot_id,
+    });
+    assert!(delete_result.success);
+
+    let project_after = state.get_project_state().unwrap();
+    let has_merge_bc = project_after.station_merges.iter().any(|m| {
+        (m.station_a == StationRef::new(sec_b, 0) && m.station_b == StationRef::new(sec_c, 0))
+            || (m.station_a == StationRef::new(sec_c, 0) && m.station_b == StationRef::new(sec_b, 0))
+    });
+    assert!(has_merge_bc, "Expected replacement merge between B:0 and C:0");
 }
 
 #[test]
@@ -3512,6 +3630,66 @@ fn test_move_station_updates_shot_data() {
     let expected_azi = (15.0_f64).atan2(10.0).to_degrees(); // atan2(dx, dy)
     assert!((shot.azimuth_in - expected_azi).abs() < 1e-6, "Azimuth should be {:.1}°, got {:.1}°", expected_azi, shot.azimuth_in);
     assert!((shot.depth_out - 3.0).abs() < 1e-6, "Depth out should be 3.0, got {}", shot.depth_out);
+}
+
+#[test]
+fn test_move_station_zero_updates_section_offset() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Create section with a shot pointing due east (azimuth 90°), length 10
+    let create_result = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        }],
+    });
+
+    let section_id = create_result.section_id.unwrap();
+    let station_0 = StationRef::new(section_id, 0);
+    let station_1 = StationRef::new(section_id, 1);
+
+    let before = state.get_project_state().unwrap();
+    let before_station_1 = before.compute_station_raw_coords(station_1).unwrap();
+
+    // Move station 0 by (5, 0, 0) — should shift section offset and keep station 1 fixed
+    let result = state.execute(Command::MoveStation {
+        station_ref: station_0,
+        offset: Coordinates::new(5.0, 0.0, 0.0),
+    });
+    assert!(result.success);
+
+    let after = state.get_project_state().unwrap();
+    let after_station_0 = after.compute_station_raw_coords(station_0).unwrap();
+    let after_station_1 = after.compute_station_raw_coords(station_1).unwrap();
+
+    assert!((after_station_0.x - 5.0).abs() < 1e-6, "Station 0 x should be 5.0");
+    assert!((after_station_0.y).abs() < 1e-6, "Station 0 y should remain 0.0");
+    assert!(
+        (after_station_1.x - before_station_1.x).abs() < 1e-6,
+        "Station 1 x should remain unchanged"
+    );
+    assert!(
+        (after_station_1.y - before_station_1.y).abs() < 1e-6,
+        "Station 1 y should remain unchanged"
+    );
+
+    let offset = after.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+    assert!((offset.0 - 5.0).abs() < 1e-6, "Section offset x should be 5.0");
+    assert!((offset.1).abs() < 1e-6, "Section offset y should remain 0.0");
 }
 
 #[test]
@@ -6888,12 +7066,10 @@ fn test_delete_shot_undo_redo_with_snapshot() {
     assert!(delete_result.success);
 
     let proj = state.get_project_state().unwrap();
-    // After deleting shot 0: station 1 collapses, refs >= 1 shift by -1
-    // Merge was at station 0, should stay at 0 (not >= 1)
-    assert_eq!(
-        proj.station_merges[0].station_a,
-        StationRef::new(sec_a, 0),
-        "Merge at station 0 should stay after deleting shot 0"
+    // After deleting shot 0: merge referencing deleted station 0 should be removed
+    assert!(
+        proj.station_merges.is_empty(),
+        "Merges referencing deleted station should be removed"
     );
     // Zero datum was at station 2, should shift to station 1
     assert_eq!(

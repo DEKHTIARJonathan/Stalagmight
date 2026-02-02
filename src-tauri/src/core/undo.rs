@@ -149,6 +149,9 @@ pub enum UndoData {
         prev_shot_after: Option<(ShotId, ShotData)>,
         /// Previous station offset (None = no offset existed)
         prev_offset: Option<(f64, f64, f64)>,
+        /// Previous section offset (None = no offset existed)
+        #[serde(default)]
+        prev_section_offset: Option<(f64, f64)>,
     },
 
     /// Full project snapshot for batch operations (JSON serialized)

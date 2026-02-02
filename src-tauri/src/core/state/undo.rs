@@ -297,11 +297,13 @@ impl AppState {
                         };
                         let prev_shot_after = section.shots.get(idx).map(|s| (s.id, s.to_shot_data()));
                         let prev_offset = project.station_offsets.get(station_ref).copied();
+                        let prev_section_offset = project.section_offsets.get(&station_ref.section_id).copied();
                         UndoData::StationMoveInfo {
                             station_ref: *station_ref,
                             prev_shot_before,
                             prev_shot_after,
                             prev_offset,
+                            prev_section_offset,
                         }
                     }
                     None => UndoData::None,
@@ -755,6 +757,7 @@ impl AppState {
                 prev_shot_before,
                 prev_shot_after,
                 prev_offset,
+                prev_section_offset,
             } => {
                 // Restore adjacent shot data and station offset
                 match self.project.lock() {
@@ -793,6 +796,15 @@ impl AppState {
                                 }
                                 None => {
                                     project.station_offsets.remove(station_ref);
+                                }
+                            }
+                            // Restore section offset
+                            match prev_section_offset {
+                                Some(offset) => {
+                                    project.section_offsets.insert(station_ref.section_id, *offset);
+                                }
+                                None => {
+                                    project.section_offsets.remove(&station_ref.section_id);
                                 }
                             }
                             project.touch();

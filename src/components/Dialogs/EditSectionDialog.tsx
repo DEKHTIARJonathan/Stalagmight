@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
@@ -7,9 +8,11 @@ import { getThemeColor } from '../../utils/themeColors';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import type { Shot, ShotData } from '../../types/project';
+import type { DeleteShotImpact } from '../../types/commands';
+import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 
 export default function EditSectionDialog() {
-  const { closeDialog, dialogData } = useUIStore();
+  const { closeDialog, dialogData, openDialog } = useUIStore();
   const { updateSection, createShot, updateShot, deleteShot, project, config } = useProjectStore();
 
   const sectionId = dialogData.sectionId as number | undefined;
@@ -29,6 +32,9 @@ export default function EditSectionDialog() {
   const [shots, setShots] = useState<EditableShot[]>([]);
   const [nextTempId, setNextTempId] = useState(-1);
   const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null);
+  const [pendingMidDelete, setPendingMidDelete] = useState<{ index: number; shotId: number } | null>(null);
+  const [pendingImpact, setPendingImpact] = useState<DeleteShotImpact | null>(null);
+  const [pendingImpactError, setPendingImpactError] = useState<string | null>(null);
 
   // Initialize form with section data
   useEffect(() => {
@@ -79,24 +85,82 @@ export default function EditSectionDialog() {
   }, [nextTempId]);
 
   const handleDeleteShot = useCallback((index: number) => {
-    setShots(prev => {
-      const shot = prev[index];
-      if (!shot) return prev;
-      if (shot.isNew) {
+    const shot = shots[index];
+    if (!shot) return;
+
+    if (!shot.isNew && section) {
+      const originalIndex = section.shots.findIndex((s) => s.id === shot.id);
+      const totalShots = section.shots.length;
+      const isMidShot = totalShots >= 3 && originalIndex > 0 && originalIndex < totalShots - 1;
+      if (isMidShot) {
+        setPendingMidDelete({ index, shotId: shot.id });
+        return;
+      }
+    }
+
+    setShots((prev) => {
+      const current = prev[index];
+      if (!current) return prev;
+      if (current.isNew) {
         // New shot - just remove from array
         return prev.filter((_, i) => i !== index);
-      } else {
-        // Existing shot - mark as deleted
-        const updated = [...prev];
-        updated[index] = { ...shot, isDeleted: true } as EditableShot;
-        return updated;
       }
+      // Existing shot - mark as deleted
+      const updated = [...prev];
+      updated[index] = { ...current, isDeleted: true } as EditableShot;
+      return updated;
     });
+
     // Clear selection if deleted row was selected
     if (selectedRowIndex === index) {
       setSelectedRowIndex(null);
     }
-  }, [selectedRowIndex]);
+  }, [shots, section, selectedRowIndex]);
+
+  useEffect(() => {
+    if (pendingMidDelete && sectionId !== undefined) {
+      invoke<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId: pendingMidDelete.shotId })
+        .then((result) => {
+          setPendingImpact(result);
+          setPendingImpactError(null);
+        })
+        .catch((e) => {
+          setPendingImpact(null);
+          setPendingImpactError(e instanceof Error ? e.message : 'Failed to load shot impacts');
+        });
+    } else {
+      setPendingImpact(null);
+      setPendingImpactError(null);
+    }
+  }, [pendingMidDelete, sectionId]);
+
+  const confirmShiftMidDelete = useCallback(() => {
+    if (!pendingMidDelete) return;
+    setShots((prev) => {
+      const current = prev[pendingMidDelete.index];
+      if (!current) return prev;
+      if (current.isNew) {
+        return prev.filter((_, i) => i !== pendingMidDelete.index);
+      }
+      const updated = [...prev];
+      updated[pendingMidDelete.index] = { ...current, isDeleted: true } as EditableShot;
+      return updated;
+    });
+    if (selectedRowIndex === pendingMidDelete.index) {
+      setSelectedRowIndex(null);
+    }
+    setPendingMidDelete(null);
+  }, [pendingMidDelete, selectedRowIndex]);
+
+  const confirmSplitMidDelete = useCallback(() => {
+    if (!pendingMidDelete || sectionId === undefined) return;
+    const targetName = section?.name ?? `Section ${sectionId}`;
+    openDialog('split-section', {
+      sectionId,
+      shotId: pendingMidDelete.shotId,
+      sectionName: targetName,
+    });
+  }, [pendingMidDelete, sectionId, section, openDialog]);
 
   const handleInsertBefore = useCallback((index: number) => {
     const newShot: EditableShot = {
@@ -314,11 +378,39 @@ export default function EditSectionDialog() {
           />
         </div>
 
+        {pendingMidDelete && (
+          <div className="p-3 bg-warning-10 border border-warning-20 rounded text-sm space-y-3">
+            <p className="font-medium text-warning">This is a mid-section shot.</p>
+            <p className="text-text-secondary">
+              Split Section keeps geometry fixed but discards other unsaved edits. Shift Geometry deletes the shot and allows downstream stations to move.
+            </p>
+
+            {pendingImpactError && (
+              <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
+                {pendingImpactError}
+              </div>
+            )}
+
+            <DeleteShotImpactDetails
+              impact={pendingImpact}
+              title="If you choose Shift Geometry, these relationships will update:"
+            />
+
+            <div className="flex justify-end gap-2">
+              <Button onClick={() => setPendingMidDelete(null)}>Cancel</Button>
+              <Button onClick={confirmSplitMidDelete}>Split Section</Button>
+              <Button variant="danger" onClick={confirmShiftMidDelete}>
+                Shift Geometry
+              </Button>
+            </div>
+          </div>
+        )}
+
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={closeDialog} disabled={isLoading}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleSave} disabled={isLoading}>
+          <Button variant="primary" onClick={handleSave} disabled={isLoading || pendingMidDelete !== null}>
             {isLoading ? 'Saving...' : 'Save'}
           </Button>
         </div>

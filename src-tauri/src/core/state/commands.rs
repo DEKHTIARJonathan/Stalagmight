@@ -777,11 +777,12 @@ impl AppState {
             None => return CommandResult::failure("No project open".to_string()),
         };
 
-        if project.remove_shot(section_id, shot_id).is_some() {
-            tracing::info!(section_id, shot_id, "Shot deleted");
-            CommandResult::success()
-        } else {
-            CommandResult::failure(format!("Shot {}:{} not found", section_id, shot_id))
+        match project.remove_shot_with_rewire(section_id, shot_id) {
+            Ok(_) => {
+                tracing::info!(section_id, shot_id, "Shot deleted");
+                CommandResult::success()
+            }
+            Err(e) => CommandResult::failure(e),
         }
     }
 
@@ -1034,6 +1035,21 @@ impl AppState {
             return CommandResult::failure("Invalid station index".to_string());
         }
 
+        // Special case: moving station 0 should move the section offset so the
+        // rest of the geometry stays in place. Shot 0 is adjusted below to
+        // compensate for the offset shift.
+        if idx == 0 && (total_dx != 0.0 || total_dy != 0.0) {
+            let current = project
+                .section_offsets
+                .get(&station_ref.section_id)
+                .copied()
+                .unwrap_or((0.0, 0.0));
+            project.section_offsets.insert(
+                station_ref.section_id,
+                (current.0 + total_dx, current.1 + total_dy),
+            );
+        }
+
         // Modify preceding shot (shot idx-1): its endpoint moved by +delta
         if idx > 0 {
             if let Some(shot) = section.shots.get_mut(idx - 1) {
@@ -1248,6 +1264,8 @@ impl AppState {
             }
         };
 
+        let undo_section_b_name = name_b.clone();
+
         // Step 2: Get split data and perform the operation
         let new_section_id = {
             let mut proj_guard = match self.project.lock() {
@@ -1444,7 +1462,7 @@ impl AppState {
                     shot_id,
                 },
                 Command::CreateSection {
-                    name: Some(format!("Split from section {}", section_id)),
+                    name: Some(undo_section_b_name),
                     surveyor: None,
                     date: None,
                     color: String::new(),

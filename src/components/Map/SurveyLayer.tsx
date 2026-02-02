@@ -1749,6 +1749,9 @@ export default class SurveyLayer {
 
     // Update loop closure line opacity — gray out closures where both endpoints are anchored
     this.updateClosureAnchoredOpacity(sectionIds);
+
+    // Refresh main layer opacity so anchored sections dim consistently with current set.
+    this.updateImmovableLayerOpacity(this.immovableStationFeatureIds, this.immovableShotFeatureIds);
   }
 
   // Set text-opacity on label layers: 0.25 for features in anchored sections, normal otherwise
@@ -1823,6 +1826,10 @@ export default class SurveyLayer {
   // Set circle-opacity/line-opacity on main layers using data-driven expressions.
   // Uses setPaintProperty (not setFeatureState) for reliable initial-activation dimming.
   private updateImmovableLayerOpacity(stationIds: Set<number>, shotIds: Set<number>): void {
+    const anchoredCheck: maplibregl.ExpressionSpecification = this.anchoredSectionIds.size > 0
+      ? ['in', ['get', 'sectionId'], ['literal', [...this.anchoredSectionIds]]]
+      : (false as unknown as maplibregl.ExpressionSpecification);
+
     if (stationIds.size > 0 || shotIds.size > 0) {
       // Station circles: dim immovable stations
       if (stationIds.size > 0) {
@@ -1833,25 +1840,25 @@ export default class SurveyLayer {
         this.map.setPaintProperty(this.stationsLayerId, 'circle-opacity', [
           'case',
           immovableCheck, 0.25,
-          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          anchoredCheck, 0.25,
           1,
         ] as maplibregl.ExpressionSpecification);
         this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-opacity', [
           'case',
           immovableCheck, 0.25,
-          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          anchoredCheck, 0.25,
           1,
         ] as maplibregl.ExpressionSpecification);
       } else {
         // Restore default (feature-state only)
         this.map.setPaintProperty(this.stationsLayerId, 'circle-opacity', [
           'case',
-          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          anchoredCheck, 0.25,
           1,
         ] as maplibregl.ExpressionSpecification);
         this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-opacity', [
           'case',
-          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          anchoredCheck, 0.25,
           1,
         ] as maplibregl.ExpressionSpecification);
       }
@@ -1865,7 +1872,7 @@ export default class SurveyLayer {
         this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', [
           'case',
           immovableCheck, 0.25,
-          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          anchoredCheck, 0.25,
           ['get', 'isVirtual'], 0.5,
           1,
         ] as maplibregl.ExpressionSpecification);
@@ -1873,7 +1880,7 @@ export default class SurveyLayer {
         // Restore default (feature-state only)
         this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', [
           'case',
-          ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          anchoredCheck, 0.25,
           ['get', 'isVirtual'], 0.5,
           1,
         ] as maplibregl.ExpressionSpecification);
@@ -1882,17 +1889,17 @@ export default class SurveyLayer {
       // No immovable features — restore original paint properties
       this.map.setPaintProperty(this.stationsLayerId, 'circle-opacity', [
         'case',
-        ['boolean', ['feature-state', 'anchored'], false], 0.25,
+        anchoredCheck, 0.25,
         1,
       ] as maplibregl.ExpressionSpecification);
       this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-opacity', [
         'case',
-        ['boolean', ['feature-state', 'anchored'], false], 0.25,
+        anchoredCheck, 0.25,
         1,
       ] as maplibregl.ExpressionSpecification);
       this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', [
         'case',
-        ['boolean', ['feature-state', 'anchored'], false], 0.25,
+        anchoredCheck, 0.25,
         ['get', 'isVirtual'], 0.5,
         1,
       ] as maplibregl.ExpressionSpecification);
