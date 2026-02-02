@@ -151,6 +151,11 @@ export function useGlobalViewShortcuts({
       // Block all other shortcuts if context menu is visible
       if (contextMenuVisibleRef.current) return;
 
+      const { activeDialog } = useUIStore.getState();
+      if (activeDialog && e.key !== 'Escape') {
+        return;
+      }
+
       // Don't handle if focus is in an input element
       const activeElement = document.activeElement;
       if (
