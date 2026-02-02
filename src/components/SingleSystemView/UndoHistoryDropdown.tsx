@@ -88,10 +88,11 @@ interface DetailPreviewPopupProps {
   previewData: PreviewData | null;
   anchorRect: DOMRect;
   dropdownRect: DOMRect;
+  commandType: string;
 }
 
 /** Detail preview popup showing field changes */
-function DetailPreviewPopup({ previewData, anchorRect, dropdownRect }: DetailPreviewPopupProps) {
+function DetailPreviewPopup({ previewData, anchorRect, dropdownRect, commandType }: DetailPreviewPopupProps) {
   const popupRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<'right' | 'left'>('right');
 
@@ -136,26 +137,57 @@ function DetailPreviewPopup({ previewData, anchorRect, dropdownRect }: DetailPre
         <div className="text-sm text-text-secondary">No details</div>
       ) : (
         <>
-          <div className="space-y-2">
-            {previewData.changes.map((change, idx) => (
-              <div key={idx} className="text-xs">
-                <div className="text-text-secondary font-medium mb-0.5">
-                  {change.field}
+          <div className="space-y-1">
+            {previewData.changes.map((change, idx) => {
+              // Batch sub-commands: only for actual batch commands
+              const looksLikeBatchSubcommand = commandType === 'batch';
+
+              if (looksLikeBatchSubcommand) {
+                // Batch sub-command: description as header, details on next line
+                return (
+                  <div key={idx} className="text-xs" title={change.newValue ? `${change.field}: ${change.newValue}` : change.field}>
+                    <div className="text-text-secondary truncate">{change.field}</div>
+                    {change.newValue && (
+                      <div className="text-text-primary truncate pl-2">{change.newValue}</div>
+                    )}
+                  </div>
+                );
+              }
+
+              // Single-line "Field: value" format
+              return (
+                <div key={idx} className="text-xs truncate" title={
+                  change.oldValue && change.newValue
+                    ? `${change.field}: ${change.oldValue} → ${change.newValue}`
+                    : change.newValue
+                      ? `${change.field}: ${change.newValue}`
+                      : change.oldValue
+                        ? `${change.field}: ${change.oldValue}`
+                        : change.field
+                }>
+                  <span className="text-text-secondary">{change.field}: </span>
+                  {change.oldValue && change.newValue ? (
+                    // Both values: "Field: old → new"
+                    <>
+                      <span className="text-text-primary">{change.oldValue}</span>
+                      <span className="text-text-secondary"> &rarr; </span>
+                      <span className="text-text-primary">{change.newValue}</span>
+                    </>
+                  ) : change.newValue ? (
+                    // Info-only: "Field: value"
+                    <span className="text-text-primary">{change.newValue}</span>
+                  ) : change.oldValue ? (
+                    // Removed: "Field: ̶v̶a̶l̶u̶e̶"
+                    <span className="text-text-secondary line-through">{change.oldValue}</span>
+                  ) : (
+                    <span className="text-text-secondary">(empty)</span>
+                  )}
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-text-primary truncate max-w-[70px]" title={change.oldValue}>
-                    {change.oldValue || '(empty)'}
-                  </span>
-                  <span className="text-text-secondary shrink-0">&rarr;</span>
-                  <span className="text-text-primary truncate max-w-[70px]" title={change.newValue}>
-                    {change.newValue || '(empty)'}
-                  </span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           {previewData.additionalChanges > 0 && (
-            <div className="mt-2 pt-2 border-t border-border text-xs text-text-secondary">
+            <div className="mt-1 pt-1 border-t border-border text-xs text-text-secondary">
               +{previewData.additionalChanges} more
             </div>
           )}
@@ -866,6 +898,7 @@ export default function UndoHistoryDropdown({
           previewData={hoveredItem.previewData}
           anchorRect={hoveredItemRect}
           dropdownRect={dropdownRect}
+          commandType={hoveredItem.commandType}
         />
       )}
 

@@ -1046,6 +1046,19 @@ impl AppState {
 
     /// Get the undo stack as a list of history items for the UI
     pub fn get_undo_stack(&self) -> Vec<crate::commands::history::UndoHistoryItem> {
+        // Build a lightweight section name lookup map, then release the project lock
+        // before acquiring the undo_stack lock (avoids holding both simultaneously)
+        let section_names: std::collections::HashMap<u32, Option<String>> = self
+            .project
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard.as_ref().map(|p| {
+                    p.sections.iter().map(|s| (s.id, s.name.clone())).collect()
+                })
+            })
+            .unwrap_or_default();
+
         self.undo_stack
             .lock()
             .map(|stack| {
@@ -1053,7 +1066,11 @@ impl AppState {
                     .undo_entries()
                     .enumerate()
                     .map(|(idx, entry)| {
-                        crate::commands::history::entry_to_history_item(entry, idx)
+                        crate::commands::history::entry_to_history_item(
+                            entry,
+                            idx,
+                            &section_names,
+                        )
                     })
                     .collect()
             })
@@ -1062,6 +1079,17 @@ impl AppState {
 
     /// Get the redo stack as a list of history items for the UI
     pub fn get_redo_stack(&self) -> Vec<crate::commands::history::UndoHistoryItem> {
+        let section_names: std::collections::HashMap<u32, Option<String>> = self
+            .project
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard.as_ref().map(|p| {
+                    p.sections.iter().map(|s| (s.id, s.name.clone())).collect()
+                })
+            })
+            .unwrap_or_default();
+
         self.undo_stack
             .lock()
             .map(|stack| {
@@ -1069,7 +1097,11 @@ impl AppState {
                     .redo_entries()
                     .enumerate()
                     .map(|(idx, entry)| {
-                        crate::commands::history::entry_to_history_item(entry, idx)
+                        crate::commands::history::entry_to_history_item(
+                            entry,
+                            idx,
+                            &section_names,
+                        )
                     })
                     .collect()
             })

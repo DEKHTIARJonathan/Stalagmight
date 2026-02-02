@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use serde::Serialize;
 use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult, UndoData, UndoEntry};
+use crate::models::SectionId;
 
 /// DTO for undo history item sent to frontend
 #[derive(Debug, Clone, Serialize)]
@@ -152,8 +155,80 @@ fn get_command_type(command: &Command) -> String {
     }
 }
 
+/// Helper to format a station ref with its section name when available
+fn format_station_with_name(
+    station_ref: &crate::models::StationRef,
+    section_names: &HashMap<SectionId, Option<String>>,
+) -> String {
+    if let Some(Some(name)) = section_names.get(&station_ref.section_id) {
+        format!("{} ({})", station_ref, name)
+    } else {
+        station_ref.to_string()
+    }
+}
+
+/// Derive a compact detail string from just the command data (for batch sub-commands).
+/// Returns None for commands where no useful details can be extracted from the command alone.
+fn derive_command_details(
+    cmd: &Command,
+    section_names: &HashMap<SectionId, Option<String>>,
+) -> Option<String> {
+    match cmd {
+        Command::MoveSection { section_id, offset } => {
+            let mut parts = Vec::new();
+            if let Some(Some(name)) = section_names.get(section_id) {
+                parts.push(name.clone());
+            }
+            parts.push(offset.display_offset());
+            Some(parts.join(", "))
+        }
+        Command::MoveStation { offset, .. } | Command::MoveSegment { offset, .. } => {
+            Some(offset.display_offset())
+        }
+        Command::MergeStations { station_a, station_b } => {
+            Some(format!(
+                "{} \u{2194} {}",
+                format_station_with_name(station_a, section_names),
+                format_station_with_name(station_b, section_names),
+            ))
+        }
+        Command::CreateLoopClosure { station_a, station_b, closure_strategy } => {
+            Some(format!("{} \u{2194} {}, {}", station_a, station_b, closure_strategy.as_str()))
+        }
+        Command::SetShotVirtual { is_virtual, .. } => {
+            Some(format!("Virtual: {}", is_virtual))
+        }
+        Command::CreateShot { shot, .. } => {
+            Some(format!("Length: {:.2}, Azimuth: {:.1}", shot.length, shot.azimuth_in))
+        }
+        Command::CreateSection { name, .. } => {
+            name.as_ref().map(|n| format!("Name: {}", n))
+        }
+        Command::UpdateShot { updates, .. } => {
+            let mut parts = Vec::new();
+            if let Some(l) = updates.length {
+                parts.push(format!("Length: {:.2}", l));
+            }
+            if let Some(a) = updates.azimuth_in {
+                parts.push(format!("Azimuth: {:.1}", a));
+            }
+            if let Some(d) = updates.depth_in {
+                parts.push(format!("Depth: {:.2}", d));
+            }
+            if parts.is_empty() { None } else { Some(parts.join(", ")) }
+        }
+        Command::SetZeroDatum { coordinates, .. } => {
+            Some(format!("Lat: {:.6}, Lon: {:.6}", coordinates.latitude, coordinates.longitude))
+        }
+        _ => None,
+    }
+}
+
 /// Derive preview data from an undo entry based on command type and undo data
-fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
+fn derive_preview_data(
+    entry: &UndoEntry,
+    section_names: &HashMap<SectionId, Option<String>>,
+) -> Option<PreviewData> {
     match (&entry.command, &entry.undo_data) {
         // UpdateShot - show changed fields from PreviousValues
         (Command::UpdateShot { updates, .. }, UndoData::PreviousValues { values_json, .. }) => {
@@ -161,44 +236,76 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
 
             // Parse the previous values JSON to extract old values
             if let Ok(prev) = serde_json::from_str::<serde_json::Value>(values_json) {
-                // Check each field that was updated
-                if let Some(new_len) = updates.length {
-                    if let Some(old_len) = prev.get("length").and_then(|v| v.as_f64()) {
+                // f64 fields: check if updated and show old → new
+                let f64_fields: &[(&str, Option<f64>, &str, &str)] = &[
+                    ("Length", updates.length, "length", "{:.2}"),
+                    ("Azimuth In", updates.azimuth_in, "azimuth_in", "{:.1}"),
+                    ("Azimuth Out", updates.azimuth_out, "azimuth_out", "{:.1}"),
+                    ("Depth In", updates.depth_in, "depth_in", "{:.2}"),
+                    ("Depth Out", updates.depth_out, "depth_out", "{:.2}"),
+                ];
+                for &(label, new_val, json_key, _) in f64_fields {
+                    if let Some(new_v) = new_val {
+                        let old_v = prev.get(json_key).and_then(|v| v.as_f64());
+                        let fmt = if label.contains("Azimuth") { 1usize } else { 2 };
                         changes.push(FieldChange {
-                            field: "length".to_string(),
-                            old_value: format!("{:.2}", old_len),
-                            new_value: format!("{:.2}", new_len),
+                            field: label.to_string(),
+                            old_value: old_v.map(|v| format!("{:.prec$}", v, prec = fmt)).unwrap_or_default(),
+                            new_value: format!("{:.prec$}", new_v, prec = fmt),
                         });
                     }
                 }
-                if let Some(new_az) = updates.azimuth_in {
-                    if let Some(old_az) = prev.get("azimuth_in").and_then(|v| v.as_f64()) {
+
+                // Option<Option<f64>> fields (nullable measurements)
+                let opt_f64_fields: &[(&str, &Option<Option<f64>>, &str)] = &[
+                    ("Pitch In", &updates.pitch_in, "pitch_in"),
+                    ("Pitch Out", &updates.pitch_out, "pitch_out"),
+                    ("Left", &updates.left, "left"),
+                    ("Right", &updates.right, "right"),
+                    ("Up", &updates.up, "up"),
+                    ("Down", &updates.down, "down"),
+                ];
+                for &(label, update_val, json_key) in opt_f64_fields {
+                    if let Some(ref new_opt) = update_val {
+                        let old_v = prev.get(json_key).and_then(|v| v.as_f64());
                         changes.push(FieldChange {
-                            field: "azimuth".to_string(),
-                            old_value: format!("{:.1}", old_az),
-                            new_value: format!("{:.1}", new_az),
+                            field: label.to_string(),
+                            old_value: old_v.map(|v| format!("{:.2}", v)).unwrap_or_default(),
+                            new_value: new_opt.map(|v| format!("{:.2}", v)).unwrap_or_default(),
                         });
                     }
                 }
-                if let Some(new_depth) = updates.depth_in {
-                    if let Some(old_depth) = prev.get("depth_in").and_then(|v| v.as_f64()) {
-                        changes.push(FieldChange {
-                            field: "depth".to_string(),
-                            old_value: format!("{:.2}", old_depth),
-                            new_value: format!("{:.2}", new_depth),
-                        });
-                    }
-                }
-                // Handle comment field (Option<Option<String>>)
+
+                // Comment (Option<Option<String>>)
                 if let Some(ref new_comment_opt) = updates.comment {
                     let old_comment = prev.get("comment")
                         .and_then(|v| if v.is_null() { None } else { v.as_str() })
                         .unwrap_or("");
                     let new_comment = new_comment_opt.as_deref().unwrap_or("");
                     changes.push(FieldChange {
-                        field: "comment".to_string(),
+                        field: "Comment".to_string(),
                         old_value: old_comment.to_string(),
                         new_value: new_comment.to_string(),
+                    });
+                }
+
+                // is_virtual
+                if let Some(new_virtual) = updates.is_virtual {
+                    let old_virtual = prev.get("is_virtual").and_then(|v| v.as_bool()).unwrap_or(false);
+                    changes.push(FieldChange {
+                        field: "Virtual".to_string(),
+                        old_value: old_virtual.to_string(),
+                        new_value: new_virtual.to_string(),
+                    });
+                }
+
+                // Temperature (Option<Option<f64>>)
+                if let Some(ref new_temp) = updates.temperature {
+                    let old_temp = prev.get("temperature").and_then(|v| v.as_f64());
+                    changes.push(FieldChange {
+                        field: "Temperature".to_string(),
+                        old_value: old_temp.map(|v| format!("{:.1}", v)).unwrap_or_default(),
+                        new_value: new_temp.map(|v| format!("{:.1}", v)).unwrap_or_default(),
                     });
                 }
             }
@@ -207,8 +314,8 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
                 None
             } else {
                 let total = changes.len();
-                let shown: Vec<_> = changes.into_iter().take(3).collect();
-                let additional = if total > 3 { total - 3 } else { 0 };
+                let shown: Vec<_> = changes.into_iter().take(5).collect();
+                let additional = if total > 5 { total - 5 } else { 0 };
                 Some(PreviewData {
                     changes: shown,
                     additional_changes: additional,
@@ -226,7 +333,7 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
                         .and_then(|v| v.as_str())
                         .unwrap_or("unnamed");
                     changes.push(FieldChange {
-                        field: "name".to_string(),
+                        field: "Name".to_string(),
                         old_value: old_name.to_string(),
                         new_value: new_name.clone(),
                     });
@@ -236,7 +343,7 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     changes.push(FieldChange {
-                        field: "surveyor".to_string(),
+                        field: "Surveyor".to_string(),
                         old_value: old_surveyor.to_string(),
                         new_value: new_surveyor.clone(),
                     });
@@ -246,7 +353,7 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     changes.push(FieldChange {
-                        field: "date".to_string(),
+                        field: "Date".to_string(),
                         old_value: old_date.to_string(),
                         new_value: new_date.to_string(),
                     });
@@ -270,7 +377,7 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
         (Command::CreateSection { name, .. }, _) => {
             Some(PreviewData {
                 changes: vec![FieldChange {
-                    field: "name".to_string(),
+                    field: "Name".to_string(),
                     old_value: String::new(),
                     new_value: name.clone().unwrap_or_else(|| "unnamed".to_string()),
                 }],
@@ -283,12 +390,12 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
             Some(PreviewData {
                 changes: vec![
                     FieldChange {
-                        field: "length".to_string(),
+                        field: "Length".to_string(),
                         old_value: String::new(),
                         new_value: format!("{:.2}", shot.length),
                     },
                     FieldChange {
-                        field: "azimuth".to_string(),
+                        field: "Azimuth".to_string(),
                         old_value: String::new(),
                         new_value: format!("{:.1}", shot.azimuth_in),
                     },
@@ -304,12 +411,12 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
                     Some(PreviewData {
                         changes: vec![
                             FieldChange {
-                                field: "name".to_string(),
+                                field: "Name".to_string(),
                                 old_value: section.name.clone().unwrap_or_else(|| "unnamed".to_string()),
                                 new_value: String::new(),
                             },
                             FieldChange {
-                                field: "shots".to_string(),
+                                field: "Shots".to_string(),
                                 old_value: section.shots.len().to_string(),
                                 new_value: "0".to_string(),
                             },
@@ -329,12 +436,12 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
             Some(PreviewData {
                 changes: vec![
                     FieldChange {
-                        field: "length".to_string(),
+                        field: "Length".to_string(),
                         old_value: format!("{:.2}", shot_data.length),
                         new_value: String::new(),
                     },
                     FieldChange {
-                        field: "azimuth".to_string(),
+                        field: "Azimuth".to_string(),
                         old_value: format!("{:.1}", shot_data.azimuth_in),
                         new_value: String::new(),
                     },
@@ -348,12 +455,12 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
             Some(PreviewData {
                 changes: vec![
                     FieldChange {
-                        field: "latitude".to_string(),
+                        field: "Latitude".to_string(),
                         old_value: String::new(),
                         new_value: format!("{:.6}", coordinates.latitude),
                     },
                     FieldChange {
-                        field: "longitude".to_string(),
+                        field: "Longitude".to_string(),
                         old_value: String::new(),
                         new_value: format!("{:.6}", coordinates.longitude),
                     },
@@ -362,50 +469,220 @@ fn derive_preview_data(entry: &UndoEntry) -> Option<PreviewData> {
             })
         }
 
-        // Batch - show summary of operations count (human-readable)
-        (Command::Batch { commands }, _) => {
-            let count = commands.len();
-            let label = if count == 1 { "operation" } else { "operations" };
+        // SetShotVirtual - show the toggle
+        (Command::SetShotVirtual { is_virtual, .. }, _) => {
             Some(PreviewData {
                 changes: vec![FieldChange {
-                    field: "count".to_string(),
-                    old_value: String::new(),
-                    new_value: format!("{} {}", count, label),
+                    field: "Virtual".to_string(),
+                    old_value: (!is_virtual).to_string(),
+                    new_value: is_virtual.to_string(),
                 }],
                 additional_changes: 0,
             })
         }
 
-        // Commands without meaningful diff
-        (Command::MergeStations { .. }, _) |
-        (Command::UnmergeStations { .. }, _) |
-        (Command::RemoveZeroDatum { .. }, _) |
-        (Command::MoveSection { .. }, _) |
-        (Command::MoveStation { .. }, _) => None,
+        // MoveSection - show offset and section name
+        (Command::MoveSection { section_id, offset }, _) => {
+            let mut changes = vec![FieldChange {
+                field: "Offset".to_string(),
+                old_value: String::new(),
+                new_value: offset.display_offset(),
+            }];
+            if let Some(Some(name)) = section_names.get(section_id) {
+                changes.insert(0, FieldChange {
+                    field: "Section".to_string(),
+                    old_value: String::new(),
+                    new_value: name.clone(),
+                });
+            }
+            Some(PreviewData { changes, additional_changes: 0 })
+        }
 
-        // Default: no preview data
-        _ => None,
+        // MoveStation - show offset
+        (Command::MoveStation { offset, .. }, _) => {
+            Some(PreviewData {
+                changes: vec![FieldChange {
+                    field: "Offset".to_string(),
+                    old_value: String::new(),
+                    new_value: offset.display_offset(),
+                }],
+                additional_changes: 0,
+            })
+        }
+
+        // MoveSegment - show offset and affected section count
+        (Command::MoveSegment { offset, .. }, UndoData::SegmentMoveInfo { affected_sections, .. }) => {
+            Some(PreviewData {
+                changes: vec![
+                    FieldChange {
+                        field: "Offset".to_string(),
+                        old_value: String::new(),
+                        new_value: offset.display_offset(),
+                    },
+                    FieldChange {
+                        field: "Affected sections".to_string(),
+                        old_value: String::new(),
+                        new_value: affected_sections.len().to_string(),
+                    },
+                ],
+                additional_changes: 0,
+            })
+        }
+
+        // MoveSegment fallback (other undo data variants)
+        (Command::MoveSegment { offset, .. }, _) => {
+            Some(PreviewData {
+                changes: vec![FieldChange {
+                    field: "Offset".to_string(),
+                    old_value: String::new(),
+                    new_value: offset.display_offset(),
+                }],
+                additional_changes: 0,
+            })
+        }
+
+        // MergeStations - show station identifiers with section names
+        (Command::MergeStations { station_a, station_b }, _) => {
+            Some(PreviewData {
+                changes: vec![
+                    FieldChange {
+                        field: "Station A".to_string(),
+                        old_value: String::new(),
+                        new_value: format_station_with_name(station_a, section_names),
+                    },
+                    FieldChange {
+                        field: "Station B".to_string(),
+                        old_value: String::new(),
+                        new_value: format_station_with_name(station_b, section_names),
+                    },
+                ],
+                additional_changes: 0,
+            })
+        }
+
+        // UnmergeStations - show station identifier with section name
+        (Command::UnmergeStations { station_ref }, _) => {
+            Some(PreviewData {
+                changes: vec![FieldChange {
+                    field: "Station".to_string(),
+                    old_value: String::new(),
+                    new_value: format_station_with_name(station_ref, section_names),
+                }],
+                additional_changes: 0,
+            })
+        }
+
+        // CreateLoopClosure - show stations and strategy
+        (Command::CreateLoopClosure { station_a, station_b, closure_strategy }, _) => {
+            Some(PreviewData {
+                changes: vec![
+                    FieldChange {
+                        field: "Stations".to_string(),
+                        old_value: String::new(),
+                        new_value: format!("{} \u{2194} {}", station_a, station_b),
+                    },
+                    FieldChange {
+                        field: "Strategy".to_string(),
+                        old_value: String::new(),
+                        new_value: closure_strategy.as_str().to_string(),
+                    },
+                ],
+                additional_changes: 0,
+            })
+        }
+
+        // RemoveZeroDatum - show station and previous GPS if available
+        (Command::RemoveZeroDatum { station_ref }, UndoData::ZeroDatumInfo { previous_gps, .. }) => {
+            let mut changes = vec![FieldChange {
+                field: "Station".to_string(),
+                old_value: String::new(),
+                new_value: station_ref.to_string(),
+            }];
+            if let Some(gps) = previous_gps {
+                changes.push(FieldChange {
+                    field: "Latitude".to_string(),
+                    old_value: format!("{:.6}", gps.latitude),
+                    new_value: String::new(),
+                });
+                changes.push(FieldChange {
+                    field: "Longitude".to_string(),
+                    old_value: format!("{:.6}", gps.longitude),
+                    new_value: String::new(),
+                });
+            }
+            Some(PreviewData { changes, additional_changes: 0 })
+        }
+
+        // RemoveZeroDatum fallback
+        (Command::RemoveZeroDatum { station_ref }, _) => {
+            Some(PreviewData {
+                changes: vec![FieldChange {
+                    field: "Station".to_string(),
+                    old_value: String::new(),
+                    new_value: station_ref.to_string(),
+                }],
+                additional_changes: 0,
+            })
+        }
+
+        // Batch - list all sub-commands with their details
+        (Command::Batch { commands }, _) => {
+            let changes: Vec<FieldChange> = commands.iter()
+                .map(|cmd| {
+                    let details = derive_command_details(cmd, section_names)
+                        .unwrap_or_default();
+                    FieldChange {
+                        field: cmd.description(),
+                        old_value: String::new(),
+                        new_value: details,
+                    }
+                })
+                .collect();
+            Some(PreviewData { changes, additional_changes: 0 })
+        }
+
+        // Default catch-all: show command description so hover is never empty
+        _ => {
+            Some(PreviewData {
+                changes: vec![FieldChange {
+                    field: "Action".to_string(),
+                    old_value: String::new(),
+                    new_value: entry.command.description(),
+                }],
+                additional_changes: 0,
+            })
+        }
     }
 }
 
 /// Convert an UndoEntry to an UndoHistoryItem
-pub fn entry_to_history_item(entry: &UndoEntry, index: usize) -> UndoHistoryItem {
+pub fn entry_to_history_item(
+    entry: &UndoEntry,
+    index: usize,
+    section_names: &HashMap<SectionId, Option<String>>,
+) -> UndoHistoryItem {
     UndoHistoryItem {
         index,
         description: entry.command.description(),
         timestamp: entry.timestamp.map(|t| t.to_rfc3339()),
         command_type: get_command_type(&entry.command),
-        preview_data: derive_preview_data(entry),
+        preview_data: derive_preview_data(entry, section_names),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::models::{
+        ClosureStrategy, Coordinates, SectionData, ShotData, ShotUpdates, GpsCoordinates,
+        StationRef,
+    };
+    use chrono::Utc;
     use std::collections::HashMap;
 
-    use super::*;
-    use crate::models::{SectionData, ShotData, ShotUpdates, GpsCoordinates, StationRef};
-    use chrono::Utc;
+    fn empty_names() -> HashMap<SectionId, Option<String>> {
+        HashMap::new()
+    }
 
     #[test]
     fn test_get_command_type() {
@@ -444,7 +721,7 @@ mod tests {
             timestamp: Some(Utc::now()),
         };
 
-        let item = entry_to_history_item(&entry, 0);
+        let item = entry_to_history_item(&entry, 0, &empty_names());
         assert_eq!(item.index, 0);
         assert_eq!(item.description, "Create section 'Test Section'");
         assert!(item.timestamp.is_some());
@@ -480,16 +757,16 @@ mod tests {
             timestamp: None,
         };
 
-        let item = entry_to_history_item(&entry, 3);
+        let item = entry_to_history_item(&entry, 3, &empty_names());
         assert_eq!(item.index, 3);
         assert!(item.timestamp.is_none());
         assert_eq!(item.command_type, "delete_section");
 
         let preview = item.preview_data.unwrap();
         assert_eq!(preview.changes.len(), 2);
-        assert_eq!(preview.changes[0].field, "name");
+        assert_eq!(preview.changes[0].field, "Name");
         assert_eq!(preview.changes[0].old_value, "Deleted Section");
-        assert_eq!(preview.changes[1].field, "shots");
+        assert_eq!(preview.changes[1].field, "Shots");
         assert_eq!(preview.changes[1].old_value, "2");
     }
 
@@ -513,18 +790,22 @@ mod tests {
             timestamp: None,
         };
 
-        let preview = derive_preview_data(&entry).unwrap();
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
         assert_eq!(preview.changes.len(), 2);
-        assert_eq!(preview.changes[0].field, "length");
+        assert_eq!(preview.changes[0].field, "Length");
         assert_eq!(preview.changes[0].old_value, "10.00");
         assert_eq!(preview.changes[0].new_value, "15.00");
-        assert_eq!(preview.changes[1].field, "azimuth");
+        assert_eq!(preview.changes[1].field, "Azimuth In");
         assert_eq!(preview.changes[1].old_value, "45.0");
         assert_eq!(preview.changes[1].new_value, "90.0");
     }
 
     #[test]
-    fn test_derive_preview_data_merge_stations_none() {
+    fn test_derive_preview_data_merge_stations_with_names() {
+        let mut names = HashMap::new();
+        names.insert(0, Some("Main Passage".to_string()));
+        names.insert(1, Some("Side Tunnel".to_string()));
+
         let entry = UndoEntry {
             command: Command::MergeStations {
                 station_a: StationRef::new(0, 0),
@@ -534,13 +815,38 @@ mod tests {
                 station_a: StationRef::new(0, 0),
                 station_b: StationRef::new(1, 0),
                 removed_closures: Vec::new(),
-                previous_offsets: std::collections::HashMap::new(),
+                previous_offsets: HashMap::new(),
             },
             timestamp: None,
         };
 
-        let preview = derive_preview_data(&entry);
-        assert!(preview.is_none());
+        let preview = derive_preview_data(&entry, &names).unwrap();
+        assert_eq!(preview.changes.len(), 2);
+        assert_eq!(preview.changes[0].field, "Station A");
+        assert_eq!(preview.changes[0].new_value, "0:0 (Main Passage)");
+        assert_eq!(preview.changes[1].field, "Station B");
+        assert_eq!(preview.changes[1].new_value, "1:0 (Side Tunnel)");
+    }
+
+    #[test]
+    fn test_derive_preview_data_merge_stations_without_names() {
+        let entry = UndoEntry {
+            command: Command::MergeStations {
+                station_a: StationRef::new(0, 0),
+                station_b: StationRef::new(1, 0),
+            },
+            undo_data: UndoData::MergeInfo {
+                station_a: StationRef::new(0, 0),
+                station_b: StationRef::new(1, 0),
+                removed_closures: Vec::new(),
+                previous_offsets: HashMap::new(),
+            },
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        assert_eq!(preview.changes[0].new_value, "0:0");
+        assert_eq!(preview.changes[1].new_value, "1:0");
     }
 
     #[test]
@@ -558,11 +864,159 @@ mod tests {
             timestamp: None,
         };
 
-        let preview = derive_preview_data(&entry).unwrap();
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
         assert_eq!(preview.changes.len(), 2);
-        assert_eq!(preview.changes[0].field, "latitude");
+        assert_eq!(preview.changes[0].field, "Latitude");
         assert_eq!(preview.changes[0].new_value, "45.123456");
-        assert_eq!(preview.changes[1].field, "longitude");
+        assert_eq!(preview.changes[1].field, "Longitude");
         assert_eq!(preview.changes[1].new_value, "-73.654321");
+    }
+
+    #[test]
+    fn test_derive_preview_data_move_section() {
+        let mut names = HashMap::new();
+        names.insert(2, Some("East Wing".to_string()));
+
+        let entry = UndoEntry {
+            command: Command::MoveSection {
+                section_id: 2,
+                offset: Coordinates::new(0.0, 5.0, 0.0),
+            },
+            undo_data: UndoData::None,
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &names).unwrap();
+        assert_eq!(preview.changes[0].field, "Section");
+        assert_eq!(preview.changes[0].new_value, "East Wing");
+        assert_eq!(preview.changes[1].field, "Offset");
+        assert_eq!(preview.changes[1].new_value, "5.0m N");
+    }
+
+    #[test]
+    fn test_derive_preview_data_move_station() {
+        let entry = UndoEntry {
+            command: Command::MoveStation {
+                station_ref: StationRef::new(1, 3),
+                offset: Coordinates::new(5.0, 0.0, -2.0),
+            },
+            undo_data: UndoData::None,
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        assert_eq!(preview.changes[0].field, "Offset");
+        assert_eq!(preview.changes[0].new_value, "5.0m E, 2.0m up");
+    }
+
+    #[test]
+    fn test_derive_preview_data_set_shot_virtual() {
+        let entry = UndoEntry {
+            command: Command::SetShotVirtual {
+                section_id: 1,
+                shot_id: 2,
+                is_virtual: true,
+            },
+            undo_data: UndoData::None,
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        assert_eq!(preview.changes[0].field, "Virtual");
+        assert_eq!(preview.changes[0].old_value, "false");
+        assert_eq!(preview.changes[0].new_value, "true");
+    }
+
+    #[test]
+    fn test_derive_preview_data_create_loop_closure() {
+        let entry = UndoEntry {
+            command: Command::CreateLoopClosure {
+                station_a: StationRef::new(1, 0),
+                station_b: StationRef::new(2, 3),
+                closure_strategy: ClosureStrategy::ProportionalByLength,
+            },
+            undo_data: UndoData::None,
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        assert_eq!(preview.changes[0].field, "Stations");
+        assert!(preview.changes[0].new_value.contains("1:0"));
+        assert!(preview.changes[0].new_value.contains("2:3"));
+        assert_eq!(preview.changes[1].field, "Strategy");
+        assert_eq!(preview.changes[1].new_value, "ProportionalByLength");
+    }
+
+    #[test]
+    fn test_derive_preview_data_remove_zero_datum_with_gps() {
+        let entry = UndoEntry {
+            command: Command::RemoveZeroDatum {
+                station_ref: StationRef::new(0, 0),
+            },
+            undo_data: UndoData::ZeroDatumInfo {
+                station_ref: StationRef::new(0, 0),
+                previous_gps: Some(GpsCoordinates::new(45.0, -73.0, 0.0).unwrap()),
+                previous_offsets: HashMap::new(),
+            },
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        assert_eq!(preview.changes.len(), 3);
+        assert_eq!(preview.changes[0].field, "Station");
+        assert_eq!(preview.changes[1].field, "Latitude");
+        assert_eq!(preview.changes[1].old_value, "45.000000");
+        assert_eq!(preview.changes[2].field, "Longitude");
+    }
+
+    #[test]
+    fn test_derive_preview_data_batch_lists_subcommands_with_details() {
+        let entry = UndoEntry {
+            command: Command::Batch {
+                commands: vec![
+                    Command::DeleteShot { section_id: 1, shot_id: 2 },
+                    Command::MergeStations {
+                        station_a: StationRef::new(1, 0),
+                        station_b: StationRef::new(2, 0),
+                    },
+                    Command::MoveSection {
+                        section_id: 3,
+                        offset: Coordinates::new(0.0, 5.0, 0.0),
+                    },
+                    Command::CloseProject,
+                ],
+            },
+            undo_data: UndoData::None,
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        // All 4 sub-commands shown (no truncation)
+        assert_eq!(preview.changes.len(), 4);
+        assert_eq!(preview.additional_changes, 0);
+        // Each field is the sub-command description
+        assert_eq!(preview.changes[0].field, "Delete shot 1:3");
+        assert!(preview.changes[0].new_value.is_empty()); // no details for delete without undo data
+        assert_eq!(preview.changes[1].field, "Merge stations 1:0 and 2:0");
+        assert!(preview.changes[1].new_value.contains("1:0"));
+        assert!(preview.changes[1].new_value.contains("2:0"));
+        assert_eq!(preview.changes[2].field, "Move section 3");
+        assert_eq!(preview.changes[2].new_value, "5.0m N");
+        assert_eq!(preview.changes[3].field, "Close project");
+        assert!(preview.changes[3].new_value.is_empty());
+    }
+
+    #[test]
+    fn test_derive_preview_data_default_fallback_never_none() {
+        // DeleteShot with non-matching undo data should still produce preview via fallback
+        let entry = UndoEntry {
+            command: Command::DeleteShot { section_id: 1, shot_id: 2 },
+            undo_data: UndoData::None,
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        assert_eq!(preview.changes[0].field, "Action");
+        assert!(preview.changes[0].new_value.contains("Delete shot"));
     }
 }

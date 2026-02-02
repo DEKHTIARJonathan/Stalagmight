@@ -6,8 +6,20 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
  * Tests hover behavior, click actions, keyboard navigation, detail preview, and edge cases.
  */
 
+/** Shape of a mock undo/redo history item */
+interface MockHistoryItem {
+  index: number;
+  description: string;
+  timestamp: string | null;
+  commandType: string;
+  previewData: {
+    changes: Array<{ field: string; oldValue: string | null; newValue: string | null }>;
+    additionalChanges: number;
+  } | null;
+}
+
 /** Mock undo history items for testing */
-function getMockUndoStack() {
+function getMockUndoStack(): MockHistoryItem[] {
   return [
     {
       index: 0,
@@ -16,8 +28,8 @@ function getMockUndoStack() {
       commandType: 'update_shot',
       previewData: {
         changes: [
-          { field: 'length', oldValue: '10.0', newValue: '15.5' },
-          { field: 'azimuth', oldValue: '45', newValue: '48' },
+          { field: 'Length', oldValue: '10.0', newValue: '15.5' },
+          { field: 'Azimuth In', oldValue: '45', newValue: '48' },
         ],
         additionalChanges: 0,
       },
@@ -28,7 +40,7 @@ function getMockUndoStack() {
       timestamp: new Date(Date.now() - 120000).toISOString(), // 2 minutes ago
       commandType: 'create_section',
       previewData: {
-        changes: [{ field: 'name', oldValue: '', newValue: 'Main Tunnel' }],
+        changes: [{ field: 'Name', oldValue: '', newValue: 'Main Tunnel' }],
         additionalChanges: 0,
       },
     },
@@ -37,19 +49,31 @@ function getMockUndoStack() {
       description: 'Delete shot in Side Passage',
       timestamp: new Date(Date.now() - 180000).toISOString(), // 3 minutes ago
       commandType: 'delete_shot',
-      previewData: null,
+      previewData: {
+        changes: [
+          { field: 'Length', oldValue: '8.5', newValue: '' },
+          { field: 'Azimuth In', oldValue: '120', newValue: '' },
+        ],
+        additionalChanges: 1,
+      },
     },
     {
       index: 3,
       description: 'Merge stations A1 and B2',
       timestamp: null, // Legacy entry without timestamp
       commandType: 'merge_stations',
-      previewData: null,
+      previewData: {
+        changes: [
+          { field: 'Station A', oldValue: null, newValue: '1:0 (Main Tunnel)' },
+          { field: 'Station B', oldValue: null, newValue: '2:1 (Side Passage)' },
+        ],
+        additionalChanges: 0,
+      },
     },
   ];
 }
 
-function getMockRedoStack() {
+function getMockRedoStack(): MockHistoryItem[] {
   return [
     {
       index: 0,
@@ -57,7 +81,7 @@ function getMockRedoStack() {
       timestamp: new Date(Date.now() - 300000).toISOString(),
       commandType: 'delete_section',
       previewData: {
-        changes: [{ field: 'name', oldValue: 'Old Tunnel', newValue: '' }],
+        changes: [{ field: 'Name', oldValue: 'Old Tunnel', newValue: '' }],
         additionalChanges: 2,
       },
     },
@@ -67,8 +91,8 @@ function getMockRedoStack() {
 interface MockUndoRedoConfig {
   canUndo: boolean;
   canRedo: boolean;
-  undoStack: ReturnType<typeof getMockUndoStack>;
-  redoStack: ReturnType<typeof getMockRedoStack>;
+  undoStack: MockHistoryItem[];
+  redoStack: MockHistoryItem[];
   /** When true, undo/redo commands mutate the mock stacks (move entries between them)
    *  and derive canUndo/canRedo from array lengths. Default: false (fixed stacks). */
   mutating?: boolean;
@@ -501,25 +525,168 @@ test.describe('Undo/Redo History Dropdown', () => {
       const previewPopup = page.getByTestId('detail-preview-popup');
       await expect(previewPopup).toBeVisible({ timeout: 1000 });
 
-      // Verify preview shows field changes
-      await expect(previewPopup).toContainText('length');
+      // Verify preview shows field changes in "Field: value" format
+      await expect(previewPopup).toContainText('Length:');
       await expect(previewPopup).toContainText('10.0');
       await expect(previewPopup).toContainText('15.5');
     });
 
-    test('detail preview shows "No details" for items without previewData', async ({ page }) => {
+    test('detail preview shows info-only values without arrow for merge_stations', async ({ page }) => {
       const undoButton = page.getByTestId('toolbar-undo-button');
 
       // Hover to open dropdown
       await undoButton.hover();
       await page.waitForTimeout(400);
 
-      // Hover over item at index 2 (which has null previewData)
+      // Hover over item at index 3 (merge_stations with info-only newValue fields)
+      const item = page.getByTestId('toolbar-undo-button-item-3');
+      await expect(item).toBeVisible();
+      await item.hover();
+
+      // Detail preview popup should show station info
+      const previewPopup = page.getByTestId('detail-preview-popup');
+      await expect(previewPopup).toBeVisible({ timeout: 1000 });
+      await expect(previewPopup).toContainText('Station A:');
+      await expect(previewPopup).toContainText('1:0 (Main Tunnel)');
+      await expect(previewPopup).toContainText('Station B:');
+      await expect(previewPopup).toContainText('2:1 (Side Passage)');
+
+      // Should NOT contain arrow symbol (info-only rendering)
+      await expect(previewPopup).not.toContainText('→');
+    });
+
+    test('detail preview shows old values for delete_shot', async ({ page }) => {
+      const undoButton = page.getByTestId('toolbar-undo-button');
+
+      // Hover to open dropdown
+      await undoButton.hover();
+      await page.waitForTimeout(400);
+
+      // Hover over item at index 2 (delete_shot with old values)
       const item = page.getByTestId('toolbar-undo-button-item-2');
       await expect(item).toBeVisible();
       await item.hover();
 
-      // Detail preview popup should show "No details"
+      // Detail preview popup should show deleted shot data
+      const previewPopup = page.getByTestId('detail-preview-popup');
+      await expect(previewPopup).toBeVisible({ timeout: 1000 });
+      await expect(previewPopup).toContainText('Length:');
+      await expect(previewPopup).toContainText('8.5');
+    });
+
+    test('detail preview shows move offset without arrow', async ({ page }) => {
+      // Setup custom mock with a move command (description is simple, details in hover only)
+      await page.evaluate(() => {
+        const cfg = (window as unknown as { __UNDO_REDO_MOCK_CONFIG__: { undoStack: unknown[] } }).__UNDO_REDO_MOCK_CONFIG__;
+        cfg.undoStack = [
+          {
+            index: 0,
+            description: 'Move section 2',
+            timestamp: new Date().toISOString(),
+            commandType: 'move_section',
+            previewData: {
+              changes: [
+                { field: 'Offset', oldValue: null, newValue: '5.3m NNW, 1.2m down' },
+                { field: 'Section', oldValue: null, newValue: 'Main Tunnel' },
+              ],
+              additionalChanges: 0,
+            },
+          },
+        ];
+      });
+
+      const undoButton = page.getByTestId('toolbar-undo-button');
+
+      // Re-open dropdown to pick up new mock data
+      await undoButton.hover();
+      await page.waitForTimeout(400);
+
+      const item = page.getByTestId('toolbar-undo-button-item-0');
+      await expect(item).toBeVisible();
+      await item.hover();
+
+      const previewPopup = page.getByTestId('detail-preview-popup');
+      await expect(previewPopup).toBeVisible({ timeout: 1000 });
+      await expect(previewPopup).toContainText('Offset:');
+      await expect(previewPopup).toContainText('5.3m NNW, 1.2m down');
+      await expect(previewPopup).toContainText('Section:');
+      await expect(previewPopup).toContainText('Main Tunnel');
+
+      // Should NOT contain arrow symbol (info-only rendering)
+      await expect(previewPopup).not.toContainText('→');
+    });
+
+    test('detail preview lists batch sub-commands with details', async ({ page }) => {
+      // Setup custom mock with a batch command.
+      // Field = command description (header), newValue = details (shown on next line).
+      // Each sub-command renders with description as header and details below.
+      await page.evaluate(() => {
+        const cfg = (window as unknown as { __UNDO_REDO_MOCK_CONFIG__: { undoStack: unknown[] } }).__UNDO_REDO_MOCK_CONFIG__;
+        cfg.undoStack = [
+          {
+            index: 0,
+            description: 'Batch of 3 commands',
+            timestamp: new Date().toISOString(),
+            commandType: 'batch',
+            previewData: {
+              changes: [
+                { field: 'Merge stations 1:0 and 2:1', oldValue: null, newValue: '1:0 \u2194 2:1' },
+                { field: 'Update section 1 metadata', oldValue: null, newValue: '' },
+                { field: 'Delete section "Side"', oldValue: null, newValue: '' },
+              ],
+              additionalChanges: 0,
+            },
+          },
+        ];
+      });
+
+      const undoButton = page.getByTestId('toolbar-undo-button');
+
+      // Re-open dropdown to pick up new mock data
+      await undoButton.hover();
+      await page.waitForTimeout(400);
+
+      const item = page.getByTestId('toolbar-undo-button-item-0');
+      await expect(item).toBeVisible();
+      await item.hover();
+
+      const previewPopup = page.getByTestId('detail-preview-popup');
+      await expect(previewPopup).toBeVisible({ timeout: 1000 });
+
+      // Should show each sub-command description as header
+      await expect(previewPopup).toContainText('Merge stations 1:0 and 2:1');
+      await expect(previewPopup).toContainText('Update section 1 metadata');
+      await expect(previewPopup).toContainText('Delete section "Side"');
+
+      // First item has details on a new line below the description
+      await expect(previewPopup).toContainText('1:0 \u2194 2:1');
+    });
+
+    test('detail preview shows "No details" for defensive null previewData', async ({ page }) => {
+      // Setup custom mock with null previewData to test defensive rendering
+      await page.evaluate(() => {
+        const cfg = (window as unknown as { __UNDO_REDO_MOCK_CONFIG__: { undoStack: unknown[] } }).__UNDO_REDO_MOCK_CONFIG__;
+        cfg.undoStack = [
+          {
+            index: 0,
+            description: 'Some unknown command',
+            timestamp: new Date().toISOString(),
+            commandType: 'unknown',
+            previewData: null,
+          },
+        ];
+      });
+
+      const undoButton = page.getByTestId('toolbar-undo-button');
+
+      // Re-open dropdown to pick up new mock data
+      await undoButton.hover();
+      await page.waitForTimeout(400);
+
+      const item = page.getByTestId('toolbar-undo-button-item-0');
+      await expect(item).toBeVisible();
+      await item.hover();
+
       const previewPopup = page.getByTestId('detail-preview-popup');
       await expect(previewPopup).toBeVisible({ timeout: 1000 });
       await expect(previewPopup).toContainText('No details');
