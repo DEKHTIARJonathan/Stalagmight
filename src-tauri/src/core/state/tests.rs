@@ -3456,7 +3456,7 @@ fn test_undo_unmerge_restores_removed_closures() {
 // === Move Station Tests ===
 
 #[test]
-fn test_move_station_updates_offsets() {
+fn test_move_station_updates_shot_data() {
     let state = AppState::new().unwrap();
 
     state.execute(Command::CreateProject {
@@ -3464,45 +3464,54 @@ fn test_move_station_updates_offsets() {
         location: None,
     });
 
+    // Create section with a shot pointing due east (azimuth 90°), length 10
     let create_result = state.execute(Command::CreateSection {
         name: None,
         surveyor: None,
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        }],
     });
 
     let section_id = create_result.section_id.unwrap();
-    let station_ref = StationRef::new(section_id, 1);
+    let station_ref = StationRef::new(section_id, 1); // last station
 
-    // First move
+    // Move station 1 by (5, 0, 0) — extend eastward
+    // Shot 0: vector was (10, 0, 0), now (15, 0, 0)
     let result = state.execute(Command::MoveStation {
         station_ref,
-        offset: Coordinates::new(10.0, 20.0, 5.0),
+        offset: Coordinates::new(5.0, 0.0, 0.0),
     });
     assert!(result.success);
 
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.station_offsets.get(&station_ref),
-        Some(&(10.0, 20.0, 5.0)),
-        "First move should set offset to (10, 20, 5)"
-    );
+    let shot = &project.get_section(section_id).unwrap().shots[0];
+    assert!((shot.length - 15.0).abs() < 1e-6, "Length should be 15.0, got {}", shot.length);
+    assert!((shot.azimuth_in - 90.0).abs() < 1e-6, "Azimuth should still be 90°");
+    assert!(project.station_offsets.get(&station_ref).is_none(), "Station offset should be cleared");
 
-    // Second move should accumulate
+    // Second move: (0, 10, 3) — shot vector becomes (15, 10, 3)
     let result = state.execute(Command::MoveStation {
         station_ref,
-        offset: Coordinates::new(5.0, -10.0, 3.0),
+        offset: Coordinates::new(0.0, 10.0, 3.0),
     });
     assert!(result.success);
 
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.station_offsets.get(&station_ref),
-        Some(&(15.0, 10.0, 8.0)),
-        "Second move should accumulate to (15, 10, 8)"
-    );
+    let shot = &project.get_section(section_id).unwrap().shots[0];
+    let expected_len = (15.0_f64.powi(2) + 10.0_f64.powi(2)).sqrt(); // sqrt(325)
+    assert!((shot.length - expected_len).abs() < 1e-6, "Length should be {}, got {}", expected_len, shot.length);
+    let expected_azi = (15.0_f64).atan2(10.0).to_degrees(); // atan2(dx, dy)
+    assert!((shot.azimuth_in - expected_azi).abs() < 1e-6, "Azimuth should be {:.1}°, got {:.1}°", expected_azi, shot.azimuth_in);
+    assert!((shot.depth_out - 3.0).abs() < 1e-6, "Depth out should be 3.0, got {}", shot.depth_out);
 }
 
 #[test]
@@ -3514,37 +3523,47 @@ fn test_move_station_undo() {
         location: None,
     });
 
+    // Due east shot, length 10
     let create_result = state.execute(Command::CreateSection {
         name: None,
         surveyor: None,
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        }],
     });
 
     let section_id = create_result.section_id.unwrap();
-    let station_ref = StationRef::new(section_id, 0);
+    let station_ref = StationRef::new(section_id, 0); // first station
 
-    // Move station
+    // Move station 0 by (5, 0, 0) — following shot vector -= (5, 0, 0) → (5, 0, 0)
     state.execute(Command::MoveStation {
         station_ref,
-        offset: Coordinates::new(10.0, 20.0, 5.0),
+        offset: Coordinates::new(5.0, 0.0, 0.0),
     });
 
     let project = state.get_project_state().unwrap();
-    assert_eq!(project.station_offsets.get(&station_ref), Some(&(10.0, 20.0, 5.0)));
+    let shot = &project.get_section(section_id).unwrap().shots[0];
+    assert!((shot.length - 5.0).abs() < 1e-6, "Shot length after move should be 5.0");
 
-    // Undo should reverse the move
+    // Undo should restore original shot data
     let undo_result = state.undo();
     assert!(undo_result.success);
 
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0)),
-        (0.0, 0.0, 0.0),
-        "Undo should restore offset to origin"
-    );
+    let shot = &project.get_section(section_id).unwrap().shots[0];
+    assert!((shot.length - 10.0).abs() < 1e-6, "Undo should restore length to 10.0, got {}", shot.length);
+    assert!((shot.azimuth_in - 90.0).abs() < 1e-6, "Undo should restore azimuth_in to 90.0");
+    assert!((shot.azimuth_out - 90.0).abs() < 1e-6, "Undo should restore azimuth_out to 90.0");
+    assert!((shot.depth_in - 0.0).abs() < 1e-6, "Undo should restore depth_in to 0.0");
+    assert!((shot.depth_out - 0.0).abs() < 1e-6, "Undo should restore depth_out to 0.0");
 }
 
 #[test]
@@ -3556,45 +3575,52 @@ fn test_move_station_redo() {
         location: None,
     });
 
+    // Due east shot, length 10
     let create_result = state.execute(Command::CreateSection {
         name: None,
         surveyor: None,
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        }],
     });
 
     let section_id = create_result.section_id.unwrap();
-    let station_ref = StationRef::new(section_id, 1);
+    let station_ref = StationRef::new(section_id, 1); // last station
 
-    // Move station
+    // Move station 1 by (5, 0, 0) — preceding shot vector += (5, 0, 0) → (15, 0, 0)
     state.execute(Command::MoveStation {
         station_ref,
-        offset: Coordinates::new(10.0, 20.0, 5.0),
+        offset: Coordinates::new(5.0, 0.0, 0.0),
     });
+
+    let project = state.get_project_state().unwrap();
+    let shot = &project.get_section(section_id).unwrap().shots[0];
+    assert!((shot.length - 15.0).abs() < 1e-6, "After move: length should be 15.0");
 
     // Undo
     let undo_result = state.undo();
     assert!(undo_result.success);
 
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0)),
-        (0.0, 0.0, 0.0),
-        "Undo should restore offset to origin"
-    );
+    let shot = &project.get_section(section_id).unwrap().shots[0];
+    assert!((shot.length - 10.0).abs() < 1e-6, "After undo: length should be 10.0");
 
     // Redo should re-apply the move
     let redo_result = state.redo();
     assert!(redo_result.success);
 
     let project = state.get_project_state().unwrap();
-    assert_eq!(
-        project.station_offsets.get(&station_ref),
-        Some(&(10.0, 20.0, 5.0)),
-        "Redo should re-apply the move"
-    );
+    let shot = &project.get_section(section_id).unwrap().shots[0];
+    assert!((shot.length - 15.0).abs() < 1e-6, "After redo: length should be 15.0, got {}", shot.length);
+    assert!((shot.azimuth_in - 90.0).abs() < 1e-6, "After redo: azimuth should be 90°");
 }
 
 #[test]
@@ -5734,12 +5760,12 @@ fn test_split_remaps_station_offsets() {
     });
     let section_id = create_result.section_id.unwrap();
 
-    // Move station 3 (will be in section B after split at index 1)
-    let move_result = state.execute(Command::MoveStation {
-        station_ref: StationRef::new(section_id, 3),
-        offset: Coordinates::new(1.0, 2.0, 3.0),
-    });
-    assert!(move_result.success);
+    // Directly insert a station offset for station 3 (simulates legacy offset data)
+    {
+        let mut proj = state.get_project_state().unwrap();
+        proj.station_offsets.insert(StationRef::new(section_id, 3), (1.0, 2.0, 3.0));
+        state.set_project_for_tests(proj);
+    }
 
     // Split at shot index 1
     let shot_id = {
@@ -6362,12 +6388,12 @@ fn test_delete_section_undo_restores_relationships() {
     });
     assert!(datum_result.success, "SetZeroDatum should succeed");
 
-    // Move station sec_a:0 to create a station offset
-    let move_result = state.execute(Command::MoveStation {
-        station_ref: StationRef::new(sec_a, 0),
-        offset: Coordinates::new(1.0, 2.0, 0.0),
-    });
-    assert!(move_result.success, "MoveStation should succeed");
+    // Directly insert a station offset for sec_a:0 (MoveStation now modifies shot data directly)
+    {
+        let mut proj = state.get_project_state().unwrap();
+        proj.station_offsets.insert(StationRef::new(sec_a, 0), (1.0, 2.0, 0.0));
+        state.set_project_for_tests(proj);
+    }
 
     // Capture state before deletion
     let proj_before = state.get_project_state().unwrap();

@@ -1015,30 +1015,70 @@ impl AppState {
             None => return CommandResult::failure("No project open".to_string()),
         };
 
-        // Find the section containing this station
-        let section = project
-            .sections
-            .iter()
-            .find(|s| s.id == station_ref.section_id);
+        // Incorporate any existing station offset
+        let existing = project.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0));
+        let total_dx = existing.0 + offset.x;
+        let total_dy = existing.1 + offset.y;
+        let total_dz = existing.2 + offset.z;
 
-        let section = match section {
+        // Find the section containing this station (mutable)
+        let section = match project.sections.iter_mut().find(|s| s.id == station_ref.section_id) {
             Some(s) => s,
             None => return CommandResult::failure("Section not found".to_string()),
         };
 
-        // Validate station index
-        if station_ref.station_index > section.shots.len() as u32 {
+        let idx = station_ref.station_index as usize;
+
+        // Validate station index (N shots → N+1 stations, indices 0..=N)
+        if idx > section.shots.len() {
             return CommandResult::failure("Invalid station index".to_string());
         }
 
-        // Get current offset or default to (0, 0, 0)
-        let current = project.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0));
-        // Apply delta
-        let new_offset = (current.0 + offset.x, current.1 + offset.y, current.2 + offset.z);
-        project.station_offsets.insert(station_ref, new_offset);
+        // Modify preceding shot (shot idx-1): its endpoint moved by +delta
+        if idx > 0 {
+            if let Some(shot) = section.shots.get_mut(idx - 1) {
+                let azi_rad = shot.average_azimuth().to_radians();
+                let old_dx = shot.length * azi_rad.sin();
+                let old_dy = shot.length * azi_rad.cos();
+                let new_dx = old_dx + total_dx;
+                let new_dy = old_dy + total_dy;
+                let new_len = (new_dx * new_dx + new_dy * new_dy).sqrt();
+                let new_azi = if new_len > 1e-9 {
+                    new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
+                } else {
+                    shot.average_azimuth() // keep old azimuth for zero-length
+                };
+                shot.length = new_len;
+                shot.azimuth_in = new_azi;
+                shot.azimuth_out = new_azi;
+                shot.depth_out += total_dz;
+            }
+        }
+
+        // Modify following shot (shot idx): its startpoint moved by +delta
+        if let Some(shot) = section.shots.get_mut(idx) {
+            let azi_rad = shot.average_azimuth().to_radians();
+            let old_dx = shot.length * azi_rad.sin();
+            let old_dy = shot.length * azi_rad.cos();
+            let new_dx = old_dx - total_dx;
+            let new_dy = old_dy - total_dy;
+            let new_len = (new_dx * new_dx + new_dy * new_dy).sqrt();
+            let new_azi = if new_len > 1e-9 {
+                new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
+            } else {
+                shot.average_azimuth()
+            };
+            shot.length = new_len;
+            shot.azimuth_in = new_azi;
+            shot.azimuth_out = new_azi;
+            shot.depth_in += total_dz;
+        }
+
+        // Clear station offset (now incorporated into shot data)
+        project.station_offsets.remove(&station_ref);
         project.touch();
 
-        tracing::info!(?station_ref, ?offset, ?new_offset, "Station moved");
+        tracing::info!(?station_ref, ?offset, "Station moved (shot data updated)");
         CommandResult::success()
     }
 
