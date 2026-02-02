@@ -64,7 +64,7 @@ fn assert_failure_contains(result: &CommandResult, needle: &str) {
 fn shot_data(length: f64) -> ShotData {
     ShotData {
         azimuth_in: 0.0,
-        azimuth_out: 180.0,
+        azimuth_out: 5.0,
         length,
         depth_in: 0.0,
         depth_out: 0.0,
@@ -75,7 +75,7 @@ fn shot_data(length: f64) -> ShotData {
 fn shot_data_with_depth(length: f64, depth_in: f64, depth_out: f64) -> ShotData {
     ShotData {
         azimuth_in: 10.0,
-        azimuth_out: 190.0,
+        azimuth_out: 15.0,
         length,
         depth_in,
         depth_out,
@@ -1553,7 +1553,7 @@ fn test_get_project_warnings_detects_azimuth_deviation() {
     create_project(&app);
     let mut shot = shot_data(5.0);
     shot.azimuth_in = 0.0;
-    shot.azimuth_out = 0.0;
+    shot.azimuth_out = 45.0; // 45° difference exceeds 10° threshold
     create_section_with_shots(&app, vec![shot]);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));

@@ -106,18 +106,18 @@ impl Validator {
             });
         }
 
-        // Check azimuth deviation (should be roughly 180° apart)
-        let expected_out = (shot.azimuth_in + 180.0) % 360.0;
-        let deviation = ((shot.azimuth_out - expected_out + 540.0) % 360.0 - 180.0).abs();
-        if deviation > config.warn_azimuth_deviation_max {
+        // Check azimuth in/out difference (both forward readings, should be similar)
+        let diff = (shot.azimuth_out - shot.azimuth_in).abs();
+        let angular_diff = if diff > 180.0 { 360.0 - diff } else { diff };
+        if angular_diff > config.azimuth_diff_threshold {
             warnings.push(ValidationWarning {
                 code: "AZIMUTH_DEVIATION".to_string(),
                 message: format!(
-                    "Shot {}:{} azimuth in/out deviation {:.1}° exceeds threshold {:.1}°",
+                    "Shot {}:{} azimuth in/out difference {:.1}° exceeds threshold {:.1}°",
                     section_id,
                     shot_index + 1,
-                    deviation,
-                    config.warn_azimuth_deviation_max
+                    angular_diff,
+                    config.azimuth_diff_threshold
                 ),
                 severity: WarningSeverity::Warning,
             });
@@ -186,7 +186,7 @@ mod tests {
             warn_shot_length_max: 50.0,
             warn_depth_change_per_shot_max: 10.0,
             warn_azimuth_deviation_max: 30.0,
-            azimuth_diff_threshold: 10.0,
+            azimuth_diff_threshold: 20.0,
             pitch_diff_threshold: 5.0,
         }
     }
@@ -195,7 +195,7 @@ mod tests {
     fn test_valid_shot() {
         let shot = ShotData {
             azimuth_in: 45.0,
-            azimuth_out: 225.0,
+            azimuth_out: 50.0,
             length: 5.0,
             depth_in: 10.0,
             depth_out: 11.0,
@@ -210,7 +210,7 @@ mod tests {
     fn test_zero_length_shot() {
         let shot = ShotData {
             azimuth_in: 45.0,
-            azimuth_out: 225.0,
+            azimuth_out: 50.0,
             length: 0.0,
             depth_in: 10.0,
             depth_out: 10.0,
@@ -225,7 +225,7 @@ mod tests {
     fn test_azimuth_deviation() {
         let shot = ShotData {
             azimuth_in: 45.0,
-            azimuth_out: 180.0, // Should be ~225, deviation is 45°
+            azimuth_out: 180.0, // 135° difference, exceeds 10° threshold
             length: 5.0,
             depth_in: 10.0,
             depth_out: 11.0,
@@ -245,7 +245,7 @@ mod tests {
         // ZERO_LENGTH with section_id=4, shot_index=2 → "Shot 4:3 has zero length"
         let zero_shot = ShotData {
             azimuth_in: 45.0,
-            azimuth_out: 225.0,
+            azimuth_out: 50.0,
             length: 0.0,
             ..Default::default()
         };
@@ -256,7 +256,7 @@ mod tests {
         // SHORT_SHOT with section_id=7, shot_index=0 → "Shot 7:1 length ..."
         let short_shot = ShotData {
             azimuth_in: 90.0,
-            azimuth_out: 270.0,
+            azimuth_out: 95.0,
             length: 0.05,
             ..Default::default()
         };
@@ -296,7 +296,7 @@ mod tests {
         // Valid positive length
         let valid_shot = ShotData {
             azimuth_in: 90.0,
-            azimuth_out: 270.0,
+            azimuth_out: 95.0,
             length: 5.0,
             depth_in: 0.0,
             depth_out: 0.0,
@@ -309,7 +309,7 @@ mod tests {
         let negative_shot = ShotData {
             length: -5.0,
             azimuth_in: 90.0,
-            azimuth_out: 270.0,
+            azimuth_out: 95.0,
             ..Default::default()
         };
         let warnings = Validator::validate_shot(&negative_shot, &config, 0, 0);
@@ -320,7 +320,7 @@ mod tests {
         let zero_shot = ShotData {
             length: 0.0,
             azimuth_in: 90.0,
-            azimuth_out: 270.0,
+            azimuth_out: 95.0,
             ..Default::default()
         };
         let warnings = Validator::validate_shot(&zero_shot, &config, 0, 0);
@@ -331,7 +331,7 @@ mod tests {
         let short_shot = ShotData {
             length: 0.05, // Below warn_shot_length_min of 0.1
             azimuth_in: 90.0,
-            azimuth_out: 270.0,
+            azimuth_out: 95.0,
             ..Default::default()
         };
         let warnings = Validator::validate_shot(&short_shot, &config, 0, 0);
@@ -341,7 +341,7 @@ mod tests {
         let long_shot = ShotData {
             length: 100.0, // Above warn_shot_length_max of 50.0
             azimuth_in: 90.0,
-            azimuth_out: 270.0,
+            azimuth_out: 95.0,
             ..Default::default()
         };
         let warnings = Validator::validate_shot(&long_shot, &config, 0, 0);
@@ -356,7 +356,7 @@ mod tests {
         // Valid azimuth at 0 degrees
         let shot_0 = ShotData {
             azimuth_in: 0.0,
-            azimuth_out: 180.0,
+            azimuth_out: 5.0,
             length: 5.0,
             ..Default::default()
         };
@@ -366,7 +366,7 @@ mod tests {
         // Valid azimuth at 359.9 degrees
         let shot_359 = ShotData {
             azimuth_in: 359.9,
-            azimuth_out: 179.9,
+            azimuth_out: 359.5,
             length: 5.0,
             ..Default::default()
         };
@@ -423,7 +423,7 @@ mod tests {
         // Valid LRUD values (all positive)
         let valid_shot = ShotData {
             azimuth_in: 90.0,
-            azimuth_out: 270.0,
+            azimuth_out: 95.0,
             length: 5.0,
             left: Some(2.0),
             right: Some(3.0),
@@ -437,7 +437,7 @@ mod tests {
         // Valid: zero LRUD values are allowed (wall touching)
         let zero_lrud = ShotData {
             azimuth_in: 90.0,
-            azimuth_out: 270.0,
+            azimuth_out: 95.0,
             length: 5.0,
             left: Some(0.0),
             right: Some(0.0),
@@ -451,7 +451,7 @@ mod tests {
         // Valid: None LRUD values (not measured)
         let none_lrud = ShotData {
             azimuth_in: 90.0,
-            azimuth_out: 270.0,
+            azimuth_out: 95.0,
             length: 5.0,
             left: None,
             right: None,
@@ -465,7 +465,7 @@ mod tests {
         // Invalid: negative left
         let neg_left = ShotData {
             azimuth_in: 90.0,
-            azimuth_out: 270.0,
+            azimuth_out: 95.0,
             length: 5.0,
             left: Some(-1.0),
             ..Default::default()
@@ -477,7 +477,7 @@ mod tests {
         // Invalid: negative right
         let neg_right = ShotData {
             azimuth_in: 90.0,
-            azimuth_out: 270.0,
+            azimuth_out: 95.0,
             length: 5.0,
             right: Some(-2.5),
             ..Default::default()
@@ -488,7 +488,7 @@ mod tests {
         // Invalid: negative up
         let neg_up = ShotData {
             azimuth_in: 90.0,
-            azimuth_out: 270.0,
+            azimuth_out: 95.0,
             length: 5.0,
             up: Some(-0.5),
             ..Default::default()
@@ -499,7 +499,7 @@ mod tests {
         // Invalid: negative down
         let neg_down = ShotData {
             azimuth_in: 90.0,
-            azimuth_out: 270.0,
+            azimuth_out: 95.0,
             length: 5.0,
             down: Some(-3.0),
             ..Default::default()
@@ -577,105 +577,115 @@ mod tests {
         assert!(valid_gps.is_valid());
     }
 
-    /// Test 5.5: Verify backsight azimuth tolerance (within configurable degrees of expected)
+    /// Test 5.5: Verify azimuth in/out difference threshold
     #[test]
-    fn test_validate_backsight_tolerance() {
-        // Backsight validation: azimuth_out should be ~180° from azimuth_in
-        // The validator checks if the deviation exceeds warn_azimuth_deviation_max
+    fn test_validate_azimuth_diff_threshold() {
+        // azimuth_in and azimuth_out are both forward readings, should be similar.
+        // The validator checks if the angular difference exceeds azimuth_diff_threshold.
 
-        // Test with default config (30° max deviation)
+        // Test with default config (10° threshold)
         let config = default_config();
 
-        // Valid: perfect backsight (exactly 180° apart)
-        let perfect_backsight = ShotData {
+        // Valid: identical readings (0° difference)
+        let identical = ShotData {
             azimuth_in: 45.0,
-            azimuth_out: 225.0, // Exactly 180° from 45°
+            azimuth_out: 45.0,
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&perfect_backsight, &config, 0, 0);
+        let warnings = Validator::validate_shot(&identical, &config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
 
-        // Valid: within tolerance (20° deviation)
-        let within_tolerance = ShotData {
+        // Valid: within threshold (5° difference)
+        let within_threshold = ShotData {
             azimuth_in: 45.0,
-            azimuth_out: 245.0, // 20° off from expected 225°
+            azimuth_out: 50.0,
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&within_tolerance, &config, 0, 0);
+        let warnings = Validator::validate_shot(&within_threshold, &config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
 
-        // Invalid: exceeds tolerance (45° deviation)
-        let exceeds_tolerance = ShotData {
+        // Valid: exactly at threshold (20° difference, not exceeded)
+        let at_threshold = ShotData {
             azimuth_in: 45.0,
-            azimuth_out: 180.0, // 45° off from expected 225°
+            azimuth_out: 65.0,
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&exceeds_tolerance, &config, 0, 0);
+        let warnings = Validator::validate_shot(&at_threshold, &config, 0, 0);
+        assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
+
+        // Invalid: exceeds threshold (25° difference)
+        let exceeds_threshold = ShotData {
+            azimuth_in: 45.0,
+            azimuth_out: 70.0,
+            length: 5.0,
+            ..Default::default()
+        };
+        let warnings = Validator::validate_shot(&exceeds_threshold, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
 
-        // Test wraparound at 360°/0°: azimuth_in=350°, expected_out=170°
-        let wraparound = ShotData {
-            azimuth_in: 350.0,
-            azimuth_out: 170.0, // Exactly 180° from 350°
+        // Test wraparound: 355° and 5° should be 10° apart (within threshold)
+        let wraparound_within = ShotData {
+            azimuth_in: 355.0,
+            azimuth_out: 5.0,
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&wraparound, &config, 0, 0);
+        let warnings = Validator::validate_shot(&wraparound_within, &config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
 
-        // Test wraparound with deviation: azimuth_in=350°, out=220° (50° off)
-        let wraparound_deviation = ShotData {
-            azimuth_in: 350.0,
-            azimuth_out: 220.0, // 50° off from expected 170°
+        // Test wraparound with warning: 355° and 20° = 25° apart
+        let wraparound_exceeds = ShotData {
+            azimuth_in: 355.0,
+            azimuth_out: 20.0,
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&wraparound_deviation, &config, 0, 0);
+        let warnings = Validator::validate_shot(&wraparound_exceeds, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
 
-        // Test with strict config (5° max deviation)
+        // Test with strict config (5° threshold)
         let strict_config = ValidationConfig {
-            warn_azimuth_deviation_max: 5.0,
+            azimuth_diff_threshold: 5.0,
             ..default_config()
         };
 
-        // Small deviation (3°) should pass with strict config
-        let small_deviation = ShotData {
+        // Small difference (3°) should pass with strict config
+        let small_diff = ShotData {
             azimuth_in: 90.0,
-            azimuth_out: 273.0, // 3° off from expected 270°
+            azimuth_out: 93.0,
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&small_deviation, &strict_config, 0, 0);
+        let warnings = Validator::validate_shot(&small_diff, &strict_config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
 
-        // Medium deviation (10°) should fail with strict config
-        let medium_deviation = ShotData {
+        // 10° difference should fail with strict 5° config
+        let medium_diff = ShotData {
             azimuth_in: 90.0,
-            azimuth_out: 280.0, // 10° off from expected 270°
+            azimuth_out: 100.0,
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&medium_deviation, &strict_config, 0, 0);
+        let warnings = Validator::validate_shot(&medium_diff, &strict_config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
 
-        // Test with lenient config (90° max deviation)
+        // Test with lenient config (60° threshold)
         let lenient_config = ValidationConfig {
-            warn_azimuth_deviation_max: 90.0,
+            azimuth_diff_threshold: 60.0,
             ..default_config()
         };
 
-        // Large deviation (60°) should pass with lenient config
-        let large_deviation = ShotData {
+        // 50° difference should pass with lenient config
+        let large_diff = ShotData {
             azimuth_in: 0.0,
-            azimuth_out: 240.0, // 60° off from expected 180°
+            azimuth_out: 50.0,
             length: 5.0,
             ..Default::default()
         };
-        let warnings = Validator::validate_shot(&large_deviation, &lenient_config, 0, 0);
+        let warnings = Validator::validate_shot(&large_diff, &lenient_config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
     }
 }

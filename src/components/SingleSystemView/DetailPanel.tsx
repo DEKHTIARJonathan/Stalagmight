@@ -480,6 +480,18 @@ function StationDetail({ station }: { station: Station }) {
   );
 }
 
+/**
+ * Compute inclination from depth change and shot length.
+ * Positive = upward (depth decreases), negative = downward.
+ * Returns null if length <= 0.
+ */
+function computeInclination(depthIn: number, depthOut: number, length: number): number | null {
+  if (length <= 0) return null;
+  const ratio = (depthIn - depthOut) / length;
+  const clamped = Math.max(-1, Math.min(1, ratio));
+  return (Math.asin(clamped) * 180) / Math.PI;
+}
+
 function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
   const { setShotVirtual } = useProjectStore();
   const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore();
@@ -573,6 +585,26 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
           <DetailRow label="Azimuth Out" value={`${shot.azimuth_out.toFixed(1)}°`} />
           <DetailRow label="Depth In" value={`${shot.depth_in.toFixed(1)} m`} />
           <DetailRow label="Depth Out" value={`${shot.depth_out.toFixed(1)} m`} />
+
+          {(shot.pitch_in !== null || shot.pitch_out !== null || shot.length > 0) && (
+            <div className="pt-2 border-t border-border">
+              <span className="text-sm text-text-secondary">Inclination:</span>
+              <div className="mt-1 space-y-1 text-sm">
+                {shot.pitch_in !== null && (
+                  <DetailRow label="Pitch In" value={`${shot.pitch_in.toFixed(1)}°`} />
+                )}
+                {shot.pitch_out !== null && (
+                  <DetailRow label="Pitch Out" value={`${shot.pitch_out.toFixed(1)}°`} />
+                )}
+                {shot.length > 0 && (() => {
+                  const incl = computeInclination(shot.depth_in, shot.depth_out, shot.length);
+                  return incl !== null ? (
+                    <DetailRow label="Computed" value={`${incl.toFixed(1)}°`} />
+                  ) : null;
+                })()}
+              </div>
+            </div>
+          )}
 
           {(shot.left !== null || shot.right !== null || shot.up !== null || shot.down !== null) && (
             <div className="pt-2 border-t border-border">
