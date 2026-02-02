@@ -150,16 +150,15 @@ export function validateShot(
     });
   }
 
-  // Azimuth deviation (in/out should be ~180° apart) - matches backend validation.rs:103
+  // Azimuth in/out difference (both forward readings, should be similar)
   if (azimuthIn >= 0 && azimuthIn < 360 && azimuthOut >= 0 && azimuthOut < 360) {
-    const expectedOut = (azimuthIn + 180) % 360;
-    // Calculate deviation from expected 180° difference
-    const deviation = Math.abs(((azimuthOut - expectedOut + 540) % 360) - 180);
-    if (deviation > config.warn_azimuth_deviation_max) {
+    if (hasAzimuthDiscrepancy(azimuthIn, azimuthOut, config.azimuth_diff_threshold)) {
+      let diff = Math.abs(azimuthIn - azimuthOut);
+      if (diff > 180) diff = 360 - diff;
       issues.push({
         field: 'azimuth',
         severity: 'warning',
-        message: `Azimuth in/out deviation ${deviation.toFixed(1)}° exceeds threshold ${config.warn_azimuth_deviation_max}°`,
+        message: `Azimuth in/out difference ${diff.toFixed(1)}° exceeds threshold ${config.azimuth_diff_threshold}°`,
       });
     }
   }

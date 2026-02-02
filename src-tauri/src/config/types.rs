@@ -481,7 +481,7 @@ fn default_grid_spacing() -> f64 {
 }
 
 fn default_azimuth_diff_threshold() -> f64 {
-    10.0
+    20.0
 }
 
 fn default_pitch_diff_threshold() -> f64 {

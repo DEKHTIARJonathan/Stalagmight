@@ -159,7 +159,7 @@ fn test_shot_pitch_coordinates() {
         0,
         ShotData {
             azimuth_in: 0.0,
-            azimuth_out: 180.0,
+            azimuth_out: 5.0,
             length: 10.0,
             depth_in: 5.0,
             depth_out: 5.0,
@@ -1170,7 +1170,7 @@ fn test_shot_lrud_persistence() {
         0,
         ShotData {
             azimuth_in: 0.0,
-            azimuth_out: 180.0,
+            azimuth_out: 5.0,
             length: 10.0,
             depth_in: 5.0,
             depth_out: 5.0,
@@ -1197,7 +1197,7 @@ fn test_shot_comment_special_chars() {
         0,
         ShotData {
             azimuth_in: 0.0,
-            azimuth_out: 180.0,
+            azimuth_out: 5.0,
             length: 10.0,
             depth_in: 5.0,
             depth_out: 5.0,
@@ -1563,7 +1563,7 @@ fn default_validation_config() -> ValidationConfig {
         warn_shot_length_max: 50.0,
         warn_depth_change_per_shot_max: 10.0,
         warn_azimuth_deviation_max: 30.0,
-        azimuth_diff_threshold: 10.0,
+        azimuth_diff_threshold: 20.0,
         pitch_diff_threshold: 5.0,
     }
 }
@@ -1577,7 +1577,7 @@ fn default_validation_config() -> ValidationConfig {
 fn test_negative_length_shot() {
     let shot = ShotData {
         azimuth_in: 45.0,
-        azimuth_out: 225.0,
+        azimuth_out: 50.0,
         length: -5.0, // Negative!
         depth_in: 10.0,
         depth_out: 10.0,
@@ -1595,7 +1595,7 @@ fn test_negative_length_shot() {
 fn test_short_shot_warning() {
     let shot = ShotData {
         azimuth_in: 45.0,
-        azimuth_out: 225.0,
+        azimuth_out: 50.0,
         length: 0.05, // Below 0.1m threshold
         depth_in: 10.0,
         depth_out: 10.0,
@@ -1618,7 +1618,7 @@ fn test_short_shot_warning() {
 fn test_long_shot_warning() {
     let shot = ShotData {
         azimuth_in: 45.0,
-        azimuth_out: 225.0,
+        azimuth_out: 50.0,
         length: 100.0, // Above 50m threshold
         depth_in: 10.0,
         depth_out: 10.0,
@@ -1638,7 +1638,7 @@ fn test_long_shot_warning() {
 fn test_large_depth_change_warning() {
     let shot = ShotData {
         azimuth_in: 45.0,
-        azimuth_out: 225.0,
+        azimuth_out: 50.0,
         length: 10.0,
         depth_in: 10.0,
         depth_out: 25.0, // 15m change, above 10m threshold
@@ -1658,7 +1658,7 @@ fn test_large_depth_change_warning() {
 fn test_negative_lrud_errors() {
     let shot = ShotData {
         azimuth_in: 45.0,
-        azimuth_out: 225.0,
+        azimuth_out: 50.0,
         length: 10.0,
         depth_in: 10.0,
         depth_out: 10.0,

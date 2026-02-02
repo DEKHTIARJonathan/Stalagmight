@@ -338,8 +338,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 date: now.split('T')[0],
                 color: '#4ECDC4',
                 shots: [
-                  { id: 1, azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: 0, depth_out: -2, is_virtual: false },
-                  { id: 2, azimuth_in: 90, azimuth_out: 270, length: 15, depth_in: -2, depth_out: -5, is_virtual: false },
+                  { id: 1, azimuth_in: 45, azimuth_out: 50, length: 10, depth_in: 0, depth_out: -2, is_virtual: false },
+                  { id: 2, azimuth_in: 90, azimuth_out: 95, length: 15, depth_in: -2, depth_out: -5, is_virtual: false },
                 ],
               },
             ];
@@ -699,7 +699,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 45,
-                      heading_out: 225, // ~180° apart (valid backsight)
+                      heading_out: 50, // both forward readings
                       length: 10.5,
                       depth_in: -2.0,
                       depth_out: -2.5,
@@ -719,7 +719,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 90,
-                      heading_out: 270, // ~180° apart (valid backsight)
+                      heading_out: 95, // both forward readings
                       length: 15.2,
                       depth_in: -2.5,
                       depth_out: -5.0,
@@ -739,7 +739,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 135,
-                      heading_out: 315, // ~180° apart (valid backsight)
+                      heading_out: 140, // both forward readings
                       length: 8.0,
                       depth_in: -5.0,
                       depth_out: -3.0,
@@ -766,7 +766,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 270,
-                      heading_out: 90, // ~180° apart (valid backsight)
+                      heading_out: 275, // both forward readings
                       length: 5.0,
                       depth_in: -3.0,
                       depth_out: -4.0,
@@ -786,7 +786,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 280,
-                      heading_out: 100, // ~180° apart (valid backsight)
+                      heading_out: 285, // both forward readings
                       length: 7.5,
                       depth_in: -4.0,
                       depth_out: -6.0,
@@ -813,7 +813,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 180,
-                      heading_out: 0, // ~180° apart (valid backsight)
+                      heading_out: 185, // both forward readings
                       length: 12.0,
                       depth_in: -1.0,
                       depth_out: -2.0,
@@ -832,7 +832,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 190,
-                      heading_out: 10, // ~180° apart (valid backsight)
+                      heading_out: 195, // both forward readings
                       length: 9.0,
                       depth_in: -2.0,
                       depth_out: -3.0,
@@ -851,7 +851,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 200,
-                      heading_out: 20, // ~180° apart (valid backsight)
+                      heading_out: 205, // both forward readings
                       length: 50.5,
                       depth_in: -3.0,
                       depth_out: -8.0,
@@ -877,7 +877,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 90,
-                      heading_out: 270, // ~180° apart (valid backsight)
+                      heading_out: 95, // both forward readings
                       length: 6.0,
                       depth_in: -2.0,
                       depth_out: -3.0,
@@ -893,7 +893,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     {
                       shot_type: 'Standard',
                       heading_in: 100,
-                      heading_out: 280, // ~180° apart (valid backsight)
+                      heading_out: 105, // both forward readings
                       length: 8.0,
                       depth_in: -3.0,
                       depth_out: -4.0,
@@ -1200,7 +1200,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 warn_shot_length_max: 50.0,
                 warn_depth_change_per_shot_max: 10.0,
                 warn_azimuth_deviation_max: 30.0,
-                azimuth_diff_threshold: 10.0,
+                azimuth_diff_threshold: 20.0,
                 pitch_diff_threshold: 5.0,
               },
               export: {
@@ -1354,7 +1354,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 warn_shot_length_max: 50.0,
                 warn_depth_change_per_shot_max: 10.0,
                 warn_azimuth_deviation_max: 30.0,
-                azimuth_diff_threshold: 10.0,
+                azimuth_diff_threshold: 20.0,
                 pitch_diff_threshold: 5.0,
               },
               export: {

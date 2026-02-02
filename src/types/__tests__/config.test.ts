@@ -147,7 +147,7 @@ describe('defaultConfig structure', () => {
       expect(defaultConfig.validation.warn_shot_length_max).toBe(50.0);
       expect(defaultConfig.validation.warn_depth_change_per_shot_max).toBe(10.0);
       expect(defaultConfig.validation.warn_azimuth_deviation_max).toBe(30.0);
-      expect(defaultConfig.validation.azimuth_diff_threshold).toBe(10.0);
+      expect(defaultConfig.validation.azimuth_diff_threshold).toBe(20.0);
       expect(defaultConfig.validation.pitch_diff_threshold).toBe(5.0);
     });
   });

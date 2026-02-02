@@ -8,7 +8,7 @@ import { isFieldChanged } from './types';
 /**
  * Validation settings category content.
  * Maps to config.validation: warn_shot_length_min/max, warn_depth_change_per_shot_max,
- * warn_azimuth_deviation_max, azimuth_diff_threshold, pitch_diff_threshold.
+ * azimuth_diff_threshold, pitch_diff_threshold.
  */
 export function ValidationSettings({
   config,
@@ -35,11 +35,6 @@ export function ValidationSettings({
     // Validate depth change threshold
     if (config.validation.warn_depth_change_per_shot_max <= 0) {
       errors.push('Depth change warning threshold must be positive');
-    }
-
-    // Validate azimuth deviation (0 means disabled)
-    if (config.validation.warn_azimuth_deviation_max < 0 || config.validation.warn_azimuth_deviation_max > 180) {
-      errors.push('Azimuth deviation warning must be between 0 and 180');
     }
 
     // Validate diff thresholds (0 means disabled)
@@ -88,18 +83,6 @@ export function ValidationSettings({
         validation: {
           ...config.validation,
           warn_depth_change_per_shot_max: num,
-        },
-      });
-    }
-  };
-
-  const handleAzimuthDeviationMaxChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        validation: {
-          ...config.validation,
-          warn_azimuth_deviation_max: num,
         },
       });
     }
@@ -196,31 +179,10 @@ export function ValidationSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Azimuth Warnings" data-testid="section-azimuth-warnings">
-        <SettingRow
-          label="Max azimuth deviation"
-          helpText="Warn when azimuth deviates more than this from previous shot (0-180 degrees)"
-          isChanged={isFieldChanged(changedFields, 'validation.warn_azimuth_deviation_max')}
-          data-testid="setting-azimuth-deviation"
-        >
-          <input
-            type="number"
-            step={1}
-            min={0}
-            max={180}
-            value={config.validation.warn_azimuth_deviation_max}
-            onChange={(e) => handleAzimuthDeviationMaxChange(e.target.value)}
-            className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Maximum azimuth deviation"
-            data-testid="input-azimuth-deviation"
-          />
-        </SettingRow>
-      </SettingsSection>
-
       <SettingsSection title="In/Out Difference Thresholds" data-testid="section-diff-thresholds">
         <SettingRow
           label="Azimuth in/out difference"
-          helpText="Warn when forward/back azimuth differs by more than this (0-180 degrees)"
+          helpText="Warn when azimuth in and out readings differ by more than this (0-180 degrees)"
           isChanged={isFieldChanged(changedFields, 'validation.azimuth_diff_threshold')}
           data-testid="setting-azimuth-diff"
         >
