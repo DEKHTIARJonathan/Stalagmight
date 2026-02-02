@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
-import type { PanelsConfig } from '../types/config';
+import type { PanelsConfig, ThemeMode } from '../types/config';
 import type { DisplaySettings } from '../types/loading';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 
@@ -246,6 +246,9 @@ interface UIStore {
   // Theme state
   resolvedTheme: ResolvedTheme;
   setResolvedTheme: (theme: ResolvedTheme) => void;
+  /** Temporary theme override for live preview in Settings dialog */
+  themePreview: ThemeMode | null;
+  setThemePreview: (theme: ThemeMode | null) => void;
 
   // ARIA selection announcements for screen readers
   selectionAnnouncement: string;
@@ -661,6 +664,8 @@ export const useUIStore = create<UIStore>((set) => ({
   // Theme state
   resolvedTheme: 'dark' as ResolvedTheme,
   setResolvedTheme: (resolvedTheme: ResolvedTheme) => set({ resolvedTheme }),
+  themePreview: null,
+  setThemePreview: (themePreview) => set({ themePreview }),
 
   // ARIA selection announcements for screen readers
   selectionAnnouncement: '',

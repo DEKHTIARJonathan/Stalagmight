@@ -44,11 +44,15 @@ function subscribeMediaQuery(
  *   the CSS :root defaults to dark so there is no visual mismatch.
  */
 export function useTheme(): ResolvedTheme {
-  const themePreference = useProjectStore(
+  const configTheme = useProjectStore(
     (s) => s.config?.appearance?.theme ?? 'dark'
   );
+  const themePreview = useUIStore((s) => s.themePreview);
   const setResolvedTheme = useUIStore((s) => s.setResolvedTheme);
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
+
+  // Use preview override when Settings dialog is live-previewing a theme
+  const themePreference = themePreview ?? configTheme;
 
   // Track media query listener cleanup
   const mediaListenerCleanupRef = useRef<(() => void) | null>(null);

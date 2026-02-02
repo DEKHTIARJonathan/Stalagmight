@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, useId } from 'react';
+import { createPortal } from 'react-dom';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
@@ -297,6 +298,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
 export default function SettingsDialog() {
   const { closeDialog } = useUIStore();
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
+  const setThemePreview = useUIStore((s) => s.setThemePreview);
   const { config, updateConfig } = useProjectStore();
 
   // Panel ID base for ARIA associations
@@ -336,6 +338,14 @@ export default function SettingsDialog() {
       originalConfigRef.current = config;
     }
   }, [config, localConfig]);
+
+  // Live-preview theme changes: apply immediately on selection, revert on unmount/cancel
+  useEffect(() => {
+    if (localConfig) {
+      setThemePreview(localConfig.appearance.theme);
+    }
+    return () => setThemePreview(null);
+  }, [localConfig?.appearance.theme, setThemePreview]);
 
   // Compute changed fields from original config
   const changedFields = useMemo(() => {
@@ -612,8 +622,9 @@ export default function SettingsDialog() {
         )}
       </DialogWrapper>
 
-      {/* Custom unsaved changes dialog */}
-      {showUnsavedDialog && (
+      {/* Custom unsaved changes dialog - portaled to #dialog-root to avoid
+          being inside the inert #root set by dialogStack */}
+      {showUnsavedDialog && createPortal(
         <div className="fixed inset-0 z-[60] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/50" onClick={handleCancelClose} />
           <div
@@ -655,11 +666,13 @@ export default function SettingsDialog() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.getElementById('dialog-root') ?? document.body,
       )}
 
-      {/* Reset to defaults confirmation dialog */}
-      {showResetConfirm && (
+      {/* Reset to defaults confirmation dialog - portaled to #dialog-root to avoid
+          being inside the inert #root set by dialogStack */}
+      {showResetConfirm && createPortal(
         <div className="fixed inset-0 z-[60] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/50" onClick={handleCancelReset} />
           <div
@@ -696,7 +709,8 @@ export default function SettingsDialog() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.getElementById('dialog-root') ?? document.body,
       )}
     </>
   );
