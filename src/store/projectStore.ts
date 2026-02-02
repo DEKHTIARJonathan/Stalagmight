@@ -20,7 +20,7 @@ import type {
   Coordinates,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, ConnectivityResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem } from '../types/commands';
+import type { CommandResult, ConnectivityResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
 /**
@@ -207,6 +207,7 @@ interface ProjectStore {
   calculateFileHash: (path: string) => Promise<string>;
   checkDuplicateImport: (hash: string) => Promise<boolean>;
   trackImportedFile: (hash: string) => Promise<void>;
+  importSections: (sections: ImportSectionConfig[], fileHash?: string | null) => Promise<CommandResult>;
   exportCsv: (path: string) => Promise<void>;
   exportJson: (path: string) => Promise<void>;
   exportImage: (path: string, options: ExportImageOptions) => Promise<void>;
@@ -919,6 +920,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   trackImportedFile: async (hash: string) => {
     await invoke('track_imported_file', { hash });
+  },
+
+  importSections: async (sections: ImportSectionConfig[], fileHash?: string | null) => {
+    const result = await invoke<CommandResult>('import_sections', {
+      sections,
+      fileHash: fileHash ?? null,
+    });
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
   },
 
   exportCsv: async (path: string) => {

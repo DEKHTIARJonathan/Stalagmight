@@ -45,3 +45,14 @@ pub fn track_imported_file(state: State<'_, AppState>, hash: String) -> CommandR
 pub(crate) fn track_imported_file_impl(state: &AppState, hash: String) -> CommandResult {
     state.track_imported_file(hash)
 }
+
+/// Import multiple sections as a single atomic undo/redo unit.
+/// Includes file hash tracking so undo also reverts the duplicate-detection state.
+#[tauri::command]
+pub fn import_sections(
+    state: State<'_, AppState>,
+    sections: Vec<crate::models::ImportSectionConfig>,
+    file_hash: Option<String>,
+) -> CommandResult {
+    state.execute_import_sections(sections, file_hash)
+}

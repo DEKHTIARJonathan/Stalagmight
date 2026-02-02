@@ -11,7 +11,8 @@ import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
-import type { SectionData, ShotData } from './types/project';
+import type { ShotData } from './types/project';
+import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from './types/commands';
 
 /**
  * Convert an EditableShot to a ShotData for the backend.
@@ -61,7 +62,7 @@ function calculateStationPositions(shots: ImportedSectionConfig['shots']): Array
 }
 
 function App() {
-  const { project, stations, loadConfig, config, isDirty, createSection, createSectionAndMerge, setZeroDatum, mergeStations, moveSection, importDmp, trackImportedFile } = useProjectStore();
+  const { project, stations, loadConfig, config, isDirty, importDmp, importSections } = useProjectStore();
   const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, triggerFitToBounds, toast, selectionAnnouncement } = useUIStore();
 
   // Apply theme from config (resolves auto mode, sets data-theme attribute)
@@ -106,221 +107,85 @@ function App() {
   );
 
   /**
-   * Handle importing sections from the DMP Section Config Dialog.
-   * Processes each section based on its placement type.
+   * Convert frontend section configs to backend ImportSectionConfig format
+   * and import all sections as a single atomic operation.
    */
-  const handleImportSections = useCallback(async (sections: ImportedSectionConfig[]): Promise<boolean> => {
-    const errors: string[] = [];
-    const warnings: string[] = [];
+  const handleImportSections = useCallback(async (sections: ImportedSectionConfig[], fileHash?: string | null): Promise<boolean> => {
+    // Convert each section to the backend format
+    const backendSections: BackendImportSectionConfig[] = sections.map((sectionConfig) => {
+      const shots: ShotData[] = sectionConfig.shots.map(editableShotToShotData);
+      const placement = sectionConfig.placement;
 
-    // Map of import section index to created section ID
-    // Used for fromImporting placement type
-    const createdSectionIds = new Map<number, number>();
+      let backendPlacement: ImportPlacement;
 
-    for (const sectionConfig of sections) {
-      const sectionData: SectionData = {
+      if (placement.type === 'origin') {
+        backendPlacement = { type: 'origin' };
+      } else if (placement.type === 'zeroDatum') {
+        backendPlacement = {
+          type: 'zero_datum',
+          coordinates: placement.coordinates,
+          station_index: placement.stationIndex,
+        };
+      } else if (placement.type === 'fromExisting') {
+        backendPlacement = {
+          type: 'from_existing',
+          import_station: placement.importStation,
+          existing_station: placement.existingStation,
+        };
+      } else if (placement.type === 'fromImporting') {
+        backendPlacement = {
+          type: 'from_importing',
+          import_station: placement.importStation,
+          target_section_index: placement.targetSectionIndex,
+          target_station_index: placement.targetStationIndex,
+        };
+      } else if (placement.type === 'manual' && placement.snappedToStation) {
+        // Manual with snap → manualSnap variant
+        const snapIndex = Math.max(0, Math.min(placement.alignStationIndex, sectionConfig.shots.length));
+        backendPlacement = {
+          type: 'manual_snap',
+          align_station_index: snapIndex,
+          snapped_to_station: placement.snappedToStation,
+        };
+      } else {
+        // Manual without snap → compute offset
+        const alignIdx = placement.type === 'manual' ? placement.alignStationIndex : 0;
+        if (placement.type === 'manual' && placement.position) {
+          const stationPositions = calculateStationPositions(sectionConfig.shots);
+          const clampedIdx = Math.max(0, Math.min(alignIdx, stationPositions.length - 1));
+          const alignPos = stationPositions[clampedIdx];
+          if (alignPos) {
+            backendPlacement = {
+              type: 'manual',
+              align_station_index: alignIdx,
+              offset: {
+                x: placement.position.x - alignPos.x,
+                y: placement.position.y - alignPos.y,
+                z: placement.position.z ?? 0,
+              },
+            };
+          } else {
+            backendPlacement = { type: 'manual', align_station_index: alignIdx };
+          }
+        } else {
+          backendPlacement = { type: 'manual', align_station_index: alignIdx };
+        }
+      }
+
+      return {
+        section_index: sectionConfig.sectionIndex,
         name: sectionConfig.name,
         surveyor: sectionConfig.surveyor,
         date: sectionConfig.date,
         color: sectionConfig.color,
         direction: sectionConfig.direction,
-        shots: sectionConfig.shots.map(editableShotToShotData),
+        shots,
+        placement: backendPlacement,
       };
+    });
 
-      // Handle placement-specific operations
-      const placement = sectionConfig.placement;
-
-      // For placements that require merging, use the atomic create+merge operation
-      // This ensures create + merge is a single undo/redo unit
-      if (placement.type === 'fromExisting') {
-        // Use createSectionAndMerge for atomic create+merge (single undo)
-        const result = await createSectionAndMerge(
-          sectionData,
-          placement.importStation,
-          placement.existingStation,
-          'KeepRaw'
-        );
-
-        if (!result.success) {
-          errors.push(`Failed to create and merge section "${sectionConfig.name}": ${result.error}`);
-          continue;
-        }
-
-        const sectionId = result.section_id;
-        if (sectionId === undefined) {
-          errors.push(`Section "${sectionConfig.name}" created but no ID returned`);
-          continue;
-        }
-
-        // Store the created section ID for fromImporting references
-        createdSectionIds.set(sectionConfig.sectionIndex, sectionId);
-        continue;
-      }
-
-      if (placement.type === 'fromImporting') {
-        // Check if target section has already been created
-        const targetSectionId = createdSectionIds.get(placement.targetSectionIndex);
-        if (targetSectionId !== undefined) {
-          // Target exists - use atomic create+merge
-          const targetStation = {
-            section_id: targetSectionId,
-            station_index: placement.targetStationIndex,
-          };
-
-          const result = await createSectionAndMerge(
-            sectionData,
-            placement.importStation,
-            targetStation,
-            'KeepRaw'
-          );
-
-          if (!result.success) {
-            errors.push(`Failed to create and merge section "${sectionConfig.name}": ${result.error}`);
-            continue;
-          }
-
-          const sectionId = result.section_id;
-          if (sectionId === undefined) {
-            errors.push(`Section "${sectionConfig.name}" created but no ID returned`);
-            continue;
-          }
-
-          createdSectionIds.set(sectionConfig.sectionIndex, sectionId);
-          continue;
-        }
-
-        // Target section not yet created - fall through to create section first
-        // then merge will be handled below
-      }
-
-      // Manual placement with snap - use atomic create+merge (single undo)
-      // The merge operation handles repositioning, so no separate move is needed
-      if (placement.type === 'manual' && placement.snappedToStation) {
-        const snapIndex = Math.max(0, Math.min(placement.alignStationIndex, sectionConfig.shots.length));
-
-        const result = await createSectionAndMerge(
-          sectionData,
-          snapIndex,
-          placement.snappedToStation,
-          'KeepRaw'
-        );
-
-        if (!result.success) {
-          errors.push(`Failed to create and snap section "${sectionConfig.name}": ${result.error}`);
-          continue;
-        }
-
-        const sectionId = result.section_id;
-        if (sectionId !== undefined) {
-          createdSectionIds.set(sectionConfig.sectionIndex, sectionId);
-        }
-        continue;
-      }
-
-      // For other placement types (origin, zeroDatum, manual without snap, or fromImporting when target not yet created),
-      // create the section first
-      const createResult = await createSection(sectionData);
-
-      if (!createResult.success) {
-        errors.push(`Failed to create section "${sectionConfig.name}": ${createResult.error}`);
-        continue;
-      }
-
-      const sectionId = createResult.section_id;
-      if (sectionId === undefined) {
-        errors.push(`Section "${sectionConfig.name}" created but no ID returned`);
-        continue;
-      }
-
-      // Store the created section ID for fromImporting references
-      createdSectionIds.set(sectionConfig.sectionIndex, sectionId);
-
-      if (placement.type === 'origin') {
-        // Place at 0,0 - nothing else to do, section is already at origin
-        continue;
-      }
-
-      if (placement.type === 'zeroDatum') {
-        // Set zero datum on the specified station
-        // Skip fitToBounds during import - we'll do a single fit at the end
-        const zeroDatumResult = await setZeroDatum(
-          { section_id: sectionId, station_index: placement.stationIndex },
-          placement.coordinates,
-          { fitToBounds: false }
-        );
-
-        if (!zeroDatumResult.success) {
-          warnings.push(
-            `Section "${sectionConfig.name}" created but failed to set zero datum: ${zeroDatumResult.error}`
-          );
-        }
-        continue;
-      }
-
-      if (placement.type === 'fromImporting') {
-        // This case handles when target section wasn't created yet when we checked above
-        // Now try again - target should exist now
-        const targetSectionId = createdSectionIds.get(placement.targetSectionIndex);
-        if (targetSectionId === undefined) {
-          warnings.push(
-            `Section "${sectionConfig.name}" could not be attached: target section not yet created`
-          );
-          continue;
-        }
-
-        const importRef = {
-          section_id: sectionId,
-          station_index: placement.importStation,
-        };
-
-        const existingStation = {
-          section_id: targetSectionId,
-          station_index: placement.targetStationIndex,
-        };
-
-        const mergeResult = await mergeStations(
-          importRef,
-          existingStation,
-        );
-
-        if (!mergeResult.success) {
-          warnings.push(
-            `Section "${sectionConfig.name}" created but failed to merge with imported section: ${mergeResult.error}`
-          );
-        }
-        continue;
-      }
-
-      if (placement.type === 'manual') {
-        // Manual placement without snap - apply offset
-        // (Manual with snap is handled above using atomic create+merge)
-        if (placement.position) {
-          // Calculate station positions to determine offset
-          const stationPositions = calculateStationPositions(sectionConfig.shots);
-          // Clamp alignStationIndex to valid range
-          const alignIndex = Math.max(0, Math.min(placement.alignStationIndex, stationPositions.length - 1));
-          const alignPos = stationPositions[alignIndex];
-
-          if (alignPos) {
-            // Calculate offset needed to move align station to target position
-            const offset = {
-              x: placement.position.x - alignPos.x,
-              y: placement.position.y - alignPos.y,
-              z: placement.position.z ?? 0,
-            };
-
-            const moveResult = await moveSection(sectionId, offset);
-
-            if (!moveResult.success) {
-              warnings.push(
-                `Section "${sectionConfig.name}" created but failed to apply offset: ${moveResult.error}`
-              );
-            }
-          }
-        }
-        continue;
-      }
-    }
+    // Single backend call — all sections + file hash in one atomic undo unit
+    const result = await importSections(backendSections, fileHash);
 
     // Close the dialog and switch to single view
     closeDialog();
@@ -329,22 +194,16 @@ function App() {
     // Fit map to show all stations including newly imported ones
     triggerFitToBounds();
 
-    // Show errors if any occurred
-    if (errors.length > 0) {
+    if (!result.success) {
       openDialog('error', {
         title: 'Import Errors',
-        message: errors.join('\n'),
+        message: result.error ?? 'Unknown error during import',
       });
-    } else if (warnings.length > 0) {
-      // Show warnings as a non-blocking notification (using error dialog for now)
-      openDialog('error', {
-        title: 'Import Warnings',
-        message: warnings.join('\n'),
-      });
+      return false;
     }
 
-    return errors.length === 0;
-  }, [createSection, createSectionAndMerge, setZeroDatum, mergeStations, moveSection, closeDialog, openDialog, setView, triggerFitToBounds]);
+    return true;
+  }, [importSections, closeDialog, openDialog, setView, triggerFitToBounds]);
 
   useEffect(() => {
     // Load config on startup
@@ -541,14 +400,7 @@ function App() {
           onImport={async (sections) => {
             // Capture hash before handleImportSections closes dialog (clears dialogData)
             const hash = (dialogData.selectionConfig as DmpSelectionConfig)?.fileHash;
-            const succeeded = await handleImportSections(sections);
-            if (hash && succeeded) {
-              try {
-                await trackImportedFile(hash);
-              } catch (e) {
-                console.warn('Failed to track imported file hash:', e);
-              }
-            }
+            await handleImportSections(sections, hash);
           }}
         />
       ) : null}
