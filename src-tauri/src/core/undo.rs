@@ -133,6 +133,19 @@ pub enum UndoData {
         offset: (f64, f64),
     },
 
+    /// Previous shot data and station offset for station moves.
+    /// MoveStation modifies adjacent shots' geometry (length/azimuth/depth) directly,
+    /// so undo needs to restore the original shot data and station offset.
+    StationMoveInfo {
+        station_ref: StationRef,
+        /// Shot data for the preceding shot (shot at station_index - 1), if any
+        prev_shot_before: Option<(ShotId, ShotData)>,
+        /// Shot data for the following shot (shot at station_index), if any
+        prev_shot_after: Option<(ShotId, ShotData)>,
+        /// Previous station offset (None = no offset existed)
+        prev_offset: Option<(f64, f64, f64)>,
+    },
+
     /// Full project snapshot for batch operations (JSON serialized)
     ProjectSnapshot(String),
 
@@ -164,6 +177,7 @@ impl UndoData {
             UndoData::ClosureInfo { .. } => "ClosureInfo",
             UndoData::ZeroDatumInfo { .. } => "ZeroDatumInfo",
             UndoData::SegmentMoveInfo { .. } => "SegmentMoveInfo",
+            UndoData::StationMoveInfo { .. } => "StationMoveInfo",
             UndoData::ProjectSnapshot(_) => "ProjectSnapshot",
             UndoData::ProjectSnapshotPair { .. } => "ProjectSnapshotPair",
             UndoData::None => "None",

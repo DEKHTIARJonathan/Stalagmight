@@ -284,13 +284,29 @@ impl AppState {
 
             Command::MoveStation {
                 station_ref,
-                offset,
+                offset: _,
             } => {
-                // Inverse is moving back by negative offset
-                UndoData::InverseCommand(Command::MoveStation {
-                    station_ref: *station_ref,
-                    offset: Coordinates::new(-offset.x, -offset.y, -offset.z),
-                })
+                // Capture adjacent shot data and station offset before execution
+                let section = project.sections.iter().find(|s| s.id == station_ref.section_id);
+                match section {
+                    Some(section) => {
+                        let idx = station_ref.station_index as usize;
+                        let prev_shot_before = if idx > 0 {
+                            section.shots.get(idx - 1).map(|s| (s.id, s.to_shot_data()))
+                        } else {
+                            None
+                        };
+                        let prev_shot_after = section.shots.get(idx).map(|s| (s.id, s.to_shot_data()));
+                        let prev_offset = project.station_offsets.get(station_ref).copied();
+                        UndoData::StationMoveInfo {
+                            station_ref: *station_ref,
+                            prev_shot_before,
+                            prev_shot_after,
+                            prev_offset,
+                        }
+                    }
+                    None => UndoData::None,
+                }
             }
 
             // Batch: undo data is handled entirely inside execute_batch(),
@@ -686,6 +702,60 @@ impl AppState {
                                     None => {
                                         project.section_offsets.remove(section_id);
                                     }
+                                }
+                            }
+                            project.touch();
+                            CommandResult::success()
+                        }
+                        None => CommandResult::failure("No project open".to_string()),
+                    },
+                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                }
+            }
+
+            UndoData::StationMoveInfo {
+                station_ref,
+                prev_shot_before,
+                prev_shot_after,
+                prev_offset,
+            } => {
+                // Restore adjacent shot data and station offset
+                match self.project.lock() {
+                    Ok(mut proj_guard) => match proj_guard.as_mut() {
+                        Some(project) => {
+                            let section = project
+                                .sections
+                                .iter_mut()
+                                .find(|s| s.id == station_ref.section_id);
+                            if let Some(section) = section {
+                                // Restore preceding shot
+                                if let Some((shot_id, shot_data)) = prev_shot_before {
+                                    if let Some(shot) = section.shots.iter_mut().find(|s| s.id == *shot_id) {
+                                        shot.azimuth_in = shot_data.azimuth_in;
+                                        shot.azimuth_out = shot_data.azimuth_out;
+                                        shot.length = shot_data.length;
+                                        shot.depth_in = shot_data.depth_in;
+                                        shot.depth_out = shot_data.depth_out;
+                                    }
+                                }
+                                // Restore following shot
+                                if let Some((shot_id, shot_data)) = prev_shot_after {
+                                    if let Some(shot) = section.shots.iter_mut().find(|s| s.id == *shot_id) {
+                                        shot.azimuth_in = shot_data.azimuth_in;
+                                        shot.azimuth_out = shot_data.azimuth_out;
+                                        shot.length = shot_data.length;
+                                        shot.depth_in = shot_data.depth_in;
+                                        shot.depth_out = shot_data.depth_out;
+                                    }
+                                }
+                            }
+                            // Restore station offset
+                            match prev_offset {
+                                Some(offset) => {
+                                    project.station_offsets.insert(*station_ref, *offset);
+                                }
+                                None => {
+                                    project.station_offsets.remove(station_ref);
                                 }
                             }
                             project.touch();
