@@ -42,22 +42,21 @@ impl AppState {
                 }
             }
 
+            // For DeleteShot, capture full project snapshot (before/after pair)
+            // because remove_shot shifts station refs — a ShotSnapshot alone cannot
+            // restore the original station references.
             Command::DeleteShot {
                 section_id,
                 shot_id,
             } => {
                 if let Some(section) = project.get_section(*section_id) {
-                    if let Some((position, shot)) = section
-                        .shots
-                        .iter()
-                        .enumerate()
-                        .find(|(_, s)| s.id == *shot_id)
-                    {
-                        UndoData::ShotSnapshot {
-                            section_id: *section_id,
-                            shot_id: *shot_id,
-                            shot_data: shot.to_shot_data(),
-                            position,
+                    if section.shots.iter().any(|s| s.id == *shot_id) {
+                        match serde_json::to_string(project) {
+                            Ok(before) => UndoData::ProjectSnapshotPair {
+                                before,
+                                after: String::new(), // Filled by finalize_undo_data
+                            },
+                            Err(_) => UndoData::None,
                         }
                     } else {
                         UndoData::None
@@ -345,7 +344,11 @@ impl AppState {
                 }
             }
 
-            Command::CreateShot { section_id, .. } => {
+            Command::CreateShot {
+                section_id,
+                before_shot_id,
+                ..
+            } => {
                 // Capture full snapshot of the just-created shot so that redo can
                 // restore it with its original ID instead of re-executing CreateShot
                 // (which would assign a new ID).
@@ -360,11 +363,29 @@ impl AppState {
                         .enumerate()
                         .find(|(_, s)| s.id == shot_id)
                     {
+                        // For insert_before: station_shift_from = position (the array position)
+                        // For insert_after/append: station_shift_from = position + 1
+                        // (insert_after creates new station at pos+2 of old array, but after
+                        // insertion it's at position+1 in the new array; for redo we need the
+                        // from_index matching the shift semantics of insert_before)
+                        let station_shift_from = if before_shot_id.is_some() {
+                            position as u32
+                        } else {
+                            // For insert_after and append: the new station doesn't displace
+                            // existing ones in the same way. We use position + 1 so that on redo,
+                            // refs at station >= position+1 get shifted up (matching insert_after
+                            // semantics of shifting >= pos+2, but pos here is already post-insert).
+                            // Actually, for append (end of section), no refs need shifting since
+                            // there are no stations beyond it. Using section.shots.len() as u32
+                            // ensures no refs match.
+                            (position + 1) as u32
+                        };
                         UndoData::CreatedShotSnapshot {
                             section_id: *section_id,
                             shot_id,
                             shot_data: shot.to_shot_data(),
                             position,
+                            station_shift_from,
                         }
                     } else {
                         undo_data
@@ -392,8 +413,8 @@ impl AppState {
                 }
             }
 
-            // DeleteSection: fill in the "after" snapshot now that cleanup + removal is done
-            Command::DeleteSection { .. } => {
+            // DeleteSection/DeleteShot: fill in the "after" snapshot now that removal is done
+            Command::DeleteSection { .. } | Command::DeleteShot { .. } => {
                 if let UndoData::ProjectSnapshotPair { before, .. } = undo_data {
                     match serde_json::to_string(project) {
                         Ok(after) => UndoData::ProjectSnapshotPair { before, after },
@@ -524,10 +545,26 @@ impl AppState {
             UndoData::CreatedShotSnapshot {
                 section_id,
                 shot_id,
-                ..
+                shot_data,
+                position,
+                station_shift_from,
             } => {
                 // Undo a CreateShot by deleting the shot
-                self.delete_shot(*section_id, *shot_id)
+                let result = self.delete_shot(*section_id, *shot_id);
+                // For insert_before at pos=0, reverse the section offset adjustment
+                // that was applied during the original insert
+                if result.success && *position == 0 && *station_shift_from == 0 {
+                    if let Ok(mut proj_guard) = self.project.lock() {
+                        if let Some(project) = proj_guard.as_mut() {
+                            let (dx, dy) = Project::shot_displacement(shot_data);
+                            if dx != 0.0 || dy != 0.0 {
+                                let current = project.section_offsets.get(section_id).copied().unwrap_or((0.0, 0.0));
+                                project.section_offsets.insert(*section_id, (current.0 + dx, current.1 + dy));
+                            }
+                        }
+                    }
+                }
+                result
             }
 
             UndoData::MergeInfo {
@@ -880,9 +917,28 @@ impl AppState {
                 shot_id,
                 shot_data,
                 position,
+                station_shift_from,
             } => {
                 // Redo CreateShot by restoring from snapshot to preserve original ID
-                self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position)
+                let result = self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position);
+                if result.success && *station_shift_from < u32::MAX {
+                    // Apply station ref shift for redo (mirrors what insert_shot_before/after does)
+                    if let Ok(mut proj_guard) = self.project.lock() {
+                        if let Some(project) = proj_guard.as_mut() {
+                            project.shift_station_refs(*section_id, *station_shift_from, 1);
+                            // For insert_before at pos=0, also adjust this section's
+                            // offset to keep existing stations at the same visual position
+                            if *position == 0 && *station_shift_from == 0 {
+                                let (dx, dy) = Project::shot_displacement(shot_data);
+                                if dx != 0.0 || dy != 0.0 {
+                                    let current = project.section_offsets.get(section_id).copied().unwrap_or((0.0, 0.0));
+                                    project.section_offsets.insert(*section_id, (current.0 - dx, current.1 - dy));
+                                }
+                            }
+                        }
+                    }
+                }
+                result
             }
             UndoData::SegmentMoveInfo {
                 affected_sections,
