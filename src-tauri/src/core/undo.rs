@@ -80,6 +80,11 @@ pub enum UndoData {
         shot_data: ShotData,
         /// Position in the section's shot list (for re-insertion at correct position)
         position: usize,
+        /// Station index from which to shift refs when restoring (redo).
+        /// For insert_before: same as position. For insert_after/append: position + 1.
+        /// Undo of CreateShot (delete) uses the inverse shift automatically via remove_shot.
+        #[serde(default)]
+        station_shift_from: u32,
     },
 
     /// Merge info for unmerging stations
@@ -1299,6 +1304,7 @@ mod tests {
                         ..Default::default()
                     },
                     position: 0,
+                    station_shift_from: 1,
                 },
                 timestamp: None,
             },

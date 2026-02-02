@@ -260,6 +260,64 @@ impl Project {
         self.zero_datums.retain(|zd| zd.station_ref.section_id != section_id);
     }
 
+    /// Compute the (dx, dy) horizontal displacement of a shot from its data.
+    /// Uses the same average azimuth calculation as coordinate computation.
+    pub(crate) fn shot_displacement(data: &ShotData) -> (f64, f64) {
+        let diff = (data.azimuth_out - data.azimuth_in + 540.0) % 360.0 - 180.0;
+        let avg_az = (data.azimuth_in + diff / 2.0 + 360.0) % 360.0;
+        let az_rad = avg_az.to_radians();
+        (data.length * az_rad.sin(), data.length * az_rad.cos())
+    }
+
+    /// Shift all StationRef indices in the project for the given section.
+    ///
+    /// All station references where `section_id` matches AND `station_index >= from_index`
+    /// have their `station_index` shifted by `delta`. This is needed when inserting or
+    /// removing shots, which changes station indices for all subsequent stations.
+    ///
+    /// Affects: station_merges, loop_closures, zero_datums, station_offsets.
+    pub(crate) fn shift_station_refs(&mut self, section_id: SectionId, from_index: u32, delta: i32) {
+        let shift = |sr: &mut StationRef| {
+            if sr.section_id == section_id && sr.station_index >= from_index {
+                sr.station_index = (sr.station_index as i32 + delta) as u32;
+            }
+        };
+
+        // Shift station_merges
+        for merge in &mut self.station_merges {
+            shift(&mut merge.station_a);
+            shift(&mut merge.station_b);
+        }
+
+        // Shift loop_closures
+        for closure in &mut self.loop_closures {
+            shift(&mut closure.station_a);
+            shift(&mut closure.station_b);
+        }
+
+        // Shift zero_datums
+        for zd in &mut self.zero_datums {
+            shift(&mut zd.station_ref);
+        }
+
+        // Shift station_offsets (HashMap keys — collect, remove, re-insert)
+        let keys_to_shift: Vec<(StationRef, (f64, f64, f64))> = self
+            .station_offsets
+            .iter()
+            .filter(|(sr, _)| sr.section_id == section_id && sr.station_index >= from_index)
+            .map(|(sr, v)| (*sr, *v))
+            .collect();
+
+        for (old_key, value) in keys_to_shift {
+            self.station_offsets.remove(&old_key);
+            let new_key = StationRef::new(
+                old_key.section_id,
+                (old_key.station_index as i32 + delta) as u32,
+            );
+            self.station_offsets.insert(new_key, value);
+        }
+    }
+
     // === Shot operations ===
 
     /// Add a shot to a section
@@ -278,9 +336,14 @@ impl Project {
         after_shot_id: ShotId,
         data: ShotData,
     ) -> Option<&Shot> {
+        // Look up position before mutable borrow
+        let pos = self.get_section(section_id)?
+            .shots.iter().position(|s| s.id == after_shot_id)?;
         let section = self.get_section_mut(section_id)?;
         let shot = section.insert_shot_after(after_shot_id, data)?;
         let shot_id = shot.id;
+        // insert_after at pos: new shot at pos+1, old stations >= pos+2 shift up
+        self.shift_station_refs(section_id, (pos + 2) as u32, 1);
         self.touch();
         self.get_section(section_id)?.get_shot(shot_id)
     }
@@ -292,9 +355,32 @@ impl Project {
         before_shot_id: ShotId,
         data: ShotData,
     ) -> Option<&Shot> {
+        // Look up position before mutable borrow
+        let pos = self.get_section(section_id)?
+            .shots.iter().position(|s| s.id == before_shot_id)?;
+        // Compute displacement before data is consumed (only needed at pos=0)
+        let disp = if pos == 0 {
+            Some(Self::shot_displacement(&data))
+        } else {
+            None
+        };
         let section = self.get_section_mut(section_id)?;
         let shot = section.insert_shot_before(before_shot_id, data)?;
         let shot_id = shot.id;
+        // insert_before at pos: new shot at pos, old station at pos becomes pos+1
+        self.shift_station_refs(section_id, pos as u32, 1);
+        // When prepending (pos=0), adjust this section's offset so existing
+        // stations keep their visual position. Station 0 is always at
+        // section_offset, so old station 0 (now 1) = section_offset +
+        // displacement. Subtract the displacement from the offset to compensate.
+        // Only this section is adjusted — other merged sections are unaffected
+        // because the new shot only changes this section's coordinate walk.
+        if let Some((dx, dy)) = disp {
+            if dx != 0.0 || dy != 0.0 {
+                let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+                self.section_offsets.insert(section_id, (current.0 - dx, current.1 - dy));
+            }
+        }
         self.touch();
         self.get_section(section_id)?.get_shot(shot_id)
     }
@@ -315,8 +401,13 @@ impl Project {
 
     /// Remove a shot
     pub fn remove_shot(&mut self, section_id: SectionId, shot_id: ShotId) -> Option<Shot> {
+        // Look up position before mutable borrow
+        let pos = self.get_section(section_id)?
+            .shots.iter().position(|s| s.id == shot_id)?;
         let section = self.get_section_mut(section_id)?;
         let shot = section.remove_shot(shot_id)?;
+        // remove at pos: station pos+1 collapses, shift refs >= pos+1 by -1
+        self.shift_station_refs(section_id, (pos + 1) as u32, -1);
         self.touch();
         Some(shot)
     }
