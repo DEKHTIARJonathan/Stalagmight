@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
-import type { DmpFile } from '../../types/commands';
+import type { DmpFile, DmpSection } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { Project, Station } from '../../types/project';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
@@ -160,8 +160,8 @@ export default function DmpSectionConfigDialog({
     isMidSection: boolean;
   }>({ visible: false, shotIndex: -1, isMidSection: false });
 
-  // Selected shot row index (syncs with preview)
-  const [selectedShotIndex, setSelectedShotIndex] = useState<number | null>(null);
+  // Selected shot key (stable across insert/delete)
+  const [selectedShotKey, setSelectedShotKey] = useState<string | null>(null);
 
   // ===== Placement Mode State =====
   // Zero Datum fields
@@ -185,14 +185,80 @@ export default function DmpSectionConfigDialog({
     ? dmpFile.sections[currentSectionIndex]
     : undefined;
 
+  // Build a preview section from editable shots so the minimap updates with edits.
+  const previewSection = useMemo<DmpSection | null>(() => {
+    if (!currentConfig) return null;
+
+    return {
+      name: currentConfig.name ?? currentDmpSection?.name ?? '',
+      direction: currentConfig.direction ?? currentDmpSection?.direction ?? 'in',
+      date: currentConfig.date ?? currentDmpSection?.date ?? '',
+      shots: currentConfig.shots
+        .filter((shot) => !shot.isDeleted)
+        .map((shot) => ({
+          shot_type: 'Standard',
+          heading_in: shot.azimuth_in,
+          heading_out: shot.azimuth_out,
+          length: shot.length,
+          depth_in: shot.depth_in,
+          depth_out: shot.depth_out,
+          pitch_in: shot.pitch_in ?? 0,
+          pitch_out: shot.pitch_out ?? 0,
+          left: shot.left ?? 0,
+          right: shot.right ?? 0,
+          up: shot.up ?? 0,
+          down: shot.down ?? 0,
+          temperature: 0,
+          hour: 0,
+          minute: 0,
+          second: 0,
+          marker_index: 0,
+          comment: shot.comment ?? undefined,
+        })),
+    };
+  }, [currentConfig, currentDmpSection]);
+
   // Alias for backward compatibility with currentIndex
   const currentIndex = currentArrayIndex;
 
+  const visibleShots = useMemo(() => {
+    return currentConfig?.shots.filter((s) => !s.isDeleted) ?? [];
+  }, [currentConfig]);
+
+  const getShotKey = useCallback((shot: EditableShot): string => {
+    if (shot.tempId !== undefined) return `t:${shot.tempId}`;
+    return `i:${shot.id}`;
+  }, []);
+
+  const selectedShotActualIndex = useMemo(() => {
+    if (!currentConfig || !selectedShotKey) return null;
+    const index = currentConfig.shots.findIndex((shot) => getShotKey(shot) === selectedShotKey);
+    return index >= 0 ? index : null;
+  }, [currentConfig, getShotKey, selectedShotKey]);
+
+  const selectedShotVisibleIndex = useMemo(() => {
+    if (!selectedShotKey) return null;
+    const index = visibleShots.findIndex((shot) => getShotKey(shot) === selectedShotKey);
+    return index >= 0 ? index : null;
+  }, [getShotKey, selectedShotKey, visibleShots]);
+
+  // Clear selection when switching sections or when selected shot is deleted
+  useEffect(() => {
+    setSelectedShotKey(null);
+  }, [currentSectionIndex]);
+
+  useEffect(() => {
+    if (!selectedShotKey || !currentConfig) return;
+    const selectedShot = currentConfig.shots.find((shot) => getShotKey(shot) === selectedShotKey);
+    if (!selectedShot || selectedShot.isDeleted) {
+      setSelectedShotKey(null);
+    }
+  }, [currentConfig, getShotKey, selectedShotKey]);
+
   // Compute station count for the current section
   const currentShotCount = useMemo(() => {
-    if (!currentConfig) return 0;
-    return currentConfig.shots.filter((s) => !s.isDeleted).length;
-  }, [currentConfig]);
+    return visibleShots.length;
+  }, [visibleShots.length]);
 
   // Compute section stats for current section
   // Note: currentConfig.shots already contains only Standard shots (filtered during import config creation)
@@ -201,15 +267,16 @@ export default function DmpSectionConfigDialog({
       return { shotCount: 0, totalLength: 0, minDepth: null as number | null, maxDepth: null as number | null };
     }
 
-    const visibleShots = currentConfig.shots.filter((s) => !s.isDeleted);
     let totalLength = 0;
     let minDepth: number | null = null;
     let maxDepth: number | null = null;
 
     for (const shot of visibleShots) {
-      // Exclude negative lengths from total (data corruption guard)
-      if (Number.isFinite(shot.length) && shot.length >= 0) {
+      const hasValidLength = Number.isFinite(shot.length) && shot.length > 0;
+      if (hasValidLength) {
         totalLength += shot.length;
+      } else {
+        continue;
       }
 
       // Calculate depth range from depth_in and depth_out
@@ -228,7 +295,7 @@ export default function DmpSectionConfigDialog({
       minDepth,
       maxDepth,
     };
-  }, [currentConfig]);
+  }, [currentConfig, visibleShots]);
 
   // Generate station options (0 to shotCount, since station N is after shot N-1)
   const stationOptions = useMemo(() => {
@@ -982,15 +1049,15 @@ export default function DmpSectionConfigDialog({
       onClose={handleCancel}
       fixedSize={{ width: 'min(900px, 95vw)', height: 'min(700px, 90vh)' }}
       overflow="hidden"
-      bodyClassName="flex-1 flex flex-col p-0"
+      bodyClassName="flex-1 flex flex-col p-0 min-h-0"
       data-testid="dmp-section-config-dialog"
       onKeyDown={handleDialogKeyDown}
     >
-      <div className="flex-1 flex flex-col">
-        <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 flex overflow-hidden min-h-0">
           {/* Left Panel - Section List */}
           <div
-            className={`border-r border-border flex flex-col transition-all ${
+            className={`border-r border-border flex flex-col transition-all flex-shrink-0 min-h-0 ${
               leftPanelCollapsed ? 'w-10' : 'w-56'
             }`}
             data-testid="section-list-panel"
@@ -1085,21 +1152,27 @@ export default function DmpSectionConfigDialog({
 
             {/* Preview - anchored at bottom, only when expanded */}
             {!leftPanelCollapsed && currentConfig && currentDmpSection && (
-              <div className="flex-shrink-0 p-2 border-t border-border" data-testid="section-preview-panel">
+              <div className="flex-shrink-0 p-2 border-t border-border bg-panel" data-testid="section-preview-panel">
                 <SectionPreview
-                  section={currentDmpSection}
+                  section={previewSection}
                   color={currentConfig.color}
                   size={200}
                   selectedStationIndex={
-                    selectedShotIndex !== null ? selectedShotIndex + 1 : null
+                    selectedShotVisibleIndex !== null ? selectedShotVisibleIndex + 1 : null
                   }
                   mergePreview={mergePreviewConfig}
                   onStationClick={(stationIndex) => {
                     // Station N corresponds to shot N-1 (station 0 has no corresponding shot)
                     if (stationIndex > 0) {
-                      setSelectedShotIndex(stationIndex - 1);
+                      const visibleIndex = stationIndex - 1;
+                      const shot = visibleShots[visibleIndex];
+                      if (shot) {
+                        setSelectedShotKey(getShotKey(shot));
+                      } else {
+                        setSelectedShotKey(null);
+                      }
                     } else {
-                      setSelectedShotIndex(null);
+                      setSelectedShotKey(null);
                     }
                   }}
                 />
@@ -1115,9 +1188,9 @@ export default function DmpSectionConfigDialog({
           </div>
 
           {/* Main Panel */}
-          <div className="flex-1 flex flex-col min-h-0 min-w-0 p-4" data-testid="main-config-panel">
+          <div className="flex-1 flex flex-col min-h-0 min-w-0 p-3" data-testid="main-config-panel">
             {currentConfig && currentDmpSection ? (
-              <div className="flex-1 overflow-auto min-h-0 flex flex-col">
+              <div className="flex-1 overflow-y-auto min-h-0 flex flex-col">
                 {/* Section header */}
                 <div className="flex items-center gap-4 mb-4">
                   <h3 className="font-medium text-lg">
@@ -1551,8 +1624,16 @@ export default function DmpSectionConfigDialog({
                       onDeleteShot={handleDeleteShotRequest}
                       onInsertBefore={handleInsertBefore}
                       onInsertAfter={handleInsertAfter}
-                      selectedRowIndex={selectedShotIndex}
-                      onRowSelect={setSelectedShotIndex}
+                      selectedRowIndex={selectedShotActualIndex}
+                      onRowSelect={(rowIndex) => {
+                        if (!currentConfig) return;
+                        const shot = currentConfig.shots[rowIndex];
+                        if (!shot) {
+                          setSelectedShotKey(null);
+                          return;
+                        }
+                        setSelectedShotKey(getShotKey(shot));
+                      }}
                       maxHeight="calc(100% - 2rem)"
                       readOnly={isCurrentPlaced || isCurrentExcluded}
                       validationConfig={validationConfig}

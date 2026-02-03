@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -31,7 +31,7 @@ export default function EditSectionDialog() {
   // Shots state
   const [shots, setShots] = useState<EditableShot[]>([]);
   const [nextTempId, setNextTempId] = useState(-1);
-  const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null);
+  const [selectedShotKey, setSelectedShotKey] = useState<string | null>(null);
   const [pendingMidDelete, setPendingMidDelete] = useState<{ index: number; shotId: number } | null>(null);
   const [pendingImpact, setPendingImpact] = useState<DeleteShotImpact | null>(null);
   const [pendingImpactError, setPendingImpactError] = useState<string | null>(null);
@@ -86,9 +86,29 @@ export default function EditSectionDialog() {
     setNextTempId(prev => prev - 1);
   }, [nextTempId]);
 
+  const getShotKey = useCallback((shot: EditableShot): string => {
+    if (shot.tempId !== undefined) return `t:${shot.tempId}`;
+    return `i:${shot.id}`;
+  }, []);
+
+  const selectedRowIndex = useMemo(() => {
+    if (!selectedShotKey) return null;
+    const index = shots.findIndex((shot) => getShotKey(shot) === selectedShotKey);
+    return index >= 0 ? index : null;
+  }, [getShotKey, selectedShotKey, shots]);
+
+  useEffect(() => {
+    if (!selectedShotKey) return;
+    const selectedShot = shots.find((shot) => getShotKey(shot) === selectedShotKey);
+    if (!selectedShot || selectedShot.isDeleted) {
+      setSelectedShotKey(null);
+    }
+  }, [getShotKey, selectedShotKey, shots]);
+
   const handleDeleteShot = useCallback((index: number) => {
     const shot = shots[index];
     if (!shot) return;
+    const isSelected = selectedShotKey !== null && getShotKey(shot) === selectedShotKey;
 
     if (!shot.isNew && section) {
       const originalIndex = section.shots.findIndex((s) => s.id === shot.id);
@@ -114,10 +134,10 @@ export default function EditSectionDialog() {
     });
 
     // Clear selection if deleted row was selected
-    if (selectedRowIndex === index) {
-      setSelectedRowIndex(null);
+    if (isSelected) {
+      setSelectedShotKey(null);
     }
-  }, [shots, section, selectedRowIndex]);
+  }, [getShotKey, section, selectedShotKey, shots]);
 
   useEffect(() => {
     if (pendingMidDelete && sectionId !== undefined) {
@@ -148,11 +168,14 @@ export default function EditSectionDialog() {
       updated[pendingMidDelete.index] = { ...current, isDeleted: true } as EditableShot;
       return updated;
     });
-    if (selectedRowIndex === pendingMidDelete.index) {
-      setSelectedRowIndex(null);
+    if (selectedShotKey !== null) {
+      const pendingShot = shots[pendingMidDelete.index];
+      if (pendingShot && getShotKey(pendingShot) === selectedShotKey) {
+        setSelectedShotKey(null);
+      }
     }
     setPendingMidDelete(null);
-  }, [pendingMidDelete, selectedRowIndex]);
+  }, [getShotKey, pendingMidDelete, selectedShotKey, shots]);
 
   const confirmSplitMidDelete = useCallback(() => {
     if (!pendingMidDelete || sectionId === undefined) return;
@@ -375,7 +398,14 @@ export default function EditSectionDialog() {
             onInsertAfter={handleInsertAfter}
             validationConfig={validationConfig}
             selectedRowIndex={selectedRowIndex}
-            onRowSelect={setSelectedRowIndex}
+            onRowSelect={(rowIndex) => {
+              const shot = shots[rowIndex];
+              if (!shot) {
+                setSelectedShotKey(null);
+                return;
+              }
+              setSelectedShotKey(getShotKey(shot));
+            }}
             maxHeight="16rem"
           />
         </div>

@@ -22,7 +22,8 @@ export interface MergePreviewConfig {
 
 /**
  * Compute station coordinates from DMP shots.
- * Each station is positioned relative to the previous one based on shot heading, length, and pitch.
+ * Each station is positioned relative to the previous one based on shot heading and length.
+ * Depth change uses depth_in/out to stay consistent with placement overlay behavior.
  */
 function computeStationsFromDmpShots(shots: DmpShot[]): Array<{ x: number; y: number; z: number }> {
   // Start at origin
@@ -38,21 +39,12 @@ function computeStationsFromDmpShots(shots: DmpShot[]): Array<{ x: number; y: nu
     const azimuth = circularMeanDegrees(shot.heading_in, shot.heading_out);
     const azimuthRad = (azimuth * Math.PI) / 180;
 
-    // Average pitch (0 means horizontal, positive means upward)
-    const pitchIn = shot.pitch_in ?? 0;
-    const pitchOut = shot.pitch_out ?? 0;
-    const avgPitch = (pitchIn + pitchOut) / 2;
-    const pitchRad = (avgPitch * Math.PI) / 180;
-
-    // Project length onto horizontal plane using pitch
-    const horizontalLength = shot.length * Math.cos(pitchRad);
-    const verticalChange = shot.length * Math.sin(pitchRad);
+    const depthChange = shot.depth_out - shot.depth_in;
 
     // Compute next station position
-    const x = prev.x + horizontalLength * Math.sin(azimuthRad);
-    const y = prev.y + horizontalLength * Math.cos(azimuthRad);
-    // Use depth from shot if available, otherwise compute from pitch
-    const z = shot.depth_out !== 0 ? shot.depth_out : prev.z - verticalChange;
+    const x = prev.x + shot.length * Math.sin(azimuthRad);
+    const y = prev.y + shot.length * Math.cos(azimuthRad);
+    const z = prev.z + depthChange;
 
     stations.push({ x, y, z });
   }
@@ -63,6 +55,7 @@ function computeStationsFromDmpShots(shots: DmpShot[]): Array<{ x: number; y: nu
 /**
  * Compute station coordinates from project Section shots.
  * Used for existing sections in merge preview.
+ * Depth change uses depth_in/out to stay consistent with placement overlay behavior.
  */
 function computeStationsFromShots(shots: Shot[]): Array<{ x: number; y: number; z: number }> {
   // Start at origin
@@ -79,21 +72,12 @@ function computeStationsFromShots(shots: Shot[]): Array<{ x: number; y: number; 
     const azimuth = circularMeanDegrees(shot.azimuth_in, shot.azimuth_out);
     const azimuthRad = (azimuth * Math.PI) / 180;
 
-    // Average pitch (0 means horizontal, positive means upward)
-    const pitchIn = shot.pitch_in ?? 0;
-    const pitchOut = shot.pitch_out ?? 0;
-    const avgPitch = (pitchIn + pitchOut) / 2;
-    const pitchRad = (avgPitch * Math.PI) / 180;
-
-    // Project length onto horizontal plane using pitch
-    const horizontalLength = shot.length * Math.cos(pitchRad);
-    const verticalChange = shot.length * Math.sin(pitchRad);
+    const depthChange = shot.depth_out - shot.depth_in;
 
     // Compute next station position
-    const x = prev.x + horizontalLength * Math.sin(azimuthRad);
-    const y = prev.y + horizontalLength * Math.cos(azimuthRad);
-    // Use depth from shot if available, otherwise compute from pitch
-    const z = shot.depth_out !== 0 ? shot.depth_out : prev.z - verticalChange;
+    const x = prev.x + shot.length * Math.sin(azimuthRad);
+    const y = prev.y + shot.length * Math.cos(azimuthRad);
+    const z = prev.z + depthChange;
 
     stations.push({ x, y, z });
   }
