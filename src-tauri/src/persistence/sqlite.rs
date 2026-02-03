@@ -141,6 +141,24 @@ impl Database {
             tracing::info!("Added direction column to sections table");
         }
 
+        // Add quality column to sections table if it doesn't exist (added for weighted adjustments)
+        let has_quality_column: bool = self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='quality'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_quality_column {
+            self.conn.execute(
+                "ALTER TABLE sections ADD COLUMN quality REAL NOT NULL DEFAULT 1.0",
+                [],
+            )?;
+            tracing::info!("Added quality column to sections table");
+        }
+
         // Ensure station_offsets table exists (added for individual station moves)
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS station_offsets (
@@ -288,6 +306,7 @@ impl Database {
                 date TEXT,
                 color TEXT NOT NULL,
                 direction TEXT NOT NULL DEFAULT 'in',
+                quality REAL NOT NULL DEFAULT 1.0,
                 created_at TEXT NOT NULL
             );
 
@@ -468,7 +487,7 @@ impl Database {
         // Save sections and shots
         for section in &project.sections {
             tx.execute(
-                "INSERT INTO sections (id, name, surveyor, date, color, direction, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     section.id,
                     section.name,
@@ -476,6 +495,7 @@ impl Database {
                     section.date.map(|d| d.to_string()),
                     section.color,
                     section.direction.to_string(),
+                    section.quality,
                     Utc::now().to_rfc3339()
                 ],
             )?;
@@ -684,26 +704,69 @@ impl Database {
         let mut next_section_id = 0u32;
 
         {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT id, name, surveyor, date, color, direction FROM sections ORDER BY id")?;
-            let section_rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, u32>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                ))
-            })?;
+            let has_quality_column: bool = self.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='quality'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+
+            let mut stmt = if has_quality_column {
+                self.conn.prepare(
+                    "SELECT id, name, surveyor, date, color, direction, quality FROM sections ORDER BY id",
+                )?
+            } else {
+                self.conn.prepare(
+                    "SELECT id, name, surveyor, date, color, direction FROM sections ORDER BY id",
+                )?
+            };
+
+            let mut section_rows = Vec::new();
+            if has_quality_column {
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, f64>(6)?,
+                    ))
+                })?;
+                for row in rows {
+                    section_rows.push(row?);
+                }
+            } else {
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        1.0,
+                    ))
+                })?;
+                for row in rows {
+                    section_rows.push(row?);
+                }
+            }
 
             for section_row in section_rows {
-                let (id, name, surveyor, date_str, color, direction_str) = section_row?;
+                let (id, name, surveyor, date_str, color, direction_str, quality_raw) = section_row;
                 let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
                 let direction = direction_str
                     .and_then(|s| s.parse::<SurveyDirection>().ok())
                     .unwrap_or_default();
+                let quality = if quality_raw.is_finite() && quality_raw > 0.0 {
+                    quality_raw
+                } else {
+                    1.0
+                };
 
                 let section_data = SectionData {
                     name,
@@ -711,6 +774,7 @@ impl Database {
                     date,
                     color,
                     direction: Some(direction),
+                    quality,
                     shots: Vec::new(),
                 };
 

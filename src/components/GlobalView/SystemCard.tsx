@@ -1,5 +1,7 @@
 import { type MouseEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
+import { formatDate as formatDateIntl, formatFixed, formatNumber } from '../../i18n/format';
 
 interface SystemCardProps {
   name: string;
@@ -26,6 +28,7 @@ export default function SystemCard({
   onSelect,
   onContextMenu,
 }: SystemCardProps) {
+  const { t } = useTranslation();
   const { loadProject } = useProjectStore();
 
   const handleClick = (e: MouseEvent) => {
@@ -50,22 +53,26 @@ export default function SystemCard({
 
   const formatDate = (dateStr: string) => {
     try {
-      const date = new Date(dateStr);
-      return date.toLocaleDateString(undefined, {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-      });
+      return formatDateInternal(dateStr);
     } catch {
       return dateStr;
     }
   };
 
+  const formatDateInternal = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return formatDateIntl(date, undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  };
+
   const formatLength = (meters: number) => {
     if (meters >= 1000) {
-      return `${(meters / 1000).toFixed(1)} km`;
+      return `${formatFixed(meters / 1000, undefined, 1)} ${t('common.units.kilometers')}`;
     }
-    return `${meters.toFixed(0)} m`;
+    return `${formatFixed(meters, undefined, 0)} ${t('common.units.meters')}`;
   };
 
   return (
@@ -99,17 +106,17 @@ export default function SystemCard({
 
       <div className="grid grid-cols-2 gap-2 text-sm">
         <div>
-          <span className="text-text-secondary">Sections:</span>{' '}
-          <span>{sectionCount}</span>
+          <span className="text-text-secondary">{t('globalView.systemCard.sections')}:</span>{' '}
+          <span>{formatNumber(sectionCount)}</span>
         </div>
         <div>
-          <span className="text-text-secondary">Length:</span>{' '}
+          <span className="text-text-secondary">{t('globalView.systemCard.length')}:</span>{' '}
           <span>{formatLength(totalLength)}</span>
         </div>
       </div>
 
       <div className="mt-3 pt-3 border-t border-border text-xs text-text-secondary">
-        Modified: {formatDate(modifiedAt)}
+        {t('globalView.systemCard.modified', { date: formatDate(modifiedAt) })}
       </div>
     </div>
   );

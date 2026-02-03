@@ -15,6 +15,7 @@
 auto_save = true                    # Enable auto-save after modifications
 recent_projects = []                # List of recently opened project paths
 recent_projects_max = 10            # Maximum recent projects to track
+locale = "system"                   # "system" or a specific locale tag like "en-US"
 
 [units]
 length = "meters"                   # meters, feet

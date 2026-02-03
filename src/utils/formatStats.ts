@@ -3,6 +3,7 @@
  */
 
 import type { LengthUnit } from '../types/config';
+import { formatFixed } from '../i18n/format';
 
 /** Conversion factor: meters to feet */
 const FEET_PER_METER = 3.28084;
@@ -62,7 +63,7 @@ export function formatLength(
   const clampedPrecision = clampPrecision(precision);
   const suffix = getUnitSuffix(unit);
 
-  return `${value.toFixed(clampedPrecision)}${suffix}`;
+  return `${formatFixed(value, undefined, clampedPrecision)}${suffix}`;
 }
 
 /**
@@ -89,5 +90,5 @@ export function formatDepthRange(
   const clampedPrecision = clampPrecision(precision);
   const suffix = getUnitSuffix(unit);
 
-  return `${minValue.toFixed(clampedPrecision)}-${maxValue.toFixed(clampedPrecision)}${suffix}`;
+  return `${formatFixed(minValue, undefined, clampedPrecision)}-${formatFixed(maxValue, undefined, clampedPrecision)}${suffix}`;
 }

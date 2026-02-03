@@ -1,7 +1,9 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import maplibregl from 'maplibre-gl';
 import { getTileFetchStats, type TileFetchStats } from '../../utils/tileProtocol';
+import { formatFixed, formatNumber } from '../../i18n/format';
 
 interface CacheStats {
   total_tiles: number;
@@ -39,6 +41,7 @@ interface WebGLInfo {
  * - https://deepwiki.com/maplibre/maplibre-gl-js/5-build-system-and-performance
  */
 export function MapDevStats({ map }: MapDevStatsProps) {
+  const { t } = useTranslation();
   // FPS tracking
   const [fps, setFps] = useState(0);
   const [frameTime, setFrameTime] = useState(0);
@@ -377,12 +380,25 @@ export function MapDevStats({ map }: MapDevStatsProps) {
 
   // Format bytes to human readable
   const formatBytes = useCallback((bytes: number): string => {
-    if (bytes === 0) return '0 B';
+    const sizes = [
+      t('map.devStats.units.bytes'),
+      t('map.devStats.units.kilobytes'),
+      t('map.devStats.units.megabytes'),
+      t('map.devStats.units.gigabytes'),
+    ];
+    if (bytes === 0) {
+      return t('map.devStats.bytesValue', {
+        value: formatNumber(0),
+        unit: sizes[0],
+      });
+    }
     const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-  }, []);
+    return t('map.devStats.bytesValue', {
+      value: formatFixed(bytes / Math.pow(k, i), undefined, 1),
+      unit: sizes[i] ?? sizes[sizes.length - 1],
+    });
+  }, [t]);
 
   // Get FPS color based on performance
   const getFpsColor = useCallback((currentFps: number): string => {
@@ -393,10 +409,14 @@ export function MapDevStats({ map }: MapDevStatsProps) {
 
   // Get network status indicator
   const getNetworkIndicator = useCallback(() => {
-    if (networkStatus === null) return { color: 'text-text-secondary', text: 'checking...' };
-    if (networkStatus) return { color: 'text-success', text: 'online' };
-    return { color: 'text-error', text: 'offline' };
-  }, [networkStatus]);
+    if (networkStatus === null) {
+      return { color: 'text-text-secondary', text: t('map.devStats.network.checking') };
+    }
+    if (networkStatus) {
+      return { color: 'text-success', text: t('map.devStats.network.online') };
+    }
+    return { color: 'text-error', text: t('map.devStats.network.offline') };
+  }, [networkStatus, t]);
 
   const networkIndicator = getNetworkIndicator();
 
@@ -413,31 +433,39 @@ export function MapDevStats({ map }: MapDevStatsProps) {
     >
       {/* Performance */}
       <div className="mb-1">
-        <span className="text-text-secondary">FPS:</span>{' '}
-        <span className={getFpsColor(fps)}>{fps}</span>
-        <span className="text-text-secondary opacity-80 ml-2">({frameTime}ms)</span>
-        {isZooming && <span className="text-warning ml-2">ZOOMING</span>}
+        <span className="text-text-secondary">{t('map.devStats.fps')}:</span>{' '}
+        <span className={getFpsColor(fps)}>{formatNumber(fps)}</span>
+        <span className="text-text-secondary opacity-80 ml-2">
+          {t('map.devStats.frameTime', { ms: formatNumber(frameTime) })}
+        </span>
+        {isZooming && <span className="text-warning ml-2">{t('map.devStats.zooming')}</span>}
       </div>
 
       {/* Zoom performance (show last zoom stats) */}
       {(zoomFps !== null || lastZoomDuration !== null) && (
         <div className="mb-1 text-[10px]">
-          <span className="text-text-secondary">Last zoom:</span>{' '}
+          <span className="text-text-secondary">{t('map.devStats.lastZoom')}:</span>{' '}
           {zoomFps !== null && (
             <>
-              <span className={getFpsColor(zoomFps)}>{zoomFps} fps</span>
+              <span className={getFpsColor(zoomFps)}>
+                {t('map.devStats.fpsValue', { value: formatNumber(zoomFps) })}
+              </span>
               <span className="text-text-secondary opacity-80 mx-1">|</span>
             </>
           )}
           {lastZoomDuration !== null && (
-            <span className="text-text-primary">{lastZoomDuration}ms</span>
+            <span className="text-text-primary">
+              {t('map.devStats.durationMs', { ms: formatNumber(lastZoomDuration) })}
+            </span>
           )}
           {lastZoomLevels !== null && (
-            <span className="text-text-secondary opacity-80 ml-1">({lastZoomLevels} lvls)</span>
+            <span className="text-text-secondary opacity-80 ml-1">
+              {t('map.devStats.zoomLevels', { count: formatNumber(lastZoomLevels) })}
+            </span>
           )}
           {worstFrameTime !== null && worstFrameTime > 20 && (
             <span className={`ml-1 ${worstFrameTime > 50 ? 'text-error' : 'text-warning'}`}>
-              worst: {worstFrameTime}ms
+              {t('map.devStats.worstFrame', { ms: formatNumber(worstFrameTime) })}
             </span>
           )}
         </div>
@@ -445,32 +473,35 @@ export function MapDevStats({ map }: MapDevStatsProps) {
 
       {/* Map state */}
       <div className="mb-1">
-        <span className="text-text-secondary">Map:</span>{' '}
+        <span className="text-text-secondary">{t('map.devStats.map')}:</span>{' '}
         <span className={mapLoaded ? 'text-success' : 'text-warning'}>
-          {mapLoaded ? 'loaded' : 'loading'}
+          {mapLoaded ? t('map.devStats.loaded') : t('map.devStats.loading')}
         </span>
         <span className="text-text-secondary opacity-80 mx-1">|</span>
         <span className={tilesLoaded ? 'text-success' : 'text-warning'}>
-          {tilesLoaded ? 'tiles ready' : 'tiles loading'}
+          {tilesLoaded ? t('map.devStats.tilesReady') : t('map.devStats.tilesLoading')}
         </span>
       </div>
 
       {/* Zoom and center */}
       <div className="mb-1">
-        <span className="text-text-secondary">Zoom:</span>{' '}
-        <span className="text-text-primary">{zoom.toFixed(2)}</span>
+        <span className="text-text-secondary">{t('map.devStats.zoom')}:</span>{' '}
+        <span className="text-text-primary">{formatFixed(zoom, undefined, 2)}</span>
         <span className="text-text-secondary opacity-80 ml-2 text-[10px]">
-          {canvasSize.width}x{canvasSize.height}
+          {t('map.devStats.canvasSize', {
+            width: formatNumber(canvasSize.width),
+            height: formatNumber(canvasSize.height),
+          })}
         </span>
       </div>
       <div className="mb-1 text-text-secondary opacity-80 text-[10px]">
-        {center.lng.toFixed(6)}, {center.lat.toFixed(6)}
+        {formatFixed(center.lng, undefined, 6)}, {formatFixed(center.lat, undefined, 6)}
       </div>
 
       {/* WebGL Info */}
       {webglInfo && (
         <div className="border-t border-border pt-1 mt-1">
-          <div className="text-text-secondary mb-0.5">WebGL:</div>
+          <div className="text-text-secondary mb-0.5">{t('map.devStats.webgl')}:</div>
           <div
             className="pl-2 text-[10px] text-text-secondary opacity-80 truncate"
             title={webglInfo.renderer}
@@ -478,22 +509,24 @@ export function MapDevStats({ map }: MapDevStatsProps) {
             {webglInfo.webglVersion} - {shortRenderer}
           </div>
           <div className="pl-2 text-[10px]">
-            <span className="text-text-secondary opacity-80">Max tex:</span>{' '}
-            <span className="text-text-primary">{webglInfo.maxTextureSize}</span>
-            <span className="text-text-secondary opacity-80 ml-2">Units:</span>{' '}
-            <span className="text-text-primary">{webglInfo.maxTextureUnits}</span>
+            <span className="text-text-secondary opacity-80">{t('map.devStats.maxTexture')}:</span>{' '}
+            <span className="text-text-primary">{formatNumber(webglInfo.maxTextureSize)}</span>
+            <span className="text-text-secondary opacity-80 ml-2">{t('map.devStats.textureUnits')}:</span>{' '}
+            <span className="text-text-primary">{formatNumber(webglInfo.maxTextureUnits)}</span>
           </div>
           <div className="pl-2 text-[10px]">
-            <span className="text-text-secondary opacity-80">Color:</span>{' '}
+            <span className="text-text-secondary opacity-80">{t('map.devStats.colorBits')}:</span>{' '}
             <span className="text-text-primary">
               {webglInfo.colorBits.r}/{webglInfo.colorBits.g}/{webglInfo.colorBits.b}/{webglInfo.colorBits.a}
             </span>
-            <span className="text-text-secondary opacity-80 ml-2">Depth:</span>{' '}
-            <span className="text-text-primary">{webglInfo.depthBits}</span>
+            <span className="text-text-secondary opacity-80 ml-2">{t('map.devStats.depthBits')}:</span>{' '}
+            <span className="text-text-primary">{formatNumber(webglInfo.depthBits)}</span>
             {webglInfo.samples > 0 && (
               <>
-                <span className="text-text-secondary opacity-80 ml-2">MSAA:</span>{' '}
-                <span className="text-success">{webglInfo.samples}x</span>
+                <span className="text-text-secondary opacity-80 ml-2">{t('map.devStats.msaa')}:</span>{' '}
+                <span className="text-success">
+                  {t('map.devStats.msaaValue', { count: formatNumber(webglInfo.samples) })}
+                </span>
               </>
             )}
           </div>
@@ -502,7 +535,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
 
       {/* Debug toggles */}
       <div className="border-t border-border pt-1 mt-1 pointer-events-auto">
-        <div className="text-text-secondary mb-0.5">Debug:</div>
+        <div className="text-text-secondary mb-0.5">{t('map.devStats.debug')}:</div>
         <div className="pl-2 flex flex-wrap gap-1">
           <button
             onClick={toggleTileBoundaries}
@@ -511,9 +544,9 @@ export function MapDevStats({ map }: MapDevStatsProps) {
                 ? 'bg-accent-30 border-accent text-accent'
                 : 'bg-panel border-border text-text-secondary hover:border-accent'
             }`}
-            title="Show tile boundaries and IDs"
+            title={t('map.devStats.titles.tiles')}
           >
-            Tiles
+            {t('map.devStats.tiles')}
           </button>
           <button
             onClick={toggleCollisionBoxes}
@@ -522,9 +555,9 @@ export function MapDevStats({ map }: MapDevStatsProps) {
                 ? 'bg-accent-30 border-accent text-accent'
                 : 'bg-panel border-border text-text-secondary hover:border-accent'
             }`}
-            title="Show symbol collision boxes"
+            title={t('map.devStats.titles.collision')}
           >
-            Collision
+            {t('map.devStats.collision')}
           </button>
           <button
             onClick={toggleOverdraw}
@@ -533,9 +566,9 @@ export function MapDevStats({ map }: MapDevStatsProps) {
                 ? 'bg-accent-30 border-accent text-accent'
                 : 'bg-panel border-border text-text-secondary hover:border-accent'
             }`}
-            title="Show overdraw (fragment shader calls)"
+            title={t('map.devStats.titles.overdraw')}
           >
-            Overdraw
+            {t('map.devStats.overdraw')}
           </button>
           <button
             onClick={toggleSymbols}
@@ -544,9 +577,9 @@ export function MapDevStats({ map }: MapDevStatsProps) {
                 ? 'bg-error-20 border-error text-error'
                 : 'bg-panel border-border text-text-secondary hover:border-accent'
             }`}
-            title="Hide all symbol layers (labels) for performance testing"
+            title={t('map.devStats.titles.labels')}
           >
-            {hideSymbols ? 'Labels OFF' : 'Labels'}
+            {hideSymbols ? t('map.devStats.labelsOff') : t('map.devStats.labels')}
           </button>
           <button
             onClick={toggleAllLayers}
@@ -555,9 +588,9 @@ export function MapDevStats({ map }: MapDevStatsProps) {
                 ? 'bg-error-20 border-error text-error'
                 : 'bg-panel border-border text-text-secondary hover:border-accent'
             }`}
-            title="Hide ALL layers (background only) - tests if MapLibre/WebGL is the problem"
+            title={t('map.devStats.titles.allLayers')}
           >
-            {hideAllLayers ? 'ALL OFF' : 'All Layers'}
+            {hideAllLayers ? t('map.devStats.allLayersOff') : t('map.devStats.allLayers')}
           </button>
         </div>
       </div>
@@ -565,22 +598,24 @@ export function MapDevStats({ map }: MapDevStatsProps) {
       {/* Tile fetch stats */}
       {tileFetchStats && (
         <div className="border-t border-border pt-1 mt-1">
-          <div className="text-text-secondary mb-0.5">Satellite Tiles:</div>
+          <div className="text-text-secondary mb-0.5">{t('map.devStats.satelliteTiles')}:</div>
           <div className="pl-2">
-            <span className="text-text-secondary opacity-80">In-flight:</span>{' '}
+            <span className="text-text-secondary opacity-80">{t('map.devStats.inFlight')}:</span>{' '}
             <span className={tileFetchStats.inFlight > 0 ? 'text-warning' : 'text-success'}>
-              {tileFetchStats.inFlight}
+              {formatNumber(tileFetchStats.inFlight)}
             </span>
-            <span className="text-text-secondary opacity-80 ml-2">Latency:</span>{' '}
+            <span className="text-text-secondary opacity-80 ml-2">{t('map.devStats.latency')}:</span>{' '}
             <span className={tileFetchStats.avgLatencyMs > 500 ? 'text-warning' : 'text-text-primary'}>
-              {tileFetchStats.avgLatencyMs}ms
+              {t('map.devStats.durationMs', { ms: formatNumber(tileFetchStats.avgLatencyMs) })}
             </span>
           </div>
           <div className="pl-2">
-            <span className="text-text-secondary opacity-80">Fetched:</span>{' '}
-            <span className="text-text-primary">{tileFetchStats.totalFetched}</span>
+            <span className="text-text-secondary opacity-80">{t('map.devStats.fetched')}:</span>{' '}
+            <span className="text-text-primary">{formatNumber(tileFetchStats.totalFetched)}</span>
             {tileFetchStats.totalErrors > 0 && (
-              <span className="text-error ml-1">({tileFetchStats.totalErrors} err)</span>
+              <span className="text-error ml-1">
+                {t('map.devStats.errors', { count: formatNumber(tileFetchStats.totalErrors) })}
+              </span>
             )}
           </div>
         </div>
@@ -588,18 +623,18 @@ export function MapDevStats({ map }: MapDevStatsProps) {
 
       {/* Network status */}
       <div className="border-t border-border pt-1 mt-1">
-        <span className="text-text-secondary">Network:</span>{' '}
+        <span className="text-text-secondary">{t('map.devStats.network.label')}:</span>{' '}
         <span className={networkIndicator.color}>{networkIndicator.text}</span>
       </div>
 
       {/* Cache stats */}
       {cacheStats && (
         <div className="border-t border-border pt-1 mt-1">
-          <div className="text-text-secondary mb-0.5">Cache:</div>
+          <div className="text-text-secondary mb-0.5">{t('map.devStats.cache')}:</div>
           <div className="pl-2">
-            <span className="text-text-secondary opacity-80">Tiles:</span>{' '}
-            <span className="text-text-primary">{cacheStats.total_tiles}</span>
-            <span className="text-text-secondary opacity-80 ml-2">Size:</span>{' '}
+            <span className="text-text-secondary opacity-80">{t('map.devStats.tiles')}:</span>{' '}
+            <span className="text-text-primary">{formatNumber(cacheStats.total_tiles)}</span>
+            <span className="text-text-secondary opacity-80 ml-2">{t('map.devStats.size')}:</span>{' '}
             <span className="text-text-primary">{formatBytes(cacheStats.total_bytes)}</span>
           </div>
         </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { Toggle } from '../../common/Toggle';
 import { Button } from '../../common/Button';
@@ -8,6 +9,7 @@ import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
 import type { CacheStats } from '../../../types/cache';
+import { formatFixed, formatNumber } from '../../../i18n/format';
 
 const MIN_CACHE_SIZE_MB = 100;
 const MAX_CACHE_SIZE_MB = 10000;
@@ -21,7 +23,7 @@ function formatBytes(bytes: number): string {
   const sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   const value = bytes / Math.pow(k, i);
-  return `${value.toFixed(1)} ${sizes[i]}`;
+  return `${formatFixed(value, undefined, 1)} ${sizes[i]}`;
 }
 
 /**
@@ -43,6 +45,7 @@ export function CacheSettings({
   onValidationError,
   panelIdBase,
 }: SettingsCategoryProps) {
+  const { t } = useTranslation();
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
   const [isLoadingStats, setIsLoadingStats] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -58,15 +61,15 @@ export function CacheSettings({
 
     // Validate cache size
     if (config.cache.tile_cache_max_mb < MIN_CACHE_SIZE_MB) {
-      errors.push(`Cache size must be at least ${MIN_CACHE_SIZE_MB} MB`);
+      errors.push(t('settings.cache.validation.minSize', { value: MIN_CACHE_SIZE_MB }));
     }
     if (config.cache.tile_cache_max_mb > MAX_CACHE_SIZE_MB) {
-      errors.push(`Cache size must not exceed ${MAX_CACHE_SIZE_MB} MB`);
+      errors.push(t('settings.cache.validation.maxSize', { value: MAX_CACHE_SIZE_MB }));
     }
 
     // Validate TTL
     if (config.cache.tile_ttl_days < 1 || config.cache.tile_ttl_days > 365) {
-      errors.push('Cache TTL must be between 1 and 365 days');
+      errors.push(t('settings.cache.validation.ttl'));
     }
 
     const hasError = errors.length > 0;
@@ -74,7 +77,7 @@ export function CacheSettings({
       hasErrorRef.current = hasError;
       onValidationError('cache', hasError);
     }
-  }, [config.cache, onValidationError]);
+  }, [config.cache, onValidationError, t]);
 
   // Sync maxSizeInput when config changes externally
   useEffect(() => {
@@ -195,34 +198,37 @@ export function CacheSettings({
       aria-labelledby={getTabId(panelIdBase, 'cache')}
       data-testid="settings-panel-cache"
     >
-      <h2 className="text-lg font-medium mb-4">Cache</h2>
+      <h2 className="text-lg font-medium mb-4">{t('settings.cache.title')}</h2>
 
-      <SettingsSection title="Tile Cache" data-testid="section-tile-cache">
+      <SettingsSection title={t('settings.cache.sections.tileCache')} data-testid="section-tile-cache">
         {/* Cache Statistics - Preserve data-testid="cache-stats" */}
         <div
           className="bg-background-50 rounded-lg p-4 space-y-3 mb-4"
           data-testid="cache-stats"
         >
           {isLoadingStats ? (
-            <p className="text-text-secondary">Loading cache statistics...</p>
+            <p className="text-text-secondary">{t('settings.cache.stats.loading')}</p>
           ) : cacheStats ? (
             <>
               <div className="flex justify-between">
-                <span className="text-text-secondary">Cached tiles:</span>
-                <span data-testid="cache-tile-count">{cacheStats.total_tiles.toLocaleString()}</span>
+                <span className="text-text-secondary">{t('settings.cache.stats.cachedTiles')}</span>
+                <span data-testid="cache-tile-count">{formatNumber(cacheStats.total_tiles)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-text-secondary">Cache size:</span>
+                <span className="text-text-secondary">{t('settings.cache.stats.cacheSize')}</span>
                 <span data-testid="cache-size">{formatBytes(cacheStats.total_bytes)}</span>
               </div>
               {Object.entries(cacheStats.providers).length > 0 && (
                 <div className="pt-2 border-t border-border">
-                  <span className="text-xs text-text-secondary">By provider:</span>
+                  <span className="text-xs text-text-secondary">{t('settings.cache.stats.byProvider')}</span>
                   {Object.entries(cacheStats.providers).map(([provider, stats]) => (
                     <div key={provider} className="flex justify-between text-sm mt-1">
                       <span className="text-text-secondary capitalize">{provider}:</span>
                       <span>
-                        {stats.tiles.toLocaleString()} tiles ({formatBytes(stats.bytes)})
+                        {t('settings.cache.stats.providerTiles', {
+                          tiles: formatNumber(stats.tiles),
+                          size: formatBytes(stats.bytes),
+                        })}
                       </span>
                     </div>
                   ))}
@@ -230,7 +236,7 @@ export function CacheSettings({
               )}
             </>
           ) : (
-            <p className="text-text-secondary">Unable to load cache statistics</p>
+            <p className="text-text-secondary">{t('settings.cache.stats.unavailable')}</p>
           )}
         </div>
 
@@ -242,29 +248,32 @@ export function CacheSettings({
             disabled={isClearing || (cacheStats?.total_tiles ?? 0) === 0}
             data-testid="clear-cache-button"
           >
-            {isClearing ? 'Clearing...' : 'Clear Cache'}
+            {isClearing ? t('settings.cache.clear.clearing') : t('settings.cache.clear.button')}
           </Button>
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Cache Configuration" data-testid="section-cache-config">
+      <SettingsSection title={t('settings.cache.sections.configuration')} data-testid="section-cache-config">
         <SettingRow
-          label="Enable tile caching"
-          helpText="Cache satellite tiles for offline access"
+          label={t('settings.cache.enabled.label')}
+          helpText={t('settings.cache.enabled.help')}
           isChanged={isFieldChanged(changedFields, 'cache.tile_cache_enabled')}
           data-testid="setting-cache-enabled"
         >
           <Toggle
             checked={config.cache.tile_cache_enabled}
             onChange={handleCacheEnabledChange}
-            aria-label="Enable tile caching"
+            aria-label={t('settings.cache.enabled.aria')}
             data-testid="cache-enabled-toggle"
           />
         </SettingRow>
 
         <SettingRow
-          label="Maximum cache size"
-          helpText={`Older tiles will be removed when this limit is reached (${MIN_CACHE_SIZE_MB}-${MAX_CACHE_SIZE_MB} MB)`}
+          label={t('settings.cache.maxSize.label')}
+          helpText={t('settings.cache.maxSize.help', {
+            min: MIN_CACHE_SIZE_MB,
+            max: MAX_CACHE_SIZE_MB,
+          })}
           isChanged={isFieldChanged(changedFields, 'cache.tile_cache_max_mb')}
           data-testid="setting-cache-max-size"
         >
@@ -278,16 +287,16 @@ export function CacheSettings({
               onChange={(e) => handleMaxSizeInputChange(e.target.value)}
               onBlur={handleMaxSizeBlur}
               className="w-24 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-              aria-label="Maximum cache size in MB"
+              aria-label={t('settings.cache.maxSize.aria')}
               data-testid="cache-max-size-input"
             />
-            <span className="text-text-secondary">MB</span>
+            <span className="text-text-secondary">{t('settings.cache.maxSize.unit')}</span>
           </div>
         </SettingRow>
 
         <SettingRow
-          label="Cache TTL"
-          helpText="How long to keep cached tiles before refreshing (1-365 days)"
+          label={t('settings.cache.ttl.label')}
+          helpText={t('settings.cache.ttl.help')}
           isChanged={isFieldChanged(changedFields, 'cache.tile_ttl_days')}
           data-testid="setting-cache-ttl"
         >
@@ -299,10 +308,10 @@ export function CacheSettings({
               value={config.cache.tile_ttl_days}
               onChange={(e) => handleTtlChange(e.target.value)}
               className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-              aria-label="Cache TTL in days"
+              aria-label={t('settings.cache.ttl.aria')}
               data-testid="input-cache-ttl"
             />
-            <span className="text-text-secondary">days</span>
+            <span className="text-text-secondary">{t('settings.cache.ttl.unit')}</span>
           </div>
         </SettingRow>
       </SettingsSection>

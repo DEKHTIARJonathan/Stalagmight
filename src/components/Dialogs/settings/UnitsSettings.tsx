@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Select } from '../../common/Select';
 import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
@@ -18,6 +19,7 @@ export function UnitsSettings({
   onValidationError,
   panelIdBase,
 }: SettingsCategoryProps) {
+  const { t } = useTranslation();
   // Validation state
   const hasErrorRef = useRef(false);
 
@@ -27,7 +29,7 @@ export function UnitsSettings({
 
     // Validate decimal_precision
     if (config.units.decimal_precision < 0 || config.units.decimal_precision > 6) {
-      errors.push('Decimal precision must be between 0 and 6');
+      errors.push(t('settings.units.validation.decimalPrecision'));
     }
 
     const hasError = errors.length > 0;
@@ -35,7 +37,7 @@ export function UnitsSettings({
       hasErrorRef.current = hasError;
       onValidationError('units', hasError);
     }
-  }, [config.units, onValidationError]);
+  }, [config.units, onValidationError, t]);
 
   const handleLengthChange = (value: string) => {
     onChange({
@@ -83,12 +85,12 @@ export function UnitsSettings({
       aria-labelledby={getTabId(panelIdBase, 'units')}
       data-testid="settings-panel-units"
     >
-      <h2 className="text-lg font-medium mb-4">Units</h2>
+      <h2 className="text-lg font-medium mb-4">{t('settings.units.title')}</h2>
 
-      <SettingsSection title="Measurement Units" data-testid="section-measurement">
+      <SettingsSection title={t('settings.units.sections.measurement')} data-testid="section-measurement">
         <SettingRow
-          label="Length unit"
-          helpText="Unit for horizontal distances (shot lengths, etc.)"
+          label={t('settings.units.length.label')}
+          helpText={t('settings.units.length.help')}
           isChanged={isFieldChanged(changedFields, 'units.length')}
           data-testid="setting-length-unit"
         >
@@ -96,18 +98,18 @@ export function UnitsSettings({
             value={config.units.length}
             onChange={handleLengthChange}
             options={[
-              { value: 'meters', label: 'Meters' },
-              { value: 'feet', label: 'Feet' },
+              { value: 'meters', label: t('settings.units.length.options.meters') },
+              { value: 'feet', label: t('settings.units.length.options.feet') },
             ]}
             className="w-32"
-            aria-label="Length unit"
+            aria-label={t('settings.units.length.aria')}
             data-testid="select-length-unit"
           />
         </SettingRow>
 
         <SettingRow
-          label="Depth unit"
-          helpText="Unit for vertical depth measurements"
+          label={t('settings.units.depth.label')}
+          helpText={t('settings.units.depth.help')}
           isChanged={isFieldChanged(changedFields, 'units.depth')}
           data-testid="setting-depth-unit"
         >
@@ -115,18 +117,18 @@ export function UnitsSettings({
             value={config.units.depth}
             onChange={handleDepthChange}
             options={[
-              { value: 'meters', label: 'Meters' },
-              { value: 'feet', label: 'Feet' },
+              { value: 'meters', label: t('settings.units.depth.options.meters') },
+              { value: 'feet', label: t('settings.units.depth.options.feet') },
             ]}
             className="w-32"
-            aria-label="Depth unit"
+            aria-label={t('settings.units.depth.aria')}
             data-testid="select-depth-unit"
           />
         </SettingRow>
 
         <SettingRow
-          label="Angle unit"
-          helpText="Unit for azimuth and pitch angles"
+          label={t('settings.units.angle.label')}
+          helpText={t('settings.units.angle.help')}
           isChanged={isFieldChanged(changedFields, 'units.angle')}
           data-testid="setting-angle-unit"
         >
@@ -134,20 +136,20 @@ export function UnitsSettings({
             value={config.units.angle}
             onChange={handleAngleChange}
             options={[
-              { value: 'degrees', label: 'Degrees' },
-              { value: 'gradians', label: 'Gradians' },
+              { value: 'degrees', label: t('settings.units.angle.options.degrees') },
+              { value: 'gradians', label: t('settings.units.angle.options.gradians') },
             ]}
             className="w-32"
-            aria-label="Angle unit"
+            aria-label={t('settings.units.angle.aria')}
             data-testid="select-angle-unit"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Display Precision" data-testid="section-precision">
+      <SettingsSection title={t('settings.units.sections.precision')} data-testid="section-precision">
         <SettingRow
-          label="Decimal places"
-          helpText="Number of decimal places for numeric values (0-6)"
+          label={t('settings.units.decimal.label')}
+          helpText={t('settings.units.decimal.help')}
           isChanged={isFieldChanged(changedFields, 'units.decimal_precision')}
           data-testid="setting-decimal-precision"
         >
@@ -158,7 +160,7 @@ export function UnitsSettings({
             value={config.units.decimal_precision}
             onChange={(e) => handleDecimalPrecisionChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Decimal precision"
+            aria-label={t('settings.units.decimal.aria')}
             data-testid="input-decimal-precision"
           />
         </SettingRow>

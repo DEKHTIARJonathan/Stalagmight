@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../../common/Button';
 import { ShortcutRecorder } from '../../Settings/ShortcutRecorder';
 import { getPanelId, getTabId } from '../SettingsSidebar';
@@ -19,29 +20,29 @@ import {
  */
 interface ShortcutCategory {
   id: string;
-  label: string;
+  labelKey: string;
   actions: (keyof ShortcutsConfig)[];
 }
 
 const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
   {
     id: 'file',
-    label: 'File',
+    labelKey: 'settings.shortcuts.categories.file',
     actions: ['new_file', 'open_file', 'save', 'save_as', 'import_dmp', 'export'],
   },
   {
     id: 'tools',
-    label: 'Tools',
+    labelKey: 'settings.shortcuts.categories.tools',
     actions: ['select', 'pan', 'zoom', 'draw', 'delete_tool', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot'],
   },
   {
     id: 'edit',
-    label: 'Edit',
+    labelKey: 'settings.shortcuts.categories.edit',
     actions: ['undo', 'redo'],
   },
   {
     id: 'view',
-    label: 'View',
+    labelKey: 'settings.shortcuts.categories.view',
     actions: [
       'toggle_depth_gradient',
       'toggle_grid',
@@ -56,7 +57,7 @@ const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
   },
   {
     id: 'panels',
-    label: 'Panels',
+    labelKey: 'settings.shortcuts.categories.panels',
     actions: ['toggle_sections_panel', 'toggle_detail_panel', 'toggle_data_table'],
   },
 ];
@@ -109,15 +110,15 @@ function ShortcutNameLabel({ name }: { name: string }) {
  */
 interface ReservedShortcutEntry {
   shortcuts: string[];
-  description: string;
+  descriptionKey: string;
 }
 
 const RESERVED_DISPLAY_ENTRIES: ReservedShortcutEntry[] = [
-  { shortcuts: ['Escape'], description: 'Cancel / Close dialogs' },
-  { shortcuts: ['Delete', 'Backspace'], description: 'Delete selection' },
-  { shortcuts: ['Tab', 'Enter'], description: 'UI Navigation' },
-  { shortcuts: ['Ctrl+A'], description: 'Select all' },
-  { shortcuts: ['Ctrl+,'], description: 'Open Settings' },
+  { shortcuts: ['Escape'], descriptionKey: 'settings.shortcuts.reserved.cancelClose' },
+  { shortcuts: ['Delete', 'Backspace'], descriptionKey: 'settings.shortcuts.reserved.deleteSelection' },
+  { shortcuts: ['Tab', 'Enter'], descriptionKey: 'settings.shortcuts.reserved.uiNavigation' },
+  { shortcuts: ['Ctrl+A'], descriptionKey: 'settings.shortcuts.reserved.selectAll' },
+  { shortcuts: ['Ctrl+,'], descriptionKey: 'settings.shortcuts.reserved.openSettings' },
 ];
 
 /**
@@ -131,6 +132,7 @@ export function ShortcutsSettings({
   onValidationError,
   panelIdBase,
 }: SettingsCategoryProps) {
+  const { t } = useTranslation();
   const [shortcutSearch, setShortcutSearch] = useState('');
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
   const [shortcutError, setShortcutError] = useState<string | null>(null);
@@ -208,7 +210,10 @@ export function ShortcutsSettings({
         const reservedConflict = checkReservedConflict(newValue);
         if (reservedConflict) {
           setShortcutError(
-            `"${formatShortcut(newValue, isMac())}" cannot be assigned (reserved for: ${reservedConflict.reason}).`
+            t('settings.shortcuts.errors.reserved', {
+              shortcut: formatShortcut(newValue, isMac()),
+              reason: reservedConflict.reason,
+            })
           );
           return;
         }
@@ -217,7 +222,10 @@ export function ShortcutsSettings({
         const conflict = findConflict(newValue, shortcutRegistry, action);
         if (conflict) {
           setShortcutError(
-            `"${formatShortcut(newValue, isMac())}" is already used by "${formatActionName(conflict)}".`
+            t('settings.shortcuts.errors.conflict', {
+              shortcut: formatShortcut(newValue, isMac()),
+              action: formatActionName(conflict),
+            })
           );
           return;
         }
@@ -229,9 +237,12 @@ export function ShortcutsSettings({
         const otherSlotValue = currentBindings[otherSlotIndex];
         if (otherSlotValue && normalizeShortcut(otherSlotValue) === normalized) {
           setShortcutError(
-            `"${formatShortcut(newValue, isMac())}" is already assigned to the ${
-              slot === 'primary' ? 'secondary' : 'primary'
-            } slot.`
+            t('settings.shortcuts.errors.duplicateSlot', {
+              shortcut: formatShortcut(newValue, isMac()),
+              slot: slot === 'primary'
+                ? t('settings.shortcuts.slots.secondary')
+                : t('settings.shortcuts.slots.primary'),
+            })
           );
           return;
         }
@@ -261,7 +272,7 @@ export function ShortcutsSettings({
 
       onChange({ shortcuts: newShortcuts } as Partial<Config>);
     },
-    [config.shortcuts, onChange, shortcutRegistry]
+    [config.shortcuts, onChange, shortcutRegistry, t]
   );
 
   // Reset single action to defaults
@@ -287,8 +298,8 @@ export function ShortcutsSettings({
 
   // Handle blocked key from ShortcutRecorder
   const handleBlockedKey = useCallback((key: string) => {
-    setShortcutError(`"${key}" cannot be used as a shortcut.`);
-  }, []);
+    setShortcutError(t('settings.shortcuts.errors.blockedKey', { key }));
+  }, [t]);
 
   return (
     <div
@@ -297,17 +308,17 @@ export function ShortcutsSettings({
       aria-labelledby={getTabId(panelIdBase, 'shortcuts')}
       data-testid="settings-panel-shortcuts"
     >
-      <h2 className="text-lg font-medium mb-4">Shortcuts</h2>
+      <h2 className="text-lg font-medium mb-4">{t('settings.shortcuts.title')}</h2>
 
       <div className="space-y-4" data-testid="shortcuts-tab-content">
         {/* Reserved shortcuts section (always visible, above search) */}
         <div className="mb-4">
-          <h3 className="text-sm font-medium mb-2 text-text-secondary">Reserved Shortcuts</h3>
+          <h3 className="text-sm font-medium mb-2 text-text-secondary">{t('settings.shortcuts.reserved.title')}</h3>
           <div
             className="bg-background-50 rounded-lg p-3 grid grid-cols-2 gap-2 text-sm"
             data-testid="reserved-shortcuts"
           >
-            {RESERVED_DISPLAY_ENTRIES.map(({ shortcuts, description }) => (
+            {RESERVED_DISPLAY_ENTRIES.map(({ shortcuts, descriptionKey }) => (
               <div key={shortcuts.join('+')} className="flex items-center gap-2">
                 <span className="inline-flex items-center gap-1 shrink-0">
                   {shortcuts.map((s, i) => (
@@ -319,7 +330,7 @@ export function ShortcutsSettings({
                     </span>
                   ))}
                 </span>
-                <span className="text-text-secondary text-xs">{description}</span>
+                <span className="text-text-secondary text-xs">{t(descriptionKey)}</span>
               </div>
             ))}
           </div>
@@ -331,8 +342,8 @@ export function ShortcutsSettings({
             type="text"
             value={shortcutSearch}
             onChange={(e) => setShortcutSearch(e.target.value)}
-            placeholder="Search shortcuts..."
-            aria-label="Search keyboard shortcuts"
+            placeholder={t('settings.shortcuts.search.placeholder')}
+            aria-label={t('settings.shortcuts.search.aria')}
             className="w-full px-3 py-2 pl-9 bg-background border border-border rounded text-sm"
             data-testid="shortcuts-search"
           />
@@ -393,7 +404,7 @@ export function ShortcutsSettings({
                       d="M9 5l7 7-7 7"
                     />
                   </svg>
-                  {category.label}
+                  {t(category.labelKey)}
                 </button>
 
                 {/* Category content */}
@@ -422,7 +433,7 @@ export function ShortcutsSettings({
                             value={primary}
                             onChange={(value) => handleShortcutChange(action, 'primary', value)}
                             onBlockedKey={handleBlockedKey}
-                            ariaLabel={`Primary shortcut for ${full}`}
+                            ariaLabel={t('settings.shortcuts.slots.primaryAria', { action: full })}
                             data-testid={`shortcut-primary-${action}`}
                           />
 
@@ -431,7 +442,7 @@ export function ShortcutsSettings({
                             value={secondary}
                             onChange={(value) => handleShortcutChange(action, 'secondary', value)}
                             onBlockedKey={handleBlockedKey}
-                            ariaLabel={`Secondary shortcut for ${full}`}
+                            ariaLabel={t('settings.shortcuts.slots.secondaryAria', { action: full })}
                             data-testid={`shortcut-secondary-${action}`}
                           />
 
@@ -445,7 +456,7 @@ export function ShortcutsSettings({
                                 ? 'text-text-secondary hover:text-text'
                                 : 'text-border cursor-not-allowed'
                             }`}
-                            title="Reset to default"
+                            title={t('settings.shortcuts.resetOne.title')}
                             data-testid={`shortcut-reset-${action}`}
                           >
                             <svg
@@ -475,7 +486,7 @@ export function ShortcutsSettings({
         {/* Reset All button */}
         <div className="pt-2 border-t border-border">
           <Button variant="danger" onClick={handleResetAll} data-testid="shortcuts-reset-all">
-            Reset All Shortcuts
+            {t('settings.shortcuts.resetAll')}
           </Button>
         </div>
       </div>

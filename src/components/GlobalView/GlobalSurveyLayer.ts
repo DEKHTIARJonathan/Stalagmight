@@ -4,6 +4,8 @@ import type { ProjectMetadata } from '../../types/project';
 import type { GeometryShot, SurveyGeometry } from '../../types/survey';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import { hasLiveStyle } from '../Map/mapUtils';
+import i18n from '../../i18n';
+import { formatFixed, formatNumber } from '../../i18n/format';
 
 /**
  * System geometry data with associated metadata for the global view.
@@ -892,13 +894,13 @@ export default class GlobalSurveyLayer {
     const length = properties.totalLength ?? 0;
     let lengthStr: string;
     if (length >= 1000) {
-      lengthStr = `${(length / 1000).toFixed(2)} km`;
+      lengthStr = `${formatFixed(length / 1000, undefined, 2)} ${i18n.t('common.units.kilometers')}`;
     } else {
-      lengthStr = `${length.toFixed(1)} m`;
+      lengthStr = `${formatFixed(length, undefined, 1)} ${i18n.t('common.units.meters')}`;
     }
 
     // Build tooltip content using textContent to avoid XSS
-    const name = properties.name ?? 'Unknown';
+    const name = properties.name ?? i18n.t('globalView.tooltip.unknown');
     const stationCount = properties.stationCount ?? 0;
 
     // Clear existing content
@@ -914,13 +916,13 @@ export default class GlobalSurveyLayer {
     const grayText = this.themeColors?.grayText ?? '#aaa';
     const lengthDiv = document.createElement('div');
     lengthDiv.style.color = grayText;
-    lengthDiv.textContent = `Length: ${lengthStr}`;
+    lengthDiv.textContent = i18n.t('globalView.tooltip.length', { length: lengthStr });
     this.tooltip.appendChild(lengthDiv);
 
     // Station count row
     const stationDiv = document.createElement('div');
     stationDiv.style.color = grayText;
-    stationDiv.textContent = `Stations: ${stationCount}`;
+    stationDiv.textContent = i18n.t('globalView.tooltip.stations', { count: formatNumber(stationCount) });
     this.tooltip.appendChild(stationDiv);
 
     // Position tooltip near cursor (offset by 15px)

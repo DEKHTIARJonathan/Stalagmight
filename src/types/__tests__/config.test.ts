@@ -129,6 +129,7 @@ describe('defaultConfig structure', () => {
       expect(defaultConfig.general.recent_projects_max).toBe(20);
       expect(defaultConfig.general.undo_history_limit).toBe(100);
       expect(defaultConfig.general.undo_persist_limit).toBe(20);
+      expect(defaultConfig.general.locale).toBe('system');
     });
   });
 

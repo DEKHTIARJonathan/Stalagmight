@@ -10,4 +10,5 @@ pub use project::*;
 pub use section::*;
 pub use shot::*;
 pub use station::*;
+pub use station::ClosureStrategy;
 pub use warning::*;

@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { type Section, type Shot } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
@@ -7,12 +8,14 @@ import { Select, type SelectOption } from '../common/Select';
 import type { ProjectWarning } from '../../types/commands';
 import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
 import { formatShotId } from '../../utils/formatters';
+import { formatFixed, formatNumber } from '../../i18n/format';
 
 interface DataTableProps {
   sections: Section[];
 }
 
 export default function DataTable({ sections }: DataTableProps) {
+  const { t } = useTranslation();
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(
     sections[0]?.id ?? null
   );
@@ -57,9 +60,9 @@ export default function DataTable({ sections }: DataTableProps) {
   const sectionOptions: SelectOption[] = useMemo(() =>
     sections.map((section) => ({
       value: String(section.id),
-      label: section.name ?? `Section ${section.id}`,
+      label: section.name ?? t('sections.defaultName', { id: section.id }),
     })),
-    [sections]
+    [sections, t]
   );
 
   // Update selected section when sections change (e.g., first load or section deleted)
@@ -208,12 +211,14 @@ export default function DataTable({ sections }: DataTableProps) {
     if (shotIndex === -1) return;
 
     const shotPosition = shotIndex + 1;
-    const message = `Shot ${formatShotId(selection.sectionId, shotPosition)} selected`;
+    const message = t('dataTable.announcement.shotSelected', {
+      shotId: formatShotId(selection.sectionId, shotPosition),
+    });
     announceSelection(message);
 
     // Update ref with new selection
     prevAnnouncedSelectionRef.current = { sectionId: selection.sectionId, shotId: selection.shotId };
-  }, [selection, sections, announceSelection]);
+  }, [selection, sections, announceSelection, t]);
 
   const handleCellEdit = async (
     shot: Shot,
@@ -306,12 +311,12 @@ export default function DataTable({ sections }: DataTableProps) {
           isFirst,
           isLast,
           totalShots,
-          sectionName: selectedSection.name ?? `Section ${selectedSection.id}`,
+          sectionName: selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id }),
         },
         position: { x: event.clientX, y: event.clientY },
       });
     },
-    [selectedSection, openDialog]
+    [selectedSection, openDialog, t]
   );
 
   // Section dropdown manual change - select the new section
@@ -392,7 +397,7 @@ export default function DataTable({ sections }: DataTableProps) {
   const columns = [
     {
       key: '_warnings',
-      header: '!',
+      header: t('dataTable.columns.warningsShort'),
       width: '30px',
       align: 'center' as const,
       render: (shot: Shot) => {
@@ -414,40 +419,45 @@ export default function DataTable({ sections }: DataTableProps) {
     },
     {
       key: 'id',
-      header: '#',
+      header: t('dataTable.columns.idShort'),
       width: '60px',
       render: (_shot: Shot, index: number) =>
         selectedSectionId !== null ? formatShotId(selectedSectionId, index + 1) : '',
     },
-    { key: 'length', header: 'Length (m)', width: '100px', align: 'right' as const },
+    {
+      key: 'length',
+      header: t('dataTable.columns.length', { unit: t('common.units.meters') }),
+      width: '100px',
+      align: 'right' as const,
+    },
     {
       key: '_azimuth_avg',
-      header: 'Azi',
+      header: t('dataTable.columns.azimuthShort'),
       width: '70px',
       align: 'right' as const,
       getValue: (shot: Shot) =>
         circularMeanDegrees(shot.azimuth_in, shot.azimuth_out),
       formatValue: (value: unknown) =>
         typeof value === 'number' && Number.isFinite(value)
-          ? value.toFixed(1)
+          ? formatFixed(value, undefined, 1)
           : '',
       inputType: 'number' as const,
       inputStep: '0.1',
     },
-    { key: 'depth_in', header: 'Depth In', width: '80px', align: 'right' as const },
-    { key: 'depth_out', header: 'Depth Out', width: '95px', align: 'right' as const },
-    { key: 'left', header: 'L', width: '50px', align: 'right' as const },
-    { key: 'right', header: 'R', width: '50px', align: 'right' as const },
-    { key: 'up', header: 'U', width: '50px', align: 'right' as const },
-    { key: 'down', header: 'D', width: '50px', align: 'right' as const },
+    { key: 'depth_in', header: t('dataTable.columns.depthIn'), width: '80px', align: 'right' as const },
+    { key: 'depth_out', header: t('dataTable.columns.depthOut'), width: '95px', align: 'right' as const },
+    { key: 'left', header: t('dataTable.columns.leftShort'), width: '50px', align: 'right' as const },
+    { key: 'right', header: t('dataTable.columns.rightShort'), width: '50px', align: 'right' as const },
+    { key: 'up', header: t('dataTable.columns.upShort'), width: '50px', align: 'right' as const },
+    { key: 'down', header: t('dataTable.columns.downShort'), width: '50px', align: 'right' as const },
     {
       key: 'is_virtual',
-      header: 'V',
+      header: t('dataTable.columns.virtualShort'),
       width: '40px',
       align: 'center' as const,
       render: (shot: Shot) => (shot.is_virtual ? '●' : ''),
     },
-    { key: 'comment', header: 'Comment' },
+    { key: 'comment', header: t('dataTable.columns.comment') },
   ];
 
   const editableColumns = [
@@ -478,28 +488,30 @@ export default function DataTable({ sections }: DataTableProps) {
           onClick={toggleDataTable}
           className="text-text-secondary hover:text-text transition-transform duration-200"
           style={{ transform: dataTableOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
-          title={dataTableOpen ? 'Collapse (Ctrl+3)' : 'Expand (Ctrl+3)'}
+          title={dataTableOpen ? t('dataTable.toggle.collapse') : t('dataTable.toggle.expand')}
           data-testid="data-table-toggle"
         >
           ▲
         </button>
-        <span className="text-sm font-medium">Data Table</span>
+        <span className="text-sm font-medium">{t('dataTable.title')}</span>
         {dataTableOpen && (
           <>
             <span className="text-text-secondary">|</span>
-            <label className="text-sm text-text-secondary">Section:</label>
+            <label className="text-sm text-text-secondary">{t('common.labels.section')}:</label>
             <Select
               value={String(selectedSectionId ?? '')}
               onChange={handleSectionChange}
               options={sectionOptions}
               onOptionHover={handleSectionHover}
+              className="min-w-[220px] w-64"
               data-testid="data-table-section-select"
             />
           </>
         )}
         {!dataTableOpen && selectedSection && (
           <span className="text-sm text-text-secondary ml-auto">
-            {selectedSection.name ?? `Section ${selectedSection.id}`} ({selectedSection.shots.length} shots)
+            {selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id })}{' '}
+            ({t('dataTable.shotCount', { count: selectedSection.shots.length })})
           </span>
         )}
       </div>
@@ -525,11 +537,11 @@ export default function DataTable({ sections }: DataTableProps) {
               onRowDoubleClick={handleRowDoubleClick}
               onRowContextMenu={handleRowContextMenu}
               onRowHover={handleRowHover}
-              emptyMessage="No shots in this section"
+              emptyMessage={t('dataTable.empty')}
             />
           ) : (
             <div className="flex items-center justify-center h-full text-text-secondary">
-              Select a section to view shots
+              {t('dataTable.selectSection')}
             </div>
           )}
         </div>

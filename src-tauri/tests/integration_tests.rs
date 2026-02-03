@@ -41,6 +41,7 @@ fn create_section_with_shots(name: &str, shots: Vec<ShotData>) -> SectionData {
         date: None,
         color: "#4ecdc4".to_string(),
         direction: None,
+        quality: 1.0,
         shots,
     }
 }
@@ -758,6 +759,7 @@ fn test_section_colors_unique() {
             date: None,
             color: color.to_string(),
             direction: None,
+            quality: 1.0,
             shots: vec![],
         });
     }
@@ -781,6 +783,7 @@ fn test_section_date_storage() {
         date: Some(date),
         color: "#4ecdc4".to_string(),
         direction: None,
+        quality: 1.0,
         shots: vec![],
     });
 
@@ -1848,6 +1851,7 @@ fn test_section_insert_shot_after() {
             date: None,
             color: "#4ecdc4".to_string(),
             direction: None,
+            quality: 1.0,
             shots: vec![
                 create_shot_data(0.0, 10.0, 5.0, 5.0),
                 create_shot_data(90.0, 10.0, 5.0, 5.0),
@@ -1876,6 +1880,7 @@ fn test_section_to_section_data() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
+            quality: 1.0,
             shots: vec![create_shot_data(0.0, 10.0, 5.0, 6.0)],
         },
     );

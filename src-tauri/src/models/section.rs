@@ -53,6 +53,9 @@ pub struct Section {
     pub color: String,
     /// Survey direction (In = entering cave, Out = exiting)
     pub direction: SurveyDirection,
+    /// Quality factor (1.0 = default). Used for weighted adjustments.
+    #[serde(default = "default_section_quality")]
+    pub quality: f64,
     /// Shots in this section, in order
     pub shots: Vec<Shot>,
     /// Next shot ID to assign
@@ -69,6 +72,9 @@ pub struct SectionData {
     /// Survey direction (defaults to In if not specified)
     #[serde(default)]
     pub direction: Option<SurveyDirection>,
+    /// Quality factor (1.0 = default). Used for weighted adjustments.
+    #[serde(default = "default_section_quality")]
+    pub quality: f64,
     pub shots: Vec<ShotData>,
 }
 
@@ -85,6 +91,8 @@ pub struct SectionUpdates {
     pub color: Option<String>,
     #[serde(default)]
     pub direction: Option<SurveyDirection>,
+    #[serde(default)]
+    pub quality: Option<f64>,
 }
 
 /// Section statistics (computed, not stored)
@@ -108,6 +116,9 @@ pub struct ImportSectionConfig {
     pub color: String,
     #[serde(default)]
     pub direction: Option<SurveyDirection>,
+    /// Quality factor (1.0 = default). Used for weighted adjustments.
+    #[serde(default = "default_section_quality")]
+    pub quality: f64,
     pub shots: Vec<ShotData>,
     pub placement: ImportPlacement,
 }
@@ -155,9 +166,14 @@ impl Default for SectionData {
             date: None,
             color: "#4ecdc4".to_string(),
             direction: None,
+            quality: default_section_quality(),
             shots: Vec::new(),
         }
     }
+}
+
+fn default_section_quality() -> f64 {
+    1.0
 }
 
 impl Section {
@@ -170,6 +186,11 @@ impl Section {
             date: data.date,
             color: data.color,
             direction: data.direction.unwrap_or_default(),
+            quality: if data.quality.is_finite() && data.quality > 0.0 {
+                data.quality
+            } else {
+                default_section_quality()
+            },
             shots: Vec::new(),
             next_shot_id: 0,
         };
@@ -194,6 +215,7 @@ impl Section {
             date: self.date,
             color: self.color.clone(),
             direction: Some(self.direction),
+            quality: self.quality,
             shots: self.shots.iter().map(|s| s.to_shot_data()).collect(),
         }
     }
@@ -256,6 +278,13 @@ impl Section {
         }
         if let Some(v) = updates.direction {
             self.direction = v;
+        }
+        if let Some(v) = updates.quality {
+            if v.is_finite() && v > 0.0 {
+                self.quality = v;
+            } else {
+                self.quality = default_section_quality();
+            }
         }
     }
 
@@ -437,6 +466,7 @@ mod tests {
             date: Some(date),
             color: "#ff5733".to_string(),
             direction: Some(SurveyDirection::Out),
+            quality: 1.0,
             shots: vec![],
         };
 
@@ -788,6 +818,7 @@ mod tests {
             date: Some(date),
             color: "#ff0000".to_string(),
             direction: Some(SurveyDirection::Out),
+            quality: 1.0,
             shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
         };
 
@@ -813,6 +844,7 @@ mod tests {
             date: Some(date),
             color: "#123456".to_string(),
             direction: Some(SurveyDirection::In),
+            quality: 1.0,
             shots: vec![
                 ShotData {
                     azimuth_in: 90.0,

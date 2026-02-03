@@ -13,6 +13,7 @@ fn test_create_and_save_project() {
         date: None,
         color: "#4ecdc4".to_string(),
         direction: None,
+        quality: 1.0,
         shots: vec![ShotData {
             azimuth_in: 45.0,
             azimuth_out: 225.0,
@@ -50,6 +51,7 @@ fn test_save_load_multiple_sections() {
         date: chrono::NaiveDate::from_ymd_opt(2024, 6, 15),
         color: "#ff5733".to_string(),
         direction: Some(SurveyDirection::In),
+        quality: 1.0,
         shots: vec![
             ShotData {
                 azimuth_in: 45.0,
@@ -84,6 +86,7 @@ fn test_save_load_multiple_sections() {
         date: chrono::NaiveDate::from_ymd_opt(2024, 6, 16),
         color: "#33ff57".to_string(),
         direction: Some(SurveyDirection::Out),
+        quality: 1.0,
         shots: vec![
             ShotData {
                 azimuth_in: 90.0,
@@ -106,6 +109,7 @@ fn test_save_load_multiple_sections() {
         date: None,
         color: "#3357ff".to_string(),
         direction: None,
+        quality: 1.0,
         shots: vec![],
     };
 

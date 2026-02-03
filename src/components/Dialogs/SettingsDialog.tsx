@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo, useId } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
@@ -106,6 +108,7 @@ function getCategoryDefaults(category: SettingsCategory, resolvedTheme: Resolved
       return {
         debug: { map: { ...defaultConfig.debug.map } },
         logging: { ...defaultConfig.logging },
+        closure_adjustment: { ...defaultConfig.closure_adjustment },
         panels: { ...defaultConfig.panels },
       };
     default:
@@ -116,9 +119,9 @@ function getCategoryDefaults(category: SettingsCategory, resolvedTheme: Resolved
 /**
  * Get the label for a settings category.
  */
-function getCategoryLabel(category: SettingsCategory): string {
+function getCategoryLabel(category: SettingsCategory, t: TFunction): string {
   const cat = CATEGORIES.find((c) => c.id === category);
-  return cat?.label ?? category;
+  return cat ? t(cat.labelKey) : category;
 }
 
 /**
@@ -294,6 +297,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
 }
 
 export default function SettingsDialog() {
+  const { t } = useTranslation();
   const { closeDialog } = useUIStore();
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   const setThemePreview = useUIStore((s) => s.setThemePreview);
@@ -480,7 +484,7 @@ export default function SettingsDialog() {
   if (!localConfig) {
     return (
       <DialogWrapper
-        title="Settings"
+        title={t('dialogs.settings.title')}
         onClose={closeDialog}
         size="4xl"
         closeOnBackdropClick={false}
@@ -489,7 +493,7 @@ export default function SettingsDialog() {
         bodyClassName="flex-1 flex items-center justify-center p-4"
         data-testid="settings-dialog"
       >
-        <p className="text-text-secondary">Loading configuration...</p>
+        <p className="text-text-secondary">{t('settings.loading')}</p>
       </DialogWrapper>
     );
   }
@@ -533,7 +537,7 @@ export default function SettingsDialog() {
   return (
     <>
       <DialogWrapper
-        title="Settings"
+        title={t('dialogs.settings.title')}
         onClose={handleRequestClose}
         isDirty={false} // We handle dirty state with custom dialog
         size="4xl"
@@ -563,14 +567,14 @@ export default function SettingsDialog() {
                 {/* Content header with Reset to Defaults */}
                 <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-panel-50">
                   <span className="text-sm text-text-secondary">
-                    {getCategoryLabel(activeCategory)} Settings
+                    {t('settings.categoryHeader', { category: getCategoryLabel(activeCategory, t) })}
                   </span>
                   <Button
                     variant="secondary"
                     onClick={handleResetToDefaults}
                     data-testid="reset-category-defaults"
                   >
-                    Reset to Defaults
+                    {t('settings.resetToDefaults')}
                   </Button>
                 </div>
 
@@ -584,7 +588,7 @@ export default function SettingsDialog() {
             {/* Footer with Save/Cancel */}
             <div className="flex justify-end gap-2 px-4 py-3 border-t border-border bg-panel">
               <Button onClick={requestClose} data-testid="settings-cancel-button">
-                Cancel
+                {t('common.actions.cancel')}
               </Button>
               <Button
                 variant="primary"
@@ -592,7 +596,7 @@ export default function SettingsDialog() {
                 disabled={!isDirty || hasAnyError}
                 data-testid="settings-save-button"
               >
-                Save
+                {t('common.actions.save')}
               </Button>
             </div>
           </div>
@@ -601,20 +605,20 @@ export default function SettingsDialog() {
 
       <AlertDialog
         open={showUnsavedDialog}
-        title="Unsaved Changes"
+        title={t('dialogs.unsaved.title')}
         onClose={handleCancelClose}
         data-testid="unsaved-changes-dialog"
         actions={
           <>
             <Button onClick={handleCancelClose} data-testid="unsaved-cancel">
-              Cancel
+              {t('common.actions.cancel')}
             </Button>
             <Button
               variant="danger"
               onClick={handleDiscardAndClose}
               data-testid="unsaved-discard"
             >
-              Discard Changes
+              {t('dialogs.unsaved.discard')}
             </Button>
             <Button
               variant="primary"
@@ -622,46 +626,45 @@ export default function SettingsDialog() {
               disabled={hasAnyError}
               data-testid="unsaved-save"
             >
-              Save
+              {t('common.actions.save')}
             </Button>
           </>
         }
       >
         <>
-          <p>You have unsaved changes. What would you like to do?</p>
+          <p>{t('dialogs.unsaved.message')}</p>
           <p className="text-sm text-text-secondary">
-            Your changes will be lost if you discard them.
+            {t('dialogs.unsaved.note')}
           </p>
         </>
       </AlertDialog>
 
       <AlertDialog
         open={showResetConfirm}
-        title="Reset to Defaults"
+        title={t('dialogs.resetDefaults.title')}
         onClose={handleCancelReset}
         data-testid="reset-confirm-dialog"
         actions={
           <>
             <Button onClick={handleCancelReset} data-testid="reset-cancel">
-              Cancel
+              {t('common.actions.cancel')}
             </Button>
             <Button
               variant="danger"
               onClick={handleConfirmReset}
               data-testid="reset-confirm"
             >
-              Reset
+              {t('common.actions.reset')}
             </Button>
           </>
         }
       >
         <>
           <p>
-            Reset all {getCategoryLabel(activeCategory)} settings to their default values?
+            {t('dialogs.resetDefaults.message', { category: getCategoryLabel(activeCategory, t) })}
           </p>
           <p className="text-sm text-text-secondary">
-            This will only affect the current category. Changes are not saved until you click
-            Save.
+            {t('dialogs.resetDefaults.note', { action: t('common.actions.save') })}
           </p>
         </>
       </AlertDialog>

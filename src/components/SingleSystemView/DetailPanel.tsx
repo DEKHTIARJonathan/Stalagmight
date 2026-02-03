@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
@@ -8,8 +9,10 @@ import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType,
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId, formatStationId } from '../../utils/formatters';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
+import { formatFixed, formatPercent, formatNumber, formatDate } from '../../i18n/format';
 
 export default function DetailPanel() {
+  const { t } = useTranslation();
   const { selection, detailPanelTab, setDetailPanelTab, setSelection } = useUIStore();
   const { project, stations, warnings } = useProjectStore();
 
@@ -25,7 +28,7 @@ export default function DetailPanel() {
           onClick={() => setDetailPanelTab('details')}
           testId="detail-tab-details"
         >
-          Details
+          {t('detailPanel.tabs.details')}
         </TabButton>
         <TabButton
           active={detailPanelTab === 'warnings'}
@@ -34,7 +37,7 @@ export default function DetailPanel() {
           badgeType={errorCount > 0 ? 'error' : 'warning'}
           testId="detail-tab-warnings"
         >
-          Warnings
+          {t('detailPanel.tabs.warnings')}
         </TabButton>
       </div>
 
@@ -109,6 +112,7 @@ interface DetailsContentProps {
 }
 
 function DetailsContent({ selection, project, stations }: DetailsContentProps) {
+  const { t } = useTranslation();
   const { stats } = useProjectStore();
 
   if (!selection) {
@@ -153,7 +157,7 @@ function DetailsContent({ selection, project, stations }: DetailsContentProps) {
 
   return (
     <div className="p-4">
-      <div className="text-text-secondary">Selection not found</div>
+      <div className="text-text-secondary">{t('detailPanel.selectionNotFound')}</div>
     </div>
   );
 }
@@ -165,6 +169,7 @@ interface WarningsContentProps {
 }
 
 function WarningsContent({ warnings, project, onWarningClick }: WarningsContentProps) {
+  const { t } = useTranslation();
   const { resolveWarning, unresolveWarning } = useProjectStore();
   const [showResolved, setShowResolved] = useState(false);
 
@@ -176,14 +181,14 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
     return (
       <div className="p-4 text-center text-text-secondary">
         <div className="text-3xl mb-2">✓</div>
-        <p>No validation issues found</p>
+        <p>{t('detailPanel.warnings.empty')}</p>
       </div>
     );
   }
 
   const getSectionName = (sectionId: number) => {
     const section = project?.sections.find((s) => s.id === sectionId);
-    return section?.name ?? `Section ${sectionId}`;
+    return section?.name ?? t('sections.defaultName', { id: sectionId });
   };
 
   const handleToggleResolved = (e: React.MouseEvent, warning: ProjectWarning) => {
@@ -199,15 +204,15 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
     <div className="p-2">
       <div className="flex items-center justify-between mb-2 px-2">
         <span className="text-sm text-text-secondary">
-          {unresolvedCount} issue{unresolvedCount !== 1 ? 's' : ''}
-          {resolvedCount > 0 && ` (${resolvedCount} resolved)`}
+          {t('detailPanel.warnings.count', { count: unresolvedCount })}
+          {resolvedCount > 0 && ` ${t('detailPanel.warnings.resolvedCount', { count: resolvedCount })}`}
         </span>
         {resolvedCount > 0 && (
           <button
             onClick={() => setShowResolved(!showResolved)}
             className="text-xs text-accent hover:underline"
           >
-            {showResolved ? 'Hide resolved' : 'Show resolved'}
+            {showResolved ? t('detailPanel.warnings.hideResolved') : t('detailPanel.warnings.showResolved')}
           </button>
         )}
       </div>
@@ -235,7 +240,10 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                       {warning.message}
                     </div>
                     <div className="text-xs text-text-secondary mt-0.5">
-                      {getSectionName(warning.sectionId)} • Shot {formatShotId(warning.sectionId, warning.shotIndex + 1)}
+                      {t('detailPanel.warnings.location', {
+                        section: getSectionName(warning.sectionId),
+                        shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
+                      })}
                     </div>
                   </div>
                 </div>
@@ -243,9 +251,9 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               <button
                 onClick={(e) => handleToggleResolved(e, warning)}
                 className="text-xs px-2 py-1 rounded bg-background-50 hover:bg-background text-text-secondary"
-                title={warning.isResolved ? 'Mark as unresolved' : 'Mark as resolved'}
+                title={warning.isResolved ? t('detailPanel.warnings.markUnresolved') : t('detailPanel.warnings.markResolved')}
               >
-                {warning.isResolved ? 'Undo' : 'Resolve'}
+                {warning.isResolved ? t('common.actions.undo') : t('detailPanel.warnings.resolve')}
               </button>
             </div>
           </div>
@@ -256,6 +264,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
 }
 
 function StationDetail({ station }: { station: Station }) {
+  const { t } = useTranslation();
   const { project, stations } = useProjectStore();
   const { openDialog, setSelection, triggerCenterOnStation, announceSelection, setHoveredStation, setHoveredShot, setHoveredSectionId } = useUIStore();
   const section = project?.sections.find(
@@ -328,14 +337,20 @@ function StationDetail({ station }: { station: Station }) {
     );
   };
 
-  const sectionDisplayText = `${sectionId}: ${section?.name ?? 'Unnamed'}`;
+  const sectionName = section?.name ?? t('detailPanel.section.unnamed');
+  const sectionDisplayText = t('detailPanel.section.display', {
+    id: sectionId,
+    name: sectionName,
+  });
 
   const centerButton = (
     <button
       type="button"
       onClick={handleCenterOnStation}
       className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
-      aria-label={`Center map on station ${formatStationId(sectionId, stationPosition)}`}
+      aria-label={t('detailPanel.station.center', {
+        id: formatStationId(sectionId, stationPosition),
+      })}
       data-testid="center-station-button"
     >
       <svg
@@ -352,29 +367,29 @@ function StationDetail({ station }: { station: Station }) {
 
   return (
     <div className="h-full bg-panel overflow-auto" data-testid="station-detail">
-      <Panel title="Station" headerActions={centerButton}>
+      <Panel title={t('detailPanel.station.title')} headerActions={centerButton}>
         <div className="space-y-3">
           <DetailRow
-            label="ID"
+            label={t('detailPanel.labels.id')}
             value={formatStationId(sectionId, stationPosition)}
           />
-          <DetailRow label="Section" value={section?.name ?? `Section ${sectionId}`} />
-          <DetailRow label="X" value={`${station.coordinates.x.toFixed(2)} m`} />
-          <DetailRow label="Y" value={`${station.coordinates.y.toFixed(2)} m`} />
-          <DetailRow label="Depth" value={`${station.coordinates.z.toFixed(1)} m`} />
+          <DetailRow label={t('detailPanel.labels.section')} value={section?.name ?? t('sections.defaultName', { id: sectionId })} />
+          <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(station.coordinates.x, undefined, 2)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(station.coordinates.y, undefined, 2)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.depth')} value={`${formatFixed(station.coordinates.z, undefined, 1)} ${t('common.units.meters')}`} />
 
           {station.is_zero_datum && (
             <div className="pt-2 border-t border-border">
-              <span className="text-warning">&#9733; Zero Datum</span>
+              <span className="text-warning">&#9733; {t('detailPanel.station.zeroDatum')}</span>
               {station.gps_coordinates && (
                 <div className="mt-2 text-sm">
                   <DetailRow
-                    label="Latitude"
-                    value={station.gps_coordinates.latitude.toFixed(6)}
+                    label={t('detailPanel.labels.latitude')}
+                    value={formatFixed(station.gps_coordinates.latitude, undefined, 6)}
                   />
                   <DetailRow
-                    label="Longitude"
-                    value={station.gps_coordinates.longitude.toFixed(6)}
+                    label={t('detailPanel.labels.longitude')}
+                    value={formatFixed(station.gps_coordinates.longitude, undefined, 6)}
                   />
                 </div>
               )}
@@ -383,7 +398,7 @@ function StationDetail({ station }: { station: Station }) {
 
           {station.merged_with.length > 0 && (
             <div className="pt-2 border-t border-border">
-              <span className="text-sm text-text-secondary">Merged with:</span>
+              <span className="text-sm text-text-secondary">{t('detailPanel.station.mergedWith')}:</span>
               <ul className="mt-1 space-y-1">
                 {station.merged_with.map((ref, i) => (
                   <li key={i} className="text-sm">
@@ -408,6 +423,7 @@ function StationDetail({ station }: { station: Station }) {
               closures={station.closures_with}
               loopClosures={project?.loop_closures ?? []}
               stations={stations}
+              anchorStation={station.station_ref}
               onSelectStation={handleSelectMergedStation}
               onAnnounce={announceSelection}
               onHoverStart={(ref) => setHoveredStation({ section_id: ref.section_id, station_index: ref.station_index })}
@@ -417,11 +433,11 @@ function StationDetail({ station }: { station: Station }) {
 
           {/* Connected section with hyperlinks */}
           <div className="pt-2 border-t border-border">
-            <span className="text-sm text-text-secondary">Connected:</span>
+            <span className="text-sm text-text-secondary">{t('detailPanel.station.connected')}:</span>
             <div className="mt-1 space-y-1 text-sm">
               {!isFirstStation && (
                 <div className="flex justify-between">
-                  <span className="text-text-secondary">Previous Shot:</span>
+                  <span className="text-text-secondary">{t('detailPanel.station.previousShot')}:</span>
                   <DetailLink
                     type="shot"
                     target={{ sectionId, position: prevShotPosition }}
@@ -439,7 +455,7 @@ function StationDetail({ station }: { station: Station }) {
               )}
               {!isLastStation && (
                 <div className="flex justify-between">
-                  <span className="text-text-secondary">Next Shot:</span>
+                  <span className="text-text-secondary">{t('detailPanel.station.nextShot')}:</span>
                   <DetailLink
                     type="shot"
                     target={{ sectionId, position: nextShotPosition }}
@@ -456,7 +472,7 @@ function StationDetail({ station }: { station: Station }) {
                 </div>
               )}
               <div className="flex justify-between">
-                <span className="text-text-secondary">Section:</span>
+                <span className="text-text-secondary">{t('detailPanel.labels.section')}:</span>
                 <DetailLink
                   type="section"
                   target={{ sectionId }}
@@ -474,7 +490,7 @@ function StationDetail({ station }: { station: Station }) {
 
       <div className="p-3 border-t border-border">
         <Button size="sm" className="w-full" onClick={handleEdit}>
-          Edit
+          {t('common.actions.edit')}
         </Button>
       </div>
     </div>
@@ -494,6 +510,7 @@ function computeInclination(depthIn: number, depthOut: number, length: number): 
 }
 
 function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
+  const { t } = useTranslation();
   const { setShotVirtual } = useProjectStore();
   const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore();
 
@@ -532,7 +549,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
       isFirst,
       isLast,
       totalShots,
-      section.name ?? `Section ${section.id}`,
+      section.name ?? t('sections.defaultName', { id: section.id }),
     );
     openDialog(dialog, data);
   };
@@ -559,14 +576,20 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
     triggerCenterOnShot(section.id, shot.id);
   };
 
-  const sectionDisplayText = `${section.id}: ${section.name ?? 'Unnamed'}`;
+  const sectionName = section.name ?? t('detailPanel.section.unnamed');
+  const sectionDisplayText = t('detailPanel.section.display', {
+    id: section.id,
+    name: sectionName,
+  });
 
   const centerButton = (
     <button
       type="button"
       onClick={handleCenterOnShot}
       className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
-      aria-label={`Center map on shot ${section.id}:${shotPosition}`}
+      aria-label={t('detailPanel.shot.center', {
+        id: formatShotId(section.id, shotPosition),
+      })}
       data-testid="center-shot-button"
     >
       <svg
@@ -583,30 +606,30 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
 
   return (
     <div className="h-full bg-panel overflow-auto">
-      <Panel title="Shot" headerActions={centerButton}>
+      <Panel title={t('detailPanel.shot.title')} headerActions={centerButton}>
         <div className="space-y-3">
-          <DetailRow label="ID" value={formatShotId(section.id, shotPosition)} />
-          <DetailRow label="Section" value={section.name ?? `Section ${section.id}`} />
-          <DetailRow label="Length" value={`${shot.length.toFixed(2)} m`} />
-          <DetailRow label="Azimuth In" value={`${shot.azimuth_in.toFixed(1)}°`} />
-          <DetailRow label="Azimuth Out" value={`${shot.azimuth_out.toFixed(1)}°`} />
-          <DetailRow label="Depth In" value={`${shot.depth_in.toFixed(1)} m`} />
-          <DetailRow label="Depth Out" value={`${shot.depth_out.toFixed(1)} m`} />
+          <DetailRow label={t('detailPanel.labels.id')} value={formatShotId(section.id, shotPosition)} />
+          <DetailRow label={t('detailPanel.labels.section')} value={section.name ?? t('sections.defaultName', { id: section.id })} />
+          <DetailRow label={t('detailPanel.labels.length')} value={`${formatFixed(shot.length, undefined, 2)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.azimuthIn')} value={`${formatFixed(shot.azimuth_in, undefined, 1)}°`} />
+          <DetailRow label={t('detailPanel.labels.azimuthOut')} value={`${formatFixed(shot.azimuth_out, undefined, 1)}°`} />
+          <DetailRow label={t('detailPanel.labels.depthIn')} value={`${formatFixed(shot.depth_in, undefined, 1)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.depthOut')} value={`${formatFixed(shot.depth_out, undefined, 1)} ${t('common.units.meters')}`} />
 
           {(shot.pitch_in !== null || shot.pitch_out !== null || shot.length > 0) && (
             <div className="pt-2 border-t border-border">
-              <span className="text-sm text-text-secondary">Inclination:</span>
+              <span className="text-sm text-text-secondary">{t('detailPanel.shot.inclination')}:</span>
               <div className="mt-1 space-y-1 text-sm">
                 {shot.pitch_in !== null && (
-                  <DetailRow label="Pitch In" value={`${shot.pitch_in.toFixed(1)}°`} />
+                  <DetailRow label={t('detailPanel.labels.pitchIn')} value={`${formatFixed(shot.pitch_in, undefined, 1)}°`} />
                 )}
                 {shot.pitch_out !== null && (
-                  <DetailRow label="Pitch Out" value={`${shot.pitch_out.toFixed(1)}°`} />
+                  <DetailRow label={t('detailPanel.labels.pitchOut')} value={`${formatFixed(shot.pitch_out, undefined, 1)}°`} />
                 )}
                 {shot.length > 0 && (() => {
                   const incl = computeInclination(shot.depth_in, shot.depth_out, shot.length);
                   return incl !== null ? (
-                    <DetailRow label="Computed" value={`${incl.toFixed(1)}°`} />
+                    <DetailRow label={t('detailPanel.shot.computed')} value={`${formatFixed(incl, undefined, 1)}°`} />
                   ) : null;
                 })()}
               </div>
@@ -615,22 +638,22 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
 
           {(shot.left !== null || shot.right !== null || shot.up !== null || shot.down !== null) && (
             <div className="pt-2 border-t border-border">
-              <span className="text-sm text-text-secondary">LRUD:</span>
+              <span className="text-sm text-text-secondary">{t('detailPanel.shot.lrud')}:</span>
               <div className="grid grid-cols-2 gap-2 mt-1 text-sm">
-                <DetailRow label="L" value={shot.left?.toFixed(1) ?? '-'} />
-                <DetailRow label="R" value={shot.right?.toFixed(1) ?? '-'} />
-                <DetailRow label="U" value={shot.up?.toFixed(1) ?? '-'} />
-                <DetailRow label="D" value={shot.down?.toFixed(1) ?? '-'} />
+                <DetailRow label={t('detailPanel.labels.leftShort')} value={shot.left != null ? formatFixed(shot.left, undefined, 1) : t('detailPanel.placeholder.none')} />
+                <DetailRow label={t('detailPanel.labels.rightShort')} value={shot.right != null ? formatFixed(shot.right, undefined, 1) : t('detailPanel.placeholder.none')} />
+                <DetailRow label={t('detailPanel.labels.upShort')} value={shot.up != null ? formatFixed(shot.up, undefined, 1) : t('detailPanel.placeholder.none')} />
+                <DetailRow label={t('detailPanel.labels.downShort')} value={shot.down != null ? formatFixed(shot.down, undefined, 1) : t('detailPanel.placeholder.none')} />
               </div>
             </div>
           )}
 
           {/* Connected section with hyperlinks */}
           <div className="pt-2 border-t border-border">
-            <span className="text-sm text-text-secondary">Connected:</span>
+            <span className="text-sm text-text-secondary">{t('detailPanel.shot.connected')}:</span>
             <div className="mt-1 space-y-1 text-sm">
               <div className="flex justify-between">
-                <span className="text-text-secondary">Start Station:</span>
+                <span className="text-text-secondary">{t('detailPanel.shot.startStation')}:</span>
                 <DetailLink
                   type="station"
                   target={{ sectionId: section.id, position: startStationPosition }}
@@ -643,7 +666,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
                 />
               </div>
               <div className="flex justify-between">
-                <span className="text-text-secondary">End Station:</span>
+                <span className="text-text-secondary">{t('detailPanel.shot.endStation')}:</span>
                 <DetailLink
                   type="station"
                   target={{ sectionId: section.id, position: endStationPosition }}
@@ -656,7 +679,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
                 />
               </div>
               <div className="flex justify-between">
-                <span className="text-text-secondary">Section:</span>
+                <span className="text-text-secondary">{t('detailPanel.labels.section')}:</span>
                 <DetailLink
                   type="section"
                   target={{ sectionId: section.id }}
@@ -671,12 +694,12 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
           </div>
 
           {shot.is_virtual && (
-            <div className="text-warning text-sm">Virtual shot</div>
+            <div className="text-warning text-sm">{t('detailPanel.shot.virtual')}</div>
           )}
 
           {shot.comment && (
             <div className="pt-2 border-t border-border">
-              <span className="text-sm text-text-secondary">Comment:</span>
+              <span className="text-sm text-text-secondary">{t('detailPanel.labels.comment')}:</span>
               <p className="text-sm mt-1">{shot.comment}</p>
             </div>
           )}
@@ -685,10 +708,10 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
 
       <div className="p-3 border-t border-border space-y-2">
         <Button size="sm" className="w-full" onClick={handleToggleVirtual}>
-          {shot.is_virtual ? 'Mark as Real' : 'Mark as Virtual'}
+          {shot.is_virtual ? t('detailPanel.shot.markReal') : t('detailPanel.shot.markVirtual')}
         </Button>
         <Button size="sm" variant="danger" className="w-full" onClick={handleDelete}>
-          Delete
+          {t('common.actions.delete')}
         </Button>
       </div>
     </div>
@@ -702,6 +725,7 @@ interface SectionDetailProps {
 }
 
 function SectionDetail({ section, stations, totalProjectLength }: SectionDetailProps) {
+  const { t } = useTranslation();
   const { openDialog, setSelection, triggerZoomToSection, announceSelection, setHoveredStation } = useUIStore();
 
   // Calculate section statistics
@@ -762,14 +786,14 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
     openDialog('edit-section', { sectionId: section.id });
   };
 
-  const sectionDisplayName = section.name ?? 'Unnamed';
+  const sectionDisplayName = section.name ?? t('detailPanel.section.unnamed');
 
   const centerButton = (
     <button
       type="button"
       onClick={handleCenterOnSection}
       className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
-      aria-label={`Center map on section ${section.id}: ${sectionDisplayName}`}
+      aria-label={t('detailPanel.section.center', { id: section.id, name: sectionDisplayName })}
       data-testid="center-section-button"
     >
       <svg
@@ -786,14 +810,14 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
 
   return (
     <div className="h-full bg-panel overflow-auto" data-testid="section-detail">
-      <Panel title="Section" headerActions={centerButton}>
+      <Panel title={t('detailPanel.section.title')} headerActions={centerButton}>
         <div className="space-y-4">
           {/* Section info */}
           <div className="space-y-2">
-            <DetailRow label="Name" value={section.name ?? 'Unnamed'} />
-            <DetailRow label="Surveyor" value={section.surveyor ?? '-'} />
-            <DetailRow label="Date" value={section.date ?? '-'} />
-            <DetailRow label="Color" value={
+            <DetailRow label={t('common.labels.name')} value={section.name ?? t('detailPanel.section.unnamed')} />
+            <DetailRow label={t('detailPanel.labels.surveyor')} value={section.surveyor ?? t('detailPanel.placeholder.none')} />
+            <DetailRow label={t('common.labels.date')} value={section.date ?? t('detailPanel.placeholder.none')} />
+            <DetailRow label={t('detailPanel.labels.color')} value={
               <div className="flex items-center gap-2">
                 <span
                   className="w-4 h-4 rounded"
@@ -807,14 +831,14 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
           {/* Survey statistics */}
           <div className="space-y-2 pt-2 border-t border-border">
             <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
-              Survey Statistics
+              {t('detailPanel.section.statsTitle')}
             </h4>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-              <StatCard label="Total Length" value={`${sectionLength.toFixed(1)} m`} />
-              <StatCard label="Shot Count" value={String(shotCount)} />
-              <StatCard label="Avg Shot" value={`${avgShotLength.toFixed(2)} m`} />
+              <StatCard label={t('detailPanel.section.totalLength')} value={`${formatFixed(sectionLength, undefined, 1)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.section.shotCount')} value={formatNumber(shotCount)} />
+              <StatCard label={t('detailPanel.section.avgShot')} value={`${formatFixed(avgShotLength, undefined, 2)} ${t('common.units.meters')}`} />
               {virtualCount > 0 && (
-                <StatCard label="Virtual Shots" value={String(virtualCount)} />
+                <StatCard label={t('detailPanel.section.virtualShots')} value={formatNumber(virtualCount)} />
               )}
             </div>
           </div>
@@ -823,11 +847,11 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
           {sectionStations.length > 0 && (
             <div className="space-y-2 pt-2 border-t border-border">
               <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
-                Depth Range
+                {t('detailPanel.section.depthRange')}
               </h4>
               <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                <StatCard label="Shallowest" value={`${minDepth.toFixed(1)} m`} />
-                <StatCard label="Deepest" value={`${maxDepth.toFixed(1)} m`} />
+                <StatCard label={t('detailPanel.section.shallowest')} value={`${formatFixed(minDepth, undefined, 1)} ${t('common.units.meters')}`} />
+                <StatCard label={t('detailPanel.section.deepest')} value={`${formatFixed(maxDepth, undefined, 1)} ${t('common.units.meters')}`} />
               </div>
             </div>
           )}
@@ -836,13 +860,13 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
           {sectionStations.length > 0 && (
             <div className="space-y-2 pt-2 border-t border-border">
               <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
-                Endpoints
+                {t('detailPanel.section.endpoints')}
               </h4>
               <div className="space-y-1 text-sm">
                 {hasSingleStation ? (
                   // Single station case
                   <div className="flex justify-between">
-                    <span className="text-text-secondary">Only Station:</span>
+                    <span className="text-text-secondary">{t('detailPanel.section.onlyStation')}:</span>
                     <DetailLink
                       type="station"
                       target={{ sectionId: section.id, position: firstStationPosition }}
@@ -858,7 +882,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                   // Multiple stations case
                   <>
                     <div className="flex justify-between">
-                      <span className="text-text-secondary">First Station:</span>
+                      <span className="text-text-secondary">{t('detailPanel.section.firstStation')}:</span>
                       <DetailLink
                         type="station"
                         target={{ sectionId: section.id, position: firstStationPosition }}
@@ -871,7 +895,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                       />
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-text-secondary">Last Station:</span>
+                      <span className="text-text-secondary">{t('detailPanel.section.lastStation')}:</span>
                       <DetailLink
                         type="station"
                         target={{ sectionId: section.id, position: lastStationPosition }}
@@ -892,7 +916,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
           {/* Contribution */}
           <div className="space-y-2 pt-2 border-t border-border">
             <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
-              Project Contribution
+              {t('detailPanel.section.contribution')}
             </h4>
             <div className="flex items-center gap-2">
               <div className="flex-1 h-2 bg-background rounded-full overflow-hidden">
@@ -902,7 +926,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                 />
               </div>
               <span className="text-sm font-medium w-12 text-right">
-                {contributionPercent.toFixed(1)}%
+                {formatPercent(contributionPercent, undefined, 1)}
               </span>
             </div>
           </div>
@@ -911,7 +935,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
 
       <div className="p-3 border-t border-border">
         <Button size="sm" className="w-full" onClick={handleEditSection}>
-          Edit Section
+          {t('detailPanel.section.edit')}
         </Button>
       </div>
     </div>
@@ -925,10 +949,11 @@ interface ProjectStatsProps {
 }
 
 function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
+  const { t } = useTranslation();
   if (!project || !stats) {
     return (
       <div className="p-4 text-center text-text-secondary">
-        <p>No project loaded</p>
+        <p>{t('detailPanel.projectStats.empty')}</p>
       </div>
     );
   }
@@ -946,23 +971,23 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
   const earliestDate = dates.length > 0 ? dates[0] : null;
   const latestDate = dates.length > 0 ? dates[dates.length - 1] : null;
 
-  return (
-    <div className="h-full bg-panel overflow-auto">
-      <Panel title="Project Statistics">
+    return (
+      <div className="h-full bg-panel overflow-auto">
+      <Panel title={t('detailPanel.projectStats.title')}>
         <div className="space-y-4">
           {/* Survey overview */}
           <div className="space-y-2">
             <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
-              Survey Overview
+              {t('detailPanel.projectStats.overview')}
             </h4>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-              <StatCard label="Total Length" value={`${stats.total_length.toFixed(1)} m`} />
-              <StatCard label="Penetration" value={`${stats.penetration_distance.toFixed(1)} m`} />
-              <StatCard label="Sections" value={String(stats.section_count)} />
-              <StatCard label="Shots" value={String(stats.shot_count)} />
-              <StatCard label="Stations" value={String(stats.station_count)} />
+              <StatCard label={t('detailPanel.projectStats.totalLength')} value={`${formatFixed(stats.total_length, undefined, 1)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.projectStats.penetration')} value={`${formatFixed(stats.penetration_distance, undefined, 1)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.projectStats.sections')} value={formatNumber(stats.section_count)} />
+              <StatCard label={t('detailPanel.projectStats.shots')} value={formatNumber(stats.shot_count)} />
+              <StatCard label={t('detailPanel.projectStats.stations')} value={formatNumber(stats.station_count)} />
               {stats.loop_count > 0 && (
-                <StatCard label="Loops" value={String(stats.loop_count)} />
+                <StatCard label={t('detailPanel.projectStats.loops')} value={formatNumber(stats.loop_count)} />
               )}
             </div>
           </div>
@@ -970,12 +995,12 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
           {/* Depth information */}
           <div className="space-y-2 pt-2 border-t border-border">
             <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
-              Depth Range
+              {t('detailPanel.projectStats.depthRange')}
             </h4>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-              <StatCard label="Shallowest" value={`${minDepth.toFixed(1)} m`} />
-              <StatCard label="Deepest" value={`${maxDepth.toFixed(1)} m`} />
-              <StatCard label="Total Depth" value={`${(maxDepth - minDepth).toFixed(1)} m`} />
+              <StatCard label={t('detailPanel.projectStats.shallowest')} value={`${formatFixed(minDepth, undefined, 1)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.projectStats.deepest')} value={`${formatFixed(maxDepth, undefined, 1)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.projectStats.totalDepth')} value={`${formatFixed(maxDepth - minDepth, undefined, 1)} ${t('common.units.meters')}`} />
             </div>
           </div>
 
@@ -983,12 +1008,20 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
           {(earliestDate || latestDate) && (
             <div className="space-y-2 pt-2 border-t border-border">
               <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
-                Survey Dates
+                {t('detailPanel.projectStats.surveyDates')}
               </h4>
               <div className="space-y-1">
-                {earliestDate && <DetailRow label="First Survey" value={earliestDate} />}
+                {earliestDate && (
+                  <DetailRow
+                    label={t('detailPanel.projectStats.firstSurvey')}
+                    value={formatDate(new Date(earliestDate), undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                  />
+                )}
                 {latestDate && earliestDate !== latestDate && (
-                  <DetailRow label="Latest Survey" value={latestDate} />
+                  <DetailRow
+                    label={t('detailPanel.projectStats.latestSurvey')}
+                    value={formatDate(new Date(latestDate), undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                  />
                 )}
               </div>
             </div>
@@ -997,11 +1030,11 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
           {/* Merges and datums */}
           <div className="space-y-2 pt-2 border-t border-border">
             <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
-              Connections
+              {t('detailPanel.projectStats.connections')}
             </h4>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-              <StatCard label="Station Merges" value={String(project.station_merges.length)} />
-              <StatCard label="Zero Datums" value={String(project.zero_datums.length)} />
+              <StatCard label={t('detailPanel.projectStats.stationMerges')} value={formatNumber(project.station_merges.length)} />
+              <StatCard label={t('detailPanel.projectStats.zeroDatums')} value={formatNumber(project.zero_datums.length)} />
             </div>
           </div>
         </div>
@@ -1014,6 +1047,7 @@ interface ClosuresSectionProps {
   closures: ClosureRef[];
   loopClosures: LoopClosure[];
   stations: Station[];
+  anchorStation: { section_id: number; station_index: number };
   onSelectStation: (ref: { section_id: number; station_index: number }) => void;
   onAnnounce: (message: string) => void;
   onHoverStart: (ref: { section_id: number; station_index: number }) => void;
@@ -1024,11 +1058,14 @@ function ClosuresSection({
   closures,
   loopClosures,
   stations,
+  anchorStation,
   onSelectStation,
   onAnnounce,
   onHoverStart,
   onHoverEnd,
 }: ClosuresSectionProps) {
+  const { t } = useTranslation();
+  const { openDialog } = useUIStore();
   const [expanded, setExpanded] = useState(true);
   const contentId = 'closures-section-content';
 
@@ -1087,10 +1124,20 @@ function ClosuresSection({
         aria-controls={contentId}
       >
         <span className="text-xs">{expanded ? '▼' : '▶'}</span>
-        <span>Loop Closures</span>
+        <span>{t('detailPanel.closures.title')}</span>
       </button>
       {expanded && (
         <div className="mt-1 space-y-2" id={contentId} data-testid="closures-section-content">
+          <div>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => openDialog('adjust-closures', { anchorStation })}
+              data-testid="adjust-closures-button"
+            >
+              Adjust Closures
+            </Button>
+          </div>
           {sortedGroups.map(([closureId, refs]) => {
             const closure = closureMap.get(closureId);
             const directRefs = refs.filter((r) => !r.is_transitive);
@@ -1102,7 +1149,7 @@ function ClosuresSection({
               <div key={closureId} className={`space-y-1${isTransitiveOnly ? ' opacity-50' : ''}`}>
                 {directRefs.length > 0 && (
                   <div className="text-sm" data-testid={`closure-direct-${closureId}`}>
-                    <span className="text-text-secondary">Closure to </span>
+                    <span className="text-text-secondary">{t('detailPanel.closures.direct')} </span>
                     {directRefs.map((ref, i) => (
                       <span key={i}>
                         {i > 0 && ', '}
@@ -1122,7 +1169,7 @@ function ClosuresSection({
                 )}
                 {transitiveRefs.length > 0 && (
                   <div className="text-sm" data-testid={`closure-transitive-${closureId}`}>
-                    <span className="text-text-secondary">Transitive closure to </span>
+                    <span className="text-text-secondary">{t('detailPanel.closures.transitive')} </span>
                     {transitiveRefs.map((ref, i) => (
                       <span key={i}>
                         {i > 0 && ', '}
@@ -1138,7 +1185,7 @@ function ClosuresSection({
                         />
                         {ref.via_station && (
                           <span>
-                            {' (via '}
+                            {t('detailPanel.closures.viaPrefix')}
                             <DetailLink
                               type="station"
                               target={{ sectionId: ref.via_station.section_id, position: ref.via_station.station_index }}
@@ -1149,7 +1196,7 @@ function ClosuresSection({
                               onHoverStart={() => onHoverStart(ref.via_station!)}
                               onHoverEnd={onHoverEnd}
                             />
-                            {')'}
+                            {t('detailPanel.closures.viaSuffix')}
                           </span>
                         )}
                       </span>
@@ -1158,11 +1205,15 @@ function ClosuresSection({
                 )}
                 {closure ? (
                   <div className="text-xs text-text-secondary" data-testid={`closure-metrics-${closureId}`}>
-                    Path: {closure.path_length.toFixed(1)}m | Error: {closure.misclosure_distance.toFixed(2)}m ({closure.error_percentage.toFixed(2)}%)
+                    {t('detailPanel.closures.metrics', {
+                      path: `${formatFixed(closure.path_length, undefined, 1)}${t('common.units.meters')}`,
+                      error: `${formatFixed(closure.misclosure_distance, undefined, 2)}${t('common.units.meters')}`,
+                      percent: formatPercent(closure.error_percentage, undefined, 2),
+                    })}
                   </div>
                 ) : (
                   <div className="text-xs text-text-secondary" data-testid={`closure-metrics-${closureId}`}>
-                    Metrics unavailable
+                    {t('detailPanel.closures.unavailable')}
                   </div>
                 )}
               </div>

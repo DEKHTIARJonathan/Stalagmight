@@ -2,6 +2,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::config::TransitVerticalMode;
 use crate::models::{
     shot_display_position, ClosureStrategy, Coordinates, GpsCoordinates, SectionId,
     SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef, SurveyDirection,
@@ -77,6 +78,13 @@ pub enum Command {
         station_a: StationRef,
         station_b: StationRef,
         closure_strategy: ClosureStrategy,
+    },
+    AdjustLoopClosures {
+        anchor_station: StationRef,
+        method: ClosureStrategy,
+        use_strategy_filter: bool,
+        sequential_distribution: ClosureStrategy,
+        transit_vertical_mode: TransitVerticalMode,
     },
     SetZeroDatum {
         station_ref: StationRef,
@@ -316,6 +324,9 @@ impl Command {
                 station_b,
                 ..
             } => format!("Create loop closure between {} and {}", station_a, station_b),
+            Command::AdjustLoopClosures { method, .. } => {
+                format!("Adjust loop closures ({})", method.as_str())
+            }
             Command::SetZeroDatum { station_ref, .. } => {
                 format!("Set zero datum at {}", station_ref)
             }

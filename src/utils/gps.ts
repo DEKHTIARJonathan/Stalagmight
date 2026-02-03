@@ -12,6 +12,7 @@
  */
 
 import type { GpsCoordinates } from '../types/project';
+import { formatFixed } from '../i18n/format';
 
 /**
  * Supported GPS coordinate formats.
@@ -1055,7 +1056,7 @@ export function formatGpsCoordinates(
 
   switch (format) {
     case 'DD':
-      return `${latitude.toFixed(precision)}, ${longitude.toFixed(precision)}`;
+      return `${formatFixed(latitude, undefined, precision)}, ${formatFixed(longitude, undefined, precision)}`;
 
     case 'DMS': {
       const latDir = latitude >= 0 ? 'N' : 'S';
@@ -1068,7 +1069,7 @@ export function formatGpsCoordinates(
       const lonDeg = Math.floor(absLon);
       const lonMin = Math.floor((absLon - lonDeg) * 60);
       const lonSec = ((absLon - lonDeg) * 60 - lonMin) * 60;
-      return `${latDeg}°${latMin}'${latSec.toFixed(2)}"${latDir} ${lonDeg}°${lonMin}'${lonSec.toFixed(2)}"${lonDir}`;
+      return `${latDeg}°${latMin}'${formatFixed(latSec, undefined, 2)}"${latDir} ${lonDeg}°${lonMin}'${formatFixed(lonSec, undefined, 2)}"${lonDir}`;
     }
 
     case 'DDM': {
@@ -1080,7 +1081,7 @@ export function formatGpsCoordinates(
       const latMin = (absLat - latDeg) * 60;
       const lonDeg = Math.floor(absLon);
       const lonMin = (absLon - lonDeg) * 60;
-      return `${latDeg}°${latMin.toFixed(4)}'${latDir} ${lonDeg}°${lonMin.toFixed(4)}'${lonDir}`;
+      return `${latDeg}°${formatFixed(latMin, undefined, 4)}'${latDir} ${lonDeg}°${formatFixed(lonMin, undefined, 4)}'${lonDir}`;
     }
 
     case 'UTM':
@@ -1089,9 +1090,9 @@ export function formatGpsCoordinates(
     case 'What3words':
       // These formats require complex encoding - fall back to DD with warning
       // Throwing would break UI, so return DD with a note
-      return `${latitude.toFixed(precision)}, ${longitude.toFixed(precision)}`;
+      return `${formatFixed(latitude, undefined, precision)}, ${formatFixed(longitude, undefined, precision)}`;
 
     default:
-      return `${latitude.toFixed(precision)}, ${longitude.toFixed(precision)}`;
+      return `${formatFixed(latitude, undefined, precision)}, ${formatFixed(longitude, undefined, precision)}`;
   }
 }

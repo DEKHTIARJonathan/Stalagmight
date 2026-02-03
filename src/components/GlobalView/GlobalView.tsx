@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { useProject } from '../../hooks/useProject';
 import { useGlobalViewShortcuts } from '../../hooks/useGlobalViewShortcuts';
@@ -11,33 +12,39 @@ import SystemCard from './SystemCard';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
 import type { ProjectMetadata } from '../../types/project';
+import { formatNumber } from '../../i18n/format';
 
 /** Map phase enum values to human-readable labels */
-function formatPhaseLabel(phase: string | undefined, phaseIndex?: number, phaseCount?: number): string {
-  if (!phase) return 'Initializing...';
+function formatPhaseLabel(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  phase: string | undefined,
+  phaseIndex?: number,
+  phaseCount?: number
+): string {
+  if (!phase) return t('globalView.loading.phases.initializing');
 
   const labels: Record<string, string> = {
     // Project opening phases
-    opening_database: 'Opening database',
-    loading_project_data: 'Loading project data',
-    loading_sections: 'Loading sections',
-    computing_stations: 'Computing stations',
-    computing_statistics: 'Computing statistics',
-    validating_data: 'Validating data',
-    loading_settings: 'Loading settings',
-    finalizing: 'Finalizing',
+    opening_database: t('globalView.loading.phases.openingDatabase'),
+    loading_project_data: t('globalView.loading.phases.loadingProjectData'),
+    loading_sections: t('globalView.loading.phases.loadingSections'),
+    computing_stations: t('globalView.loading.phases.computingStations'),
+    computing_statistics: t('globalView.loading.phases.computingStatistics'),
+    validating_data: t('globalView.loading.phases.validatingData'),
+    loading_settings: t('globalView.loading.phases.loadingSettings'),
+    finalizing: t('globalView.loading.phases.finalizing'),
     // Timeout message
-    loading_taking_long: 'Taking longer than expected...',
+    loading_taking_long: t('globalView.loading.phases.takingLong'),
     // Create project phases
-    creating_database: 'Creating database',
-    initializing_project: 'Initializing project',
-    saving_settings: 'Saving settings',
+    creating_database: t('globalView.loading.phases.creatingDatabase'),
+    initializing_project: t('globalView.loading.phases.initializingProject'),
+    saving_settings: t('globalView.loading.phases.savingSettings'),
   };
 
   const label = labels[phase] ?? phase;
 
   if (phaseIndex !== undefined && phaseCount !== undefined && phaseCount > 0) {
-    return `Step ${phaseIndex + 1}/${phaseCount}: ${label}`;
+    return t('globalView.loading.step', { current: phaseIndex + 1, total: phaseCount, label });
   }
 
   return label;
@@ -64,6 +71,7 @@ export default function GlobalView() {
 
   // Note: useLoadingProgress() is called in App.tsx (always mounted) to avoid duplicate listeners
   const { openDialog } = useUIStore();
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<ViewTab>('list');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
@@ -134,7 +142,11 @@ export default function GlobalView() {
   }, [selectedSystemIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Check if there are any GPS-positioned projects (null check only, no sentinel)
-  const hasGpsProjects = recentProjects.some((p) => p.gps_center !== null);
+  const gpsProjectCount = useMemo(
+    () => recentProjects.filter((p) => p.gps_center !== null).length,
+    [recentProjects]
+  );
+  const hasGpsProjects = gpsProjectCount > 0;
 
   // Handle project selection (single click)
   const handleProjectSelect = useCallback((filePath: string, ctrlKey?: boolean) => {
@@ -322,18 +334,24 @@ export default function GlobalView() {
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-3">
-          <Button onClick={() => handleImportDmp()} data-testid="global-import-dmp-button">Import DMP</Button>
-          <Button data-testid="new-project-button" onClick={() => handleNewProject()}>New Project</Button>
-          <Button onClick={() => handleOpenProject()} data-testid="global-open-project-button">Open Project</Button>
+          <Button onClick={() => handleImportDmp()} data-testid="global-import-dmp-button">
+            {t('globalView.actions.importDmp')}
+          </Button>
+          <Button data-testid="new-project-button" onClick={() => handleNewProject()}>
+            {t('globalView.actions.newProject')}
+          </Button>
+          <Button onClick={() => handleOpenProject()} data-testid="global-open-project-button">
+            {t('globalView.actions.openProject')}
+          </Button>
         </div>
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold">CaveChef</h1>
           <Button
             onClick={() => openDialog('settings')}
             data-testid="settings-button"
-            aria-label="Settings"
+            aria-label={t('globalView.actions.settings')}
           >
-            Settings
+            {t('globalView.actions.settings')}
           </Button>
         </div>
       </header>
@@ -351,7 +369,8 @@ export default function GlobalView() {
                   : 'border-transparent text-text-secondary hover:text-text'
               }`}
             >
-              Map {hasGpsProjects ? `(${recentProjects.filter(p => p.gps_center !== null).length})` : ''}
+              {t('globalView.tabs.map')}{' '}
+              {hasGpsProjects ? `(${formatNumber(gpsProjectCount)})` : ''}
             </button>
             <button
               data-testid="globalview-list-tab"
@@ -362,7 +381,7 @@ export default function GlobalView() {
                   : 'border-transparent text-text-secondary hover:text-text'
               }`}
             >
-              List ({recentProjects.length})
+              {t('globalView.tabs.list')} ({formatNumber(recentProjects.length)})
             </button>
           </div>
 
@@ -375,18 +394,18 @@ export default function GlobalView() {
                 value={searchTerm}
                 onChange={handleSearchChange}
                 onKeyDown={handleSearchKeyDown}
-                placeholder="Search systems..."
+                placeholder={t('globalView.search.placeholder')}
                 className="bg-panel border border-border rounded px-2 py-1 text-sm w-48 pr-7 focus:outline-none focus:ring-1 focus:ring-accent"
                 data-testid="globalview-search-input"
-                aria-label="Search systems by name"
+                aria-label={t('globalView.search.aria')}
               />
               {/* Clear button (X) - only show when there's text */}
               {searchTerm && (
                 <button
                   onClick={handleClearSearch}
                   className="absolute right-1 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text p-1"
-                  title="Clear search (Escape)"
-                  aria-label="Clear search"
+                  title={t('globalView.search.clearTitle')}
+                  aria-label={t('globalView.search.clearAria')}
                   data-testid="globalview-search-clear"
                 >
                   <svg
@@ -416,10 +435,12 @@ export default function GlobalView() {
           <LoadingProgress
             title={
               loading.error
-                ? 'Failed to Load Project'
-                : `Loading ${loading.projectName ?? 'project'}...`
+                ? t('globalView.loading.failedTitle')
+                : t('globalView.loading.loadingTitle', {
+                  name: loading.projectName ?? t('globalView.loading.projectFallback'),
+                })
             }
-            phase={formatPhaseLabel(loading.phase, loading.phaseIndex, loading.phaseCount)}
+            phase={formatPhaseLabel(t, loading.phase, loading.phaseIndex, loading.phaseCount)}
             overallProgress={loading.overallProgress}
             onCancel={loading.error ? handleDismissError : handleCancelLoading}
             {...(loading.phaseProgress !== undefined && { phaseProgress: loading.phaseProgress })}
@@ -460,19 +481,19 @@ export default function GlobalView() {
           ) : (
             <div className="h-full overflow-auto p-6">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-medium">Recent Projects</h2>
+                <h2 className="text-lg font-medium">{t('globalView.recent.title')}</h2>
                 {selectedCount >= 2 && (
                   <Button
                     onClick={handleMergeProjects}
                     data-testid="merge-projects-button"
-                    aria-label={`Merge ${selectedCount} selected projects`}
+                    aria-label={t('globalView.actions.mergeProjectsAria', { count: selectedCount })}
                   >
-                    Merge {selectedCount} Projects
+                    {t('globalView.actions.mergeProjects', { count: selectedCount })}
                   </Button>
                 )}
               </div>
               <p className="text-xs text-text-secondary mb-4">
-                Ctrl+click to select multiple projects. Right-click for options.
+                {t('globalView.recent.hint')}
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {recentProjects.map((project) => (
@@ -510,10 +531,10 @@ export default function GlobalView() {
       {/* Status bar */}
       <footer className="px-4 py-2 border-t border-border text-sm text-text-secondary flex justify-between">
         <span>
-          Systems: {recentProjects.length}
-          {selectedCount > 1 && ` | Selected: ${selectedCount}`}
+          {t('globalView.status.systems', { count: recentProjects.length })}
+          {selectedCount > 1 && ` | ${t('globalView.status.selected', { count: selectedCount })}`}
         </span>
-        <span>Status: Ready</span>
+        <span>{t('globalView.status.ready')}</span>
       </footer>
 
       {/* Context Menu */}
@@ -523,7 +544,7 @@ export default function GlobalView() {
           className="fixed z-50 bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[180px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           role="menu"
-          aria-label="Project context menu"
+          aria-label={t('globalView.contextMenu.aria')}
           data-testid="project-context-menu"
         >
           <button
@@ -537,7 +558,7 @@ export default function GlobalView() {
             role="menuitem"
             data-testid="context-menu-open"
           >
-            Open
+            {t('globalView.contextMenu.open')}
           </button>
           <button
             className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"
@@ -545,7 +566,7 @@ export default function GlobalView() {
             role="menuitem"
             data-testid="context-menu-zoom"
           >
-            Zoom to System
+            {t('globalView.contextMenu.zoom')}
           </button>
           <button
             className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"
@@ -553,7 +574,7 @@ export default function GlobalView() {
             role="menuitem"
             data-testid="context-menu-show-in-folder"
           >
-            Show in Folder
+            {t('globalView.contextMenu.showInFolder')}
           </button>
           {selectedCount >= 2 && (
             <button
@@ -562,7 +583,7 @@ export default function GlobalView() {
               role="menuitem"
               data-testid="context-menu-merge"
             >
-              Merge {selectedCount} Projects
+              {t('globalView.contextMenu.mergeProjects', { count: selectedCount })}
             </button>
           )}
           <div className="border-t border-border my-1" />
@@ -587,7 +608,9 @@ export default function GlobalView() {
             role="menuitem"
             data-testid="context-menu-remove"
           >
-            {selectedCount > 1 ? `Remove ${selectedCount} from Recent` : 'Remove from Recent'}
+            {selectedCount > 1
+              ? t('globalView.contextMenu.removeMultiple', { count: selectedCount })
+              : t('globalView.contextMenu.remove')}
           </button>
         </div>
       )}
@@ -602,36 +625,36 @@ interface EmptyStateProps {
 }
 
 function EmptyState({ onImport, onNew, onOpen }: EmptyStateProps) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center justify-center h-full gap-8">
       <div className="text-center">
         <div className="text-6xl mb-4">🗺️</div>
-        <h2 className="text-2xl font-bold mb-2">No cave systems yet</h2>
+        <h2 className="text-2xl font-bold mb-2">{t('globalView.empty.title')}</h2>
         <p className="text-text-secondary max-w-md">
-          Start by importing survey data from your mNemo device, creating a new project,
-          or opening an existing CaveChef project file.
+          {t('globalView.empty.description')}
         </p>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-2xl">
         <EmptyStateCard
           icon="📥"
-          title="Import DMP"
-          description="Import survey data from mNemo's .dmp file format"
+          title={t('globalView.empty.cards.import.title')}
+          description={t('globalView.empty.cards.import.description')}
           onClick={() => onImport()}
           primary
           testId="empty-state-import-dmp"
         />
         <EmptyStateCard
           icon="📝"
-          title="New Project"
-          description="Create a blank project and enter data manually"
+          title={t('globalView.empty.cards.newProject.title')}
+          description={t('globalView.empty.cards.newProject.description')}
           onClick={() => onNew()}
           testId="empty-state-new-project"
         />
         <EmptyStateCard
           icon="📂"
-          title="Open Existing"
-          description="Open a previously saved .cvchef project file"
+          title={t('globalView.empty.cards.open.title')}
+          description={t('globalView.empty.cards.open.description')}
           onClick={() => onOpen()}
           testId="empty-state-open-project"
         />

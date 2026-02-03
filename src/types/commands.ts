@@ -86,6 +86,7 @@ export interface ImportSectionConfig {
   date: string | null;
   color: string;
   direction?: 'in' | 'out';
+  quality?: number;
   shots: ShotData[];
   placement: ImportPlacement;
 }

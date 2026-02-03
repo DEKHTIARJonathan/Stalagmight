@@ -1,8 +1,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::cmp::Ordering;
 use std::path::PathBuf;
 use tracing::{debug, info};
+
+use crate::config::{ClosureAdjustmentConfig, TransitVerticalMode};
 
 use super::{
     gps_to_local, ClosurePreview, ClosureRef, ClosureStrategy, Coordinates, GpsBounds,
@@ -37,6 +40,68 @@ pub struct ClosurePair {
     pub closure_id: u64,
     pub station_a: StationRef,
     pub station_b: StationRef,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PathEdge {
+    Shot {
+        section_id: SectionId,
+        shot_index: usize,
+        forward: bool,
+    },
+    Merge,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PathStep {
+    to: StationRef,
+    edge: PathEdge,
+}
+
+#[derive(Debug, Clone)]
+struct StationPath {
+    start: StationRef,
+    steps: Vec<PathStep>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SegmentShot {
+    section_id: SectionId,
+    shot_index: usize,
+    forward: bool,
+    length: f64,
+    path_vec: Coordinates,
+    sign: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HeapItem {
+    cost: f64,
+    node: StationRef,
+}
+
+impl Eq for HeapItem {}
+
+impl PartialEq for HeapItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.cost == other.cost
+    }
+}
+
+impl Ord for HeapItem {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Reverse for min-heap; treat NaN as equal (should not occur).
+        other
+            .cost
+            .partial_cmp(&self.cost)
+            .unwrap_or(Ordering::Equal)
+    }
+}
+
+impl PartialOrd for HeapItem {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -301,7 +366,8 @@ impl Project {
         let diff = (data.azimuth_out - data.azimuth_in + 540.0) % 360.0 - 180.0;
         let avg_az = (data.azimuth_in + diff / 2.0 + 360.0) % 360.0;
         let az_rad = avg_az.to_radians();
-        (data.length * az_rad.sin(), data.length * az_rad.cos())
+        let horizontal = data.horizontal_length();
+        (horizontal * az_rad.sin(), horizontal * az_rad.cos())
     }
 
     /// Shift all StationRef indices in the project for the given section.
@@ -985,8 +1051,9 @@ impl Project {
             }
             let shot = &section.shots[i];
             let azimuth_rad = shot.average_azimuth().to_radians();
-            let dx = shot.length * azimuth_rad.sin();
-            let dy = shot.length * azimuth_rad.cos();
+            let horizontal = shot.horizontal_length();
+            let dx = horizontal * azimuth_rad.sin();
+            let dy = horizontal * azimuth_rad.cos();
             let dz = shot.depth_out - shot.depth_in;
             coords.x += dx;
             coords.y += dy;
@@ -1016,84 +1083,101 @@ impl Project {
         self.calculate_path_length_impl(station_a, station_b, false)
     }
 
-    /// Internal BFS path length implementation.
+    /// Internal Dijkstra path length implementation.
     /// When `include_closures` is true, loop closures are treated as zero-distance edges.
     fn calculate_path_length_impl(&self, station_a: StationRef, station_b: StationRef, include_closures: bool) -> f64 {
-        // Use BFS to find path between stations
-        use std::collections::VecDeque;
+        if !self.station_exists(station_a) || !self.station_exists(station_b) {
+            return 0.0;
+        }
 
-        // Node in our search: (section_id, station_index, accumulated_length)
-        let mut queue: VecDeque<(SectionId, u32, f64)> = VecDeque::new();
-        let mut visited: HashSet<(SectionId, u32)> = HashSet::new();
+        let section_lookup = self.build_section_lookup();
+        let merge_adj = self.build_merge_adjacency(&section_lookup);
 
-        queue.push_back((station_a.section_id, station_a.station_index, 0.0));
-        visited.insert((station_a.section_id, station_a.station_index));
+        let mut closure_adj: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        if include_closures {
+            for closure in &self.loop_closures {
+                if !self.station_exists(closure.station_a) || !self.station_exists(closure.station_b) {
+                    continue;
+                }
+                closure_adj.entry(closure.station_a).or_default().push(closure.station_b);
+                closure_adj.entry(closure.station_b).or_default().push(closure.station_a);
+            }
+        }
 
-        while let Some((section_id, station_index, path_len)) = queue.pop_front() {
-            // Check if we reached the destination
-            if section_id == station_b.section_id && station_index == station_b.station_index {
-                return path_len;
+        let mut dist: HashMap<StationRef, f64> = HashMap::new();
+        let mut heap = BinaryHeap::new();
+        dist.insert(station_a, 0.0);
+        heap.push(HeapItem { cost: 0.0, node: station_a });
+
+        while let Some(HeapItem { cost, node }) = heap.pop() {
+            if let Some(&known) = dist.get(&node) {
+                if cost > known + 1e-9 {
+                    continue;
+                }
             }
 
-            let section = match self.sections.iter().find(|s| s.id == section_id) {
+            if node == station_b {
+                return cost;
+            }
+
+            let section = match section_lookup.get(&node.section_id) {
                 Some(s) => s,
                 None => continue,
             };
 
-            // Move to previous station in section (if exists)
-            if station_index > 0 {
-                let prev_index = station_index - 1;
-                let key = (section_id, prev_index);
-                if !visited.contains(&key) {
-                    let shot_len = section.shots.get(prev_index as usize).map(|s| s.length).unwrap_or(0.0);
-                    visited.insert(key);
-                    queue.push_back((section_id, prev_index, path_len + shot_len));
-                }
-            }
-
-            // Move to next station in section (if exists)
-            if (station_index as usize) < section.shots.len() {
-                let next_index = station_index + 1;
-                let key = (section_id, next_index);
-                if !visited.contains(&key) {
-                    let shot_len = section.shots.get(station_index as usize).map(|s| s.length).unwrap_or(0.0);
-                    visited.insert(key);
-                    queue.push_back((section_id, next_index, path_len + shot_len));
-                }
-            }
-
-            // Follow merges to other sections (zero distance)
-            let current_ref = StationRef::new(section_id, station_index);
-            for merge in &self.station_merges {
-                if merge.station_a == current_ref {
-                    let key = (merge.station_b.section_id, merge.station_b.station_index);
-                    if !visited.contains(&key) {
-                        visited.insert(key);
-                        queue.push_back((merge.station_b.section_id, merge.station_b.station_index, path_len));
-                    }
-                } else if merge.station_b == current_ref {
-                    let key = (merge.station_a.section_id, merge.station_a.station_index);
-                    if !visited.contains(&key) {
-                        visited.insert(key);
-                        queue.push_back((merge.station_a.section_id, merge.station_a.station_index, path_len));
+            // Previous station (shot index = station_index - 1)
+            if node.station_index > 0 {
+                let prev_index = node.station_index - 1;
+                if (prev_index as usize) <= section.shots.len() {
+                    let shot_len = section
+                        .shots
+                        .get(prev_index as usize)
+                        .map(|s| s.length.max(0.0))
+                        .unwrap_or(0.0);
+                    let neighbor = StationRef::new(node.section_id, prev_index);
+                    let next_cost = cost + shot_len;
+                    if dist.get(&neighbor).map_or(true, |&d| next_cost < d - 1e-9) {
+                        dist.insert(neighbor, next_cost);
+                        heap.push(HeapItem { cost: next_cost, node: neighbor });
                     }
                 }
             }
 
-            // Follow closures to other sections (zero distance, same as merges)
+            // Next station (shot index = station_index)
+            if (node.station_index as usize) < section.shots.len() {
+                let next_index = node.station_index + 1;
+                let shot_len = section
+                    .shots
+                    .get(node.station_index as usize)
+                    .map(|s| s.length.max(0.0))
+                    .unwrap_or(0.0);
+                let neighbor = StationRef::new(node.section_id, next_index);
+                let next_cost = cost + shot_len;
+                if dist.get(&neighbor).map_or(true, |&d| next_cost < d - 1e-9) {
+                    dist.insert(neighbor, next_cost);
+                    heap.push(HeapItem { cost: next_cost, node: neighbor });
+                }
+            }
+
+            // Merge neighbors (zero distance)
+            if let Some(neighbors) = merge_adj.get(&node) {
+                for &neighbor in neighbors {
+                    let next_cost = cost;
+                    if dist.get(&neighbor).map_or(true, |&d| next_cost < d - 1e-9) {
+                        dist.insert(neighbor, next_cost);
+                        heap.push(HeapItem { cost: next_cost, node: neighbor });
+                    }
+                }
+            }
+
+            // Closure neighbors (zero distance)
             if include_closures {
-                for closure in &self.loop_closures {
-                    if closure.station_a == current_ref {
-                        let key = (closure.station_b.section_id, closure.station_b.station_index);
-                        if !visited.contains(&key) {
-                            visited.insert(key);
-                            queue.push_back((closure.station_b.section_id, closure.station_b.station_index, path_len));
-                        }
-                    } else if closure.station_b == current_ref {
-                        let key = (closure.station_a.section_id, closure.station_a.station_index);
-                        if !visited.contains(&key) {
-                            visited.insert(key);
-                            queue.push_back((closure.station_a.section_id, closure.station_a.station_index, path_len));
+                if let Some(neighbors) = closure_adj.get(&node) {
+                    for &neighbor in neighbors {
+                        let next_cost = cost;
+                        if dist.get(&neighbor).map_or(true, |&d| next_cost < d - 1e-9) {
+                            dist.insert(neighbor, next_cost);
+                            heap.push(HeapItem { cost: next_cost, node: neighbor });
                         }
                     }
                 }
@@ -1112,6 +1196,1462 @@ impl Project {
             .flat_map(|s| s.shots.iter())
             .map(|shot| shot.length)
             .sum()
+    }
+
+    fn coords_add(a: Coordinates, b: Coordinates) -> Coordinates {
+        Coordinates::new(a.x + b.x, a.y + b.y, a.z + b.z)
+    }
+
+    fn coords_sub(a: Coordinates, b: Coordinates) -> Coordinates {
+        Coordinates::new(a.x - b.x, a.y - b.y, a.z - b.z)
+    }
+
+    fn coords_scale(a: Coordinates, factor: f64) -> Coordinates {
+        Coordinates::new(a.x * factor, a.y * factor, a.z * factor)
+    }
+
+    fn coords_norm(a: Coordinates) -> f64 {
+        (a.x * a.x + a.y * a.y + a.z * a.z).sqrt()
+    }
+
+    fn coords_close(a: Coordinates, b: Coordinates, eps: f64) -> bool {
+        (a.x - b.x).abs() < eps && (a.y - b.y).abs() < eps && (a.z - b.z).abs() < eps
+    }
+
+    fn coords_close_xy(a: Coordinates, b: Coordinates, eps: f64) -> bool {
+        (a.x - b.x).abs() < eps && (a.y - b.y).abs() < eps
+    }
+
+    fn shot_vector_along(shot: &Shot, forward: bool) -> Coordinates {
+        let azimuth_rad = shot.average_azimuth().to_radians();
+        let horizontal = shot.horizontal_length();
+        let dx = horizontal * azimuth_rad.sin();
+        let dy = horizontal * azimuth_rad.cos();
+        let dz = shot.depth_out - shot.depth_in;
+        if forward {
+            Coordinates::new(dx, dy, dz)
+        } else {
+            Coordinates::new(-dx, -dy, -dz)
+        }
+    }
+
+    fn update_shot_from_forward_vector(shot: &mut Shot, vec: Coordinates) {
+        let dx = vec.x;
+        let dy = vec.y;
+        let dz = vec.z;
+        let horizontal = (dx * dx + dy * dy).sqrt();
+        let new_len = (horizontal * horizontal + dz * dz).sqrt();
+        let new_azi = if horizontal > 1e-9 {
+            dx.atan2(dy).to_degrees().rem_euclid(360.0)
+        } else {
+            shot.average_azimuth()
+        };
+        shot.length = new_len;
+        shot.azimuth_in = new_azi;
+        shot.azimuth_out = new_azi;
+        shot.depth_out = shot.depth_in + dz;
+        let pitch = dz.atan2(horizontal).to_degrees();
+        shot.pitch_in = Some(pitch);
+        shot.pitch_out = Some(pitch);
+    }
+
+    fn collect_segment_shots(
+        &self,
+        path: &StationPath,
+        section_lookup: &HashMap<SectionId, &Section>,
+    ) -> Result<Vec<SegmentShot>, String> {
+        let mut shots: Vec<SegmentShot> = Vec::new();
+        for step in &path.steps {
+            if let PathEdge::Shot {
+                section_id,
+                shot_index,
+                forward,
+            } = step.edge
+            {
+                let section = section_lookup
+                    .get(&section_id)
+                    .ok_or_else(|| "Section not found for closure path".to_string())?;
+                let shot = section
+                    .shots
+                    .get(shot_index)
+                    .ok_or_else(|| "Shot not found for closure path".to_string())?;
+                let path_vec = Self::shot_vector_along(shot, forward);
+                shots.push(SegmentShot {
+                    section_id,
+                    shot_index,
+                    forward,
+                    length: shot.length,
+                    path_vec,
+                    sign: 1.0,
+                });
+            }
+        }
+        Ok(shots)
+    }
+
+    fn apply_correction_to_shots(
+        &mut self,
+        shots: &[SegmentShot],
+        correction_vec: Coordinates,
+        distribution: ClosureStrategy,
+        transit_vertical_mode: TransitVerticalMode,
+    ) -> Result<(), String> {
+        if shots.is_empty() {
+            return Err("No distributable shots found for closure path".to_string());
+        }
+
+        let total_len: f64 = shots.iter().map(|s| s.length).sum();
+        let shot_count = shots.len();
+
+        if distribution == ClosureStrategy::ProportionalByLength && total_len <= 0.0 {
+            return Err("No valid shot lengths for proportional distribution".to_string());
+        }
+
+        let (mut sum_abs_lat, mut sum_abs_dep) = (0.0, 0.0);
+        for shot in shots {
+            sum_abs_lat += shot.path_vec.y.abs();
+            sum_abs_dep += shot.path_vec.x.abs();
+        }
+
+        for shot in shots {
+            let signed = Self::coords_scale(correction_vec, shot.sign);
+            let (corr_x, corr_y, corr_z) = match distribution {
+                ClosureStrategy::ProportionalByLength => {
+                    let weight = shot.length / total_len;
+                    (
+                        signed.x * weight,
+                        signed.y * weight,
+                        signed.z * weight,
+                    )
+                }
+                ClosureStrategy::EqualDistribution => {
+                    let weight = 1.0 / shot_count as f64;
+                    (
+                        signed.x * weight,
+                        signed.y * weight,
+                        signed.z * weight,
+                    )
+                }
+                ClosureStrategy::TransitRule => {
+                    let dep_weight = if sum_abs_dep > 0.0 {
+                        shot.path_vec.x.abs() / sum_abs_dep
+                    } else {
+                        1.0 / shot_count as f64
+                    };
+                    let lat_weight = if sum_abs_lat > 0.0 {
+                        shot.path_vec.y.abs() / sum_abs_lat
+                    } else {
+                        1.0 / shot_count as f64
+                    };
+                    let corr_z = match transit_vertical_mode {
+                        TransitVerticalMode::Ignore => 0.0,
+                        TransitVerticalMode::LengthProportional => {
+                            if total_len > 0.0 {
+                                signed.z * (shot.length / total_len)
+                            } else {
+                                signed.z / shot_count as f64
+                            }
+                        }
+                        TransitVerticalMode::Equal => signed.z / shot_count as f64,
+                    };
+                    (
+                        signed.x * dep_weight,
+                        signed.y * lat_weight,
+                        corr_z,
+                    )
+                }
+                _ => {
+                    return Err("Unsupported distribution strategy for adjustment".to_string());
+                }
+            };
+
+            let new_path_vec = Coordinates::new(
+                shot.path_vec.x + corr_x,
+                shot.path_vec.y + corr_y,
+                shot.path_vec.z + corr_z,
+            );
+            let forward_vec = if shot.forward {
+                new_path_vec
+            } else {
+                Self::coords_scale(new_path_vec, -1.0)
+            };
+
+            let section = self
+                .get_section_mut(shot.section_id)
+                .ok_or_else(|| "Section not found for closure path".to_string())?;
+            let shot_mut = section
+                .shots
+                .get_mut(shot.shot_index)
+                .ok_or_else(|| "Shot not found for closure path".to_string())?;
+            Self::update_shot_from_forward_vector(shot_mut, forward_vec);
+        }
+
+        Ok(())
+    }
+
+    pub fn adjust_loop_closures(
+        &mut self,
+        anchor_station: StationRef,
+        method: ClosureStrategy,
+        use_strategy_filter: bool,
+        sequential_distribution: ClosureStrategy,
+        transit_vertical_mode: TransitVerticalMode,
+        config: &ClosureAdjustmentConfig,
+    ) -> Result<(), String> {
+        if !self.station_exists(anchor_station) {
+            return Err("Anchor station does not exist".to_string());
+        }
+
+        let component = self.get_connected_section_ids(anchor_station.section_id);
+        let zero_datum_set: HashSet<StationRef> = self
+            .zero_datums
+            .iter()
+            .filter(|zd| component.contains(&zd.station_ref.section_id))
+            .map(|zd| zd.station_ref)
+            .collect();
+
+        let mut zero_datum_coords: HashMap<StationRef, Coordinates> = HashMap::new();
+        for zd in &zero_datum_set {
+            let coords = self
+                .compute_station_raw_coords(*zd)
+                .ok_or_else(|| "Failed to compute zero datum coordinates".to_string())?;
+            zero_datum_coords.insert(*zd, coords);
+        }
+
+        let mut closures: Vec<LoopClosure> = self
+            .loop_closures
+            .iter()
+            .filter(|lc| {
+                component.contains(&lc.station_a.section_id)
+                    && component.contains(&lc.station_b.section_id)
+                    && lc.strategy != ClosureStrategy::KeepRaw
+                    && (!use_strategy_filter || lc.strategy == method)
+            })
+            .cloned()
+            .collect();
+
+        if closures.is_empty() {
+            return Err("No eligible loop closures found for adjustment".to_string());
+        }
+
+        match method {
+            ClosureStrategy::Sequential => {
+                self.adjust_loops_ordered(
+                    &mut closures,
+                    sequential_distribution,
+                    transit_vertical_mode,
+                    true,
+                    &zero_datum_set,
+                )?;
+            }
+            ClosureStrategy::TransitRule => {
+                self.adjust_loops_ordered(
+                    &mut closures,
+                    ClosureStrategy::TransitRule,
+                    transit_vertical_mode,
+                    false,
+                    &zero_datum_set,
+                )?;
+            }
+            ClosureStrategy::LeastSquaresWeighted => {
+                self.adjust_least_squares(
+                    &component,
+                    &closures,
+                    anchor_station,
+                    config,
+                )?;
+            }
+            _ => {
+                return Err("Unsupported adjustment method".to_string());
+            }
+        }
+
+        // Verify zero datums remain fixed
+        for (zd, before) in &zero_datum_coords {
+            let after = self
+                .compute_station_raw_coords(*zd)
+                .ok_or_else(|| "Failed to compute zero datum coordinates".to_string())?;
+            if !Self::coords_close(*before, after, 1e-6) {
+                return Err("Adjustment would move a zero datum station".to_string());
+            }
+        }
+
+        // Recompute closure metrics for the affected component
+        self.recompute_closure_metrics_for_component(&component);
+
+        Ok(())
+    }
+
+    fn adjust_loops_ordered(
+        &mut self,
+        closures: &mut [LoopClosure],
+        distribution: ClosureStrategy,
+        transit_vertical_mode: TransitVerticalMode,
+        lock_loops: bool,
+        fixed_initial: &HashSet<StationRef>,
+    ) -> Result<(), String> {
+        let mut fixed: HashSet<StationRef> = fixed_initial.clone();
+
+        let mut ordered: Vec<(f64, StationRef, StationRef)> = Vec::new();
+        for lc in closures.iter() {
+            let metrics = self.compute_closure_metrics(lc.station_a, lc.station_b)?;
+            ordered.push((metrics.error_percentage, lc.station_a, lc.station_b));
+        }
+        ordered.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+
+        for (_, station_a, station_b) in ordered {
+            let path_ab = self
+                .shortest_path_shots_merges(station_a, station_b)
+                .ok_or_else(|| "Failed to build closure path".to_string())?;
+
+            let mut nodes: Vec<StationRef> = Vec::with_capacity(path_ab.steps.len() + 1);
+            nodes.push(path_ab.start);
+            for step in &path_ab.steps {
+                nodes.push(step.to);
+            }
+
+            let mut fixed_on_path: Vec<StationRef> = nodes
+                .iter()
+                .filter(|n| fixed.contains(n))
+                .copied()
+                .collect();
+            fixed_on_path.sort_by(|a, b| (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index)));
+            fixed_on_path.dedup();
+
+            let anchor = if fixed_on_path.is_empty() {
+                station_a
+            } else {
+                fixed_on_path[0]
+            };
+
+            if fixed_on_path.len() > 1 {
+                let anchor_coords = self
+                    .compute_station_raw_coords(anchor)
+                    .ok_or_else(|| "Failed to compute anchor coordinates".to_string())?;
+                for node in fixed_on_path.iter().skip(1) {
+                    let coords = self
+                        .compute_station_raw_coords(*node)
+                        .ok_or_else(|| "Failed to compute fixed node coordinates".to_string())?;
+                    if !Self::coords_close(anchor_coords, coords, 1e-6) {
+                        return Err("Closure path crosses multiple fixed stations".to_string());
+                    }
+                }
+            }
+
+            let path_a = self
+                .shortest_path_shots_merges(anchor, station_a)
+                .ok_or_else(|| "Failed to build path from anchor to station A".to_string())?;
+            let path_b = self
+                .shortest_path_shots_merges(anchor, station_b)
+                .ok_or_else(|| "Failed to build path from anchor to station B".to_string())?;
+
+            for path in [&path_a, &path_b] {
+                let mut nodes: Vec<StationRef> = Vec::with_capacity(path.steps.len() + 1);
+                nodes.push(path.start);
+                for step in &path.steps {
+                    nodes.push(step.to);
+                }
+                for node in nodes {
+                    if node != anchor && fixed.contains(&node) {
+                        return Err("Closure path crosses a fixed station".to_string());
+                    }
+                }
+            }
+
+            let coords_a = self
+                .compute_station_raw_coords(station_a)
+                .ok_or_else(|| "Failed to compute station A coordinates".to_string())?;
+            let coords_b = self
+                .compute_station_raw_coords(station_b)
+                .ok_or_else(|| "Failed to compute station B coordinates".to_string())?;
+            let correction = Self::coords_sub(coords_b, coords_a);
+
+            let (mut shots_a, mut shots_b) = {
+                let section_lookup = self.build_section_lookup();
+                let shots_a = self.collect_segment_shots(&path_a, &section_lookup)?;
+                let shots_b = self.collect_segment_shots(&path_b, &section_lookup)?;
+                (shots_a, shots_b)
+            };
+            for shot in &mut shots_b {
+                shot.sign = -1.0;
+            }
+            let mut all_shots = Vec::with_capacity(shots_a.len() + shots_b.len());
+            all_shots.append(&mut shots_a);
+            all_shots.append(&mut shots_b);
+
+            self.apply_correction_to_shots(
+                &all_shots,
+                correction,
+                distribution,
+                transit_vertical_mode,
+            )?;
+
+            let coords_a_after = self
+                .compute_station_raw_coords(station_a)
+                .ok_or_else(|| "Failed to compute station A after adjustment".to_string())?;
+            let coords_b_after = self
+                .compute_station_raw_coords(station_b)
+                .ok_or_else(|| "Failed to compute station B after adjustment".to_string())?;
+            let aligned = if distribution == ClosureStrategy::TransitRule
+                && transit_vertical_mode == TransitVerticalMode::Ignore
+            {
+                Self::coords_close_xy(coords_a_after, coords_b_after, 1e-6)
+            } else {
+                Self::coords_close(coords_a_after, coords_b_after, 1e-6)
+            };
+            if !aligned {
+                return Err("Closure adjustment failed to align endpoints".to_string());
+            }
+
+            if lock_loops {
+                let mut nodes_a: Vec<StationRef> = Vec::with_capacity(path_a.steps.len() + 1);
+                nodes_a.push(path_a.start);
+                for step in &path_a.steps {
+                    nodes_a.push(step.to);
+                }
+                for node in nodes_a {
+                    fixed.insert(node);
+                }
+                let mut nodes_b: Vec<StationRef> = Vec::with_capacity(path_b.steps.len() + 1);
+                nodes_b.push(path_b.start);
+                for step in &path_b.steps {
+                    nodes_b.push(step.to);
+                }
+                for node in nodes_b {
+                    fixed.insert(node);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn adjust_least_squares(
+        &mut self,
+        component: &HashSet<SectionId>,
+        closures: &[LoopClosure],
+        anchor_station: StationRef,
+        config: &ClosureAdjustmentConfig,
+    ) -> Result<(), String> {
+        // Collect all stations in component
+        let mut stations: Vec<StationRef> = Vec::new();
+        for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
+            for idx in 0..=section.shots.len() {
+                stations.push(StationRef::new(section.id, idx as u32));
+            }
+        }
+
+        let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
+        for station in &stations {
+            parent.insert(*station, *station);
+        }
+
+        let mut find = |x: StationRef, parent: &mut HashMap<StationRef, StationRef>| -> StationRef {
+            let mut current = x;
+            while let Some(p) = parent.get(&current) {
+                if *p == current {
+                    break;
+                }
+                current = *p;
+            }
+            let root = current;
+            // Path compression
+            let mut current = x;
+            while let Some(p) = parent.get(&current) {
+                if *p == root {
+                    break;
+                }
+                let next = *p;
+                parent.insert(current, root);
+                current = next;
+            }
+            root
+        };
+
+        let mut union = |a: StationRef, b: StationRef, parent: &mut HashMap<StationRef, StationRef>| {
+            let ra = find(a, parent);
+            let rb = find(b, parent);
+            if ra != rb {
+                parent.insert(ra, rb);
+            }
+        };
+
+        for merge in &self.station_merges {
+            if component.contains(&merge.station_a.section_id)
+                && component.contains(&merge.station_b.section_id)
+            {
+                union(merge.station_a, merge.station_b, &mut parent);
+            }
+        }
+
+        for closure in closures {
+            if component.contains(&closure.station_a.section_id)
+                && component.contains(&closure.station_b.section_id)
+            {
+                union(closure.station_a, closure.station_b, &mut parent);
+            }
+        }
+
+        let mut groups: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for station in &stations {
+            let root = find(*station, &mut parent);
+            groups.entry(root).or_default().push(*station);
+        }
+
+        let zero_datum_set: HashSet<StationRef> = self
+            .zero_datums
+            .iter()
+            .filter(|zd| component.contains(&zd.station_ref.section_id))
+            .map(|zd| zd.station_ref)
+            .collect();
+
+        let mut fixed_groups: HashSet<StationRef> = HashSet::new();
+        let mut fixed_coords: HashMap<StationRef, Coordinates> = HashMap::new();
+
+        for (root, members) in &groups {
+            let mut datum_members: Vec<StationRef> = members
+                .iter()
+                .filter(|m| zero_datum_set.contains(m))
+                .copied()
+                .collect();
+            if datum_members.len() > 1 {
+                return Err("Multiple zero datums in a single constraint group".to_string());
+            }
+            if let Some(datum) = datum_members.pop() {
+                let coords = self
+                    .compute_station_raw_coords(datum)
+                    .ok_or_else(|| "Failed to compute zero datum coordinates".to_string())?;
+                fixed_groups.insert(*root);
+                fixed_coords.insert(*root, coords);
+            }
+        }
+
+        if fixed_groups.is_empty() {
+            let anchor_root = find(anchor_station, &mut parent);
+            let coords = self
+                .compute_station_raw_coords(anchor_station)
+                .ok_or_else(|| "Failed to compute anchor coordinates".to_string())?;
+            fixed_groups.insert(anchor_root);
+            fixed_coords.insert(anchor_root, coords);
+        }
+
+        let mut unknown_index: HashMap<StationRef, usize> = HashMap::new();
+        for root in groups.keys() {
+            if !fixed_groups.contains(root) {
+                let next = unknown_index.len();
+                unknown_index.insert(*root, next);
+            }
+        }
+
+        let n = unknown_index.len();
+        if n == 0 {
+            return Ok(());
+        }
+
+        let mut ata_x = vec![0.0; n * n];
+        let mut atb_x = vec![0.0; n];
+        let mut ata_y = vec![0.0; n * n];
+        let mut atb_y = vec![0.0; n];
+        let mut ata_z = vec![0.0; n * n];
+        let mut atb_z = vec![0.0; n];
+
+        let mut add_row = |ata: &mut [f64],
+                           atb: &mut [f64],
+                           i: Option<usize>,
+                           j: Option<usize>,
+                           b: f64,
+                           w: f64| {
+            if !w.is_finite() || w <= 0.0 {
+                return;
+            }
+            match (i, j) {
+                (Some(i_idx), Some(j_idx)) => {
+                    let ii = i_idx * n + i_idx;
+                    let jj = j_idx * n + j_idx;
+                    let ij = i_idx * n + j_idx;
+                    let ji = j_idx * n + i_idx;
+                    ata[ii] += w;
+                    ata[jj] += w;
+                    ata[ij] -= w;
+                    ata[ji] -= w;
+                    atb[i_idx] += -w * b;
+                    atb[j_idx] += w * b;
+                }
+                (Some(i_idx), None) => {
+                    let ii = i_idx * n + i_idx;
+                    ata[ii] += w;
+                    atb[i_idx] += -w * b;
+                }
+                (None, Some(j_idx)) => {
+                    let jj = j_idx * n + j_idx;
+                    ata[jj] += w;
+                    atb[j_idx] += w * b;
+                }
+                (None, None) => {}
+            }
+        };
+
+        for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
+            let quality = if section.quality.is_finite() && section.quality > 0.0 {
+                section.quality
+            } else {
+                1.0
+            };
+            let sigma_len = config.base_sigma_length_m * quality;
+            let sigma_az = config.base_sigma_azimuth_deg.to_radians() * quality;
+            let sigma_depth = config.base_sigma_depth_m * quality;
+
+            for (idx, shot) in section.shots.iter().enumerate() {
+                let station_i = StationRef::new(section.id, idx as u32);
+                let station_j = StationRef::new(section.id, (idx + 1) as u32);
+
+                let root_i = find(station_i, &mut parent);
+                let root_j = find(station_j, &mut parent);
+
+                if root_i == root_j {
+                    continue;
+                }
+
+                let vec = Self::shot_vector_along(shot, true);
+                let az = shot.average_azimuth().to_radians();
+                let len = shot.length;
+
+                let sigma_dx = ((az.sin() * sigma_len).powi(2) + (len * az.cos() * sigma_az).powi(2)).sqrt();
+                let sigma_dy = ((az.cos() * sigma_len).powi(2) + (len * az.sin() * sigma_az).powi(2)).sqrt();
+                let sigma_dz = sigma_depth;
+
+                let w_x = if sigma_dx > 0.0 { 1.0 / (sigma_dx * sigma_dx) } else { 0.0 };
+                let w_y = if sigma_dy > 0.0 { 1.0 / (sigma_dy * sigma_dy) } else { 0.0 };
+                let w_z = if sigma_dz > 0.0 { 1.0 / (sigma_dz * sigma_dz) } else { 0.0 };
+
+                let i_idx = unknown_index.get(&root_i).copied();
+                let j_idx = unknown_index.get(&root_j).copied();
+
+                let b_x = match (i_idx, j_idx) {
+                    (Some(_), Some(_)) => vec.x,
+                    (Some(_), None) => {
+                        let xj = fixed_coords.get(&root_j).copied().unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
+                        vec.x - xj.x
+                    }
+                    (None, Some(_)) => {
+                        let xi = fixed_coords.get(&root_i).copied().unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
+                        vec.x + xi.x
+                    }
+                    (None, None) => 0.0,
+                };
+                let b_y = match (i_idx, j_idx) {
+                    (Some(_), Some(_)) => vec.y,
+                    (Some(_), None) => {
+                        let yj = fixed_coords.get(&root_j).copied().unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
+                        vec.y - yj.y
+                    }
+                    (None, Some(_)) => {
+                        let yi = fixed_coords.get(&root_i).copied().unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
+                        vec.y + yi.y
+                    }
+                    (None, None) => 0.0,
+                };
+                let b_z = match (i_idx, j_idx) {
+                    (Some(_), Some(_)) => vec.z,
+                    (Some(_), None) => {
+                        let zj = fixed_coords.get(&root_j).copied().unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
+                        vec.z - zj.z
+                    }
+                    (None, Some(_)) => {
+                        let zi = fixed_coords.get(&root_i).copied().unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
+                        vec.z + zi.z
+                    }
+                    (None, None) => 0.0,
+                };
+
+                add_row(&mut ata_x, &mut atb_x, i_idx, j_idx, b_x, w_x);
+                add_row(&mut ata_y, &mut atb_y, i_idx, j_idx, b_y, w_y);
+                add_row(&mut ata_z, &mut atb_z, i_idx, j_idx, b_z, w_z);
+            }
+        }
+
+        let solve_axis = |ata: Vec<f64>, atb: Vec<f64>| -> Result<Vec<f64>, String> {
+            let m = nalgebra::DMatrix::from_row_slice(n, n, &ata);
+            let b = nalgebra::DVector::from_row_slice(&atb);
+            let sol = m.lu().solve(&b).ok_or_else(|| "Least squares solve failed".to_string())?;
+            Ok(sol.as_slice().to_vec())
+        };
+
+        let sol_x = solve_axis(ata_x, atb_x)?;
+        let sol_y = solve_axis(ata_y, atb_y)?;
+        let sol_z = solve_axis(ata_z, atb_z)?;
+
+        let mut group_coords: HashMap<StationRef, Coordinates> = HashMap::new();
+        for (root, members) in &groups {
+            if let Some(coords) = fixed_coords.get(root) {
+                group_coords.insert(*root, *coords);
+                continue;
+            }
+            if let Some(idx) = unknown_index.get(root) {
+                group_coords.insert(
+                    *root,
+                    Coordinates::new(sol_x[*idx], sol_y[*idx], sol_z[*idx]),
+                );
+            }
+        }
+
+        let station_offsets = self.station_offsets.clone();
+
+        // Update shots based on solved coordinates
+        for section in self.sections.iter_mut().filter(|s| component.contains(&s.id)) {
+            for idx in 0..section.shots.len() {
+                let station_i = StationRef::new(section.id, idx as u32);
+                let station_j = StationRef::new(section.id, (idx + 1) as u32);
+
+                let root_i = find(station_i, &mut parent);
+                let root_j = find(station_j, &mut parent);
+                let coords_i = group_coords
+                    .get(&root_i)
+                    .ok_or_else(|| "Missing solved coordinates".to_string())?;
+                let coords_j = group_coords
+                    .get(&root_j)
+                    .ok_or_else(|| "Missing solved coordinates".to_string())?;
+
+                let offset_i = station_offsets.get(&station_i).copied().unwrap_or((0.0, 0.0, 0.0));
+                let offset_j = station_offsets.get(&station_j).copied().unwrap_or((0.0, 0.0, 0.0));
+
+                let base_i = Coordinates::new(coords_i.x - offset_i.0, coords_i.y - offset_i.1, coords_i.z - offset_i.2);
+                let base_j = Coordinates::new(coords_j.x - offset_j.0, coords_j.y - offset_j.1, coords_j.z - offset_j.2);
+                let forward_vec = Self::coords_sub(base_j, base_i);
+
+                let shot = section
+                    .shots
+                    .get_mut(idx)
+                    .ok_or_else(|| "Shot not found for LSQ update".to_string())?;
+                Self::update_shot_from_forward_vector(shot, forward_vec);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn recompute_closure_metrics_for_component(&mut self, component: &HashSet<SectionId>) {
+        let mut updates = Vec::new();
+        for (idx, closure) in self.loop_closures.iter().enumerate() {
+            if component.contains(&closure.station_a.section_id)
+                && component.contains(&closure.station_b.section_id)
+            {
+                if let Ok(metrics) =
+                    self.compute_closure_metrics(closure.station_a, closure.station_b)
+                {
+                    updates.push((idx, metrics));
+                }
+            }
+        }
+
+        for (idx, metrics) in updates {
+            if let Some(closure) = self.loop_closures.get_mut(idx) {
+                closure.path_length = metrics.path_length;
+                closure.misclosure_distance = metrics.misclosure_distance;
+                closure.error_percentage = metrics.error_percentage;
+                closure.horizontal_misclosure = metrics.horizontal_misclosure;
+                closure.vertical_misclosure = metrics.vertical_misclosure;
+            }
+        }
+    }
+
+    fn build_section_lookup(&self) -> HashMap<SectionId, &Section> {
+        self.sections.iter().map(|s| (s.id, s)).collect()
+    }
+
+    fn build_merge_adjacency(
+        &self,
+        section_lookup: &HashMap<SectionId, &Section>,
+    ) -> HashMap<StationRef, Vec<StationRef>> {
+        let mut adjacency: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for merge in &self.station_merges {
+            if !section_lookup.contains_key(&merge.station_a.section_id)
+                || !section_lookup.contains_key(&merge.station_b.section_id)
+            {
+                continue;
+            }
+            adjacency.entry(merge.station_a).or_default().push(merge.station_b);
+            adjacency.entry(merge.station_b).or_default().push(merge.station_a);
+        }
+        adjacency
+    }
+
+    fn shortest_path_with_target<F>(
+        &self,
+        start: StationRef,
+        is_target: F,
+    ) -> Option<(StationRef, HashMap<StationRef, (StationRef, PathEdge)>)>
+    where
+        F: Fn(StationRef) -> bool,
+    {
+        let section_lookup = self.build_section_lookup();
+        let merge_adj = self.build_merge_adjacency(&section_lookup);
+
+        // Validate start station exists
+        let start_section = section_lookup.get(&start.section_id)?;
+        if start.station_index as usize > start_section.shots.len() {
+            return None;
+        }
+
+        let mut dist: HashMap<StationRef, f64> = HashMap::new();
+        let mut prev: HashMap<StationRef, (StationRef, PathEdge)> = HashMap::new();
+        let mut heap = BinaryHeap::new();
+
+        dist.insert(start, 0.0);
+        heap.push(HeapItem { cost: 0.0, node: start });
+
+        while let Some(HeapItem { cost, node }) = heap.pop() {
+            if let Some(&known) = dist.get(&node) {
+                if cost > known + 1e-9 {
+                    continue;
+                }
+            }
+
+            if is_target(node) {
+                return Some((node, prev));
+            }
+
+            let section = match section_lookup.get(&node.section_id) {
+                Some(s) => s,
+                None => continue,
+            };
+
+            // Previous station
+            if node.station_index > 0 {
+                let prev_index = node.station_index - 1;
+                if (prev_index as usize) <= section.shots.len() {
+                    let shot_len = section.shots.get(prev_index as usize).map(|s| s.length).unwrap_or(0.0);
+                    let neighbor = StationRef::new(node.section_id, prev_index);
+                    let next_cost = cost + shot_len;
+                    if dist.get(&neighbor).map_or(true, |&d| next_cost < d - 1e-9) {
+                        dist.insert(neighbor, next_cost);
+                        prev.insert(
+                            neighbor,
+                            (
+                                node,
+                                PathEdge::Shot {
+                                    section_id: node.section_id,
+                                    shot_index: prev_index as usize,
+                                    forward: false,
+                                },
+                            ),
+                        );
+                        heap.push(HeapItem { cost: next_cost, node: neighbor });
+                    }
+                }
+            }
+
+            // Next station
+            if (node.station_index as usize) < section.shots.len() {
+                let next_index = node.station_index + 1;
+                let shot_len = section.shots.get(node.station_index as usize).map(|s| s.length).unwrap_or(0.0);
+                let neighbor = StationRef::new(node.section_id, next_index);
+                let next_cost = cost + shot_len;
+                if dist.get(&neighbor).map_or(true, |&d| next_cost < d - 1e-9) {
+                    dist.insert(neighbor, next_cost);
+                    prev.insert(
+                        neighbor,
+                        (
+                            node,
+                            PathEdge::Shot {
+                                section_id: node.section_id,
+                                shot_index: node.station_index as usize,
+                                forward: true,
+                            },
+                        ),
+                    );
+                    heap.push(HeapItem { cost: next_cost, node: neighbor });
+                }
+            }
+
+            // Merge neighbors (zero distance)
+            if let Some(neighbors) = merge_adj.get(&node) {
+                for &neighbor in neighbors {
+                    let next_cost = cost;
+                    if dist.get(&neighbor).map_or(true, |&d| next_cost < d - 1e-9) {
+                        dist.insert(neighbor, next_cost);
+                        prev.insert(neighbor, (node, PathEdge::Merge));
+                        heap.push(HeapItem { cost: next_cost, node: neighbor });
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn reconstruct_path(
+        start: StationRef,
+        goal: StationRef,
+        prev: &HashMap<StationRef, (StationRef, PathEdge)>,
+    ) -> Option<StationPath> {
+        let mut steps_rev: Vec<PathStep> = Vec::new();
+        let mut current = goal;
+        while current != start {
+            let (p, edge) = prev.get(&current).copied()?;
+            steps_rev.push(PathStep { to: current, edge });
+            current = p;
+        }
+        steps_rev.reverse();
+        Some(StationPath { start, steps: steps_rev })
+    }
+
+    fn shortest_path_shots_merges(&self, start: StationRef, goal: StationRef) -> Option<StationPath> {
+        let (found, prev) = self.shortest_path_with_target(start, |node| node == goal)?;
+        Self::reconstruct_path(start, found, &prev)
+    }
+
+    fn shortest_path_to_any_zero_datum(&self, start: StationRef) -> Option<(StationRef, StationPath)> {
+        if self.zero_datums.is_empty() {
+            return None;
+        }
+        let zero_set: HashSet<StationRef> = self.zero_datums.iter().map(|zd| zd.station_ref).collect();
+        let (found, prev) = self.shortest_path_with_target(start, |node| zero_set.contains(&node))?;
+        let path = Self::reconstruct_path(start, found, &prev)?;
+        Some((found, path))
+    }
+
+    fn build_colocated_groups(&self) -> HashMap<StationRef, Vec<StationRef>> {
+        let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
+        let mut rank: HashMap<StationRef, usize> = HashMap::new();
+
+        for section in &self.sections {
+            for idx in 0..=section.shots.len() {
+                let sr = StationRef::new(section.id, idx as u32);
+                parent.insert(sr, sr);
+                rank.insert(sr, 0);
+            }
+        }
+
+        fn find(
+            parent: &mut HashMap<StationRef, StationRef>,
+            x: StationRef,
+        ) -> StationRef {
+            let mut current = x;
+            while let Some(&p) = parent.get(&current) {
+                if p == current {
+                    break;
+                }
+                current = p;
+            }
+            let mut node = x;
+            while let Some(&p) = parent.get(&node) {
+                if p == current {
+                    break;
+                }
+                parent.insert(node, current);
+                node = p;
+            }
+            current
+        }
+
+        fn union(
+            parent: &mut HashMap<StationRef, StationRef>,
+            rank: &mut HashMap<StationRef, usize>,
+            a: StationRef,
+            b: StationRef,
+        ) {
+            let ra = find(parent, a);
+            let rb = find(parent, b);
+            if ra == rb {
+                return;
+            }
+            let rank_a = *rank.get(&ra).unwrap_or(&0);
+            let rank_b = *rank.get(&rb).unwrap_or(&0);
+            if rank_a < rank_b {
+                parent.insert(ra, rb);
+            } else if rank_b < rank_a {
+                parent.insert(rb, ra);
+            } else {
+                parent.insert(rb, ra);
+                rank.insert(ra, rank_a + 1);
+            }
+        }
+
+        for merge in &self.station_merges {
+            union(&mut parent, &mut rank, merge.station_a, merge.station_b);
+        }
+
+        for closure in &self.loop_closures {
+            if closure.strategy == ClosureStrategy::KeepRaw {
+                continue;
+            }
+            union(&mut parent, &mut rank, closure.station_a, closure.station_b);
+        }
+
+        let mut groups: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for section in &self.sections {
+            for idx in 0..=section.shots.len() {
+                let sr = StationRef::new(section.id, idx as u32);
+                let root = find(&mut parent, sr);
+                groups.entry(root).or_default().push(sr);
+            }
+        }
+
+        groups
+    }
+
+    fn apply_station_move_internal(
+        &mut self,
+        station_ref: StationRef,
+        delta: Coordinates,
+    ) -> Result<(), String> {
+        let existing = self.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0));
+        let total_dx = existing.0 + delta.x;
+        let total_dy = existing.1 + delta.y;
+        let total_dz = existing.2 + delta.z;
+
+        let section = match self.sections.iter_mut().find(|s| s.id == station_ref.section_id) {
+            Some(s) => s,
+            None => return Err("Section not found".to_string()),
+        };
+
+        let idx = station_ref.station_index as usize;
+        if idx > section.shots.len() {
+            return Err("Invalid station index".to_string());
+        }
+
+        if idx == 0 && (total_dx != 0.0 || total_dy != 0.0) {
+            let current = self
+                .section_offsets
+                .get(&station_ref.section_id)
+                .copied()
+                .unwrap_or((0.0, 0.0));
+            self.section_offsets.insert(
+                station_ref.section_id,
+                (current.0 + total_dx, current.1 + total_dy),
+            );
+        }
+
+        if idx > 0 {
+            if let Some(shot) = section.shots.get_mut(idx - 1) {
+                let azi_rad = shot.average_azimuth().to_radians();
+                let old_horizontal = shot.horizontal_length();
+                let old_dx = old_horizontal * azi_rad.sin();
+                let old_dy = old_horizontal * azi_rad.cos();
+                let new_dx = old_dx + total_dx;
+                let new_dy = old_dy + total_dy;
+                let new_horizontal = (new_dx * new_dx + new_dy * new_dy).sqrt();
+                let new_dz = (shot.depth_out + total_dz) - shot.depth_in;
+                let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
+                let new_azi = if new_horizontal > 1e-9 {
+                    new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
+                } else {
+                    shot.average_azimuth()
+                };
+                shot.length = new_len;
+                shot.azimuth_in = new_azi;
+                shot.azimuth_out = new_azi;
+                shot.depth_out += total_dz;
+                let pitch = new_dz.atan2(new_horizontal).to_degrees();
+                shot.pitch_in = Some(pitch);
+                shot.pitch_out = Some(pitch);
+            }
+        }
+
+        if let Some(shot) = section.shots.get_mut(idx) {
+            let azi_rad = shot.average_azimuth().to_radians();
+            let old_horizontal = shot.horizontal_length();
+            let old_dx = old_horizontal * azi_rad.sin();
+            let old_dy = old_horizontal * azi_rad.cos();
+            let new_dx = old_dx - total_dx;
+            let new_dy = old_dy - total_dy;
+            let new_horizontal = (new_dx * new_dx + new_dy * new_dy).sqrt();
+            let new_dz = shot.depth_out - (shot.depth_in + total_dz);
+            let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
+            let new_azi = if new_horizontal > 1e-9 {
+                new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
+            } else {
+                shot.average_azimuth()
+            };
+            shot.length = new_len;
+            shot.azimuth_in = new_azi;
+            shot.azimuth_out = new_azi;
+            shot.depth_in += total_dz;
+            let pitch = new_dz.atan2(new_horizontal).to_degrees();
+            shot.pitch_in = Some(pitch);
+            shot.pitch_out = Some(pitch);
+        }
+
+        self.station_offsets.remove(&station_ref);
+        Ok(())
+    }
+
+    fn distribute_closure_error(
+        &mut self,
+        station_a: StationRef,
+        station_b: StationRef,
+        strategy: ClosureStrategy,
+    ) -> Result<(), String> {
+        let colocated_groups = self.build_colocated_groups();
+        let zero_datum_set: HashSet<StationRef> = self.zero_datums.iter().map(|zd| zd.station_ref).collect();
+
+        let is_group_anchored = |station: StationRef, groups: &HashMap<StationRef, Vec<StationRef>>| -> bool {
+            let root = groups
+                .iter()
+                .find(|(_, members)| members.contains(&station))
+                .map(|(r, _)| *r);
+            if let Some(root) = root {
+                if let Some(members) = groups.get(&root) {
+                    return members.iter().any(|m| zero_datum_set.contains(m));
+                }
+            }
+            false
+        };
+
+        let a_anchored = is_group_anchored(station_a, &colocated_groups);
+        let b_anchored = is_group_anchored(station_b, &colocated_groups);
+
+        let (start, end) = if b_anchored && !a_anchored {
+            (station_b, station_a)
+        } else {
+            (station_a, station_b)
+        };
+
+        let coords_a_orig = self
+            .compute_station_raw_coords(station_a)
+            .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
+        let coords_b_orig = self
+            .compute_station_raw_coords(station_b)
+            .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
+
+        let coords_start = if start == station_a { coords_a_orig } else { coords_b_orig };
+        let coords_end = if end == station_a { coords_a_orig } else { coords_b_orig };
+
+        let base_correction = Self::coords_sub(coords_end, coords_start);
+        let correction = Self::coords_sub(coords_b_orig, coords_a_orig);
+
+        let mut targets: HashMap<StationRef, Coordinates> = HashMap::new();
+        let section_lookup = self.build_section_lookup();
+
+        let apply_path_targets = |path: &StationPath,
+                                      start_coords: Coordinates,
+                                      correction_vec: Coordinates,
+                                      sign: f64,
+                                      total_len: f64,
+                                      shot_count: usize,
+                                      targets: &mut HashMap<StationRef, Coordinates>|
+         -> Result<(), String> {
+            let mut current = start_coords;
+            if let Some(existing) = targets.get(&path.start) {
+                if !Self::coords_close(*existing, current, 1e-6) {
+                    return Err("Inconsistent target coordinates on path start".to_string());
+                }
+            } else {
+                targets.insert(path.start, current);
+            }
+
+            for step in &path.steps {
+                let vec = match step.edge {
+                    PathEdge::Shot {
+                        section_id,
+                        shot_index,
+                        forward,
+                    } => {
+                        let section = section_lookup
+                            .get(&section_id)
+                            .ok_or_else(|| "Section not found for closure path".to_string())?;
+                        let shot = section
+                            .shots
+                            .get(shot_index)
+                            .ok_or_else(|| "Shot not found for closure path".to_string())?;
+                        let mut v = Self::shot_vector_along(shot, forward);
+                        let weight = if strategy == ClosureStrategy::ProportionalByLength {
+                            shot.length / total_len
+                        } else {
+                            1.0 / shot_count as f64
+                        };
+                        let corr = Self::coords_scale(correction_vec, sign * weight);
+                        v = Self::coords_add(v, corr);
+                        v
+                    }
+                    PathEdge::Merge => Coordinates::new(0.0, 0.0, 0.0),
+                };
+                current = Self::coords_add(current, vec);
+                if let Some(existing) = targets.get(&step.to) {
+                    if !Self::coords_close(*existing, current, 1e-6) {
+                        return Err("Inconsistent target coordinates in closure path".to_string());
+                    }
+                } else {
+                    targets.insert(step.to, current);
+                }
+            }
+            Ok(())
+        };
+
+        let add_path_stats = |path: &StationPath, total_len: &mut f64, shot_count: &mut usize| {
+            for step in &path.steps {
+                if let PathEdge::Shot { section_id, shot_index, .. } = step.edge {
+                    if let Some(section) = section_lookup.get(&section_id) {
+                        if let Some(shot) = section.shots.get(shot_index) {
+                            *total_len += shot.length;
+                            *shot_count += 1;
+                        }
+                    }
+                }
+            }
+        };
+
+        let loop_path_ab = self.shortest_path_shots_merges(station_a, station_b);
+
+        if let Some(loop_path) = loop_path_ab {
+            // Inspect loop path for zero datum anchors
+            let mut zero_nodes: Vec<StationRef> = Vec::new();
+            let mut nodes: Vec<StationRef> = Vec::with_capacity(loop_path.steps.len() + 1);
+            nodes.push(loop_path.start);
+            for step in &loop_path.steps {
+                nodes.push(step.to);
+            }
+            for node in nodes {
+                if zero_datum_set.contains(&node) {
+                    zero_nodes.push(node);
+                }
+            }
+            zero_nodes.sort_by(|a, b| (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index)));
+            zero_nodes.dedup();
+
+            if zero_nodes.len() > 1 {
+                return Err("Multiple zero datum stations in closure path".to_string());
+            }
+
+            if zero_nodes.len() == 1 && zero_nodes[0] != station_a && zero_nodes[0] != station_b {
+                let anchor = zero_nodes[0];
+                let path_a = self
+                    .shortest_path_shots_merges(anchor, station_a)
+                    .ok_or_else(|| "Failed to build path from zero datum to station A".to_string())?;
+                let path_b = self
+                    .shortest_path_shots_merges(anchor, station_b)
+                    .ok_or_else(|| "Failed to build path from zero datum to station B".to_string())?;
+
+                let mut total_len = 0.0;
+                let mut shot_count = 0usize;
+                add_path_stats(&path_a, &mut total_len, &mut shot_count);
+                add_path_stats(&path_b, &mut total_len, &mut shot_count);
+
+                if (strategy == ClosureStrategy::ProportionalByLength && total_len <= 0.0)
+                    || (strategy == ClosureStrategy::EqualDistribution && shot_count == 0)
+                {
+                    return Err("No distributable shots found for zero datum loop path".to_string());
+                }
+
+                let coords_anchor = self
+                    .compute_station_raw_coords(anchor)
+                    .ok_or_else(|| "Failed to compute coordinates for zero datum anchor".to_string())?;
+
+                apply_path_targets(
+                    &path_a,
+                    coords_anchor,
+                    correction,
+                    1.0,
+                    total_len,
+                    shot_count,
+                    &mut targets,
+                )?;
+                apply_path_targets(
+                    &path_b,
+                    coords_anchor,
+                    correction,
+                    -1.0,
+                    total_len,
+                    shot_count,
+                    &mut targets,
+                )?;
+            } else {
+                let path = if start == station_a && end == station_b {
+                    loop_path
+                } else {
+                    self.shortest_path_shots_merges(start, end)
+                        .ok_or_else(|| "Failed to build closure path".to_string())?
+                };
+
+                let mut total_len = 0.0;
+                let mut shot_count = 0usize;
+                add_path_stats(&path, &mut total_len, &mut shot_count);
+
+                if (strategy == ClosureStrategy::ProportionalByLength && total_len <= 0.0)
+                    || (strategy == ClosureStrategy::EqualDistribution && shot_count == 0)
+                {
+                    return Err("No distributable shots found for closure path".to_string());
+                }
+
+                let coords_start = if path.start == station_a { coords_a_orig } else { coords_b_orig };
+                apply_path_targets(
+                    &path,
+                    coords_start,
+                    base_correction,
+                    -1.0,
+                    total_len,
+                    shot_count,
+                    &mut targets,
+                )?;
+            }
+        } else {
+            // Fallback: use zero datum paths
+            let (zd_a, _) = self
+                .shortest_path_to_any_zero_datum(station_a)
+                .ok_or_else(|| "No zero datum path found from station A".to_string())?;
+            let (zd_b, _) = self
+                .shortest_path_to_any_zero_datum(station_b)
+                .ok_or_else(|| "No zero datum path found from station B".to_string())?;
+
+            let path_a = self
+                .shortest_path_shots_merges(zd_a, station_a)
+                .ok_or_else(|| "Failed to build path from zero datum to station A".to_string())?;
+            let path_b = self
+                .shortest_path_shots_merges(zd_b, station_b)
+                .ok_or_else(|| "Failed to build path from zero datum to station B".to_string())?;
+
+            let coords_zd_a = self
+                .compute_station_raw_coords(zd_a)
+                .ok_or_else(|| "Failed to compute coordinates for zero datum A".to_string())?;
+            let coords_zd_b = self
+                .compute_station_raw_coords(zd_b)
+                .ok_or_else(|| "Failed to compute coordinates for zero datum B".to_string())?;
+
+            let mut total_len = 0.0;
+            let mut shot_count = 0usize;
+            add_path_stats(&path_a, &mut total_len, &mut shot_count);
+            add_path_stats(&path_b, &mut total_len, &mut shot_count);
+
+            if (strategy == ClosureStrategy::ProportionalByLength && total_len <= 0.0)
+                || (strategy == ClosureStrategy::EqualDistribution && shot_count == 0)
+            {
+                return Err("No distributable shots found for zero datum fallback".to_string());
+            }
+
+            apply_path_targets(
+                &path_a,
+                coords_zd_a,
+                correction,
+                1.0,
+                total_len,
+                shot_count,
+                &mut targets,
+            )?;
+            apply_path_targets(
+                &path_b,
+                coords_zd_b,
+                correction,
+                -1.0,
+                total_len,
+                shot_count,
+                &mut targets,
+            )?;
+        }
+
+        let mut deltas: HashMap<StationRef, Coordinates> = HashMap::new();
+        for (station, target) in &targets {
+            let current = self
+                .compute_station_raw_coords(*station)
+                .ok_or_else(|| "Failed to compute station coordinates".to_string())?;
+            let delta = Self::coords_sub(*target, current);
+            if Self::coords_norm(delta) > 1e-9 {
+                deltas.insert(*station, delta);
+            }
+        }
+
+        // Propagate deltas to co-located groups (merges + non-KeepRaw closures)
+        let mut group_delta: HashMap<StationRef, Coordinates> = HashMap::new();
+        let mut station_to_group: HashMap<StationRef, StationRef> = HashMap::new();
+        for (root, members) in &colocated_groups {
+            for member in members {
+                station_to_group.insert(*member, *root);
+            }
+        }
+
+        for (station, delta) in &deltas {
+            let root = station_to_group.get(station).copied().unwrap_or(*station);
+            if let Some(existing) = group_delta.get(&root) {
+                if !Self::coords_close(*existing, *delta, 1e-6) {
+                    return Err("Conflicting deltas for co-located station group".to_string());
+                }
+            } else {
+                group_delta.insert(root, *delta);
+            }
+        }
+
+        let mut final_deltas: HashMap<StationRef, Coordinates> = HashMap::new();
+        for (root, delta) in &group_delta {
+            if let Some(members) = colocated_groups.get(root) {
+                for member in members {
+                    final_deltas.insert(*member, *delta);
+                }
+            } else {
+                final_deltas.insert(*root, *delta);
+            }
+        }
+
+        // Prevent moving zero datum stations
+        for (station, delta) in &final_deltas {
+            if zero_datum_set.contains(station) && Self::coords_norm(*delta) > 1e-9 {
+                return Err("Closure distribution would move a zero datum station".to_string());
+            }
+        }
+
+        // Apply moves
+        let mut moves: Vec<(StationRef, Coordinates)> = final_deltas.into_iter().collect();
+        moves.sort_by(|a, b| {
+            (a.0.section_id, a.0.station_index).cmp(&(b.0.section_id, b.0.station_index))
+        });
+        for (station, delta) in moves {
+            if Self::coords_norm(delta) <= 1e-9 {
+                continue;
+            }
+            self.apply_station_move_internal(station, delta)?;
+        }
+
+        // Ensure endpoints overlap exactly
+        let coords_a_after = self
+            .compute_station_raw_coords(station_a)
+            .ok_or_else(|| "Failed to compute station A after distribution".to_string())?;
+        let coords_b_after = self
+            .compute_station_raw_coords(station_b)
+            .ok_or_else(|| "Failed to compute station B after distribution".to_string())?;
+        let residual = Self::coords_sub(coords_b_after, coords_a_after);
+        if Self::coords_norm(residual) > 1e-6 {
+            // Move B's group if possible, otherwise move A's group
+            let b_root = colocated_groups
+                .iter()
+                .find(|(_, members)| members.contains(&station_b))
+                .map(|(r, _)| *r)
+                .unwrap_or(station_b);
+            let a_root = colocated_groups
+                .iter()
+                .find(|(_, members)| members.contains(&station_a))
+                .map(|(r, _)| *r)
+                .unwrap_or(station_a);
+
+            let b_anchor = colocated_groups
+                .get(&b_root)
+                .map(|members| members.iter().any(|m| zero_datum_set.contains(m)))
+                .unwrap_or(false);
+            let a_anchor = colocated_groups
+                .get(&a_root)
+                .map(|members| members.iter().any(|m| zero_datum_set.contains(m)))
+                .unwrap_or(false);
+
+            if !b_anchor {
+                if let Some(members) = colocated_groups.get(&b_root) {
+                    for member in members {
+                        self.apply_station_move_internal(*member, Self::coords_scale(residual, -1.0))?;
+                    }
+                } else {
+                    self.apply_station_move_internal(station_b, Self::coords_scale(residual, -1.0))?;
+                }
+            } else if !a_anchor {
+                if let Some(members) = colocated_groups.get(&a_root) {
+                    for member in members {
+                        self.apply_station_move_internal(*member, residual)?;
+                    }
+                } else {
+                    self.apply_station_move_internal(station_a, residual)?;
+                }
+            } else {
+                return Err("Closure distribution failed to align endpoints".to_string());
+            }
+        }
+
+        Ok(())
     }
 
     /// Merge two stations
@@ -1260,6 +2800,14 @@ impl Project {
 
         // Compute closure values using shared helper
         let metrics = self.compute_closure_metrics(station_a, station_b)?;
+
+        // Apply closure error distribution for supported strategies (mutates shot data)
+        if matches!(
+            strategy,
+            ClosureStrategy::ProportionalByLength | ClosureStrategy::EqualDistribution
+        ) {
+            self.distribute_closure_error(station_a, station_b, strategy)?;
+        }
 
         // Normalize next_closure_id in case of legacy deserialization (default 0)
         let max_existing = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
@@ -1674,7 +3222,7 @@ impl Project {
             // Compute subsequent stations from shots
             for (i, shot) in section.shots.iter().enumerate() {
                 let azimuth_rad = shot.average_azimuth().to_radians();
-                let horizontal_length = shot.length;
+                let horizontal_length = shot.horizontal_length();
 
                 // Compute new position
                 let dx = horizontal_length * azimuth_rad.sin();

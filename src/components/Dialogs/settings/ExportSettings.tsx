@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
 import { SettingsSection } from './SettingsSection';
@@ -6,19 +7,6 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
-
-const IMAGE_FORMAT_OPTIONS = [
-  { value: 'png', label: 'PNG' },
-  { value: 'svg', label: 'SVG' },
-  { value: 'pdf', label: 'PDF' },
-];
-
-const DPI_OPTIONS = [
-  { value: '72', label: '72 DPI (Screen)' },
-  { value: '150', label: '150 DPI (Low Print)' },
-  { value: '300', label: '300 DPI (Standard Print)' },
-  { value: '600', label: '600 DPI (High Quality)' },
-];
 
 /**
  * Export settings category content.
@@ -32,6 +20,7 @@ export function ExportSettings({
   onValidationError,
   panelIdBase,
 }: SettingsCategoryProps) {
+  const { t } = useTranslation();
   // Validation state
   const hasErrorRef = useRef(false);
 
@@ -41,7 +30,7 @@ export function ExportSettings({
 
     // Validate DPI
     if (config.export.default_dpi < 72 || config.export.default_dpi > 1200) {
-      errors.push('DPI must be between 72 and 1200');
+      errors.push(t('settings.export.validation.dpi'));
     }
 
     const hasError = errors.length > 0;
@@ -49,7 +38,20 @@ export function ExportSettings({
       hasErrorRef.current = hasError;
       onValidationError('export', hasError);
     }
-  }, [config.export, onValidationError]);
+  }, [config.export, onValidationError, t]);
+
+  const imageFormatOptions = useMemo(() => [
+    { value: 'png', label: t('settings.export.format.options.png') },
+    { value: 'svg', label: t('settings.export.format.options.svg') },
+    { value: 'pdf', label: t('settings.export.format.options.pdf') },
+  ], [t]);
+
+  const dpiOptions = useMemo(() => [
+    { value: '72', label: t('settings.export.dpi.options.screen') },
+    { value: '150', label: t('settings.export.dpi.options.lowPrint') },
+    { value: '300', label: t('settings.export.dpi.options.standardPrint') },
+    { value: '600', label: t('settings.export.dpi.options.highQuality') },
+  ], [t]);
 
   const handleFormatChange = (value: string) => {
     onChange({
@@ -106,81 +108,81 @@ export function ExportSettings({
       aria-labelledby={getTabId(panelIdBase, 'export')}
       data-testid="settings-panel-export"
     >
-      <h2 className="text-lg font-medium mb-4">Export</h2>
+      <h2 className="text-lg font-medium mb-4">{t('settings.export.title')}</h2>
 
-      <SettingsSection title="Image Format" data-testid="section-image-format">
+      <SettingsSection title={t('settings.export.sections.imageFormat')} data-testid="section-image-format">
         <SettingRow
-          label="Default format"
-          helpText="File format for exported images"
+          label={t('settings.export.format.label')}
+          helpText={t('settings.export.format.help')}
           isChanged={isFieldChanged(changedFields, 'export.default_image_format')}
           data-testid="setting-image-format"
         >
           <Select
             value={config.export.default_image_format}
             onChange={handleFormatChange}
-            options={IMAGE_FORMAT_OPTIONS}
+            options={imageFormatOptions}
             className="w-32"
-            aria-label="Default image format"
+            aria-label={t('settings.export.format.aria')}
             data-testid="select-image-format"
           />
         </SettingRow>
 
         <SettingRow
-          label="Default DPI"
-          helpText="Resolution for exported images"
+          label={t('settings.export.dpi.label')}
+          helpText={t('settings.export.dpi.help')}
           isChanged={isFieldChanged(changedFields, 'export.default_dpi')}
           data-testid="setting-dpi"
         >
           <Select
             value={String(config.export.default_dpi)}
             onChange={handleDpiChange}
-            options={DPI_OPTIONS}
+            options={dpiOptions}
             className="w-48"
-            aria-label="Default DPI"
+            aria-label={t('settings.export.dpi.aria')}
             data-testid="select-dpi"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Default Layers" data-testid="section-default-layers">
+      <SettingsSection title={t('settings.export.sections.layers')} data-testid="section-default-layers">
         <SettingRow
-          label="Include satellite"
-          helpText="Include satellite imagery layer by default"
+          label={t('settings.export.layers.satellite.label')}
+          helpText={t('settings.export.layers.satellite.help')}
           isChanged={isFieldChanged(changedFields, 'export.default_include_satellite')}
           data-testid="setting-include-satellite"
         >
           <Toggle
             checked={config.export.default_include_satellite}
             onChange={handleIncludeSatelliteChange}
-            aria-label="Include satellite imagery"
+            aria-label={t('settings.export.layers.satellite.aria')}
             data-testid="toggle-include-satellite"
           />
         </SettingRow>
 
         <SettingRow
-          label="Include grid"
-          helpText="Include grid overlay by default"
+          label={t('settings.export.layers.grid.label')}
+          helpText={t('settings.export.layers.grid.help')}
           isChanged={isFieldChanged(changedFields, 'export.default_include_grid')}
           data-testid="setting-include-grid"
         >
           <Toggle
             checked={config.export.default_include_grid}
             onChange={handleIncludeGridChange}
-            aria-label="Include grid overlay"
+            aria-label={t('settings.export.layers.grid.aria')}
             data-testid="toggle-include-grid"
           />
         </SettingRow>
 
         <SettingRow
-          label="Include labels"
-          helpText="Include station/shot labels by default"
+          label={t('settings.export.layers.labels.label')}
+          helpText={t('settings.export.layers.labels.help')}
           isChanged={isFieldChanged(changedFields, 'export.default_include_labels')}
           data-testid="setting-include-labels"
         >
           <Toggle
             checked={config.export.default_include_labels}
             onChange={handleIncludeLabelsChange}
-            aria-label="Include labels"
+            aria-label={t('settings.export.layers.labels.aria')}
             data-testid="toggle-include-labels"
           />
         </SettingRow>

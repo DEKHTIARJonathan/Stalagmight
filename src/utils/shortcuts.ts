@@ -1,3 +1,5 @@
+import i18n from '../i18n';
+
 /**
  * Keyboard shortcut utilities for platform detection, normalization, conflict detection,
  * and display formatting.
@@ -491,7 +493,47 @@ export function formatShortcut(shortcut: string, forceMac?: boolean): string {
  * @param action - Action name (e.g., "toggle_sections_panel")
  * @returns Formatted action name (e.g., "Toggle Sections Panel")
  */
+const ACTION_NAME_KEYS: Record<string, string> = {
+  new_file: 'settings.shortcuts.actions.newFile',
+  open_file: 'settings.shortcuts.actions.openFile',
+  save: 'settings.shortcuts.actions.save',
+  save_as: 'settings.shortcuts.actions.saveAs',
+  import_dmp: 'settings.shortcuts.actions.importDmp',
+  export: 'settings.shortcuts.actions.export',
+  select: 'settings.shortcuts.actions.select',
+  pan: 'settings.shortcuts.actions.pan',
+  zoom: 'settings.shortcuts.actions.zoom',
+  draw: 'settings.shortcuts.actions.draw',
+  delete_tool: 'settings.shortcuts.actions.deleteTool',
+  merge: 'settings.shortcuts.actions.merge',
+  measure: 'settings.shortcuts.actions.measure',
+  move_station: 'settings.shortcuts.actions.moveStation',
+  move_segment: 'settings.shortcuts.actions.moveSegment',
+  move_shot: 'settings.shortcuts.actions.moveShot',
+  undo: 'settings.shortcuts.actions.undo',
+  redo: 'settings.shortcuts.actions.redo',
+  toggle_depth_gradient: 'settings.shortcuts.actions.toggleDepthGradient',
+  toggle_grid: 'settings.shortcuts.actions.toggleGrid',
+  toggle_satellite: 'settings.shortcuts.actions.toggleSatellite',
+  toggle_station_labels: 'settings.shortcuts.actions.toggleStationLabels',
+  toggle_shot_labels: 'settings.shortcuts.actions.toggleShotLabels',
+  toggle_section_labels: 'settings.shortcuts.actions.toggleSectionLabels',
+  fit_to_bounds: 'settings.shortcuts.actions.fitToBounds',
+  zoom_in: 'settings.shortcuts.actions.zoomIn',
+  zoom_out: 'settings.shortcuts.actions.zoomOut',
+  toggle_sections_panel: 'settings.shortcuts.actions.toggleSectionsPanel',
+  toggle_detail_panel: 'settings.shortcuts.actions.toggleDetailPanel',
+  toggle_data_table: 'settings.shortcuts.actions.toggleDataTable',
+};
+
 export function formatActionName(action: string): string {
+  const key = ACTION_NAME_KEYS[action];
+  if (key) {
+    const translated = i18n.t(key);
+    if (translated && translated !== key) {
+      return translated;
+    }
+  }
   return action
     .split('_')
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))

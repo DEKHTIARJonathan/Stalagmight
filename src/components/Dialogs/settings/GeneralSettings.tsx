@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
 import { SettingsSection } from './SettingsSection';
@@ -20,6 +21,7 @@ export function GeneralSettings({
   onValidationError,
   panelIdBase,
 }: SettingsCategoryProps) {
+  const { t } = useTranslation();
   // Validation state
   const hasErrorRef = useRef(false);
 
@@ -32,17 +34,17 @@ export function GeneralSettings({
       config.general.auto_save_interval_seconds < 10 ||
       config.general.auto_save_interval_seconds > 3600
     ) {
-      errors.push('Auto-save interval must be between 10 and 3600 seconds');
+      errors.push(t('settings.general.validation.autoSaveInterval'));
     }
 
     // Validate recent_projects_max
     if (config.general.recent_projects_max < 1 || config.general.recent_projects_max > 50) {
-      errors.push('Recent projects limit must be between 1 and 50');
+      errors.push(t('settings.general.validation.recentProjects'));
     }
 
     // Validate undo_history_limit
     if (config.general.undo_history_limit < 10 || config.general.undo_history_limit > 1000) {
-      errors.push('Undo history limit must be between 10 and 1000');
+      errors.push(t('settings.general.validation.undoHistory'));
     }
 
     // Validate undo_persist_limit
@@ -50,7 +52,7 @@ export function GeneralSettings({
       config.general.undo_persist_limit < 0 ||
       config.general.undo_persist_limit > config.general.undo_history_limit
     ) {
-      errors.push('Undo persist limit must be between 0 and undo history limit');
+      errors.push(t('settings.general.validation.undoPersist'));
     }
 
     const hasError = errors.length > 0;
@@ -58,7 +60,7 @@ export function GeneralSettings({
       hasErrorRef.current = hasError;
       onValidationError('general', hasError);
     }
-  }, [config.general, onValidationError]);
+  }, [config.general, onValidationError, t]);
 
   const handleAutoSaveToggle = (checked: boolean) => {
     onChange({
@@ -126,6 +128,15 @@ export function GeneralSettings({
     });
   };
 
+  const handleLocaleChange = (value: string) => {
+    onChange({
+      general: {
+        ...config.general,
+        locale: value,
+      },
+    });
+  };
+
   return (
     <div
       role="tabpanel"
@@ -133,26 +144,47 @@ export function GeneralSettings({
       aria-labelledby={getTabId(panelIdBase, 'general')}
       data-testid="settings-panel-general"
     >
-      <h2 className="text-lg font-medium mb-4">General</h2>
+      <h2 className="text-lg font-medium mb-4">{t('settings.general.title')}</h2>
 
-      <SettingsSection title="Saving" data-testid="section-saving">
+      <SettingsSection title={t('settings.general.sections.language')} data-testid="section-language">
         <SettingRow
-          label="Auto-save"
-          helpText="Automatically save changes at regular intervals"
+          label={t('settings.general.language.label')}
+          helpText={t('settings.general.language.help')}
+          isChanged={isFieldChanged(changedFields, 'general.locale')}
+          data-testid="setting-language"
+        >
+          <Select
+            value={config.general.locale || 'system'}
+            onChange={handleLocaleChange}
+            options={[
+              { value: 'system', label: t('settings.general.language.options.system') },
+              { value: 'en-US', label: t('settings.general.language.options.enUS') },
+            ]}
+            className="w-48"
+            aria-label={t('settings.general.language.aria')}
+            data-testid="select-language"
+          />
+        </SettingRow>
+      </SettingsSection>
+
+      <SettingsSection title={t('settings.general.sections.saving')} data-testid="section-saving">
+        <SettingRow
+          label={t('settings.general.autoSave.label')}
+          helpText={t('settings.general.autoSave.help')}
           isChanged={isFieldChanged(changedFields, 'general.auto_save')}
           data-testid="setting-auto-save"
         >
           <Toggle
             checked={config.general.auto_save}
             onChange={handleAutoSaveToggle}
-            aria-label="Enable auto-save"
+            aria-label={t('settings.general.autoSave.aria')}
             data-testid="toggle-auto-save"
           />
         </SettingRow>
 
         <SettingRow
-          label="Auto-save interval"
-          helpText="How often to auto-save (in seconds, 10-3600)"
+          label={t('settings.general.autoSaveInterval.label')}
+          helpText={t('settings.general.autoSaveInterval.help')}
           isChanged={isFieldChanged(changedFields, 'general.auto_save_interval_seconds')}
           data-testid="setting-auto-save-interval"
         >
@@ -163,16 +195,16 @@ export function GeneralSettings({
             value={config.general.auto_save_interval_seconds}
             onChange={(e) => handleAutoSaveIntervalChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Auto-save interval in seconds"
+            aria-label={t('settings.general.autoSaveInterval.aria')}
             data-testid="input-auto-save-interval"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Recent Projects" data-testid="section-recent">
+      <SettingsSection title={t('settings.general.sections.recentProjects')} data-testid="section-recent">
         <SettingRow
-          label="Maximum recent projects"
-          helpText="Number of recent projects to remember (1-50)"
+          label={t('settings.general.recentProjectsMax.label')}
+          helpText={t('settings.general.recentProjectsMax.help')}
           isChanged={isFieldChanged(changedFields, 'general.recent_projects_max')}
           data-testid="setting-recent-max"
         >
@@ -183,16 +215,16 @@ export function GeneralSettings({
             value={config.general.recent_projects_max}
             onChange={(e) => handleRecentProjectsChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Maximum recent projects"
+            aria-label={t('settings.general.recentProjectsMax.aria')}
             data-testid="input-recent-max"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Undo History" data-testid="section-undo">
+      <SettingsSection title={t('settings.general.sections.undoHistory')} data-testid="section-undo">
         <SettingRow
-          label="History limit"
-          helpText="Maximum number of undo steps in memory (10-1000)"
+          label={t('settings.general.undoHistoryLimit.label')}
+          helpText={t('settings.general.undoHistoryLimit.help')}
           isChanged={isFieldChanged(changedFields, 'general.undo_history_limit')}
           data-testid="setting-undo-limit"
         >
@@ -203,14 +235,14 @@ export function GeneralSettings({
             value={config.general.undo_history_limit}
             onChange={(e) => handleUndoHistoryChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Undo history limit"
+            aria-label={t('settings.general.undoHistoryLimit.aria')}
             data-testid="input-undo-limit"
           />
         </SettingRow>
 
         <SettingRow
-          label="Persist limit"
-          helpText="Number of undo steps to save with project (0 = none)"
+          label={t('settings.general.undoPersistLimit.label')}
+          helpText={t('settings.general.undoPersistLimit.help')}
           isChanged={isFieldChanged(changedFields, 'general.undo_persist_limit')}
           data-testid="setting-undo-persist"
         >
@@ -221,16 +253,16 @@ export function GeneralSettings({
             value={config.general.undo_persist_limit}
             onChange={(e) => handleUndoPersistChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Undo persist limit"
+            aria-label={t('settings.general.undoPersistLimit.aria')}
             data-testid="input-undo-persist"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Feedback" data-testid="section-feedback">
+      <SettingsSection title={t('settings.general.sections.feedback')} data-testid="section-feedback">
         <SettingRow
-          label="Shortcut feedback"
-          helpText="Show toast notifications when keyboard shortcuts are activated"
+          label={t('settings.general.shortcutFeedback.label')}
+          helpText={t('settings.general.shortcutFeedback.help')}
           isChanged={isFieldChanged(changedFields, 'general.shortcut_feedback')}
           data-testid="setting-shortcut-feedback"
         >
@@ -238,12 +270,12 @@ export function GeneralSettings({
             value={config.general.shortcut_feedback}
             onChange={handleShortcutFeedbackChange}
             options={[
-              { value: 'none', label: 'None' },
-              { value: 'non_obvious', label: 'Non-obvious only' },
-              { value: 'all', label: 'All' },
+              { value: 'none', label: t('settings.general.shortcutFeedback.options.none') },
+              { value: 'non_obvious', label: t('settings.general.shortcutFeedback.options.nonObvious') },
+              { value: 'all', label: t('settings.general.shortcutFeedback.options.all') },
             ]}
             className="w-40"
-            aria-label="Shortcut feedback preference"
+            aria-label={t('settings.general.shortcutFeedback.aria')}
             data-testid="select-shortcut-feedback"
           />
         </SettingRow>

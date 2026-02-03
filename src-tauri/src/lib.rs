@@ -440,6 +440,7 @@ pub fn run() {
             commands::station::move_station,
             commands::station::check_merge_connectivity,
             commands::station::create_loop_closure,
+            commands::station::adjust_loop_closures,
             // Undo/Redo
             commands::history::undo,
             commands::history::redo,

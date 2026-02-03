@@ -857,6 +857,127 @@ fn create_loop_closure_creates_correct_values() {
 }
 
 #[test]
+fn create_loop_closure_proportional_distributes_and_overlaps() {
+    let mut project = Project::new("ClosureDist".to_string(), None);
+
+    let section_id = project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            shot(90.0, 90.0, 10.0, 0.0, 0.0),
+        ],
+        ..Default::default()
+    }).id;
+
+    let station_a = StationRef::new(section_id, 0);
+    let station_b = StationRef::new(section_id, 2);
+
+    let coords_a_before = project.compute_station_raw_coords(station_a).unwrap();
+    let coords_b_before = project.compute_station_raw_coords(station_b).unwrap();
+    assert!(coords_a_before.distance_to(&coords_b_before) > 0.1);
+
+    let len_before = project.get_section(section_id).unwrap().shots[0].length;
+
+    project.create_loop_closure(
+        station_a,
+        station_b,
+        ClosureStrategy::ProportionalByLength,
+    ).unwrap();
+
+    let coords_a_after = project.compute_station_raw_coords(station_a).unwrap();
+    let coords_b_after = project.compute_station_raw_coords(station_b).unwrap();
+    assert!(coords_a_after.distance_to(&coords_b_after) < 1e-6);
+
+    let len_after = project.get_section(section_id).unwrap().shots[0].length;
+    assert!((len_before - len_after).abs() > 1e-6, "Shot length should change after distribution");
+}
+
+#[test]
+fn create_loop_closure_with_zero_datum_on_path_keeps_anchor_fixed() {
+    let mut project = Project::new("ClosureZero".to_string(), None);
+
+    let section_id = project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            shot(0.0, 0.0, 10.0, 0.0, 0.0),
+        ],
+        ..Default::default()
+    }).id;
+
+    let zero_ref = StationRef::new(section_id, 1);
+    project.set_zero_datum(
+        zero_ref,
+        GpsCoordinates::new(25.0, -80.0, 0.0).unwrap(),
+    ).unwrap();
+
+    let zero_before = project.compute_station_raw_coords(zero_ref).unwrap();
+
+    project.create_loop_closure(
+        StationRef::new(section_id, 0),
+        StationRef::new(section_id, 2),
+        ClosureStrategy::ProportionalByLength,
+    ).unwrap();
+
+    let zero_after = project.compute_station_raw_coords(zero_ref).unwrap();
+    assert!(zero_before.distance_to(&zero_after) < 1e-6, "Zero datum station must remain fixed");
+}
+
+#[test]
+fn create_loop_closure_equal_distribution_fallback_zero_datum() {
+    let mut project = Project::new("ClosureFallback".to_string(), None);
+
+    let a = project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            shot(0.0, 0.0, 5.0, 0.0, 0.0),
+        ],
+        ..Default::default()
+    }).id;
+    let b = project.add_section(SectionData {
+        shots: vec![
+            shot(90.0, 90.0, 8.0, 0.0, 0.0),
+            shot(90.0, 90.0, 4.0, 0.0, 0.0),
+        ],
+        ..Default::default()
+    }).id;
+
+    project.store_zero_datum_without_repositioning(
+        StationRef::new(a, 0),
+        GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    ).unwrap();
+    project.store_zero_datum_without_repositioning(
+        StationRef::new(b, 0),
+        GpsCoordinates::new(11.0, 21.0, 0.0).unwrap(),
+    ).unwrap();
+
+    let closure_id = project.next_closure_id;
+    project.loop_closures.push(LoopClosure {
+        id: closure_id,
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 2),
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::KeepRaw,
+    });
+    project.next_closure_id += 1;
+
+    let station_a = StationRef::new(a, 1);
+    let station_b = StationRef::new(b, 1);
+
+    project.create_loop_closure(
+        station_a,
+        station_b,
+        ClosureStrategy::EqualDistribution,
+    ).unwrap();
+
+    let coords_a_after = project.compute_station_raw_coords(station_a).unwrap();
+    let coords_b_after = project.compute_station_raw_coords(station_b).unwrap();
+    assert!(coords_a_after.distance_to(&coords_b_after) < 1e-6);
+}
+
+#[test]
 fn create_loop_closure_rejects_duplicate() {
     let mut project = Project::new("DupClosure".to_string(), None);
 
@@ -1178,6 +1299,50 @@ fn closure_expands_connected_sections_with_existing_merges() {
         StationRef::new(a, 0),
         StationRef::new(c, 0),
     ));
+}
+
+#[test]
+fn calculate_path_length_prefers_shorter_weighted_path() {
+    // Two paths between A.0 and A.1:
+    // 1) Direct shot length 100
+    // 2) Merge to B.0, two shots of length 1, merge back at B.2 (total 2)
+    let mut project = Project::new("ShortestPath".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(90.0, 90.0, 1.0, 0.0, 0.0),
+                shot(90.0, 90.0, 1.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 2),
+        merged_at: Utc::now(),
+    });
+
+    let path = project.calculate_path_length_between(
+        StationRef::new(a, 0),
+        StationRef::new(a, 1),
+    );
+    assert!(
+        (path - 2.0).abs() < 1e-6,
+        "Path should prefer length 2.0 over direct 100.0, got {}",
+        path
+    );
 }
 
 #[test]

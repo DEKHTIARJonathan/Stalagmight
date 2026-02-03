@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore, type ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button, IconButton } from '../common/Button';
@@ -22,7 +23,6 @@ interface ToolbarProps {
 interface StandaloneTool {
   kind: 'standalone';
   id: ToolType;
-  label: string;
   shortcut: string;
 }
 
@@ -72,18 +72,23 @@ function formatTooltip(label: string, shortcut: string): string {
   return shortcut ? `${label} (${shortcut})` : label;
 }
 
-/** Human-readable tool labels */
-const TOOL_LABELS: Record<ToolType, string> = {
-  select: 'Select',
-  pan: 'Pan',
-  zoom: 'Zoom',
-  draw: 'Draw',
-  delete: 'Delete',
-  merge: 'Merge',
-  measure: 'Measure',
-  move_station: 'Move Station',
-  move_segment: 'Move Segment',
-  move_shot: 'Move Shot',
+/** Translation keys for tool labels */
+const TOOL_LABEL_KEYS: Record<ToolType, string> = {
+  select: 'toolbar.tools.select',
+  pan: 'toolbar.tools.pan',
+  zoom: 'toolbar.tools.zoom',
+  draw: 'toolbar.tools.draw',
+  delete: 'toolbar.tools.delete',
+  merge: 'toolbar.tools.merge',
+  measure: 'toolbar.tools.measure',
+  move_station: 'toolbar.tools.moveStation',
+  move_segment: 'toolbar.tools.moveSegment',
+  move_shot: 'toolbar.tools.moveShot',
+};
+
+const TOOL_GROUP_LABEL_KEYS: Record<string, string> = {
+  navigate: 'toolbar.groups.navigate',
+  move: 'toolbar.groups.move',
 };
 
 /**
@@ -91,14 +96,14 @@ const TOOL_LABELS: Record<ToolType, string> = {
  * [Select] | [Navigate group] | [Draw] [Delete] [Merge] [Measure] | [Move group]
  */
 const TOOLBAR_ITEMS: ToolbarItem[] = [
-  { kind: 'standalone', id: 'select', label: 'Select', shortcut: 'S' },
+  { kind: 'standalone', id: 'select', shortcut: 'S' },
   { kind: 'separator' },
   { kind: 'group', groupId: 'navigate' },
   { kind: 'separator' },
-  { kind: 'standalone', id: 'draw', label: 'Draw', shortcut: 'D' },
-  { kind: 'standalone', id: 'delete', label: 'Delete', shortcut: 'X' },
-  { kind: 'standalone', id: 'merge', label: 'Merge', shortcut: 'M' },
-  { kind: 'standalone', id: 'measure', label: 'Measure', shortcut: 'R' },
+  { kind: 'standalone', id: 'draw', shortcut: 'D' },
+  { kind: 'standalone', id: 'delete', shortcut: 'X' },
+  { kind: 'standalone', id: 'merge', shortcut: 'M' },
+  { kind: 'standalone', id: 'measure', shortcut: 'R' },
   { kind: 'separator' },
   { kind: 'group', groupId: 'move' },
 ];
@@ -113,6 +118,7 @@ export default function Toolbar({
   canUndo,
   canRedo,
 }: ToolbarProps) {
+  const { t } = useTranslation();
   const { activeTool, setActiveTool, openDialog } = useUIStore();
 
   return (
@@ -120,16 +126,16 @@ export default function Toolbar({
       {/* Left section */}
       <div className="flex items-center gap-2">
         <Button onClick={onBack} size="sm" data-testid="back-button">
-          ← Back
+          ← {t('common.actions.back')}
         </Button>
         <Button onClick={onSave} size="sm" data-testid="toolbar-save-button">
-          Save
+          {t('common.actions.save')}
         </Button>
         <Button onClick={() => onImport()} size="sm" data-testid="toolbar-import-button">
-          Import
+          {t('common.actions.import')}
         </Button>
         <Button onClick={() => openDialog('export')} size="sm" data-testid="toolbar-export-button">
-          Export
+          {t('common.actions.export')}
         </Button>
         <div className="w-px h-6 bg-border mx-2" />
         <UndoHistoryDropdown
@@ -139,7 +145,7 @@ export default function Toolbar({
           testId="toolbar-undo-button"
         >
           <span className="inline-flex items-center gap-0.5">
-            Undo
+            {t('common.actions.undo')}
             {canUndo && <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="undo-chevron">{' '}▾</span>}
           </span>
         </UndoHistoryDropdown>
@@ -150,7 +156,7 @@ export default function Toolbar({
           testId="toolbar-redo-button"
         >
           <span className="inline-flex items-center gap-0.5">
-            Redo
+            {t('common.actions.redo')}
             {canRedo && <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="redo-chevron">{' '}▾</span>}
           </span>
         </UndoHistoryDropdown>
@@ -173,7 +179,7 @@ export default function Toolbar({
                   icon={<ToolIcon tool={item.id} />}
                   active={activeTool === item.id}
                   onClick={() => setActiveTool(item.id)}
-                  tooltip={`${item.label} (${item.shortcut})`}
+                  tooltip={formatTooltip(t(TOOL_LABEL_KEYS[item.id]), item.shortcut)}
                   size="sm"
                   aria-pressed={activeTool === item.id}
                   data-testid={`tool-${item.id}`}
@@ -206,6 +212,7 @@ interface ToolGroupButtonProps {
 }
 
 function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonProps) {
+  const { t } = useTranslation();
   const [flyoutOpen, setFlyoutOpen] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -369,6 +376,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
   }, [onActivateTool, closeFlyout]);
 
   const displayShortcut = getShortcutForTool(displayTool, shortcuts as unknown as Record<string, string[]>);
+  const groupLabel = t(TOOL_GROUP_LABEL_KEYS[group.id] ?? group.id);
 
   return (
     <div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
@@ -383,7 +391,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
         `}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
-        title={formatTooltip(TOOL_LABELS[displayTool], displayShortcut)}
+        title={formatTooltip(t(TOOL_LABEL_KEYS[displayTool]), displayShortcut)}
         aria-pressed={isGroupActive}
         aria-haspopup="true"
         aria-expanded={flyoutOpen}
@@ -404,7 +412,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
           ref={flyoutRef}
           className="absolute top-full right-0 mt-1 z-50 bg-panel border border-border rounded shadow-lg py-1 min-w-[10rem]"
           role="menu"
-          aria-label={`${group.id} tools`}
+          aria-label={t('toolbar.groupAria', { group: groupLabel })}
           onKeyDown={handleFlyoutKeyDown}
           data-testid={`subtool-flyout-${group.id}`}
         >
@@ -428,7 +436,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
                 data-testid={`subtool-${tool}`}
               >
                 <span className="w-5 text-center"><ToolIcon tool={tool} /></span>
-                <span className="flex-1">{TOOL_LABELS[tool]}</span>
+                <span className="flex-1">{t(TOOL_LABEL_KEYS[tool])}</span>
                 {shortcut && <span className="text-text-secondary text-xs ml-2">{shortcut}</span>}
               </button>
             );

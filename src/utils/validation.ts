@@ -5,6 +5,8 @@
 
 import type { DmpShot } from '../types/commands';
 import { type ValidationConfig, defaultConfig } from '../types/config';
+import i18n from '../i18n';
+import { formatFixed } from '../i18n/format';
 
 // Re-export ValidationConfig for convenience
 export type { ValidationConfig };
@@ -40,6 +42,14 @@ export interface ValidationIssue {
  * The backend only validates that LRUD values are non-negative.
  */
 const LRUD_MAX = 50.0;
+
+function formatMeters(value: number, precision: number = 1): string {
+  return `${formatFixed(value, undefined, precision)}${i18n.t('common.units.meters')}`;
+}
+
+function formatDegrees(value: number, precision: number = 1): string {
+  return `${formatFixed(value, undefined, precision)}°`;
+}
 
 /**
  * Check if azimuth in/out values differ from each other by more than the threshold.
@@ -109,7 +119,7 @@ export function validateShot(
     issues.push({
       field: 'length',
       severity: 'error',
-      message: 'Shot length is required for standard shots',
+      message: i18n.t('validation.shot.lengthRequired'),
     });
     // Skip threshold warnings if length is invalid/missing
   } else {
@@ -118,7 +128,10 @@ export function validateShot(
       issues.push({
         field: 'length',
         severity: 'warning',
-        message: `Shot length ${shot.length.toFixed(1)}m is below minimum ${config.warn_shot_length_min}m`,
+        message: i18n.t('validation.shot.lengthTooShort', {
+          length: formatMeters(shot.length),
+          min: formatMeters(config.warn_shot_length_min),
+        }),
       });
     }
 
@@ -127,7 +140,10 @@ export function validateShot(
       issues.push({
         field: 'length',
         severity: 'warning',
-        message: `Shot length ${shot.length.toFixed(1)}m exceeds maximum ${config.warn_shot_length_max}m`,
+        message: i18n.t('validation.shot.lengthTooLong', {
+          length: formatMeters(shot.length),
+          max: formatMeters(config.warn_shot_length_max),
+        }),
       });
     }
   }
@@ -139,14 +155,18 @@ export function validateShot(
     issues.push({
       field: 'azimuth',
       severity: 'error',
-      message: `Azimuth in ${azimuthIn.toFixed(1)}° is out of valid range [0, 360)`,
+      message: i18n.t('validation.shot.azimuthInRange', {
+        value: formatDegrees(azimuthIn),
+      }),
     });
   }
   if (azimuthOut < 0 || azimuthOut >= 360) {
     issues.push({
       field: 'azimuth',
       severity: 'error',
-      message: `Azimuth out ${azimuthOut.toFixed(1)}° is out of valid range [0, 360)`,
+      message: i18n.t('validation.shot.azimuthOutRange', {
+        value: formatDegrees(azimuthOut),
+      }),
     });
   }
 
@@ -158,7 +178,10 @@ export function validateShot(
       issues.push({
         field: 'azimuth',
         severity: 'warning',
-        message: `Azimuth in/out difference ${diff.toFixed(1)}° exceeds threshold ${config.azimuth_diff_threshold}°`,
+        message: i18n.t('validation.shot.azimuthDiff', {
+          diff: formatDegrees(diff),
+          threshold: formatDegrees(config.azimuth_diff_threshold, 0),
+        }),
       });
     }
   }
@@ -171,7 +194,10 @@ export function validateShot(
     issues.push({
       field: 'depth',
       severity: 'warning',
-      message: `Depth change ${depthChange.toFixed(1)}m exceeds maximum ${config.warn_depth_change_per_shot_max}m per shot`,
+      message: i18n.t('validation.shot.depthChange', {
+        change: formatMeters(depthChange),
+        max: formatMeters(config.warn_depth_change_per_shot_max),
+      }),
     });
   }
 
@@ -190,14 +216,21 @@ export function validateShot(
         issues.push({
           field: 'lrud',
           severity: 'error',
-          message: `${name} distance ${value.toFixed(1)}m is negative`,
+          message: i18n.t('validation.shot.lrudNegative', {
+            name,
+            value: formatMeters(value),
+          }),
         });
       } else if (value > LRUD_MAX) {
         // Exceeds passage max is a warning
         issues.push({
           field: 'lrud',
           severity: 'warning',
-          message: `${name} distance ${value.toFixed(1)}m exceeds maximum ${LRUD_MAX}m`,
+          message: i18n.t('validation.shot.lrudTooLarge', {
+            name,
+            value: formatMeters(value),
+            max: formatMeters(LRUD_MAX),
+          }),
         });
       }
     }
@@ -240,7 +273,7 @@ export function validateSection(
         existing.push({
           field: 'general',
           severity: 'warning',
-          message: `Duplicate station marker index ${marker} found in section`,
+          message: i18n.t('validation.section.duplicateMarker', { marker }),
         });
         issuesByShot.set(index, existing);
       }
@@ -359,7 +392,7 @@ export function validateEditableShot(
       sectionIndex,
       shotIndex,
       field: 'length',
-      message: 'Length must be greater than 0',
+      message: i18n.t('validation.import.lengthPositive'),
     });
   }
 
@@ -370,7 +403,9 @@ export function validateEditableShot(
       sectionIndex,
       shotIndex,
       field: 'azimuth_in',
-      message: `Azimuth in (${shot.azimuth_in.toFixed(1)}°) must be between 0 and 360`,
+      message: i18n.t('validation.import.azimuthInRange', {
+        value: formatDegrees(shot.azimuth_in),
+      }),
     });
   }
 
@@ -381,7 +416,9 @@ export function validateEditableShot(
       sectionIndex,
       shotIndex,
       field: 'azimuth_out',
-      message: `Azimuth out (${shot.azimuth_out.toFixed(1)}°) must be between 0 and 360`,
+      message: i18n.t('validation.import.azimuthOutRange', {
+        value: formatDegrees(shot.azimuth_out),
+      }),
     });
   }
 
@@ -404,7 +441,7 @@ export function validatePlacement(
     return {
       type: 'missingPlacement',
       sectionIndex,
-      message: 'Section must be placed before import',
+      message: i18n.t('validation.import.sectionNotPlaced'),
     };
   }
   return null;
@@ -436,7 +473,7 @@ export function validateMergeTarget(
     return {
       type: 'mergeConflict',
       sectionIndex,
-      message: 'Target section for merge is not specified',
+      message: i18n.t('validation.import.mergeTargetMissing'),
     };
   }
 
@@ -445,7 +482,7 @@ export function validateMergeTarget(
     return {
       type: 'mergeConflict',
       sectionIndex,
-      message: 'Target section for merge does not exist',
+      message: i18n.t('validation.import.mergeTargetNotFound'),
     };
   }
 

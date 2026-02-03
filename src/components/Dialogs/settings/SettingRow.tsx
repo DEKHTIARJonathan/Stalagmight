@@ -1,4 +1,5 @@
 import { useId, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface SettingRowProps {
   /** Label text for the setting */
@@ -27,6 +28,7 @@ export function SettingRow({
   children,
   'data-testid': dataTestId,
 }: SettingRowProps) {
+  const { t } = useTranslation();
   const labelId = useId();
 
   return (
@@ -44,9 +46,9 @@ export function SettingRow({
             {requiresRestart && (
               <span
                 className="text-xs px-1.5 py-0.5 bg-warning-20 text-warning rounded"
-                title="Requires app restart to take effect"
+                title={t('settings.common.restartTitle')}
               >
-                Restart
+                {t('settings.common.restartBadge')}
               </span>
             )}
           </div>

@@ -19,7 +19,7 @@ import type {
   ClosureStrategy,
   Coordinates,
 } from '../types/project';
-import type { Config } from '../types/config';
+import type { Config, TransitVerticalMode } from '../types/config';
 import type { CommandResult, ConnectivityResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
@@ -184,6 +184,13 @@ interface ProjectStore {
   unmergeStations: (stationRef: StationRef) => Promise<CommandResult>;
   checkMergeConnectivity: (stationA: StationRef, stationB: StationRef) => Promise<ConnectivityResult>;
   createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
+  adjustLoopClosures: (
+    anchorStation: StationRef,
+    method: ClosureStrategy,
+    useStrategyFilter: boolean,
+    sequentialDistribution: ClosureStrategy,
+    transitVerticalMode: TransitVerticalMode
+  ) => Promise<CommandResult>;
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
   moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
@@ -731,6 +738,27 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   createLoopClosure: async (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => {
     const result = await invoke<CommandResult>('create_loop_closure', { stationA, stationB, closureStrategy });
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
+  },
+
+  adjustLoopClosures: async (
+    anchorStation: StationRef,
+    method: ClosureStrategy,
+    useStrategyFilter: boolean,
+    sequentialDistribution: ClosureStrategy,
+    transitVerticalMode: TransitVerticalMode
+  ) => {
+    const result = await invoke<CommandResult>('adjust_loop_closures', {
+      anchorStation,
+      method,
+      useStrategyFilter,
+      sequentialDistribution,
+      transitVerticalMode,
+    });
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });

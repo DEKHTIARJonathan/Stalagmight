@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useId } from 'react';
 import { createPortal } from 'react-dom';
-import { formatDistanceToNow, isValid, parseISO, differenceInDays, format } from 'date-fns';
+import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { formatDate, formatRelativeTime } from '../../i18n/format';
 import type { CommandResult, UndoHistoryItem, PreviewData } from '../../types/commands';
 
 interface UndoHistoryDropdownProps {
@@ -53,27 +54,27 @@ function getCommandIcon(commandType: string): string {
   }
 }
 
-/** Format timestamp for display using date-fns for consistent cross-runtime support */
-function formatTimestamp(timestamp: string | null): string {
+/** Format timestamp for display using Intl for consistent cross-runtime support */
+function formatTimestamp(timestamp: string | null, t: (key: string) => string): string {
   if (!timestamp) {
-    return 'Unknown';
+    return t('common.states.unknown');
   }
 
-  const date = parseISO(timestamp);
-  if (!isValid(date)) {
-    return 'Unknown';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return t('common.states.unknown');
   }
 
   const now = new Date();
-  const daysDiff = differenceInDays(now, date);
+  const diffMs = Math.abs(now.getTime() - date.getTime());
 
-  if (daysDiff < 1) {
+  if (diffMs < 86400000) {
     // Less than 1 day - show relative time
-    return formatDistanceToNow(date, { addSuffix: true });
-  } else {
-    // 1 day or older - show date with time using date-fns format
-    return format(date, 'MMM d, h:mm a');
+    return formatRelativeTime(date);
   }
+
+  // 1 day or older - show date with time
+  return formatDate(date, undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 /** Truncate description to ~40 chars with ellipsis */
@@ -93,6 +94,7 @@ interface DetailPreviewPopupProps {
 
 /** Detail preview popup showing field changes */
 function DetailPreviewPopup({ previewData, anchorRect, dropdownRect, commandType }: DetailPreviewPopupProps) {
+  const { t } = useTranslation();
   const popupRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<'right' | 'left'>('right');
 
@@ -134,7 +136,7 @@ function DetailPreviewPopup({ previewData, anchorRect, dropdownRect, commandType
       data-testid="detail-preview-popup"
     >
       {!hasChanges ? (
-        <div className="text-sm text-text-secondary">No details</div>
+        <div className="text-sm text-text-secondary">{t('undo.preview.noDetails')}</div>
       ) : (
         <>
           <div className="space-y-1">
@@ -180,7 +182,7 @@ function DetailPreviewPopup({ previewData, anchorRect, dropdownRect, commandType
                     // Removed: "Field: ̶v̶a̶l̶u̶e̶"
                     <span className="text-text-secondary line-through">{change.oldValue}</span>
                   ) : (
-                    <span className="text-text-secondary">(empty)</span>
+                    <span className="text-text-secondary">{t('undo.preview.empty')}</span>
                   )}
                 </div>
               );
@@ -188,7 +190,7 @@ function DetailPreviewPopup({ previewData, anchorRect, dropdownRect, commandType
           </div>
           {previewData.additionalChanges > 0 && (
             <div className="mt-1 pt-1 border-t border-border text-xs text-text-secondary">
-              +{previewData.additionalChanges} more
+              {t('undo.preview.more', { count: previewData.additionalChanges })}
             </div>
           )}
         </>
@@ -205,6 +207,8 @@ export default function UndoHistoryDropdown({
   onSingleAction,
   testId,
 }: UndoHistoryDropdownProps) {
+  const { t } = useTranslation();
+  const modeLabel = mode === 'undo' ? t('undo.actions.undo') : t('undo.actions.redo');
   const [isOpen, setIsOpen] = useState(false);
   const [items, setItems] = useState<UndoHistoryItem[]>([]);
   // State for preview popup
@@ -317,16 +321,16 @@ export default function UndoHistoryDropdown({
     context: { description: string; commandType: string; timestamp: string | null }
   ): string => {
     const lines: string[] = [];
-    lines.push(`Failed to ${mode} action: "${context.description}"`);
+    lines.push(t('undo.errors.failedAction', { mode, description: context.description }));
     lines.push('');
-    lines.push(`Reason: ${errorReason}`);
+    lines.push(t('undo.errors.reason', { reason: errorReason }));
     lines.push('');
-    lines.push(`Command type: ${context.commandType}`);
+    lines.push(t('undo.errors.commandType', { commandType: context.commandType }));
     if (context.timestamp) {
-      lines.push(`Original timestamp: ${formatTimestamp(context.timestamp)}`);
+      lines.push(t('undo.errors.timestamp', { timestamp: formatTimestamp(context.timestamp, t) }));
     }
     return lines.join('\n');
-  }, [mode]);
+  }, [mode, t]);
 
   // Process the action queue sequentially
   const processQueue = useCallback(async () => {
@@ -355,7 +359,7 @@ export default function UndoHistoryDropdown({
         setIsActionInProgress(false);
         actionQueueRef.current = [];
         openDialog('error', {
-          title: `${mode === 'undo' ? 'Undo' : 'Redo'} Failed`,
+          title: t('undo.errors.failedTitle', { mode: modeLabel }),
           message: buildErrorMessage(errorReason, context),
           stackTrace: errorStack,
         });
@@ -365,7 +369,7 @@ export default function UndoHistoryDropdown({
       // Primary error path: check CommandResult.success (fail closed: treat missing result as error)
       if (!result?.success) {
         console.error(`${mode} action failed:`, result?.error);
-        const errorReason = result?.error ?? 'An unknown error occurred.';
+        const errorReason = result?.error ?? t('undo.errors.unknownError');
 
         // Refresh stack so dropdown reflects actual backend state even after error
         await fetchStack();
@@ -375,7 +379,7 @@ export default function UndoHistoryDropdown({
         setIsActionInProgress(false);
         actionQueueRef.current = [];
         openDialog('error', {
-          title: `${mode === 'undo' ? 'Undo' : 'Redo'} Failed`,
+          title: t('undo.errors.failedTitle', { mode: modeLabel }),
           message: buildErrorMessage(errorReason, context),
         });
         return;
@@ -396,19 +400,19 @@ export default function UndoHistoryDropdown({
         actionQueueRef.current = [];
         isActionInProgressRef.current = false;
         setIsActionInProgress(false);
-        setAnnouncement('No actions remaining');
+        setAnnouncement(t('undo.announcement.none'));
         hardClose();
         return;
       }
 
       // Announce remaining item count for screen readers
       const count = refreshedStack.length;
-      setAnnouncement(`${count} ${count === 1 ? 'action' : 'actions'} remaining`);
+      setAnnouncement(t('undo.announcement.remaining', { count }));
     }
 
     isActionInProgressRef.current = false;
     setIsActionInProgress(false);
-  }, [mode, fetchStack, hardClose, openDialog]);
+  }, [mode, fetchStack, hardClose, openDialog, t, modeLabel, buildErrorMessage]);
 
   // Enqueue an action and start processing if idle
   const enqueueAction = useCallback((
@@ -546,13 +550,13 @@ export default function UndoHistoryDropdown({
     const item = items.find(i => i.index === index);
     const context = item
       ? { description: item.description, commandType: item.commandType, timestamp: item.timestamp }
-      : { description: `Action #${index}`, commandType: 'unknown', timestamp: null };
+      : { description: t('undo.actionIndex', { index }), commandType: 'unknown', timestamp: null };
 
     const action = mode === 'undo' ? undoTo : redoTo;
     enqueueAction(() => action(index), context);
     // Close dropdown immediately after clicking an item
     hardClose();
-  }, [mode, undoTo, redoTo, enqueueAction, hardClose, items]);
+  }, [mode, undoTo, redoTo, enqueueAction, hardClose, items, t]);
 
   // Handle keyboard navigation on trigger button
   const handleButtonKeyDown = useCallback(async (event: React.KeyboardEvent) => {
@@ -637,7 +641,7 @@ export default function UndoHistoryDropdown({
       const firstItem = items[0];
       const context = firstItem
         ? { description: firstItem.description, commandType: firstItem.commandType, timestamp: firstItem.timestamp }
-        : { description: 'Single action', commandType: 'unknown', timestamp: null };
+        : { description: t('undo.singleAction'), commandType: 'unknown', timestamp: null };
 
       const action = mode === 'undo' ? undo : redo;
       enqueueAction(() => action(), context);
@@ -646,7 +650,7 @@ export default function UndoHistoryDropdown({
       hardClose();
       onSingleAction();
     }
-  }, [mode, undo, redo, enqueueAction, onSingleAction, hardClose, items]);
+  }, [mode, undo, redo, enqueueAction, onSingleAction, hardClose, items, t]);
 
   // Close on Escape - use hardClose and return focus to button
   useEffect(() => {
@@ -697,7 +701,7 @@ export default function UndoHistoryDropdown({
         const firstItem = items[0];
         const context = firstItem
           ? { description: firstItem.description, commandType: firstItem.commandType, timestamp: firstItem.timestamp }
-          : { description: 'Keyboard shortcut action', commandType: 'unknown', timestamp: null };
+          : { description: t('undo.keyboardAction'), commandType: 'unknown', timestamp: null };
 
         // Perform the appropriate action based on the key pressed
         const action = isUndoKey ? undo : redo;
@@ -710,7 +714,7 @@ export default function UndoHistoryDropdown({
     return () => {
       document.removeEventListener('keydown', handleShortcut, true);
     };
-  }, [isOpen, undo, redo, enqueueAction, items]);
+  }, [isOpen, undo, redo, enqueueAction, items, t]);
 
   // Close on click outside - use hardClose
   useEffect(() => {
@@ -811,7 +815,7 @@ export default function UndoHistoryDropdown({
           tabIndex={-1}
         >
           <div className="px-3 py-2 text-xs font-medium text-text-secondary uppercase tracking-wide border-b border-border">
-            {mode === 'undo' ? 'Undo History' : 'Redo History'}
+            {mode === 'undo' ? t('undo.history.undo') : t('undo.history.redo')}
           </div>
 
           {/* Loading indicator shown at top of dropdown during action */}
@@ -821,7 +825,7 @@ export default function UndoHistoryDropdown({
               data-testid={`${testId}-loading`}
             >
               <div className="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-              <span className="text-xs text-text-secondary">Processing...</span>
+              <span className="text-xs text-text-secondary">{t('undo.processing')}</span>
             </div>
           )}
 
@@ -836,7 +840,7 @@ export default function UndoHistoryDropdown({
           >
             {items.length === 0 ? (
               <div className="px-3 py-4 text-center text-text-secondary text-sm">
-                No {mode} history
+                {t('undo.history.empty', { mode: modeLabel })}
               </div>
             ) : (
               items.map((item, idx) => {
@@ -881,7 +885,7 @@ export default function UndoHistoryDropdown({
                         {truncateDescription(item.description)}
                       </div>
                       <div className="text-xs text-text-secondary">
-                        {formatTimestamp(item.timestamp)}
+                        {formatTimestamp(item.timestamp, t)}
                       </div>
                     </div>
                   </button>

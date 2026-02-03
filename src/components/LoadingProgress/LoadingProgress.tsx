@@ -1,4 +1,6 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
+import { formatNumber } from '../../i18n/format';
 
 export interface LoadingProgressProps {
   title: string;                    // "Loading ProjectName..."
@@ -32,6 +34,7 @@ export function LoadingProgress({
   onRetry,
   error,
 }: LoadingProgressProps) {
+  const { t } = useTranslation();
   const [detailsExpanded, setDetailsExpanded] = React.useState(false);
   const [copyFeedback, setCopyFeedback] = React.useState<'idle' | 'copied' | 'failed'>('idle');
   const isIndeterminate = phaseProgress === undefined;
@@ -92,7 +95,7 @@ export function LoadingProgress({
       >
         {/* Error Title */}
         <h2 className="text-lg font-medium text-error mb-2">
-          Failed to Load Project
+          {t('loading.error.title')}
         </h2>
 
         {/* Error Message */}
@@ -110,7 +113,7 @@ export function LoadingProgress({
               aria-expanded={detailsExpanded}
               aria-controls={detailsId}
             >
-              {detailsExpanded ? '▼ Hide details' : '▶ Show details'}
+              {detailsExpanded ? t('loading.error.hideDetails') : t('loading.error.showDetails')}
             </button>
             {detailsExpanded && (
               <pre
@@ -131,7 +134,7 @@ export function LoadingProgress({
               onClick={onRetry}
               className="px-3 py-1.5 bg-accent text-accent-on rounded hover:bg-accent-90 transition-colors"
             >
-              Retry
+              {t('common.actions.retry')}
             </button>
           )}
           <button
@@ -140,15 +143,19 @@ export function LoadingProgress({
             disabled={!onCancel}
             className="px-3 py-1.5 bg-surface-alt text-text-primary rounded hover:bg-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Dismiss
+            {t('common.actions.dismiss')}
           </button>
           <button
             type="button"
             onClick={handleCopyError}
             className="px-3 py-1.5 text-text-secondary hover:text-text-primary transition-colors"
-            title="Copy error to clipboard"
+            title={t('loading.error.copyTitle')}
           >
-            {copyFeedback === 'copied' ? 'Copied!' : copyFeedback === 'failed' ? 'Failed' : 'Copy'}
+            {copyFeedback === 'copied'
+              ? t('loading.error.copied')
+              : copyFeedback === 'failed'
+                ? t('loading.error.copyFailed')
+                : t('loading.error.copy')}
           </button>
         </div>
       </div>
@@ -172,15 +179,15 @@ export function LoadingProgress({
       {/* Overall Progress */}
       <div className="mb-4">
         <div className="flex justify-between text-sm text-text-secondary mb-1">
-          <span>Overall</span>
-          <span>{Math.round(clampedOverall)}%</span>
+          <span>{t('loading.overall.label')}</span>
+          <span>{formatNumber(Math.round(clampedOverall))}%</span>
         </div>
         <div className="h-1.5 bg-border rounded-full overflow-hidden">
           <div
             className="h-full bg-accent transition-all duration-300"
             style={{ width: `${clampedOverall}%` }}
             role="progressbar"
-            aria-label="Overall progress"
+            aria-label={t('loading.overall.aria')}
             aria-valuenow={Math.round(clampedOverall)}
             aria-valuemin={0}
             aria-valuemax={100}
@@ -198,7 +205,7 @@ export function LoadingProgress({
         <div className="flex justify-between text-sm text-text-secondary mb-1">
           <span>{phase}</span>
           {phaseCurrent !== undefined && phaseTotal !== undefined && (
-            <span>{phaseCurrent}/{phaseTotal}</span>
+            <span>{formatNumber(phaseCurrent)}/{formatNumber(phaseTotal)}</span>
           )}
         </div>
         <div className="h-1 bg-border rounded-full overflow-hidden">
@@ -206,15 +213,15 @@ export function LoadingProgress({
             <div
               className="h-full bg-accent-70 animate-pulse-shimmer"
               role="progressbar"
-              aria-label="Phase progress"
-              aria-valuetext="Loading"
+              aria-label={t('loading.phase.aria')}
+              aria-valuetext={t('common.states.loading')}
             />
           ) : (
             <div
               className="h-full bg-accent-70 transition-all duration-150"
               style={{ width: `${clampedPhase}%` }}
               role="progressbar"
-              aria-label="Phase progress"
+              aria-label={t('loading.phase.aria')}
               aria-valuenow={Math.round(clampedPhase!)}
               aria-valuemin={0}
               aria-valuemax={100}
@@ -230,7 +237,7 @@ export function LoadingProgress({
           onClick={onCancel}
           className="text-sm text-text-secondary hover:text-text-primary transition-colors"
         >
-          Cancel
+          {t('common.actions.cancel')}
         </button>
       )}
     </div>

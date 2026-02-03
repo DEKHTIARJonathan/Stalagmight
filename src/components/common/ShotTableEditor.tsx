@@ -1,4 +1,6 @@
 import { useState, useRef, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useTranslation } from 'react-i18next';
+import { formatFixed, formatNumber } from '../../i18n/format';
 import type { Shot } from '../../types/project';
 import { defaultConfig } from '../../types/config';
 import { hasAzimuthDiscrepancy, hasPitchDiscrepancy, validateEditableShot } from '../../utils/validation';
@@ -89,20 +91,28 @@ function hasPitchWarning(shot: EditableShot, threshold: number): boolean {
 /**
  * Get warnings for a shot based on validation config.
  */
-function getShotWarnings(shot: EditableShot, config: ValidationConfig): ShotWarning[] {
+function getShotWarnings(
+  shot: EditableShot,
+  config: ValidationConfig,
+  t: (key: string, options?: Record<string, unknown>) => string
+): ShotWarning[] {
   const warnings: ShotWarning[] = [];
 
   if (hasAzimuthWarning(shot, config.azimuth_diff_threshold)) {
     warnings.push({
       type: 'azimuth',
-      message: `Azimuth in/out differ by more than ${config.azimuth_diff_threshold}°`,
+      message: t('shotTable.warnings.azimuthDiff', {
+        threshold: `${formatFixed(config.azimuth_diff_threshold, undefined, 0)}°`,
+      }),
     });
   }
 
   if (hasPitchWarning(shot, config.pitch_diff_threshold)) {
     warnings.push({
       type: 'pitch',
-      message: `Pitch in/out differ by more than ${config.pitch_diff_threshold}°`,
+      message: t('shotTable.warnings.pitchDiff', {
+        threshold: `${formatFixed(config.pitch_diff_threshold, undefined, 0)}°`,
+      }),
     });
   }
 
@@ -166,6 +176,7 @@ export function ShotTableEditor({
   selectedRowIndex,
   onRowSelect,
 }: ShotTableEditorProps) {
+  const { t } = useTranslation();
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -371,7 +382,7 @@ export function ShotTableEditor({
       {/* Header with count and add button */}
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm text-text-secondary">
-          Shots ({visibleShots.length})
+          {t('shotTable.header', { count: formatNumber(visibleShots.length) })}
         </span>
         {showAddButton && !readOnly && (
           <button
@@ -380,7 +391,7 @@ export function ShotTableEditor({
             className="text-sm px-2 py-1 bg-accent text-accent-on rounded hover:bg-accent-80 transition-colors"
             data-testid="add-shot-button"
           >
-            + Add Shot
+            {t('shotTable.add')}
           </button>
         )}
       </div>
@@ -394,24 +405,24 @@ export function ShotTableEditor({
         <table ref={tableRef} className="w-full text-sm" data-testid="shot-table">
           <thead className="bg-background sticky top-0 z-10">
             <tr className="border-b border-border">
-              <th className="px-1 py-1 text-left w-10">#</th>
-              <th className="px-1 py-1 !text-right w-12">Length</th>
-              <th className="px-1 py-1 !text-right w-12">Azimuth</th>
-              <th className="px-1 py-1 !text-right w-12">Depth In</th>
-              <th className="px-1 py-1 !text-right w-12">Depth Out</th>
-              <th className="px-1 py-1 !text-right w-10">L</th>
-              <th className="px-1 py-1 !text-right w-10">R</th>
-              <th className="px-1 py-1 !text-right w-10">U</th>
-              <th className="px-1 py-1 !text-right w-10">D</th>
-              <th className="px-1 py-1 text-left w-20">Comment</th>
-              <th className="px-1 py-1 !text-center w-6" title="Warnings"></th>
+              <th className="px-1 py-1 text-left w-10">{t('shotTable.columns.idShort')}</th>
+              <th className="px-1 py-1 !text-right w-12">{t('shotTable.columns.length')}</th>
+              <th className="px-1 py-1 !text-right w-12">{t('shotTable.columns.azimuth')}</th>
+              <th className="px-1 py-1 !text-right w-12">{t('shotTable.columns.depthIn')}</th>
+              <th className="px-1 py-1 !text-right w-12">{t('shotTable.columns.depthOut')}</th>
+              <th className="px-1 py-1 !text-right w-10">{t('shotTable.columns.leftShort')}</th>
+              <th className="px-1 py-1 !text-right w-10">{t('shotTable.columns.rightShort')}</th>
+              <th className="px-1 py-1 !text-right w-10">{t('shotTable.columns.upShort')}</th>
+              <th className="px-1 py-1 !text-right w-10">{t('shotTable.columns.downShort')}</th>
+              <th className="px-1 py-1 text-left w-20">{t('shotTable.columns.comment')}</th>
+              <th className="px-1 py-1 !text-center w-6" title={t('shotTable.columns.warnings')}></th>
               <th className="px-1 py-1 w-8"></th>
             </tr>
           </thead>
           <tbody>
             {visibleShots.map((shot, visibleIdx) => {
               const actualIndex = getActualIndex(visibleIdx);
-              const warnings = getShotWarnings(shot, validationConfig);
+              const warnings = getShotWarnings(shot, validationConfig, t);
               const errors = getShotErrors(shot, actualIndex);
               const hasErrors = errors.length > 0;
               const warningMessages = warnings.map((w) => w.message);
@@ -503,7 +514,10 @@ export function ShotTableEditor({
                       max="360"
                       disabled={readOnly}
                       data-testid={`shot-azimuth-${visibleIdx}`}
-                      title={`In: ${shot.azimuth_in.toFixed(1)}°, Out: ${shot.azimuth_out.toFixed(1)}°`}
+                      title={t('shotTable.azimuthTitle', {
+                        inValue: `${formatFixed(shot.azimuth_in, undefined, 1)}°`,
+                        outValue: `${formatFixed(shot.azimuth_out, undefined, 1)}°`,
+                      })}
                     />
                       );
                     })()}
@@ -742,7 +756,7 @@ export function ShotTableEditor({
                         title={tooltipText}
                         data-testid={`shot-warning-${visibleIdx}`}
                         role="img"
-                        aria-label={hasErrors ? 'Error' : 'Warning'}
+                        aria-label={hasErrors ? t('shotTable.warnings.error') : t('shotTable.warnings.warning')}
                       >
                         !
                       </span>
@@ -759,7 +773,7 @@ export function ShotTableEditor({
                           onDeleteShot(actualIndex);
                         }}
                         className="text-error hover:text-error-80 text-xs px-1"
-                        title="Delete shot"
+                        title={t('shotTable.actions.delete')}
                         data-testid={`shot-delete-${visibleIdx}`}
                       >
                         x
@@ -772,7 +786,7 @@ export function ShotTableEditor({
             {visibleShots.length === 0 && (
               <tr>
                 <td colSpan={12} className="px-2 py-4 text-center text-text-secondary">
-                  No shots. {!readOnly && 'Click "Add Shot" to create one.'}
+                  {readOnly ? t('shotTable.empty') : t('shotTable.emptyWithAction')}
                 </td>
               </tr>
             )}
@@ -803,7 +817,7 @@ export function ShotTableEditor({
                 className="w-full px-3 py-2 text-left text-sm hover:bg-accent-10"
                 data-testid="context-menu-insert-before"
               >
-                Insert row before
+                {t('shotTable.contextMenu.insertBefore')}
               </button>
             )}
             {onInsertAfter && (
@@ -813,7 +827,7 @@ export function ShotTableEditor({
                 className="w-full px-3 py-2 text-left text-sm hover:bg-accent-10"
                 data-testid="context-menu-insert-after"
               >
-                Insert row after
+                {t('shotTable.contextMenu.insertAfter')}
               </button>
             )}
             {(onInsertBefore || onInsertAfter) && (
@@ -825,7 +839,7 @@ export function ShotTableEditor({
               className="w-full px-3 py-2 text-left text-sm text-error hover:bg-error-10"
               data-testid="context-menu-delete"
             >
-              Delete row
+              {t('shotTable.contextMenu.delete')}
             </button>
           </div>
         </div>

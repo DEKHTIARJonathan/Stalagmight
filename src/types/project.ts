@@ -68,6 +68,7 @@ export interface Section {
   date: string | null;
   color: string;
   direction: SurveyDirection;
+  quality: number;
   shots: Shot[];
 }
 
@@ -77,6 +78,7 @@ export interface SectionData {
   date?: string | null;
   color: string;
   direction?: SurveyDirection;
+  quality?: number;
   shots: ShotData[];
 }
 
@@ -86,6 +88,7 @@ export interface SectionUpdates {
   date?: string | null;
   color?: string;
   direction?: SurveyDirection;
+  quality?: number;
 }
 
 export interface SectionStats {
@@ -162,6 +165,9 @@ export interface ZeroDatum {
 export type ClosureStrategy =
   | 'ProportionalByLength'
   | 'EqualDistribution'
+  | 'Sequential'
+  | 'TransitRule'
+  | 'LeastSquaresWeighted'
   | 'KeepRaw'
   | 'ManualAdjustment'
   | 'Move';

@@ -1,0 +1,1329 @@
+{
+  "common": {
+    "actions": {
+      "add": "Add",
+      "apply": "Apply",
+      "back": "Back",
+      "cancel": "Cancel",
+      "clear": "Clear",
+      "close": "Close",
+      "confirm": "Confirm",
+      "continue": "Continue",
+      "copy": "Copy",
+      "delete": "Delete",
+      "dismiss": "Dismiss",
+      "done": "Done",
+      "edit": "Edit",
+      "export": "Export",
+      "import": "Import",
+      "next": "Next",
+      "open": "Open",
+      "remove": "Remove",
+      "reset": "Reset",
+      "retry": "Retry",
+      "save": "Save",
+      "select": "Select",
+      "show": "Show",
+      "submit": "Submit",
+      "update": "Update",
+      "undo": "Undo",
+      "redo": "Redo"
+    },
+    "labels": {
+      "date": "Date",
+      "depth": "Depth",
+      "description": "Description",
+      "location": "Location",
+      "name": "Name",
+      "notes": "Notes",
+      "status": "Status",
+      "section": "Section"
+    },
+    "states": {
+      "disabled": "Disabled",
+      "enabled": "Enabled",
+      "loading": "Loading",
+      "none": "None",
+      "unknown": "Unknown"
+    },
+    "units": {
+      "degrees": "deg",
+      "feet": "ft",
+      "kilometers": "km",
+      "meters": "m",
+      "percent": "%"
+    },
+    "offline": "Offline"
+  },
+  "settings": {
+    "loading": "Loading configuration...",
+    "categoryHeader": "{{category}} Settings",
+    "resetToDefaults": "Reset to Defaults",
+    "sidebar": {
+      "ariaLabel": "Settings categories",
+      "general": "General",
+      "appearance": "Appearance",
+      "units": "Units",
+      "display": "Display",
+      "map": "Map",
+      "validation": "Validation",
+      "export": "Export",
+      "shortcuts": "Shortcuts",
+      "cache": "Cache",
+      "advanced": "Advanced"
+    },
+    "common": {
+      "restartBadge": "Restart",
+      "restartTitle": "Requires app restart to take effect"
+    },
+    "general": {
+      "title": "General",
+      "sections": {
+        "language": "Language",
+        "saving": "Saving",
+        "recentProjects": "Recent Projects",
+        "undoHistory": "Undo History",
+        "feedback": "Feedback"
+      },
+      "language": {
+        "label": "Language / Locale",
+        "help": "Controls number and date formatting",
+        "aria": "Language or locale preference",
+        "options": {
+          "system": "System Default",
+          "enUS": "English (US)"
+        }
+      },
+      "autoSave": {
+        "label": "Auto-save",
+        "help": "Automatically save changes at regular intervals",
+        "aria": "Enable auto-save"
+      },
+      "autoSaveInterval": {
+        "label": "Auto-save interval",
+        "help": "How often to auto-save (in seconds, 10-3600)",
+        "aria": "Auto-save interval in seconds"
+      },
+      "recentProjectsMax": {
+        "label": "Maximum recent projects",
+        "help": "Number of recent projects to remember (1-50)",
+        "aria": "Maximum recent projects"
+      },
+      "undoHistoryLimit": {
+        "label": "History limit",
+        "help": "Maximum number of undo steps in memory (10-1000)",
+        "aria": "Undo history limit"
+      },
+      "undoPersistLimit": {
+        "label": "Persist limit",
+        "help": "Number of undo steps to save with project (0 = none)",
+        "aria": "Undo persist limit"
+      },
+      "shortcutFeedback": {
+        "label": "Shortcut feedback",
+        "help": "Show toast notifications when keyboard shortcuts are activated",
+        "aria": "Shortcut feedback preference",
+        "options": {
+          "none": "None",
+          "nonObvious": "Non-obvious only",
+          "all": "All"
+        }
+      },
+      "validation": {
+        "autoSaveInterval": "Auto-save interval must be between 10 and 3600 seconds",
+        "recentProjects": "Recent projects limit must be between 1 and 50",
+        "undoHistory": "Undo history limit must be between 10 and 1000",
+        "undoPersist": "Undo persist limit must be between 0 and undo history limit"
+      }
+    },
+    "appearance": {
+      "title": "Appearance",
+      "theme": {
+        "title": "Theme",
+        "label": "Application theme",
+        "help": "Choose how CaveChef looks",
+        "aria": "Application theme",
+        "options": {
+          "dark": {
+            "label": "Dark",
+            "description": "Dark backgrounds with light text, optimized for low-light environments"
+          },
+          "light": {
+            "label": "Light",
+            "description": "Light backgrounds with dark text, optimized for bright environments"
+          },
+          "auto": {
+            "label": "Auto",
+            "description": "Follows your operating system appearance preference"
+          }
+        }
+      }
+    },
+    "units": {
+      "title": "Units",
+      "sections": {
+        "measurement": "Measurement Units",
+        "precision": "Display Precision"
+      },
+      "length": {
+        "label": "Length unit",
+        "help": "Unit for horizontal distances (shot lengths, etc.)",
+        "aria": "Length unit",
+        "options": {
+          "meters": "Meters",
+          "feet": "Feet"
+        }
+      },
+      "depth": {
+        "label": "Depth unit",
+        "help": "Unit for vertical depth measurements",
+        "aria": "Depth unit",
+        "options": {
+          "meters": "Meters",
+          "feet": "Feet"
+        }
+      },
+      "angle": {
+        "label": "Angle unit",
+        "help": "Unit for azimuth and pitch angles",
+        "aria": "Angle unit",
+        "options": {
+          "degrees": "Degrees",
+          "gradians": "Gradians"
+        }
+      },
+      "decimal": {
+        "label": "Decimal places",
+        "help": "Number of decimal places for numeric values (0-6)",
+        "aria": "Decimal precision"
+      },
+      "validation": {
+        "decimalPrecision": "Decimal precision must be between 0 and 6"
+      }
+    },
+    "display": {
+      "title": "Display",
+      "sections": {
+        "background": "Background",
+        "grid": "Grid",
+        "font": "Font",
+        "depthGradient": "Depth Gradient",
+        "sectionColors": "Section Colors"
+      },
+      "background": {
+        "label": "Background color",
+        "help": "Default background color for the map view",
+        "aria": "Background color"
+      },
+      "grid": {
+        "color": {
+          "label": "Grid color",
+          "help": "Color of the grid lines overlay",
+          "aria": "Grid color"
+        },
+        "spacing": {
+          "label": "Grid spacing",
+          "help": "Distance between grid lines",
+          "aria": "Grid spacing"
+        },
+        "spacingOptionOne": "{{value}} meter",
+        "spacingOptionOther": "{{value}} meters"
+      },
+      "font": {
+        "size": {
+          "label": "Font size",
+          "help": "Size of labels and text (8-32 pixels)",
+          "aria": "Font size"
+        },
+        "color": {
+          "label": "Font color",
+          "help": "Default color for labels and text",
+          "aria": "Font color"
+        }
+      },
+      "depthGradient": {
+        "enabled": {
+          "label": "Enable depth gradient",
+          "help": "Color shots based on their depth",
+          "aria": "Enable depth gradient coloring"
+        },
+        "shallowColor": {
+          "label": "Shallow color",
+          "help": "Color at the shallow depth threshold",
+          "aria": "Shallow depth color"
+        },
+        "deepColor": {
+          "label": "Deep color",
+          "help": "Color at the deep depth threshold",
+          "aria": "Deep depth color"
+        },
+        "shallowDepth": {
+          "label": "Shallow depth",
+          "help": "Depth value where gradient starts (in configured depth unit)",
+          "aria": "Shallow depth threshold"
+        },
+        "deepDepth": {
+          "label": "Deep depth",
+          "help": "Depth value where gradient ends (in configured depth unit)",
+          "aria": "Deep depth threshold"
+        }
+      },
+      "sectionColors": {
+        "label": "Color palette",
+        "help": "Colors assigned to new sections (click to change)",
+        "aria": "Section color {{index}}"
+      },
+      "validation": {
+        "fontSize": "Font size must be between 8 and 32",
+        "depthRange": "Shallow depth must be less than deep depth"
+      }
+    },
+    "validation": {
+      "title": "Validation",
+      "sections": {
+        "shotLength": "Shot Length Warnings",
+        "depth": "Depth Warnings",
+        "diffThresholds": "In/Out Difference Thresholds"
+      },
+      "shotLength": {
+        "min": {
+          "label": "Minimum shot length",
+          "help": "Warn when shot length is below this value (in length units)",
+          "aria": "Minimum shot length warning"
+        },
+        "max": {
+          "label": "Maximum shot length",
+          "help": "Warn when shot length exceeds this value (in length units)",
+          "aria": "Maximum shot length warning"
+        }
+      },
+      "depth": {
+        "max": {
+          "label": "Max depth change per shot",
+          "help": "Warn when depth changes more than this in a single shot (in depth units)",
+          "aria": "Maximum depth change per shot"
+        }
+      },
+      "azimuthDiff": {
+        "label": "Azimuth in/out difference",
+        "help": "Warn when azimuth in and out readings differ by more than this (0-180 degrees)",
+        "aria": "Azimuth in/out difference threshold"
+      },
+      "pitchDiff": {
+        "label": "Pitch in/out difference",
+        "help": "Warn when forward/back pitch differs by more than this (0-90 degrees)",
+        "aria": "Pitch in/out difference threshold"
+      },
+      "validation": {
+        "minShotLength": "Minimum shot length warning must be >= 0",
+        "maxShotLength": "Maximum shot length warning must be greater than minimum",
+        "depthChange": "Depth change warning threshold must be positive",
+        "azimuthDiff": "Azimuth difference threshold must be between 0 and 180",
+        "pitchDiff": "Pitch difference threshold must be between 0 and 90"
+      }
+    },
+    "export": {
+      "title": "Export",
+      "sections": {
+        "imageFormat": "Image Format",
+        "layers": "Default Layers"
+      },
+      "format": {
+        "label": "Default format",
+        "help": "File format for exported images",
+        "aria": "Default image format",
+        "options": {
+          "png": "PNG",
+          "svg": "SVG",
+          "pdf": "PDF"
+        }
+      },
+      "dpi": {
+        "label": "Default DPI",
+        "help": "Resolution for exported images",
+        "aria": "Default DPI",
+        "options": {
+          "screen": "72 DPI (Screen)",
+          "lowPrint": "150 DPI (Low Print)",
+          "standardPrint": "300 DPI (Standard Print)",
+          "highQuality": "600 DPI (High Quality)"
+        }
+      },
+      "layers": {
+        "satellite": {
+          "label": "Include satellite",
+          "help": "Include satellite imagery layer by default",
+          "aria": "Include satellite imagery"
+        },
+        "grid": {
+          "label": "Include grid",
+          "help": "Include grid overlay by default",
+          "aria": "Include grid overlay"
+        },
+        "labels": {
+          "label": "Include labels",
+          "help": "Include station/shot labels by default",
+          "aria": "Include labels"
+        }
+      },
+      "validation": {
+        "dpi": "DPI must be between 72 and 1200"
+      }
+    },
+    "cache": {
+      "title": "Cache",
+      "sections": {
+        "tileCache": "Tile Cache",
+        "configuration": "Cache Configuration"
+      },
+      "stats": {
+        "loading": "Loading cache statistics...",
+        "cachedTiles": "Cached tiles:",
+        "cacheSize": "Cache size:",
+        "byProvider": "By provider:",
+        "providerTiles": "{{tiles}} tiles ({{size}})",
+        "unavailable": "Unable to load cache statistics"
+      },
+      "clear": {
+        "button": "Clear Cache",
+        "clearing": "Clearing..."
+      },
+      "enabled": {
+        "label": "Enable tile caching",
+        "help": "Cache satellite tiles for offline access",
+        "aria": "Enable tile caching"
+      },
+      "maxSize": {
+        "label": "Maximum cache size",
+        "help": "Older tiles will be removed when this limit is reached ({{min}}-{{max}} MB)",
+        "aria": "Maximum cache size in MB",
+        "unit": "MB"
+      },
+      "ttl": {
+        "label": "Cache TTL",
+        "help": "How long to keep cached tiles before refreshing (1-365 days)",
+        "aria": "Cache TTL in days",
+        "unit": "days"
+      },
+      "validation": {
+        "minSize": "Cache size must be at least {{value}} MB",
+        "maxSize": "Cache size must not exceed {{value}} MB",
+        "ttl": "Cache TTL must be between 1 and 365 days"
+      }
+    },
+    "advanced": {
+      "title": "Advanced",
+      "sections": {
+        "debug": "Debug",
+        "logging": "Logging",
+        "closureAdjustment": "Closure Adjustment",
+        "panels": "Panel Dimensions",
+        "configFile": "Configuration File"
+      },
+      "debug": {
+        "showHitboxes": {
+          "label": "Show hitboxes",
+          "help": "Visualize clickable areas for stations and shots",
+          "aria": "Show hitboxes"
+        },
+        "logHitDetection": {
+          "label": "Log hit detection",
+          "help": "Log click/hover detection events to console",
+          "aria": "Log hit detection"
+        }
+      },
+      "logging": {
+        "level": {
+          "label": "Log level",
+          "help": "Minimum severity level for log messages",
+          "aria": "Log level",
+          "options": {
+            "trace": "Trace (most verbose)",
+            "debug": "Debug",
+            "info": "Info (default)",
+            "warn": "Warning",
+            "error": "Error (least verbose)"
+          }
+        },
+        "maxSize": {
+          "label": "Max log directory size",
+          "help": "Maximum total size for log files (1-10000 MB)",
+          "aria": "Max log directory size in MB",
+          "unit": "MB"
+        }
+      },
+      "closureAdjustment": {
+        "sigmaLength": {
+          "label": "Base length sigma",
+          "help": "Baseline standard deviation for shot length (meters)",
+          "aria": "Base length sigma in meters"
+        },
+        "sigmaAzimuth": {
+          "label": "Base azimuth sigma",
+          "help": "Baseline standard deviation for azimuth (degrees)",
+          "aria": "Base azimuth sigma in degrees"
+        },
+        "sigmaDepth": {
+          "label": "Base depth sigma",
+          "help": "Baseline standard deviation for depth change (meters)",
+          "aria": "Base depth sigma in meters"
+        },
+        "transitVertical": {
+          "label": "Transit vertical handling",
+          "help": "How transit rule distributes vertical misclosure",
+          "aria": "Transit vertical handling",
+          "ignore": "Ignore vertical",
+          "length": "Length proportional",
+          "equal": "Equal"
+        },
+        "sequentialDistribution": {
+          "label": "Sequential distribution",
+          "help": "Default distribution used when running sequential closure",
+          "aria": "Sequential distribution method",
+          "proportional": "Proportional by length",
+          "equal": "Equal distribution",
+          "transit": "Transit rule"
+        }
+      },
+      "panels": {
+        "sectionsWidth": {
+          "label": "Sections panel width",
+          "help": "Default width of the sections panel (100-800 px)",
+          "aria": "Sections panel width",
+          "unit": "px"
+        },
+        "detailWidth": {
+          "label": "Detail panel width",
+          "help": "Default width of the detail panel (150-800 px)",
+          "aria": "Detail panel width",
+          "unit": "px"
+        },
+        "dataTableHeight": {
+          "label": "Data table height",
+          "help": "Default height of the data table (100-600 px)",
+          "aria": "Data table height",
+          "unit": "px"
+        }
+      },
+      "reload": {
+        "button": "Reload Config from Disk",
+        "loading": "Reloading...",
+        "help": "Reload configuration from the config file, discarding any unsaved changes.",
+        "success": "Config reloaded:\n{{changes}}",
+        "noChanges": "Config reloaded (no changes detected in advanced settings)",
+        "error": "Failed to reload config: {{error}}"
+      },
+      "validation": {
+        "logSize": "Log directory size must be between 1 and 10000 MB",
+        "sectionsPanel": "Sections panel width must be between 100 and 800",
+        "detailPanel": "Detail panel width must be between 150 and 800",
+        "dataTable": "Data table height must be between 100 and 600",
+        "closureSigmaLength": "Base length sigma must be greater than 0",
+        "closureSigmaAzimuth": "Base azimuth sigma must be greater than 0",
+        "closureSigmaDepth": "Base depth sigma must be greater than 0"
+      }
+    },
+    "shortcuts": {
+      "title": "Shortcuts",
+      "categories": {
+        "file": "File",
+        "tools": "Tools",
+        "edit": "Edit",
+        "view": "View",
+        "panels": "Panels"
+      },
+      "reserved": {
+        "title": "Reserved Shortcuts",
+        "cancelClose": "Cancel / Close dialogs",
+        "deleteSelection": "Delete selection",
+        "uiNavigation": "UI Navigation",
+        "selectAll": "Select all",
+        "openSettings": "Open Settings"
+      },
+      "search": {
+        "placeholder": "Search shortcuts...",
+        "aria": "Search keyboard shortcuts"
+      },
+      "errors": {
+        "reserved": "\"{{shortcut}}\" cannot be assigned (reserved for: {{reason}}).",
+        "conflict": "\"{{shortcut}}\" is already used by \"{{action}}\".",
+        "duplicateSlot": "\"{{shortcut}}\" is already assigned to the {{slot}} slot.",
+        "blockedKey": "\"{{key}}\" cannot be used as a shortcut."
+      },
+      "slots": {
+        "primary": "primary",
+        "secondary": "secondary",
+        "primaryAria": "Primary shortcut for {{action}}",
+        "secondaryAria": "Secondary shortcut for {{action}}"
+      },
+      "resetOne": {
+        "title": "Reset to default"
+      },
+      "resetAll": "Reset All Shortcuts"
+    },
+    "map": {
+      "title": "Map",
+      "sections": {
+        "satellite": "Satellite",
+        "zoom": "Zoom",
+        "controls": "Controls",
+        "station": "Station Appearance",
+        "shot": "Shot Appearance",
+        "snap": "Snap-to-Station",
+        "animation": "Animation"
+      },
+      "satellite": {
+        "provider": {
+          "label": "Tile provider",
+          "help": "Source for satellite imagery tiles",
+          "aria": "Satellite tile provider"
+        },
+        "providerRequiresKey": "{{provider}} (requires API key)",
+        "enabled": {
+          "label": "Enable satellite",
+          "help": "Show satellite imagery by default",
+          "aria": "Enable satellite imagery"
+        },
+        "latitude": {
+          "label": "GPS origin latitude",
+          "help": "Default latitude for satellite alignment (-90 to 90)",
+          "aria": "GPS origin latitude"
+        },
+        "longitude": {
+          "label": "GPS origin longitude",
+          "help": "Default longitude for satellite alignment (-180 to 180)",
+          "aria": "GPS origin longitude"
+        }
+      },
+      "zoom": {
+        "default": {
+          "label": "Default zoom",
+          "help": "Initial zoom level when opening a project",
+          "aria": "Default zoom level"
+        },
+        "min": {
+          "label": "Minimum zoom",
+          "help": "Lowest allowed zoom level (most zoomed out)",
+          "aria": "Minimum zoom level"
+        },
+        "max": {
+          "label": "Maximum zoom",
+          "help": "Highest allowed zoom level (most zoomed in)",
+          "aria": "Maximum zoom level"
+        },
+        "step": {
+          "label": "Zoom step",
+          "help": "Zoom increment for click-to-zoom (0.1-5.0)",
+          "aria": "Zoom step"
+        }
+      },
+      "controls": {
+        "panSpeed": {
+          "label": "Pan speed",
+          "help": "Multiplier for panning speed (0.1-5.0)",
+          "aria": "Pan speed multiplier"
+        },
+        "zoomSpeed": {
+          "label": "Zoom speed",
+          "help": "Multiplier for scroll zoom speed (0.1-5.0)",
+          "aria": "Zoom speed multiplier"
+        },
+        "invertScroll": {
+          "label": "Invert scroll",
+          "help": "Reverse scroll wheel zoom direction",
+          "aria": "Invert scroll direction"
+        }
+      },
+      "station": {
+        "radius": {
+          "label": "Station radius",
+          "help": "Visual size of station markers (1-50 pixels)",
+          "aria": "Station radius"
+        },
+        "hitArea": {
+          "label": "Station hit area",
+          "help": "Clickable area size (must be >= radius)",
+          "aria": "Station hit area"
+        },
+        "hoverRadius": {
+          "label": "Station hover radius",
+          "help": "Radius when hovered (1-50 pixels)",
+          "aria": "Station hover radius"
+        },
+        "selectionRadius": {
+          "label": "Station selection radius",
+          "help": "Radius when selected (1-50 pixels)",
+          "aria": "Station selection radius"
+        }
+      },
+      "shot": {
+        "width": {
+          "label": "Shot width",
+          "help": "Visual thickness of shot lines (0.5-20 pixels)",
+          "aria": "Shot line width"
+        },
+        "hitArea": {
+          "label": "Shot hit area",
+          "help": "Clickable area width (must be >= width)",
+          "aria": "Shot hit area"
+        },
+        "hoverWidth": {
+          "label": "Shot hover width",
+          "help": "Width when hovered (0.5-20 pixels)",
+          "aria": "Shot hover width"
+        },
+        "selectionWidth": {
+          "label": "Shot selection width",
+          "help": "Width when selected (0.5-20 pixels)",
+          "aria": "Shot selection width"
+        }
+      },
+      "snap": {
+        "threshold": {
+          "label": "Snap threshold",
+          "help": "Distance in pixels to snap to stations (1-50)",
+          "aria": "Snap threshold"
+        },
+        "draw": {
+          "label": "Snap in Draw tool",
+          "help": "Enable snap-to-station when drawing",
+          "aria": "Enable snap in Draw tool"
+        },
+        "merge": {
+          "label": "Snap in Merge tool",
+          "help": "Enable snap-to-station when merging",
+          "aria": "Enable snap in Merge tool"
+        },
+        "measure": {
+          "label": "Snap in Measure tool",
+          "help": "Enable snap-to-station when measuring",
+          "aria": "Enable snap in Measure tool"
+        }
+      },
+      "animation": {
+        "enabled": {
+          "label": "Enable animations",
+          "help": "Animate map focus transitions",
+          "aria": "Enable map animations"
+        },
+        "duration": {
+          "label": "Animation duration",
+          "help": "Duration of focus animations (0-2000 ms)",
+          "aria": "Animation duration"
+        },
+        "pointZoom": {
+          "label": "Point focus zoom",
+          "help": "Zoom level when focusing on a single point",
+          "aria": "Point focus zoom level"
+        }
+      },
+      "validation": {
+        "zoomRange": "Minimum zoom must be less than maximum zoom",
+        "zoomDefault": "Default zoom must be between min and max zoom",
+        "zoomStep": "Zoom step must be between 0.1 and 5.0",
+        "latitude": "Latitude must be between -90 and 90",
+        "longitude": "Longitude must be between -180 and 180",
+        "stationRadius": "Station radius must be between 1 and 50",
+        "stationHitArea": "Station hit area must be at least as large as radius",
+        "shotWidth": "Shot width must be between 0.5 and 20",
+        "shotHitArea": "Shot hit area must be at least as large as width",
+        "snapThreshold": "Snap threshold must be between 1 and 50",
+        "animationDuration": "Animation duration must be between 0 and 2000 ms"
+      }
+    }
+  },
+  "dialogs": {
+    "settings": {
+      "title": "Settings"
+    },
+    "unsaved": {
+      "title": "Unsaved Changes",
+      "message": "You have unsaved changes. What would you like to do?",
+      "note": "Your changes will be lost if you discard them.",
+      "discard": "Discard Changes"
+    },
+    "resetDefaults": {
+      "title": "Reset to Defaults",
+      "message": "Reset all {{category}} settings to their default values?",
+      "note": "This will only affect the current category. Changes are not saved until you click {{action}}."
+    }
+  },
+  "undo": {
+    "preview": {
+      "noDetails": "No details",
+      "empty": "No details",
+      "more": "+{{count}} more"
+    },
+    "errors": {
+      "failedAction": "Failed to {{mode}} action: \"{{description}}\"",
+      "reason": "Reason: {{reason}}",
+      "commandType": "Command type: {{commandType}}",
+      "timestamp": "Original timestamp: {{timestamp}}",
+      "failedTitle": "{{mode}} failed",
+      "unknownError": "Unknown error"
+    },
+    "actionIndex": "Action {{index}}",
+    "actions": {
+      "redo": "Redo",
+      "undo": "Undo"
+    },
+    "announcement": {
+      "none": "No more actions remaining.",
+      "remaining": "{{count}} actions remaining."
+    },
+    "history": {
+      "empty": "No {{mode}} actions.",
+      "redo": "Redo history",
+      "undo": "Undo history"
+    },
+    "keyboardAction": "Keyboard action",
+    "processing": "Processing...",
+    "singleAction": "Single action"
+  },
+  "status": {
+    "saved": "Project saved",
+    "saving": "Saving..."
+  },
+  "dataTable": {
+    "title": "Data table",
+    "toggle": {
+      "collapse": "Collapse data table",
+      "expand": "Expand data table"
+    },
+    "columns": {
+      "warningsShort": "!",
+      "idShort": "ID",
+      "length": "Len ({{unit}})",
+      "azimuthShort": "Az",
+      "depthIn": "Depth In",
+      "depthOut": "Depth Out",
+      "leftShort": "L",
+      "rightShort": "R",
+      "upShort": "U",
+      "downShort": "D",
+      "virtualShort": "V",
+      "comment": "Comment"
+    },
+    "empty": "No shots in this section.",
+    "selectSection": "Select a section to view shots.",
+    "shotCount": "{{count}} shots",
+    "announcement": {
+      "shotSelected": "Selected shot {{shotId}}."
+    }
+  },
+  "detailPanel": {
+    "tabs": {
+      "details": "Details",
+      "warnings": "Warnings"
+    },
+    "selectionNotFound": "Selection not found.",
+    "warnings": {
+      "empty": "No warnings.",
+      "count": "{{count}} warnings",
+      "resolvedCount": "{{count}} resolved",
+      "hideResolved": "Hide resolved",
+      "showResolved": "Show resolved",
+      "location": "Section {{section}} - Shot {{shot}}",
+      "markResolved": "Mark resolved",
+      "markUnresolved": "Mark unresolved",
+      "resolve": "Resolve"
+    },
+    "labels": {
+      "id": "ID",
+      "section": "Section",
+      "x": "X",
+      "y": "Y",
+      "depth": "Depth",
+      "length": "Length",
+      "azimuthIn": "Azimuth (in)",
+      "azimuthOut": "Azimuth (out)",
+      "depthIn": "Depth (in)",
+      "depthOut": "Depth (out)",
+      "leftShort": "L",
+      "rightShort": "R",
+      "upShort": "U",
+      "downShort": "D",
+      "pitchIn": "Pitch (in)",
+      "pitchOut": "Pitch (out)",
+      "comment": "Comment",
+      "color": "Color",
+      "latitude": "Latitude",
+      "longitude": "Longitude",
+      "surveyor": "Surveyor"
+    },
+    "placeholder": {
+      "none": "None"
+    },
+    "station": {
+      "title": "Station",
+      "center": "Center on station {{id}}",
+      "zeroDatum": "Zero datum station",
+      "mergedWith": "Merged with",
+      "connected": "Connected",
+      "previousShot": "Previous shot",
+      "nextShot": "Next shot"
+    },
+    "shot": {
+      "title": "Shot",
+      "center": "Center on shot {{id}}",
+      "inclination": "Inclination",
+      "computed": "Computed",
+      "lrud": "LRUD",
+      "connected": "Connected",
+      "startStation": "Start station",
+      "endStation": "End station",
+      "virtual": "Virtual shot",
+      "markVirtual": "Mark as virtual",
+      "markReal": "Mark as real"
+    },
+    "section": {
+      "title": "Section",
+      "center": "Center on section {{id}} ({{name}})",
+      "unnamed": "Unnamed section",
+      "display": "Section {{id}} - {{name}}",
+      "statsTitle": "Section stats",
+      "totalLength": "Total length",
+      "shotCount": "Shots",
+      "avgShot": "Average shot",
+      "virtualShots": "Virtual shots",
+      "depthRange": "Depth range",
+      "shallowest": "Shallowest",
+      "deepest": "Deepest",
+      "endpoints": "Endpoints",
+      "onlyStation": "Only station",
+      "firstStation": "First station",
+      "lastStation": "Last station",
+      "contribution": "Contribution",
+      "edit": "Edit section"
+    },
+    "projectStats": {
+      "title": "Project stats",
+      "empty": "No project statistics available.",
+      "overview": "Overview",
+      "totalLength": "Total length",
+      "penetration": "Penetration",
+      "sections": "Sections",
+      "shots": "Shots",
+      "stations": "Stations",
+      "loops": "Loops",
+      "depthRange": "Depth range",
+      "shallowest": "Shallowest",
+      "deepest": "Deepest",
+      "totalDepth": "Total depth",
+      "surveyDates": "Survey dates",
+      "firstSurvey": "First survey",
+      "latestSurvey": "Latest survey",
+      "connections": "Connections",
+      "stationMerges": "Station merges",
+      "zeroDatums": "Zero datums"
+    },
+    "closures": {
+      "title": "Loop closures",
+      "direct": "Direct:",
+      "transitive": "Transitive:",
+      "viaPrefix": " (via ",
+      "viaSuffix": ")",
+      "metrics": "Path {{path}} | Error {{error}} | {{percent}}",
+      "unavailable": "Closure metrics unavailable"
+    }
+  },
+  "displayMenu": {
+    "button": "Display",
+    "title": "Display options",
+    "spacing": {
+      "label": "Grid spacing"
+    },
+    "groups": {
+      "mapElements": "Map elements",
+      "overlays": "Overlays",
+      "developer": "Developer"
+    },
+    "items": {
+      "stations": "Stations",
+      "sectionNames": "Section names",
+      "stationLabels": "Station labels",
+      "shots": "Shots",
+      "virtualShots": "Virtual shots",
+      "shotData": "Shot data",
+      "zeroDatum": "Zero datum",
+      "grid": "Grid",
+      "scaleBar": "Scale bar",
+      "satellite": "Satellite",
+      "depthGradient": "Depth gradient",
+      "devStats": "Dev stats"
+    },
+    "descriptions": {
+      "stations": "Show station markers",
+      "sectionNames": "Show section labels",
+      "stationLabels": "Show station IDs",
+      "shots": "Show shot lines",
+      "virtualShots": "Show virtual shots",
+      "shotData": "Show shot data labels",
+      "zeroDatum": "Show zero datum stations",
+      "grid": "Show grid overlay",
+      "scaleBar": "Show scale bar",
+      "satellite": "Show satellite imagery",
+      "depthGradient": "Color shots by depth",
+      "devStats": "Show developer stats overlay"
+    }
+  },
+  "globalView": {
+    "actions": {
+      "importDmp": "Import DMP",
+      "mergeProjects": "Merge {{count}} projects",
+      "mergeProjectsAria": "Merge {{count}} selected projects",
+      "newProject": "New project",
+      "openProject": "Open project",
+      "settings": "Settings"
+    },
+    "tabs": {
+      "map": "Map",
+      "list": "List"
+    },
+    "search": {
+      "placeholder": "Search projects...",
+      "aria": "Search projects",
+      "clearTitle": "Clear search",
+      "clearAria": "Clear search input"
+    },
+    "recent": {
+      "title": "Recent projects",
+      "hint": "Click to select, double-click to open, right-click for options."
+    },
+    "status": {
+      "systems": "Systems: {{count}}",
+      "selected": "Selected: {{count}}",
+      "ready": "Ready"
+    },
+    "contextMenu": {
+      "aria": "Project actions",
+      "open": "Open project",
+      "zoom": "Zoom to system",
+      "showInFolder": "Show in folder",
+      "mergeProjects": "Merge {{count}} projects",
+      "remove": "Remove from recent",
+      "removeMultiple": "Remove {{count}} from recent"
+    },
+    "empty": {
+      "title": "No projects yet",
+      "description": "Create a new project or import a DMP file to get started.",
+      "cards": {
+        "import": {
+          "title": "Import DMP",
+          "description": "Bring in survey data from a DMP file."
+        },
+        "newProject": {
+          "title": "New project",
+          "description": "Start a blank project from scratch."
+        },
+        "open": {
+          "title": "Open project",
+          "description": "Open an existing CaveChef project."
+        }
+      }
+    },
+    "loading": {
+      "failedTitle": "Loading failed",
+      "loadingTitle": "Loading {{name}}...",
+      "projectFallback": "Project",
+      "step": "Step {{current}} of {{total}}: {{label}}",
+      "phases": {
+        "initializing": "Initializing",
+        "openingDatabase": "Opening database",
+        "loadingProjectData": "Loading project data",
+        "loadingSections": "Loading sections",
+        "computingStations": "Computing stations",
+        "computingStatistics": "Computing statistics",
+        "validatingData": "Validating data",
+        "loadingSettings": "Loading settings",
+        "finalizing": "Finalizing",
+        "takingLong": "Taking longer than expected",
+        "creatingDatabase": "Creating database",
+        "initializingProject": "Initializing project",
+        "savingSettings": "Saving settings"
+      }
+    },
+    "map": {
+      "empty": {
+        "title": "No GPS data",
+        "subtitle": "Projects without GPS coordinates will not appear here."
+      },
+      "errorLoading": "Error loading {{name}}",
+      "fitAll": "Fit all",
+      "fitAllTitle": "Fit all systems",
+      "reducedDetail": "Reduced detail",
+      "reducedDetailTitle": "Reduced detail for performance",
+      "systemCount": "Systems: {{count}}"
+    },
+    "metadata": {
+      "title": "Project details",
+      "panelAria": "Project metadata panel",
+      "panelCollapsedAria": "Project metadata panel (collapsed)",
+      "expandAria": "Expand metadata panel",
+      "collapseAria": "Collapse metadata panel",
+      "selectedSystems": "Selected systems",
+      "multiSelected": "{{count}} systems selected",
+      "multiHint": "Use the context menu to merge or remove selected systems.",
+      "empty": "Select a project to see details.",
+      "unknown": "Unknown",
+      "notSet": "Not specified",
+      "fields": {
+        "name": "Name",
+        "location": "Location",
+        "file": "File",
+        "lastModified": "Last modified",
+        "sections": "Sections",
+        "totalLength": "Total length",
+        "combinedLength": "Combined length",
+        "totalStations": "Total stations",
+        "gpsCenter": "GPS center",
+        "bounds": "Bounds"
+      },
+      "boundsValue": "N {{north}}, S {{south}}, E {{east}}, W {{west}}",
+      "actions": {
+        "openProject": "Open project",
+        "openProjectAria": "Open {{name}}",
+        "showInFolder": "Show in folder",
+        "showInFolderAria": "Show {{name}} in folder",
+        "removeFromRecent": "Remove from recent",
+        "removeFromRecentAria": "Remove {{name}} from recent"
+      }
+    },
+    "systemCard": {
+      "length": "Length",
+      "modified": "Modified {{date}}",
+      "sections": "Sections"
+    },
+    "tooltip": {
+      "length": "Length: {{length}}",
+      "stations": "Stations: {{count}}",
+      "unknown": "Unknown"
+    },
+    "viewMode": {
+      "switchToMarkers": "Switch to markers view",
+      "switchToSurvey": "Switch to survey view"
+    }
+  },
+  "loading": {
+    "error": {
+      "title": "Loading error",
+      "showDetails": "Show details",
+      "hideDetails": "Hide details",
+      "copy": "Copy error",
+      "copied": "Copied",
+      "copyFailed": "Copy failed",
+      "copyTitle": "Copy error details"
+    },
+    "overall": {
+      "label": "Overall progress",
+      "aria": "Overall progress"
+    },
+    "phase": {
+      "aria": "Phase progress"
+    }
+  },
+  "map": {
+    "fitToViewTitle": "Fit to view",
+    "depthLegend": {
+      "aria": "Depth gradient from {{min}} to {{max}}",
+      "flat": "Flat"
+    },
+    "placement": {
+      "title": "Placement",
+      "instructions": "Click to place section. Esc to cancel.",
+      "snapped": "Snapped to station"
+    },
+    "merge": {
+      "title": "Merge",
+      "instructions": "Select another station to merge."
+    },
+    "measure": {
+      "title": "Measure",
+      "instructions": "Click a second point to finish.",
+      "distance": "Distance",
+      "depthDiff": "Depth diff"
+    },
+    "move": {
+      "instructions": "Drag to move. Esc to cancel.",
+      "station": "Station",
+      "segment": "Segment",
+      "shot": "Shot"
+    },
+    "devStats": {
+      "allLayers": "All layers",
+      "allLayersOff": "All layers off",
+      "bytesValue": "{{value}} {{unit}}",
+      "cache": "Cache",
+      "canvasSize": "Canvas {{width}}x{{height}}",
+      "collision": "Collision",
+      "colorBits": "Color bits",
+      "debug": "Debug",
+      "depthBits": "Depth bits",
+      "durationMs": "{{ms}} ms",
+      "errors": "{{count}} errors",
+      "fetched": "Fetched",
+      "fps": "FPS",
+      "fpsValue": "{{value}} fps",
+      "frameTime": "{{ms}} ms",
+      "inFlight": "In flight",
+      "labels": "Labels",
+      "labelsOff": "Labels off",
+      "lastZoom": "Last zoom",
+      "latency": "Latency",
+      "loaded": "Loaded",
+      "loading": "Loading",
+      "map": "Map",
+      "maxTexture": "Max texture",
+      "msaa": "MSAA",
+      "msaaValue": "{{count}}x",
+      "network": {
+        "checking": "Checking",
+        "label": "Network",
+        "offline": "Offline",
+        "online": "Online"
+      },
+      "overdraw": "Overdraw",
+      "satelliteTiles": "Satellite tiles",
+      "size": "Size",
+      "textureUnits": "Texture units",
+      "tiles": "Tiles",
+      "tilesLoading": "Tiles loading",
+      "tilesReady": "Tiles ready",
+      "titles": {
+        "allLayers": "Toggle all layers",
+        "collision": "Toggle collision boxes",
+        "labels": "Toggle labels",
+        "overdraw": "Toggle overdraw",
+        "tiles": "Toggle tile boundaries"
+      },
+      "units": {
+        "bytes": "B",
+        "kilobytes": "KB",
+        "megabytes": "MB",
+        "gigabytes": "GB"
+      },
+      "webgl": "WebGL",
+      "worstFrame": "Worst {{ms}} ms",
+      "zoom": "Zoom",
+      "zoomLevels": "{{count}} levels",
+      "zooming": "Zooming"
+    }
+  },
+  "sectionMetadata": {
+    "direction": {
+      "in": "In",
+      "out": "Out"
+    },
+    "labels": {
+      "color": "Color",
+      "directionShort": "Dir",
+      "quality": "Quality",
+      "surveyor": "Surveyor"
+    },
+    "placeholders": {
+      "color": "#RRGGBB",
+      "name": "Section name",
+      "surveyor": "Surveyor"
+    }
+  },
+  "sections": {
+    "actions": {
+      "add": "Add section",
+      "delete": "Delete section",
+      "zoom": "Double-click to zoom (Ctrl+G)"
+    },
+    "ariaList": "Sections list",
+    "confirmDelete": "Delete this section?",
+    "defaultName": "Section {{id}}",
+    "empty": {
+      "action": "Import data",
+      "message": "No sections yet."
+    },
+    "stats": "Shots: {{shots}} | {{length}}",
+    "title": "Sections"
+  },
+  "shotTable": {
+    "actions": {
+      "delete": "Delete shot"
+    },
+    "add": "Add shot",
+    "azimuthTitle": "In: {{inValue}} / Out: {{outValue}}",
+    "columns": {
+      "azimuth": "Az",
+      "comment": "Comment",
+      "depthIn": "Depth In",
+      "depthOut": "Depth Out",
+      "downShort": "D",
+      "idShort": "ID",
+      "leftShort": "L",
+      "length": "Len",
+      "rightShort": "R",
+      "upShort": "U",
+      "warnings": "Warnings"
+    },
+    "contextMenu": {
+      "delete": "Delete",
+      "insertAfter": "Insert after",
+      "insertBefore": "Insert before"
+    },
+    "empty": "No shots.",
+    "emptyWithAction": "No shots yet. Click Add to create one.",
+    "header": "{{count}} shots",
+    "warnings": {
+      "azimuthDiff": "Azimuth in/out differs by more than {{threshold}}.",
+      "error": "Error",
+      "pitchDiff": "Pitch in/out differs by more than {{threshold}}.",
+      "warning": "Warning"
+    }
+  },
+  "singleView": {
+    "empty": "No project open.",
+    "status": {
+      "depthRange": "Depth range: {{min}} - {{max}}",
+      "summary": "Sections: {{sections}} | Shots: {{shots}} | Length: {{length}}"
+    }
+  },
+  "toolbar": {
+    "groupAria": "{{group}} tools",
+    "groups": {
+      "move": "Move",
+      "navigate": "Navigate"
+    },
+    "tools": {
+      "delete": "Delete",
+      "draw": "Draw",
+      "measure": "Measure",
+      "merge": "Merge",
+      "moveSegment": "Move segment",
+      "moveShot": "Move shot",
+      "moveStation": "Move station",
+      "pan": "Pan",
+      "select": "Select",
+      "zoom": "Zoom"
+    }
+  },
+  "validation": {
+    "import": {
+      "azimuthInRange": "Azimuth in {{value}} must be between 0 and 360 degrees.",
+      "azimuthOutRange": "Azimuth out {{value}} must be between 0 and 360 degrees.",
+      "lengthPositive": "Length must be positive.",
+      "mergeTargetMissing": "Merge target section is required.",
+      "mergeTargetNotFound": "Merge target section not found.",
+      "sectionNotPlaced": "Section has not been placed."
+    },
+    "section": {
+      "duplicateMarker": "Duplicate marker {{marker}}."
+    },
+    "shot": {
+      "azimuthDiff": "Azimuth in/out differ by {{diff}} (threshold {{threshold}}).",
+      "azimuthInRange": "Azimuth in {{value}} must be between 0 and 360 degrees.",
+      "azimuthOutRange": "Azimuth out {{value}} must be between 0 and 360 degrees.",
+      "depthChange": "Depth change {{change}} exceeds {{max}}.",
+      "lengthRequired": "Length is required.",
+      "lengthTooLong": "Length {{length}} exceeds {{max}}.",
+      "lengthTooShort": "Length {{length}} is below {{min}}.",
+      "lrudNegative": "{{name}} value {{value}} must be 0 or greater.",
+      "lrudTooLarge": "{{name}} value {{value}} exceeds {{max}}."
+    }
+  }
+}

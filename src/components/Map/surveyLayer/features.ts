@@ -7,6 +7,7 @@ import type {
 } from '../../../types/project';
 import { getDepthColor, getErrorColor } from '../../../utils/colors';
 import { metersToMapCoords } from '../../../utils/coordinates';
+import { formatFixed } from '../../../i18n/format';
 import type { MapThemeColors } from '../../../utils/themeColors';
 
 export type DepthRange = { min: number; max: number };
@@ -168,7 +169,7 @@ export function buildSurveyFeatures(
         const midY = (fromStation.coordinates.y + toStation.coordinates.y) / 2;
         const labelDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
 
-        const label = `${shot.azimuth_in.toFixed(0)}° ${shot.length.toFixed(1)}m ${labelDepth.toFixed(1)}m`;
+        const label = `${formatFixed(shot.azimuth_in, undefined, 0)}° ${formatFixed(shot.length, undefined, 1)}m ${formatFixed(labelDepth, undefined, 1)}m`;
 
         const shotLabelDepthColor = showDepthGradient
           ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
