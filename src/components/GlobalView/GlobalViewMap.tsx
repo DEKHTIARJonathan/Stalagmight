@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
+import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
 import GlobalSurveyLayer, { type SystemGeometry, generateSystemColor } from './GlobalSurveyLayer';
@@ -11,6 +12,7 @@ import { defaultConfig } from '../../types/config';
 import { getTileConfig } from '../../utils/tileConfig';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
+import { formatFixed, formatNumber } from '../../i18n/format';
 
 /** Local storage key for persisting map position/zoom. */
 const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
@@ -134,6 +136,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   const markerTooltipRef = useRef<HTMLDivElement | null>(null);
   const contextMenuOpenRef = useRef(false);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const { t } = useTranslation();
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   // Buffer for geometry data that arrives before map is ready
   const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
@@ -744,7 +747,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
     const title = document.createElement('div');
     title.style.cssText = `font-weight: 600; margin-bottom: 4px; color: ${getThemeColor('--cc-error')};`;
-    title.textContent = `Error loading ${name}`;
+    title.textContent = t('globalView.map.errorLoading', { name });
     container.appendChild(title);
 
     const errorDiv = document.createElement('div');
@@ -766,7 +769,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       .setLngLat([lng, lat])
       .setDOMContent(container)
       .addTo(map.current);
-  }, []);
+  }, [t]);
 
   // Update markers when projects or selection changes
   useEffect(() => {
@@ -874,16 +877,16 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         // Build tooltip content (same format as survey view)
         if (markerTooltipRef.current) {
           const tooltip = markerTooltipRef.current;
-          const projectName = el.dataset.projectName || '';
+          const projectName = el.dataset.projectName || t('globalView.tooltip.unknown');
           const totalLength = parseFloat(el.dataset.totalLength || '0');
           const stationCount = parseInt(el.dataset.stationCount || '0', 10);
 
           // Format length like survey view
           let lengthStr: string;
           if (totalLength >= 1000) {
-            lengthStr = `${(totalLength / 1000).toFixed(2)} km`;
+            lengthStr = `${formatFixed(totalLength / 1000, undefined, 2)} ${t('common.units.kilometers')}`;
           } else {
-            lengthStr = `${totalLength.toFixed(1)} m`;
+            lengthStr = `${formatFixed(totalLength, undefined, 1)} ${t('common.units.meters')}`;
           }
 
           // Build tooltip content using DOM to prevent XSS (matches survey view format)
@@ -898,13 +901,13 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           // Length row
           const lengthDiv = document.createElement('div');
           lengthDiv.style.color = getThemeColor('--cc-gray-text');
-          lengthDiv.textContent = `Length: ${lengthStr}`;
+          lengthDiv.textContent = t('globalView.tooltip.length', { length: lengthStr });
           tooltip.appendChild(lengthDiv);
 
           // Station count row
           const stationDiv = document.createElement('div');
           stationDiv.style.color = getThemeColor('--cc-gray-text');
-          stationDiv.textContent = `Stations: ${stationCount}`;
+          stationDiv.textContent = t('globalView.tooltip.stations', { count: formatNumber(stationCount) });
           tooltip.appendChild(stationDiv);
 
           tooltip.style.transform = '';
@@ -1000,7 +1003,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       markersRef.current.set(project.file_path, marker);
     }
-  }, [gpsProjects, selectedProjectId, mapLoaded, onProjectSelect, onProjectOpen, geometryStates, resolvedTheme]);
+  }, [gpsProjects, selectedProjectId, mapLoaded, onProjectSelect, onProjectOpen, geometryStates, resolvedTheme, t]);
 
   // Update marker styles when selection, loading states, or theme changes
   useEffect(() => {
@@ -1106,9 +1109,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       >
         <div className="text-center">
           <div className="text-4xl mb-4">&#127758;</div>
-          <p>No GPS-positioned systems to display.</p>
+          <p>{t('globalView.map.empty.title')}</p>
           <p className="text-sm mt-2">
-            Add GPS coordinates to your projects to see them on the map.
+            {t('globalView.map.empty.subtitle')}
           </p>
         </div>
       </div>
@@ -1123,9 +1126,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       <button
         onClick={fitToBounds}
         className="absolute top-2 left-2 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
-        title="Fit all systems in view"
+        title={t('globalView.map.fitAllTitle')}
       >
-        Fit All
+        {t('globalView.map.fitAll')}
       </button>
 
       {/* View mode toggle - positioned below navigation controls */}
@@ -1138,10 +1141,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       {/* Project count indicator */}
       <div className="absolute bottom-2 right-2 bg-panel-90 border border-border rounded px-2 py-1 text-xs">
-        {gpsProjects.length} system{gpsProjects.length !== 1 ? 's' : ''} on map
+        {t('globalView.map.systemCount', { count: gpsProjects.length })}
         {isThrottled && (
-          <span className="ml-2 text-warning" title="Detail reduced for performance">
-            (reduced detail)
+          <span className="ml-2 text-warning" title={t('globalView.map.reducedDetailTitle')}>
+            {t('globalView.map.reducedDetail')}
           </span>
         )}
       </div>

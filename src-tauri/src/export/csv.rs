@@ -73,6 +73,7 @@ mod tests {
             date: None,
             color: "#4ecdc4".to_string(),
             direction: None,
+            quality: 1.0,
             shots: vec![ShotData {
                 azimuth_in: 45.0,
                 azimuth_out: 225.0,

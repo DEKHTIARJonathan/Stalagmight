@@ -1,8 +1,10 @@
 import { type FC, useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import type { ProjectMetadata } from '../../types/project';
 import { ResizablePanel } from '../common/Panel';
 import { Button } from '../common/Button';
+import { formatDate, formatFixed, formatNumber } from '../../i18n/format';
 
 interface MetadataPanelProps {
   /** The selected project metadata to display (legacy single-selection) */
@@ -32,6 +34,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
   onCollapseChange,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(collapsed);
+  const { t } = useTranslation();
 
   // Normalize selection: prefer selectedProjects if non-empty, fallback to project
   const projects = selectedProjects?.length ? selectedProjects : (project ? [project] : []);
@@ -75,11 +78,11 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
   }, [singleProject?.file_path, onRemoveFromRecent]);
 
   // Format date for display
-  const formatDate = (isoDate: string | null | undefined): string => {
-    if (!isoDate) return 'Unknown';
+  const formatProjectDate = (isoDate: string | null | undefined): string => {
+    if (!isoDate) return t('globalView.metadata.unknown');
     try {
       const date = new Date(isoDate);
-      return date.toLocaleDateString(undefined, {
+      return formatDate(date, undefined, {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
@@ -87,40 +90,40 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
         minute: '2-digit',
       });
     } catch {
-      return 'Unknown';
+      return t('globalView.metadata.unknown');
     }
   };
 
   // Format GPS coordinates for display
   const formatGps = (center: [number, number] | null): string => {
-    if (!center) return 'Not set';
+    if (!center) return t('globalView.metadata.notSet');
     const [lng, lat] = center;
     const latDir = lat >= 0 ? 'N' : 'S';
     const lngDir = lng >= 0 ? 'E' : 'W';
-    return `${Math.abs(lat).toFixed(6)}${latDir}, ${Math.abs(lng).toFixed(6)}${lngDir}`;
+    return `${formatFixed(Math.abs(lat), undefined, 6)}${latDir}, ${formatFixed(Math.abs(lng), undefined, 6)}${lngDir}`;
   };
 
   // Format length for display
   const formatLength = (length: number | null | undefined): string => {
-    if (length === null || length === undefined) return '0 m';
+    if (length === null || length === undefined) return `0 ${t('common.units.meters')}`;
     if (length >= 1000) {
-      return `${(length / 1000).toFixed(2)} km`;
+      return `${formatFixed(length / 1000, undefined, 2)} ${t('common.units.kilometers')}`;
     }
-    return `${length.toFixed(1)} m`;
+    return `${formatFixed(length, undefined, 1)} ${t('common.units.meters')}`;
   };
 
   if (isCollapsed) {
     return (
       <aside
         role="complementary"
-        aria-label="Project details panel (collapsed)"
+        aria-label={t('globalView.metadata.panelCollapsedAria')}
         data-testid="metadata-panel-collapsed"
         className="flex-shrink-0 w-10 bg-panel border-l border-border flex flex-col items-center py-2"
       >
         <button
           onClick={handleCollapseToggle}
           className="p-2 hover:bg-background-50 rounded"
-          aria-label="Expand project details panel"
+          aria-label={t('globalView.metadata.expandAria')}
           aria-expanded="false"
           data-testid="metadata-panel-expand-button"
         >
@@ -152,19 +155,19 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
     >
       <aside
         role="complementary"
-        aria-label="Project details panel"
+        aria-label={t('globalView.metadata.panelAria')}
         data-testid="metadata-panel"
         className="h-full bg-panel border-l border-border flex flex-col overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-3 py-2 border-b border-border">
           <h2 className="font-medium text-text-primary" id="metadata-panel-title">
-            Project Details
+            {t('globalView.metadata.title')}
           </h2>
           <button
             onClick={handleCollapseToggle}
             className="p-1 hover:bg-background-50 rounded"
-            aria-label="Collapse project details panel"
+            aria-label={t('globalView.metadata.collapseAria')}
             aria-expanded="true"
             data-testid="metadata-panel-collapse-button"
           >
@@ -191,25 +194,25 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
             <div className="p-3 space-y-3" aria-labelledby="metadata-panel-title">
               {/* Selection count header */}
               <div className="text-lg font-semibold text-text-primary" data-testid="metadata-multi-count">
-                {projects.length} systems selected
+                {t('globalView.metadata.multiSelected', { count: formatNumber(projects.length) })}
               </div>
 
               {/* Aggregate stats */}
               <MetadataField
-                label="Combined Length"
+                label={t('globalView.metadata.fields.combinedLength')}
                 value={formatLength(projects.reduce((sum, p) => sum + (p.total_length ?? 0), 0))}
                 testId="metadata-multi-length"
               />
 
               <MetadataField
-                label="Total Stations"
-                value={String(projects.reduce((sum, p) => sum + (p.station_count ?? 0), 0))}
+                label={t('globalView.metadata.fields.totalStations')}
+                value={formatNumber(projects.reduce((sum, p) => sum + (p.station_count ?? 0), 0))}
                 testId="metadata-multi-stations"
               />
 
               {/* List of selected systems */}
               <div className="pt-2 border-t border-border">
-                <dt className="text-xs text-text-secondary font-medium mb-1">Selected Systems</dt>
+                <dt className="text-xs text-text-secondary font-medium mb-1">{t('globalView.metadata.selectedSystems')}</dt>
                 <dd className="text-sm text-text-primary space-y-1">
                   {projects.map((p) => (
                     <div key={p.file_path} className="truncate" title={p.name}>
@@ -223,7 +226,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
             {/* Multi-selection actions */}
             <div className="p-3 border-t border-border">
               <p className="text-xs text-text-secondary text-center">
-                Right-click in the list view to merge selected systems
+                {t('globalView.metadata.multiHint')}
               </p>
             </div>
           </div>
@@ -233,21 +236,21 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
             <div className="p-3 space-y-3" aria-labelledby="metadata-panel-title">
               {/* Project Name */}
               <MetadataField
-                label="Name"
+                label={t('globalView.metadata.fields.name')}
                 value={singleProject.name}
                 testId="metadata-name"
               />
 
               {/* Location */}
               <MetadataField
-                label="Location"
-                value={singleProject.location || 'Not specified'}
+                label={t('globalView.metadata.fields.location')}
+                value={singleProject.location || t('globalView.metadata.notSet')}
                 testId="metadata-location"
               />
 
               {/* File Path */}
               <MetadataField
-                label="File"
+                label={t('globalView.metadata.fields.file')}
                 value={singleProject.file_path}
                 testId="metadata-file-path"
                 truncate
@@ -255,28 +258,28 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
 
               {/* Modified Date */}
               <MetadataField
-                label="Last Modified"
-                value={formatDate(singleProject.modified_at)}
+                label={t('globalView.metadata.fields.lastModified')}
+                value={formatProjectDate(singleProject.modified_at)}
                 testId="metadata-modified"
               />
 
               {/* Section Count */}
               <MetadataField
-                label="Sections"
-                value={String(singleProject.section_count)}
+                label={t('globalView.metadata.fields.sections')}
+                value={formatNumber(singleProject.section_count)}
                 testId="metadata-sections"
               />
 
               {/* Total Length */}
               <MetadataField
-                label="Total Length"
+                label={t('globalView.metadata.fields.totalLength')}
                 value={formatLength(singleProject.total_length)}
                 testId="metadata-length"
               />
 
               {/* GPS Center */}
               <MetadataField
-                label="GPS Center"
+                label={t('globalView.metadata.fields.gpsCenter')}
                 value={formatGps(singleProject.gps_center)}
                 testId="metadata-gps"
               />
@@ -284,11 +287,13 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
               {/* GPS Bounds (if available) */}
               {singleProject.gps_bounds && (
                 <div className="text-xs text-text-secondary">
-                  <span className="font-medium">Bounds:</span>{' '}
-                  N{singleProject.gps_bounds.north.toFixed(4)}{' '}
-                  S{singleProject.gps_bounds.south.toFixed(4)}{' '}
-                  E{singleProject.gps_bounds.east.toFixed(4)}{' '}
-                  W{singleProject.gps_bounds.west.toFixed(4)}
+                  <span className="font-medium">{t('globalView.metadata.fields.bounds')}:</span>{' '}
+                  {t('globalView.metadata.boundsValue', {
+                    north: formatFixed(singleProject.gps_bounds.north, undefined, 4),
+                    south: formatFixed(singleProject.gps_bounds.south, undefined, 4),
+                    east: formatFixed(singleProject.gps_bounds.east, undefined, 4),
+                    west: formatFixed(singleProject.gps_bounds.west, undefined, 4),
+                  })}
                 </div>
               )}
             </div>
@@ -299,27 +304,27 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
                 onClick={handleOpenProject}
                 className="w-full"
                 data-testid="metadata-open-button"
-                aria-label={`Open project ${singleProject.name}`}
+                aria-label={t('globalView.metadata.actions.openProjectAria', { name: singleProject.name })}
               >
-                Open Project
+                {t('globalView.metadata.actions.openProject')}
               </Button>
               <Button
                 onClick={handleShowInFolder}
                 variant="secondary"
                 className="w-full"
                 data-testid="metadata-show-folder-button"
-                aria-label={`Show ${singleProject.name} in file explorer`}
+                aria-label={t('globalView.metadata.actions.showInFolderAria', { name: singleProject.name })}
               >
-                Show in Folder
+                {t('globalView.metadata.actions.showInFolder')}
               </Button>
               <Button
                 onClick={handleRemoveFromRecent}
                 variant="danger"
                 className="w-full"
                 data-testid="metadata-remove-button"
-                aria-label={`Remove ${singleProject.name} from recent projects`}
+                aria-label={t('globalView.metadata.actions.removeFromRecentAria', { name: singleProject.name })}
               >
-                Remove from Recent
+                {t('globalView.metadata.actions.removeFromRecent')}
               </Button>
             </div>
           </div>
@@ -329,7 +334,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
             data-testid="metadata-panel-empty"
           >
             <p className="text-text-secondary text-center text-sm">
-              Select a project to view details
+              {t('globalView.metadata.empty')}
             </p>
           </div>
         )}

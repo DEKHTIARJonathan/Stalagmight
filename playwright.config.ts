@@ -26,6 +26,7 @@ export default defineConfig({
   use: {
     // Base URL for the Vite dev server
     baseURL: 'http://localhost:1420',
+    locale: 'en-US',
 
     // Collect trace when retrying a failed test
     trace: 'on-first-retry',

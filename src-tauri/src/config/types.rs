@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::models::ClosureStrategy;
+
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -11,6 +13,8 @@ pub struct Config {
     pub section_colors: SectionColorsConfig,
     pub map: MapConfig,
     pub validation: ValidationConfig,
+    #[serde(default)]
+    pub closure_adjustment: ClosureAdjustmentConfig,
     pub export: ExportConfig,
     pub logging: LoggingConfig,
     pub shortcuts: ShortcutsConfig,
@@ -432,6 +436,13 @@ pub struct GeneralConfig {
     /// Shortcut feedback preference: none, non_obvious (default), or all
     #[serde(default)]
     pub shortcut_feedback: ShortcutFeedback,
+    /// Locale setting: 'system' or a specific locale tag (e.g., 'en-US')
+    #[serde(default = "default_locale")]
+    pub locale: String,
+}
+
+fn default_locale() -> String {
+    "system".to_string()
 }
 
 fn default_undo_history_limit() -> usize {
@@ -592,6 +603,68 @@ pub struct ValidationConfig {
     /// Threshold for pitch in/out difference warning (degrees).
     #[serde(default = "default_pitch_diff_threshold")]
     pub pitch_diff_threshold: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitVerticalMode {
+    Ignore,
+    LengthProportional,
+    Equal,
+}
+
+impl Default for TransitVerticalMode {
+    fn default() -> Self {
+        Self::Ignore
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClosureAdjustmentConfig {
+    #[serde(default = "default_sigma_length_m")]
+    pub base_sigma_length_m: f64,
+    #[serde(default = "default_sigma_azimuth_deg")]
+    pub base_sigma_azimuth_deg: f64,
+    #[serde(default = "default_sigma_depth_m")]
+    pub base_sigma_depth_m: f64,
+    #[serde(default)]
+    pub transit_vertical_mode: TransitVerticalMode,
+    #[serde(default)]
+    pub sequential_distribution_default: ClosureStrategy,
+}
+
+impl ClosureAdjustmentConfig {
+    pub fn normalize(&mut self) {
+        if !self.base_sigma_length_m.is_finite() || self.base_sigma_length_m <= 0.0 {
+            self.base_sigma_length_m = default_sigma_length_m();
+        }
+        if !self.base_sigma_azimuth_deg.is_finite() || self.base_sigma_azimuth_deg <= 0.0 {
+            self.base_sigma_azimuth_deg = default_sigma_azimuth_deg();
+        }
+        if !self.base_sigma_depth_m.is_finite() || self.base_sigma_depth_m <= 0.0 {
+            self.base_sigma_depth_m = default_sigma_depth_m();
+        }
+        match self.sequential_distribution_default {
+            ClosureStrategy::ProportionalByLength
+            | ClosureStrategy::EqualDistribution
+            | ClosureStrategy::TransitRule => {}
+            _ => {
+                self.sequential_distribution_default = ClosureStrategy::ProportionalByLength;
+            }
+        }
+    }
+}
+
+pub fn default_sigma_length_m() -> f64 {
+    0.05
+}
+
+pub fn default_sigma_azimuth_deg() -> f64 {
+    1.0
+}
+
+pub fn default_sigma_depth_m() -> f64 {
+    0.05
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1084,6 +1157,10 @@ impl Config {
         self.shortcuts.normalize();
         self.global_view.normalize();
         self.appearance.normalize();
+        self.closure_adjustment.normalize();
+        if self.general.locale.trim().is_empty() {
+            self.general.locale = default_locale();
+        }
     }
 
     /// Migrate legacy config fields to new structure

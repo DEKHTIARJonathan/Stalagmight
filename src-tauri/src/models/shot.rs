@@ -21,6 +21,28 @@ pub fn shot_display_position(shot_id: ShotId, section_id: SectionId) -> u32 {
     }
 }
 
+/// Convert slope length + vertical delta into horizontal length.
+/// Returns 0.0 if the inputs are invalid (e.g., slope < |dz|).
+pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {
+    let len_sq = length * length - dz * dz;
+    if len_sq <= 0.0 {
+        0.0
+    } else {
+        len_sq.sqrt()
+    }
+}
+
+/// Convert horizontal + vertical components into slope length.
+pub(crate) fn slope_length_from_components(horizontal: f64, dz: f64) -> f64 {
+    (horizontal * horizontal + dz * dz).sqrt()
+}
+
+/// Compute pitch (degrees) from horizontal + vertical components.
+/// Positive pitch corresponds to increasing depth (downwards).
+pub(crate) fn pitch_from_components(horizontal: f64, dz: f64) -> f64 {
+    dz.atan2(horizontal).to_degrees()
+}
+
 /// A single survey measurement between two stations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shot {
@@ -202,6 +224,12 @@ impl Shot {
         (self.azimuth_in + diff / 2.0 + 360.0) % 360.0
     }
 
+    /// Horizontal projection of the shot length (meters).
+    /// Shot.length is slope distance, so horizontal is derived from depth change.
+    pub fn horizontal_length(&self) -> f64 {
+        horizontal_length_from_slope(self.length, self.depth_out - self.depth_in)
+    }
+
     /// Get depth change for this shot
     pub fn depth_change(&self) -> f64 {
         self.depth_out - self.depth_in
@@ -226,6 +254,14 @@ impl Shot {
             marker_index: self.marker_index,
             temperature: self.temperature,
         }
+    }
+}
+
+impl ShotData {
+    /// Horizontal projection of the shot length (meters).
+    /// ShotData.length is slope distance, so horizontal is derived from depth change.
+    pub fn horizontal_length(&self) -> f64 {
+        horizontal_length_from_slope(self.length, self.depth_out - self.depth_in)
     }
 }
 

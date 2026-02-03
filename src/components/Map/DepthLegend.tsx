@@ -1,4 +1,6 @@
 import { useId, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { formatFixed } from '../../i18n/format';
 import { getDepthColor } from '../../utils/colors';
 import { getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
@@ -30,6 +32,7 @@ export function DepthLegend({
   visible,
 }: DepthLegendProps) {
   const gradientId = useId();
+  const { t } = useTranslation();
   // Subscribe to theme for reactive color updates (value triggers re-render)
   useUIStore((s) => s.resolvedTheme);
   const effectiveShallow = shallowColor ?? getThemeColor('--cc-depth-shallow');
@@ -78,7 +81,10 @@ export function DepthLegend({
         width="16"
         height="80"
         role="img"
-        aria-label={`Depth scale: ${minDepth.toFixed(1)}m (shallow) to ${maxDepth.toFixed(1)}m (deep)`}
+        aria-label={t('map.depthLegend.aria', {
+          min: `${formatFixed(minDepth, undefined, 1)}${t('common.units.meters')}`,
+          max: `${formatFixed(maxDepth, undefined, 1)}${t('common.units.meters')}`,
+        })}
       >
         <defs>
           <linearGradient id={gradientId} x1="0%" y1="0%" x2="0%" y2="100%">
@@ -100,13 +106,13 @@ export function DepthLegend({
           textShadow: `0 1px 2px ${textHaloAlt}`,
         }}
       >
-        <span data-testid="depth-legend-min">{minDepth.toFixed(1)}m</span>
+        <span data-testid="depth-legend-min">{`${formatFixed(minDepth, undefined, 1)}${t('common.units.meters')}`}</span>
         {isFlat && (
           <span style={{ fontSize: 10, opacity: 0.7 }}>
-            (Flat)
+            {t('map.depthLegend.flat')}
           </span>
         )}
-        <span data-testid="depth-legend-max">{maxDepth.toFixed(1)}m</span>
+        <span data-testid="depth-legend-max">{`${formatFixed(maxDepth, undefined, 1)}${t('common.units.meters')}`}</span>
       </div>
     </div>
   );

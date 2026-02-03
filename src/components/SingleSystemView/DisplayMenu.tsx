@@ -1,40 +1,42 @@
 import { useState, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore, type DisplayToggleKey } from '../../store/uiStore';
 import { GRID_SPACING_OPTIONS } from '../Map/GridOverlay';
+import { formatNumber } from '../../i18n/format';
 
 interface DisplayOption {
   key: DisplayToggleKey;
-  label: string;
-  description?: string;
+  labelKey: string;
+  descriptionKey?: string;
   disabledWhen?: DisplayToggleKey;
 }
 
-const displayOptions: { group: string; items: DisplayOption[] }[] = [
+const displayOptions: { groupKey: string; items: DisplayOption[] }[] = [
   {
-    group: 'Map Elements',
+    groupKey: 'displayMenu.groups.mapElements',
     items: [
-      { key: 'showStations', label: 'Stations', description: 'Show station markers' },
-      { key: 'showSectionNames', label: 'Section Names', description: 'Show labels for sections' },
-      { key: 'showStationLabels', label: 'Station Labels', description: 'Show station index numbers' },
-      { key: 'showShots', label: 'Shots', description: 'Show survey shot lines' },
-      { key: 'showVirtualShots', label: 'Virtual Shots', description: 'Show dashed virtual connections', disabledWhen: 'showShots' },
-      { key: 'showShotData', label: 'Shot Data', description: 'Show azimuth, length, depth labels', disabledWhen: 'showShots' },
-      { key: 'showZeroDatum', label: 'Zero Datum', description: 'Highlight entrance markers' },
+      { key: 'showStations', labelKey: 'displayMenu.items.stations', descriptionKey: 'displayMenu.descriptions.stations' },
+      { key: 'showSectionNames', labelKey: 'displayMenu.items.sectionNames', descriptionKey: 'displayMenu.descriptions.sectionNames' },
+      { key: 'showStationLabels', labelKey: 'displayMenu.items.stationLabels', descriptionKey: 'displayMenu.descriptions.stationLabels' },
+      { key: 'showShots', labelKey: 'displayMenu.items.shots', descriptionKey: 'displayMenu.descriptions.shots' },
+      { key: 'showVirtualShots', labelKey: 'displayMenu.items.virtualShots', descriptionKey: 'displayMenu.descriptions.virtualShots', disabledWhen: 'showShots' },
+      { key: 'showShotData', labelKey: 'displayMenu.items.shotData', descriptionKey: 'displayMenu.descriptions.shotData', disabledWhen: 'showShots' },
+      { key: 'showZeroDatum', labelKey: 'displayMenu.items.zeroDatum', descriptionKey: 'displayMenu.descriptions.zeroDatum' },
     ],
   },
   {
-    group: 'Overlays',
+    groupKey: 'displayMenu.groups.overlays',
     items: [
-      { key: 'showGrid', label: 'Grid', description: 'Show coordinate grid' },
-      { key: 'showScaleBar', label: 'Scale Bar', description: 'Show distance scale' },
-      { key: 'showSatellite', label: 'Satellite', description: 'Show satellite imagery' },
-      { key: 'showDepthGradient', label: 'Depth Gradient', description: 'Color by depth' },
+      { key: 'showGrid', labelKey: 'displayMenu.items.grid', descriptionKey: 'displayMenu.descriptions.grid' },
+      { key: 'showScaleBar', labelKey: 'displayMenu.items.scaleBar', descriptionKey: 'displayMenu.descriptions.scaleBar' },
+      { key: 'showSatellite', labelKey: 'displayMenu.items.satellite', descriptionKey: 'displayMenu.descriptions.satellite' },
+      { key: 'showDepthGradient', labelKey: 'displayMenu.items.depthGradient', descriptionKey: 'displayMenu.descriptions.depthGradient' },
     ],
   },
   {
-    group: 'Developer',
+    groupKey: 'displayMenu.groups.developer',
     items: [
-      { key: 'showDevStats', label: 'Dev Stats', description: 'Show performance and cache metrics' },
+      { key: 'showDevStats', labelKey: 'displayMenu.items.devStats', descriptionKey: 'displayMenu.descriptions.devStats' },
     ],
   },
 ];
@@ -43,6 +45,7 @@ export default function DisplayMenu() {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const { t } = useTranslation();
 
   const {
     showStations,
@@ -131,13 +134,13 @@ export default function DisplayMenu() {
             : 'bg-background hover:bg-background-80 text-text-primary'
           }
         `}
-        title="Display Options"
+        title={t('displayMenu.title')}
         data-testid="display-menu-button"
         aria-expanded={isOpen}
       >
         <span className="flex items-center gap-1">
           <span>👁</span>
-          <span>Display</span>
+          <span>{t('displayMenu.button')}</span>
           <span className="text-xs">{isOpen ? '▲' : '▼'}</span>
         </span>
       </button>
@@ -149,10 +152,10 @@ export default function DisplayMenu() {
           data-testid="display-menu"
         >
           {displayOptions.map((group, groupIndex) => (
-            <div key={group.group}>
+            <div key={group.groupKey}>
               {groupIndex > 0 && <div className="border-t border-border" />}
               <div className="px-3 py-2 text-xs font-medium text-text-secondary uppercase tracking-wide">
-                {group.group}
+                {t(group.groupKey)}
               </div>
               <div className="pb-1">
                 {group.items.map((item) => {
@@ -170,9 +173,9 @@ export default function DisplayMenu() {
                       data-testid={`display-toggle-${item.key}`}
                     >
                       <div className="flex flex-col items-start">
-                        <span className="text-sm">{item.label}</span>
-                        {item.description && (
-                          <span className="text-xs text-text-secondary">{item.description}</span>
+                        <span className="text-sm">{t(item.labelKey)}</span>
+                        {item.descriptionKey && (
+                          <span className="text-xs text-text-secondary">{t(item.descriptionKey)}</span>
                         )}
                       </div>
                       <div
@@ -191,7 +194,7 @@ export default function DisplayMenu() {
                     {item.key === 'showGrid' && showGrid && (
                       <div className="px-3 py-2 pl-6 bg-background-30">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs text-text-secondary">Spacing:</span>
+                          <span className="text-xs text-text-secondary">{t('displayMenu.spacing.label')}:</span>
                           <select
                             value={gridSpacing}
                             onChange={(e) => setGridSpacing(Number(e.target.value))}
@@ -201,7 +204,7 @@ export default function DisplayMenu() {
                           >
                             {GRID_SPACING_OPTIONS.map((spacing) => (
                               <option key={spacing} value={spacing}>
-                                {spacing}m
+                                {formatNumber(spacing)}{t('common.units.meters')}
                               </option>
                             ))}
                           </select>

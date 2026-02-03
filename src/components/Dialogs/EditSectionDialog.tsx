@@ -27,6 +27,7 @@ export default function EditSectionDialog() {
   const [date, setDate] = useState('');
   const [color, setColor] = useState(getThemeColor('--cc-station-default'));
   const [direction, setDirection] = useState<'in' | 'out'>('in');
+  const [quality, setQuality] = useState(1);
 
   // Shots state
   const [shots, setShots] = useState<EditableShot[]>([]);
@@ -46,6 +47,7 @@ export default function EditSectionDialog() {
       setDate(section.date ?? '');
       setColor(section.color);
       setDirection(section.direction ?? 'in');
+      setQuality(section.quality ?? 1);
       setShots(section.shots.map(s => ({ ...s })));
     }
   }, [section]);
@@ -255,6 +257,7 @@ export default function EditSectionDialog() {
         date: date.trim() || null,
         color,
         direction,
+        quality,
       });
 
       if (!sectionResult.success) {
@@ -341,6 +344,7 @@ export default function EditSectionDialog() {
     date !== (section.date ?? '') ||
     color !== section.color ||
     direction !== (section.direction ?? 'in') ||
+    quality !== (section.quality ?? 1) ||
     shots.some(s => s.isNew || s.isDeleted) ||
     shots.some(s => {
       const original = section.shots.find(o => o.id === s.id);
@@ -378,12 +382,15 @@ export default function EditSectionDialog() {
           date={date}
           color={color}
           direction={direction}
+          quality={quality}
           onNameChange={setName}
           onSurveyorChange={setSurveyor}
           onDateChange={setDate}
           onColorChange={setColor}
+          onQualityChange={setQuality}
           onDirectionChange={setDirection}
           showDirection={true}
+          showQuality={true}
           disabled={isLoading}
         />
 

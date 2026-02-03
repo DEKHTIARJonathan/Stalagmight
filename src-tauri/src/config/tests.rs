@@ -1243,6 +1243,7 @@ recent_projects_max = 20
 "#;
     let config: GeneralConfig = toml::from_str(toml_str).expect("Should deserialize");
     assert_eq!(config.shortcut_feedback, ShortcutFeedback::NonObvious);
+    assert_eq!(config.locale, "system");
 }
 
 #[test]
@@ -1255,6 +1256,18 @@ shortcut_feedback = "all"
 "#;
     let config: GeneralConfig = toml::from_str(toml_str).expect("Should deserialize");
     assert_eq!(config.shortcut_feedback, ShortcutFeedback::All);
+}
+
+#[test]
+fn test_general_config_locale_explicit() {
+    let toml_str = r#"
+auto_save = true
+auto_save_interval_seconds = 30
+recent_projects_max = 20
+locale = "en-US"
+"#;
+    let config: GeneralConfig = toml::from_str(toml_str).expect("Should deserialize");
+    assert_eq!(config.locale, "en-US");
 }
 
 #[test]
@@ -1279,6 +1292,7 @@ fn test_load_from_path_missing_returns_default() {
     let path = dir.path().join("config.toml");
     let config = Config::load_from_path(&path).unwrap();
     assert_eq!(config.general.auto_save_interval_seconds, 30);
+    assert_eq!(config.general.locale, "system");
     assert_eq!(config.validation.warn_shot_length_max, 50.0);
 }
 

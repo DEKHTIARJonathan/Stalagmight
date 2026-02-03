@@ -1,7 +1,7 @@
 use crate::core::{Command, CommandResult, UndoData};
 use crate::models::{
-    Coordinates, LoopClosure, Project, Section, SectionData, SectionId, SectionUpdates, Shot,
-    ShotData, ShotId, ShotUpdates,
+    ClosureStrategy, Coordinates, LoopClosure, Project, Section, SectionData, SectionId,
+    SectionUpdates, Shot, ShotData, ShotId, ShotUpdates,
 };
 
 use super::AppState;
@@ -66,6 +66,15 @@ impl AppState {
                 }
             }
 
+            // AdjustLoopClosures: capture full project snapshot (before/after pair)
+            Command::AdjustLoopClosures { .. } => match serde_json::to_string(project) {
+                Ok(before) => UndoData::ProjectSnapshotPair {
+                    before,
+                    after: String::new(),
+                },
+                Err(_) => UndoData::None,
+            },
+
             // For update commands, capture previous values
             Command::UpdateShot {
                 section_id,
@@ -122,6 +131,7 @@ impl AppState {
                         date: updates.date.as_ref().map(|_| section.date),
                         color: updates.color.as_ref().map(|_| section.color.clone()),
                         direction: updates.direction.map(|_| section.direction),
+                        quality: updates.quality.map(|_| section.quality),
                     };
 
                     if let Ok(json) = serde_json::to_string(&prev_updates) {
@@ -204,9 +214,23 @@ impl AppState {
                 }
             }
 
-            // For create loop closure, return None initially (closure doesn't exist yet)
-            // Will be finalized after execution
-            Command::CreateLoopClosure { .. } => UndoData::None,
+            // For create loop closure, capture snapshot when it mutates shot data
+            Command::CreateLoopClosure { closure_strategy, .. } => {
+                if matches!(
+                    closure_strategy,
+                    ClosureStrategy::ProportionalByLength | ClosureStrategy::EqualDistribution
+                ) {
+                    match serde_json::to_string(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
+                    }
+                } else {
+                    UndoData::None
+                }
+            }
 
             // For zero datum operations - capture GPS and section offsets
             Command::SetZeroDatum { station_ref, .. } => {
@@ -400,23 +424,39 @@ impl AppState {
             Command::CreateLoopClosure {
                 station_a,
                 station_b,
-                ..
+                closure_strategy,
             } => {
-                // Capture the newly created closure from the project's loop_closures
-                if let Some(closure) = project.loop_closures.iter().find(|lc| {
-                    (lc.station_a == *station_a && lc.station_b == *station_b)
-                        || (lc.station_a == *station_b && lc.station_b == *station_a)
-                }) {
-                    UndoData::ClosureInfo {
-                        closure: closure.clone(),
+                if matches!(
+                    closure_strategy,
+                    ClosureStrategy::ProportionalByLength | ClosureStrategy::EqualDistribution
+                ) {
+                    if let UndoData::ProjectSnapshotPair { before, .. } = undo_data {
+                        match serde_json::to_string(project) {
+                            Ok(after) => UndoData::ProjectSnapshotPair { before, after },
+                            Err(_) => UndoData::None,
+                        }
+                    } else {
+                        undo_data
                     }
                 } else {
-                    undo_data
+                    // Capture the newly created closure from the project's loop_closures
+                    if let Some(closure) = project.loop_closures.iter().find(|lc| {
+                        (lc.station_a == *station_a && lc.station_b == *station_b)
+                            || (lc.station_a == *station_b && lc.station_b == *station_a)
+                    }) {
+                        UndoData::ClosureInfo {
+                            closure: closure.clone(),
+                        }
+                    } else {
+                        undo_data
+                    }
                 }
             }
 
-            // DeleteSection/DeleteShot: fill in the "after" snapshot now that removal is done
-            Command::DeleteSection { .. } | Command::DeleteShot { .. } => {
+            // DeleteSection/DeleteShot/AdjustLoopClosures: fill in the "after" snapshot now that removal/adjustment is done
+            Command::DeleteSection { .. }
+            | Command::DeleteShot { .. }
+            | Command::AdjustLoopClosures { .. } => {
                 if let UndoData::ProjectSnapshotPair { before, .. } = undo_data {
                     match serde_json::to_string(project) {
                         Ok(after) => UndoData::ProjectSnapshotPair { before, after },
@@ -1029,6 +1069,7 @@ impl AppState {
                 date: *date,
                 color: color.clone(),
                 direction: *direction,
+                quality: 1.0,
                 shots: shots.clone(),
             }),
             Command::DeleteSection { section_id } => self.delete_section(*section_id),

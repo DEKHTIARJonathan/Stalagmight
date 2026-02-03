@@ -71,6 +71,7 @@ fn test_merge_projects_archives_sources_and_adds_extension() {
         date: None,
         color: "#4ecdc4".to_string(),
         direction: Some(SurveyDirection::In),
+        quality: 1.0,
         shots: vec![test_shot_data(1.0)],
     });
 
@@ -81,6 +82,7 @@ fn test_merge_projects_archives_sources_and_adds_extension() {
         date: None,
         color: "#4ecdc4".to_string(),
         direction: Some(SurveyDirection::Out),
+        quality: 1.0,
         shots: vec![test_shot_data(2.0)],
     });
 
@@ -938,6 +940,7 @@ fn test_project_snapshot_pair_undo_redo_roundtrip() {
         date: None,
         color: "#ff0000".to_string(),
         direction: Some(SurveyDirection::In),
+        quality: 1.0,
         shots: vec![test_shot_data(1.0)],
     });
 
@@ -948,6 +951,7 @@ fn test_project_snapshot_pair_undo_redo_roundtrip() {
         date: None,
         color: "#00ff00".to_string(),
         direction: Some(SurveyDirection::Out),
+        quality: 1.0,
         shots: vec![test_shot_data(2.0), test_shot_data(3.0)],
     });
 
@@ -1575,7 +1579,7 @@ fn test_move_nonexistent_section() {
 // === Validation Tests ===
 
 #[test]
-fn test_create_section_with_validation_warnings() {
+fn test_create_section_rejects_zero_length_shot() {
     let state = AppState::new().unwrap();
 
     state.execute(Command::CreateProject {
@@ -1583,7 +1587,7 @@ fn test_create_section_with_validation_warnings() {
         location: None,
     });
 
-    // Create a section with a zero-length shot (should trigger warning)
+    // Create a section with a zero-length shot (should be rejected)
     let result = state.execute(Command::CreateSection {
         name: None,
         surveyor: None,
@@ -1600,9 +1604,8 @@ fn test_create_section_with_validation_warnings() {
         }],
     });
 
-    assert!(result.success);
-    assert!(!result.warnings.is_empty());
-    assert!(result.warnings.iter().any(|w| w.code == "ZERO_LENGTH"));
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("zero length"));
 }
 
 // === Undo/Redo with Shot Restoration ===
@@ -3477,6 +3480,78 @@ fn test_undo_create_loop_closure_has_closure_info() {
 }
 
 #[test]
+fn test_undo_create_loop_closure_distributed_restores_shots() {
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "DistUndo".to_string(),
+        location: None,
+    });
+
+    let result = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(10.0), test_shot_data(6.0)],
+    });
+    let section_id = result.section_id.unwrap();
+
+    let before_project = state.get_project_state().unwrap();
+    let before_shots = before_project
+        .sections
+        .iter()
+        .find(|s| s.id == section_id)
+        .unwrap()
+        .shots
+        .clone();
+
+    let closure_result = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(section_id, 0),
+        station_b: StationRef::new(section_id, 2),
+        closure_strategy: ClosureStrategy::ProportionalByLength,
+    });
+    assert!(closure_result.success, "Distributed closure should succeed");
+
+    let after_project = state.get_project_state().unwrap();
+    let after_shots = after_project
+        .sections
+        .iter()
+        .find(|s| s.id == section_id)
+        .unwrap()
+        .shots
+        .clone();
+    assert_ne!(before_shots[0].length, after_shots[0].length);
+
+    let undo_result = state.undo();
+    assert!(undo_result.success, "Undo should succeed");
+
+    let undo_project = state.get_project_state().unwrap();
+    let undo_shots = undo_project
+        .sections
+        .iter()
+        .find(|s| s.id == section_id)
+        .unwrap()
+        .shots
+        .clone();
+    assert!((undo_shots[0].length - before_shots[0].length).abs() < 1e-6);
+
+    let redo_result = state.redo();
+    assert!(redo_result.success, "Redo should succeed");
+
+    let redo_project = state.get_project_state().unwrap();
+    let redo_shots = redo_project
+        .sections
+        .iter()
+        .find(|s| s.id == section_id)
+        .unwrap()
+        .shots
+        .clone();
+    assert!((redo_shots[0].length - before_shots[0].length).abs() > 1e-6);
+}
+
+#[test]
 fn test_undo_unmerge_restores_removed_closures() {
     let state = AppState::new().unwrap();
 
@@ -3625,7 +3700,7 @@ fn test_move_station_updates_shot_data() {
 
     let project = state.get_project_state().unwrap();
     let shot = &project.get_section(section_id).unwrap().shots[0];
-    let expected_len = (15.0_f64.powi(2) + 10.0_f64.powi(2)).sqrt(); // sqrt(325)
+    let expected_len = (15.0_f64.powi(2) + 10.0_f64.powi(2) + 3.0_f64.powi(2)).sqrt(); // slope length
     assert!((shot.length - expected_len).abs() < 1e-6, "Length should be {}, got {}", expected_len, shot.length);
     let expected_azi = (15.0_f64).atan2(10.0).to_degrees(); // atan2(dx, dy)
     assert!((shot.azimuth_in - expected_azi).abs() < 1e-6, "Azimuth should be {:.1}°, got {:.1}°", expected_azi, shot.azimuth_in);
@@ -5847,14 +5922,16 @@ fn test_split_recalculates_offset_b() {
     let new_id = result.section_id.unwrap();
 
     // Section B offset should be at (accumulated shots_before + deleted shot)
-    // shots_before: 10m east, deleted: 5m east = 15m east
+    // Shot lengths are slope distances; horizontal = sqrt(length^2 - dz^2)
     // With azimuth 90, sin(90) = 1, cos(90) = 0
-    // So bx = 15, by = 0 (approximately)
+    // So bx = horizontal_sum, by = 0 (approximately)
     let proj = state.get_project_state().unwrap();
     let b_offset = proj.section_offsets.get(&new_id);
     assert!(b_offset.is_some(), "Section B should have an offset");
     let (bx, by) = b_offset.unwrap();
-    assert!((*bx - 15.0).abs() < 0.001, "bx should be ~15, got {}", bx);
+    let expected = (10.0_f64.powi(2) - 1.0_f64.powi(2)).sqrt()
+        + (5.0_f64.powi(2) - 1.0_f64.powi(2)).sqrt();
+    assert!((*bx - expected).abs() < 0.001, "bx should be ~{}, got {}", expected, bx);
     assert!(by.abs() < 0.001, "by should be ~0, got {}", by);
 }
 

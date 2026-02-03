@@ -41,6 +41,7 @@ export interface SectionConfig {
   date: string | null;
   color: string;
   direction: 'in' | 'out';
+  quality: number;
   shots: EditableShot[];
   placement: PlacementConfig;
 }
@@ -669,6 +670,7 @@ function initializeState(
       date: dateStr,
       color: SECTION_COLORS[arrayIdx % SECTION_COLORS.length] ?? '#4ecdc4',
       direction: section.direction,
+      quality: 1.0,
       shots: convertToEditableShots(section.shots),
       placement: { type: 'origin' },
     });
@@ -676,7 +678,12 @@ function initializeState(
 
   // If restoring from saved state
   if (savedState) {
-    const sectionConfigs = new Map(savedState.sectionConfigs);
+    const sectionConfigs = new Map(
+      savedState.sectionConfigs.map(([idx, cfg]) => [
+        idx,
+        { ...cfg, quality: cfg.quality ?? 1.0 },
+      ])
+    );
     return {
       sectionConfigs,
       currentSectionIndex: savedState.currentSectionIndex,
@@ -707,6 +714,7 @@ function initializeState(
       date: dateStr,
       color: SECTION_COLORS[arrayIdx % SECTION_COLORS.length] ?? '#4ecdc4',
       direction,
+      quality: 1.0,
       shots: convertToEditableShots(section.shots),
       placement: { type: 'origin' },
     });

@@ -1,4 +1,5 @@
 import { useRef, useEffect, useId } from 'react';
+import { useTranslation } from 'react-i18next';
 
 /**
  * Category identifiers for settings sidebar navigation.
@@ -20,20 +21,20 @@ export type SettingsCategory =
  */
 interface CategoryConfig {
   id: SettingsCategory;
-  label: string;
+  labelKey: string;
 }
 
 const CATEGORIES: CategoryConfig[] = [
-  { id: 'general', label: 'General' },
-  { id: 'appearance', label: 'Appearance' },
-  { id: 'units', label: 'Units' },
-  { id: 'display', label: 'Display' },
-  { id: 'map', label: 'Map' },
-  { id: 'validation', label: 'Validation' },
-  { id: 'export', label: 'Export' },
-  { id: 'shortcuts', label: 'Shortcuts' },
-  { id: 'cache', label: 'Cache' },
-  { id: 'advanced', label: 'Advanced' },
+  { id: 'general', labelKey: 'settings.sidebar.general' },
+  { id: 'appearance', labelKey: 'settings.sidebar.appearance' },
+  { id: 'units', labelKey: 'settings.sidebar.units' },
+  { id: 'display', labelKey: 'settings.sidebar.display' },
+  { id: 'map', labelKey: 'settings.sidebar.map' },
+  { id: 'validation', labelKey: 'settings.sidebar.validation' },
+  { id: 'export', labelKey: 'settings.sidebar.export' },
+  { id: 'shortcuts', labelKey: 'settings.sidebar.shortcuts' },
+  { id: 'cache', labelKey: 'settings.sidebar.cache' },
+  { id: 'advanced', labelKey: 'settings.sidebar.advanced' },
 ];
 
 interface SettingsSidebarProps {
@@ -81,6 +82,7 @@ export function SettingsSidebar({
   categoryErrors = {},
   panelIdBase,
 }: SettingsSidebarProps) {
+  const { t } = useTranslation();
   const generatedIdBase = useId();
   const idBase = panelIdBase ?? generatedIdBase;
   const tabRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -176,7 +178,7 @@ export function SettingsSidebar({
     <div
       role="tablist"
       aria-orientation="vertical"
-      aria-label="Settings categories"
+      aria-label={t('settings.sidebar.ariaLabel')}
       className="w-[150px] flex-shrink-0 border-r border-border bg-panel flex flex-col overflow-hidden"
       data-testid="settings-sidebar"
     >
@@ -214,7 +216,7 @@ export function SettingsSidebar({
                 onFocus={() => handleFocus(index)}
               >
                 <span className="flex items-center gap-2">
-                  {category.label}
+                  {t(category.labelKey)}
                   {/* Error indicator (red dot) */}
                   {hasError && (
                     <span

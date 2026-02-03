@@ -26,6 +26,7 @@ export interface Config {
   section_colors: SectionColorsConfig;
   map: MapConfig;
   validation: ValidationConfig;
+  closure_adjustment: ClosureAdjustmentConfig;
   export: ExportConfig;
   logging: LoggingConfig;
   shortcuts: ShortcutsConfig;
@@ -44,6 +45,8 @@ export interface GeneralConfig {
   undo_persist_limit: number;
   /** Shortcut feedback preference: none, non_obvious (default), or all */
   shortcut_feedback: ShortcutFeedback;
+  /** Locale setting: 'system' or a specific locale tag like 'en-US' */
+  locale: string;
 }
 
 export interface UnitsConfig {
@@ -177,6 +180,16 @@ export interface ValidationConfig {
   pitch_diff_threshold: number;
 }
 
+export type TransitVerticalMode = 'ignore' | 'length_proportional' | 'equal';
+
+export interface ClosureAdjustmentConfig {
+  base_sigma_length_m: number;
+  base_sigma_azimuth_deg: number;
+  base_sigma_depth_m: number;
+  transit_vertical_mode: TransitVerticalMode;
+  sequential_distribution_default: import('./project').ClosureStrategy;
+}
+
 export interface ExportConfig {
   default_image_format: string;
   default_dpi: number;
@@ -265,6 +278,7 @@ export const defaultConfig: Config = {
     undo_history_limit: 100,
     undo_persist_limit: 20,
     shortcut_feedback: 'non_obvious',
+    locale: 'system',
   },
   units: {
     length: 'meters',
@@ -343,6 +357,13 @@ export const defaultConfig: Config = {
     warn_azimuth_deviation_max: 30.0,
     azimuth_diff_threshold: 20.0,
     pitch_diff_threshold: 5.0,
+  },
+  closure_adjustment: {
+    base_sigma_length_m: 0.05,
+    base_sigma_azimuth_deg: 1.0,
+    base_sigma_depth_m: 0.05,
+    transit_vertical_mode: 'ignore',
+    sequential_distribution_default: 'ProportionalByLength',
   },
   export: {
     default_image_format: 'png',

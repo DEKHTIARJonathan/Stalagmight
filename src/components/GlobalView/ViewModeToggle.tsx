@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 
 /** View mode for GlobalView map */
 export type ViewMode = 'survey' | 'markers';
@@ -99,14 +100,15 @@ function MarkersIcon() {
  */
 export function ViewModeToggle({ mode, onModeChange }: ViewModeToggleProps) {
   const [showTooltip, setShowTooltip] = useState(false);
+  const { t } = useTranslation();
 
   const handleClick = useCallback(() => {
     onModeChange(mode === 'survey' ? 'markers' : 'survey');
   }, [mode, onModeChange]);
 
   const tooltipText = mode === 'survey'
-    ? 'Switch to markers only'
-    : 'Show survey geometry';
+    ? t('globalView.viewMode.switchToMarkers')
+    : t('globalView.viewMode.switchToSurvey');
 
   return (
     <div className="relative">

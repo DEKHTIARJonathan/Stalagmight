@@ -10,6 +10,9 @@ import type { ClosurePreview, BatchCommand } from '../../types/commands';
 const STRATEGY_OPTIONS: { value: ClosureStrategy; label: string }[] = [
   { value: 'ProportionalByLength', label: 'Proportional by Length' },
   { value: 'EqualDistribution', label: 'Equal Distribution' },
+  { value: 'Sequential', label: 'Sequential (Batch)' },
+  { value: 'TransitRule', label: 'Transit Rule (Batch)' },
+  { value: 'LeastSquaresWeighted', label: 'Least Squares (Weighted)' },
   { value: 'KeepRaw', label: 'Keep Raw' },
   { value: 'ManualAdjustment', label: 'Manual Adjustment' },
 ];

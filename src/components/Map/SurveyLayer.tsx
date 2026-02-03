@@ -21,6 +21,7 @@ import {
 } from './surveyLayer/features';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import { metersToMapCoords } from '../../utils/coordinates';
+import { formatFixed } from '../../i18n/format';
 import { getErrorColor } from '../../utils/colors';
 import {
   distanceToLineSegment,
@@ -2245,7 +2246,7 @@ export default class SurveyLayer {
           toCoord,
           movingEnd: fromIsMoving && toIsMoving ? 'both' : fromIsMoving ? 'from' : 'to',
           shotLabelProperties: {
-            label: `${shot.azimuth_in.toFixed(0)}° ${shot.length.toFixed(1)}m`,
+            label: `${formatFixed(shot.azimuth_in, undefined, 0)}° ${formatFixed(shot.length, undefined, 1)}m`,
             sectionId: section.id,
             shotId: shot.id,
             color: section.color,

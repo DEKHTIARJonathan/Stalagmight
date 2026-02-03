@@ -114,6 +114,7 @@ fn project_with_section(shots: Vec<ShotData>) -> Project {
         date: None,
         color: "#4ecdc4".to_string(),
         direction: None,
+        quality: 1.0,
         shots,
     });
     project

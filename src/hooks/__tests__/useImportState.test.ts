@@ -27,6 +27,7 @@ const baseConfig: SectionConfig = {
   date: null,
   color: '#ffffff',
   direction: 'in',
+  quality: 1.0,
   shots: [baseShot],
   placement: { type: 'origin' },
 };

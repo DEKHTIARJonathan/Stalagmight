@@ -34,6 +34,7 @@ resvg = "0.43"
 sha2 = "0.10"
 ureq = "3"
 http = "1"
+nalgebra = "0.33"
 
 [profile.release]
 lto = true

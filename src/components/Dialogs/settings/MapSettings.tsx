@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
@@ -31,6 +32,7 @@ export function MapSettings({
   onValidationError,
   panelIdBase,
 }: SettingsCategoryProps) {
+  const { t } = useTranslation();
   // Validation state
   const hasErrorRef = useRef(false);
 
@@ -46,7 +48,9 @@ export function MapSettings({
       if (mountedRef.current) {
         const options: ProviderOption[] = providers.map((p) => ({
           value: p.name,
-          label: p.available ? p.display_label : `${p.display_label} (requires API key)`,
+          label: p.available
+            ? p.display_label
+            : t('settings.map.satellite.providerRequiresKey', { provider: p.display_label }),
           disabled: !p.available,
         }));
         // Sort available providers first
@@ -66,7 +70,7 @@ export function MapSettings({
         setProvidersLoaded(true);
       }
     }
-  }, []);
+  }, [t]);
 
   // Load providers on mount
   useEffect(() => {
@@ -83,50 +87,50 @@ export function MapSettings({
 
     // Validate zoom settings
     if (config.map.zoom_min >= config.map.zoom_max) {
-      errors.push('Minimum zoom must be less than maximum zoom');
+      errors.push(t('settings.map.validation.zoomRange'));
     }
     if (
       config.map.zoom_default < config.map.zoom_min ||
       config.map.zoom_default > config.map.zoom_max
     ) {
-      errors.push('Default zoom must be between min and max zoom');
+      errors.push(t('settings.map.validation.zoomDefault'));
     }
     if (config.map.zoom_step < 0.1 || config.map.zoom_step > 5.0) {
-      errors.push('Zoom step must be between 0.1 and 5.0');
+      errors.push(t('settings.map.validation.zoomStep'));
     }
 
     // Validate GPS origin
     if (config.map.satellite_gps_origin.latitude < -90 || config.map.satellite_gps_origin.latitude > 90) {
-      errors.push('Latitude must be between -90 and 90');
+      errors.push(t('settings.map.validation.latitude'));
     }
     if (config.map.satellite_gps_origin.longitude < -180 || config.map.satellite_gps_origin.longitude > 180) {
-      errors.push('Longitude must be between -180 and 180');
+      errors.push(t('settings.map.validation.longitude'));
     }
 
     // Validate station settings
     if (config.map.station.radius < 1 || config.map.station.radius > 50) {
-      errors.push('Station radius must be between 1 and 50');
+      errors.push(t('settings.map.validation.stationRadius'));
     }
     if (config.map.station.hit_area < config.map.station.radius) {
-      errors.push('Station hit area must be at least as large as radius');
+      errors.push(t('settings.map.validation.stationHitArea'));
     }
 
     // Validate shot settings
     if (config.map.shot.width < 0.5 || config.map.shot.width > 20) {
-      errors.push('Shot width must be between 0.5 and 20');
+      errors.push(t('settings.map.validation.shotWidth'));
     }
     if (config.map.shot.hit_area < config.map.shot.width) {
-      errors.push('Shot hit area must be at least as large as width');
+      errors.push(t('settings.map.validation.shotHitArea'));
     }
 
     // Validate snap threshold
     if (config.map.snap.threshold < 1 || config.map.snap.threshold > 50) {
-      errors.push('Snap threshold must be between 1 and 50');
+      errors.push(t('settings.map.validation.snapThreshold'));
     }
 
     // Validate animation duration
     if (config.map.animation.duration < 0 || config.map.animation.duration > 2000) {
-      errors.push('Animation duration must be between 0 and 2000 ms');
+      errors.push(t('settings.map.validation.animationDuration'));
     }
 
     const hasError = errors.length > 0;
@@ -134,7 +138,7 @@ export function MapSettings({
       hasErrorRef.current = hasError;
       onValidationError('map', hasError);
     }
-  }, [config.map, onValidationError]);
+  }, [config.map, onValidationError, t]);
 
   // Satellite settings
   const handleProviderChange = (value: string) => {
@@ -427,12 +431,12 @@ export function MapSettings({
       aria-labelledby={getTabId(panelIdBase, 'map')}
       data-testid="settings-panel-map"
     >
-      <h2 className="text-lg font-medium mb-4">Map</h2>
+      <h2 className="text-lg font-medium mb-4">{t('settings.map.title')}</h2>
 
-      <SettingsSection title="Satellite" data-testid="section-satellite">
+      <SettingsSection title={t('settings.map.sections.satellite')} data-testid="section-satellite">
         <SettingRow
-          label="Tile provider"
-          helpText="Source for satellite imagery tiles"
+          label={t('settings.map.satellite.provider.label')}
+          helpText={t('settings.map.satellite.provider.help')}
           isChanged={isFieldChanged(changedFields, 'map.satellite_provider')}
           data-testid="setting-satellite-provider"
         >
@@ -441,29 +445,29 @@ export function MapSettings({
             onChange={handleProviderChange}
             options={providerOptions}
             className="w-40"
-            aria-label="Satellite tile provider"
+            aria-label={t('settings.map.satellite.provider.aria')}
             data-testid="select-satellite-provider"
             disabled={!providersLoaded}
           />
         </SettingRow>
 
         <SettingRow
-          label="Enable satellite"
-          helpText="Show satellite imagery by default"
+          label={t('settings.map.satellite.enabled.label')}
+          helpText={t('settings.map.satellite.enabled.help')}
           isChanged={isFieldChanged(changedFields, 'map.satellite_enabled')}
           data-testid="setting-satellite-enabled"
         >
           <Toggle
             checked={config.map.satellite_enabled}
             onChange={handleSatelliteEnabledChange}
-            aria-label="Enable satellite imagery"
+            aria-label={t('settings.map.satellite.enabled.aria')}
             data-testid="toggle-satellite-enabled"
           />
         </SettingRow>
 
         <SettingRow
-          label="GPS origin latitude"
-          helpText="Default latitude for satellite alignment (-90 to 90)"
+          label={t('settings.map.satellite.latitude.label')}
+          helpText={t('settings.map.satellite.latitude.help')}
           isChanged={isFieldChanged(changedFields, 'map.satellite_gps_origin.latitude')}
           data-testid="setting-gps-latitude"
         >
@@ -475,14 +479,14 @@ export function MapSettings({
             value={config.map.satellite_gps_origin.latitude}
             onChange={(e) => handleLatitudeChange(e.target.value)}
             className="w-24 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="GPS origin latitude"
+            aria-label={t('settings.map.satellite.latitude.aria')}
             data-testid="input-gps-latitude"
           />
         </SettingRow>
 
         <SettingRow
-          label="GPS origin longitude"
-          helpText="Default longitude for satellite alignment (-180 to 180)"
+          label={t('settings.map.satellite.longitude.label')}
+          helpText={t('settings.map.satellite.longitude.help')}
           isChanged={isFieldChanged(changedFields, 'map.satellite_gps_origin.longitude')}
           data-testid="setting-gps-longitude"
         >
@@ -494,16 +498,16 @@ export function MapSettings({
             value={config.map.satellite_gps_origin.longitude}
             onChange={(e) => handleLongitudeChange(e.target.value)}
             className="w-24 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="GPS origin longitude"
+            aria-label={t('settings.map.satellite.longitude.aria')}
             data-testid="input-gps-longitude"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Zoom" data-testid="section-zoom">
+      <SettingsSection title={t('settings.map.sections.zoom')} data-testid="section-zoom">
         <SettingRow
-          label="Default zoom"
-          helpText="Initial zoom level when opening a project"
+          label={t('settings.map.zoom.default.label')}
+          helpText={t('settings.map.zoom.default.help')}
           isChanged={isFieldChanged(changedFields, 'map.zoom_default')}
           data-testid="setting-zoom-default"
         >
@@ -514,14 +518,14 @@ export function MapSettings({
             value={config.map.zoom_default}
             onChange={(e) => handleZoomDefaultChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Default zoom level"
+            aria-label={t('settings.map.zoom.default.aria')}
             data-testid="input-zoom-default"
           />
         </SettingRow>
 
         <SettingRow
-          label="Minimum zoom"
-          helpText="Lowest allowed zoom level (most zoomed out)"
+          label={t('settings.map.zoom.min.label')}
+          helpText={t('settings.map.zoom.min.help')}
           isChanged={isFieldChanged(changedFields, 'map.zoom_min')}
           data-testid="setting-zoom-min"
         >
@@ -532,14 +536,14 @@ export function MapSettings({
             value={config.map.zoom_min}
             onChange={(e) => handleZoomMinChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Minimum zoom level"
+            aria-label={t('settings.map.zoom.min.aria')}
             data-testid="input-zoom-min"
           />
         </SettingRow>
 
         <SettingRow
-          label="Maximum zoom"
-          helpText="Highest allowed zoom level (most zoomed in)"
+          label={t('settings.map.zoom.max.label')}
+          helpText={t('settings.map.zoom.max.help')}
           isChanged={isFieldChanged(changedFields, 'map.zoom_max')}
           data-testid="setting-zoom-max"
         >
@@ -550,14 +554,14 @@ export function MapSettings({
             value={config.map.zoom_max}
             onChange={(e) => handleZoomMaxChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Maximum zoom level"
+            aria-label={t('settings.map.zoom.max.aria')}
             data-testid="input-zoom-max"
           />
         </SettingRow>
 
         <SettingRow
-          label="Zoom step"
-          helpText="Zoom increment for click-to-zoom (0.1-5.0)"
+          label={t('settings.map.zoom.step.label')}
+          helpText={t('settings.map.zoom.step.help')}
           isChanged={isFieldChanged(changedFields, 'map.zoom_step')}
           data-testid="setting-zoom-step"
         >
@@ -569,16 +573,16 @@ export function MapSettings({
             value={config.map.zoom_step}
             onChange={(e) => handleZoomStepChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Zoom step"
+            aria-label={t('settings.map.zoom.step.aria')}
             data-testid="input-zoom-step"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Controls" data-testid="section-controls">
+      <SettingsSection title={t('settings.map.sections.controls')} data-testid="section-controls">
         <SettingRow
-          label="Pan speed"
-          helpText="Multiplier for panning speed (0.1-5.0)"
+          label={t('settings.map.controls.panSpeed.label')}
+          helpText={t('settings.map.controls.panSpeed.help')}
           isChanged={isFieldChanged(changedFields, 'map.controls.pan_speed')}
           data-testid="setting-pan-speed"
         >
@@ -590,14 +594,14 @@ export function MapSettings({
             value={config.map.controls.pan_speed}
             onChange={(e) => handlePanSpeedChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Pan speed multiplier"
+            aria-label={t('settings.map.controls.panSpeed.aria')}
             data-testid="input-pan-speed"
           />
         </SettingRow>
 
         <SettingRow
-          label="Zoom speed"
-          helpText="Multiplier for scroll zoom speed (0.1-5.0)"
+          label={t('settings.map.controls.zoomSpeed.label')}
+          helpText={t('settings.map.controls.zoomSpeed.help')}
           isChanged={isFieldChanged(changedFields, 'map.controls.zoom_speed')}
           data-testid="setting-zoom-speed"
         >
@@ -609,30 +613,30 @@ export function MapSettings({
             value={config.map.controls.zoom_speed}
             onChange={(e) => handleZoomSpeedChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Zoom speed multiplier"
+            aria-label={t('settings.map.controls.zoomSpeed.aria')}
             data-testid="input-zoom-speed"
           />
         </SettingRow>
 
         <SettingRow
-          label="Invert scroll"
-          helpText="Reverse scroll wheel zoom direction"
+          label={t('settings.map.controls.invertScroll.label')}
+          helpText={t('settings.map.controls.invertScroll.help')}
           isChanged={isFieldChanged(changedFields, 'map.controls.invert_scroll')}
           data-testid="setting-invert-scroll"
         >
           <Toggle
             checked={config.map.controls.invert_scroll}
             onChange={handleInvertScrollChange}
-            aria-label="Invert scroll direction"
+            aria-label={t('settings.map.controls.invertScroll.aria')}
             data-testid="toggle-invert-scroll"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Station Appearance" data-testid="section-station">
+      <SettingsSection title={t('settings.map.sections.station')} data-testid="section-station">
         <SettingRow
-          label="Station radius"
-          helpText="Visual size of station markers (1-50 pixels)"
+          label={t('settings.map.station.radius.label')}
+          helpText={t('settings.map.station.radius.help')}
           isChanged={isFieldChanged(changedFields, 'map.station.radius')}
           data-testid="setting-station-radius"
         >
@@ -644,14 +648,14 @@ export function MapSettings({
             value={config.map.station.radius}
             onChange={(e) => handleStationRadiusChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Station radius"
+            aria-label={t('settings.map.station.radius.aria')}
             data-testid="input-station-radius"
           />
         </SettingRow>
 
         <SettingRow
-          label="Station hit area"
-          helpText="Clickable area size (must be >= radius)"
+          label={t('settings.map.station.hitArea.label')}
+          helpText={t('settings.map.station.hitArea.help')}
           isChanged={isFieldChanged(changedFields, 'map.station.hit_area')}
           data-testid="setting-station-hit-area"
         >
@@ -663,14 +667,14 @@ export function MapSettings({
             value={config.map.station.hit_area}
             onChange={(e) => handleStationHitAreaChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Station hit area"
+            aria-label={t('settings.map.station.hitArea.aria')}
             data-testid="input-station-hit-area"
           />
         </SettingRow>
 
         <SettingRow
-          label="Station hover radius"
-          helpText="Radius when hovered (1-50 pixels)"
+          label={t('settings.map.station.hoverRadius.label')}
+          helpText={t('settings.map.station.hoverRadius.help')}
           isChanged={isFieldChanged(changedFields, 'map.station.hover_radius')}
           data-testid="setting-station-hover-radius"
         >
@@ -682,14 +686,14 @@ export function MapSettings({
             value={config.map.station.hover_radius}
             onChange={(e) => handleStationHoverRadiusChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Station hover radius"
+            aria-label={t('settings.map.station.hoverRadius.aria')}
             data-testid="input-station-hover-radius"
           />
         </SettingRow>
 
         <SettingRow
-          label="Station selection radius"
-          helpText="Radius when selected (1-50 pixels)"
+          label={t('settings.map.station.selectionRadius.label')}
+          helpText={t('settings.map.station.selectionRadius.help')}
           isChanged={isFieldChanged(changedFields, 'map.station.selection_radius')}
           data-testid="setting-station-selection-radius"
         >
@@ -701,16 +705,16 @@ export function MapSettings({
             value={config.map.station.selection_radius}
             onChange={(e) => handleStationSelectionRadiusChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Station selection radius"
+            aria-label={t('settings.map.station.selectionRadius.aria')}
             data-testid="input-station-selection-radius"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Shot Appearance" data-testid="section-shot">
+      <SettingsSection title={t('settings.map.sections.shot')} data-testid="section-shot">
         <SettingRow
-          label="Shot width"
-          helpText="Visual thickness of shot lines (0.5-20 pixels)"
+          label={t('settings.map.shot.width.label')}
+          helpText={t('settings.map.shot.width.help')}
           isChanged={isFieldChanged(changedFields, 'map.shot.width')}
           data-testid="setting-shot-width"
         >
@@ -722,14 +726,14 @@ export function MapSettings({
             value={config.map.shot.width}
             onChange={(e) => handleShotWidthChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Shot line width"
+            aria-label={t('settings.map.shot.width.aria')}
             data-testid="input-shot-width"
           />
         </SettingRow>
 
         <SettingRow
-          label="Shot hit area"
-          helpText="Clickable area width (must be >= width)"
+          label={t('settings.map.shot.hitArea.label')}
+          helpText={t('settings.map.shot.hitArea.help')}
           isChanged={isFieldChanged(changedFields, 'map.shot.hit_area')}
           data-testid="setting-shot-hit-area"
         >
@@ -741,14 +745,14 @@ export function MapSettings({
             value={config.map.shot.hit_area}
             onChange={(e) => handleShotHitAreaChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Shot hit area"
+            aria-label={t('settings.map.shot.hitArea.aria')}
             data-testid="input-shot-hit-area"
           />
         </SettingRow>
 
         <SettingRow
-          label="Shot hover width"
-          helpText="Width when hovered (0.5-20 pixels)"
+          label={t('settings.map.shot.hoverWidth.label')}
+          helpText={t('settings.map.shot.hoverWidth.help')}
           isChanged={isFieldChanged(changedFields, 'map.shot.hover_width')}
           data-testid="setting-shot-hover-width"
         >
@@ -760,14 +764,14 @@ export function MapSettings({
             value={config.map.shot.hover_width}
             onChange={(e) => handleShotHoverWidthChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Shot hover width"
+            aria-label={t('settings.map.shot.hoverWidth.aria')}
             data-testid="input-shot-hover-width"
           />
         </SettingRow>
 
         <SettingRow
-          label="Shot selection width"
-          helpText="Width when selected (0.5-20 pixels)"
+          label={t('settings.map.shot.selectionWidth.label')}
+          helpText={t('settings.map.shot.selectionWidth.help')}
           isChanged={isFieldChanged(changedFields, 'map.shot.selection_width')}
           data-testid="setting-shot-selection-width"
         >
@@ -779,16 +783,16 @@ export function MapSettings({
             value={config.map.shot.selection_width}
             onChange={(e) => handleShotSelectionWidthChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Shot selection width"
+            aria-label={t('settings.map.shot.selectionWidth.aria')}
             data-testid="input-shot-selection-width"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Snap-to-Station" data-testid="section-snap">
+      <SettingsSection title={t('settings.map.sections.snap')} data-testid="section-snap">
         <SettingRow
-          label="Snap threshold"
-          helpText="Distance in pixels to snap to stations (1-50)"
+          label={t('settings.map.snap.threshold.label')}
+          helpText={t('settings.map.snap.threshold.help')}
           isChanged={isFieldChanged(changedFields, 'map.snap.threshold')}
           data-testid="setting-snap-threshold"
         >
@@ -800,72 +804,72 @@ export function MapSettings({
             value={config.map.snap.threshold}
             onChange={(e) => handleSnapThresholdChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Snap threshold"
+            aria-label={t('settings.map.snap.threshold.aria')}
             data-testid="input-snap-threshold"
           />
         </SettingRow>
 
         <SettingRow
-          label="Snap in Draw tool"
-          helpText="Enable snap-to-station when drawing"
+          label={t('settings.map.snap.draw.label')}
+          helpText={t('settings.map.snap.draw.help')}
           isChanged={isFieldChanged(changedFields, 'map.snap.enabled_draw')}
           data-testid="setting-snap-draw"
         >
           <Toggle
             checked={config.map.snap.enabled_draw}
             onChange={handleSnapDrawChange}
-            aria-label="Enable snap in Draw tool"
+            aria-label={t('settings.map.snap.draw.aria')}
             data-testid="toggle-snap-draw"
           />
         </SettingRow>
 
         <SettingRow
-          label="Snap in Merge tool"
-          helpText="Enable snap-to-station when merging"
+          label={t('settings.map.snap.merge.label')}
+          helpText={t('settings.map.snap.merge.help')}
           isChanged={isFieldChanged(changedFields, 'map.snap.enabled_merge')}
           data-testid="setting-snap-merge"
         >
           <Toggle
             checked={config.map.snap.enabled_merge}
             onChange={handleSnapMergeChange}
-            aria-label="Enable snap in Merge tool"
+            aria-label={t('settings.map.snap.merge.aria')}
             data-testid="toggle-snap-merge"
           />
         </SettingRow>
 
         <SettingRow
-          label="Snap in Measure tool"
-          helpText="Enable snap-to-station when measuring"
+          label={t('settings.map.snap.measure.label')}
+          helpText={t('settings.map.snap.measure.help')}
           isChanged={isFieldChanged(changedFields, 'map.snap.enabled_measure')}
           data-testid="setting-snap-measure"
         >
           <Toggle
             checked={config.map.snap.enabled_measure}
             onChange={handleSnapMeasureChange}
-            aria-label="Enable snap in Measure tool"
+            aria-label={t('settings.map.snap.measure.aria')}
             data-testid="toggle-snap-measure"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Animation" data-testid="section-animation">
+      <SettingsSection title={t('settings.map.sections.animation')} data-testid="section-animation">
         <SettingRow
-          label="Enable animations"
-          helpText="Animate map focus transitions"
+          label={t('settings.map.animation.enabled.label')}
+          helpText={t('settings.map.animation.enabled.help')}
           isChanged={isFieldChanged(changedFields, 'map.animation.enabled')}
           data-testid="setting-animation-enabled"
         >
           <Toggle
             checked={config.map.animation.enabled}
             onChange={handleAnimationEnabledChange}
-            aria-label="Enable map animations"
+            aria-label={t('settings.map.animation.enabled.aria')}
             data-testid="toggle-animation-enabled"
           />
         </SettingRow>
 
         <SettingRow
-          label="Animation duration"
-          helpText="Duration of focus animations (0-2000 ms)"
+          label={t('settings.map.animation.duration.label')}
+          helpText={t('settings.map.animation.duration.help')}
           isChanged={isFieldChanged(changedFields, 'map.animation.duration')}
           data-testid="setting-animation-duration"
         >
@@ -877,14 +881,14 @@ export function MapSettings({
             value={config.map.animation.duration}
             onChange={(e) => handleAnimationDurationChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Animation duration"
+            aria-label={t('settings.map.animation.duration.aria')}
             data-testid="input-animation-duration"
           />
         </SettingRow>
 
         <SettingRow
-          label="Point focus zoom"
-          helpText="Zoom level when focusing on a single point"
+          label={t('settings.map.animation.pointZoom.label')}
+          helpText={t('settings.map.animation.pointZoom.help')}
           isChanged={isFieldChanged(changedFields, 'map.animation.point_zoom')}
           data-testid="setting-point-zoom"
         >
@@ -895,7 +899,7 @@ export function MapSettings({
             value={config.map.animation.point_zoom}
             onChange={(e) => handlePointZoomChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Point focus zoom level"
+            aria-label={t('settings.map.animation.pointZoom.aria')}
             data-testid="input-point-zoom"
           />
         </SettingRow>

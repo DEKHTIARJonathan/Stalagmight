@@ -4,6 +4,7 @@
  */
 import { DatePicker } from './DatePicker';
 import { Select } from './Select';
+import { useTranslation } from 'react-i18next';
 
 export interface SectionMetadataFormProps {
   name: string;
@@ -11,12 +12,15 @@ export interface SectionMetadataFormProps {
   date: string;
   color: string;
   direction?: 'in' | 'out';
+  quality?: number;
   onNameChange: (value: string) => void;
   onSurveyorChange: (value: string) => void;
   onDateChange: (value: string) => void;
   onColorChange: (value: string) => void;
+  onQualityChange?: (value: number) => void;
   onDirectionChange?: (value: 'in' | 'out') => void;
   showDirection?: boolean;
+  showQuality?: boolean;
   disabled?: boolean;
 }
 
@@ -26,25 +30,29 @@ export function SectionMetadataForm({
   date,
   color,
   direction = 'in',
+  quality = 1.0,
   onNameChange,
   onSurveyorChange,
   onDateChange,
   onColorChange,
+  onQualityChange,
   onDirectionChange,
   showDirection = false,
+  showQuality = false,
   disabled = false,
 }: SectionMetadataFormProps) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-3" data-testid="section-metadata-form">
       {/* Name field - full width */}
       <div>
-        <label className="block text-sm text-text-secondary mb-1">Name</label>
+        <label className="block text-sm text-text-secondary mb-1">{t('common.labels.name')}</label>
         <input
           type="text"
           value={name}
           onChange={(e) => onNameChange(e.target.value)}
           className="w-full px-3 py-2 bg-background border border-border rounded"
-          placeholder="Section name"
+          placeholder={t('sectionMetadata.placeholders.name')}
           disabled={disabled}
           data-testid="section-name-input"
         />
@@ -52,24 +60,40 @@ export function SectionMetadataForm({
 
       {/* Surveyor field - full width */}
       <div>
-        <label className="block text-sm text-text-secondary mb-1">Surveyor</label>
+        <label className="block text-sm text-text-secondary mb-1">{t('sectionMetadata.labels.surveyor')}</label>
         <input
           type="text"
           value={surveyor}
           onChange={(e) => onSurveyorChange(e.target.value)}
           className="w-full px-3 py-2 bg-background border border-border rounded"
-          placeholder="Surveyor name"
+          placeholder={t('sectionMetadata.placeholders.surveyor')}
           disabled={disabled}
           data-testid="section-surveyor-input"
         />
       </div>
+
+      {showQuality && (
+        <div>
+          <label className="block text-sm text-text-secondary mb-1">{t('sectionMetadata.labels.quality')}</label>
+          <input
+            type="number"
+            min={0.1}
+            step={0.1}
+            value={quality}
+            onChange={(e) => onQualityChange?.(parseFloat(e.target.value) || 1.0)}
+            className="w-32 px-3 py-2 bg-background border border-border rounded"
+            disabled={disabled}
+            data-testid="section-quality-input"
+          />
+        </div>
+      )}
 
       {/* Date, Direction, and Color row */}
       <div className="flex gap-3 items-end justify-between">
         {/* Date and Direction - left aligned */}
         <div className="flex gap-3 items-end">
           <div className="w-32">
-            <label className="block text-sm text-text-secondary mb-1">Date</label>
+            <label className="block text-sm text-text-secondary mb-1">{t('common.labels.date')}</label>
             <DatePicker
               value={date}
               onChange={onDateChange}
@@ -80,13 +104,13 @@ export function SectionMetadataForm({
 
           {showDirection && (
             <div className="w-16">
-              <label className="block text-sm text-text-secondary mb-1">Dir</label>
+              <label className="block text-sm text-text-secondary mb-1">{t('sectionMetadata.labels.directionShort')}</label>
               <Select
                 value={direction}
                 onChange={(v) => onDirectionChange?.(v as 'in' | 'out')}
                 options={[
-                  { value: 'in', label: 'In' },
-                  { value: 'out', label: 'Out' },
+                  { value: 'in', label: t('sectionMetadata.direction.in') },
+                  { value: 'out', label: t('sectionMetadata.direction.out') },
                 ]}
                 disabled={disabled}
                 data-testid="section-direction-select"
@@ -97,7 +121,7 @@ export function SectionMetadataForm({
 
         {/* Color - right aligned */}
         <div className="flex-shrink-0">
-          <label className="block text-sm text-text-secondary mb-1">Color</label>
+          <label className="block text-sm text-text-secondary mb-1">{t('sectionMetadata.labels.color')}</label>
           <div className="flex items-center gap-2">
             <input
               type="color"
@@ -112,7 +136,7 @@ export function SectionMetadataForm({
               value={color}
               onChange={(e) => onColorChange(e.target.value)}
               className="w-20 px-2 py-1.5 bg-background border border-border rounded text-sm"
-              placeholder="#hex"
+              placeholder={t('sectionMetadata.placeholders.color')}
               disabled={disabled}
               data-testid="section-color-hex-input"
             />

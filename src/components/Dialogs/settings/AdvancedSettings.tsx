@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
@@ -8,16 +9,9 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
-import type { Config } from '../../../types/config';
+import type { Config, TransitVerticalMode } from '../../../types/config';
+import type { ClosureStrategy } from '../../../types/project';
 import { useProjectStore } from '../../../store/projectStore';
-
-const LOG_LEVEL_OPTIONS = [
-  { value: 'trace', label: 'Trace (most verbose)' },
-  { value: 'debug', label: 'Debug' },
-  { value: 'info', label: 'Info (default)' },
-  { value: 'warn', label: 'Warning' },
-  { value: 'error', label: 'Error (least verbose)' },
-];
 
 /**
  * Compute differences between two config objects for reload display.
@@ -83,6 +77,43 @@ function computeConfigDiff(
     });
   }
 
+  // Check closure adjustment settings
+  if (oldConfig.closure_adjustment.base_sigma_length_m !== newConfig.closure_adjustment.base_sigma_length_m) {
+    changes.push({
+      path: 'closure_adjustment.base_sigma_length_m',
+      oldValue: String(oldConfig.closure_adjustment.base_sigma_length_m),
+      newValue: String(newConfig.closure_adjustment.base_sigma_length_m),
+    });
+  }
+  if (oldConfig.closure_adjustment.base_sigma_azimuth_deg !== newConfig.closure_adjustment.base_sigma_azimuth_deg) {
+    changes.push({
+      path: 'closure_adjustment.base_sigma_azimuth_deg',
+      oldValue: String(oldConfig.closure_adjustment.base_sigma_azimuth_deg),
+      newValue: String(newConfig.closure_adjustment.base_sigma_azimuth_deg),
+    });
+  }
+  if (oldConfig.closure_adjustment.base_sigma_depth_m !== newConfig.closure_adjustment.base_sigma_depth_m) {
+    changes.push({
+      path: 'closure_adjustment.base_sigma_depth_m',
+      oldValue: String(oldConfig.closure_adjustment.base_sigma_depth_m),
+      newValue: String(newConfig.closure_adjustment.base_sigma_depth_m),
+    });
+  }
+  if (oldConfig.closure_adjustment.transit_vertical_mode !== newConfig.closure_adjustment.transit_vertical_mode) {
+    changes.push({
+      path: 'closure_adjustment.transit_vertical_mode',
+      oldValue: String(oldConfig.closure_adjustment.transit_vertical_mode),
+      newValue: String(newConfig.closure_adjustment.transit_vertical_mode),
+    });
+  }
+  if (oldConfig.closure_adjustment.sequential_distribution_default !== newConfig.closure_adjustment.sequential_distribution_default) {
+    changes.push({
+      path: 'closure_adjustment.sequential_distribution_default',
+      oldValue: String(oldConfig.closure_adjustment.sequential_distribution_default),
+      newValue: String(newConfig.closure_adjustment.sequential_distribution_default),
+    });
+  }
+
   return changes;
 }
 
@@ -97,6 +128,7 @@ export function AdvancedSettings({
   onValidationError,
   panelIdBase,
 }: SettingsCategoryProps) {
+  const { t } = useTranslation();
   const { setConfig } = useProjectStore();
   const [isReloading, setIsReloading] = useState(false);
   const [reloadMessage, setReloadMessage] = useState<string | null>(null);
@@ -111,18 +143,28 @@ export function AdvancedSettings({
 
     // Validate logging max directory size
     if (config.logging.max_directory_size_mb < 1 || config.logging.max_directory_size_mb > 10000) {
-      errors.push('Log directory size must be between 1 and 10000 MB');
+      errors.push(t('settings.advanced.validation.logSize'));
     }
 
     // Validate panel dimensions
     if (config.panels.sections_panel_width < 100 || config.panels.sections_panel_width > 800) {
-      errors.push('Sections panel width must be between 100 and 800');
+      errors.push(t('settings.advanced.validation.sectionsPanel'));
     }
     if (config.panels.detail_panel_width < 150 || config.panels.detail_panel_width > 800) {
-      errors.push('Detail panel width must be between 150 and 800');
+      errors.push(t('settings.advanced.validation.detailPanel'));
     }
     if (config.panels.data_table_height < 100 || config.panels.data_table_height > 600) {
-      errors.push('Data table height must be between 100 and 600');
+      errors.push(t('settings.advanced.validation.dataTable'));
+    }
+
+    if (config.closure_adjustment.base_sigma_length_m <= 0) {
+      errors.push(t('settings.advanced.validation.closureSigmaLength'));
+    }
+    if (config.closure_adjustment.base_sigma_azimuth_deg <= 0) {
+      errors.push(t('settings.advanced.validation.closureSigmaAzimuth'));
+    }
+    if (config.closure_adjustment.base_sigma_depth_m <= 0) {
+      errors.push(t('settings.advanced.validation.closureSigmaDepth'));
     }
 
     const hasError = errors.length > 0;
@@ -130,7 +172,15 @@ export function AdvancedSettings({
       hasErrorRef.current = hasError;
       onValidationError('advanced', hasError);
     }
-  }, [config.logging, config.panels, onValidationError]);
+  }, [config.logging, config.panels, config.closure_adjustment, onValidationError, t]);
+
+  const logLevelOptions = useMemo(() => [
+    { value: 'trace', label: t('settings.advanced.logging.level.options.trace') },
+    { value: 'debug', label: t('settings.advanced.logging.level.options.debug') },
+    { value: 'info', label: t('settings.advanced.logging.level.options.info') },
+    { value: 'warn', label: t('settings.advanced.logging.level.options.warn') },
+    { value: 'error', label: t('settings.advanced.logging.level.options.error') },
+  ], [t]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -224,6 +274,44 @@ export function AdvancedSettings({
     }
   };
 
+  const updateClosureAdjustment = useCallback((updates: Partial<Config['closure_adjustment']>) => {
+    onChange({
+      closure_adjustment: {
+        ...config.closure_adjustment,
+        ...updates,
+      },
+    });
+  }, [config.closure_adjustment, onChange]);
+
+  const handleSigmaLengthChange = (value: string) => {
+    const num = parseFloat(value);
+    if (!isNaN(num)) {
+      updateClosureAdjustment({ base_sigma_length_m: num });
+    }
+  };
+
+  const handleSigmaAzimuthChange = (value: string) => {
+    const num = parseFloat(value);
+    if (!isNaN(num)) {
+      updateClosureAdjustment({ base_sigma_azimuth_deg: num });
+    }
+  };
+
+  const handleSigmaDepthChange = (value: string) => {
+    const num = parseFloat(value);
+    if (!isNaN(num)) {
+      updateClosureAdjustment({ base_sigma_depth_m: num });
+    }
+  };
+
+  const handleTransitVerticalChange = (value: TransitVerticalMode) => {
+    updateClosureAdjustment({ transit_vertical_mode: value });
+  };
+
+  const handleSequentialDistributionChange = (value: ClosureStrategy) => {
+    updateClosureAdjustment({ sequential_distribution_default: value });
+  };
+
   // Reload config from disk
   const handleReloadConfig = useCallback(async () => {
     setIsReloading(true);
@@ -244,21 +332,21 @@ export function AdvancedSettings({
         const changeList = changes
           .map((c) => `${c.path}: ${c.oldValue} -> ${c.newValue}`)
           .join('\n');
-        setReloadMessage(`Config reloaded:\n${changeList}`);
+        setReloadMessage(t('settings.advanced.reload.success', { changes: changeList }));
       } else {
-        setReloadMessage('Config reloaded (no changes detected in advanced settings)');
+        setReloadMessage(t('settings.advanced.reload.noChanges'));
       }
     } catch (error) {
       console.error('[AdvancedSettings] Failed to reload config:', error);
       if (mountedRef.current) {
-        setReloadMessage(`Failed to reload config: ${error}`);
+        setReloadMessage(t('settings.advanced.reload.error', { error: String(error) }));
       }
     } finally {
       if (mountedRef.current) {
         setIsReloading(false);
       }
     }
-  }, [config, setConfig, onChange]);
+  }, [config, setConfig, onChange, t]);
 
   return (
     <div
@@ -267,42 +355,42 @@ export function AdvancedSettings({
       aria-labelledby={getTabId(panelIdBase, 'advanced')}
       data-testid="settings-panel-advanced"
     >
-      <h2 className="text-lg font-medium mb-4">Advanced</h2>
+      <h2 className="text-lg font-medium mb-4">{t('settings.advanced.title')}</h2>
 
-      <SettingsSection title="Debug" data-testid="section-debug">
+      <SettingsSection title={t('settings.advanced.sections.debug')} data-testid="section-debug">
         <SettingRow
-          label="Show hitboxes"
-          helpText="Visualize clickable areas for stations and shots"
+          label={t('settings.advanced.debug.showHitboxes.label')}
+          helpText={t('settings.advanced.debug.showHitboxes.help')}
           isChanged={isFieldChanged(changedFields, 'debug.map.show_hitboxes')}
           data-testid="setting-show-hitboxes"
         >
           <Toggle
             checked={config.debug.map.show_hitboxes}
             onChange={handleShowHitboxesChange}
-            aria-label="Show hitboxes"
+            aria-label={t('settings.advanced.debug.showHitboxes.aria')}
             data-testid="toggle-show-hitboxes"
           />
         </SettingRow>
 
         <SettingRow
-          label="Log hit detection"
-          helpText="Log click/hover detection events to console"
+          label={t('settings.advanced.debug.logHitDetection.label')}
+          helpText={t('settings.advanced.debug.logHitDetection.help')}
           isChanged={isFieldChanged(changedFields, 'debug.map.log_hit_detection')}
           data-testid="setting-log-hit-detection"
         >
           <Toggle
             checked={config.debug.map.log_hit_detection}
             onChange={handleLogHitDetectionChange}
-            aria-label="Log hit detection"
+            aria-label={t('settings.advanced.debug.logHitDetection.aria')}
             data-testid="toggle-log-hit-detection"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Logging" data-testid="section-logging">
+      <SettingsSection title={t('settings.advanced.sections.logging')} data-testid="section-logging">
         <SettingRow
-          label="Log level"
-          helpText="Minimum severity level for log messages"
+          label={t('settings.advanced.logging.level.label')}
+          helpText={t('settings.advanced.logging.level.help')}
           isChanged={isFieldChanged(changedFields, 'logging.level')}
           requiresRestart
           data-testid="setting-log-level"
@@ -310,16 +398,16 @@ export function AdvancedSettings({
           <Select
             value={config.logging.level}
             onChange={handleLogLevelChange}
-            options={LOG_LEVEL_OPTIONS}
+            options={logLevelOptions}
             className="w-48"
-            aria-label="Log level"
+            aria-label={t('settings.advanced.logging.level.aria')}
             data-testid="select-log-level"
           />
         </SettingRow>
 
         <SettingRow
-          label="Max log directory size"
-          helpText="Maximum total size for log files (1-10000 MB)"
+          label={t('settings.advanced.logging.maxSize.label')}
+          helpText={t('settings.advanced.logging.maxSize.help')}
           isChanged={isFieldChanged(changedFields, 'logging.max_directory_size_mb')}
           data-testid="setting-max-log-size"
         >
@@ -331,18 +419,114 @@ export function AdvancedSettings({
               value={config.logging.max_directory_size_mb}
               onChange={(e) => handleMaxLogSizeChange(e.target.value)}
               className="w-24 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-              aria-label="Max log directory size in MB"
+              aria-label={t('settings.advanced.logging.maxSize.aria')}
               data-testid="input-max-log-size"
             />
-            <span className="text-text-secondary">MB</span>
+            <span className="text-text-secondary">{t('settings.advanced.logging.maxSize.unit')}</span>
           </div>
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Panel Dimensions" data-testid="section-panels">
+      <SettingsSection title={t('settings.advanced.sections.closureAdjustment')} data-testid="section-closure-adjustment">
         <SettingRow
-          label="Sections panel width"
-          helpText="Default width of the sections panel (100-800 px)"
+          label={t('settings.advanced.closureAdjustment.sigmaLength.label')}
+          helpText={t('settings.advanced.closureAdjustment.sigmaLength.help')}
+          isChanged={isFieldChanged(changedFields, 'closure_adjustment.base_sigma_length_m')}
+          data-testid="setting-closure-sigma-length"
+        >
+          <input
+            type="number"
+            min={0.001}
+            step={0.01}
+            value={config.closure_adjustment.base_sigma_length_m}
+            onChange={(e) => handleSigmaLengthChange(e.target.value)}
+            className="w-24 px-2 py-1 bg-background border border-border rounded text-sm text-right"
+            aria-label={t('settings.advanced.closureAdjustment.sigmaLength.aria')}
+            data-testid="input-closure-sigma-length"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t('settings.advanced.closureAdjustment.sigmaAzimuth.label')}
+          helpText={t('settings.advanced.closureAdjustment.sigmaAzimuth.help')}
+          isChanged={isFieldChanged(changedFields, 'closure_adjustment.base_sigma_azimuth_deg')}
+          data-testid="setting-closure-sigma-azimuth"
+        >
+          <input
+            type="number"
+            min={0.01}
+            step={0.1}
+            value={config.closure_adjustment.base_sigma_azimuth_deg}
+            onChange={(e) => handleSigmaAzimuthChange(e.target.value)}
+            className="w-24 px-2 py-1 bg-background border border-border rounded text-sm text-right"
+            aria-label={t('settings.advanced.closureAdjustment.sigmaAzimuth.aria')}
+            data-testid="input-closure-sigma-azimuth"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t('settings.advanced.closureAdjustment.sigmaDepth.label')}
+          helpText={t('settings.advanced.closureAdjustment.sigmaDepth.help')}
+          isChanged={isFieldChanged(changedFields, 'closure_adjustment.base_sigma_depth_m')}
+          data-testid="setting-closure-sigma-depth"
+        >
+          <input
+            type="number"
+            min={0.001}
+            step={0.01}
+            value={config.closure_adjustment.base_sigma_depth_m}
+            onChange={(e) => handleSigmaDepthChange(e.target.value)}
+            className="w-24 px-2 py-1 bg-background border border-border rounded text-sm text-right"
+            aria-label={t('settings.advanced.closureAdjustment.sigmaDepth.aria')}
+            data-testid="input-closure-sigma-depth"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t('settings.advanced.closureAdjustment.transitVertical.label')}
+          helpText={t('settings.advanced.closureAdjustment.transitVertical.help')}
+          isChanged={isFieldChanged(changedFields, 'closure_adjustment.transit_vertical_mode')}
+          data-testid="setting-closure-transit-vertical"
+        >
+          <Select
+            value={config.closure_adjustment.transit_vertical_mode}
+            onChange={(v) => handleTransitVerticalChange(v as TransitVerticalMode)}
+            options={[
+              { value: 'ignore', label: t('settings.advanced.closureAdjustment.transitVertical.ignore') },
+              { value: 'length_proportional', label: t('settings.advanced.closureAdjustment.transitVertical.length') },
+              { value: 'equal', label: t('settings.advanced.closureAdjustment.transitVertical.equal') },
+            ]}
+            className="w-48"
+            aria-label={t('settings.advanced.closureAdjustment.transitVertical.aria')}
+            data-testid="select-closure-transit-vertical"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t('settings.advanced.closureAdjustment.sequentialDistribution.label')}
+          helpText={t('settings.advanced.closureAdjustment.sequentialDistribution.help')}
+          isChanged={isFieldChanged(changedFields, 'closure_adjustment.sequential_distribution_default')}
+          data-testid="setting-closure-sequential-distribution"
+        >
+          <Select
+            value={config.closure_adjustment.sequential_distribution_default}
+            onChange={(v) => handleSequentialDistributionChange(v as ClosureStrategy)}
+            options={[
+              { value: 'ProportionalByLength', label: t('settings.advanced.closureAdjustment.sequentialDistribution.proportional') },
+              { value: 'EqualDistribution', label: t('settings.advanced.closureAdjustment.sequentialDistribution.equal') },
+              { value: 'TransitRule', label: t('settings.advanced.closureAdjustment.sequentialDistribution.transit') },
+            ]}
+            className="w-48"
+            aria-label={t('settings.advanced.closureAdjustment.sequentialDistribution.aria')}
+            data-testid="select-closure-sequential-distribution"
+          />
+        </SettingRow>
+      </SettingsSection>
+
+      <SettingsSection title={t('settings.advanced.sections.panels')} data-testid="section-panels">
+        <SettingRow
+          label={t('settings.advanced.panels.sectionsWidth.label')}
+          helpText={t('settings.advanced.panels.sectionsWidth.help')}
           isChanged={isFieldChanged(changedFields, 'panels.sections_panel_width')}
           data-testid="setting-sections-panel-width"
         >
@@ -354,16 +538,16 @@ export function AdvancedSettings({
               value={config.panels.sections_panel_width}
               onChange={(e) => handleSectionsPanelWidthChange(e.target.value)}
               className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-              aria-label="Sections panel width"
+              aria-label={t('settings.advanced.panels.sectionsWidth.aria')}
               data-testid="input-sections-panel-width"
             />
-            <span className="text-text-secondary">px</span>
+            <span className="text-text-secondary">{t('settings.advanced.panels.sectionsWidth.unit')}</span>
           </div>
         </SettingRow>
 
         <SettingRow
-          label="Detail panel width"
-          helpText="Default width of the detail panel (150-800 px)"
+          label={t('settings.advanced.panels.detailWidth.label')}
+          helpText={t('settings.advanced.panels.detailWidth.help')}
           isChanged={isFieldChanged(changedFields, 'panels.detail_panel_width')}
           data-testid="setting-detail-panel-width"
         >
@@ -375,16 +559,16 @@ export function AdvancedSettings({
               value={config.panels.detail_panel_width}
               onChange={(e) => handleDetailPanelWidthChange(e.target.value)}
               className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-              aria-label="Detail panel width"
+              aria-label={t('settings.advanced.panels.detailWidth.aria')}
               data-testid="input-detail-panel-width"
             />
-            <span className="text-text-secondary">px</span>
+            <span className="text-text-secondary">{t('settings.advanced.panels.detailWidth.unit')}</span>
           </div>
         </SettingRow>
 
         <SettingRow
-          label="Data table height"
-          helpText="Default height of the data table (100-600 px)"
+          label={t('settings.advanced.panels.dataTableHeight.label')}
+          helpText={t('settings.advanced.panels.dataTableHeight.help')}
           isChanged={isFieldChanged(changedFields, 'panels.data_table_height')}
           data-testid="setting-data-table-height"
         >
@@ -396,15 +580,15 @@ export function AdvancedSettings({
               value={config.panels.data_table_height}
               onChange={(e) => handleDataTableHeightChange(e.target.value)}
               className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-              aria-label="Data table height"
+              aria-label={t('settings.advanced.panels.dataTableHeight.aria')}
               data-testid="input-data-table-height"
             />
-            <span className="text-text-secondary">px</span>
+            <span className="text-text-secondary">{t('settings.advanced.panels.dataTableHeight.unit')}</span>
           </div>
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Configuration File" data-testid="section-config-file">
+      <SettingsSection title={t('settings.advanced.sections.configFile')} data-testid="section-config-file">
         <div className="space-y-3">
           <Button
             variant="secondary"
@@ -412,10 +596,10 @@ export function AdvancedSettings({
             disabled={isReloading}
             data-testid="reload-config-button"
           >
-            {isReloading ? 'Reloading...' : 'Reload Config from Disk'}
+            {isReloading ? t('settings.advanced.reload.loading') : t('settings.advanced.reload.button')}
           </Button>
           <p className="text-xs text-text-secondary">
-            Reload configuration from the config file, discarding any unsaved changes.
+            {t('settings.advanced.reload.help')}
           </p>
           {reloadMessage && (
             <pre className="text-xs p-2 bg-background rounded border border-border whitespace-pre-wrap">

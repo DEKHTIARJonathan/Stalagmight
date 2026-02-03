@@ -719,6 +719,7 @@ mod tests {
             date: None,
             color: "#4ecdc4".to_string(),
             direction: None,
+            quality: 1.0,
             shots: vec![ShotData {
                 azimuth_in: 0.0,
                 azimuth_out: 180.0,
@@ -931,6 +932,7 @@ mod tests {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
+            quality: 1.0,
             shots: vec![
                 ShotData {
                     azimuth_in: 0.0,
@@ -1323,6 +1325,7 @@ mod tests {
             date: None,
             color: "red\" onclick=\"alert(1)".to_string(), // Injection attempt
             direction: None,
+            quality: 1.0,
             shots: vec![ShotData {
                 azimuth_in: 0.0,
                 azimuth_out: 180.0,
@@ -1467,6 +1470,7 @@ mod tests {
             date: None,
             color: "#4ecdc4".to_string(),
             direction: None,
+            quality: 1.0,
             shots: vec![ShotData {
                 azimuth_in: 0.0,
                 azimuth_out: 180.0,
@@ -1516,6 +1520,7 @@ mod tests {
             date: None,
             color: "#4ecdc4".to_string(),
             direction: None,
+            quality: 1.0,
             shots: vec![
                 // Create a 100m x 100m survey
                 ShotData {
@@ -1571,6 +1576,7 @@ mod tests {
             date: None,
             color: "#ff6b6b".to_string(),
             direction: None,
+            quality: 1.0,
             shots: vec![ShotData {
                 azimuth_in: 90.0,
                 azimuth_out: 270.0,

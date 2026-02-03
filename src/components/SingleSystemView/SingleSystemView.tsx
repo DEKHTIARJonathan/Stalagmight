@@ -8,8 +8,11 @@ import SectionsPanel from './SectionsPanel';
 import DetailPanel from './DetailPanel';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
+import { useTranslation } from 'react-i18next';
+import { formatFixed, formatNumber } from '../../i18n/format';
 
 export default function SingleSystemView() {
+  const { t } = useTranslation();
   useKeyboardShortcuts();
 
   const {
@@ -40,7 +43,7 @@ export default function SingleSystemView() {
   if (!project) {
     return (
       <div className="h-full flex items-center justify-center">
-        <div className="text-text-secondary">No project open</div>
+        <div className="text-text-secondary">{t('singleView.empty')}</div>
       </div>
     );
   }
@@ -121,11 +124,17 @@ export default function SingleSystemView() {
       {/* Status bar */}
       <footer className="px-4 py-2 border-t border-border text-sm text-text-secondary flex justify-between">
         <span>
-          Sections: {stats?.section_count ?? 0} | Shots: {stats?.shot_count ?? 0} |
-          Length: {formatLength(stats?.total_length ?? 0)}
+          {t('singleView.status.summary', {
+            sections: formatNumber(stats?.section_count ?? 0),
+            shots: formatNumber(stats?.shot_count ?? 0),
+            length: formatLength(stats?.total_length ?? 0),
+          })}
         </span>
         <span>
-          Depth: {formatDepth(stats?.min_depth ?? 0)} - {formatDepth(stats?.max_depth ?? 0)}
+          {t('singleView.status.depthRange', {
+            min: formatDepth(stats?.min_depth ?? 0),
+            max: formatDepth(stats?.max_depth ?? 0),
+          })}
         </span>
       </footer>
     </div>
@@ -134,11 +143,11 @@ export default function SingleSystemView() {
 
 function formatLength(meters: number): string {
   if (meters >= 1000) {
-    return `${(meters / 1000).toFixed(2)} km`;
+    return `${formatFixed(meters / 1000, undefined, 2)} km`;
   }
-  return `${meters.toFixed(1)} m`;
+  return `${formatFixed(meters, undefined, 1)} m`;
 }
 
 function formatDepth(meters: number): string {
-  return `${meters.toFixed(1)} m`;
+  return `${formatFixed(meters, undefined, 1)} m`;
 }

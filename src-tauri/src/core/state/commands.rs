@@ -1,7 +1,8 @@
+use crate::config::TransitVerticalMode;
 use crate::core::{Command, CommandResult, UndoData, Validator};
 use crate::models::{
-    ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates, SectionData, SectionId,
-    SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef,
+    shot_display_position, ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates,
+    SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef,
 };
 
 use super::AppState;
@@ -43,6 +44,7 @@ impl AppState {
                 date: *date,
                 color: color.clone(),
                 direction: *direction,
+                quality: 1.0,
                 shots: shots.clone(),
             }),
             Command::DeleteSection { section_id } => self.delete_section(*section_id),
@@ -80,6 +82,19 @@ impl AppState {
                 station_b,
                 closure_strategy,
             } => self.create_loop_closure(*station_a, *station_b, *closure_strategy),
+            Command::AdjustLoopClosures {
+                anchor_station,
+                method,
+                use_strategy_filter,
+                sequential_distribution,
+                transit_vertical_mode,
+            } => self.adjust_loop_closures(
+                *anchor_station,
+                *method,
+                *use_strategy_filter,
+                *sequential_distribution,
+                *transit_vertical_mode,
+            ),
             Command::SetZeroDatum {
                 station_ref,
                 coordinates,
@@ -177,6 +192,7 @@ impl AppState {
             date,
             color: color.clone(),
             direction,
+            quality: 1.0,
             shots: shots.clone(),
         };
 
@@ -358,6 +374,7 @@ impl AppState {
                 date: config.date,
                 color: config.color.clone(),
                 direction: config.direction,
+                quality: config.quality,
                 shots: config.shots.clone(),
             };
 
@@ -606,6 +623,21 @@ impl AppState {
         let section_id_for_validation = project.next_section_id;
         let mut warnings = Vec::new();
         for (i, shot) in data.shots.iter().enumerate() {
+            if shot.length == 0.0 {
+                return CommandResult::failure(format!(
+                    "Shot {}:{} has zero length",
+                    section_id_for_validation,
+                    i + 1
+                ));
+            }
+            if shot.length < 0.0 {
+                return CommandResult::failure(format!(
+                    "Shot {}:{} has negative length: {:.1}m",
+                    section_id_for_validation,
+                    i + 1,
+                    shot.length
+                ));
+            }
             if let Some(ref cfg) = config {
                 warnings.extend(Validator::validate_shot(shot, &cfg.validation, section_id_for_validation, i));
             }
@@ -716,6 +748,22 @@ impl AppState {
                 .unwrap_or(0)
         };
 
+        if data.length == 0.0 {
+            return CommandResult::failure(format!(
+                "Shot {}:{} has zero length",
+                section_id,
+                shot_index + 1
+            ));
+        }
+        if data.length < 0.0 {
+            return CommandResult::failure(format!(
+                "Shot {}:{} has negative length: {:.1}m",
+                section_id,
+                shot_index + 1,
+                data.length
+            ));
+        }
+
         let mut warnings = Vec::new();
         if let Some(ref cfg) = config {
             warnings.extend(Validator::validate_shot(&data, &cfg.validation, section_id, shot_index));
@@ -757,6 +805,28 @@ impl AppState {
             Some(p) => p,
             None => return CommandResult::failure("No project open".to_string()),
         };
+
+        // Validate resulting length (disallow zero/negative)
+        if let Some(section) = project.sections.iter().find(|s| s.id == section_id) {
+            if let Some(existing) = section.shots.iter().find(|s| s.id == shot_id) {
+                let new_length = updates.length.unwrap_or(existing.length);
+                if new_length == 0.0 {
+                    return CommandResult::failure(format!(
+                        "Shot {}:{} has zero length",
+                        section_id,
+                        shot_display_position(shot_id, section_id)
+                    ));
+                }
+                if new_length < 0.0 {
+                    return CommandResult::failure(format!(
+                        "Shot {}:{} has negative length: {:.1}m",
+                        section_id,
+                        shot_display_position(shot_id, section_id),
+                        new_length
+                    ));
+                }
+            }
+        }
 
         if project.update_shot(section_id, shot_id, &updates).is_some() {
             tracing::info!(section_id, shot_id, "Shot updated");
@@ -886,6 +956,48 @@ impl AppState {
             }
             Err(e) => {
                 tracing::warn!(?station_a, ?station_b, error = %e, "Failed to create loop closure");
+                CommandResult::failure(e)
+            }
+        }
+    }
+
+    pub(super) fn adjust_loop_closures(
+        &self,
+        anchor_station: StationRef,
+        method: ClosureStrategy,
+        use_strategy_filter: bool,
+        sequential_distribution: ClosureStrategy,
+        transit_vertical_mode: TransitVerticalMode,
+    ) -> CommandResult {
+        let mut proj_guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+        };
+
+        let project = match proj_guard.as_ref() {
+            Some(p) => p,
+            None => return CommandResult::failure("No project open".to_string()),
+        };
+
+        let config = self.get_config();
+        let mut working = project.clone();
+
+        match working.adjust_loop_closures(
+            anchor_station,
+            method,
+            use_strategy_filter,
+            sequential_distribution,
+            transit_vertical_mode,
+            &config.closure_adjustment,
+        ) {
+            Ok(_) => {
+                working.touch();
+                *proj_guard = Some(working);
+                tracing::info!(?anchor_station, ?method, "Loop closures adjusted");
+                CommandResult::success()
+            }
+            Err(e) => {
+                tracing::warn!(?anchor_station, ?method, error = %e, "Failed to adjust loop closures");
                 CommandResult::failure(e)
             }
         }
@@ -1049,6 +1161,56 @@ impl AppState {
             return CommandResult::failure("Invalid station index".to_string());
         }
 
+        // Pre-compute updates to avoid partial mutations on failure.
+        let mut prev_update: Option<(f64, f64, f64, f64)> = None; // len, azi, depth_out, pitch
+        if idx > 0 {
+            let shot = &section.shots[idx - 1];
+            let azi_rad = shot.average_azimuth().to_radians();
+            let old_horizontal = shot.horizontal_length();
+            let old_dx = old_horizontal * azi_rad.sin();
+            let old_dy = old_horizontal * azi_rad.cos();
+            let new_dx = old_dx + total_dx;
+            let new_dy = old_dy + total_dy;
+            let new_horizontal = (new_dx * new_dx + new_dy * new_dy).sqrt();
+            let new_depth_out = shot.depth_out + total_dz;
+            let new_dz = new_depth_out - shot.depth_in;
+            let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
+            if new_len <= 0.0 {
+                return CommandResult::failure("Move would create zero-length shot".to_string());
+            }
+            let new_azi = if new_horizontal > 1e-9 {
+                new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
+            } else {
+                shot.average_azimuth()
+            };
+            let pitch = new_dz.atan2(new_horizontal).to_degrees();
+            prev_update = Some((new_len, new_azi, new_depth_out, pitch));
+        }
+
+        let mut next_update: Option<(f64, f64, f64, f64)> = None; // len, azi, depth_in, pitch
+        if let Some(shot) = section.shots.get(idx) {
+            let azi_rad = shot.average_azimuth().to_radians();
+            let old_horizontal = shot.horizontal_length();
+            let old_dx = old_horizontal * azi_rad.sin();
+            let old_dy = old_horizontal * azi_rad.cos();
+            let new_dx = old_dx - total_dx;
+            let new_dy = old_dy - total_dy;
+            let new_horizontal = (new_dx * new_dx + new_dy * new_dy).sqrt();
+            let new_depth_in = shot.depth_in + total_dz;
+            let new_dz = shot.depth_out - new_depth_in;
+            let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
+            if new_len <= 0.0 {
+                return CommandResult::failure("Move would create zero-length shot".to_string());
+            }
+            let new_azi = if new_horizontal > 1e-9 {
+                new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
+            } else {
+                shot.average_azimuth()
+            };
+            let pitch = new_dz.atan2(new_horizontal).to_degrees();
+            next_update = Some((new_len, new_azi, new_depth_in, pitch));
+        }
+
         // Special case: moving station 0 should move the section offset so the
         // rest of the geometry stays in place. Shot 0 is adjusted below to
         // compensate for the offset shift.
@@ -1064,44 +1226,27 @@ impl AppState {
             );
         }
 
-        // Modify preceding shot (shot idx-1): its endpoint moved by +delta
-        if idx > 0 {
+        // Apply updates after validation
+        if let Some((new_len, new_azi, new_depth_out, pitch)) = prev_update {
             if let Some(shot) = section.shots.get_mut(idx - 1) {
-                let azi_rad = shot.average_azimuth().to_radians();
-                let old_dx = shot.length * azi_rad.sin();
-                let old_dy = shot.length * azi_rad.cos();
-                let new_dx = old_dx + total_dx;
-                let new_dy = old_dy + total_dy;
-                let new_len = (new_dx * new_dx + new_dy * new_dy).sqrt();
-                let new_azi = if new_len > 1e-9 {
-                    new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
-                } else {
-                    shot.average_azimuth() // keep old azimuth for zero-length
-                };
                 shot.length = new_len;
                 shot.azimuth_in = new_azi;
                 shot.azimuth_out = new_azi;
-                shot.depth_out += total_dz;
+                shot.depth_out = new_depth_out;
+                shot.pitch_in = Some(pitch);
+                shot.pitch_out = Some(pitch);
             }
         }
 
-        // Modify following shot (shot idx): its startpoint moved by +delta
-        if let Some(shot) = section.shots.get_mut(idx) {
-            let azi_rad = shot.average_azimuth().to_radians();
-            let old_dx = shot.length * azi_rad.sin();
-            let old_dy = shot.length * azi_rad.cos();
-            let new_dx = old_dx - total_dx;
-            let new_dy = old_dy - total_dy;
-            let new_len = (new_dx * new_dx + new_dy * new_dy).sqrt();
-            let new_azi = if new_len > 1e-9 {
-                new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
-            } else {
-                shot.average_azimuth()
-            };
-            shot.length = new_len;
-            shot.azimuth_in = new_azi;
-            shot.azimuth_out = new_azi;
-            shot.depth_in += total_dz;
+        if let Some((new_len, new_azi, new_depth_in, pitch)) = next_update {
+            if let Some(shot) = section.shots.get_mut(idx) {
+                shot.length = new_len;
+                shot.azimuth_in = new_azi;
+                shot.azimuth_out = new_azi;
+                shot.depth_in = new_depth_in;
+                shot.pitch_in = Some(pitch);
+                shot.pitch_out = Some(pitch);
+            }
         }
 
         // Clear station offset (now incorporated into shot data)
@@ -1322,6 +1467,7 @@ impl AppState {
             let date = section.date;
             let color = section.color.clone();
             let direction = section.direction;
+            let quality = section.quality;
 
             // Step 3: Modify original section -> section A
             // Truncate in-place to preserve existing Shot IDs and next_shot_id
@@ -1334,17 +1480,20 @@ impl AppState {
             let mut bx: f64 = 0.0;
             let mut by: f64 = 0.0;
             for shot_data in &shots_before {
-                let avg_az = crate::models::Shot::new(0, shot_data.clone()).average_azimuth();
+                let temp_shot = crate::models::Shot::new(0, shot_data.clone());
+                let avg_az = temp_shot.average_azimuth();
                 let azimuth_rad = avg_az.to_radians();
-                bx += shot_data.length * azimuth_rad.sin();
-                by += shot_data.length * azimuth_rad.cos();
+                let horizontal = temp_shot.horizontal_length();
+                bx += horizontal * azimuth_rad.sin();
+                by += horizontal * azimuth_rad.cos();
             }
             // Add deleted shot
             {
                 let deleted_shot = crate::models::Shot::new(0, deleted_shot_data);
                 let azimuth_rad = deleted_shot.average_azimuth().to_radians();
-                bx += deleted_shot.length * azimuth_rad.sin();
-                by += deleted_shot.length * azimuth_rad.cos();
+                let horizontal = deleted_shot.horizontal_length();
+                bx += horizontal * azimuth_rad.sin();
+                by += horizontal * azimuth_rad.cos();
             }
 
             // Get existing section offset to add to computed B offset
@@ -1360,6 +1509,7 @@ impl AppState {
                 date,
                 color,
                 direction: Some(direction),
+                quality,
                 shots: shots_after,
             };
 

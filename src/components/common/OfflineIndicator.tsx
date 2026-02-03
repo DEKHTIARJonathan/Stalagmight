@@ -1,4 +1,5 @@
 import { useNetworkStatus } from '../../hooks/useNetworkStatus';
+import { useTranslation } from 'react-i18next';
 
 interface OfflineIndicatorProps {
   /** Custom className for positioning */
@@ -12,6 +13,7 @@ interface OfflineIndicatorProps {
  * informing users that they're working with cached data.
  */
 export function OfflineIndicator({ className = '' }: OfflineIndicatorProps) {
+  const { t } = useTranslation();
   const { isOnline } = useNetworkStatus();
 
   // Only show when offline
@@ -27,7 +29,7 @@ export function OfflineIndicator({ className = '' }: OfflineIndicatorProps) {
       aria-live="polite"
     >
       <span className="inline-block w-2 h-2 rounded-full bg-warning animate-pulse" />
-      <span>Offline - using cached tiles</span>
+      <span>{t('common.offline')}</span>
     </div>
   );
 }

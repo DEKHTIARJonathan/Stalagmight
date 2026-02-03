@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef } from '../../types/project';
 import type { BatchCommand } from '../../types/commands';
@@ -18,6 +19,7 @@ import GridOverlay from './GridOverlay';
 import { DepthLegend } from './DepthLegend';
 import { MapDevStats } from './MapDevStats';
 import { getMapThemeColors } from '../../utils/themeColors';
+import { formatFixed } from '../../i18n/format';
 
 // Tools that support Ctrl+drag for panning
 const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment'];
@@ -98,6 +100,7 @@ export default function MapCanvas() {
   const snapMergeDialogPendingRef = useRef(false);
   // Co-located station refs for station drag (includes merged/closured stations)
   const stationDragColocatedRefsRef = useRef<StationRef[]>([]);
+  const { t } = useTranslation();
 
   const { project, stations, stats, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
 
@@ -2645,7 +2648,7 @@ export default function MapCanvas() {
       <button
         onClick={fitToBounds}
         className="absolute top-2 left-2 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
-        title="Fit to view (Ctrl+0)"
+        title={t('map.fitToViewTitle')}
         data-testid="fit-to-view-button"
       >
         ⊞
@@ -2657,10 +2660,10 @@ export default function MapCanvas() {
           className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-accent rounded px-3 py-2 text-sm"
           data-testid="placement-mode-indicator"
         >
-          <span className="text-accent">Placement Mode:</span>{' '}
-          Click to place section, Escape to cancel
+          <span className="text-accent">{t('map.placement.title')}:</span>{' '}
+          {t('map.placement.instructions')}
           {placementMode.snappedToStation && (
-            <span className="ml-2 text-success">(Snapped)</span>
+            <span className="ml-2 text-success">{t('map.placement.snapped')}</span>
           )}
         </div>
       )}
@@ -2668,23 +2671,27 @@ export default function MapCanvas() {
       {/* Merge tool indicator */}
       {activeTool === 'merge' && mergeStationA && !placementMode && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-accent rounded px-3 py-2 text-sm">
-          <span className="text-accent">Merge Tool:</span> Click another station to merge, or click empty to cancel
+          <span className="text-accent">{t('map.merge.title')}:</span>{' '}
+          {t('map.merge.instructions')}
         </div>
       )}
 
       {/* Measure tool indicator */}
       {activeTool === 'measure' && measureStart && !measureEnd && !placementMode && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-accent rounded px-3 py-2 text-sm">
-          <span className="text-accent">Measure Tool:</span> Click another point to measure distance
+          <span className="text-accent">{t('map.measure.title')}:</span>{' '}
+          {t('map.measure.instructions')}
         </div>
       )}
 
       {/* Measurement result display */}
       {measureResult && !placementMode && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-border rounded px-3 py-2 text-sm">
-          <span className="font-medium">Distance:</span> {measureResult.distance.toFixed(2)}m
+          <span className="font-medium">{t('map.measure.distance')}:</span>{' '}
+          {formatFixed(measureResult.distance, undefined, 2)}{t('common.units.meters')}
           <span className="mx-2">|</span>
-          <span className="font-medium">Depth diff:</span> {measureResult.depthDiff.toFixed(2)}m
+          <span className="font-medium">{t('map.measure.depthDiff')}:</span>{' '}
+          {formatFixed(measureResult.depthDiff, undefined, 2)}{t('common.units.meters')}
         </div>
       )}
 
@@ -2692,9 +2699,14 @@ export default function MapCanvas() {
       {moveDrag && !placementMode && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-accent rounded px-3 py-2 text-sm">
           <span className="text-accent">
-            {moveDrag.type === 'station' ? 'Move Station' : moveDrag.type === 'segment' ? 'Move Segment' : 'Move Shot'}:
+            {moveDrag.type === 'station'
+              ? t('map.move.station')
+              : moveDrag.type === 'segment'
+                ? t('map.move.segment')
+                : t('map.move.shot')}
+            :
           </span>{' '}
-          Drag to new position, release to confirm
+          {t('map.move.instructions')}
         </div>
       )}
     </div>

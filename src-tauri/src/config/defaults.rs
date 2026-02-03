@@ -1,4 +1,6 @@
 use super::*;
+use super::types::{default_sigma_azimuth_deg, default_sigma_depth_m, default_sigma_length_m};
+use crate::models::ClosureStrategy;
 
 impl Default for Config {
     fn default() -> Self {
@@ -9,6 +11,7 @@ impl Default for Config {
             section_colors: SectionColorsConfig::default(),
             map: MapConfig::default(),
             validation: ValidationConfig::default(),
+            closure_adjustment: ClosureAdjustmentConfig::default(),
             export: ExportConfig::default(),
             logging: LoggingConfig::default(),
             shortcuts: ShortcutsConfig::default(),
@@ -32,6 +35,7 @@ impl Default for GeneralConfig {
             undo_history_limit: 100,
             undo_persist_limit: 20,
             shortcut_feedback: ShortcutFeedback::default(),
+            locale: "system".to_string(),
         }
     }
 }
@@ -130,6 +134,18 @@ impl Default for ValidationConfig {
             warn_azimuth_deviation_max: 30.0,
             azimuth_diff_threshold: 20.0,
             pitch_diff_threshold: 5.0,
+        }
+    }
+}
+
+impl Default for ClosureAdjustmentConfig {
+    fn default() -> Self {
+        Self {
+            base_sigma_length_m: default_sigma_length_m(),
+            base_sigma_azimuth_deg: default_sigma_azimuth_deg(),
+            base_sigma_depth_m: default_sigma_depth_m(),
+            transit_vertical_mode: TransitVerticalMode::default(),
+            sequential_distribution_default: ClosureStrategy::ProportionalByLength,
         }
     }
 }

@@ -145,6 +145,7 @@ fn get_command_type(command: &Command) -> String {
         Command::MergeStations { .. } => "merge_stations".to_string(),
         Command::UnmergeStations { .. } => "unmerge_stations".to_string(),
         Command::CreateLoopClosure { .. } => "create_loop_closure".to_string(),
+        Command::AdjustLoopClosures { .. } => "adjust_loop_closures".to_string(),
         Command::SetZeroDatum { .. } => "set_zero_datum".to_string(),
         Command::RemoveZeroDatum { .. } => "remove_zero_datum".to_string(),
         Command::MoveSection { .. } => "move_section".to_string(),
@@ -194,6 +195,9 @@ fn derive_command_details(
         }
         Command::CreateLoopClosure { station_a, station_b, closure_strategy } => {
             Some(format!("{} \u{2194} {}, {}", station_a, station_b, closure_strategy.as_str()))
+        }
+        Command::AdjustLoopClosures { method, .. } => {
+            Some(format!("Method: {}", method.as_str()))
         }
         Command::SetShotVirtual { is_virtual, .. } => {
             Some(format!("Virtual: {}", is_virtual))
@@ -741,6 +745,7 @@ mod tests {
             date: None,
             color: "#000".to_string(),
             direction: None,
+            quality: 1.0,
             shots: vec![
                 ShotData::default(),
                 ShotData::default(),

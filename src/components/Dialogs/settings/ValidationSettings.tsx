@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
@@ -17,6 +18,7 @@ export function ValidationSettings({
   onValidationError,
   panelIdBase,
 }: SettingsCategoryProps) {
+  const { t } = useTranslation();
   // Validation state
   const hasErrorRef = useRef(false);
 
@@ -26,23 +28,23 @@ export function ValidationSettings({
 
     // Validate shot length thresholds
     if (config.validation.warn_shot_length_min < 0) {
-      errors.push('Minimum shot length warning must be >= 0');
+      errors.push(t('settings.validation.validation.minShotLength'));
     }
     if (config.validation.warn_shot_length_max <= config.validation.warn_shot_length_min) {
-      errors.push('Maximum shot length warning must be greater than minimum');
+      errors.push(t('settings.validation.validation.maxShotLength'));
     }
 
     // Validate depth change threshold
     if (config.validation.warn_depth_change_per_shot_max <= 0) {
-      errors.push('Depth change warning threshold must be positive');
+      errors.push(t('settings.validation.validation.depthChange'));
     }
 
     // Validate diff thresholds (0 means disabled)
     if (config.validation.azimuth_diff_threshold < 0 || config.validation.azimuth_diff_threshold > 180) {
-      errors.push('Azimuth difference threshold must be between 0 and 180');
+      errors.push(t('settings.validation.validation.azimuthDiff'));
     }
     if (config.validation.pitch_diff_threshold < 0 || config.validation.pitch_diff_threshold > 90) {
-      errors.push('Pitch difference threshold must be between 0 and 90');
+      errors.push(t('settings.validation.validation.pitchDiff'));
     }
 
     const hasError = errors.length > 0;
@@ -50,7 +52,7 @@ export function ValidationSettings({
       hasErrorRef.current = hasError;
       onValidationError('validation', hasError);
     }
-  }, [config.validation, onValidationError]);
+  }, [config.validation, onValidationError, t]);
 
   const handleShotLengthMinChange = (value: string) => {
     const num = parseFloat(value);
@@ -119,12 +121,12 @@ export function ValidationSettings({
       aria-labelledby={getTabId(panelIdBase, 'validation')}
       data-testid="settings-panel-validation"
     >
-      <h2 className="text-lg font-medium mb-4">Validation</h2>
+      <h2 className="text-lg font-medium mb-4">{t('settings.validation.title')}</h2>
 
-      <SettingsSection title="Shot Length Warnings" data-testid="section-shot-length">
+      <SettingsSection title={t('settings.validation.sections.shotLength')} data-testid="section-shot-length">
         <SettingRow
-          label="Minimum shot length"
-          helpText="Warn when shot length is below this value (in length units)"
+          label={t('settings.validation.shotLength.min.label')}
+          helpText={t('settings.validation.shotLength.min.help')}
           isChanged={isFieldChanged(changedFields, 'validation.warn_shot_length_min')}
           data-testid="setting-shot-length-min"
         >
@@ -135,14 +137,14 @@ export function ValidationSettings({
             value={config.validation.warn_shot_length_min}
             onChange={(e) => handleShotLengthMinChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Minimum shot length warning"
+            aria-label={t('settings.validation.shotLength.min.aria')}
             data-testid="input-shot-length-min"
           />
         </SettingRow>
 
         <SettingRow
-          label="Maximum shot length"
-          helpText="Warn when shot length exceeds this value (in length units)"
+          label={t('settings.validation.shotLength.max.label')}
+          helpText={t('settings.validation.shotLength.max.help')}
           isChanged={isFieldChanged(changedFields, 'validation.warn_shot_length_max')}
           data-testid="setting-shot-length-max"
         >
@@ -153,16 +155,16 @@ export function ValidationSettings({
             value={config.validation.warn_shot_length_max}
             onChange={(e) => handleShotLengthMaxChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Maximum shot length warning"
+            aria-label={t('settings.validation.shotLength.max.aria')}
             data-testid="input-shot-length-max"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Depth Warnings" data-testid="section-depth-warnings">
+      <SettingsSection title={t('settings.validation.sections.depth')} data-testid="section-depth-warnings">
         <SettingRow
-          label="Max depth change per shot"
-          helpText="Warn when depth changes more than this in a single shot (in depth units)"
+          label={t('settings.validation.depth.max.label')}
+          helpText={t('settings.validation.depth.max.help')}
           isChanged={isFieldChanged(changedFields, 'validation.warn_depth_change_per_shot_max')}
           data-testid="setting-depth-change-max"
         >
@@ -173,16 +175,16 @@ export function ValidationSettings({
             value={config.validation.warn_depth_change_per_shot_max}
             onChange={(e) => handleDepthChangeMaxChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Maximum depth change per shot"
+            aria-label={t('settings.validation.depth.max.aria')}
             data-testid="input-depth-change-max"
           />
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="In/Out Difference Thresholds" data-testid="section-diff-thresholds">
+      <SettingsSection title={t('settings.validation.sections.diffThresholds')} data-testid="section-diff-thresholds">
         <SettingRow
-          label="Azimuth in/out difference"
-          helpText="Warn when azimuth in and out readings differ by more than this (0-180 degrees)"
+          label={t('settings.validation.azimuthDiff.label')}
+          helpText={t('settings.validation.azimuthDiff.help')}
           isChanged={isFieldChanged(changedFields, 'validation.azimuth_diff_threshold')}
           data-testid="setting-azimuth-diff"
         >
@@ -194,14 +196,14 @@ export function ValidationSettings({
             value={config.validation.azimuth_diff_threshold}
             onChange={(e) => handleAzimuthDiffChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Azimuth in/out difference threshold"
+            aria-label={t('settings.validation.azimuthDiff.aria')}
             data-testid="input-azimuth-diff"
           />
         </SettingRow>
 
         <SettingRow
-          label="Pitch in/out difference"
-          helpText="Warn when forward/back pitch differs by more than this (0-90 degrees)"
+          label={t('settings.validation.pitchDiff.label')}
+          helpText={t('settings.validation.pitchDiff.help')}
           isChanged={isFieldChanged(changedFields, 'validation.pitch_diff_threshold')}
           data-testid="setting-pitch-diff"
         >
@@ -213,7 +215,7 @@ export function ValidationSettings({
             value={config.validation.pitch_diff_threshold}
             onChange={(e) => handlePitchDiffChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label="Pitch in/out difference threshold"
+            aria-label={t('settings.validation.pitchDiff.aria')}
             data-testid="input-pitch-diff"
           />
         </SettingRow>

@@ -486,6 +486,7 @@ mod tests {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
+            quality: 1.0,
             shots: vec![],
         }
     }

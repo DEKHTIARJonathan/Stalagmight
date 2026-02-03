@@ -5,9 +5,10 @@ import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import { useBeforeUnload, useLoadingProgress, useTheme } from './hooks';
+import i18n from './i18n';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
@@ -179,6 +180,7 @@ function App() {
         date: sectionConfig.date,
         color: sectionConfig.color,
         direction: sectionConfig.direction,
+        quality: sectionConfig.quality ?? 1.0,
         shots,
         placement: backendPlacement,
       };
@@ -209,6 +211,19 @@ function App() {
     // Load config on startup
     loadConfig();
   }, [loadConfig]);
+
+  // Sync i18n language with config locale setting
+  useEffect(() => {
+    const locale = config?.general?.locale;
+    if (!locale) return;
+    if (locale === 'system') {
+      void i18n.changeLanguage();
+      return;
+    }
+    if (i18n.language !== locale) {
+      void i18n.changeLanguage(locale);
+    }
+  }, [config?.general?.locale]);
 
   // Initialize panel sizes from config
   useEffect(() => {
@@ -408,6 +423,7 @@ function App() {
       {activeDialog === 'delete-shot-choice' && <DeleteShotChoiceDialog />}
       {activeDialog === 'merge' && <MergeDialog />}
       {activeDialog === 'closure' && <ClosureDialog />}
+      {activeDialog === 'adjust-closures' && <AdjustClosuresDialog />}
       {activeDialog === 'merge-projects' && <MergeProjectsDialog />}
       {activeDialog === 'draw-shot' && <DrawShotDialog />}
       {activeDialog === 'edit-section' && <EditSectionDialog />}

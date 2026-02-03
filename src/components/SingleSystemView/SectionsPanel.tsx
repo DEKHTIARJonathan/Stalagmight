@@ -1,12 +1,15 @@
 import { useRef, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { type Section, type SectionId } from '../../types/project';
 import { useUIStore } from '../../store/uiStore';
+import { formatFixed, formatNumber } from '../../i18n/format';
 
 interface SectionsPanelProps {
   sections: Section[];
 }
 
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
+  const { t } = useTranslation();
   const { selection, setSelection, clearSelection, hoveredSectionId, setHoveredSectionId, openDialog, triggerZoomToSection } = useUIStore();
 
   // Track the last hovered section ID set by this panel (for cleanup on unmount)
@@ -149,7 +152,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     openDialog('confirm-delete', {
       type: 'section',
       sectionId,
-      message: 'Delete this section and all its shots? This cannot be undone.',
+      message: t('sections.confirmDelete'),
     });
   };
 
@@ -166,11 +169,11 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     <div className="h-full flex flex-col bg-panel" data-testid="sections-panel">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-        <h2 className="font-medium">Sections</h2>
+        <h2 className="font-medium">{t('sections.title')}</h2>
         <button
           onClick={handleAddSection}
           className="text-accent hover:text-accent-80 text-lg"
-          title="Add section"
+          title={t('sections.actions.add')}
           data-testid="sections-add-button"
         >
           +
@@ -181,20 +184,20 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       <div className="flex-1 overflow-auto">
         {sections.length === 0 ? (
           <div className="p-4 text-center text-text-secondary text-sm">
-            No sections yet.
+            {t('sections.empty.message')}
             <br />
             <button
               onClick={handleAddSection}
               className="text-accent hover:underline mt-2 inline-block"
               data-testid="sections-empty-add"
             >
-              Add a section
+              {t('sections.empty.action')}
             </button>
           </div>
         ) : (
           <ul
             role="listbox"
-            aria-label="Cave survey sections"
+            aria-label={t('sections.ariaList')}
             className="py-1"
             onBlur={handleContainerBlur}
           >
@@ -213,6 +216,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                   tabIndex={focusedIndex === index ? 0 : (focusedIndex === -1 && index === 0 ? 0 : -1)}
                   data-testid={`section-row-${section.id}`}
                   title="Double-click to zoom (Ctrl+G)"
+                  title={t('sections.actions.zoom')}
                   className={`px-3 py-2 cursor-pointer group transition-colors outline-none focus:ring-2 focus:ring-accent focus:ring-inset ${
                     isSelected || hoveredSectionId === section.id ? 'bg-accent-20' : 'hover:bg-accent-20'
                   }`}
@@ -237,7 +241,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                       style={{ backgroundColor: section.color }}
                     />
                     <span className="flex-1 truncate">
-                      {section.name ?? `Section ${section.id}`}
+                      {section.name ?? t('sections.defaultName', { id: section.id })}
                     </span>
                     <button
                       onClick={(e) => handleDeleteSection(section.id, e)}
@@ -245,14 +249,17 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                       onDoubleClick={handleDeleteDoubleClick}
                       tabIndex={-1}
                       className="text-text-secondary hover:text-error opacity-0 group-hover:opacity-100"
-                      title="Delete section"
+                      title={t('sections.actions.delete')}
                       data-testid={`section-delete-${section.id}`}
                     >
                       ×
                     </button>
                   </div>
                   <div className="text-xs text-text-secondary mt-1 ml-5">
-                    {stats.shotCount} shots · {stats.length.toFixed(1)}m
+                    {t('sections.stats', {
+                      shots: formatNumber(stats.shotCount),
+                      length: `${formatFixed(stats.length, undefined, 1)}${t('common.units.meters')}`,
+                    })}
                   </div>
                 </li>
               );

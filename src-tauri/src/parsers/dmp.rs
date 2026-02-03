@@ -577,6 +577,7 @@ impl DmpSection {
             date: Some(self.date.date()),
             color,
             direction: Some(self.direction.to_survey_direction()),
+            quality: 1.0,
             shots: self
                 .shots
                 .iter()

@@ -1,5 +1,6 @@
 import type { Coordinates, GpsCoordinates } from '../types/project';
 import type { GpsOrigin } from '../types/config';
+import { formatFixed } from '../i18n/format';
 
 // Earth radius in meters for coordinate conversions
 const EARTH_RADIUS = 6371000;
@@ -180,12 +181,12 @@ export function calculatePosition(
  * Format a coordinate for display
  */
 export function formatCoordinate(value: number, precision: number = 1): string {
-  return value.toFixed(precision);
+  return formatFixed(value, undefined, precision);
 }
 
 /**
  * Format a GPS coordinate for display
  */
 export function formatGps(gps: GpsCoordinates, precision: number = 6): string {
-  return `${gps.latitude.toFixed(precision)}, ${gps.longitude.toFixed(precision)}`;
+  return `${formatFixed(gps.latitude, undefined, precision)}, ${formatFixed(gps.longitude, undefined, precision)}`;
 }

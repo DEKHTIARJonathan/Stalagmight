@@ -1260,12 +1260,15 @@ export default function DmpSectionConfigDialog({
                       date={currentConfig.date ?? ''}
                       color={currentConfig.color}
                       direction={currentConfig.direction}
+                      quality={currentConfig.quality}
                       onNameChange={(value) => updateSectionField('name', value)}
                       onSurveyorChange={(value) => updateSectionField('surveyor', value || null)}
                       onDateChange={(value) => updateSectionField('date', value || null)}
                       onColorChange={(value) => updateSectionField('color', value)}
+                      onQualityChange={(value) => updateSectionField('quality', value)}
                       onDirectionChange={(value) => updateSectionField('direction', value)}
                       showDirection
+                      showQuality
                       disabled={isCurrentPlaced || isCurrentExcluded}
                     />
                   </Panel>
