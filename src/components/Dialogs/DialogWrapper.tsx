@@ -312,7 +312,7 @@ export function DialogWrapper({
       tabIndex={-1}
       onKeyDown={handleKeyDown}
     >
-      <div className="absolute inset-0 bg-black/50" onClick={handleBackdropClick} />
+      <div className="absolute inset-0 bg-overlay" onClick={handleBackdropClick} />
       <div
         ref={dialogContentRef}
         role="dialog"
@@ -345,7 +345,7 @@ export function DialogWrapper({
           className="fixed inset-0 z-[60] flex items-center justify-center"
           tabIndex={-1}
         >
-          <div className="absolute inset-0 bg-black/50" onClick={handleCancelDiscard} />
+          <div className="absolute inset-0 bg-overlay" onClick={handleCancelDiscard} />
           <div
             role="alertdialog"
             aria-modal="true"

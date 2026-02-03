@@ -426,7 +426,7 @@ function App() {
         <div className="fixed inset-0 pointer-events-none z-[99999]">
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
             <div
-              className="bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg"
+              className="bg-panel text-text-primary px-4 py-2 rounded-lg shadow-lg"
               role="status"
               aria-live="polite"
             >

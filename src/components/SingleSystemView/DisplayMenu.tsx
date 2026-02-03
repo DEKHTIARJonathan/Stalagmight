@@ -127,7 +127,7 @@ export default function DisplayMenu() {
         className={`
           px-3 py-1.5 text-sm rounded transition-colors
           ${isOpen
-            ? 'bg-accent text-white'
+            ? 'bg-accent text-accent-on'
             : 'bg-background hover:bg-background-80 text-text-primary'
           }
         `}
@@ -179,7 +179,7 @@ export default function DisplayMenu() {
                         className={`
                           w-5 h-5 rounded flex items-center justify-center text-xs
                           ${toggleValues[item.key]
-                            ? 'bg-accent text-white'
+                            ? 'bg-accent text-accent-on'
                             : 'bg-background border border-border text-transparent'
                           }
                         `}

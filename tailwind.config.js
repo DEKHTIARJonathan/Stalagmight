@@ -26,6 +26,7 @@ export default {
         'text-secondary': 'var(--cc-text-secondary)',
         accent: 'var(--cc-accent)',
         'accent-on': 'var(--cc-accent-on)',
+        overlay: 'var(--cc-overlay)',
         warning: 'var(--cc-warning)',
         error: 'var(--cc-error)',
         success: 'var(--cc-success)',

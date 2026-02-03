@@ -412,7 +412,7 @@ export default function GlobalView() {
 
       {/* Loading Modal Overlay */}
       {loading.isLoading && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-overlay flex items-center justify-center z-50">
           <LoadingProgress
             title={
               loading.error

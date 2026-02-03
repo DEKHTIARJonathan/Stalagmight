@@ -165,7 +165,7 @@ export function DetailLink({
 
   // Build class list conditionally to avoid conflicting Tailwind utilities
   const baseClasses = 'underline focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset';
-  const colorClass = isMissing ? 'text-yellow-400' : 'text-accent';
+  const colorClass = isMissing ? 'text-warning' : 'text-accent';
   const cursorClass = isMissing ? 'cursor-not-allowed' : 'cursor-pointer';
 
   return (

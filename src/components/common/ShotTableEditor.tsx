@@ -377,7 +377,7 @@ export function ShotTableEditor({
           <button
             type="button"
             onClick={onAddShot}
-            className="text-sm px-2 py-1 bg-accent text-white rounded hover:bg-accent-80 transition-colors"
+            className="text-sm px-2 py-1 bg-accent text-accent-on rounded hover:bg-accent-80 transition-colors"
             data-testid="add-shot-button"
           >
             + Add Shot
@@ -737,7 +737,7 @@ export function ShotTableEditor({
                     {(hasErrors || warnings.length > 0) && (
                       <span
                         className={`inline-flex items-center justify-center w-5 h-5 text-xs font-bold rounded-full cursor-help ${
-                          hasErrors ? 'bg-error text-white' : 'bg-warning text-black'
+                          hasErrors ? 'bg-error-20 text-error' : 'bg-warning-20 text-warning'
                         }`}
                         title={tooltipText}
                         data-testid={`shot-warning-${visibleIdx}`}

@@ -129,7 +129,7 @@ export function LoadingProgress({
             <button
               type="button"
               onClick={onRetry}
-              className="px-3 py-1.5 bg-accent text-white rounded hover:bg-accent-90 transition-colors"
+              className="px-3 py-1.5 bg-accent text-accent-on rounded hover:bg-accent-90 transition-colors"
             >
               Retry
             </button>

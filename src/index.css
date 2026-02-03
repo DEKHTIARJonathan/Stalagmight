@@ -33,6 +33,7 @@
   --cc-input-border: #0f3460;
   --cc-outside-month: #666666;
   --cc-selection-gradient: rgba(78, 205, 196, 0.3);
+  --cc-overlay: rgba(0, 0, 0, 0.5);
 
   /* --- MapLibre Controls --- */
   --cc-map-ctrl-bg: #16213e;
@@ -130,6 +131,7 @@
   --cc-input-border: #d4c5a9;
   --cc-outside-month: #b0a090;
   --cc-selection-gradient: rgba(58, 138, 130, 0.2);
+  --cc-overlay: rgba(0, 0, 0, 0.5);
 
   /* --- MapLibre Controls --- */
   --cc-map-ctrl-bg: #ffffff;

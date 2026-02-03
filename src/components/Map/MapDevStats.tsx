@@ -386,16 +386,16 @@ export function MapDevStats({ map }: MapDevStatsProps) {
 
   // Get FPS color based on performance
   const getFpsColor = useCallback((currentFps: number): string => {
-    if (currentFps >= 55) return 'text-green-400';
-    if (currentFps >= 30) return 'text-yellow-400';
-    return 'text-red-400';
+    if (currentFps >= 55) return 'text-success';
+    if (currentFps >= 30) return 'text-warning';
+    return 'text-error';
   }, []);
 
   // Get network status indicator
   const getNetworkIndicator = useCallback(() => {
-    if (networkStatus === null) return { color: 'text-gray-400', text: 'checking...' };
-    if (networkStatus) return { color: 'text-green-400', text: 'online' };
-    return { color: 'text-red-400', text: 'offline' };
+    if (networkStatus === null) return { color: 'text-text-secondary', text: 'checking...' };
+    if (networkStatus) return { color: 'text-success', text: 'online' };
+    return { color: 'text-error', text: 'offline' };
   }, [networkStatus]);
 
   const networkIndicator = getNetworkIndicator();
@@ -407,36 +407,36 @@ export function MapDevStats({ map }: MapDevStatsProps) {
 
   return (
     <div
-      className="absolute bottom-2 right-2 bg-black/85 text-white text-xs font-mono p-2 rounded border border-gray-600 select-none"
+      className="absolute bottom-2 right-2 bg-panel-90 text-text-primary text-xs font-mono p-2 rounded border border-border select-none"
       style={{ minWidth: '200px', maxWidth: '280px' }}
       data-testid="map-dev-stats"
     >
       {/* Performance */}
       <div className="mb-1">
-        <span className="text-gray-400">FPS:</span>{' '}
+        <span className="text-text-secondary">FPS:</span>{' '}
         <span className={getFpsColor(fps)}>{fps}</span>
-        <span className="text-gray-500 ml-2">({frameTime}ms)</span>
-        {isZooming && <span className="text-yellow-400 ml-2">ZOOMING</span>}
+        <span className="text-text-secondary opacity-80 ml-2">({frameTime}ms)</span>
+        {isZooming && <span className="text-warning ml-2">ZOOMING</span>}
       </div>
 
       {/* Zoom performance (show last zoom stats) */}
       {(zoomFps !== null || lastZoomDuration !== null) && (
         <div className="mb-1 text-[10px]">
-          <span className="text-gray-400">Last zoom:</span>{' '}
+          <span className="text-text-secondary">Last zoom:</span>{' '}
           {zoomFps !== null && (
             <>
               <span className={getFpsColor(zoomFps)}>{zoomFps} fps</span>
-              <span className="text-gray-500 mx-1">|</span>
+              <span className="text-text-secondary opacity-80 mx-1">|</span>
             </>
           )}
           {lastZoomDuration !== null && (
-            <span className="text-white">{lastZoomDuration}ms</span>
+            <span className="text-text-primary">{lastZoomDuration}ms</span>
           )}
           {lastZoomLevels !== null && (
-            <span className="text-gray-500 ml-1">({lastZoomLevels} lvls)</span>
+            <span className="text-text-secondary opacity-80 ml-1">({lastZoomLevels} lvls)</span>
           )}
           {worstFrameTime !== null && worstFrameTime > 20 && (
-            <span className={`ml-1 ${worstFrameTime > 50 ? 'text-red-400' : 'text-yellow-400'}`}>
+            <span className={`ml-1 ${worstFrameTime > 50 ? 'text-error' : 'text-warning'}`}>
               worst: {worstFrameTime}ms
             </span>
           )}
@@ -445,52 +445,55 @@ export function MapDevStats({ map }: MapDevStatsProps) {
 
       {/* Map state */}
       <div className="mb-1">
-        <span className="text-gray-400">Map:</span>{' '}
-        <span className={mapLoaded ? 'text-green-400' : 'text-yellow-400'}>
+        <span className="text-text-secondary">Map:</span>{' '}
+        <span className={mapLoaded ? 'text-success' : 'text-warning'}>
           {mapLoaded ? 'loaded' : 'loading'}
         </span>
-        <span className="text-gray-500 mx-1">|</span>
-        <span className={tilesLoaded ? 'text-green-400' : 'text-yellow-400'}>
+        <span className="text-text-secondary opacity-80 mx-1">|</span>
+        <span className={tilesLoaded ? 'text-success' : 'text-warning'}>
           {tilesLoaded ? 'tiles ready' : 'tiles loading'}
         </span>
       </div>
 
       {/* Zoom and center */}
       <div className="mb-1">
-        <span className="text-gray-400">Zoom:</span>{' '}
-        <span className="text-white">{zoom.toFixed(2)}</span>
-        <span className="text-gray-500 ml-2 text-[10px]">
+        <span className="text-text-secondary">Zoom:</span>{' '}
+        <span className="text-text-primary">{zoom.toFixed(2)}</span>
+        <span className="text-text-secondary opacity-80 ml-2 text-[10px]">
           {canvasSize.width}x{canvasSize.height}
         </span>
       </div>
-      <div className="mb-1 text-gray-500 text-[10px]">
+      <div className="mb-1 text-text-secondary opacity-80 text-[10px]">
         {center.lng.toFixed(6)}, {center.lat.toFixed(6)}
       </div>
 
       {/* WebGL Info */}
       {webglInfo && (
-        <div className="border-t border-gray-700 pt-1 mt-1">
-          <div className="text-gray-400 mb-0.5">WebGL:</div>
-          <div className="pl-2 text-[10px] text-gray-500 truncate" title={webglInfo.renderer}>
+        <div className="border-t border-border pt-1 mt-1">
+          <div className="text-text-secondary mb-0.5">WebGL:</div>
+          <div
+            className="pl-2 text-[10px] text-text-secondary opacity-80 truncate"
+            title={webglInfo.renderer}
+          >
             {webglInfo.webglVersion} - {shortRenderer}
           </div>
           <div className="pl-2 text-[10px]">
-            <span className="text-gray-500">Max tex:</span>{' '}
-            <span className="text-white">{webglInfo.maxTextureSize}</span>
-            <span className="text-gray-500 ml-2">Units:</span>{' '}
-            <span className="text-white">{webglInfo.maxTextureUnits}</span>
+            <span className="text-text-secondary opacity-80">Max tex:</span>{' '}
+            <span className="text-text-primary">{webglInfo.maxTextureSize}</span>
+            <span className="text-text-secondary opacity-80 ml-2">Units:</span>{' '}
+            <span className="text-text-primary">{webglInfo.maxTextureUnits}</span>
           </div>
           <div className="pl-2 text-[10px]">
-            <span className="text-gray-500">Color:</span>{' '}
-            <span className="text-white">
+            <span className="text-text-secondary opacity-80">Color:</span>{' '}
+            <span className="text-text-primary">
               {webglInfo.colorBits.r}/{webglInfo.colorBits.g}/{webglInfo.colorBits.b}/{webglInfo.colorBits.a}
             </span>
-            <span className="text-gray-500 ml-2">Depth:</span>{' '}
-            <span className="text-white">{webglInfo.depthBits}</span>
+            <span className="text-text-secondary opacity-80 ml-2">Depth:</span>{' '}
+            <span className="text-text-primary">{webglInfo.depthBits}</span>
             {webglInfo.samples > 0 && (
               <>
-                <span className="text-gray-500 ml-2">MSAA:</span>{' '}
-                <span className="text-green-400">{webglInfo.samples}x</span>
+                <span className="text-text-secondary opacity-80 ml-2">MSAA:</span>{' '}
+                <span className="text-success">{webglInfo.samples}x</span>
               </>
             )}
           </div>
@@ -498,15 +501,15 @@ export function MapDevStats({ map }: MapDevStatsProps) {
       )}
 
       {/* Debug toggles */}
-      <div className="border-t border-gray-700 pt-1 mt-1 pointer-events-auto">
-        <div className="text-gray-400 mb-0.5">Debug:</div>
+      <div className="border-t border-border pt-1 mt-1 pointer-events-auto">
+        <div className="text-text-secondary mb-0.5">Debug:</div>
         <div className="pl-2 flex flex-wrap gap-1">
           <button
             onClick={toggleTileBoundaries}
             className={`px-1.5 py-0.5 rounded text-[10px] border ${
               showTileBoundaries
                 ? 'bg-accent-30 border-accent text-accent'
-                : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'
+                : 'bg-panel border-border text-text-secondary hover:border-accent'
             }`}
             title="Show tile boundaries and IDs"
           >
@@ -517,7 +520,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
             className={`px-1.5 py-0.5 rounded text-[10px] border ${
               showCollisionBoxes
                 ? 'bg-accent-30 border-accent text-accent'
-                : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'
+                : 'bg-panel border-border text-text-secondary hover:border-accent'
             }`}
             title="Show symbol collision boxes"
           >
@@ -528,7 +531,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
             className={`px-1.5 py-0.5 rounded text-[10px] border ${
               showOverdraw
                 ? 'bg-accent-30 border-accent text-accent'
-                : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'
+                : 'bg-panel border-border text-text-secondary hover:border-accent'
             }`}
             title="Show overdraw (fragment shader calls)"
           >
@@ -538,8 +541,8 @@ export function MapDevStats({ map }: MapDevStatsProps) {
             onClick={toggleSymbols}
             className={`px-1.5 py-0.5 rounded text-[10px] border ${
               hideSymbols
-                ? 'bg-red-500/30 border-red-500 text-red-400'
-                : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'
+                ? 'bg-error-20 border-error text-error'
+                : 'bg-panel border-border text-text-secondary hover:border-accent'
             }`}
             title="Hide all symbol layers (labels) for performance testing"
           >
@@ -549,8 +552,8 @@ export function MapDevStats({ map }: MapDevStatsProps) {
             onClick={toggleAllLayers}
             className={`px-1.5 py-0.5 rounded text-[10px] border ${
               hideAllLayers
-                ? 'bg-red-500/30 border-red-500 text-red-400'
-                : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'
+                ? 'bg-error-20 border-error text-error'
+                : 'bg-panel border-border text-text-secondary hover:border-accent'
             }`}
             title="Hide ALL layers (background only) - tests if MapLibre/WebGL is the problem"
           >
@@ -561,43 +564,43 @@ export function MapDevStats({ map }: MapDevStatsProps) {
 
       {/* Tile fetch stats */}
       {tileFetchStats && (
-        <div className="border-t border-gray-700 pt-1 mt-1">
-          <div className="text-gray-400 mb-0.5">Satellite Tiles:</div>
+        <div className="border-t border-border pt-1 mt-1">
+          <div className="text-text-secondary mb-0.5">Satellite Tiles:</div>
           <div className="pl-2">
-            <span className="text-gray-500">In-flight:</span>{' '}
-            <span className={tileFetchStats.inFlight > 0 ? 'text-yellow-400' : 'text-green-400'}>
+            <span className="text-text-secondary opacity-80">In-flight:</span>{' '}
+            <span className={tileFetchStats.inFlight > 0 ? 'text-warning' : 'text-success'}>
               {tileFetchStats.inFlight}
             </span>
-            <span className="text-gray-500 ml-2">Latency:</span>{' '}
-            <span className={tileFetchStats.avgLatencyMs > 500 ? 'text-yellow-400' : 'text-white'}>
+            <span className="text-text-secondary opacity-80 ml-2">Latency:</span>{' '}
+            <span className={tileFetchStats.avgLatencyMs > 500 ? 'text-warning' : 'text-text-primary'}>
               {tileFetchStats.avgLatencyMs}ms
             </span>
           </div>
           <div className="pl-2">
-            <span className="text-gray-500">Fetched:</span>{' '}
-            <span className="text-white">{tileFetchStats.totalFetched}</span>
+            <span className="text-text-secondary opacity-80">Fetched:</span>{' '}
+            <span className="text-text-primary">{tileFetchStats.totalFetched}</span>
             {tileFetchStats.totalErrors > 0 && (
-              <span className="text-red-400 ml-1">({tileFetchStats.totalErrors} err)</span>
+              <span className="text-error ml-1">({tileFetchStats.totalErrors} err)</span>
             )}
           </div>
         </div>
       )}
 
       {/* Network status */}
-      <div className="border-t border-gray-700 pt-1 mt-1">
-        <span className="text-gray-400">Network:</span>{' '}
+      <div className="border-t border-border pt-1 mt-1">
+        <span className="text-text-secondary">Network:</span>{' '}
         <span className={networkIndicator.color}>{networkIndicator.text}</span>
       </div>
 
       {/* Cache stats */}
       {cacheStats && (
-        <div className="border-t border-gray-700 pt-1 mt-1">
-          <div className="text-gray-400 mb-0.5">Cache:</div>
+        <div className="border-t border-border pt-1 mt-1">
+          <div className="text-text-secondary mb-0.5">Cache:</div>
           <div className="pl-2">
-            <span className="text-gray-500">Tiles:</span>{' '}
-            <span className="text-white">{cacheStats.total_tiles}</span>
-            <span className="text-gray-500 ml-2">Size:</span>{' '}
-            <span className="text-white">{formatBytes(cacheStats.total_bytes)}</span>
+            <span className="text-text-secondary opacity-80">Tiles:</span>{' '}
+            <span className="text-text-primary">{cacheStats.total_tiles}</span>
+            <span className="text-text-secondary opacity-80 ml-2">Size:</span>{' '}
+            <span className="text-text-primary">{formatBytes(cacheStats.total_bytes)}</span>
           </div>
         </div>
       )}

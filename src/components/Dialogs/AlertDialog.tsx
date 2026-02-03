@@ -101,7 +101,7 @@ export function AlertDialog({
       tabIndex={-1}
       onKeyDown={handleKeyDown}
     >
-      <div className="absolute inset-0 bg-black/50" onClick={handleBackdropClick} />
+      <div className="absolute inset-0 bg-overlay" onClick={handleBackdropClick} />
       <div
         ref={dialogRef}
         role="alertdialog"

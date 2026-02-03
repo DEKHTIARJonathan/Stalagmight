@@ -93,7 +93,7 @@ function ShortcutNameLabel({ name }: { name: string }) {
       </div>
       {showTooltip && isTruncated && (
         <div
-          className="absolute left-0 bottom-full mb-1 bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap pointer-events-none z-10"
+          className="absolute left-0 bottom-full mb-1 bg-panel-90 text-text-primary text-xs px-2 py-1 rounded border border-border whitespace-nowrap pointer-events-none z-10"
           role="tooltip"
         >
           {name}

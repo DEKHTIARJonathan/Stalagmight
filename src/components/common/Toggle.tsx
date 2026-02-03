@@ -61,7 +61,7 @@ export function Toggle({
         relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full
         transition-all duration-200
         focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-        ${checked ? 'bg-accent' : 'bg-gray-600'}
+        ${checked ? 'bg-accent' : 'bg-border'}
         ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
       `}
       onKeyDown={handleKeyDown}
@@ -70,7 +70,7 @@ export function Toggle({
       {/* Thumb (sliding circle) */}
       <span
         className={`
-          inline-block h-4 w-4 rounded-full bg-white shadow-sm
+          inline-block h-4 w-4 rounded-full bg-text-primary shadow-sm
           transition-all duration-200
           ${checked ? 'translate-x-6' : 'translate-x-1'}
         `}

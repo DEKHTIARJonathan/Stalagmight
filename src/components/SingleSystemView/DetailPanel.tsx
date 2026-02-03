@@ -92,7 +92,7 @@ function TabButton({ active, onClick, children, badge, badgeType, testId }: TabB
         <span
           className={`
             ml-2 px-1.5 py-0.5 text-xs rounded-full
-            ${badgeType === 'error' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}
+            ${badgeType === 'error' ? 'bg-error-10 text-error' : 'bg-warning-10 text-warning'}
           `}
         >
           {badge}
@@ -227,7 +227,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 className="flex-1 text-left"
               >
                 <div className="flex items-start gap-2">
-                  <span className={warning.severity === 'error' ? 'text-red-400' : 'text-yellow-400'}>
+                  <span className={warning.severity === 'error' ? 'text-error' : 'text-warning'}>
                     {warning.isResolved ? '✓' : (warning.severity === 'error' ? '⛔' : '⚠️')}
                   </span>
                   <div className="flex-1 min-w-0">

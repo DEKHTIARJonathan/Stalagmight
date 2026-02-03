@@ -1127,7 +1127,7 @@ export default function DmpSectionConfigDialog({
                       {/* Warning count badge - only when warnings exist with no errors */}
                       {showWarnings && (
                         <span
-                          className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 bg-warning text-black rounded-full text-[10px] font-medium"
+                          className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 bg-warning text-accent-on rounded-full text-[10px] font-medium"
                           data-testid={`section-warning-count-${arrayIdx}`}
                           title={`${sectionWarnings} warning${sectionWarnings > 1 ? 's' : ''}`}
                         >
@@ -1137,7 +1137,7 @@ export default function DmpSectionConfigDialog({
                       {/* Error count badge - data errors only */}
                       {sectionDataErrors > 0 && (
                         <span
-                          className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 bg-error text-white rounded-full text-[10px] font-medium"
+                          className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 bg-error text-accent-on rounded-full text-[10px] font-medium"
                           data-testid={`section-error-count-${arrayIdx}`}
                           title={`${sectionDataErrors} error${sectionDataErrors > 1 ? 's' : ''}`}
                         >
