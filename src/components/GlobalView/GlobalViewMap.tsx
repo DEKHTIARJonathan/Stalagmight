@@ -1140,7 +1140,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       <div className="absolute bottom-2 right-2 bg-panel-90 border border-border rounded px-2 py-1 text-xs">
         {gpsProjects.length} system{gpsProjects.length !== 1 ? 's' : ''} on map
         {isThrottled && (
-          <span className="ml-2 text-yellow-500" title="Detail reduced for performance">
+          <span className="ml-2 text-warning" title="Detail reduced for performance">
             (reduced detail)
           </span>
         )}

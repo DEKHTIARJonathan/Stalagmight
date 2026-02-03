@@ -404,7 +404,7 @@ export default function DataTable({ sections }: DataTableProps) {
         return (
           <span
             data-testid={`warning-${selectedSectionId}-${shot.id}`}
-            className={hasError ? 'text-red-400' : 'text-yellow-400'}
+            className={hasError ? 'text-error' : 'text-warning'}
             title={tooltipText}
           >
             {hasError ? '⛔' : '⚠️'}
