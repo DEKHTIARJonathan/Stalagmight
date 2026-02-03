@@ -72,6 +72,8 @@ export interface ImportState {
   sectionConfigs: Map<number, SectionConfig>;
   /** Current section index (within the Map keys) */
   currentSectionIndex: number;
+  /** Monotonic counter for unique temporary shot IDs */
+  nextTempId: number;
   /** Placed sections (user has explicitly set placement) */
   placedSections: Set<number>;
   /** Excluded sections (will not be imported) */
@@ -146,6 +148,22 @@ function convertToEditableShots(shots: DmpShot[]): EditableShot[] {
 }
 
 /**
+ * Get the next available temp ID based on existing shots.
+ */
+function getNextTempIdFromConfigs(sectionConfigs: Map<number, SectionConfig>): number {
+  let maxTempId = 0;
+  for (const config of sectionConfigs.values()) {
+    for (const shot of config.shots) {
+      const candidate = shot.tempId ?? (shot.id < 0 ? Math.abs(shot.id) : 0);
+      if (candidate > maxTempId) {
+        maxTempId = candidate;
+      }
+    }
+  }
+  return maxTempId + 1;
+}
+
+/**
  * Deep copy a shots array.
  */
 function deepCopyShots(shots: EditableShot[]): EditableShot[] {
@@ -159,8 +177,8 @@ function createBlankShot(tempId: number): EditableShot {
   return {
     id: -tempId,
     azimuth_in: 0,
-    azimuth_out: 180,
-    length: 1,
+    azimuth_out: 0,
+    length: 0,
     depth_in: 0,
     depth_out: 0,
     pitch_in: null,
@@ -219,7 +237,7 @@ function pushToUndoStack(
 /**
  * Import state reducer.
  */
-function importReducer(state: ImportState, action: ImportAction): ImportState {
+export function importReducer(state: ImportState, action: ImportAction): ImportState {
   const currentConfig = state.sectionConfigs.get(state.currentSectionIndex);
 
   switch (action.type) {
@@ -293,7 +311,7 @@ function importReducer(state: ImportState, action: ImportAction): ImportState {
       let stateWithUndo = pushToUndoStack(state, 'shotAdd', 'Add shot', previousPartial);
 
       // Add new shot
-      const newShot = createBlankShot(Date.now());
+      const newShot = createBlankShot(state.nextTempId);
       const newShots = [...currentConfig.shots, newShot];
 
       const newConfigs = new Map(stateWithUndo.sectionConfigs);
@@ -305,6 +323,7 @@ function importReducer(state: ImportState, action: ImportAction): ImportState {
       return {
         ...stateWithUndo,
         sectionConfigs: newConfigs,
+        nextTempId: state.nextTempId + 1,
       };
     }
 
@@ -346,7 +365,7 @@ function importReducer(state: ImportState, action: ImportAction): ImportState {
       let stateWithUndo = pushToUndoStack(state, 'shotAdd', `Insert shot before ${action.index}`, previousPartial);
 
       // Insert new shot
-      const newShot = createBlankShot(Date.now());
+      const newShot = createBlankShot(state.nextTempId);
       const newShots = [...currentConfig.shots];
       newShots.splice(action.index, 0, newShot);
 
@@ -359,6 +378,7 @@ function importReducer(state: ImportState, action: ImportAction): ImportState {
       return {
         ...stateWithUndo,
         sectionConfigs: newConfigs,
+        nextTempId: state.nextTempId + 1,
       };
     }
 
@@ -372,7 +392,7 @@ function importReducer(state: ImportState, action: ImportAction): ImportState {
       let stateWithUndo = pushToUndoStack(state, 'shotAdd', `Insert shot after ${action.index}`, previousPartial);
 
       // Insert new shot
-      const newShot = createBlankShot(Date.now());
+      const newShot = createBlankShot(state.nextTempId);
       const newShots = [...currentConfig.shots];
       newShots.splice(action.index + 1, 0, newShot);
 
@@ -385,6 +405,7 @@ function importReducer(state: ImportState, action: ImportAction): ImportState {
       return {
         ...stateWithUndo,
         sectionConfigs: newConfigs,
+        nextTempId: state.nextTempId + 1,
       };
     }
 
@@ -598,12 +619,17 @@ function importReducer(state: ImportState, action: ImportAction): ImportState {
     }
 
     case 'RESTORE_STATE': {
+      const nextTempId = Math.max(
+        state.nextTempId,
+        getNextTempIdFromConfigs(action.sectionConfigs)
+      );
       return {
         ...state,
         sectionConfigs: action.sectionConfigs,
         placedSections: action.placedSections,
         excludedSections: action.excludedSections,
         currentSectionIndex: action.currentSectionIndex,
+        nextTempId,
       };
     }
 
@@ -650,9 +676,11 @@ function initializeState(
 
   // If restoring from saved state
   if (savedState) {
+    const sectionConfigs = new Map(savedState.sectionConfigs);
     return {
-      sectionConfigs: new Map(savedState.sectionConfigs),
+      sectionConfigs,
       currentSectionIndex: savedState.currentSectionIndex,
+      nextTempId: getNextTempIdFromConfigs(sectionConfigs),
       placedSections: new Set(savedState.placedSections),
       excludedSections: new Set(savedState.excludedSections ?? []),
       undoStacks: new Map(),
@@ -688,9 +716,12 @@ function initializeState(
   const placedSections = new Set<number>();
   const excludedSections = new Set<number>();
 
+  const nextTempId = getNextTempIdFromConfigs(sectionConfigs);
+
   return {
     sectionConfigs,
     currentSectionIndex: firstSectionIndex ?? 0,
+    nextTempId,
     placedSections,
     excludedSections,
     undoStacks: new Map(),
