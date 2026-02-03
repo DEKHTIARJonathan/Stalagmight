@@ -1,3 +1,5 @@
+import { themeTokens } from '../theme/tokens';
+
 // Configuration types matching Rust config
 
 export type LengthUnit = 'meters' | 'feet';
@@ -271,11 +273,11 @@ export const defaultConfig: Config = {
     decimal_precision: 1,
   },
   display: {
-    default_background: '#1a1a2e',
-    grid_color: '#333366',
+    default_background: themeTokens.dark['--cc-map-background'],
+    grid_color: themeTokens.dark['--cc-grid-default'],
     grid_spacing: 10,
     font_size: 12,
-    font_color: '#f5f5f5',
+    font_color: themeTokens.dark['--cc-depth-text'],
     depth_gradient: {
       enabled: false,
       shallow_color: '#00bfff',
@@ -426,11 +428,11 @@ export const defaultConfig: Config = {
  * light backgrounds.
  */
 export const lightDisplayDefaults: DisplayConfig = {
-  default_background: '#f5f0e8',
+  default_background: themeTokens.light['--cc-background'],
   grid_color: '#c1a07a',
   grid_spacing: 10,
   font_size: 12,
-  font_color: '#1a120b',
+  font_color: themeTokens.light['--cc-text-primary'],
   depth_gradient: {
     enabled: false,
     shallow_color: '#0077b6',
