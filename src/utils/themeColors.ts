@@ -1,3 +1,5 @@
+import { themeTokens } from '../theme/tokens';
+
 /**
  * Theme color utilities for reading CSS custom properties at runtime.
  *
@@ -12,38 +14,9 @@
 /**
  * Fallback map with dark-theme defaults for each --cc-* variable.
  * Prevents empty strings if called before CSS loads or during unusual mount timing.
+ * Keep in sync with src/theme/tokens.ts (tests enforce parity with CSS).
  */
-const FALLBACK_MAP: Record<string, string> = {
-  '--cc-map-background': '#1a1a2e',
-  '--cc-background': '#1a1a2e',
-  '--cc-panel': '#16213e',
-  '--cc-border': '#0f3460',
-  '--cc-text-primary': '#f5f5f5',
-  '--cc-text-secondary': '#a0a0a0',
-  '--cc-accent': '#4ecdc4',
-  '--cc-accent-on': '#1a1a2e',
-  '--cc-stroke-color': '#ffffff',
-  '--cc-stroke-light': 'rgba(255, 255, 255, 0.25)',
-  '--cc-map-ctrl-shadow': 'rgba(15, 52, 96, 0.3)',
-  '--cc-text-halo': '#1a1a2e',
-  '--cc-text-halo-alt': 'rgba(0, 0, 0, 0.7)',
-  '--cc-station-default': '#a0a0a0',
-  '--cc-gray-line': '#666666',
-  '--cc-gray-text': '#999999',
-  '--cc-grid-default': '#333366',
-  '--cc-zero-datum': '#ffd700',
-  '--cc-compass-color': '#ffffff',
-  '--cc-depth-shallow': '#4ecdc4',
-  '--cc-depth-deep': '#ff6b6b',
-  '--cc-depth-text': '#f5f5f5',
-  '--cc-preview-bg': '#1a1a2e',
-  '--cc-preview-text': '#f5f5f5',
-  '--cc-snap-color': '#ff6b6b',
-  '--cc-hover-highlight': '#ffcb77',
-  '--cc-select-highlight': '#4ecdc4',
-  '--cc-error': '#ff6b6b',
-  '--cc-success': '#95e1d3',
-};
+const FALLBACK_MAP: Record<string, string> = { ...themeTokens.dark };
 
 /**
  * Read a CSS custom property value from the document root.

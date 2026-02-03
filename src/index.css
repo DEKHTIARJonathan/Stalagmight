@@ -4,7 +4,8 @@
 
 /* ============================================================
    Theme CSS Variables (--cc-* tokens)
-   Dark = default, Light = derived from brand_tokens.css
+   Source of truth: src/theme/tokens.ts
+   Dark = default, Light = UI chrome + MapLibre controls only
    ============================================================ */
 
 :root,
