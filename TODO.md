@@ -1,6 +1,6 @@
 # CaveChef TODO - v1.0 Completion Tasks
 
-This document tracks functionality specified in `docs/SPEC.md` and implementation status based on codebase analysis (last updated: 2026-01-29).
+This document tracks functionality specified in `docs/SPEC.md` and implementation status based on codebase analysis (last updated: 2026-02-03).
 
 ## Summary
 
@@ -8,14 +8,13 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 - Core functionality ✅ COMPLETE
 - Minor items remaining: file hash tracking (command exists but unused)
 
-**v1.0 Completion Tasks**: 17/39 complete (44%)
-- ✅ COMPLETE: Loop Closure (3/3), Settings/Configuration (4/4), Accessibility (4/4), Tool Panel & Move (4/4)
-- 🟡 PARTIAL: Data Table (3/4 - inline editing ✅, delete row w/ split ✅, add row remaining)
+**v1.0 Completion Tasks**: 21/40 complete (52%)
+- ✅ COMPLETE: Loop Closure (3/3), Settings/Configuration (4/4), Data Table (4/4), Accessibility (4/4), Tool Panel & Move (4/4)
 - 🟡 PARTIAL: Performance (1/4 - loading states ✅, no virtual scrolling/auto-save)
 - 🟡 PARTIAL: Error Handling (1/4 - basic network error tracking, no error boundaries)
 - ❌ NOT STARTED: i18n (0/3), Final polish (1/6 - only tile caching done)
 
-**Last Updated**: 2026-01-29
+**Last Updated**: 2026-02-03
 
 ---
 
@@ -149,7 +148,7 @@ All components are implemented and working:
 
 ## 🚧 v1.0 Completion Tasks
 
-Based on codebase analysis as of 2026-01-29.
+Based on codebase analysis as of 2026-02-03.
 
 ### Phase A: Loop Closure Foundation
 
@@ -173,7 +172,7 @@ Based on codebase analysis as of 2026-01-29.
 | Title | Status |
 |-------|--------|
 | Inline Editing | ✅ (EditableTable component with EditableCell) |
-| Add Row | 🟡 WIP (fn-47-ok1) — Context menu on DataTable + map; DrawShotDialog; prepend mode |
+| Add Row | ✅ (Context menu on DataTable + map; DrawShotDialog; prepend mode) |
 | Delete Row with Split | ✅ |
 | Row Highlighting Sync | ✅ |
 
@@ -269,7 +268,7 @@ Based on codebase analysis as of 2026-01-29.
 |-------|-------|-----------|-----------|
 | A: Loop Closure | 3 | 3 | 0 |
 | B: Settings | 4 | 4 | 0 |
-| C: Data Table | 4 | 3 | 1 |
+| C: Data Table | 4 | 4 | 0 |
 | D: Accessibility | 4 | 4 | 0 |
 | E: i18n | 3 | 0 | 3 |
 | F: Performance | 3 | 1 | 2 |
@@ -278,15 +277,15 @@ Based on codebase analysis as of 2026-01-29.
 | I: Tool Panel & Move | 5 | 4 | 1 |
 | J: Closure Distribution | 2 | 0 | 2 |
 | K: Import & Reporting | 2 | 0 | 2 |
-| **v1.0 Total** | **40** | **20** | **20** |
+| **v1.0 Total** | **40** | **21** | **19** |
 
 ### Grand Total
 
 | Category | Tasks | Completed | Remaining |
 |----------|-------|-----------|-----------|
 | DMP Import Refactoring | 22 | 21 | 1 |
-| v1.0 Completion | 40 | 20 | 20 |
-| **Grand Total** | **62** | **41** | **21** |
+| v1.0 Completion | 40 | 21 | 19 |
+| **Grand Total** | **62** | **42** | **20** |
 
 ---
 
@@ -375,7 +374,7 @@ About Dialog ❌ ───> Bug Reporter ❌
 1. **DMP Import Refactoring**: Mostly complete, minor cleanup remaining
 2. **Phase A** (Loop Closure): ✅ COMPLETE
 3. **Phase B** (Settings): ✅ COMPLETE
-4. **Phase C** (Data Table): Add Row feature remaining
+4. **Phase C** (Data Table): ✅ COMPLETE
 5. **Phase D** (Accessibility): Focus management and theme switching remaining
 6. **Phase E** (i18n): Full infrastructure needed
 7. **Phase G** (Error Handling): Error boundaries needed for stability
