@@ -1,4 +1,4 @@
-# CaveChef v1.0 Roadmap
+# Stalagmight v1.0 Roadmap
 
 The remaining v1.0 features are tracked as PRD files in `prd/` and corresponding Plane projects. Each PRD contains detailed specifications, UI mockups, acceptance criteria, and test cases.
 

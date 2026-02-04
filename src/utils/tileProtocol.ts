@@ -54,7 +54,7 @@ export function resetTileFetchStats(): void {
 }
 
 /**
- * Register the cavechef-tiles:// protocol for MapLibre.
+ * Register the stalagmight-tiles:// protocol for MapLibre.
  *
  * This is now a no-op. Tile requests go directly to Tauri's native protocol
  * handler which returns binary data efficiently without JSON serialization.
@@ -62,12 +62,12 @@ export function resetTileFetchStats(): void {
  * Kept for API compatibility with existing code that calls register/unregister.
  */
 export function registerTileProtocol(): void {
-  // No-op - Tauri's native protocol handles cavechef-tiles:// URLs directly
+  // No-op - Tauri's native protocol handles stalagmight-tiles:// URLs directly
   // WebView routes these to register_asynchronous_uri_scheme_protocol in Rust
 }
 
 /**
- * Unregister the cavechef-tiles:// protocol.
+ * Unregister the stalagmight-tiles:// protocol.
  * No-op since we don't register a JS-side protocol anymore.
  */
 export function unregisterTileProtocol(): void {

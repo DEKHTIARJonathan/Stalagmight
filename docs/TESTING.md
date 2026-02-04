@@ -1,6 +1,6 @@
-# CaveChef Testing Guide
+# Stalagmight Testing Guide
 
-This document describes the testing infrastructure, conventions, and best practices for CaveChef.
+This document describes the testing infrastructure, conventions, and best practices for Stalagmight.
 
 ## Testing Philosophy
 
@@ -13,7 +13,7 @@ This document describes the testing infrastructure, conventions, and best practi
 
 ## Test Infrastructure
 
-CaveChef uses a multi-layered testing approach:
+Stalagmight uses a multi-layered testing approach:
 
 | Layer | Framework | Purpose | Speed |
 |-------|-----------|---------|-------|
@@ -253,7 +253,7 @@ e2e/
 
 ### Dialog Reference
 
-CaveChef has two different import flows that serve different purposes:
+Stalagmight has two different import flows that serve different purposes:
 
 | Dialog Component | `activeDialog` Value | Opened By | Test File | Stats Feature |
 |------------------|---------------------|-----------|-----------|---------------|
@@ -330,7 +330,7 @@ The `wdio.sh` script automatically handles:
 - Platform verification (Linux/Windows only)
 - tauri-driver installation check
 - Display detection (uses xvfb automatically if headless)
-- Port cleanup (kills stale tauri-driver/cavechef processes)
+- Port cleanup (kills stale tauri-driver/stalagmight processes)
 - Build freshness checks (rebuilds if source is newer than binary)
 - Proper argument passing to wdio (uses `npx wdio` directly)
 
@@ -357,12 +357,12 @@ SKIP_BUILD=1 npx wdio run wdio.conf.ts --spec e2e/specs/ctrl-drag-pan-movement.s
 
 #### Binary Path Configuration
 
-The test runner looks for the Tauri binary at `$CARGO_TARGET_DIR/debug/cavechef`. By default, `wdio.conf.ts` expects `~/.cargo_build/debug/cavechef`.
+The test runner looks for the Tauri binary at `$CARGO_TARGET_DIR/debug/stalagmight`. By default, `wdio.conf.ts` expects `~/.cargo_build/debug/stalagmight`.
 
 If your project builds to a different location (e.g., the standard `src-tauri/target/`), set `CARGO_TARGET_DIR`:
 
 ```bash
-# If binary is at src-tauri/target/debug/cavechef
+# If binary is at src-tauri/target/debug/stalagmight
 CARGO_TARGET_DIR=./src-tauri/target xvfb-run -a pnpm test:e2e
 
 # Combined with skip build
@@ -477,7 +477,7 @@ Be specific in assertions:
 
 ```typescript
 // Good - specific assertion
-await expect(page.locator('h1')).toHaveText('CaveChef');
+await expect(page.locator('h1')).toHaveText('Stalagmight');
 
 // Bad - generic assertion
 expect(true).toBeTruthy();
@@ -967,7 +967,7 @@ await waitForMapIdle(page);
 
 // Verify map centered on element (check map state)
 const center = await page.evaluate(() => {
-  return (window as any).__cavechef_map__?.getCenter();
+  return (window as any).__stalagmight_map__?.getCenter();
 });
 // Assert center is near expected coordinates
 ```
@@ -979,7 +979,7 @@ const center = await page.evaluate(() => {
 ```typescript
 // First pan map off-target to ensure center button actually moves the view
 await page.evaluate(() => {
-  const map = (window as any).__cavechef_map__;
+  const map = (window as any).__stalagmight_map__;
   if (map) {
     const center = map.getCenter();
     map.setCenter([center.lng + 0.001, center.lat + 0.001]);
@@ -997,7 +997,7 @@ await waitForMapIdle(page);
 ```typescript
 // First pan map off-target to ensure center button actually moves the view
 await browser.execute(() => {
-  const map = (window as any).__cavechef_map__;
+  const map = (window as any).__stalagmight_map__;
   if (map) {
     const center = map.getCenter();
     map.setCenter([center.lng + 0.001, center.lat + 0.001]);
@@ -1291,7 +1291,7 @@ await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible();
 
 ### WebdriverIO Tests Failing
 
-1. **"No such file or directory" for cavechef binary**: Set `CARGO_TARGET_DIR` to point to where your binary was built (e.g., `CARGO_TARGET_DIR=./src-tauri/target`)
+1. **"No such file or directory" for stalagmight binary**: Set `CARGO_TARGET_DIR` to point to where your binary was built (e.g., `CARGO_TARGET_DIR=./src-tauri/target`)
 2. **"No display available" or display errors**: Use `xvfb-run -a` to provide a virtual display, or use `./scripts/wdio.sh` which auto-detects
 3. **Port 4444 already in use**: A previous tauri-driver is still running. Kill it with `pkill tauri-driver`, or use `./scripts/wdio.sh` which handles this automatically
 4. **Check tauri-driver**: Must be installed (`cargo install tauri-driver`)

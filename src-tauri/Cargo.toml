@@ -1,12 +1,12 @@
 [package]
-name = "cavechef"
+name = "stalagmight"
 version = "1.0.0"
 description = "Cave Survey Processing Application"
-authors = ["CaveChef Team"]
+authors = ["Stalagmight Team"]
 edition = "2021"
 
 [lib]
-name = "cavechef_lib"
+name = "stalagmight_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]

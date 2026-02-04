@@ -1131,7 +1131,7 @@ impl Config {
     /// Get the config file path
     pub fn config_path() -> Result<PathBuf> {
         let dirs =
-            directories::ProjectDirs::from("com", "cavechef", "CaveChef").context("No home directory")?;
+            directories::ProjectDirs::from("com", "stalagmight", "Stalagmight").context("No home directory")?;
         Ok(dirs.config_dir().join("config.toml"))
     }
 

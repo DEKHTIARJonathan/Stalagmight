@@ -1,12 +1,12 @@
-# CaveChef Configuration
+# Stalagmight Configuration
 
 ## Config File Location
 
 | Platform | Path |
 |----------|------|
-| Linux | `~/.config/cavechef/config.toml` |
-| macOS | `~/Library/Application Support/cavechef/config.toml` |
-| Windows | `%APPDATA%\cavechef\config.toml` |
+| Linux | `~/.config/stalagmight/config.toml` |
+| macOS | `~/Library/Application Support/stalagmight/config.toml` |
+| Windows | `%APPDATA%\stalagmight\config.toml` |
 
 ## Key Config Options
 
@@ -230,8 +230,8 @@ Logs are written using the `tracing` crate with `tracing-appender` for file outp
 
 | Platform | Log Path |
 |----------|----------|
-| Linux | `~/.local/share/cavechef/logs/` |
-| macOS | `~/Library/Application Support/cavechef/logs/` |
-| Windows | `%APPDATA%\cavechef\logs\` |
+| Linux | `~/.local/share/stalagmight/logs/` |
+| macOS | `~/Library/Application Support/stalagmight/logs/` |
+| Windows | `%APPDATA%\stalagmight\logs\` |
 
 Log level is configurable in the config file.

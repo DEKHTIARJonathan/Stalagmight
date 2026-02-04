@@ -16,8 +16,8 @@ async function waitForMapReady(page: Page): Promise<void> {
   await page.waitForFunction(
     () => {
       const map = (window as unknown as {
-        __cavechef_map__?: { loaded?: () => boolean; isStyleLoaded?: () => boolean };
-      }).__cavechef_map__;
+        __stalagmight_map__?: { loaded?: () => boolean; isStyleLoaded?: () => boolean };
+      }).__stalagmight_map__;
       return Boolean(map && ((map.isStyleLoaded && map.isStyleLoaded()) || (map.loaded && map.loaded())));
     },
     { timeout: 10000 }
@@ -39,8 +39,8 @@ async function waitForStationsRendered(page: Page): Promise<void> {
   await expect.poll(async () => {
     return page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: { queryRenderedFeatures: (opts: { layers: string[] }) => Array<unknown> };
-      }).__cavechef_map__;
+        __stalagmight_map__?: { queryRenderedFeatures: (opts: { layers: string[] }) => Array<unknown> };
+      }).__stalagmight_map__;
       if (!map) return 0;
       try {
         return map.queryRenderedFeatures({ layers: ['survey-stations'] }).length;
@@ -95,14 +95,14 @@ async function getStationScreenPosition(
   return page.evaluate(
     ({ sectionId, stationIndex }) => {
       const map = (window as unknown as {
-        __cavechef_map__?: {
+        __stalagmight_map__?: {
           project: (coords: [number, number]) => { x: number; y: number };
           queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
             geometry: { type: string; coordinates: [number, number] };
             properties: { sectionId: number; stationIndex: number };
           }>;
         };
-      }).__cavechef_map__;
+      }).__stalagmight_map__;
 
       if (!map) throw new Error('Map not available');
 
@@ -215,10 +215,10 @@ async function getHitboxLayerOpacity(page: Page, layerId: string): Promise<numbe
   return page.evaluate(
     ({ layerId }) => {
       const map = (window as unknown as {
-        __cavechef_map__?: {
+        __stalagmight_map__?: {
           getPaintProperty: (layer: string, prop: string) => number;
         };
-      }).__cavechef_map__;
+      }).__stalagmight_map__;
 
       if (!map) return 0;
       return map.getPaintProperty(layerId, layerId.includes('shots') ? 'line-opacity' : 'circle-opacity') ?? 0;
@@ -234,10 +234,10 @@ async function getHitboxLayerOpacity(page: Page, layerId: string): Promise<numbe
 async function getLayerOrder(page: Page): Promise<Record<string, number>> {
   return page.evaluate(() => {
     const map = (window as unknown as {
-      __cavechef_map__?: {
+      __stalagmight_map__?: {
         getStyle: () => { layers: Array<{ id: string }> };
       };
-    }).__cavechef_map__;
+    }).__stalagmight_map__;
 
     if (!map) return {};
 
@@ -265,14 +265,14 @@ test.describe('Hitbox Detection', () => {
     // Get any station and test hitbox boundaries
     const testData = await page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: {
+        __stalagmight_map__?: {
           project: (coords: [number, number]) => { x: number; y: number };
           queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
             geometry: { type: string; coordinates: [number, number] };
             properties: { sectionId: number; stationIndex: number };
           }>;
         };
-      }).__cavechef_map__;
+      }).__stalagmight_map__;
 
       const stores = (window as unknown as {
         __E2E_TEST__?: {
@@ -334,14 +334,14 @@ test.describe('Hitbox Detection', () => {
     // Find two stations whose hitboxes actually overlap in screen space
     const overlapData = await page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: {
+        __stalagmight_map__?: {
           project: (coords: [number, number]) => { x: number; y: number };
           queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
             geometry: { type: string; coordinates: [number, number] };
             properties: { sectionId: number; stationIndex: number };
           }>;
         };
-      }).__cavechef_map__;
+      }).__stalagmight_map__;
 
       const stores = (window as unknown as {
         __E2E_TEST__?: {
@@ -496,14 +496,14 @@ test.describe('Hitbox Detection', () => {
     // Get shot info and find a click point on the shot that's far from all stations
     const shotInfo = await page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: {
+        __stalagmight_map__?: {
           project: (coords: [number, number]) => { x: number; y: number };
           queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
             geometry: { type: string; coordinates: [number, number] | [number, number][] };
             properties: Record<string, unknown>;
           }>;
         };
-      }).__cavechef_map__;
+      }).__stalagmight_map__;
 
       const stores = (window as unknown as {
         __E2E_TEST__?: {
@@ -812,10 +812,10 @@ test.describe('Config Reload Effects', () => {
     // Verify the hitbox layer circle-radius matches the config
     const layerRadius = await page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: {
+        __stalagmight_map__?: {
           getPaintProperty: (layer: string, prop: string) => number;
         };
-      }).__cavechef_map__;
+      }).__stalagmight_map__;
 
       if (!map) return 0;
       return map.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
@@ -837,10 +837,10 @@ test.describe('Config Reload Effects', () => {
     // Verify initial hitbox radius is 10 (default)
     const initialRadius = await page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: {
+        __stalagmight_map__?: {
           getPaintProperty: (layer: string, prop: string) => number;
         };
-      }).__cavechef_map__;
+      }).__stalagmight_map__;
       return map?.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
     });
     expect(initialRadius).toBe(10);
@@ -888,10 +888,10 @@ test.describe('Config Reload Effects', () => {
       async () => {
         return page.evaluate(() => {
           const map = (window as unknown as {
-            __cavechef_map__?: {
+            __stalagmight_map__?: {
               getPaintProperty: (layer: string, prop: string) => number;
             };
-          }).__cavechef_map__;
+          }).__stalagmight_map__;
           return map?.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
         });
       },
@@ -901,10 +901,10 @@ test.describe('Config Reload Effects', () => {
     // Verify station hitbox radius updated
     const updatedStationRadius = await page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: {
+        __stalagmight_map__?: {
           getPaintProperty: (layer: string, prop: string) => number;
         };
-      }).__cavechef_map__;
+      }).__stalagmight_map__;
       return map?.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
     });
     expect(updatedStationRadius).toBe(15);
@@ -912,10 +912,10 @@ test.describe('Config Reload Effects', () => {
     // Verify shot hitbox width updated
     const updatedShotWidth = await page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: {
+        __stalagmight_map__?: {
           getPaintProperty: (layer: string, prop: string) => number;
         };
-      }).__cavechef_map__;
+      }).__stalagmight_map__;
       return map?.getPaintProperty('survey-shots-hitbox', 'line-width') ?? 0;
     });
     expect(updatedShotWidth).toBe(12);
@@ -927,14 +927,14 @@ test.describe('Config Reload Effects', () => {
     // Get first station and find a safe direction to click (away from all other stations)
     const testData = await page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: {
+        __stalagmight_map__?: {
           project: (coords: [number, number]) => { x: number; y: number };
           queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
             geometry: { type: string; coordinates: [number, number] };
             properties: { sectionId: number; stationIndex: number };
           }>;
         };
-      }).__cavechef_map__;
+      }).__stalagmight_map__;
 
       const stores = (window as unknown as {
         __E2E_TEST__?: {
@@ -1050,10 +1050,10 @@ test.describe('Config Reload Effects', () => {
       async () => {
         return page.evaluate(() => {
           const map = (window as unknown as {
-            __cavechef_map__?: {
+            __stalagmight_map__?: {
               getPaintProperty: (layer: string, prop: string) => number;
             };
-          }).__cavechef_map__;
+          }).__stalagmight_map__;
           return map?.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
         });
       },
@@ -1111,7 +1111,7 @@ test.describe('E2E Test Infrastructure', () => {
     expect(hasTestAPI.hasProjectStore).toBe(true);
   });
 
-  test('__cavechef_map__ is exposed after map loads', async ({ page }) => {
+  test('__stalagmight_map__ is exposed after map loads', async ({ page }) => {
     await createProject(page, 'Map Exposure Test');
 
     // Ensure map has finished loading after project seeding
@@ -1119,18 +1119,18 @@ test.describe('E2E Test Infrastructure', () => {
       async () => {
         return page.evaluate(() => {
           const map = (window as unknown as {
-            __cavechef_map__?: { loaded?: () => boolean; isStyleLoaded?: () => boolean };
-          }).__cavechef_map__;
+            __stalagmight_map__?: { loaded?: () => boolean; isStyleLoaded?: () => boolean };
+          }).__stalagmight_map__;
           return Boolean(map && ((map.isStyleLoaded && map.isStyleLoaded()) || (map.loaded && map.loaded())));
         });
       },
       { timeout: 10000 }
     ).toBe(true);
 
-    // Verify __cavechef_map__ is available with required methods
+    // Verify __stalagmight_map__ is available with required methods
     const hasMapAPI = await page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: {
+        __stalagmight_map__?: {
           loaded: () => boolean;
           isStyleLoaded?: () => boolean;
           project: (coords: [number, number]) => { x: number; y: number };
@@ -1138,7 +1138,7 @@ test.describe('E2E Test Infrastructure', () => {
           getPaintProperty: (layer: string, prop: string) => unknown;
           queryRenderedFeatures: (options?: unknown) => unknown[];
         };
-      }).__cavechef_map__;
+      }).__stalagmight_map__;
 
       return {
         hasMap: !!map,

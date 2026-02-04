@@ -87,7 +87,7 @@ impl AppState {
 
     /// Initialize the tile cache based on config
     pub(super) fn init_tile_cache(config: &Config) -> Result<TileCache> {
-        let dirs = directories::ProjectDirs::from("com", "cavechef", "CaveChef")
+        let dirs = directories::ProjectDirs::from("com", "stalagmight", "Stalagmight")
             .ok_or_else(|| anyhow::anyhow!("Could not determine app data directory"))?;
         let cache_dir = dirs.cache_dir();
         TileCache::open(cache_dir, config.cache.tile_cache_max_mb, config.cache.tile_ttl_days)

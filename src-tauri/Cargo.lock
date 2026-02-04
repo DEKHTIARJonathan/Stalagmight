@@ -440,7 +440,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cavechef"
+name = "stalagmight"
 version = "1.0.0"
 dependencies = [
  "anyhow",

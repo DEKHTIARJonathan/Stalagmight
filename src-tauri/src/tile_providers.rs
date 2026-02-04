@@ -213,7 +213,7 @@ mod tests {
             min_zoom: 0,
             max_zoom: 18,
             content_type_hint: "image/png".to_string(),
-            api_key_env: Some("CAVECHEF_TEST_MISSING_KEY_12345".to_string()),
+            api_key_env: Some("STALAGMIGHT_TEST_MISSING_KEY_12345".to_string()),
             auth_header: None,
         };
 

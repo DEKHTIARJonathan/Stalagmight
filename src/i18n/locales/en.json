@@ -141,7 +141,7 @@
       "theme": {
         "title": "Theme",
         "label": "Application theme",
-        "help": "Choose how CaveChef looks",
+        "help": "Choose how Stalagmight looks",
         "aria": "Application theme",
         "options": {
           "dark": {
@@ -1018,7 +1018,7 @@
         },
         "open": {
           "title": "Open project",
-          "description": "Open an existing CaveChef project."
+          "description": "Open an existing Stalagmight project."
         }
       }
     },

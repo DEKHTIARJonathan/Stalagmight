@@ -16,7 +16,7 @@ export function useProject() {
   const handleOpenProject = useCallback(async () => {
     const selected = await open({
       multiple: false,
-      filters: [{ name: 'CaveChef Project', extensions: ['cvproj', 'cvchef'] }],
+      filters: [{ name: 'Stalagmight Project', extensions: ['cvproj', 'cvchef'] }],
     });
 
     console.log('[useProject] Open dialog result:', selected, typeof selected);
@@ -41,7 +41,7 @@ export function useProject() {
 
   const handleSaveProjectAs = useCallback(async () => {
     const selected = await save({
-      filters: [{ name: 'CaveChef Project', extensions: ['cvproj'] }],
+      filters: [{ name: 'Stalagmight Project', extensions: ['cvproj'] }],
     });
 
     if (selected) {

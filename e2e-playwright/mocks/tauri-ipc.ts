@@ -1,7 +1,7 @@
 import { Page } from '@playwright/test';
 
 /**
- * Mock data types matching the CaveChef Rust backend models.
+ * Mock data types matching the Stalagmight Rust backend models.
  */
 interface MockProject {
   id: string;

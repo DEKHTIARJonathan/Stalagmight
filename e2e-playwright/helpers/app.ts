@@ -45,14 +45,14 @@ export async function waitForMapReady(page: Page): Promise<void> {
     timeout: 20000,
   });
   await page.waitForFunction(() => {
-    const map = (window as { __cavechef_map__?: { isStyleLoaded?: () => boolean } }).__cavechef_map__;
+    const map = (window as { __stalagmight_map__?: { isStyleLoaded?: () => boolean } }).__stalagmight_map__;
     return Boolean(map && map.isStyleLoaded && map.isStyleLoaded());
   });
 }
 
 export async function waitForMapIdle(page: Page): Promise<void> {
   await page.waitForFunction(() => {
-    const map = (window as { __cavechef_map__?: { isMoving?: () => boolean } }).__cavechef_map__;
+    const map = (window as { __stalagmight_map__?: { isMoving?: () => boolean } }).__stalagmight_map__;
     return Boolean(map && map.isMoving && !map.isMoving());
   });
 }

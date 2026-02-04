@@ -1,14 +1,14 @@
-//! Comprehensive integration tests for CaveChef
+//! Comprehensive integration tests for Stalagmight
 //!
 //! Tests are organized by category. Run `cargo test` to execute all tests.
 
-use cavechef_lib::config::{CacheConfig, Config, ValidationConfig};
-use cavechef_lib::core::{Command, UndoData, UndoEntry, UndoStack, Validator};
-use cavechef_lib::models::{
+use stalagmight_lib::config::{CacheConfig, Config, ValidationConfig};
+use stalagmight_lib::core::{Command, UndoData, UndoEntry, UndoStack, Validator};
+use stalagmight_lib::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure, Project, Section, SectionData,
     SectionUpdates, Shot, ShotData, ShotUpdates, StationMerge, StationRef,
 };
-use cavechef_lib::persistence::Database;
+use stalagmight_lib::persistence::Database;
 use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -1057,7 +1057,7 @@ threshold_pixels = 20
 
     // Verify custom values were preserved
     assert_eq!(config.general.auto_save_interval_seconds, 60);
-    assert_eq!(config.units.depth, cavechef_lib::config::LengthUnit::Feet);
+    assert_eq!(config.units.depth, stalagmight_lib::config::LengthUnit::Feet);
     assert_eq!(config.display.font_size, 14);
     assert!(config.display.depth_gradient.enabled);
     assert_eq!(config.map.satellite_provider, "esri");
@@ -1082,7 +1082,7 @@ threshold_pixels = 20
 /// Test: Config normalization clamps and validates values
 #[test]
 fn test_config_normalize_clamps_values() {
-    use cavechef_lib::config::{MapConfig, StationConfig, ShotConfig, MapSnapConfig};
+    use stalagmight_lib::config::{MapConfig, StationConfig, ShotConfig, MapSnapConfig};
 
     let mut map_config = MapConfig {
         station: StationConfig { radius: 0.1, hit_area: 0.5, ..Default::default() },  // Below min
@@ -1108,7 +1108,7 @@ fn test_config_normalize_clamps_values() {
 /// Test: Config normalization handles NaN/inf values
 #[test]
 fn test_config_normalize_handles_nan_inf() {
-    use cavechef_lib::config::{MapConfig, StationConfig, ShotConfig, MapSnapConfig};
+    use stalagmight_lib::config::{MapConfig, StationConfig, ShotConfig, MapSnapConfig};
 
     let mut map_config = MapConfig {
         station: StationConfig { radius: f64::NAN, hit_area: f64::INFINITY, ..Default::default() },
@@ -1130,7 +1130,7 @@ fn test_config_normalize_handles_nan_inf() {
 /// Test: hit_area must be >= radius/width after normalization
 #[test]
 fn test_config_normalize_hit_area_ge_visual_size() {
-    use cavechef_lib::config::{MapConfig, StationConfig, ShotConfig};
+    use stalagmight_lib::config::{MapConfig, StationConfig, ShotConfig};
 
     let mut map_config = MapConfig {
         station: StationConfig { radius: 20.0, hit_area: 5.0, ..Default::default() },  // hit_area < radius
@@ -1613,7 +1613,7 @@ fn test_short_shot_warning() {
     assert!(warnings.iter().any(|w| w.code == "SHORT_SHOT"));
     // SHORT_SHOT is a warning, not error
     let short_warning = warnings.iter().find(|w| w.code == "SHORT_SHOT").unwrap();
-    assert_eq!(short_warning.severity, cavechef_lib::core::WarningSeverity::Warning);
+    assert_eq!(short_warning.severity, stalagmight_lib::core::WarningSeverity::Warning);
 }
 
 /// Coverage Test 3: Long shot warning

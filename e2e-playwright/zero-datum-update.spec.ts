@@ -30,7 +30,7 @@ async function createProject(page: Page, name: string): Promise<void> {
 
   // Wait for map initialization (known flakiness pitfall)
   await page.waitForFunction(
-    () => (window as unknown as { __cavechef_map__?: unknown }).__cavechef_map__ !== undefined,
+    () => (window as unknown as { __stalagmight_map__?: unknown }).__stalagmight_map__ !== undefined,
     { timeout: 10000 }
   );
 }

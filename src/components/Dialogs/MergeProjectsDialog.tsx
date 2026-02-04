@@ -80,7 +80,7 @@ export default function MergeProjectsDialog() {
       const outputPath = await save({
         title: 'Save Merged Project',
         defaultPath: `${defaultDir}/${defaultFileName}`,
-        filters: [{ name: 'CaveChef Project', extensions: ['cvchef'] }],
+        filters: [{ name: 'Stalagmight Project', extensions: ['cvchef'] }],
       });
 
       if (!outputPath) {

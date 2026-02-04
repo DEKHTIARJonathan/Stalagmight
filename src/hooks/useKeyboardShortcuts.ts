@@ -212,14 +212,14 @@ function getMap(): {
 } | null {
   return (
     window as unknown as {
-      __cavechef_map__?: {
+      __stalagmight_map__?: {
         getZoom: () => number;
         getMinZoom: () => number;
         getMaxZoom: () => number;
         zoomTo: (zoom: number, options?: { duration?: number }) => void;
       };
     }
-  ).__cavechef_map__ ?? null;
+  ).__stalagmight_map__ ?? null;
 }
 
 /**
@@ -543,7 +543,7 @@ export function useKeyboardShortcuts() {
             try {
               const selected = await open({
                 multiple: false,
-                filters: [{ name: 'CaveChef Project', extensions: ['cvproj', 'cvchef'] }],
+                filters: [{ name: 'Stalagmight Project', extensions: ['cvproj', 'cvchef'] }],
               });
 
               let path: string | null = null;
@@ -582,7 +582,7 @@ export function useKeyboardShortcuts() {
             (async () => {
               try {
                 const selected = await save({
-                  filters: [{ name: 'CaveChef Project', extensions: ['cvproj'] }],
+                  filters: [{ name: 'Stalagmight Project', extensions: ['cvproj'] }],
                 });
 
                 if (selected) {

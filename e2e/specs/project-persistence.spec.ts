@@ -33,7 +33,7 @@ describe('Project Persistence', () => {
     await waitForAppReady();
     await resetAppState();
     // Create unique temp directory for each test
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cavechef-e2e-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-e2e-'));
   });
 
   afterEach(async () => {
@@ -898,8 +898,8 @@ describe('Project Persistence', () => {
     // The requestFitToBounds flag is transient (cleared immediately after being consumed),
     // so we verify the outcome: the map should have zoomed to show the data.
     const zoomResult = await browser.execute(() => {
-      const mapRef = (window as unknown as { __cavechef_map__?: { getZoom: () => number } })
-        .__cavechef_map__;
+      const mapRef = (window as unknown as { __stalagmight_map__?: { getZoom: () => number } })
+        .__stalagmight_map__;
       if (!mapRef) return { hasMap: false, zoom: 0 };
       return { hasMap: true, zoom: mapRef.getZoom() };
     });

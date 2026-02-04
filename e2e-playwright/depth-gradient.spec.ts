@@ -72,7 +72,7 @@ async function toggleDisplayOption(page: Page, toggleKey: string): Promise<void>
 async function waitForMapLoaded(page: Page): Promise<void> {
   await expect.poll(async () => {
     const loaded = await page.evaluate(() => {
-      const map = (window as unknown as { __cavechef_map__?: { loaded: () => boolean } }).__cavechef_map__;
+      const map = (window as unknown as { __stalagmight_map__?: { loaded: () => boolean } }).__stalagmight_map__;
       return map?.loaded() ?? false;
     });
     return loaded;
@@ -107,10 +107,10 @@ test.describe('Depth Gradient', () => {
     await expect.poll(async () => {
       const count = await page.evaluate(() => {
         const map = (window as unknown as {
-          __cavechef_map__?: {
+          __stalagmight_map__?: {
             queryRenderedFeatures: (opts: { layers: string[] }) => Array<unknown>;
           };
-        }).__cavechef_map__;
+        }).__stalagmight_map__;
         if (!map) return 0;
         try {
           return map.queryRenderedFeatures({ layers: ['survey-stations'] }).length;
@@ -124,12 +124,12 @@ test.describe('Depth Gradient', () => {
     // Get station colors BEFORE enabling depth gradient
     const colorsBefore = await page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: {
+        __stalagmight_map__?: {
           queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
             properties: { color?: string };
           }>;
         };
-      }).__cavechef_map__;
+      }).__stalagmight_map__;
       if (!map) return [];
       try {
         const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
@@ -163,12 +163,12 @@ test.describe('Depth Gradient', () => {
     await expect.poll(async () => {
       const colorsAfter = await page.evaluate(() => {
         const map = (window as unknown as {
-          __cavechef_map__?: {
+          __stalagmight_map__?: {
             queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
               properties: { color?: string };
             }>;
           };
-        }).__cavechef_map__;
+        }).__stalagmight_map__;
         if (!map) return [];
         try {
           const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });

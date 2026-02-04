@@ -1,4 +1,4 @@
-# CaveChef Architecture
+# Stalagmight Architecture
 
 > For full data model, UI design, and workflows, see [SPEC.md](SPEC.md).
 
@@ -131,7 +131,7 @@ GlobalView.tsx (container)
             │
             ▼
 GlobalViewMap.tsx
-    ├── Initializes MapLibre with Esri World Imagery via cavechef-tiles:// protocol
+    ├── Initializes MapLibre with Esri World Imagery via stalagmight-tiles:// protocol
     ├── Restores persisted map position from localStorage
     ├── Creates GlobalSurveyLayer for geometry rendering
     └── On map moveend → loadGeometryBatch(visible systems)

@@ -2,7 +2,7 @@
 
 ## DMP Files
 
-Test DMP files for CaveChef E2E testing. These are binary files from the mNemo cave surveying device.
+Test DMP files for Stalagmight E2E testing. These are binary files from the mNemo cave surveying device.
 
 ### Available Test Files
 

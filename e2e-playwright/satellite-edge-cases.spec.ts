@@ -31,7 +31,7 @@ async function isSatelliteEnabled(page: Page): Promise<boolean> {
 async function waitForMapLayer(page: Page, layerId: string): Promise<boolean> {
   return await expect.poll(async () => {
     return await page.evaluate((id) => {
-      const map = (window as unknown as { __cavechef_map__?: { getLayer: (id: string) => unknown } }).__cavechef_map__;
+      const map = (window as unknown as { __stalagmight_map__?: { getLayer: (id: string) => unknown } }).__stalagmight_map__;
       return map ? !!map.getLayer(id) : false;
     }, layerId);
   }, { timeout: 5000 }).toBe(true).then(() => true).catch(() => false);
@@ -43,7 +43,7 @@ async function waitForMapLayer(page: Page, layerId: string): Promise<boolean> {
 async function waitForNoMapLayer(page: Page, layerId: string): Promise<boolean> {
   return await expect.poll(async () => {
     return await page.evaluate((id) => {
-      const map = (window as unknown as { __cavechef_map__?: { getLayer: (id: string) => unknown } }).__cavechef_map__;
+      const map = (window as unknown as { __stalagmight_map__?: { getLayer: (id: string) => unknown } }).__stalagmight_map__;
       return map ? !!map.getLayer(id) : false;
     }, layerId);
   }, { timeout: 5000 }).toBe(false).then(() => true).catch(() => false);
@@ -231,7 +231,7 @@ test.describe('Satellite Edge Cases', () => {
       }
 
       // Wait for GlobalView
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("CaveChef")', { timeout: 8000 });
+      await page.waitForSelector('[data-testid="global-view"], h1:has-text("Stalagmight")', { timeout: 8000 });
 
       // Create a new project
       await createProject(page, 'Satellite Test Project 2');
@@ -272,7 +272,7 @@ test.describe('Satellite Edge Cases', () => {
       }
 
       // Wait for GlobalView
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("CaveChef")', { timeout: 8000 });
+      await page.waitForSelector('[data-testid="global-view"], h1:has-text("Stalagmight")', { timeout: 8000 });
 
       // Create new project (mock has default sections, but test the flow)
       await createProject(page, 'Empty Satellite Test');
@@ -392,7 +392,7 @@ test.describe('Satellite Edge Cases', () => {
       }
 
       // Wait for GlobalView to load
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("CaveChef")', { timeout: 8000 });
+      await page.waitForSelector('[data-testid="global-view"], h1:has-text("Stalagmight")', { timeout: 8000 });
 
       // Click Settings button
       await page.click('[data-testid="settings-button"], button:has-text("Settings")');
@@ -458,13 +458,13 @@ test.describe('Satellite Edge Cases', () => {
       // Check that source uses custom protocol
       await expect.poll(async () => {
         return await page.evaluate(() => {
-          const map = (window as unknown as { __cavechef_map__?: { getSource: (id: string) => { tiles?: string[] } | null } }).__cavechef_map__;
+          const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => { tiles?: string[] } | null } }).__stalagmight_map__;
           if (!map) return null;
           const source = map.getSource('satellite-tiles');
           if (!source || !('tiles' in source)) return null;
           return source.tiles?.[0] ?? null;
         });
-      }, { timeout: 5000 }).toContain('cavechef-tiles://');
+      }, { timeout: 5000 }).toContain('stalagmight-tiles://');
     });
 
     test('should clean up satellite layer when disabled', async ({ page }) => {
@@ -492,7 +492,7 @@ test.describe('Satellite Edge Cases', () => {
       // Wait for source to exist
       await expect.poll(async () => {
         return await page.evaluate(() => {
-          const map = (window as unknown as { __cavechef_map__?: { getSource: (id: string) => unknown } }).__cavechef_map__;
+          const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => unknown } }).__stalagmight_map__;
           return map ? !!map.getSource('satellite-tiles') : false;
         });
       }, { timeout: 5000 }).toBe(true);
@@ -503,7 +503,7 @@ test.describe('Satellite Edge Cases', () => {
       // Verify source is removed using polling
       await expect.poll(async () => {
         return await page.evaluate(() => {
-          const map = (window as unknown as { __cavechef_map__?: { getSource: (id: string) => unknown } }).__cavechef_map__;
+          const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => unknown } }).__stalagmight_map__;
           return map ? !!map.getSource('satellite-tiles') : false;
         });
       }, { timeout: 5000 }).toBe(false);

@@ -672,7 +672,7 @@ test.describe('Error Handling', () => {
       }
 
       // After error, should stay on start page
-      const title = page.locator('h1:has-text("CaveChef")');
+      const title = page.locator('h1:has-text("Stalagmight")');
       await expect(title).toBeVisible({ timeout: 5000 });
 
       // Reset error mode and test file not found
