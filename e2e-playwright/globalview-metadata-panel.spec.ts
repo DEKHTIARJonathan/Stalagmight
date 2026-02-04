@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
 
 test.describe('GlobalView Metadata Panel', () => {

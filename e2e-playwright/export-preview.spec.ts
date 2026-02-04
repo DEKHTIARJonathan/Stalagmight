@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
@@ -10,7 +10,7 @@ import {
 /**
  * Helper to create a new project and import some data for testing
  */
-async function createProjectWithData(page: import('@playwright/test').Page) {
+async function createProjectWithData(page: import('./fixtures/coverage').Page) {
   await createProject(page, 'Export Test Project');
   await openDmpSelectionDialog(page);
   const dialog = page.getByTestId('dmp-selection-dialog');
@@ -40,7 +40,7 @@ async function createProjectWithData(page: import('@playwright/test').Page) {
 /**
  * Helper to open the export dialog
  */
-async function openExportDialog(page: import('@playwright/test').Page) {
+async function openExportDialog(page: import('./fixtures/coverage').Page) {
   await page.keyboard.press('Control+e');
   await expect(page.getByTestId('export-dialog')).toBeVisible({ timeout: 5000 });
 }

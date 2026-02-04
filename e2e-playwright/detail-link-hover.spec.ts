@@ -15,7 +15,7 @@
  * 3. MapLibre feature-state changes are not easily observable in Playwright
  */
 
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,

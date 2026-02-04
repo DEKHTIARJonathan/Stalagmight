@@ -12,9 +12,12 @@ let tauriDriver: ChildProcess | null = null;
 let tempRoot: string | null = null;
 let workerLogStream: fs.WriteStream | null = null;
 let xvfbProcess: ChildProcess | null = null;
+let currentWorkerId: number | null = null;
 
 // Directory for per-worker log files
 const LOGS_DIR = path.join(__dirname, 'wdio-logs');
+const coverageEnabled = process.env.E2E_COVERAGE === '1';
+const defaultCoverageDir = path.join(__dirname, 'docs', 'coverage', 'raw', 'wdio');
 
 // Detect platform and set appropriate binary path
 const isWindows = process.platform === 'win32';
@@ -138,6 +141,22 @@ function parseWorkerId(cid: string): number {
   return Number.isFinite(fallback) ? fallback : 0;
 }
 
+function sanitizeFileName(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, '_');
+}
+
+function getCoverageDir(): string {
+  return process.env.COVERAGE_DIR || defaultCoverageDir;
+}
+
+function getTestLabel(test: { title?: string; parent?: { title?: string } | string }): string {
+  const parentTitle = typeof test.parent === 'string'
+    ? test.parent
+    : test.parent?.title || 'suite';
+  const title = test.title || 'test';
+  return `${parentTitle}-${title}`;
+}
+
 function applyWorkerEnv(root: string): void {
   if (isWindows) {
     const appData = path.join(root, 'appdata');
@@ -254,6 +273,7 @@ export const config: Options.Testrunner = {
           env: {
             ...process.env,
             VITE_E2E: '1',
+            ...(coverageEnabled ? { VITE_COVERAGE: '1' } : {}),
             CARGO_TARGET_DIR: cargoTargetDir,
           },
         });
@@ -270,6 +290,7 @@ export const config: Options.Testrunner = {
     const workerId = parseWorkerId(cid);
     const driverPort = basePort + workerId;
     const nativePort = baseNativePort + workerId;
+    currentWorkerId = workerId;
 
     // Ensure each worker has isolated config/data/cache directories
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `stalagmight-wdio-${cid}-`));
@@ -321,7 +342,7 @@ export const config: Options.Testrunner = {
   },
 
   // Log test results to per-spec log file
-  afterTest: function (test, _context, { error, passed }) {
+  afterTest: async function (test, _context, { error, passed }) {
     if (workerLogStream) {
       const status = passed ? '✓ PASS' : '✗ FAIL';
       workerLogStream.write(`\n[TEST] ${status}: ${test.parent} > ${test.title}\n`);
@@ -331,6 +352,28 @@ export const config: Options.Testrunner = {
           workerLogStream.write(`  Stack: ${error.stack.split('\n').slice(0, 5).join('\n  ')}\n`);
         }
       }
+    }
+
+    if (!coverageEnabled) {
+      return;
+    }
+
+    try {
+      const coverage = await browser.execute(() => {
+        return (window as unknown as { __coverage__?: unknown }).__coverage__ ?? null;
+      });
+      if (!coverage) return;
+
+      const coverageDir = getCoverageDir();
+      fs.mkdirSync(coverageDir, { recursive: true });
+
+      const label = sanitizeFileName(getTestLabel(test));
+      const workerSuffix = currentWorkerId ?? 0;
+      const fileName = `${label}-${workerSuffix}-${Date.now()}.json`;
+      const filePath = path.join(coverageDir, fileName);
+      fs.writeFileSync(filePath, JSON.stringify(coverage));
+    } catch (coverageError) {
+      console.warn('WDIO coverage collection failed:', coverageError);
     }
   },
 
@@ -355,6 +398,8 @@ export const config: Options.Testrunner = {
       }
       tempRoot = null;
     }
+
+    currentWorkerId = null;
   },
 
   // Print summary of logs location after all tests complete

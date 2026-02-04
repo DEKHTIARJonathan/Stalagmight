@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
@@ -21,7 +21,7 @@ const sectionSeeds: SectionSeed[] = [
   },
 ];
 
-async function createProjectWithSections(page: import('@playwright/test').Page): Promise<void> {
+async function createProjectWithSections(page: import('./fixtures/coverage').Page): Promise<void> {
   await createProject(page, 'Tool Groups Test');
   await seedProjectWithSections(page, sectionSeeds);
   await waitForMapReady(page);
