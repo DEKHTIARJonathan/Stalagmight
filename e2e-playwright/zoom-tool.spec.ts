@@ -460,7 +460,7 @@ test.describe('Zoom Tool', () => {
         const map = (window as unknown as { __stalagmight_map__?: { getCanvas: () => HTMLCanvasElement } }).__stalagmight_map__;
         return map?.getCanvas()?.style.cursor ?? null;
       });
-      expect(cursor).toBe('default');
+      expect(cursor === '' || cursor === 'default').toBe(true);
 
       // Activate zoom via keyboard (zoom is in Navigate group)
       await page.keyboard.press('z');

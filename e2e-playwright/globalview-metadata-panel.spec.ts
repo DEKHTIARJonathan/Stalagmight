@@ -17,7 +17,7 @@ test.describe('GlobalView Metadata Panel', () => {
     test('should show empty state when no project is selected', async ({ page }) => {
       const emptyState = page.locator('[data-testid="metadata-panel-empty"]');
       await expect(emptyState).toBeVisible();
-      await expect(emptyState).toContainText('Select a project to view details');
+      await expect(emptyState).toContainText('Select a project to see details');
     });
   });
 
@@ -108,19 +108,19 @@ test.describe('GlobalView Metadata Panel', () => {
     test('should have Open Project button', async ({ page }) => {
       const openButton = page.locator('[data-testid="metadata-open-button"]');
       await expect(openButton).toBeVisible();
-      await expect(openButton).toContainText('Open Project');
+      await expect(openButton).toContainText('Open project');
     });
 
     test('should have Show in Folder button', async ({ page }) => {
       const folderButton = page.locator('[data-testid="metadata-show-folder-button"]');
       await expect(folderButton).toBeVisible();
-      await expect(folderButton).toContainText('Show in Folder');
+      await expect(folderButton).toContainText('Show in folder');
     });
 
     test('should have Remove from Recent button', async ({ page }) => {
       const removeButton = page.locator('[data-testid="metadata-remove-button"]');
       await expect(removeButton).toBeVisible();
-      await expect(removeButton).toContainText('Remove from Recent');
+      await expect(removeButton).toContainText('Remove from recent');
     });
 
     test('should open project when Open Project button is clicked', async ({ page }) => {
@@ -133,13 +133,13 @@ test.describe('GlobalView Metadata Panel', () => {
 
     test('should have correct aria-label on action buttons', async ({ page }) => {
       const openButton = page.locator('[data-testid="metadata-open-button"]');
-      await expect(openButton).toHaveAttribute('aria-label', /Open project Cave System Alpha/);
+      await expect(openButton).toHaveAttribute('aria-label', /Open Cave System Alpha/);
 
       const folderButton = page.locator('[data-testid="metadata-show-folder-button"]');
-      await expect(folderButton).toHaveAttribute('aria-label', /Show Cave System Alpha in file explorer/);
+      await expect(folderButton).toHaveAttribute('aria-label', /Show Cave System Alpha in folder/);
 
       const removeButton = page.locator('[data-testid="metadata-remove-button"]');
-      await expect(removeButton).toHaveAttribute('aria-label', /Remove Cave System Alpha from recent projects/);
+      await expect(removeButton).toHaveAttribute('aria-label', /Remove Cave System Alpha from recent/);
     });
   });
 
@@ -193,13 +193,13 @@ test.describe('GlobalView Metadata Panel', () => {
 
     test('should have accessible label', async ({ page }) => {
       const panel = page.locator('[data-testid="metadata-panel"]');
-      await expect(panel).toHaveAttribute('aria-label', 'Project details panel');
+      await expect(panel).toHaveAttribute('aria-label', 'Project metadata panel');
     });
 
     test('should have heading for the panel', async ({ page }) => {
       const heading = page.locator('#metadata-panel-title');
       await expect(heading).toBeVisible();
-      await expect(heading).toContainText('Project Details');
+      await expect(heading).toContainText('Project details');
     });
   });
 
@@ -212,7 +212,7 @@ test.describe('GlobalView Metadata Panel', () => {
       const gpsField = page.locator('[data-testid="metadata-gps"]');
       await expect(gpsField).toBeVisible();
       // Should show formatted GPS (not "Not set")
-      await expect(gpsField).not.toContainText('Not set');
+      await expect(gpsField).not.toContainText('Not specified');
     });
 
     test('should display "Not set" when project has no GPS', async ({ page }) => {
@@ -222,7 +222,7 @@ test.describe('GlobalView Metadata Panel', () => {
 
       const gpsField = page.locator('[data-testid="metadata-gps"]');
       await expect(gpsField).toBeVisible();
-      await expect(gpsField).toContainText('Not set');
+      await expect(gpsField).toContainText('Not specified');
     });
   });
 

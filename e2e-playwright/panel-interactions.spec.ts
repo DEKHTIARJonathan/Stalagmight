@@ -217,22 +217,22 @@ test.describe('Panel Interactions', () => {
     await expect(sectionRow).toBeVisible({ timeout: 2000 });
 
     // Initially the section shows basic info (name and stats)
-    const sectionStats = sectionRow.locator('text=/\\d+ shots/');
+    const sectionStats = sectionRow.locator('text=/Shots:\\s*\\d+/');
     await expect(sectionStats).toBeVisible();
 
     // Click on the section to select it
     await sectionRow.click();
     await waitForMapIdle(page);
 
-    // When a section is selected, it should have a highlight (bg-accent/20)
-    await expect(sectionRow).toHaveClass(/bg-accent/);
+    // When a section is selected, aria-selected should reflect it
+    await expect(sectionRow).toHaveAttribute('aria-selected', 'true');
 
     // The detail panel should now show section details
     const detailPanel = page.getByTestId('detail-panel');
     if (await detailPanel.isVisible()) {
-      // Look for section-specific details like "Survey Statistics"
-      const surveyStats = page.locator('h4:has-text("Survey Statistics")');
-      await expect(surveyStats).toBeVisible({ timeout: 2000 });
+      const sectionDetail = page.getByTestId('section-detail');
+      await expect(sectionDetail).toBeVisible({ timeout: 2000 });
+      await expect(sectionDetail.locator('text=Section stats')).toBeVisible({ timeout: 2000 });
     }
 
     // Click on a different section to verify selection changes

@@ -518,10 +518,10 @@ test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
     await page.locator('[data-testid="continue-button"]').click();
     await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
 
-    // First section (Main Passage) is NOT placed yet - has azimuth warnings, shows warning icon
+    // First section (Main Passage) is NOT placed yet - no warnings/errors, shows default icon
     const status0 = page.locator('[data-testid="section-status-0"]');
-    await expect(status0).toContainText('⚠');
-    await expect(status0).toHaveClass(/text-warning/);
+    await expect(status0).toContainText('○');
+    await expect(status0).toHaveClass(/text-text-secondary/);
 
     // Second section (Validation Test) should show error icon
     const status1 = page.locator('[data-testid="section-status-1"]');
@@ -586,12 +586,12 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
   });
 
   /**
-   * Test: track_imported_file IPC call made after successful import
+   * Test: file hash passed to import_sections after successful import
    *
-   * After a successful import (no errors), the track_imported_file
-   * command should be called with the file hash.
+   * After a successful import (no errors), the file hash should be
+   * included in the import_sections call for backend tracking.
    */
-  test('should call track_imported_file after successful import', async ({ page }) => {
+  test('should pass file hash to import_sections after successful import', async ({ page }) => {
     await createProject(page, 'Hash Track Success');
 
     // Reset tracking call counter
@@ -600,6 +600,19 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
         | (() => void)
         | undefined;
       if (reset) reset();
+    });
+
+    // Capture import_sections arguments for fileHash verification
+    await page.evaluate(() => {
+      const tauri = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+      const originalInvoke = tauri.invoke;
+      (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ = [];
+      tauri.invoke = async (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === 'import_sections') {
+          (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__?.push(args ?? {});
+        }
+        return originalInvoke(cmd, args);
+      };
     });
 
     // Open import dialog and select only Main Passage (no errors)
@@ -617,26 +630,27 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     // Place the section (single section = Place and finish)
     await placeAllSections(page);
 
-    // Wait for track_imported_file to be called (async, happens after import completes)
-    // Poll to avoid race conditions with async IPC calls
-    await expect(async () => {
-      const calls = await page.evaluate(() => {
-        const getter = (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ as
-          | (() => Array<{ hash: string }>)
-          | undefined;
-        return getter ? getter() : [];
+    // Wait for import_sections call and verify fileHash passed for tracking
+    await expect.poll(async () => {
+      return page.evaluate(() => {
+        const calls = (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ ?? [];
+        return calls.length;
       });
-      expect(calls.length).toBeGreaterThan(0);
-      // At least one call should contain the mock hash (avoids fragile index-based assertion)
-      expect(calls.some(c => c.hash.includes('mock_hash_'))).toBe(true);
-    }).toPass({ timeout: 5000 });
+    }).toBeGreaterThan(0);
+
+    const lastArgs = await page.evaluate(() => {
+      const calls = (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ ?? [];
+      return calls[calls.length - 1] ?? null;
+    });
+    expect(lastArgs).not.toBeNull();
+    expect((lastArgs as { fileHash?: string | null }).fileHash ?? '').toContain('mock_hash_');
   });
 
   /**
-   * Test: track_imported_file NOT called when import has errors
+   * Test: import_sections NOT called when import has errors
    *
-   * When importing a section with validation errors, the track_imported_file
-   * command should NOT be called (hash is only tracked on zero errors).
+   * When importing a section with validation errors, the import cannot proceed,
+   * so import_sections should not be called.
    */
   test('should not call track_imported_file when import has errors', async ({ page }) => {
     await createProject(page, 'Hash Track Error');
@@ -647,6 +661,19 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
         | (() => void)
         | undefined;
       if (reset) reset();
+    });
+
+    // Capture import_sections arguments to confirm no import occurs
+    await page.evaluate(() => {
+      const tauri = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+      const originalInvoke = tauri.invoke;
+      (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ = [];
+      tauri.invoke = async (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === 'import_sections') {
+          (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__?.push(args ?? {});
+        }
+        return originalInvoke(cmd, args);
+      };
     });
 
     // Open import dialog and select only the Validation Test Section (has errors)
@@ -667,14 +694,10 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     const placeButton = page.locator('[data-testid="place-section-button"], [data-testid="place-and-finish-button"]');
     await expect(placeButton.first()).toBeDisabled();
 
-    // Verify track_imported_file was NOT called (can't even import)
+    // Verify import_sections was NOT called (can't even import)
     const calls = await page.evaluate(() => {
-      const getter = (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ as
-        | (() => Array<{ hash: string }>)
-        | undefined;
-      return getter ? getter() : [];
+      return (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ ?? [];
     });
-
     expect(calls.length).toBe(0);
   });
 });

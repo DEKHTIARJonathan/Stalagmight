@@ -199,8 +199,8 @@ test.describe('Loading Progress', () => {
         });
       });
 
-      // Phase text should show "Step N/M:" format (4/8 because phaseIndex is 0-based)
-      await expect(page.getByText(/Step 4\/8:/)).toBeVisible();
+      // Phase text should show "Step N of M:" format (4 of 8 because phaseIndex is 0-based)
+      await expect(page.getByText(/Step 4 of 8:/)).toBeVisible();
     });
 
     test('shows phase label during loading', async ({ page }) => {
