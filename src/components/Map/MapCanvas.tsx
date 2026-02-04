@@ -20,6 +20,7 @@ import { DepthLegend } from './DepthLegend';
 import { MapDevStats } from './MapDevStats';
 import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
+import { FEATURE_ID_STRIDE } from '../../utils/ids';
 
 // Tools that support Ctrl+drag for panning
 const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment'];
@@ -222,7 +223,7 @@ export default function MapCanvas() {
     const stationIds = new Set<number>();
     for (const key of immovableStationKeys) {
       const [sec, idx] = key.split(':');
-      stationIds.add(Number(sec) * 100000 + Number(idx));
+      stationIds.add(Number(sec) * FEATURE_ID_STRIDE + Number(idx));
     }
     const shotIds = new Set<number>();
     if (activeTool === 'move_shot') {
@@ -231,7 +232,7 @@ export default function MapCanvas() {
           const fromKey = `${section.id}:${i}`;
           const toKey = `${section.id}:${i + 1}`;
           if (immovableStationKeys.has(fromKey) || immovableStationKeys.has(toKey)) {
-            shotIds.add(section.id * 100000 + section.shots[i]!.id);
+            shotIds.add(section.id * FEATURE_ID_STRIDE + section.shots[i]!.id);
           }
         }
       }

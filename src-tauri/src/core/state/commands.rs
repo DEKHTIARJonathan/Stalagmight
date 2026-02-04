@@ -3,6 +3,7 @@ use crate::core::{Command, CommandResult, UndoData, Validator};
 use crate::models::{
     shot_display_position, ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates,
     SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef,
+    FEATURE_ID_STRIDE,
 };
 
 use super::AppState;
@@ -619,6 +620,14 @@ impl AppState {
             None => return CommandResult::failure("No project open".to_string()),
         };
 
+        let max_shots = FEATURE_ID_STRIDE.saturating_sub(1) as usize;
+        if data.shots.len() > max_shots {
+            return CommandResult::failure(format!(
+                "Section exceeds maximum shots per section (limit = {})",
+                max_shots
+            ));
+        }
+
         // Validate shots using the section_id that will be assigned
         let section_id_for_validation = project.next_section_id;
         let mut warnings = Vec::new();
@@ -723,29 +732,35 @@ impl AppState {
             None => return CommandResult::failure("No project open".to_string()),
         };
 
+        let max_shots = FEATURE_ID_STRIDE.saturating_sub(1) as usize;
+
         // Compute the real shot index for validation messages
-        let shot_index = if let Some(before_id) = before_shot_id {
-            project
-                .sections
-                .iter()
-                .find(|s| s.id == section_id)
-                .and_then(|s| s.shots.iter().position(|shot| shot.id == before_id))
-                .unwrap_or(0)
-        } else if let Some(after_id) = after_shot_id {
-            project
-                .sections
-                .iter()
-                .find(|s| s.id == section_id)
-                .and_then(|s| s.shots.iter().position(|shot| shot.id == after_id))
-                .map(|pos| pos + 1)
-                .unwrap_or(0)
-        } else {
-            project
-                .sections
-                .iter()
-                .find(|s| s.id == section_id)
-                .map(|s| s.shots.len())
-                .unwrap_or(0)
+        let shot_index = {
+            let section = match project.sections.iter().find(|s| s.id == section_id) {
+                Some(section) => section,
+                None => return CommandResult::failure(format!("Section {} not found", section_id)),
+            };
+
+            if section.shots.len() >= max_shots {
+                return CommandResult::failure(format!(
+                    "Section {} has reached the maximum of {} shots",
+                    section_id,
+                    max_shots
+                ));
+            }
+
+            if let Some(before_id) = before_shot_id {
+                section.shots.iter().position(|shot| shot.id == before_id).unwrap_or(0)
+            } else if let Some(after_id) = after_shot_id {
+                section
+                    .shots
+                    .iter()
+                    .position(|shot| shot.id == after_id)
+                    .map(|pos| pos + 1)
+                    .unwrap_or(0)
+            } else {
+                section.shots.len()
+            }
         };
 
         if data.length == 0.0 {

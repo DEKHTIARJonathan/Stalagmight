@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::models::{
     ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot,
-    StationMerge, StationRef, SurveyDirection, ZeroDatum,
+    StationMerge, StationRef, SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE,
 };
 
 
@@ -794,7 +794,7 @@ impl Database {
                     let seq: i64 = row.get(0)?;
                     Ok(Shot {
                         // Generate globally unique shot ID from section_id and sequence
-                        id: (section_id_for_shots as u32) * 100000 + (seq as u32),
+                        id: (section_id_for_shots as u32) * FEATURE_ID_STRIDE + (seq as u32),
                         azimuth_in: row.get(1)?,
                         azimuth_out: row.get(2)?,
                         length: row.get(3)?,
