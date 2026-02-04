@@ -321,7 +321,7 @@ test.describe('Loading Progress', () => {
         e2e?.simulateLoadingProgress?.({
           isLoading: true,
           projectName: 'Test Project',
-          projectPath: '/test/path.cvproj',
+          projectPath: '/test/path.stalx',
           phase: 'loading_project_data',
           overallProgress: 25,
         });

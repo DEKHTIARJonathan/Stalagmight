@@ -543,7 +543,7 @@ export function useKeyboardShortcuts() {
             try {
               const selected = await open({
                 multiple: false,
-                filters: [{ name: 'Stalagmight Project', extensions: ['cvproj', 'cvchef'] }],
+                filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
               });
 
               let path: string | null = null;
@@ -582,11 +582,11 @@ export function useKeyboardShortcuts() {
             (async () => {
               try {
                 const selected = await save({
-                  filters: [{ name: 'Stalagmight Project', extensions: ['cvproj'] }],
+                  filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
                 });
 
                 if (selected) {
-                  const finalPath = selected.endsWith('.cvproj') ? selected : `${selected}.cvproj`;
+                  const finalPath = selected.endsWith('.stalx') ? selected : `${selected}.stalx`;
 
                   try {
                     const fileExists = await exists(finalPath);

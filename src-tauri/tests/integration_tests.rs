@@ -1221,7 +1221,7 @@ fn test_shot_comment_special_chars() {
 #[test]
 fn test_new_project_creates_file() {
     let file = NamedTempFile::new().unwrap();
-    let path = file.path().with_extension("cvproj");
+    let path = file.path().with_extension("stalx");
 
     let project = create_test_project();
 
@@ -1239,7 +1239,7 @@ fn test_new_project_creates_file() {
 #[test]
 fn test_empty_project_save_load() {
     let file = NamedTempFile::new().unwrap();
-    let path = file.path().with_extension("cvproj");
+    let path = file.path().with_extension("stalx");
 
     let project = Project::new("Empty".to_string(), None);
     assert!(project.sections.is_empty());
@@ -1540,7 +1540,7 @@ fn test_invalid_station_reference() {
 #[test]
 fn test_project_metadata() {
     let mut project = Project::new("Test Cave".to_string(), Some("Location".to_string()));
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
     project.add_section(create_section_with_shots(
         "Main",
@@ -1798,7 +1798,7 @@ fn test_save_load_with_loop_closures() {
 /// Coverage Test 10: Open nonexistent file fails
 #[test]
 fn test_open_nonexistent_file_fails() {
-    let result = Database::open_existing(Path::new("/nonexistent/path/file.cvproj"));
+    let result = Database::open_existing(Path::new("/nonexistent/path/file.stalx"));
     assert!(result.is_err());
     match result {
         Err(e) => assert!(e.to_string().contains("does not exist")),
@@ -1949,7 +1949,7 @@ fn test_project_update_shot() {
 #[test]
 fn test_gps_metadata_no_datums() {
     let mut project = Project::new("Test Cave".to_string(), None);
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
     project.add_section(create_section_with_shots(
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
@@ -1965,7 +1965,7 @@ fn test_gps_metadata_no_datums() {
 #[test]
 fn test_gps_metadata_single_datum() {
     let mut project = Project::new("Test Cave".to_string(), None);
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
     project.add_section(create_section_with_shots(
         "Main",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
@@ -1997,7 +1997,7 @@ fn test_gps_metadata_single_datum() {
 #[test]
 fn test_gps_metadata_multiple_datums() {
     let mut project = Project::new("Test Cave".to_string(), None);
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
     // Create two disconnected sections
     project.add_section(create_section_with_shots(
@@ -2043,7 +2043,7 @@ fn test_gps_metadata_multiple_datums() {
 #[test]
 fn test_gps_metadata_dateline_crossing() {
     let mut project = Project::new("Test Cave".to_string(), None);
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
     // Create three disconnected sections
     project.add_section(create_section_with_shots(
@@ -2094,7 +2094,7 @@ fn test_gps_metadata_dateline_crossing() {
 #[test]
 fn test_gps_metadata_center_stability() {
     let mut project = Project::new("Test Cave".to_string(), None);
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
     // Create two disconnected sections
     project.add_section(create_section_with_shots(
@@ -2137,7 +2137,7 @@ fn test_gps_metadata_center_stability() {
 #[test]
 fn test_gps_metadata_update_preserves_order() {
     let mut project = Project::new("Test Cave".to_string(), None);
-    project.file_path = Some(std::path::PathBuf::from("/tmp/test.cvproj"));
+    project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
     // Create two disconnected sections
     project.add_section(create_section_with_shots(
@@ -2245,7 +2245,7 @@ fn test_merge_projects_basic() {
     let dir = tempdir().unwrap();
 
     // Create first project with 2 sections
-    let path1 = dir.path().join("project1.cvproj");
+    let path1 = dir.path().join("project1.stalx");
     let mut project1 = Project::new("Cave A".to_string(), Some("Location A".to_string()));
     project1.add_section(create_section_with_shots(
         "A-Main",
@@ -2264,7 +2264,7 @@ fn test_merge_projects_basic() {
     drop(db1);
 
     // Create second project with 1 section
-    let path2 = dir.path().join("project2.cvproj");
+    let path2 = dir.path().join("project2.stalx");
     let mut project2 = Project::new("Cave B".to_string(), Some("Location B".to_string()));
     project2.add_section(create_section_with_shots(
         "B-Main",
@@ -2279,7 +2279,7 @@ fn test_merge_projects_basic() {
     drop(db2);
 
     // Merge projects
-    let output_path = dir.path().join("merged.cvproj");
+    let output_path = dir.path().join("merged.stalx");
 
     // Load both projects
     let db1 = Database::open_existing(&path1).unwrap();
@@ -2338,7 +2338,7 @@ fn test_merge_projects_preserves_zero_datums() {
     let dir = tempdir().unwrap();
 
     // Create first project with zero datum
-    let path1 = dir.path().join("project_zd1.cvproj");
+    let path1 = dir.path().join("project_zd1.stalx");
     let mut project1 = Project::new("Cave ZD1".to_string(), None);
     project1.add_section(create_section_with_shots(
         "ZD1-Main",
@@ -2360,7 +2360,7 @@ fn test_merge_projects_preserves_zero_datums() {
     drop(db1);
 
     // Create second project with zero datum
-    let path2 = dir.path().join("project_zd2.cvproj");
+    let path2 = dir.path().join("project_zd2.stalx");
     let mut project2 = Project::new("Cave ZD2".to_string(), None);
     project2.add_section(create_section_with_shots(
         "ZD2-Main",
@@ -2445,7 +2445,7 @@ fn test_merge_projects_preserves_station_merges() {
     let dir = tempdir().unwrap();
 
     // Create project with 2 sections and a station merge
-    let path1 = dir.path().join("project_merge1.cvproj");
+    let path1 = dir.path().join("project_merge1.stalx");
     let mut project1 = Project::new("Cave Merge".to_string(), None);
 
     project1.add_section(create_section_with_shots(
@@ -2470,7 +2470,7 @@ fn test_merge_projects_preserves_station_merges() {
     drop(db1);
 
     // Create second project (empty)
-    let path2 = dir.path().join("project_merge2.cvproj");
+    let path2 = dir.path().join("project_merge2.stalx");
     let mut project2 = Project::new("Empty Cave".to_string(), None);
     project2.add_section(create_section_with_shots(
         "Section C",

@@ -1161,8 +1161,8 @@ case 'get_survey_geometry': {
 
 ```typescript
 // Ctrl+click to multi-select systems
-await page.click('[data-testid="system-marker-system1.cvproj"]');
-await page.click('[data-testid="system-marker-system2.cvproj"]', { modifiers: ['Control'] });
+await page.click('[data-testid="system-marker-system1.stalx"]');
+await page.click('[data-testid="system-marker-system2.stalx"]', { modifiers: ['Control'] });
 
 // Verify multiple systems are selected in store
 const selected = await page.evaluate(() => {
@@ -1175,7 +1175,7 @@ expect(selected).toHaveLength(2);
 
 ```typescript
 // Right-click to open context menu
-await page.click('[data-testid="system-marker-system1.cvproj"]', { button: 'right' });
+await page.click('[data-testid="system-marker-system1.stalx"]', { button: 'right' });
 await expect(page.locator('[data-testid="context-menu"]')).toBeVisible();
 ```
 

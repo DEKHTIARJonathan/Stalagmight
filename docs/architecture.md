@@ -77,8 +77,8 @@ if should_save {
 ### Safe File Save
 
 Always use temp file + atomic rename pattern for saves:
-1. Write to `file.cvproj.tmp`
-2. On success, rename to `file.cvproj`
+1. Write to `file.stalx.tmp`
+2. On success, rename to `file.stalx`
 3. On failure, delete temp file
 
 This prevents data loss if save fails mid-write.

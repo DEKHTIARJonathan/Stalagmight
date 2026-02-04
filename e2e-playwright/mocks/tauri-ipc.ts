@@ -1431,7 +1431,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               {
                 name: 'Cave System Alpha',
                 location: 'Yucatan, Mexico',
-                file_path: '/projects/cave-alpha.cvproj',
+                file_path: '/projects/cave-alpha.stalx',
                 modified_at: new Date().toISOString(),
                 section_count: 5,
                 total_length: 1250.5,
@@ -1446,7 +1446,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               {
                 name: 'Underwater Cave Beta',
                 location: 'Florida, USA',
-                file_path: '/projects/cave-beta.cvproj',
+                file_path: '/projects/cave-beta.stalx',
                 modified_at: new Date(Date.now() - 86400000).toISOString(),
                 section_count: 3,
                 total_length: 820.0,
@@ -1461,7 +1461,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               {
                 name: 'Deep Cave Gamma',
                 location: 'Bahamas',
-                file_path: '/projects/cave-gamma.cvproj',
+                file_path: '/projects/cave-gamma.stalx',
                 modified_at: new Date(Date.now() - 172800000).toISOString(),
                 section_count: 8,
                 total_length: 2100.3,
@@ -1471,7 +1471,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               {
                 name: 'Local Survey (No GPS)',
                 location: 'Unknown',
-                file_path: '/projects/local-survey.cvproj',
+                file_path: '/projects/local-survey.stalx',
                 modified_at: new Date(Date.now() - 259200000).toISOString(),
                 section_count: 2,
                 total_length: 350.0,
@@ -1524,7 +1524,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Return a mock file path for testing
             return '/mock/test-survey.dmp';
           case 'plugin:dialog|save':
-            return '/mock/saved-project.cvproj';
+            return '/mock/saved-project.stalx';
 
           case 'plugin:fs|read':
           case 'plugin:fs|readFile':
@@ -1882,7 +1882,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       },
       save: async (_options?: unknown) => {
         console.log('[Mock Dialog] save called');
-        return '/mock/saved-project.cvproj';
+        return '/mock/saved-project.stalx';
       },
       message: async (_message: string, _options?: unknown) => {
         console.log('[Mock Dialog] message called');

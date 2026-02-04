@@ -72,7 +72,7 @@ describe('Project Persistence', () => {
     const statsBeforeSave = await getProjectStats();
 
     // Save project to temp location
-    const projectPath = path.join(tempDir, 'test-project.cvproj');
+    const projectPath = path.join(tempDir, 'test-project.stalx');
     await browser.executeAsync(
       async (savePath: string, done: (result: { success: boolean; error?: string }) => void) => {
         const e2e = (window as unknown as {
@@ -229,7 +229,7 @@ describe('Project Persistence', () => {
     const mergeCountBeforeSave = mergeResult.mergeCount;
 
     // Save project
-    const projectPath = path.join(tempDir, 'merge-test.cvproj');
+    const projectPath = path.join(tempDir, 'merge-test.stalx');
     await browser.executeAsync(
       async (savePath: string, done: (result: { success: boolean }) => void) => {
         const e2e = (window as unknown as {
@@ -388,7 +388,7 @@ describe('Project Persistence', () => {
     expect(datumsBeforeSave.length).toBeGreaterThan(0);
 
     // Save project
-    const projectPath = path.join(tempDir, 'zero-datum-test.cvproj');
+    const projectPath = path.join(tempDir, 'zero-datum-test.stalx');
     await browser.executeAsync(
       async (savePath: string, done: (result: { success: boolean }) => void) => {
         const e2e = (window as unknown as {
@@ -488,7 +488,7 @@ describe('Project Persistence', () => {
     fs.chmodSync(readOnlyDir, 0o444); // Read-only
 
     // Attempt to save to read-only location
-    const readOnlyPath = path.join(readOnlyDir, 'test.cvproj');
+    const readOnlyPath = path.join(readOnlyDir, 'test.stalx');
     let saveResult: { success: boolean; error?: string };
     try {
       saveResult = await browser.executeAsync(
@@ -538,7 +538,7 @@ describe('Project Persistence', () => {
     await expect(mapCanvas).toBeExisting();
 
     // Can still save to a valid location
-    const validPath = path.join(tempDir, 'valid-save.cvproj');
+    const validPath = path.join(tempDir, 'valid-save.stalx');
     const validResult = await browser.executeAsync(
       async (savePath: string, done: (result: { success: boolean }) => void) => {
         const e2e = (window as unknown as {
@@ -580,7 +580,7 @@ describe('Project Persistence', () => {
     await importDmpFile(dmpPath);
 
     // Save project
-    const projectPath = path.join(tempDir, 'recent-test.cvproj');
+    const projectPath = path.join(tempDir, 'recent-test.stalx');
     await browser.executeAsync(
       async (savePath: string, done: (result: { success: boolean }) => void) => {
         const e2e = (window as unknown as {
@@ -703,7 +703,7 @@ describe('Project Persistence', () => {
     expect(isDirty).toBe(true);
 
     // Save the project
-    const projectPath = path.join(tempDir, 'dirty-test.cvproj');
+    const projectPath = path.join(tempDir, 'dirty-test.stalx');
     await browser.executeAsync(
       async (savePath: string, done: (result: { success: boolean }) => void) => {
         const e2e = (window as unknown as {
@@ -817,7 +817,7 @@ describe('Project Persistence', () => {
     expect(importResult.success).toBe(true);
 
     // Save project
-    const projectPath = path.join(tempDir, 'fit-to-view-test.cvproj');
+    const projectPath = path.join(tempDir, 'fit-to-view-test.stalx');
     await browser.executeAsync(
       async (savePath: string, done: (result: { success: boolean }) => void) => {
         const e2e = (window as unknown as {

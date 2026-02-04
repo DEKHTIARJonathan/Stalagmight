@@ -24,7 +24,7 @@ test.describe('GlobalView Metadata Panel', () => {
   test.describe('Project Selection from List', () => {
     test('should show project details when card is clicked', async ({ page }) => {
       // Click on a system card to select it
-      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.cvproj"]');
+      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]');
       await card.click();
 
       // Wait for metadata to appear
@@ -35,20 +35,20 @@ test.describe('GlobalView Metadata Panel', () => {
 
     test('should display all metadata fields for selected project', async ({ page }) => {
       // Select the first project
-      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.cvproj"]');
+      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]');
       await card.click();
 
       // Check all metadata fields
       await expect(page.locator('[data-testid="metadata-name"]')).toContainText('Cave System Alpha');
       await expect(page.locator('[data-testid="metadata-location"]')).toContainText('Yucatan, Mexico');
-      await expect(page.locator('[data-testid="metadata-file-path"]')).toContainText('/projects/cave-alpha.cvproj');
+      await expect(page.locator('[data-testid="metadata-file-path"]')).toContainText('/projects/cave-alpha.stalx');
       await expect(page.locator('[data-testid="metadata-sections"]')).toContainText('5');
       await expect(page.locator('[data-testid="metadata-length"]')).toBeVisible();
       await expect(page.locator('[data-testid="metadata-gps"]')).toBeVisible();
     });
 
     test('should show selected state on card', async ({ page }) => {
-      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.cvproj"]');
+      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]');
       await card.click();
 
       // Card should have ring class indicating selection
@@ -57,12 +57,12 @@ test.describe('GlobalView Metadata Panel', () => {
 
     test('should update metadata when different card is selected', async ({ page }) => {
       // Select first project
-      const alphaCard = page.locator('[data-testid="system-card-/projects/cave-alpha.cvproj"]');
+      const alphaCard = page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]');
       await alphaCard.click();
       await expect(page.locator('[data-testid="metadata-name"]')).toContainText('Cave System Alpha');
 
       // Select second project
-      const betaCard = page.locator('[data-testid="system-card-/projects/cave-beta.cvproj"]');
+      const betaCard = page.locator('[data-testid="system-card-/projects/cave-beta.stalx"]');
       await betaCard.click();
       await expect(page.locator('[data-testid="metadata-name"]')).toContainText('Underwater Cave Beta');
       await expect(page.locator('[data-testid="metadata-location"]')).toContainText('Florida, USA');
@@ -87,7 +87,7 @@ test.describe('GlobalView Metadata Panel', () => {
 
     test('should show project details when map marker is clicked', async ({ page }) => {
       // Click on a marker (in markers mode, all markers are reliably visible)
-      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.stalx"]');
       await marker.click();
 
       // Wait for metadata to appear
@@ -100,7 +100,7 @@ test.describe('GlobalView Metadata Panel', () => {
   test.describe('Panel Actions', () => {
     test.beforeEach(async ({ page }) => {
       // Select a project first
-      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.cvproj"]');
+      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]');
       await card.click();
       await page.waitForSelector('[data-testid="metadata-name"]', { timeout: 5000 });
     });
@@ -206,7 +206,7 @@ test.describe('GlobalView Metadata Panel', () => {
   test.describe('GPS Display', () => {
     test('should display GPS coordinates when project has GPS', async ({ page }) => {
       // Select a project with GPS
-      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.cvproj"]');
+      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]');
       await card.click();
 
       const gpsField = page.locator('[data-testid="metadata-gps"]');
@@ -217,7 +217,7 @@ test.describe('GlobalView Metadata Panel', () => {
 
     test('should display "Not set" when project has no GPS', async ({ page }) => {
       // Select the project without GPS
-      const card = page.locator('[data-testid="system-card-/projects/local-survey.cvproj"]');
+      const card = page.locator('[data-testid="system-card-/projects/local-survey.stalx"]');
       await card.click();
 
       const gpsField = page.locator('[data-testid="metadata-gps"]');
@@ -229,7 +229,7 @@ test.describe('GlobalView Metadata Panel', () => {
   test.describe('Formatting', () => {
     test('should format length in km for large values', async ({ page }) => {
       // Select a project with large length
-      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.cvproj"]');
+      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]');
       await card.click();
 
       const lengthField = page.locator('[data-testid="metadata-length"]');
