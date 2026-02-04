@@ -856,7 +856,7 @@
     },
     "station": {
       "title": "Station",
-      "center": "Center on station {{id}}",
+      "center": "Center map on station {{id}}",
       "zeroDatum": "Zero datum station",
       "mergedWith": "Merged with",
       "connected": "Connected",
@@ -865,7 +865,7 @@
     },
     "shot": {
       "title": "Shot",
-      "center": "Center on shot {{id}}",
+      "center": "Center map on shot {{id}}",
       "inclination": "Inclination",
       "computed": "Computed",
       "lrud": "LRUD",
@@ -878,7 +878,7 @@
     },
     "section": {
       "title": "Section",
-      "center": "Center on section {{id}} ({{name}})",
+      "center": "Center map on section {{id}}: {{name}}",
       "unnamed": "Unnamed section",
       "display": "Section {{id}} - {{name}}",
       "statsTitle": "Section stats",
@@ -949,7 +949,7 @@
       "grid": "Grid",
       "scaleBar": "Scale bar",
       "satellite": "Satellite",
-      "depthGradient": "Depth gradient",
+      "depthGradient": "Depth Gradient",
       "devStats": "Dev stats"
     },
     "descriptions": {
@@ -963,7 +963,7 @@
       "grid": "Show grid overlay",
       "scaleBar": "Show scale bar",
       "satellite": "Show satellite imagery",
-      "depthGradient": "Color shots by depth",
+      "depthGradient": "Color by depth",
       "devStats": "Show developer stats overlay"
     }
   },
@@ -1125,7 +1125,7 @@
   "map": {
     "fitToViewTitle": "Fit to view",
     "depthLegend": {
-      "aria": "Depth gradient from {{min}} to {{max}}",
+      "aria": "Depth scale from {{min}} (shallow) to {{max}} (deep)",
       "flat": "Flat"
     },
     "placement": {

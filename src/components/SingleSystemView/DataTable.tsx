@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { type Section, type Shot } from '../../types/project';
+import { type Section, type Shot, type ShotUpdates } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { EditableTable } from '../common/Table';
@@ -255,7 +255,7 @@ export default function DataTable({ sections }: DataTableProps) {
       return;
     }
 
-    await updateShot(selectedSection.id, shot.id, { [key]: value });
+    await updateShot(selectedSection.id, shot.id, { [key]: value } as Partial<ShotUpdates>);
   };
 
   // Row click selects the shot

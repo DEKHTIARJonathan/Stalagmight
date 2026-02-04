@@ -781,7 +781,7 @@ export async function redo(): Promise<void> {
  * Switch to a specific map tool by keyboard shortcut.
  */
 export async function selectTool(
-  tool: 'select' | 'pan' | 'zoom' | 'draw' | 'delete' | 'merge' | 'measure' | 'moveSection' | 'moveStation' | 'moveSegment' | 'moveShot'
+  tool: 'select' | 'pan' | 'zoom' | 'draw' | 'delete' | 'merge' | 'measure' | 'moveStation' | 'moveSegment' | 'moveShot'
 ): Promise<void> {
   // Keys to send for each tool (arrays for multi-key combos like Shift+key)
   const toolKeys: Record<string, string[]> = {
@@ -792,7 +792,6 @@ export async function selectTool(
     delete: ['x'],
     merge: ['m'],
     measure: ['r'],
-    moveSection: ['Shift', 'v'],
     moveStation: ['t'],
     moveSegment: ['v'],
     moveShot: ['g'],
@@ -807,7 +806,6 @@ export async function selectTool(
     delete: 'delete',
     merge: 'merge',
     measure: 'measure',
-    moveSection: 'move_section',
     moveStation: 'move_station',
     moveSegment: 'move_segment',
     moveShot: 'move_shot',

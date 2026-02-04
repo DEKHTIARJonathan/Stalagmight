@@ -23,6 +23,8 @@ import type { Config, TransitVerticalMode } from '../types/config';
 import type { CommandResult, ConnectivityResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
+type ShotUpdatesPatch = Partial<ShotUpdates>;
+
 /**
  * Structured loading state for project load/create operations.
  * Tracks progress phases, current/total counts, and error states.
@@ -174,7 +176,7 @@ interface ProjectStore {
   deleteSection: (sectionId: SectionId) => Promise<CommandResult>;
 
   createShot: (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => Promise<CommandResult>;
-  updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdates) => Promise<CommandResult>;
+  updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdatesPatch) => Promise<CommandResult>;
   deleteShot: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
   deleteShotAndSplit: (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
   deleteLastShotAndSection: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
@@ -263,9 +265,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       await invoke('update_config', { config });
       // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
       await get().loadConfig();
-      return { success: true, error: null, warnings: [] };
+      return { success: true, error: null, warnings: [], section_ids: [] };
     } catch (e) {
-      return { success: false, error: String(e), warnings: [] };
+      return { success: false, error: String(e), warnings: [], section_ids: [] };
     }
   },
 
@@ -349,7 +351,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       }
 
       // Set backend loadingId from result for event correlation
-      get().setLoadingProgress({ loadingId: result.loadingId });
+      get().setLoadingProgress({ loadingId: Number(result.loadingId) });
 
       // Update loading title with actual project name from result
       if (result.project.name !== initialName) {
@@ -407,11 +409,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
       // Check clientOpId hasn't changed
       if (get().loading.clientOpId !== clientOpId) {
-        return { success: false, error: 'Cancelled', warnings: [] };
+        return { success: false, error: 'Cancelled', warnings: [], section_ids: [] };
       }
 
       // Set backend loadingId from result for event correlation
-      get().setLoadingProgress({ loadingId: result.loadingId });
+      get().setLoadingProgress({ loadingId: Number(result.loadingId) });
 
       // Apply project state from result
       set({
@@ -428,13 +430,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       await get().loadRecentProjects();
       get().resetLoading();
 
-      return { success: true, error: null, warnings: [] };
+      return { success: true, error: null, warnings: [], section_ids: [] };
     } catch (e) {
       const error = parseLoadError(e);
       if (get().loading.clientOpId === clientOpId) {
         get().setLoadingError(error.message, error.details);
       }
-      return { success: false, error: error.message, warnings: [] };
+      return { success: false, error: error.message, warnings: [], section_ids: [] };
     }
   },
 
@@ -451,7 +453,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
       // Check clientOpId hasn't changed
       if (get().loading.clientOpId !== clientOpId) {
-        return { success: false, error: 'Cancelled', warnings: [] };
+        return { success: false, error: 'Cancelled', warnings: [], section_ids: [] };
       }
 
       if (result.success) {
@@ -473,7 +475,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       if (get().loading.clientOpId === clientOpId) {
         get().setLoadingError(error.message, error.details);
       }
-      return { success: false, error: error.message, warnings: [] };
+      return { success: false, error: error.message, warnings: [], section_ids: [] };
     }
   },
 
@@ -499,7 +501,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     // Guard against concurrent close operations (rapid Back clicks or double Discard)
     if (get().isClosing) {
       console.log('[projectStore] closeProject ignored - already closing');
-      return { success: false, error: 'Already closing', warnings: [] };
+      return { success: false, error: 'Already closing', warnings: [], section_ids: [] };
     }
 
     set({ isClosing: true });
@@ -583,7 +585,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       return result;
     } catch (e) {
       console.error('Failed to remove from recent projects:', e);
-      return { success: false, error: String(e), warnings: [] };
+      return { success: false, error: String(e), warnings: [], section_ids: [] };
     }
   },
 
@@ -595,6 +597,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       surveyor: data.surveyor,
       date: data.date,
       color: data.color,
+      direction: data.direction,
+      quality: data.quality,
       shots: data.shots,
     });
     console.log('[projectStore] create_section result:', result);
@@ -620,6 +624,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       date: data.date,
       color: data.color,
       direction: data.direction,
+      quality: data.quality,
       shots: data.shots,
       importStationIndex,
       targetStation,
@@ -668,7 +673,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     return result;
   },
 
-  updateShot: async (sectionId: SectionId, shotId: ShotId, updates: ShotUpdates) => {
+  updateShot: async (sectionId: SectionId, shotId: ShotId, updates: ShotUpdatesPatch) => {
     const result = await invoke<CommandResult>('update_shot', { sectionId, shotId, updates });
     if (result.success) {
       await get().refreshProjectState();
@@ -833,7 +838,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed');
       }
     } catch (e) {
-      result = { success: false, warnings: [], error: String(e) };
+      result = { success: false, warnings: [], error: String(e), section_ids: [] };
       useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed');
     } finally {
       await get().refreshProjectState();
@@ -851,7 +856,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         useUIStore.getState().showToast(result.error ?? 'Unknown error', 'redo-failed');
       }
     } catch (e) {
-      result = { success: false, warnings: [], error: String(e) };
+      result = { success: false, warnings: [], error: String(e), section_ids: [] };
       useUIStore.getState().showToast(result.error ?? 'Unknown error', 'redo-failed');
     } finally {
       await get().refreshProjectState();
@@ -873,7 +878,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed');
       }
     } catch (e) {
-      result = { success: false, warnings: [], error: String(e) };
+      result = { success: false, warnings: [], error: String(e), section_ids: [] };
       useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed');
     } finally {
       await get().refreshProjectState();
@@ -895,7 +900,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         useUIStore.getState().showToast(result.error ?? 'Unknown error', 'redo-failed');
       }
     } catch (e) {
-      result = { success: false, warnings: [], error: String(e) };
+      result = { success: false, warnings: [], error: String(e), section_ids: [] };
       useUIStore.getState().showToast(result.error ?? 'Unknown error', 'redo-failed');
     } finally {
       await get().refreshProjectState();
@@ -989,7 +994,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       return result;
     } catch (e) {
       console.error('Failed to merge projects:', e);
-      return { success: false, error: String(e), warnings: [] };
+      return { success: false, error: String(e), warnings: [], section_ids: [] };
     }
   },
 }));

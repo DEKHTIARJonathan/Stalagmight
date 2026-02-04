@@ -48,8 +48,8 @@ export default function DeleteShotImpactDetails({
             <p className="font-medium">Removed closures</p>
             <ul className="list-disc list-inside">
               {impact.removed_closures.map((closure) => (
-                <li key={`removed-closure-${closure.closure_id}`}>
-                  #{closure.closure_id}: {formatPair(closure.station_a, closure.station_b)}
+                <li key={`removed-closure-${closure.closure_id.toString()}`}>
+                  #{closure.closure_id.toString()}: {formatPair(closure.station_a, closure.station_b)}
                 </li>
               ))}
             </ul>
@@ -72,8 +72,8 @@ export default function DeleteShotImpactDetails({
             <p className="font-medium">Replacement closures</p>
             <ul className="list-disc list-inside">
               {impact.replacement_closure_updates.map((update) => (
-                <li key={`replacement-closure-${update.closure_id}`}>
-                  #{update.closure_id}: {formatStationRef(update.old_station)} {'->'} {formatStationRef(update.new_station)}
+                <li key={`replacement-closure-${update.closure_id.toString()}`}>
+                  #{update.closure_id.toString()}: {formatStationRef(update.old_station)} {'->'} {formatStationRef(update.new_station)}
                 </li>
               ))}
             </ul>

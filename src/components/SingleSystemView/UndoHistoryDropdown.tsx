@@ -577,6 +577,52 @@ export default function UndoHistoryDropdown({
 
   // Handle keyboard navigation on trigger button
   const handleButtonKeyDown = useCallback(async (event: React.KeyboardEvent) => {
+    if (isOpen && items.length > 0) {
+      switch (event.key) {
+        case 'ArrowDown': {
+          event.preventDefault();
+          const nextIndex = activeIndex < items.length - 1 ? activeIndex + 1 : 0;
+          setActiveIndex(nextIndex);
+          scrollActiveItemIntoView(nextIndex);
+          return;
+        }
+        case 'ArrowUp': {
+          event.preventDefault();
+          const prevIndex = activeIndex > 0 ? activeIndex - 1 : items.length - 1;
+          setActiveIndex(prevIndex);
+          scrollActiveItemIntoView(prevIndex);
+          return;
+        }
+        case 'Home': {
+          event.preventDefault();
+          setActiveIndex(0);
+          scrollActiveItemIntoView(0);
+          return;
+        }
+        case 'End': {
+          event.preventDefault();
+          const lastIndex = items.length - 1;
+          setActiveIndex(lastIndex);
+          scrollActiveItemIntoView(lastIndex);
+          return;
+        }
+        case 'Enter': {
+          event.preventDefault();
+          const item = items[activeIndex];
+          if (item && activeIndex >= 0 && activeIndex < items.length) {
+            handleItemClick(item.index);
+          }
+          return;
+        }
+        case 'Escape': {
+          event.preventDefault();
+          hardClose();
+          buttonRef.current?.focus();
+          return;
+        }
+      }
+    }
+
     // Arrow Down opens dropdown and focuses first item
     if (event.key === 'ArrowDown' && !isOpen && !disabledRef.current) {
       event.preventDefault();
@@ -594,7 +640,7 @@ export default function UndoHistoryDropdown({
         }, 0);
       }
     }
-  }, [isOpen, fetchStack, scrollActiveItemIntoView]);
+  }, [isOpen, items, activeIndex, fetchStack, scrollActiveItemIntoView, handleItemClick, hardClose]);
 
   // Handle keyboard navigation when dropdown is open
   const handleDropdownKeyDown = useCallback((event: React.KeyboardEvent) => {

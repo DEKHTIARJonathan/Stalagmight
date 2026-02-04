@@ -184,7 +184,7 @@ export default function MapCanvas() {
     const stationByKey = new Map(
       stations.map(s => [`${s.station_ref.section_id}:${s.station_ref.station_index}`, s])
     );
-    const closureStrategyById = new Map<number, string>();
+    const closureStrategyById = new Map<bigint, string>();
     for (const lc of project?.loop_closures ?? []) {
       closureStrategyById.set(lc.id, lc.strategy);
     }
