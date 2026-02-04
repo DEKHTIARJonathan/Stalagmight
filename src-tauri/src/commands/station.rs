@@ -1,6 +1,5 @@
 use tauri::State;
 
-use crate::config::TransitVerticalMode;
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates, StationRef};
 
@@ -54,7 +53,6 @@ pub fn adjust_loop_closures(
     method: ClosureStrategy,
     use_strategy_filter: bool,
     sequential_distribution: ClosureStrategy,
-    transit_vertical_mode: TransitVerticalMode,
 ) -> CommandResult {
     adjust_loop_closures_impl(
         state.inner(),
@@ -62,7 +60,6 @@ pub fn adjust_loop_closures(
         method,
         use_strategy_filter,
         sequential_distribution,
-        transit_vertical_mode,
     )
 }
 
@@ -72,14 +69,12 @@ pub(crate) fn adjust_loop_closures_impl(
     method: ClosureStrategy,
     use_strategy_filter: bool,
     sequential_distribution: ClosureStrategy,
-    transit_vertical_mode: TransitVerticalMode,
 ) -> CommandResult {
     state.execute(Command::AdjustLoopClosures {
         anchor_station,
         method,
         use_strategy_filter,
         sequential_distribution,
-        transit_vertical_mode,
     })
 }
 

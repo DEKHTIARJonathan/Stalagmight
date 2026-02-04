@@ -5,24 +5,14 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { Select } from '../common/Select';
 import type { ClosureStrategy, StationRef } from '../../types/project';
-import type { TransitVerticalMode } from '../../types/config';
-
 const METHOD_OPTIONS: { value: ClosureStrategy; label: string }[] = [
   { value: 'Sequential', label: 'Sequential' },
-  { value: 'TransitRule', label: 'Transit Rule' },
   { value: 'LeastSquaresWeighted', label: 'Least Squares (Weighted)' },
 ];
 
 const DISTRIBUTION_OPTIONS: { value: ClosureStrategy; label: string }[] = [
   { value: 'ProportionalByLength', label: 'Proportional by Length' },
   { value: 'EqualDistribution', label: 'Equal Distribution' },
-  { value: 'TransitRule', label: 'Transit Rule' },
-];
-
-const VERTICAL_OPTIONS: { value: TransitVerticalMode; label: string }[] = [
-  { value: 'ignore', label: 'Ignore vertical' },
-  { value: 'length_proportional', label: 'Length proportional' },
-  { value: 'equal', label: 'Equal' },
 ];
 
 export default function AdjustClosuresDialog() {
@@ -37,15 +27,10 @@ export default function AdjustClosuresDialog() {
   const [sequentialDistribution, setSequentialDistribution] = useState<ClosureStrategy>(
     config?.closure_adjustment?.sequential_distribution_default ?? 'ProportionalByLength'
   );
-  const [transitVerticalMode, setTransitVerticalMode] = useState<TransitVerticalMode>(
-    config?.closure_adjustment?.transit_vertical_mode ?? 'ignore'
-  );
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const showDistribution = method === 'Sequential';
-  const showTransitVertical = method === 'TransitRule'
-    || (method === 'Sequential' && sequentialDistribution === 'TransitRule');
 
   const baseSigmas = useMemo(() => ({
     length: config?.closure_adjustment?.base_sigma_length_m ?? 0.05,
@@ -64,8 +49,7 @@ export default function AdjustClosuresDialog() {
         anchorStation,
         method,
         useStrategyFilter,
-        sequentialDistribution,
-        transitVerticalMode
+        sequentialDistribution
       );
       if (result.success) {
         closeDialog();
@@ -132,19 +116,6 @@ export default function AdjustClosuresDialog() {
                 options={DISTRIBUTION_OPTIONS}
                 className="w-full"
                 data-testid="adjust-closures-distribution"
-              />
-            </div>
-          )}
-
-          {showTransitVertical && (
-            <div>
-              <label className="block text-sm text-text-secondary mb-1">Vertical handling</label>
-              <Select
-                value={transitVerticalMode}
-                onChange={(v) => setTransitVerticalMode(v as TransitVerticalMode)}
-                options={VERTICAL_OPTIONS}
-                className="w-full"
-                data-testid="adjust-closures-vertical"
               />
             </div>
           )}

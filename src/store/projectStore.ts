@@ -19,7 +19,7 @@ import type {
   ClosureStrategy,
   Coordinates,
 } from '../types/project';
-import type { Config, TransitVerticalMode } from '../types/config';
+import type { Config } from '../types/config';
 import type { CommandResult, ConnectivityResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
@@ -188,8 +188,7 @@ interface ProjectStore {
     anchorStation: StationRef,
     method: ClosureStrategy,
     useStrategyFilter: boolean,
-    sequentialDistribution: ClosureStrategy,
-    transitVerticalMode: TransitVerticalMode
+    sequentialDistribution: ClosureStrategy
   ) => Promise<CommandResult>;
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
@@ -749,15 +748,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     anchorStation: StationRef,
     method: ClosureStrategy,
     useStrategyFilter: boolean,
-    sequentialDistribution: ClosureStrategy,
-    transitVerticalMode: TransitVerticalMode
+    sequentialDistribution: ClosureStrategy
   ) => {
     const result = await invoke<CommandResult>('adjust_loop_closures', {
       anchorStation,
       method,
       useStrategyFilter,
       sequentialDistribution,
-      transitVerticalMode,
     });
     if (result.success) {
       await get().refreshProjectState();

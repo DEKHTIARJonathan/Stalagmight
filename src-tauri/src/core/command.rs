@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use ts_rs::TS;
 
-use crate::config::TransitVerticalMode;
 use crate::models::{
     shot_display_position, ClosureStrategy, Coordinates, GpsCoordinates, SectionId,
     SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef, SurveyDirection,
@@ -85,7 +84,6 @@ pub enum Command {
         method: ClosureStrategy,
         use_strategy_filter: bool,
         sequential_distribution: ClosureStrategy,
-        transit_vertical_mode: TransitVerticalMode,
     },
     SetZeroDatum {
         station_ref: StationRef,

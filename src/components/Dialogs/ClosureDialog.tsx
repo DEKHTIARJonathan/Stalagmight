@@ -8,11 +8,9 @@ import type { StationRef, ClosureStrategy } from '../../types/project';
 import type { ClosurePreview, BatchCommand } from '../../types/commands';
 
 const STRATEGY_OPTIONS: { value: ClosureStrategy; label: string }[] = [
+  { value: 'Batch', label: 'Batch (recommended)' },
   { value: 'ProportionalByLength', label: 'Proportional by Length' },
   { value: 'EqualDistribution', label: 'Equal Distribution' },
-  { value: 'Sequential', label: 'Sequential (Batch)' },
-  { value: 'TransitRule', label: 'Transit Rule (Batch)' },
-  { value: 'LeastSquaresWeighted', label: 'Least Squares (Weighted)' },
   { value: 'KeepRaw', label: 'Keep Raw' },
   { value: 'ManualAdjustment', label: 'Manual Adjustment' },
 ];
@@ -28,7 +26,7 @@ export default function ClosureDialog() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [strategy, setStrategy] = useState<ClosureStrategy>('ProportionalByLength');
+  const [strategy, setStrategy] = useState<ClosureStrategy>('Batch');
 
   // Get section names
   const sectionAName = useMemo(() => {

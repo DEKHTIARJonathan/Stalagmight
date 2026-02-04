@@ -1,4 +1,3 @@
-use crate::config::TransitVerticalMode;
 use crate::core::{Command, CommandResult, UndoData, Validator};
 use crate::models::{
     shot_display_position, ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates,
@@ -88,13 +87,11 @@ impl AppState {
                 method,
                 use_strategy_filter,
                 sequential_distribution,
-                transit_vertical_mode,
             } => self.adjust_loop_closures(
                 *anchor_station,
                 *method,
                 *use_strategy_filter,
                 *sequential_distribution,
-                *transit_vertical_mode,
             ),
             Command::SetZeroDatum {
                 station_ref,
@@ -982,7 +979,6 @@ impl AppState {
         method: ClosureStrategy,
         use_strategy_filter: bool,
         sequential_distribution: ClosureStrategy,
-        transit_vertical_mode: TransitVerticalMode,
     ) -> CommandResult {
         let mut proj_guard = match self.project.lock() {
             Ok(g) => g,
@@ -1002,7 +998,6 @@ impl AppState {
             method,
             use_strategy_filter,
             sequential_distribution,
-            transit_vertical_mode,
             &config.closure_adjustment,
         ) {
             Ok(_) => {

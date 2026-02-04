@@ -69,7 +69,6 @@ export type LengthUnit = any;
 export type AngleUnit = any;
 export type ShortcutFeedback = any;
 export type ThemeMode = any;
-export type TransitVerticalMode = any;
 export type AppearanceConfig = any;
 export type Config = any;
 export type GeneralConfig = any;
