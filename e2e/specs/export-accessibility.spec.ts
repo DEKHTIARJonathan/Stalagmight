@@ -377,33 +377,66 @@ describe('Export Dialog Accessibility', () => {
 
   describe('Focus Management', () => {
     it('shows visible focus indicator on radio controls via keyboard', async () => {
-      // Use Tab key to navigate to radio group for :focus-visible
-      const dialog = await $('[data-testid="export-dialog"]');
-      await dialog.click(); // Ensure dialog has focus
+      // Use Arrow keys within the radiogroup so focus is moved by keyboard input.
+      const sectionRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-section"]');
+      const depthRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-depth"]');
 
-      // Tab to the first focusable element (should be export type radios)
-      await browser.keys(['Tab']);
-      await browser.keys(['Tab']); // Navigate into color mode radios
+      await sectionRadio.click();
+      await browser.waitUntil(
+        async () => {
+          const activeTestId = await browser.execute(() => document.activeElement?.getAttribute('data-testid'));
+          return activeTestId === 'color-mode-section';
+        },
+        { timeout: 2000, timeoutMsg: 'Section radio should be focused' }
+      );
+
+      await browser.keys(['ArrowRight']);
+      await browser.waitUntil(
+        async () => {
+          const activeTestId = await browser.execute(() => document.activeElement?.getAttribute('data-testid'));
+          return activeTestId === 'color-mode-depth';
+        },
+        { timeout: 2000, timeoutMsg: 'Depth radio should be focused after ArrowRight' }
+      );
 
       // Check for visible focus styles and :focus-visible match
-      const focusResult = await browser.execute(() => {
-        const el = document.activeElement as HTMLElement;
-        if (!el) return { hasFocusVisible: false, hasStyles: false };
+      const getFocusStyles = () =>
+        browser.execute(() => {
+          const el = document.querySelector('[data-testid="color-mode-depth"]') as HTMLElement | null;
+          if (!el) return { hasFocusVisible: false, hasStyles: false };
 
-        const matchesFocusVisible = el.matches(':focus-visible');
-        const styles = window.getComputedStyle(el);
-        const hasOutline = styles.outlineWidth !== '0px' && styles.outlineStyle !== 'none';
-        const hasBoxShadow = styles.boxShadow !== 'none';
+          const isFocused = document.activeElement === el;
+          const label = el.closest('label') as HTMLElement | null;
+          const target = label ?? el;
+          const matchesFocusVisible = el.matches(':focus-visible') || target.matches(':focus-visible');
+          const styles = window.getComputedStyle(target);
+          const hasOutline = styles.outlineWidth !== '0px' && styles.outlineStyle !== 'none';
+          const hasBoxShadow = styles.boxShadow !== 'none';
 
-        return {
-          hasFocusVisible: matchesFocusVisible,
-          hasStyles: hasOutline || hasBoxShadow,
-          testId: el.getAttribute('data-testid'),
-        };
-      });
+          return {
+            isFocused,
+            hasFocusVisible: matchesFocusVisible,
+            hasStyles: hasOutline || hasBoxShadow,
+            outlineWidth: styles.outlineWidth,
+            outlineStyle: styles.outlineStyle,
+            boxShadow: styles.boxShadow,
+            activeTag: el.tagName,
+            targetTag: target.tagName,
+            testId: el.getAttribute('data-testid'),
+          };
+        });
 
-      // Element should have focus and visible styling
-      expect(focusResult.hasStyles || focusResult.hasFocusVisible).toBe(true);
+      let focusResult = await getFocusStyles();
+      await browser.waitUntil(
+        async () => {
+          focusResult = await getFocusStyles();
+          return focusResult.isFocused && (focusResult.hasStyles || focusResult.hasFocusVisible);
+        },
+        {
+          timeout: 2000,
+          timeoutMsg: `Focus indicator missing: ${JSON.stringify(focusResult)}`,
+        }
+      );
     });
 
     it('shows visible focus indicator on checkboxes via keyboard', async () => {
