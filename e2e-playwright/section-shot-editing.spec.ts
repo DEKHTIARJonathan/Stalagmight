@@ -173,7 +173,7 @@ test.describe('Section and Shot Editing', () => {
 
     await expect(detailPanel).toContainText('Length');
     await expect(detailPanel).toContainText('10.50 m');
-    await expect(detailPanel).toContainText('Azimuth In');
+    await expect(detailPanel).toContainText('Azimuth (in)');
     await expect(detailPanel).toContainText('45.0°');
     await expect(detailPanel).toContainText('LRUD:');
     await expect(detailPanel).toContainText('Entrance point with good visibility');

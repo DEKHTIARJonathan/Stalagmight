@@ -12,7 +12,7 @@ import { defaultConfig } from '../../types/config';
 import { getTileConfig } from '../../utils/tileConfig';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
-import { formatFixed, formatNumber } from '../../i18n/format';
+import { formatFixed } from '../../i18n/format';
 
 /** Local storage key for persisting map position/zoom. */
 const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
@@ -907,7 +907,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           // Station count row
           const stationDiv = document.createElement('div');
           stationDiv.style.color = getThemeColor('--cc-gray-text');
-          stationDiv.textContent = t('globalView.tooltip.stations', { count: formatNumber(stationCount) });
+          stationDiv.textContent = t('globalView.tooltip.stations', { count: stationCount });
           tooltip.appendChild(stationDiv);
 
           tooltip.style.transform = '';

@@ -562,6 +562,8 @@ fn test_delete_first_shot_preserves_station_positions() {
 
     let section_id = create_result.section_id.unwrap();
     let project_before = state.get_project_state().unwrap();
+    let deleted_shot = &project_before.sections[0].shots[0];
+    let deleted_dz = deleted_shot.depth_out - deleted_shot.depth_in;
     let station_1_before = project_before
         .compute_station_raw_coords(StationRef::new(section_id, 1))
         .unwrap();
@@ -584,8 +586,19 @@ fn test_delete_first_shot_preserves_station_positions() {
         .compute_station_raw_coords(StationRef::new(section_id, 1))
         .unwrap();
 
-    assert_coords_close(station_0_after, station_1_before);
-    assert_coords_close(station_1_after, station_2_before);
+    let eps = 1e-6;
+    assert!((station_0_after.x - station_1_before.x).abs() < eps, "x mismatch after delete");
+    assert!((station_0_after.y - station_1_before.y).abs() < eps, "y mismatch after delete");
+    assert!(
+        (station_0_after.z - (station_1_before.z - deleted_dz)).abs() < eps,
+        "z mismatch after delete"
+    );
+    assert!((station_1_after.x - station_2_before.x).abs() < eps, "x mismatch after delete");
+    assert!((station_1_after.y - station_2_before.y).abs() < eps, "y mismatch after delete");
+    assert!(
+        (station_1_after.z - (station_2_before.z - deleted_dz)).abs() < eps,
+        "z mismatch after delete"
+    );
 }
 
 #[test]
@@ -2221,6 +2234,7 @@ fn test_execute_update_section_metadata_command() {
             date: Some(Some(updated_date)),
             color: Some("#0000ff".to_string()),
             direction: Some(SurveyDirection::Out),
+            quality: Some(1.25),
         },
     });
 
@@ -2234,6 +2248,7 @@ fn test_execute_update_section_metadata_command() {
     assert_eq!(section.date, Some(updated_date));
     assert_eq!(section.color, "#0000ff");
     assert_eq!(section.direction, SurveyDirection::Out);
+    assert_eq!(section.quality, 1.25);
 
     // Verify shots were not affected
     assert_eq!(section.shots.len(), 1);
@@ -3397,7 +3412,7 @@ fn test_undo_create_loop_closure() {
     let closure_result = state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(section_a, 0),
         station_b: StationRef::new(section_b, 1),
-        closure_strategy: crate::models::ClosureStrategy::default(),
+        closure_strategy: crate::models::ClosureStrategy::KeepRaw,
     });
     assert!(closure_result.success, "CreateLoopClosure should succeed");
 
@@ -3463,7 +3478,7 @@ fn test_undo_create_loop_closure_has_closure_info() {
     state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(section_a, 0),
         station_b: StationRef::new(section_b, 1),
-        closure_strategy: crate::models::ClosureStrategy::default(),
+        closure_strategy: crate::models::ClosureStrategy::KeepRaw,
     });
 
     // Check undo stack has ClosureInfo data
@@ -7005,7 +7020,7 @@ fn test_insert_before_shifts_loop_closure() {
     let closure_result = state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(sec_b, 2),
         station_b: StationRef::new(sec_c, 1),
-        closure_strategy: ClosureStrategy::ProportionalByLength,
+        closure_strategy: ClosureStrategy::KeepRaw,
     });
     assert!(closure_result.success);
 

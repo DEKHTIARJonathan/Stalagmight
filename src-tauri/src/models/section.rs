@@ -687,6 +687,7 @@ mod tests {
             date: Some(Some(new_date)),
             color: Some("#abc123".to_string()),
             direction: Some(SurveyDirection::Out),
+            quality: Some(1.5),
         });
 
         assert_eq!(section.name, Some("Updated".to_string()));
@@ -694,6 +695,7 @@ mod tests {
         assert_eq!(section.date, Some(new_date));
         assert_eq!(section.color, "#abc123");
         assert_eq!(section.direction, SurveyDirection::Out);
+        assert_eq!(section.quality, 1.5);
     }
 
     #[test]

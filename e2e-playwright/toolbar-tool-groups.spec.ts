@@ -84,7 +84,7 @@ test.describe('Toolbar Tool Groups', () => {
 
     // Right-click on the move group
     const moveGroup = page.getByTestId('tool-group-move');
-    await moveGroup.click({ button: 'right' });
+    await moveGroup.dispatchEvent('contextmenu');
 
     // Flyout should be visible
     const flyout = page.getByTestId('subtool-flyout-move');
@@ -101,7 +101,7 @@ test.describe('Toolbar Tool Groups', () => {
 
     // Open flyout for navigate group
     const navigateGroup = page.getByTestId('tool-group-navigate');
-    await navigateGroup.click({ button: 'right' });
+    await navigateGroup.dispatchEvent('contextmenu');
 
     const flyout = page.getByTestId('subtool-flyout-navigate');
     await expect(flyout).toBeVisible();
@@ -121,7 +121,7 @@ test.describe('Toolbar Tool Groups', () => {
 
     // Open flyout
     const moveGroup = page.getByTestId('tool-group-move');
-    await moveGroup.click({ button: 'right' });
+    await moveGroup.dispatchEvent('contextmenu');
 
     const flyout = page.getByTestId('subtool-flyout-move');
     await expect(flyout).toBeVisible();
@@ -143,7 +143,7 @@ test.describe('Toolbar Tool Groups', () => {
 
     // Open flyout for move group
     const moveGroup = page.getByTestId('tool-group-move');
-    await moveGroup.click({ button: 'right' });
+    await moveGroup.dispatchEvent('contextmenu');
 
     const flyout = page.getByTestId('subtool-flyout-move');
     await expect(flyout).toBeVisible();
@@ -174,7 +174,7 @@ test.describe('Toolbar Tool Groups', () => {
     await waitForActiveTool(page, 'move_shot');
 
     // Now test Space selection: open flyout again
-    await moveGroup.click({ button: 'right' });
+    await moveGroup.dispatchEvent('contextmenu');
     await expect(flyout).toBeVisible();
 
     // move_shot should be focused (since it's now active)
@@ -197,7 +197,7 @@ test.describe('Toolbar Tool Groups', () => {
 
     // Open flyout for move group
     const moveGroup = page.getByTestId('tool-group-move');
-    await moveGroup.click({ button: 'right' });
+    await moveGroup.dispatchEvent('contextmenu');
 
     const flyout = page.getByTestId('subtool-flyout-move');
     await expect(flyout).toBeVisible();

@@ -672,6 +672,62 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, section, section_id: sectionCounter, warnings: [], error: null };
           }
 
+          case 'import_sections': {
+            console.log('[Mock IPC] import_sections called with:', args);
+            const rawSections = Array.isArray(args?.sections) ? (args?.sections as Array<Record<string, unknown>>) : [];
+            if (!currentProject) {
+              const now = new Date().toISOString();
+              sectionCounter = 0;
+              currentProject = {
+                id: 1,
+                name: 'Imported Project',
+                location: null,
+                created_at: now,
+                modified_at: now,
+                file_path: null,
+                sections: [],
+                station_merges: [],
+                zero_datums: [],
+                loop_closures: [],
+                section_offsets: {},
+              };
+            }
+            const importedSections = rawSections.map((sectionData) => {
+              sectionCounter++;
+              const rawShots = Array.isArray(sectionData.shots) ? (sectionData.shots as Array<Record<string, unknown>>) : [];
+              const shots = rawShots.map((shot, index) => ({
+                id: index + 1,
+                azimuth_in: (shot.azimuth_in as number) ?? 0,
+                azimuth_out: (shot.azimuth_out as number) ?? 0,
+                length: (shot.length as number) ?? 0,
+                depth_in: (shot.depth_in as number) ?? 0,
+                depth_out: (shot.depth_out as number) ?? 0,
+                pitch_in: (shot.pitch_in as number | null | undefined) ?? null,
+                pitch_out: (shot.pitch_out as number | null | undefined) ?? null,
+                left: (shot.left as number | null | undefined) ?? null,
+                right: (shot.right as number | null | undefined) ?? null,
+                up: (shot.up as number | null | undefined) ?? null,
+                down: (shot.down as number | null | undefined) ?? null,
+                comment: (shot.comment as string | null | undefined) ?? null,
+                is_virtual: (shot.is_virtual as boolean | undefined) ?? false,
+                marker_index: (shot.marker_index as number | null | undefined) ?? null,
+                temperature: (shot.temperature as number | null | undefined) ?? null,
+              }));
+              const section = {
+                id: sectionCounter,
+                name: (sectionData.name as string) ?? `Section ${sectionCounter}`,
+                surveyor: (sectionData.surveyor as string) ?? 'Test Surveyor',
+                date: (sectionData.date as string) ?? new Date().toISOString().split('T')[0],
+                color: (sectionData.color as string) ?? '#3b82f6',
+                direction: (sectionData.direction as string) ?? 'in',
+                shots,
+              };
+              currentProject?.sections.push(section);
+              return section;
+            });
+            return { success: true, sections: importedSections };
+          }
+
           // File hash tracking for duplicate detection
           case 'calculate_file_hash':
             // Return a mock SHA256 hash based on path for consistency
@@ -1047,6 +1103,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] move_segment called with:', args);
             return { success: true };
 
+          case 'move_section':
+            // Mock move section - just return success
+            console.log('[Mock IPC] move_section called with:', args);
+            return { success: true };
+
+          case 'move_station':
+            // Mock move station - just return success
+            console.log('[Mock IPC] move_station called with:', args);
+            return { success: true };
+
           case 'move_shot':
             // Mock move shot - just return success
             console.log('[Mock IPC] move_shot called with:', args);
@@ -1203,6 +1269,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 azimuth_diff_threshold: 20.0,
                 pitch_diff_threshold: 5.0,
               },
+              closure_adjustment: {
+                base_sigma_length_m: 0.05,
+                base_sigma_azimuth_deg: 1.0,
+                base_sigma_depth_m: 0.05,
+                transit_vertical_mode: 'ignore',
+                sequential_distribution_default: 'ProportionalByLength',
+              },
               export: {
                 default_image_format: 'png',
                 default_dpi: 300,
@@ -1356,6 +1429,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 warn_azimuth_deviation_max: 30.0,
                 azimuth_diff_threshold: 20.0,
                 pitch_diff_threshold: 5.0,
+              },
+              closure_adjustment: {
+                base_sigma_length_m: 0.05,
+                base_sigma_azimuth_deg: 1.0,
+                base_sigma_depth_m: 0.05,
+                transit_vertical_mode: 'ignore',
+                sequential_distribution_default: 'ProportionalByLength',
               },
               export: {
                 default_image_format: 'png',
