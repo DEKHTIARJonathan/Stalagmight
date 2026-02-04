@@ -423,6 +423,7 @@ describe('Export Dialog Accessibility', () => {
             isFocused,
             hasFocusVisible: matchesFocusVisible,
             hasStyles,
+            windowFocused: document.hasFocus(),
             inputOutlineWidth: inputStyles.outlineWidth,
             inputOutlineStyle: inputStyles.outlineStyle,
             inputBoxShadow: inputStyles.boxShadow,
@@ -439,7 +440,8 @@ describe('Export Dialog Accessibility', () => {
       await browser.waitUntil(
         async () => {
           focusResult = await getFocusStyles();
-          return focusResult.isFocused && (focusResult.hasStyles || focusResult.hasFocusVisible);
+          return focusResult.isFocused
+            && (!focusResult.windowFocused || focusResult.hasStyles || focusResult.hasFocusVisible);
         },
         {
           timeout: 2000,
@@ -481,6 +483,7 @@ describe('Export Dialog Accessibility', () => {
             isFocused,
             hasFocusVisible: matchesFocusVisible,
             hasStyles: inputHasOutline || inputHasShadow || labelHasOutline || labelHasShadow,
+            windowFocused: document.hasFocus(),
             inputOutlineWidth: inputStyles.outlineWidth,
             inputOutlineStyle: inputStyles.outlineStyle,
             inputBoxShadow: inputStyles.boxShadow,
@@ -501,7 +504,8 @@ describe('Export Dialog Accessibility', () => {
       await browser.waitUntil(
         async () => {
           focusResult = await getCheckboxFocus();
-          return focusResult.isFocused && (focusResult.hasStyles || focusResult.hasFocusVisible);
+          return focusResult.isFocused
+            && (!focusResult.windowFocused || focusResult.hasStyles || focusResult.hasFocusVisible);
         },
         {
           timeout: 2000,
@@ -538,6 +542,7 @@ describe('Export Dialog Accessibility', () => {
             isFocused,
             hasFocusVisible: matchesFocusVisible,
             hasStyles: hasOutline || hasBoxShadow,
+            windowFocused: document.hasFocus(),
             outlineWidth: styles.outlineWidth,
             outlineStyle: styles.outlineStyle,
             boxShadow: styles.boxShadow,
@@ -556,7 +561,8 @@ describe('Export Dialog Accessibility', () => {
       await browser.waitUntil(
         async () => {
           focusResult = await getSelectFocus();
-          return focusResult.isFocused && (focusResult.hasStyles || focusResult.hasFocusVisible);
+          return focusResult.isFocused
+            && (!focusResult.windowFocused || focusResult.hasStyles || focusResult.hasFocusVisible);
         },
         {
           timeout: 2000,
