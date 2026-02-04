@@ -752,7 +752,7 @@
     "preview": {
       "noDetails": "No details",
       "empty": "No details",
-      "more": "+{{count}} more"
+      "more": "+{{countFormatted}} more"
     },
     "errors": {
       "failedAction": "Failed to {{mode}} action: \"{{description}}\"",
@@ -769,7 +769,7 @@
     },
     "announcement": {
       "none": "No more actions remaining.",
-      "remaining": "{{count}} actions remaining."
+      "remaining": "{{countFormatted}} actions remaining."
     },
     "history": {
       "empty": "No {{mode}} actions.",
@@ -806,7 +806,7 @@
     },
     "empty": "No shots in this section.",
     "selectSection": "Select a section to view shots.",
-    "shotCount": "{{count}} shots",
+    "shotCount": "{{countFormatted}} shots",
     "announcement": {
       "shotSelected": "Selected shot {{shotId}}."
     }
@@ -819,8 +819,8 @@
     "selectionNotFound": "Selection not found.",
     "warnings": {
       "empty": "No warnings.",
-      "count": "{{count}} warnings",
-      "resolvedCount": "{{count}} resolved",
+      "count": "{{countFormatted}} warnings",
+      "resolvedCount": "{{countFormatted}} resolved",
       "hideResolved": "Hide resolved",
       "showResolved": "Show resolved",
       "location": "Section {{section}} - Shot {{shot}}",
@@ -970,8 +970,8 @@
   "globalView": {
     "actions": {
       "importDmp": "Import DMP",
-      "mergeProjects": "Merge {{count}} projects",
-      "mergeProjectsAria": "Merge {{count}} selected projects",
+      "mergeProjects": "Merge {{countFormatted}} projects",
+      "mergeProjectsAria": "Merge {{countFormatted}} selected projects",
       "newProject": "New project",
       "openProject": "Open project",
       "settings": "Settings"
@@ -991,8 +991,8 @@
       "hint": "Click to select, double-click to open, right-click for options."
     },
     "status": {
-      "systems": "Systems: {{count}}",
-      "selected": "Selected: {{count}}",
+      "systems": "Systems: {{countFormatted}}",
+      "selected": "Selected: {{countFormatted}}",
       "ready": "Ready"
     },
     "contextMenu": {
@@ -1000,9 +1000,9 @@
       "open": "Open project",
       "zoom": "Zoom to system",
       "showInFolder": "Show in folder",
-      "mergeProjects": "Merge {{count}} projects",
+      "mergeProjects": "Merge {{countFormatted}} projects",
       "remove": "Remove from recent",
-      "removeMultiple": "Remove {{count}} from recent"
+      "removeMultiple": "Remove {{countFormatted}} from recent"
     },
     "empty": {
       "title": "No projects yet",
@@ -1053,7 +1053,7 @@
       "fitAllTitle": "Fit all systems",
       "reducedDetail": "Reduced detail",
       "reducedDetailTitle": "Reduced detail for performance",
-      "systemCount": "Systems: {{count}}"
+      "systemCount": "Systems: {{countFormatted}}"
     },
     "metadata": {
       "title": "Project details",
@@ -1062,7 +1062,7 @@
       "expandAria": "Expand metadata panel",
       "collapseAria": "Collapse metadata panel",
       "selectedSystems": "Selected systems",
-      "multiSelected": "{{count}} systems selected",
+      "multiSelected": "{{countFormatted}} systems selected",
       "multiHint": "Use the context menu to merge or remove selected systems.",
       "empty": "Select a project to see details.",
       "unknown": "Unknown",
@@ -1096,7 +1096,7 @@
     },
     "tooltip": {
       "length": "Length: {{length}}",
-      "stations": "Stations: {{count}}",
+      "stations": "Stations: {{countFormatted}}",
       "unknown": "Unknown"
     },
     "viewMode": {
@@ -1160,7 +1160,7 @@
       "debug": "Debug",
       "depthBits": "Depth bits",
       "durationMs": "{{ms}} ms",
-      "errors": "{{count}} errors",
+      "errors": "{{countFormatted}} errors",
       "fetched": "Fetched",
       "fps": "FPS",
       "fpsValue": "{{value}} fps",
@@ -1175,7 +1175,7 @@
       "map": "Map",
       "maxTexture": "Max texture",
       "msaa": "MSAA",
-      "msaaValue": "{{count}}x",
+      "msaaValue": "{{countFormatted}}x",
       "network": {
         "checking": "Checking",
         "label": "Network",
@@ -1205,7 +1205,7 @@
       "webgl": "WebGL",
       "worstFrame": "Worst {{ms}} ms",
       "zoom": "Zoom",
-      "zoomLevels": "{{count}} levels",
+      "zoomLevels": "{{countFormatted}} levels",
       "zooming": "Zooming"
     }
   },
@@ -1268,7 +1268,7 @@
     },
     "empty": "No shots.",
     "emptyWithAction": "No shots yet. Click Add to create one.",
-    "header": "{{count}} shots",
+    "header": "{{countFormatted}} shots",
     "warnings": {
       "azimuthDiff": "Azimuth in/out differs by more than {{threshold}}.",
       "error": "Error",

@@ -12,7 +12,7 @@ import { defaultConfig } from '../../types/config';
 import { getTileConfig } from '../../utils/tileConfig';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
-import { formatFixed } from '../../i18n/format';
+import { formatFixed, formatNumber } from '../../i18n/format';
 
 /** Local storage key for persisting map position/zoom. */
 const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
@@ -907,7 +907,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           // Station count row
           const stationDiv = document.createElement('div');
           stationDiv.style.color = getThemeColor('--cc-gray-text');
-          stationDiv.textContent = t('globalView.tooltip.stations', { count: stationCount });
+          stationDiv.textContent = t('globalView.tooltip.stations', {
+            count: stationCount,
+            countFormatted: formatNumber(stationCount),
+          });
           tooltip.appendChild(stationDiv);
 
           tooltip.style.transform = '';
@@ -1141,7 +1144,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       {/* Project count indicator */}
       <div className="absolute bottom-2 right-2 bg-panel-90 border border-border rounded px-2 py-1 text-xs">
-        {t('globalView.map.systemCount', { count: gpsProjects.length })}
+        {t('globalView.map.systemCount', {
+          count: gpsProjects.length,
+          countFormatted: formatNumber(gpsProjects.length),
+        })}
         {isThrottled && (
           <span className="ml-2 text-warning" title={t('globalView.map.reducedDetailTitle')}>
             {t('globalView.map.reducedDetail')}

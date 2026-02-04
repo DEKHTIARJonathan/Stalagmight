@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { formatFixed } from '../../i18n/format';
+import { formatFixed, formatNumber } from '../../i18n/format';
 import type { Shot } from '../../types/project';
 import { defaultConfig } from '../../types/config';
 import { hasAzimuthDiscrepancy, hasPitchDiscrepancy, validateEditableShot } from '../../utils/validation';
@@ -383,7 +383,10 @@ export function ShotTableEditor({
       {/* Header with count and add button */}
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm text-text-secondary">
-          {t('shotTable.header', { count: visibleShots.length })}
+          {t('shotTable.header', {
+            count: visibleShots.length,
+            countFormatted: formatNumber(visibleShots.length),
+          })}
         </span>
         {showAddButton && !readOnly && (
           <button

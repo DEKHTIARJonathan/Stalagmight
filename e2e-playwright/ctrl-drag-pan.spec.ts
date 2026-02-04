@@ -28,6 +28,9 @@ test.describe('Ctrl+Drag Panning', () => {
     { key: 'x', name: 'delete' },
     { key: 'm', name: 'merge' },
     { key: 'r', name: 'measure' },
+    { key: 't', name: 'move_station' },
+    { key: 'g', name: 'move_shot' },
+    { key: 'v', name: 'move_segment' },
   ];
 
   test.describe('Cursor Changes', () => {
@@ -90,8 +93,6 @@ test.describe('Ctrl+Drag Panning', () => {
   // Note: zoom mode supports Ctrl+drag panning (added in box zoom feature), so it's not in this list
   const unsupportedTools = [
     { key: 'p', name: 'pan' },
-    { key: 'v', name: 'move_segment' },
-    { key: 't', name: 'move_station' },
   ];
 
   test.describe('Unsupported Tools', () => {

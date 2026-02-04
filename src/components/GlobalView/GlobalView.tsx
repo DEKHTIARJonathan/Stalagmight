@@ -487,9 +487,15 @@ export default function GlobalView() {
                   <Button
                     onClick={handleMergeProjects}
                     data-testid="merge-projects-button"
-                    aria-label={t('globalView.actions.mergeProjectsAria', { count: selectedCount })}
+                    aria-label={t('globalView.actions.mergeProjectsAria', {
+                      count: selectedCount,
+                      countFormatted: formatNumber(selectedCount),
+                    })}
                   >
-                    {t('globalView.actions.mergeProjects', { count: selectedCount })}
+                    {t('globalView.actions.mergeProjects', {
+                      count: selectedCount,
+                      countFormatted: formatNumber(selectedCount),
+                    })}
                   </Button>
                 )}
               </div>
@@ -532,8 +538,14 @@ export default function GlobalView() {
       {/* Status bar */}
       <footer className="px-4 py-2 border-t border-border text-sm text-text-secondary flex justify-between">
         <span>
-          {t('globalView.status.systems', { count: recentProjects.length })}
-          {selectedCount > 1 && ` | ${t('globalView.status.selected', { count: selectedCount })}`}
+          {t('globalView.status.systems', {
+            count: recentProjects.length,
+            countFormatted: formatNumber(recentProjects.length),
+          })}
+          {selectedCount > 1 && ` | ${t('globalView.status.selected', {
+            count: selectedCount,
+            countFormatted: formatNumber(selectedCount),
+          })}`}
         </span>
         <span>{t('globalView.status.ready')}</span>
       </footer>
@@ -584,7 +596,10 @@ export default function GlobalView() {
               role="menuitem"
               data-testid="context-menu-merge"
             >
-              {t('globalView.contextMenu.mergeProjects', { count: selectedCount })}
+              {t('globalView.contextMenu.mergeProjects', {
+                count: selectedCount,
+                countFormatted: formatNumber(selectedCount),
+              })}
             </button>
           )}
           <div className="border-t border-border my-1" />
@@ -610,7 +625,10 @@ export default function GlobalView() {
             data-testid="context-menu-remove"
           >
             {selectedCount > 1
-              ? t('globalView.contextMenu.removeMultiple', { count: selectedCount })
+              ? t('globalView.contextMenu.removeMultiple', {
+                count: selectedCount,
+                countFormatted: formatNumber(selectedCount),
+              })
               : t('globalView.contextMenu.remove')}
           </button>
         </div>

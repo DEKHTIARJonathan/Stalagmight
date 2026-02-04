@@ -194,7 +194,10 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
             <div className="p-3 space-y-3" aria-labelledby="metadata-panel-title">
               {/* Selection count header */}
               <div className="text-lg font-semibold text-text-primary" data-testid="metadata-multi-count">
-                {t('globalView.metadata.multiSelected', { count: projects.length })}
+                {t('globalView.metadata.multiSelected', {
+                  count: projects.length,
+                  countFormatted: formatNumber(projects.length),
+                })}
               </div>
 
               {/* Aggregate stats */}

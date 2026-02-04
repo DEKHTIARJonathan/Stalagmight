@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
-import { formatDate, formatRelativeTime } from '../../i18n/format';
+import { formatDate, formatRelativeTime, formatNumber } from '../../i18n/format';
 import type { CommandResult, UndoHistoryItem, PreviewData } from '../../types/commands';
 
 interface UndoHistoryDropdownProps {
@@ -190,7 +190,10 @@ function DetailPreviewPopup({ previewData, anchorRect, dropdownRect, commandType
           </div>
           {previewData.additionalChanges > 0 && (
             <div className="mt-1 pt-1 border-t border-border text-xs text-text-secondary">
-              {t('undo.preview.more', { count: previewData.additionalChanges })}
+              {t('undo.preview.more', {
+                count: previewData.additionalChanges,
+                countFormatted: formatNumber(previewData.additionalChanges),
+              })}
             </div>
           )}
         </>
@@ -407,7 +410,7 @@ export default function UndoHistoryDropdown({
 
       // Announce remaining item count for screen readers
       const count = refreshedStack.length;
-      setAnnouncement(t('undo.announcement.remaining', { count }));
+      setAnnouncement(t('undo.announcement.remaining', { count, countFormatted: formatNumber(count) }));
     }
 
     isActionInProgressRef.current = false;
