@@ -72,7 +72,7 @@ impl Database {
             .context("Failed to open database - file may not be a valid SQLite database")?;
         tracing::info!("SQLite connection opened successfully");
 
-        let db = Self { conn };
+        let mut db = Self { conn };
         db.enable_foreign_keys()?;
 
         // Check if the project table exists and has data
@@ -369,7 +369,7 @@ impl Database {
     }
 
     /// Rebuild key tables with foreign key constraints.
-    fn rebuild_tables_with_foreign_keys(&self) -> Result<()> {
+    fn rebuild_tables_with_foreign_keys(&mut self) -> Result<()> {
         tracing::info!("Rebuilding tables with foreign key constraints (schema v2)");
 
         let has_sections = self.table_exists("sections")?;
@@ -647,7 +647,7 @@ impl Database {
     }
 
     /// Ensure schema migrations are applied and user_version is current.
-    fn ensure_schema_version(&self) -> Result<()> {
+    fn ensure_schema_version(&mut self) -> Result<()> {
         let mut current = self.get_user_version().unwrap_or(0);
         if current == 0 {
             if let Ok(Some(project_version)) = self.get_project_schema_version() {
