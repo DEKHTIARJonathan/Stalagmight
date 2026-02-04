@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { Button } from '../common/Button';
+import { Button, IconButton } from '../common/Button';
 import { Panel } from '../common/Panel';
+import { CloseIcon } from '../common/icons';
 import { DialogWrapper } from './DialogWrapper';
 import type { ShotData, SectionData } from '../../types/project';
 import { getNextSectionColor } from '../../utils/colors';
@@ -184,12 +185,14 @@ export default function ImportDialog() {
                       />
                     </td>
                     <td>
-                      <button
+                      <IconButton
                         onClick={() => handleRemoveShot(index)}
+                        icon={<CloseIcon size={12} />}
+                        size="sm"
+                        variant="ghost"
+                        aria-label="Remove shot"
                         className="text-error hover:text-error-80"
-                      >
-                        ×
-                      </button>
+                      />
                     </td>
                   </tr>
                 ))}

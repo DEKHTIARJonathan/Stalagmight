@@ -5,6 +5,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { EditableTable } from '../common/Table';
 import { Select, type SelectOption } from '../common/Select';
+import { AlertCircleIcon, AlertTriangleIcon, ChevronDownIcon, DotIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
 import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
 import { formatShotId } from '../../utils/formatters';
@@ -412,7 +413,7 @@ export default function DataTable({ sections }: DataTableProps) {
             className={hasError ? 'text-error' : 'text-warning'}
             title={tooltipText}
           >
-            {hasError ? '⛔' : '⚠️'}
+            {hasError ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />}
           </span>
         );
       },
@@ -455,7 +456,7 @@ export default function DataTable({ sections }: DataTableProps) {
       header: t('dataTable.columns.virtualShort'),
       width: '40px',
       align: 'center' as const,
-      render: (shot: Shot) => (shot.is_virtual ? '●' : ''),
+      render: (shot: Shot) => (shot.is_virtual ? <DotIcon size={10} /> : ''),
     },
     { key: 'comment', header: t('dataTable.columns.comment') },
   ];
@@ -491,7 +492,7 @@ export default function DataTable({ sections }: DataTableProps) {
           title={dataTableOpen ? t('dataTable.toggle.collapse') : t('dataTable.toggle.expand')}
           data-testid="data-table-toggle"
         >
-          ▲
+          <ChevronDownIcon size={14} />
         </button>
         <span className="text-sm font-medium">{t('dataTable.title')}</span>
         {dataTableOpen && (

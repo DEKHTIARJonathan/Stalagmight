@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore, type DisplayToggleKey } from '../../store/uiStore';
 import { GRID_SPACING_OPTIONS } from '../Map/GridOverlay';
 import { formatNumber } from '../../i18n/format';
+import { CheckIcon, ChevronDownIcon, ChevronUpIcon, EyeIcon } from '../common/icons';
 
 interface DisplayOption {
   key: DisplayToggleKey;
@@ -139,9 +140,11 @@ export default function DisplayMenu() {
         aria-expanded={isOpen}
       >
         <span className="flex items-center gap-1">
-          <span>👁</span>
+          <EyeIcon size={14} />
           <span>{t('displayMenu.button')}</span>
-          <span className="text-xs">{isOpen ? '▲' : '▼'}</span>
+          <span className="text-xs">
+            {isOpen ? <ChevronUpIcon size={10} /> : <ChevronDownIcon size={10} />}
+          </span>
         </span>
       </button>
 
@@ -187,7 +190,7 @@ export default function DisplayMenu() {
                           }
                         `}
                       >
-                        ✓
+                        <CheckIcon size={12} />
                       </div>
                     </button>
                     {/* Grid spacing options - shown when grid is enabled */}
