@@ -407,21 +407,30 @@ describe('Export Dialog Accessibility', () => {
 
           const isFocused = document.activeElement === el;
           const label = el.closest('label') as HTMLElement | null;
-          const target = label ?? el;
-          const matchesFocusVisible = el.matches(':focus-visible') || target.matches(':focus-visible');
-          const styles = window.getComputedStyle(target);
-          const hasOutline = styles.outlineWidth !== '0px' && styles.outlineStyle !== 'none';
-          const hasBoxShadow = styles.boxShadow !== 'none';
+          const matchesFocusVisible = el.matches(':focus-visible') || (label?.matches(':focus-visible') ?? false);
+
+          const inputStyles = window.getComputedStyle(el);
+          const labelStyles = label ? window.getComputedStyle(label) : null;
+
+          const inputHasOutline = inputStyles.outlineWidth !== '0px' && inputStyles.outlineStyle !== 'none';
+          const inputHasShadow = inputStyles.boxShadow !== 'none';
+          const labelHasOutline = Boolean(labelStyles && labelStyles.outlineWidth !== '0px' && labelStyles.outlineStyle !== 'none');
+          const labelHasShadow = Boolean(labelStyles && labelStyles.boxShadow !== 'none');
+
+          const hasStyles = inputHasOutline || inputHasShadow || labelHasOutline || labelHasShadow;
 
           return {
             isFocused,
             hasFocusVisible: matchesFocusVisible,
-            hasStyles: hasOutline || hasBoxShadow,
-            outlineWidth: styles.outlineWidth,
-            outlineStyle: styles.outlineStyle,
-            boxShadow: styles.boxShadow,
+            hasStyles,
+            inputOutlineWidth: inputStyles.outlineWidth,
+            inputOutlineStyle: inputStyles.outlineStyle,
+            inputBoxShadow: inputStyles.boxShadow,
+            labelOutlineWidth: labelStyles?.outlineWidth ?? 'n/a',
+            labelOutlineStyle: labelStyles?.outlineStyle ?? 'n/a',
+            labelBoxShadow: labelStyles?.boxShadow ?? 'n/a',
             activeTag: el.tagName,
-            targetTag: target.tagName,
+            targetTag: label ? label.tagName : el.tagName,
             testId: el.getAttribute('data-testid'),
           };
         });
@@ -451,28 +460,54 @@ describe('Export Dialog Accessibility', () => {
         { timeout: 3000 }
       );
 
-      // Tab to navigate to checkbox
-      await browser.keys(['Tab']); // preset select
-      await browser.keys(['Tab']); // legend checkbox
+      const getCheckboxFocus = () =>
+        browser.execute(() => {
+          const el = document.querySelector('[data-testid="option-include-legend"]') as HTMLElement | null;
+          if (!el) return { isFocused: false, hasFocusVisible: false, hasStyles: false };
 
-      // Check for visible focus styles
-      const focusResult = await browser.execute(() => {
-        const el = document.activeElement as HTMLElement;
-        if (!el) return { hasFocusVisible: false, hasStyles: false };
+          const isFocused = document.activeElement === el;
+          const label = el.closest('label') as HTMLElement | null;
+          const matchesFocusVisible = el.matches(':focus-visible') || (label?.matches(':focus-visible') ?? false);
 
-        const matchesFocusVisible = el.matches(':focus-visible');
-        const styles = window.getComputedStyle(el);
-        const hasOutline = styles.outlineWidth !== '0px' && styles.outlineStyle !== 'none';
-        const hasBoxShadow = styles.boxShadow !== 'none';
+          const inputStyles = window.getComputedStyle(el);
+          const labelStyles = label ? window.getComputedStyle(label) : null;
 
-        return {
-          hasFocusVisible: matchesFocusVisible,
-          hasStyles: hasOutline || hasBoxShadow,
-          testId: el.getAttribute('data-testid'),
-        };
-      });
+          const inputHasOutline = inputStyles.outlineWidth !== '0px' && inputStyles.outlineStyle !== 'none';
+          const inputHasShadow = inputStyles.boxShadow !== 'none';
+          const labelHasOutline = Boolean(labelStyles && labelStyles.outlineWidth !== '0px' && labelStyles.outlineStyle !== 'none');
+          const labelHasShadow = Boolean(labelStyles && labelStyles.boxShadow !== 'none');
 
-      expect(focusResult.hasStyles || focusResult.hasFocusVisible).toBe(true);
+          return {
+            isFocused,
+            hasFocusVisible: matchesFocusVisible,
+            hasStyles: inputHasOutline || inputHasShadow || labelHasOutline || labelHasShadow,
+            inputOutlineWidth: inputStyles.outlineWidth,
+            inputOutlineStyle: inputStyles.outlineStyle,
+            inputBoxShadow: inputStyles.boxShadow,
+            labelOutlineWidth: labelStyles?.outlineWidth ?? 'n/a',
+            labelOutlineStyle: labelStyles?.outlineStyle ?? 'n/a',
+            labelBoxShadow: labelStyles?.boxShadow ?? 'n/a',
+          };
+        });
+
+      // Tab until legend checkbox receives focus
+      for (let i = 0; i < 6; i += 1) {
+        const focusInfo = await getCheckboxFocus();
+        if (focusInfo.isFocused) break;
+        await browser.keys(['Tab']);
+      }
+
+      let focusResult = await getCheckboxFocus();
+      await browser.waitUntil(
+        async () => {
+          focusResult = await getCheckboxFocus();
+          return focusResult.isFocused && (focusResult.hasStyles || focusResult.hasFocusVisible);
+        },
+        {
+          timeout: 2000,
+          timeoutMsg: `Checkbox focus indicator missing: ${JSON.stringify(focusResult)}`,
+        }
+      );
     });
 
     it('shows visible focus indicator on dropdown button via keyboard', async () => {
@@ -487,28 +522,47 @@ describe('Export Dialog Accessibility', () => {
         { timeout: 3000 }
       );
 
-      // Tab to the preset dropdown button
-      await browser.keys(['Tab']);
+      const getSelectFocus = () =>
+        browser.execute(() => {
+          const container = document.querySelector('[data-testid="depth-preset-select"]');
+          const trigger = container?.querySelector('button[role="combobox"]') as HTMLElement | null;
+          if (!trigger) return { isFocused: false, hasFocusVisible: false, hasStyles: false };
 
-      // Get styles before and compare (avoiding hard-coded colors)
-      const focusResult = await browser.execute(() => {
-        const el = document.activeElement as HTMLElement;
-        if (!el) return { hasFocusVisible: false, hasStyles: false };
+          const isFocused = document.activeElement === trigger;
+          const matchesFocusVisible = trigger.matches(':focus-visible');
+          const styles = window.getComputedStyle(trigger);
+          const hasOutline = styles.outlineWidth !== '0px' && styles.outlineStyle !== 'none';
+          const hasBoxShadow = styles.boxShadow !== 'none';
 
-        const matchesFocusVisible = el.matches(':focus-visible');
-        const styles = window.getComputedStyle(el);
-        const hasOutline = styles.outlineWidth !== '0px' && styles.outlineStyle !== 'none';
-        const hasBoxShadow = styles.boxShadow !== 'none';
+          return {
+            isFocused,
+            hasFocusVisible: matchesFocusVisible,
+            hasStyles: hasOutline || hasBoxShadow,
+            outlineWidth: styles.outlineWidth,
+            outlineStyle: styles.outlineStyle,
+            boxShadow: styles.boxShadow,
+            tagName: trigger.tagName.toLowerCase(),
+          };
+        });
 
-        return {
-          hasFocusVisible: matchesFocusVisible,
-          hasStyles: hasOutline || hasBoxShadow,
-          tagName: el.tagName.toLowerCase(),
-        };
-      });
+      // Tab until the preset dropdown trigger is focused
+      for (let i = 0; i < 6; i += 1) {
+        const focusInfo = await getSelectFocus();
+        if (focusInfo.isFocused) break;
+        await browser.keys(['Tab']);
+      }
 
-      // Should have focus indicator
-      expect(focusResult.hasStyles || focusResult.hasFocusVisible).toBe(true);
+      let focusResult = await getSelectFocus();
+      await browser.waitUntil(
+        async () => {
+          focusResult = await getSelectFocus();
+          return focusResult.isFocused && (focusResult.hasStyles || focusResult.hasFocusVisible);
+        },
+        {
+          timeout: 2000,
+          timeoutMsg: `Dropdown focus indicator missing: ${JSON.stringify(focusResult)}`,
+        }
+      );
     });
   });
 
