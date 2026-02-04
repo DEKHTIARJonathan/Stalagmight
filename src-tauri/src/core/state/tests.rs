@@ -3412,7 +3412,7 @@ fn test_undo_create_loop_closure() {
     let closure_result = state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(section_a, 0),
         station_b: StationRef::new(section_b, 1),
-        closure_strategy: crate::models::ClosureStrategy::KeepRaw,
+        closure_strategy: crate::models::ClosureStrategy::Batch,
     });
     assert!(closure_result.success, "CreateLoopClosure should succeed");
 
@@ -3478,7 +3478,7 @@ fn test_undo_create_loop_closure_has_closure_info() {
     state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(section_a, 0),
         station_b: StationRef::new(section_b, 1),
-        closure_strategy: crate::models::ClosureStrategy::KeepRaw,
+        closure_strategy: crate::models::ClosureStrategy::Batch,
     });
 
     // Check undo stack has ClosureInfo data
@@ -7020,7 +7020,7 @@ fn test_insert_before_shifts_loop_closure() {
     let closure_result = state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(sec_b, 2),
         station_b: StationRef::new(sec_c, 1),
-        closure_strategy: ClosureStrategy::KeepRaw,
+        closure_strategy: ClosureStrategy::Batch,
     });
     assert!(closure_result.success);
 

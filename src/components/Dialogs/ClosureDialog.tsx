@@ -11,8 +11,6 @@ const STRATEGY_OPTIONS: { value: ClosureStrategy; label: string }[] = [
   { value: 'Batch', label: 'Batch (recommended)' },
   { value: 'ProportionalByLength', label: 'Proportional by Length' },
   { value: 'EqualDistribution', label: 'Equal Distribution' },
-  { value: 'KeepRaw', label: 'Keep Raw' },
-  { value: 'ManualAdjustment', label: 'Manual Adjustment' },
 ];
 
 export default function ClosureDialog() {

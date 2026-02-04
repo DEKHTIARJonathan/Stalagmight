@@ -86,12 +86,10 @@ impl AppState {
                 anchor_station,
                 method,
                 use_strategy_filter,
-                sequential_distribution,
             } => self.adjust_loop_closures(
                 *anchor_station,
                 *method,
                 *use_strategy_filter,
-                *sequential_distribution,
             ),
             Command::SetZeroDatum {
                 station_ref,
@@ -978,7 +976,6 @@ impl AppState {
         anchor_station: StationRef,
         method: ClosureStrategy,
         use_strategy_filter: bool,
-        sequential_distribution: ClosureStrategy,
     ) -> CommandResult {
         let mut proj_guard = match self.project.lock() {
             Ok(g) => g,
@@ -997,7 +994,6 @@ impl AppState {
             anchor_station,
             method,
             use_strategy_filter,
-            sequential_distribution,
             &config.closure_adjustment,
         ) {
             Ok(_) => {

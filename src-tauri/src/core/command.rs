@@ -83,7 +83,6 @@ pub enum Command {
         anchor_station: StationRef,
         method: ClosureStrategy,
         use_strategy_filter: bool,
-        sequential_distribution: ClosureStrategy,
     },
     SetZeroDatum {
         station_ref: StationRef,

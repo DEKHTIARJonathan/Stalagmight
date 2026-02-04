@@ -415,7 +415,7 @@ fn test_loop_detection_simple() {
     let result = project.create_loop_closure(
         StationRef::new(0, 0),
         StationRef::new(1, 2),
-        ClosureStrategy::KeepRaw,
+        ClosureStrategy::Batch,
     );
 
     // This should succeed and create a loop closure
@@ -450,7 +450,7 @@ fn test_loop_closure_error_calculation() {
     let result = project.create_loop_closure(
         StationRef::new(0, 0), // Start of A
         StationRef::new(1, 1), // End of B
-        ClosureStrategy::KeepRaw,
+        ClosureStrategy::Batch,
     );
 
     assert!(result.is_ok());

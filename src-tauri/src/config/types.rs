@@ -3,7 +3,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
-use crate::models::ClosureStrategy;
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -619,8 +618,6 @@ pub struct ClosureAdjustmentConfig {
     pub base_sigma_azimuth_deg: f64,
     #[serde(default = "default_sigma_depth_m")]
     pub base_sigma_depth_m: f64,
-    #[serde(default)]
-    pub sequential_distribution_default: ClosureStrategy,
 }
 
 impl ClosureAdjustmentConfig {
@@ -633,12 +630,6 @@ impl ClosureAdjustmentConfig {
         }
         if !self.base_sigma_depth_m.is_finite() || self.base_sigma_depth_m <= 0.0 {
             self.base_sigma_depth_m = default_sigma_depth_m();
-        }
-        match self.sequential_distribution_default {
-            ClosureStrategy::ProportionalByLength | ClosureStrategy::EqualDistribution => {}
-            _ => {
-                self.sequential_distribution_default = ClosureStrategy::ProportionalByLength;
-            }
         }
     }
 }

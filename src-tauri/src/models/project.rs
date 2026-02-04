@@ -1379,7 +1379,6 @@ impl Project {
         anchor_station: StationRef,
         method: ClosureStrategy,
         use_strategy_filter: bool,
-        sequential_distribution: ClosureStrategy,
         config: &ClosureAdjustmentConfig,
     ) -> Result<(), String> {
         if !self.station_exists(anchor_station) {
@@ -1408,7 +1407,6 @@ impl Project {
             .filter(|lc| {
                 component.contains(&lc.station_a.section_id)
                     && component.contains(&lc.station_b.section_id)
-                    && lc.strategy != ClosureStrategy::KeepRaw
                     && (!use_strategy_filter || lc.strategy == method || lc.strategy == ClosureStrategy::Batch)
             })
             .cloned()
@@ -1419,14 +1417,6 @@ impl Project {
         }
 
         match method {
-            ClosureStrategy::Sequential => {
-                self.adjust_loops_ordered(
-                    &mut closures,
-                    sequential_distribution,
-                    true,
-                    &zero_datum_set,
-                )?;
-            }
             ClosureStrategy::LeastSquaresWeighted => {
                 self.adjust_least_squares(
                     &component,
@@ -1452,91 +1442,6 @@ impl Project {
 
         // Recompute closure metrics for the affected component
         self.recompute_closure_metrics_for_component(&component);
-
-        Ok(())
-    }
-
-    fn adjust_loops_ordered(
-        &mut self,
-        closures: &mut [LoopClosure],
-        distribution: ClosureStrategy,
-        lock_loops: bool,
-        fixed_initial: &HashSet<StationRef>,
-    ) -> Result<(), String> {
-        let colocated_groups = self.build_merge_groups();
-        let mut station_to_group: HashMap<StationRef, StationRef> = HashMap::new();
-        for (root, members) in &colocated_groups {
-            for member in members {
-                station_to_group.insert(*member, *root);
-            }
-        }
-        let root_for = |station: StationRef| station_to_group.get(&station).copied().unwrap_or(station);
-        let mut fixed: HashSet<StationRef> = fixed_initial.iter().map(|s| root_for(*s)).collect();
-
-
-        let mut ordered: Vec<(f64, StationRef, StationRef)> = Vec::new();
-        for lc in closures.iter() {
-            let metrics = self.compute_closure_metrics(lc.station_a, lc.station_b)?;
-            ordered.push((metrics.error_percentage, lc.station_a, lc.station_b));
-        }
-        ordered.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-
-        for (_, station_a, station_b) in ordered {
-            let path_ab = self
-                .shortest_path_shots_merges(station_a, station_b)
-                .ok_or_else(|| "Failed to build closure path".to_string())?;
-
-            let mut nodes: Vec<StationRef> = Vec::with_capacity(path_ab.steps.len() + 1);
-            nodes.push(path_ab.start);
-            for step in &path_ab.steps {
-                nodes.push(step.to);
-            }
-
-            let fixed_roots: HashSet<StationRef> = fixed.iter().copied().collect();
-            let mut fixed_nodes_on_path: Vec<StationRef> = nodes
-                .iter()
-                .copied()
-                .filter(|n| fixed_initial.contains(n))
-                .collect();
-            fixed_nodes_on_path.sort_by(|a, b| (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index)));
-            fixed_nodes_on_path.dedup();
-            let mut fixed_roots_on_path: Vec<StationRef> = nodes
-                .iter()
-                .map(|n| root_for(*n))
-                .filter(|r| fixed_roots.contains(r))
-                .collect();
-            fixed_roots_on_path.sort_by(|a, b| (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index)));
-            fixed_roots_on_path.dedup();
-
-            if fixed_roots_on_path.len() > 1 {
-                return Err("Closure path crosses multiple fixed stations".to_string());
-            }
-
-            let mut extra_fixed: HashSet<StationRef> = HashSet::new();
-            if let Some(fixed_node) = fixed_nodes_on_path.first().copied() {
-                extra_fixed.insert(fixed_node);
-            } else if let Some(root) = fixed_roots_on_path.first().copied() {
-                if let Some(node) = nodes.iter().copied().find(|n| root_for(*n) == root) {
-                    extra_fixed.insert(node);
-                }
-            }
-
-            self.distribute_closure_error_internal(
-                station_a,
-                station_b,
-                distribution,
-                Some(&extra_fixed),
-                true,
-            )?;
-
-            if lock_loops {
-                for node in nodes {
-                    fixed.insert(root_for(node));
-                }
-            }
-
-            continue;
-        }
 
         Ok(())
     }
@@ -2347,9 +2252,6 @@ impl Project {
         }
 
         for closure in &self.loop_closures {
-            if closure.strategy == ClosureStrategy::KeepRaw {
-                continue;
-            }
             union(&mut parent, &mut rank, closure.station_a, closure.station_b);
         }
 

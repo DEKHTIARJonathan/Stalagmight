@@ -838,7 +838,7 @@ fn create_loop_closure_creates_correct_values() {
     let closure = project.create_loop_closure(
         StationRef::new(a, 0),
         StationRef::new(b, 1),
-        ClosureStrategy::KeepRaw,
+        ClosureStrategy::Batch,
     ).unwrap();
 
     assert_eq!(closure.station_a, StationRef::new(a, 0));
@@ -970,7 +970,7 @@ fn create_loop_closure_equal_distribution_fallback_zero_datum() {
         error_percentage: 0.0,
         horizontal_misclosure: 0.0,
         vertical_misclosure: 0.0,
-        strategy: ClosureStrategy::KeepRaw,
+        strategy: ClosureStrategy::Batch,
     });
     project.next_closure_id += 1;
 
