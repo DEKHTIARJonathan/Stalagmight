@@ -4,6 +4,7 @@ import { useUIStore, type Selection } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
+import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
 import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
@@ -180,7 +181,9 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
   if (warnings.length === 0) {
     return (
       <div className="p-4 text-center text-text-secondary">
-        <div className="text-3xl mb-2">✓</div>
+        <div className="text-3xl mb-2 flex items-center justify-center">
+          <CheckCircleIcon size={28} />
+        </div>
         <p>{t('detailPanel.warnings.empty')}</p>
       </div>
     );
@@ -239,7 +242,9 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               >
                 <div className="flex items-start gap-2">
                   <span className={warning.severity === 'error' ? 'text-error' : 'text-warning'}>
-                    {warning.isResolved ? '✓' : (warning.severity === 'error' ? '⛔' : '⚠️')}
+                    {warning.isResolved
+                      ? <CheckCircleIcon size={14} />
+                      : (warning.severity === 'error' ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />)}
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className={`text-sm ${warning.isResolved ? 'line-through' : ''}`}>
@@ -1129,7 +1134,9 @@ function ClosuresSection({
         aria-expanded={expanded}
         aria-controls={contentId}
       >
-        <span className="text-xs">{expanded ? '▼' : '▶'}</span>
+        <span className="text-xs">
+          {expanded ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+        </span>
         <span>{t('detailPanel.closures.title')}</span>
       </button>
       {expanded && (

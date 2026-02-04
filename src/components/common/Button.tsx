@@ -1,4 +1,4 @@
-import { type ReactNode, type ButtonHTMLAttributes } from 'react';
+import { type ReactNode, type ButtonHTMLAttributes, forwardRef } from 'react';
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 type ButtonSize = 'sm' | 'md' | 'lg';
@@ -23,7 +23,7 @@ const sizeStyles: Record<ButtonSize, string> = {
   lg: 'px-4 py-2 text-lg',
 };
 
-export function Button({
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button({
   variant = 'secondary',
   size = 'md',
   children,
@@ -31,9 +31,10 @@ export function Button({
   className = '',
   disabled,
   ...props
-}: ButtonProps) {
+}, ref) {
   return (
     <button
+      ref={ref}
       className={`
         inline-flex items-center justify-center gap-2 rounded
         font-medium transition-colors
@@ -50,7 +51,7 @@ export function Button({
       {children}
     </button>
   );
-}
+});
 
 interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   icon: ReactNode;
@@ -60,7 +61,7 @@ interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   active?: boolean;
 }
 
-export function IconButton({
+export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton({
   icon,
   variant = 'ghost',
   size = 'md',
@@ -68,7 +69,7 @@ export function IconButton({
   active,
   className = '',
   ...props
-}: IconButtonProps) {
+}, ref) {
   const iconSizes: Record<ButtonSize, string> = {
     sm: 'w-6 h-6',
     md: 'w-8 h-8',
@@ -77,6 +78,7 @@ export function IconButton({
 
   return (
     <button
+      ref={ref}
       className={`
         inline-flex items-center justify-center rounded
         transition-colors
@@ -92,4 +94,4 @@ export function IconButton({
       {icon}
     </button>
   );
-}
+});

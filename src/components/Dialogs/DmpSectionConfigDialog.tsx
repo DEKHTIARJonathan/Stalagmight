@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useState, useEffect, useMemo, useCallback, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
+import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronLeftIcon, ChevronRightIcon, CircleIcon, XCircleIcon } from '../common/icons';
 import type { DmpFile, DmpSection } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { Project, Station } from '../../types/project';
@@ -1073,7 +1074,14 @@ export default function DmpSectionConfigDialog({
               aria-label={leftPanelCollapsed ? 'Expand section list' : 'Collapse section list'}
               data-testid="collapse-section-list-button"
             >
-              {leftPanelCollapsed ? '▶' : '◀ Sections'}
+              {leftPanelCollapsed ? (
+                <ChevronRightIcon size={14} />
+              ) : (
+                <span className="inline-flex items-center gap-2">
+                  <ChevronLeftIcon size={14} />
+                  <span>Sections</span>
+                </span>
+              )}
             </button>
 
             {/* Section list */}
@@ -1094,22 +1102,22 @@ export default function DmpSectionConfigDialog({
                   const showWarnings = sectionWarnings > 0;
 
                   // Status icon - priority: excluded > errors > warnings > placed > default
-                  let statusIcon: string;
+                  let statusIcon: ReactNode;
                   let statusColor: string;
                   if (status === 'excluded') {
-                    statusIcon = '✕';
+                    statusIcon = <XCircleIcon size={14} />;
                     statusColor = 'text-error';
                   } else if (status === 'errors' || sectionDataErrors > 0) {
-                    statusIcon = '!';
+                    statusIcon = <AlertCircleIcon size={14} />;
                     statusColor = 'text-error';
                   } else if (showWarnings) {
-                    statusIcon = '\u26A0';
+                    statusIcon = <AlertTriangleIcon size={14} />;
                     statusColor = 'text-warning';
                   } else if (status === 'placed') {
-                    statusIcon = '✓';
+                    statusIcon = <CheckCircleIcon size={14} />;
                     statusColor = 'text-success';
                   } else {
-                    statusIcon = '○';
+                    statusIcon = <CircleIcon size={14} />;
                     statusColor = 'text-text-secondary';
                   }
 
@@ -1204,13 +1212,15 @@ export default function DmpSectionConfigDialog({
                   </span>
                   {/* Status badges */}
                   {isCurrentPlaced && (
-                    <span className="px-2 py-1 bg-success-10 text-success text-xs rounded" data-testid="placed-badge">
-                      ✓ Placed
+                    <span className="px-2 py-1 bg-success-10 text-success text-xs rounded inline-flex items-center gap-1" data-testid="placed-badge">
+                      <CheckCircleIcon size={12} />
+                      Placed
                     </span>
                   )}
                   {isCurrentExcluded && (
-                    <span className="px-2 py-1 bg-error-10 text-error text-xs rounded" data-testid="excluded-badge">
-                      ✕ Excluded
+                    <span className="px-2 py-1 bg-error-10 text-error text-xs rounded inline-flex items-center gap-1" data-testid="excluded-badge">
+                      <XCircleIcon size={12} />
+                      Excluded
                     </span>
                   )}
                   {/* Reset Section button - pushed to the right */}

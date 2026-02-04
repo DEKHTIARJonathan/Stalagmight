@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { type Section, type SectionId } from '../../types/project';
 import { useUIStore } from '../../store/uiStore';
 import { formatFixed, formatNumber } from '../../i18n/format';
+import { IconButton } from '../common/Button';
+import { CloseIcon, PlusIcon } from '../common/icons';
 
 interface SectionsPanelProps {
   sections: Section[];
@@ -170,14 +172,15 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <h2 className="font-medium">{t('sections.title')}</h2>
-        <button
+        <IconButton
           onClick={handleAddSection}
-          className="text-accent hover:text-accent-80 text-lg"
-          title={t('sections.actions.add')}
+          icon={<PlusIcon size={14} />}
+          size="sm"
+          variant="ghost"
+          tooltip={t('sections.actions.add')}
+          aria-label={t('sections.actions.add')}
           data-testid="sections-add-button"
-        >
-          +
-        </button>
+        />
       </div>
 
       {/* Section list */}
@@ -217,7 +220,9 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                   data-testid={`section-row-${section.id}`}
                   title={t('sections.actions.zoom')}
                   className={`px-3 py-2 cursor-pointer group transition-colors outline-none focus:ring-2 focus:ring-accent focus:ring-inset ${
-                    isSelected || hoveredSectionId === section.id ? 'bg-accent-20' : 'hover:bg-accent-20'
+                    isSelected
+                      ? 'bg-accent-20 ring-2 ring-accent ring-inset'
+                      : (hoveredSectionId === section.id ? 'bg-accent-10' : 'hover:bg-accent-10')
                   }`}
                   onMouseDown={(e) => handleSectionClick(section, e)}
                   onDoubleClick={(e) => handleSectionDoubleClick(section, e)}
@@ -242,17 +247,19 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                     <span className="flex-1 truncate">
                       {section.name ?? t('sections.defaultName', { id: section.id })}
                     </span>
-                    <button
+                    <IconButton
                       onClick={(e) => handleDeleteSection(section.id, e)}
                       onMouseDown={handleDeleteMouseDown}
                       onDoubleClick={handleDeleteDoubleClick}
+                      icon={<CloseIcon size={12} />}
+                      size="sm"
+                      variant="ghost"
+                      tooltip={t('sections.actions.delete')}
+                      aria-label={t('sections.actions.delete')}
+                      className="opacity-0 group-hover:opacity-100 text-text-secondary hover:text-error"
                       tabIndex={-1}
-                      className="text-text-secondary hover:text-error opacity-0 group-hover:opacity-100"
-                      title={t('sections.actions.delete')}
                       data-testid={`section-delete-${section.id}`}
-                    >
-                      ×
-                    </button>
+                    />
                   </div>
                   <div className="text-xs text-text-secondary mt-1 ml-5">
                     {t('sections.stats', {

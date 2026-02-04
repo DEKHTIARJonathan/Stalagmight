@@ -1,6 +1,7 @@
 import { useLayoutEffect, useEffect, useId, useRef, type ReactNode, useCallback, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Button } from '../common/Button';
+import { Button, IconButton } from '../common/Button';
+import { CloseIcon } from '../common/icons';
 import { pushDialog, popDialog } from '../../utils/dialogStack';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 
@@ -324,14 +325,15 @@ export function DialogWrapper({
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <h2 id={titleId} className="text-lg font-medium">{title}</h2>
-          <button
+          <IconButton
             type="button"
             onClick={requestClose}
-            className="text-text-secondary hover:text-text-primary text-xl"
+            icon={<CloseIcon size={14} />}
+            size="sm"
+            variant="ghost"
             aria-label="Close dialog"
-          >
-            ×
-          </button>
+            className="text-text-secondary hover:text-text-primary"
+          />
         </div>
         <div className={bodyClassName}>
           {typeof children === 'function' ? children({ requestClose }) : children}

@@ -375,6 +375,11 @@ tr:hover {
   background-color: var(--cc-accent-10);
 }
 
+tr[data-selected="true"],
+tr[data-selected="true"]:hover {
+  background-color: var(--cc-accent-20);
+}
+
 /* Selection indicator gradient bar */
 .selected-cell-indicator {
   position: relative;
