@@ -10,7 +10,7 @@
  * - Collapsible toggle works
  */
 
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,

@@ -15,6 +15,9 @@
     "test:ui": "playwright test",
     "test:ui:headed": "playwright test --headed",
     "test:ui:debug": "playwright test --debug",
+    "coverage:ui": "E2E_COVERAGE=1 VITE_COVERAGE=1 pnpm test:ui",
+    "coverage:e2e": "E2E_COVERAGE=1 VITE_COVERAGE=1 pnpm test:e2e",
+    "coverage:merge": "node scripts/merge-coverage.mjs",
     "gen:ipc-types": "cargo run --manifest-path src-tauri/Cargo.toml --bin gen_ipc_types",
     "test:all": "pnpm test && pnpm test:ui"
   },
@@ -50,10 +53,12 @@
     "@wdio/mocha-framework": "^9.23.0",
     "@wdio/spec-reporter": "^9.20.0",
     "autoprefixer": "^10.4.20",
+    "nyc": "^17.1.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.15",
     "typescript": "^5.6.3",
     "vite": "^5.4.11",
+    "vite-plugin-istanbul": "^7.2.1",
     "vitest": "^2.1.5",
     "webdriverio": "^9.23.0"
   }

@@ -6,7 +6,7 @@
  * Also covers DMP-imported projects (simulated via multiple seeded sections).
  */
 
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 
 /**
@@ -33,7 +33,7 @@ function filterMockErrors(errors: string[]): string[] {
 /**
  * Helper to create a new project and wait for SingleSystemView
  */
-async function createProject(page: import('@playwright/test').Page, name: string) {
+async function createProject(page: import('./fixtures/coverage').Page, name: string) {
   const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
   await newProjectBtn.click();
   await page.waitForSelector('.fixed.inset-0');

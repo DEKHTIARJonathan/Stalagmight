@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
 
 test.describe('GlobalView Map', () => {
@@ -192,7 +192,7 @@ test.describe('GlobalView Map', () => {
      * The automatic loading depends on viewport bounds, so we manually
      * invoke loadGeometryBatch to ensure all systems load their geometry.
      */
-    async function loadAllGeometry(page: import('@playwright/test').Page): Promise<void> {
+    async function loadAllGeometry(page: import('./fixtures/coverage').Page): Promise<void> {
       await page.evaluate(async () => {
         const e2e = (window as unknown as {
           __E2E_TEST__?: {

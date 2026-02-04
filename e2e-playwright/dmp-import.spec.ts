@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
@@ -343,7 +343,7 @@ test.describe('DMP Import Dialog', () => {
     // Project name field should be pre-filled with filename
     const nameInput = projectDialog.locator('[data-testid="project-name-input"]');
     await expect(nameInput).toBeVisible();
-    // Mock returns /mock/test-survey.dmp, so default name should be 'test-survey'
+    // Mock returns /mock./fixtures/coverage-survey.dmp, so default name should be 'test-survey'
     await expect(nameInput).toHaveValue('test-survey');
 
     // Fill in project name and create

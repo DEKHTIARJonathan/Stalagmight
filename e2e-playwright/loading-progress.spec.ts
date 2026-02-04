@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 
 test.describe('Loading Progress', () => {
@@ -321,7 +321,7 @@ test.describe('Loading Progress', () => {
         e2e?.simulateLoadingProgress?.({
           isLoading: true,
           projectName: 'Test Project',
-          projectPath: '/test/path.stalx',
+          projectPath: './fixtures/coverage/path.stalx',
           phase: 'loading_project_data',
           overallProgress: 25,
         });

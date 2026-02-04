@@ -37,6 +37,20 @@ cargo test --manifest-path src-tauri/Cargo.toml
 pnpm test:all
 ```
 
+## Coverage (Optional)
+
+```bash
+# Unit test coverage (writes reports to docs/coverage)
+pnpm vitest run --coverage
+
+# E2E coverage (instruments the app for Playwright or WDIO)
+pnpm coverage:ui
+pnpm coverage:e2e
+
+# Merge raw E2E coverage and generate reports under docs/coverage
+pnpm coverage:merge
+```
+
 ## Required Tests by Feature Type
 
 | Feature Type | Required Tests |
