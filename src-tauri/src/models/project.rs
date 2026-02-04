@@ -1520,48 +1520,6 @@ impl Project {
         let root_for = |station: StationRef| station_to_group.get(&station).copied().unwrap_or(station);
         let mut fixed: HashSet<StationRef> = fixed_initial.iter().map(|s| root_for(*s)).collect();
 
-        let find_node_with_root = |nodes: &[StationRef], root: StationRef| -> Option<StationRef> {
-            nodes.iter().copied().find(|n| root_for(*n) == root)
-        };
-
-        let collect_segment_shots_grouped = |path: &StationPath,
-                                             section_lookup: &HashMap<SectionId, &Section>|
-         -> Result<Vec<SegmentShot>, String> {
-            let mut shots: Vec<SegmentShot> = Vec::new();
-            let mut current = path.start;
-            for step in &path.steps {
-                let next = step.to;
-                if root_for(current) == root_for(next) {
-                    current = next;
-                    continue;
-                }
-                if let PathEdge::Shot {
-                    section_id,
-                    shot_index,
-                    forward,
-                } = step.edge
-                {
-                    let section = section_lookup
-                        .get(&section_id)
-                        .ok_or_else(|| "Section not found for closure path".to_string())?;
-                    let shot = section
-                        .shots
-                        .get(shot_index)
-                        .ok_or_else(|| "Shot not found for closure path".to_string())?;
-                    let path_vec = Self::shot_vector_along(shot, forward);
-                    shots.push(SegmentShot {
-                        section_id,
-                        shot_index,
-                        forward,
-                        length: shot.length,
-                        path_vec,
-                        sign: 1.0,
-                    });
-                }
-                current = next;
-            }
-            Ok(shots)
-        };
 
         let mut ordered: Vec<(f64, StationRef, StationRef)> = Vec::new();
         for lc in closures.iter() {
@@ -1581,57 +1539,51 @@ impl Project {
                 nodes.push(step.to);
             }
 
-            let mut fixed_on_path: Vec<StationRef> = nodes
+            let fixed_roots: HashSet<StationRef> = fixed.iter().copied().collect();
+            let mut fixed_nodes_on_path: Vec<StationRef> = nodes
+                .iter()
+                .copied()
+                .filter(|n| fixed_initial.contains(n))
+                .collect();
+            fixed_nodes_on_path.sort_by(|a, b| (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index)));
+            fixed_nodes_on_path.dedup();
+            let mut fixed_roots_on_path: Vec<StationRef> = fixed_nodes_on_path
                 .iter()
                 .map(|n| root_for(*n))
-                .filter(|n| fixed.contains(n))
                 .collect();
-            fixed_on_path.sort_by(|a, b| (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index)));
-            fixed_on_path.dedup();
+            fixed_roots_on_path.sort_by(|a, b| (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index)));
+            fixed_roots_on_path.dedup();
 
-            let anchor_root = if fixed_on_path.is_empty() {
-                root_for(station_a)
+            let (_anchor_root, anchor, anchor_index) = if fixed_roots_on_path.len() > 1 {
+                return Err("Closure path crosses multiple fixed stations".to_string());
+            } else if !fixed_nodes_on_path.is_empty() {
+                let anchor = fixed_nodes_on_path[0];
+                let anchor_root = root_for(anchor);
+                let anchor_index = nodes.iter().position(|n| *n == anchor).unwrap_or(0);
+                (anchor_root, anchor, anchor_index)
             } else {
-                fixed_on_path[0]
+                let mut fixed_roots_on_path: Vec<StationRef> = nodes
+                    .iter()
+                    .map(|n| root_for(*n))
+                    .filter(|r| fixed_roots.contains(r))
+                    .collect();
+                fixed_roots_on_path.sort_by(|a, b| (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index)));
+                fixed_roots_on_path.dedup();
+                if fixed_roots_on_path.len() > 1 {
+                    return Err("Closure path crosses multiple fixed stations".to_string());
+                }
+                let anchor_root = if fixed_roots_on_path.is_empty() {
+                    root_for(station_a)
+                } else {
+                    fixed_roots_on_path[0]
+                };
+                let anchor_index = nodes
+                    .iter()
+                    .position(|n| root_for(*n) == anchor_root)
+                    .unwrap_or(0);
+                let anchor = nodes[anchor_index];
+                (anchor_root, anchor, anchor_index)
             };
-            let anchor = find_node_with_root(&nodes, anchor_root).unwrap_or(station_a);
-
-            if fixed_on_path.len() > 1 {
-                let anchor_coords = self
-                    .compute_station_raw_coords(anchor)
-                    .ok_or_else(|| "Failed to compute anchor coordinates".to_string())?;
-                for root in fixed_on_path.iter().skip(1) {
-                    let rep = find_node_with_root(&nodes, *root)
-                        .ok_or_else(|| "Failed to resolve fixed station on path".to_string())?;
-                    let coords = self
-                        .compute_station_raw_coords(rep)
-                        .ok_or_else(|| "Failed to compute fixed node coordinates".to_string())?;
-                    if !Self::coords_close(anchor_coords, coords, 1e-6) {
-                        return Err("Closure path crosses multiple fixed stations".to_string());
-                    }
-                }
-            }
-
-            let path_a = self
-                .shortest_path_shots_merges(anchor, station_a)
-                .ok_or_else(|| "Failed to build path from anchor to station A".to_string())?;
-            let path_b = self
-                .shortest_path_shots_merges(anchor, station_b)
-                .ok_or_else(|| "Failed to build path from anchor to station B".to_string())?;
-
-            for path in [&path_a, &path_b] {
-                let mut nodes: Vec<StationRef> = Vec::with_capacity(path.steps.len() + 1);
-                nodes.push(path.start);
-                for step in &path.steps {
-                    nodes.push(step.to);
-                }
-                for node in nodes {
-                    let node_root = root_for(node);
-                    if node_root != anchor_root && fixed.contains(&node_root) {
-                        return Err("Closure path crosses a fixed station".to_string());
-                    }
-                }
-            }
 
             let coords_a = self
                 .compute_station_raw_coords(station_a)
@@ -1641,18 +1593,41 @@ impl Project {
                 .ok_or_else(|| "Failed to compute station B coordinates".to_string())?;
             let correction = Self::coords_sub(coords_b, coords_a);
 
-            let (mut shots_a, mut shots_b) = {
-                let section_lookup = self.build_section_lookup();
-                let shots_a = collect_segment_shots_grouped(&path_a, &section_lookup)?;
-                let shots_b = collect_segment_shots_grouped(&path_b, &section_lookup)?;
-                (shots_a, shots_b)
-            };
-            for shot in &mut shots_b {
-                shot.sign = -1.0;
+            let mut all_shots: Vec<SegmentShot> = Vec::new();
+            let section_lookup = self.build_section_lookup();
+            for (idx, step) in path_ab.steps.iter().enumerate() {
+                let from = nodes[idx];
+                let to = nodes[idx + 1];
+                if root_for(from) == root_for(to) {
+                    continue;
+                }
+                if let PathEdge::Shot {
+                    section_id,
+                    shot_index,
+                    forward,
+                } = step.edge
+                {
+                    let section = section_lookup
+                        .get(&section_id)
+                        .ok_or_else(|| "Section not found for closure path".to_string())?;
+                    let shot = section
+                        .shots
+                        .get(shot_index)
+                        .ok_or_else(|| "Shot not found for closure path".to_string())?;
+                    let before_anchor = idx < anchor_index;
+                    let forward_dir = if before_anchor { !forward } else { forward };
+                    let path_vec = Self::shot_vector_along(shot, forward_dir);
+                    let sign = if before_anchor { 1.0 } else { -1.0 };
+                    all_shots.push(SegmentShot {
+                        section_id,
+                        shot_index,
+                        forward: forward_dir,
+                        length: shot.length,
+                        path_vec,
+                        sign,
+                    });
+                }
             }
-            let mut all_shots = Vec::with_capacity(shots_a.len() + shots_b.len());
-            all_shots.append(&mut shots_a);
-            all_shots.append(&mut shots_b);
 
             if !all_shots.is_empty() {
                 self.apply_correction_to_shots(
@@ -1661,7 +1636,28 @@ impl Project {
                     distribution,
                     transit_vertical_mode,
                 )?;
+            } else {
+                debug!(
+                    ?station_a,
+                    ?station_b,
+                    ?anchor,
+                    "Closure adjustment has no distributable shots (merge-only path)"
+                );
             }
+
+            let mut affected_sections: HashSet<SectionId> = HashSet::new();
+            for node in &nodes {
+                affected_sections.insert(node.section_id);
+            }
+            let mut sections_to_align: HashSet<SectionId> = HashSet::new();
+            for (_root, members) in &colocated_groups {
+                if members.iter().any(|m| affected_sections.contains(&m.section_id)) {
+                    for member in members {
+                        sections_to_align.insert(member.section_id);
+                    }
+                }
+            }
+            self.enforce_merge_alignment(&sections_to_align, &colocated_groups, fixed_initial)?;
 
             let coords_a_after = self
                 .compute_station_raw_coords(station_a)
@@ -1669,33 +1665,201 @@ impl Project {
             let coords_b_after = self
                 .compute_station_raw_coords(station_b)
                 .ok_or_else(|| "Failed to compute station B after adjustment".to_string())?;
-            let aligned = if distribution == ClosureStrategy::TransitRule
+            let mut residual = Self::coords_sub(coords_b_after, coords_a_after);
+            if distribution == ClosureStrategy::TransitRule
+                && transit_vertical_mode == TransitVerticalMode::Ignore
+            {
+                residual.z = 0.0;
+            }
+            let mut aligned = if distribution == ClosureStrategy::TransitRule
                 && transit_vertical_mode == TransitVerticalMode::Ignore
             {
                 Self::coords_close_xy(coords_a_after, coords_b_after, 1e-6)
             } else {
                 Self::coords_close(coords_a_after, coords_b_after, 1e-6)
             };
+            if !aligned && Self::coords_norm(residual) > 1e-9 {
+                let a_root = root_for(station_a);
+                let b_root = root_for(station_b);
+                let a_locked = fixed.contains(&a_root);
+                let b_locked = fixed.contains(&b_root);
+                let mut applied = false;
+
+                if !b_locked {
+                    if let Some(members) = colocated_groups.get(&b_root) {
+                        for member in members {
+                            self.apply_station_move_internal(*member, Self::coords_scale(residual, -1.0))?;
+                        }
+                    } else {
+                        self.apply_station_move_internal(station_b, Self::coords_scale(residual, -1.0))?;
+                    }
+                    applied = true;
+                    debug!(
+                        ?station_a,
+                        ?station_b,
+                        ?residual,
+                        moved_root = ?b_root,
+                        "Applied residual alignment by moving station B merge group"
+                    );
+                } else if !a_locked {
+                    if let Some(members) = colocated_groups.get(&a_root) {
+                        for member in members {
+                            self.apply_station_move_internal(*member, residual)?;
+                        }
+                    } else {
+                        self.apply_station_move_internal(station_a, residual)?;
+                    }
+                    applied = true;
+                    debug!(
+                        ?station_a,
+                        ?station_b,
+                        ?residual,
+                        moved_root = ?a_root,
+                        "Applied residual alignment by moving station A merge group"
+                    );
+                }
+
+                if applied {
+                    let coords_a_after = self
+                        .compute_station_raw_coords(station_a)
+                        .ok_or_else(|| "Failed to compute station A after residual alignment".to_string())?;
+                    let coords_b_after = self
+                        .compute_station_raw_coords(station_b)
+                        .ok_or_else(|| "Failed to compute station B after residual alignment".to_string())?;
+                    aligned = if distribution == ClosureStrategy::TransitRule
+                        && transit_vertical_mode == TransitVerticalMode::Ignore
+                    {
+                        Self::coords_close_xy(coords_a_after, coords_b_after, 1e-6)
+                    } else {
+                        Self::coords_close(coords_a_after, coords_b_after, 1e-6)
+                    };
+                }
+            }
+
             if !aligned {
+                debug!(
+                    ?station_a,
+                    ?station_b,
+                    ?anchor,
+                    anchor_index,
+                    path_steps = path_ab.steps.len(),
+                    ?coords_a_after,
+                    ?coords_b_after,
+                    ?correction,
+                    ?distribution,
+                    ?transit_vertical_mode,
+                    "Closure adjustment failed to align endpoints"
+                );
                 return Err("Closure adjustment failed to align endpoints".to_string());
             }
 
             if lock_loops {
-                let mut nodes_a: Vec<StationRef> = Vec::with_capacity(path_a.steps.len() + 1);
-                nodes_a.push(path_a.start);
-                for step in &path_a.steps {
-                    nodes_a.push(step.to);
-                }
-                for node in nodes_a {
+                for node in nodes {
                     fixed.insert(root_for(node));
                 }
-                let mut nodes_b: Vec<StationRef> = Vec::with_capacity(path_b.steps.len() + 1);
-                nodes_b.push(path_b.start);
-                for step in &path_b.steps {
-                    nodes_b.push(step.to);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Enforce merge alignment by adjusting section and station offsets.
+    fn enforce_merge_alignment(
+        &mut self,
+        sections_to_align: &HashSet<SectionId>,
+        colocated_groups: &HashMap<StationRef, Vec<StationRef>>,
+        fixed_initial: &HashSet<StationRef>,
+    ) -> Result<(), String> {
+        if sections_to_align.is_empty() {
+            return Ok(());
+        }
+
+        let mut section_deltas: HashMap<SectionId, Coordinates> = HashMap::new();
+        let mut conflict_samples: Vec<(SectionId, StationRef, StationRef, Coordinates, Coordinates)> = Vec::new();
+        let mut conflicted_sections: HashSet<SectionId> = HashSet::new();
+        let mut section_station_counts: HashMap<SectionId, usize> = HashMap::new();
+
+        for section in self.sections.iter().filter(|s| sections_to_align.contains(&s.id)) {
+            section_station_counts.insert(section.id, section.shots.len());
+        }
+
+        for (_root, members) in colocated_groups {
+            let group_sections: HashSet<SectionId> = members.iter().map(|m| m.section_id).collect();
+            if group_sections.is_disjoint(sections_to_align) {
+                continue;
+            }
+
+            let anchor = members
+                .iter()
+                .copied()
+                .find(|m| fixed_initial.contains(m))
+                .unwrap_or_else(|| members[0]);
+            let anchor_coords = self
+                .compute_station_raw_coords(anchor)
+                .ok_or_else(|| "Failed to compute merge anchor coordinates".to_string())?;
+
+            for member in members {
+                let coords = self
+                    .compute_station_raw_coords(*member)
+                    .ok_or_else(|| "Failed to compute merge member coordinates".to_string())?;
+                let delta = Self::coords_sub(anchor_coords, coords);
+                let entry = section_deltas.entry(member.section_id).or_insert(delta);
+                if !Self::coords_close(*entry, delta, 1e-6) {
+                    conflicted_sections.insert(member.section_id);
+                    conflict_samples.push((member.section_id, anchor, *member, *entry, delta));
                 }
-                for node in nodes_b {
-                    fixed.insert(root_for(node));
+            }
+        }
+
+        if !conflict_samples.is_empty() {
+            debug!(
+                samples = conflict_samples.len(),
+                ?conflict_samples,
+                "Merge alignment produced conflicting section translations"
+            );
+        }
+
+        for (section_id, delta) in &section_deltas {
+            if !sections_to_align.contains(section_id) || conflicted_sections.contains(section_id) {
+                continue;
+            }
+            if delta.x.abs() > 1e-9 || delta.y.abs() > 1e-9 {
+                let current = self.section_offsets.get(section_id).copied().unwrap_or((0.0, 0.0));
+                self.section_offsets.insert(*section_id, (current.0 + delta.x, current.1 + delta.y));
+            }
+            if delta.z.abs() > 1e-9 {
+                if let Some(shot_count) = section_station_counts.get(section_id).copied() {
+                    for idx in 0..=shot_count {
+                        let station = StationRef::new(*section_id, idx as u32);
+                        let entry = self.station_offsets.entry(station).or_insert((0.0, 0.0, 0.0));
+                        entry.2 += delta.z;
+                    }
+                }
+            }
+        }
+
+        if !conflicted_sections.is_empty() {
+            for (_root, members) in colocated_groups {
+                let anchor = members
+                    .iter()
+                    .copied()
+                    .find(|m| fixed_initial.contains(m))
+                    .unwrap_or_else(|| members[0]);
+                let anchor_coords = self
+                    .compute_station_raw_coords(anchor)
+                    .ok_or_else(|| "Failed to compute merge anchor coordinates".to_string())?;
+
+                for member in members {
+                    if *member == anchor || !conflicted_sections.contains(&member.section_id) {
+                        continue;
+                    }
+                    let coords = self
+                        .compute_station_raw_coords(*member)
+                        .ok_or_else(|| "Failed to compute merge member coordinates".to_string())?;
+                    let delta = Self::coords_sub(anchor_coords, coords);
+                    if Self::coords_norm(delta) > 1e-9 {
+                        self.apply_station_move_internal(*member, delta)?;
+                    }
                 }
             }
         }
