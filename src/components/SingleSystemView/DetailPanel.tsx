@@ -204,8 +204,14 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
     <div className="p-2">
       <div className="flex items-center justify-between mb-2 px-2">
         <span className="text-sm text-text-secondary">
-          {t('detailPanel.warnings.count', { count: unresolvedCount })}
-          {resolvedCount > 0 && ` ${t('detailPanel.warnings.resolvedCount', { count: resolvedCount })}`}
+          {t('detailPanel.warnings.count', {
+            count: unresolvedCount,
+            countFormatted: formatNumber(unresolvedCount),
+          })}
+          {resolvedCount > 0 && ` ${t('detailPanel.warnings.resolvedCount', {
+            count: resolvedCount,
+            countFormatted: formatNumber(resolvedCount),
+          })}`}
         </span>
         {resolvedCount > 0 && (
           <button

@@ -8,7 +8,7 @@ import { Select, type SelectOption } from '../common/Select';
 import type { ProjectWarning } from '../../types/commands';
 import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
 import { formatShotId } from '../../utils/formatters';
-import { formatFixed } from '../../i18n/format';
+import { formatFixed, formatNumber } from '../../i18n/format';
 
 interface DataTableProps {
   sections: Section[];
@@ -511,7 +511,10 @@ export default function DataTable({ sections }: DataTableProps) {
         {!dataTableOpen && selectedSection && (
           <span className="text-sm text-text-secondary ml-auto">
             {selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id })}{' '}
-            ({t('dataTable.shotCount', { count: selectedSection.shots.length })})
+            ({t('dataTable.shotCount', {
+              count: selectedSection.shots.length,
+              countFormatted: formatNumber(selectedSection.shots.length),
+            })})
           </span>
         )}
       </div>
