@@ -1,4 +1,4 @@
-# CaveChef TODO - v1.0 Completion Tasks
+# Stalagmight TODO - v1.0 Completion Tasks
 
 This document tracks functionality specified in `docs/SPEC.md` and implementation status based on codebase analysis (last updated: 2026-02-03).
 

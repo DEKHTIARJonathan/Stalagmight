@@ -1,4 +1,4 @@
-# CaveChef Architecture
+# Stalagmight Architecture
 
 > For full data model, UI design, and workflows, see [SPEC.md](SPEC.md).
 
@@ -77,8 +77,8 @@ if should_save {
 ### Safe File Save
 
 Always use temp file + atomic rename pattern for saves:
-1. Write to `file.cvproj.tmp`
-2. On success, rename to `file.cvproj`
+1. Write to `file.stalx.tmp`
+2. On success, rename to `file.stalx`
 3. On failure, delete temp file
 
 This prevents data loss if save fails mid-write.
@@ -131,7 +131,7 @@ GlobalView.tsx (container)
             │
             ▼
 GlobalViewMap.tsx
-    ├── Initializes MapLibre with Esri World Imagery via cavechef-tiles:// protocol
+    ├── Initializes MapLibre with Esri World Imagery via stalagmight-tiles:// protocol
     ├── Restores persisted map position from localStorage
     ├── Creates GlobalSurveyLayer for geometry rendering
     └── On map moveend → loadGeometryBatch(visible systems)

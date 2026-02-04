@@ -270,10 +270,10 @@ test.describe('Toolbar Tool Groups', () => {
     // Wait for anchored section IDs to be fetched and feature-state applied.
     // Poll until a station feature in section 1 has anchored=true in feature-state.
     await page.waitForFunction(() => {
-      const map = (window as unknown as { __cavechef_map__?: {
+      const map = (window as unknown as { __stalagmight_map__?: {
         querySourceFeatures: (source: string) => Array<{ id?: number | string; properties?: { sectionId?: number } }>;
         getFeatureState: (opts: { source: string; id: number }) => { anchored?: boolean };
-      } }).__cavechef_map__;
+      } }).__stalagmight_map__;
       if (!map) return false;
 
       try {

@@ -1,4 +1,4 @@
-# CaveChef Project Structure
+# Stalagmight Project Structure
 
 ## Tech Stack
 
@@ -18,7 +18,7 @@
 ## Directory Tree
 
 ```
-cavechef/
+stalagmight/
 ├── src-tauri/                    # Rust backend
 │   ├── src/
 │   │   ├── main.rs               # Tauri entry point

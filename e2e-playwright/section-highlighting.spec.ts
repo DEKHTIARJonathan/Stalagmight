@@ -21,7 +21,7 @@ import { seedProjectWithSections, type SectionSeed } from './helpers/app';
 async function waitForMapReady(page: Page): Promise<void> {
   await page.waitForFunction(
     () => {
-      const map = (window as unknown as { __cavechef_map__?: { loaded: () => boolean } }).__cavechef_map__;
+      const map = (window as unknown as { __stalagmight_map__?: { loaded: () => boolean } }).__stalagmight_map__;
       return map && map.loaded();
     },
     { timeout: 10000 }
@@ -43,8 +43,8 @@ async function waitForShotsRendered(page: Page): Promise<void> {
   await expect.poll(async () => {
     return page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: { queryRenderedFeatures: (opts: { layers: string[] }) => Array<unknown> };
-      }).__cavechef_map__;
+        __stalagmight_map__?: { queryRenderedFeatures: (opts: { layers: string[] }) => Array<unknown> };
+      }).__stalagmight_map__;
       if (!map) return 0;
       try {
         return map.queryRenderedFeatures({ layers: ['survey-shots'] }).length;
@@ -224,7 +224,7 @@ async function getAvailableSectionIds(page: Page): Promise<number[]> {
 /**
  * Helper to query MapLibre feature-state on all features belonging to a section.
  * Uses querySourceFeatures + getFeatureState (requires source names, not layer names).
- * Throws inside page.evaluate if __cavechef_map__ is missing so tests fail
+ * Throws inside page.evaluate if __stalagmight_map__ is missing so tests fail
  * instead of passing vacuously with total=0.
  */
 async function getSectionFeatureStates(
@@ -233,11 +233,11 @@ async function getSectionFeatureStates(
   stateKey: 'hover' | 'selected'
 ): Promise<{ shots: { total: number; withState: number }; stations: { total: number; withState: number } }> {
   return page.evaluate(({ secId, key }) => {
-    const map = (window as unknown as { __cavechef_map__?: {
+    const map = (window as unknown as { __stalagmight_map__?: {
       querySourceFeatures: (source: string) => Array<{ properties?: { sectionId?: number; featureId?: number } }>;
       getFeatureState: (opts: { source: string; id: number }) => Record<string, unknown> | null;
-    } }).__cavechef_map__;
-    if (!map) throw new Error('__cavechef_map__ not found — map must be loaded before checking feature-state');
+    } }).__stalagmight_map__;
+    if (!map) throw new Error('__stalagmight_map__ not found — map must be loaded before checking feature-state');
 
     const checkSource = (sourceName: string) => {
       const features = map.querySourceFeatures(sourceName);
@@ -627,12 +627,12 @@ test.describe('Section Highlighting', () => {
       // Verify no map features for empty section (it has no shots)
       const featureCount = await page.evaluate((secId) => {
         const map = (window as unknown as {
-          __cavechef_map__?: {
+          __stalagmight_map__?: {
             queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
               properties: { sectionId: number };
             }>;
           };
-        }).__cavechef_map__;
+        }).__stalagmight_map__;
 
         if (!map) return -1;
         const features = map.queryRenderedFeatures({ layers: ['survey-shots'] });
@@ -700,12 +700,12 @@ test.describe('Section Highlighting', () => {
       // Query shot features - should include virtual shot
       const shotFeatures = await page.evaluate((secId) => {
         const map = (window as unknown as {
-          __cavechef_map__?: {
+          __stalagmight_map__?: {
             queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
               properties: { sectionId: number; isVirtual?: boolean };
             }>;
           };
-        }).__cavechef_map__;
+        }).__stalagmight_map__;
 
         if (!map) return { total: 0, virtual: 0 };
         const features = map.queryRenderedFeatures({ layers: ['survey-shots'] });

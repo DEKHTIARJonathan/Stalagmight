@@ -63,7 +63,7 @@ describe('Export Scaling Verification', () => {
     await waitForAppReady();
     await resetAppState();
     // Create unique temp directory for each test
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cavechef-scaling-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-scaling-'));
   });
 
   afterEach(async () => {

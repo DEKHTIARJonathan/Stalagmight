@@ -33,7 +33,7 @@ function getSatelliteToggle(page: Page) {
 async function waitForMapLayer(page: Page, layerId: string): Promise<boolean> {
   return await expect.poll(async () => {
     return await page.evaluate((id) => {
-      const map = (window as unknown as { __cavechef_map__?: { getLayer: (id: string) => unknown } }).__cavechef_map__;
+      const map = (window as unknown as { __stalagmight_map__?: { getLayer: (id: string) => unknown } }).__stalagmight_map__;
       return map ? !!map.getLayer(id) : false;
     }, layerId);
   }, { timeout: 5000 }).toBe(true).then(() => true).catch(() => false);
@@ -81,7 +81,7 @@ test.describe('Satellite Bug Regressions', () => {
       // Without GPS origin (bug case), center would be near (0, 0)
 
       const mapCenter = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getCenter: () => { lat: number; lng: number } } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getCenter: () => { lat: number; lng: number } } }).__stalagmight_map__;
         if (!map) return null;
         const center = map.getCenter();
         return { lat: center.lat, lng: center.lng };
@@ -111,7 +111,7 @@ test.describe('Satellite Bug Regressions', () => {
 
       // Get layer order and verify satellite is ABOVE background
       const layerOrder = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getStyle: () => { layers: { id: string }[] } } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getStyle: () => { layers: { id: string }[] } } }).__stalagmight_map__;
         if (!map) return [];
         const layers = map.getStyle().layers;
         return layers.map((l: { id: string }) => l.id);
@@ -144,7 +144,7 @@ test.describe('Satellite Bug Regressions', () => {
 
       // Get full layer order
       const layerOrder = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getStyle: () => { layers: { id: string }[] } } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getStyle: () => { layers: { id: string }[] } } }).__stalagmight_map__;
         if (!map) return [];
         const layers = map.getStyle().layers;
         return layers.map((l: { id: string }) => l.id);
@@ -204,7 +204,7 @@ test.describe('Satellite Bug Regressions', () => {
       }
 
       // App should remain functional after this
-      await expect(page).toHaveTitle(/CaveChef/);
+      await expect(page).toHaveTitle(/Stalagmight/);
     });
 
     test('should add satellite layer only after map is loaded', async ({ page }) => {
@@ -227,7 +227,7 @@ test.describe('Satellite Bug Regressions', () => {
 
       // Verify the source was also added
       const hasSource = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getSource: (id: string) => unknown } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => unknown } }).__stalagmight_map__;
         return map ? !!map.getSource('satellite-tiles') : false;
       });
       expect(hasSource).toBe(true);
@@ -235,7 +235,7 @@ test.describe('Satellite Bug Regressions', () => {
   });
 
   test.describe('Custom Tile Protocol (Bug: CORS with fetch)', () => {
-    test('should use cavechef-tiles:// protocol for tile requests', async ({ page }) => {
+    test('should use stalagmight-tiles:// protocol for tile requests', async ({ page }) => {
       // This bug was that tiles were fetched using browser fetch() instead of
       // Tauri's invoke(), causing CORS errors. The fix uses a custom protocol.
 
@@ -251,7 +251,7 @@ test.describe('Satellite Bug Regressions', () => {
 
       // Verify the source uses custom protocol
       const tileUrl = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getSource: (id: string) => { tiles?: string[] } | null } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => { tiles?: string[] } | null } }).__stalagmight_map__;
         if (!map) return null;
         const source = map.getSource('satellite-tiles');
         if (!source || !('tiles' in source)) return null;
@@ -259,7 +259,7 @@ test.describe('Satellite Bug Regressions', () => {
       });
 
       // Must use custom protocol, not https://
-      expect(tileUrl).toMatch(/^cavechef-tiles:\/\//);
+      expect(tileUrl).toMatch(/^stalagmight-tiles:\/\//);
       expect(tileUrl).not.toMatch(/^https?:\/\//);
     });
 
@@ -278,7 +278,7 @@ test.describe('Satellite Bug Regressions', () => {
 
       // Verify tile URL includes provider
       const tileUrl = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getSource: (id: string) => { tiles?: string[] } | null } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => { tiles?: string[] } | null } }).__stalagmight_map__;
         if (!map) return null;
         const source = map.getSource('satellite-tiles');
         if (!source || !('tiles' in source)) return null;
@@ -325,7 +325,7 @@ test.describe('Satellite Bug Regressions', () => {
 
       // Verify layer ordering
       const orderCheck = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getStyle: () => { layers: { id: string }[] } } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getStyle: () => { layers: { id: string }[] } } }).__stalagmight_map__;
         if (!map) return false;
         const layers = map.getStyle().layers.map((l: { id: string }) => l.id);
         const bgIdx = layers.indexOf('background');
@@ -336,12 +336,12 @@ test.describe('Satellite Bug Regressions', () => {
 
       // Verify custom protocol
       const protocolCheck = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getSource: (id: string) => { tiles?: string[] } | null } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => { tiles?: string[] } | null } }).__stalagmight_map__;
         if (!map) return false;
         const source = map.getSource('satellite-tiles');
         if (!source || !('tiles' in source)) return false;
         const url = source.tiles?.[0] ?? '';
-        return url.startsWith('cavechef-tiles://');
+        return url.startsWith('stalagmight-tiles://');
       });
       expect(protocolCheck).toBe(true);
 
@@ -363,7 +363,7 @@ test.describe('Satellite Bug Regressions', () => {
       await button.click();
       await expect.poll(async () => {
         return await page.evaluate(() => {
-          const map = (window as unknown as { __cavechef_map__?: { getLayer: (id: string) => unknown } }).__cavechef_map__;
+          const map = (window as unknown as { __stalagmight_map__?: { getLayer: (id: string) => unknown } }).__stalagmight_map__;
           return map ? !!map.getLayer('satellite-tiles') : false;
         });
       }, { timeout: 3000 }).toBe(false);

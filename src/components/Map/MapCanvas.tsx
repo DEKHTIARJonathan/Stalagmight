@@ -1253,10 +1253,10 @@ export default function MapCanvas() {
   // Expose map instance for E2E testing and keyboard shortcuts
   useEffect(() => {
     if (map.current) {
-      (window as unknown as { __cavechef_map__?: maplibregl.Map }).__cavechef_map__ = map.current;
+      (window as unknown as { __stalagmight_map__?: maplibregl.Map }).__stalagmight_map__ = map.current;
     }
     return () => {
-      delete (window as unknown as { __cavechef_map__?: maplibregl.Map }).__cavechef_map__;
+      delete (window as unknown as { __stalagmight_map__?: maplibregl.Map }).__stalagmight_map__;
     };
   }, [mapLoaded]);
 
@@ -1944,7 +1944,7 @@ export default function MapCanvas() {
   }, [activeTool, zoomStep, zoomMin, placementMode, zoomBox.start]);
 
   // Get satellite tile URL based on provider config
-  // Uses custom cavechef-tiles:// protocol for offline caching
+  // Uses custom stalagmight-tiles:// protocol for offline caching
   const getSatelliteTileConfig = useCallback(() => {
     return getTileConfig();
   }, []);

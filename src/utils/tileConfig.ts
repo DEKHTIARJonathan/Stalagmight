@@ -5,7 +5,7 @@
  * for a given map tile provider. Used by both MapCanvas and GlobalViewMap
  * to avoid duplicating provider-specific configuration.
  *
- * The frontend uses the cavechef-tiles:// custom protocol for all tile URLs.
+ * The frontend uses the stalagmight-tiles:// custom protocol for all tile URLs.
  * This routes through the Rust backend for SQLite caching and offline support.
  * The actual provider URL template is only used by the backend internally.
  */
@@ -41,14 +41,14 @@ const DEFAULT_PROVIDER_METADATA: Record<string, Omit<TileConfig, 'tiles'>> = {
  * @param provider - Provider name (default: 'esri')
  * @param metadata - Optional provider metadata from backend IPC (get_tile_providers).
  *                   If provided, uses metadata fields (attribution, tile_size, min_zoom, max_zoom).
- *                   The url_template is NOT used - frontend always uses cavechef-tiles:// protocol.
+ *                   The url_template is NOT used - frontend always uses stalagmight-tiles:// protocol.
  * @returns Tile configuration object
  * @throws Error if provider is unknown and no metadata provided
  */
 export function getTileConfig(provider: string = 'esri', metadata?: TileProviderInfo): TileConfig {
-  // Always use cavechef-tiles:// protocol for frontend tile URLs
+  // Always use stalagmight-tiles:// protocol for frontend tile URLs
   // This routes through Rust backend for caching and offline support
-  const tiles = [`cavechef-tiles://${provider}/{z}/{y}/{x}`];
+  const tiles = [`stalagmight-tiles://${provider}/{z}/{y}/{x}`];
 
   // If metadata provided from backend, use it (except url_template)
   if (metadata) {

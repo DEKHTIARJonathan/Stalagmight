@@ -473,9 +473,9 @@ mod tests {
             ),
             (
                 Command::OpenProject {
-                    path: PathBuf::from("alpha.cvproj"),
+                    path: PathBuf::from("alpha.stalx"),
                 },
-                "Open project 'alpha.cvproj'",
+                "Open project 'alpha.stalx'",
             ),
             (
                 Command::SaveProject { path: None },
@@ -483,9 +483,9 @@ mod tests {
             ),
             (
                 Command::SaveProject {
-                    path: Some(PathBuf::from("alpha.cvproj")),
+                    path: Some(PathBuf::from("alpha.stalx")),
                 },
-                "Save project to 'alpha.cvproj'",
+                "Save project to 'alpha.stalx'",
             ),
             (Command::CloseProject, "Close project"),
             (
@@ -613,8 +613,8 @@ mod tests {
             ),
             (
                 Command::MergeProjects {
-                    source_paths: vec![PathBuf::from("a.cvproj"), PathBuf::from("b.cvproj")],
-                    output_path: PathBuf::from("out.cvproj"),
+                    source_paths: vec![PathBuf::from("a.stalx"), PathBuf::from("b.stalx")],
+                    output_path: PathBuf::from("out.stalx"),
                     output_name: "Merged".to_string(),
                     archive_originals: false,
                 },

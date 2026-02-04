@@ -1,12 +1,12 @@
 #!/bin/bash
 #
-# wdio.sh - Comprehensive WebdriverIO E2E Test Runner for CaveChef
+# wdio.sh - Comprehensive WebdriverIO E2E Test Runner for Stalagmight
 #
 # This script handles all the common issues that can cause WebdriverIO tests to fail:
 # - Platform verification (Linux/Windows only)
 # - tauri-driver installation check
 # - Display detection (headed vs headless with xvfb)
-# - Port cleanup (kills stale tauri-driver/cavechef processes)
+# - Port cleanup (kills stale tauri-driver/stalagmight processes)
 # - Build freshness check (rebuilds if source is newer than binary)
 #
 # Usage:
@@ -36,7 +36,7 @@ success() { echo -e "${GREEN}[OK]${NC} $1"; }
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cargo_build}"
-BINARY_PATH="$CARGO_TARGET_DIR/debug/cavechef"
+BINARY_PATH="$CARGO_TARGET_DIR/debug/stalagmight"
 DIST_PATH="$PROJECT_ROOT/dist"
 DEFAULT_MAX_INSTANCES=1
 if command -v nproc &> /dev/null; then
@@ -104,7 +104,7 @@ parse_args() {
 
 show_help() {
     cat << EOF
-CaveChef WebdriverIO E2E Test Runner
+Stalagmight WebdriverIO E2E Test Runner
 
 Usage: $0 [options] [wdio-args]
 
@@ -252,10 +252,10 @@ cleanup_ports() {
         pkill -9 WebKitWebDriver 2>/dev/null || true
     fi
 
-    # Kill any stale cavechef processes
-    if pgrep -x cavechef > /dev/null 2>&1; then
-        warn "Found running cavechef, killing..."
-        pkill -9 cavechef 2>/dev/null || true
+    # Kill any stale stalagmight processes
+    if pgrep -x stalagmight > /dev/null 2>&1; then
+        warn "Found running stalagmight, killing..."
+        pkill -9 stalagmight 2>/dev/null || true
     fi
 
     # Check if ports are in use and free them (cover parallel worker range)
@@ -382,7 +382,7 @@ check_build_freshness() {
 
 # ===== Build =====
 do_build() {
-    info "Building CaveChef..."
+    info "Building Stalagmight..."
 
     cd "$PROJECT_ROOT"
 
@@ -441,7 +441,7 @@ run_tests() {
 main() {
     echo ""
     echo "========================================"
-    echo "  CaveChef WebdriverIO E2E Test Runner"
+    echo "  Stalagmight WebdriverIO E2E Test Runner"
     echo "========================================"
     echo ""
 

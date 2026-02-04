@@ -77,8 +77,8 @@ fn sanitize_content_type(raw: &str) -> String {
 /// Parses tile coordinates from a URI.
 /// Supports both path-based (/esri/z/y/x) and host-based (esri/{z}/{y}/{x}) formats.
 ///
-/// Path-based: `cavechef-tiles://localhost/esri/10/500/250`
-/// Host-based: `cavechef-tiles://esri/10/500/250`
+/// Path-based: `stalagmight-tiles://localhost/esri/10/500/250`
+/// Host-based: `stalagmight-tiles://esri/10/500/250`
 ///
 /// Returns None for malformed URIs.
 fn parse_tile_uri(uri: &http::Uri) -> Option<(String, u32, u32, u32)> {
@@ -328,7 +328,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .register_asynchronous_uri_scheme_protocol("cavechef-tiles", |ctx, request, responder| {
+        .register_asynchronous_uri_scheme_protocol("stalagmight-tiles", |ctx, request, responder| {
             let uri = request.uri().clone();
             let state = ctx.app_handle().state::<core::state::AppState>();
             let tile_cache = state.tile_cache();
@@ -381,7 +381,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            tracing::info!("CaveChef starting up");
+            tracing::info!("Stalagmight starting up");
 
             // Initialize app state
             let app_state = core::state::AppState::new()?;
@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn test_parse_tile_uri_path_based() {
-        let uri: http::Uri = "cavechef-tiles://localhost/esri/10/500/250"
+        let uri: http::Uri = "stalagmight-tiles://localhost/esri/10/500/250"
             .parse()
             .unwrap();
         let result = parse_tile_uri(&uri);
@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn test_parse_tile_uri_path_based_with_extension() {
-        let uri: http::Uri = "cavechef-tiles://localhost/esri/10/500/250.jpg"
+        let uri: http::Uri = "stalagmight-tiles://localhost/esri/10/500/250.jpg"
             .parse()
             .unwrap();
         let result = parse_tile_uri(&uri);
@@ -507,7 +507,7 @@ mod tests {
 
     #[test]
     fn test_parse_tile_uri_host_based() {
-        let uri: http::Uri = "cavechef-tiles://esri/10/500/250".parse().unwrap();
+        let uri: http::Uri = "stalagmight-tiles://esri/10/500/250".parse().unwrap();
         let result = parse_tile_uri(&uri);
         assert_eq!(result, Some(("esri".to_string(), 10, 500, 250)));
     }
@@ -515,7 +515,7 @@ mod tests {
     #[test]
     fn test_parse_tile_uri_malformed_no_host() {
         // Malformed URI with numeric first segment but no valid host
-        let uri: http::Uri = "cavechef-tiles://localhost/10/500/250".parse().unwrap();
+        let uri: http::Uri = "stalagmight-tiles://localhost/10/500/250".parse().unwrap();
         let result = parse_tile_uri(&uri);
         // First segment is "10" which parses as z, host is "localhost" which is rejected
         assert_eq!(result, None);
@@ -523,7 +523,7 @@ mod tests {
 
     #[test]
     fn test_parse_tile_uri_invalid_coordinates() {
-        let uri: http::Uri = "cavechef-tiles://localhost/esri/abc/500/250"
+        let uri: http::Uri = "stalagmight-tiles://localhost/esri/abc/500/250"
             .parse()
             .unwrap();
         let result = parse_tile_uri(&uri);
@@ -532,14 +532,14 @@ mod tests {
 
     #[test]
     fn test_parse_tile_uri_too_few_segments() {
-        let uri: http::Uri = "cavechef-tiles://localhost/esri/10/500".parse().unwrap();
+        let uri: http::Uri = "stalagmight-tiles://localhost/esri/10/500".parse().unwrap();
         let result = parse_tile_uri(&uri);
         assert_eq!(result, None);
     }
 
     #[test]
     fn test_parse_tile_uri_empty_path() {
-        let uri: http::Uri = "cavechef-tiles://localhost/".parse().unwrap();
+        let uri: http::Uri = "stalagmight-tiles://localhost/".parse().unwrap();
         let result = parse_tile_uri(&uri);
         assert_eq!(result, None);
     }
@@ -561,232 +561,232 @@ mod tests {
 
     parse_case!(
         test_parse_tile_uri_path_based_png_extension,
-        "cavechef-tiles://localhost/esri/10/500/250.png",
+        "stalagmight-tiles://localhost/esri/10/500/250.png",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_path_based_jpeg_extension,
-        "cavechef-tiles://localhost/esri/10/500/250.jpeg",
+        "stalagmight-tiles://localhost/esri/10/500/250.jpeg",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_path_based_leading_zeros,
-        "cavechef-tiles://localhost/esri/01/002/0003",
+        "stalagmight-tiles://localhost/esri/01/002/0003",
         expect("esri", 1, 2, 3)
     );
     parse_case!(
         test_parse_tile_uri_path_based_uppercase_provider,
-        "cavechef-tiles://localhost/ESRI/10/500/250",
+        "stalagmight-tiles://localhost/ESRI/10/500/250",
         expect("ESRI", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_path_based_provider_with_dash,
-        "cavechef-tiles://localhost/esri-v2/10/500/250",
+        "stalagmight-tiles://localhost/esri-v2/10/500/250",
         expect("esri-v2", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_path_based_provider_with_dot,
-        "cavechef-tiles://localhost/esri.v1/10/500/250",
+        "stalagmight-tiles://localhost/esri.v1/10/500/250",
         expect("esri.v1", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_path_based_extra_segments,
-        "cavechef-tiles://localhost/esri/10/500/250/extra",
+        "stalagmight-tiles://localhost/esri/10/500/250/extra",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_path_based_trailing_slash,
-        "cavechef-tiles://localhost/esri/10/500/250/",
+        "stalagmight-tiles://localhost/esri/10/500/250/",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_path_based_query,
-        "cavechef-tiles://localhost/esri/10/500/250?token=abc",
+        "stalagmight-tiles://localhost/esri/10/500/250?token=abc",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_path_based_zero_coords,
-        "cavechef-tiles://localhost/esri/0/0/0",
+        "stalagmight-tiles://localhost/esri/0/0/0",
         expect("esri", 0, 0, 0)
     );
     parse_case!(
         test_parse_tile_uri_path_based_large_coords,
-        "cavechef-tiles://localhost/esri/4294967295/4294967295/4294967295",
+        "stalagmight-tiles://localhost/esri/4294967295/4294967295/4294967295",
         expect("esri", 4294967295, 4294967295, 4294967295)
     );
     parse_case!(
         test_parse_tile_uri_path_based_with_port,
-        "cavechef-tiles://localhost:1234/esri/10/500/250",
+        "stalagmight-tiles://localhost:1234/esri/10/500/250",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_path_based_x_double_extension,
-        "cavechef-tiles://localhost/esri/10/500/250.png.jpg",
+        "stalagmight-tiles://localhost/esri/10/500/250.png.jpg",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_path_based_x_trailing_dot,
-        "cavechef-tiles://localhost/esri/10/500/250.",
+        "stalagmight-tiles://localhost/esri/10/500/250.",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_path_based_x_decimal_truncates,
-        "cavechef-tiles://localhost/esri/10/500/250.5",
+        "stalagmight-tiles://localhost/esri/10/500/250.5",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_path_based_invalid_y,
-        "cavechef-tiles://localhost/esri/10/abc/250",
+        "stalagmight-tiles://localhost/esri/10/abc/250",
         None
     );
     parse_case!(
         test_parse_tile_uri_path_based_invalid_x,
-        "cavechef-tiles://localhost/esri/10/500/abc",
+        "stalagmight-tiles://localhost/esri/10/500/abc",
         None
     );
     parse_case!(
         test_parse_tile_uri_path_based_invalid_z,
-        "cavechef-tiles://localhost/esri/abc/500/250",
+        "stalagmight-tiles://localhost/esri/abc/500/250",
         None
     );
     parse_case!(
         test_parse_tile_uri_path_based_negative_z,
-        "cavechef-tiles://localhost/esri/-1/500/250",
+        "stalagmight-tiles://localhost/esri/-1/500/250",
         None
     );
     parse_case!(
         test_parse_tile_uri_path_based_negative_y,
-        "cavechef-tiles://localhost/esri/10/-1/250",
+        "stalagmight-tiles://localhost/esri/10/-1/250",
         None
     );
     parse_case!(
         test_parse_tile_uri_path_based_negative_x,
-        "cavechef-tiles://localhost/esri/10/500/-1",
+        "stalagmight-tiles://localhost/esri/10/500/-1",
         None
     );
     parse_case!(
         test_parse_tile_uri_path_based_missing_x_trailing_slash,
-        "cavechef-tiles://localhost/esri/10/500/",
+        "stalagmight-tiles://localhost/esri/10/500/",
         None
     );
     parse_case!(
         test_parse_tile_uri_path_based_only_provider,
-        "cavechef-tiles://localhost/esri",
+        "stalagmight-tiles://localhost/esri",
         None
     );
     parse_case!(
         test_parse_tile_uri_path_based_provider_and_z,
-        "cavechef-tiles://localhost/esri/10",
+        "stalagmight-tiles://localhost/esri/10",
         None
     );
     parse_case!(
         test_parse_tile_uri_path_based_double_slash,
-        "cavechef-tiles://localhost/esri//500/250",
+        "stalagmight-tiles://localhost/esri//500/250",
         None
     );
     parse_case!(
         test_parse_tile_uri_path_based_z_float,
-        "cavechef-tiles://localhost/esri/10.5/500/250",
+        "stalagmight-tiles://localhost/esri/10.5/500/250",
         None
     );
     parse_case!(
         test_parse_tile_uri_path_based_y_float,
-        "cavechef-tiles://localhost/esri/10/500.1/250",
+        "stalagmight-tiles://localhost/esri/10/500.1/250",
         None
     );
     parse_case!(
         test_parse_tile_uri_host_based_png_extension,
-        "cavechef-tiles://esri/10/500/250.png",
+        "stalagmight-tiles://esri/10/500/250.png",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_host_based_uppercase_provider,
-        "cavechef-tiles://ESRI/10/500/250",
+        "stalagmight-tiles://ESRI/10/500/250",
         expect("ESRI", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_host_based_provider_with_dot,
-        "cavechef-tiles://esri.v1/10/500/250",
+        "stalagmight-tiles://esri.v1/10/500/250",
         expect("esri.v1", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_host_based_provider_numeric,
-        "cavechef-tiles://123/10/500/250",
+        "stalagmight-tiles://123/10/500/250",
         expect("123", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_host_based_with_port,
-        "cavechef-tiles://esri:1234/10/500/250",
+        "stalagmight-tiles://esri:1234/10/500/250",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_host_based_extra_segments,
-        "cavechef-tiles://esri/10/500/250/extra",
+        "stalagmight-tiles://esri/10/500/250/extra",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_host_based_trailing_slash,
-        "cavechef-tiles://esri/10/500/250/",
+        "stalagmight-tiles://esri/10/500/250/",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_host_based_query,
-        "cavechef-tiles://esri/10/500/250?x=1",
+        "stalagmight-tiles://esri/10/500/250?x=1",
         expect("esri", 10, 500, 250)
     );
     parse_case!(
         test_parse_tile_uri_host_based_zero_coords,
-        "cavechef-tiles://esri/0/0/0",
+        "stalagmight-tiles://esri/0/0/0",
         expect("esri", 0, 0, 0)
     );
     parse_case!(
         test_parse_tile_uri_host_based_large_coords,
-        "cavechef-tiles://esri/4294967295/4294967295/4294967295",
+        "stalagmight-tiles://esri/4294967295/4294967295/4294967295",
         expect("esri", 4294967295, 4294967295, 4294967295)
     );
     parse_case!(
         test_parse_tile_uri_host_based_missing_y,
-        "cavechef-tiles://esri/10",
+        "stalagmight-tiles://esri/10",
         None
     );
     parse_case!(
         test_parse_tile_uri_host_based_missing_x,
-        "cavechef-tiles://esri/10/500",
+        "stalagmight-tiles://esri/10/500",
         None
     );
     parse_case!(
         test_parse_tile_uri_host_based_invalid_y,
-        "cavechef-tiles://esri/10/abc/250",
+        "stalagmight-tiles://esri/10/abc/250",
         None
     );
     parse_case!(
         test_parse_tile_uri_host_based_invalid_x,
-        "cavechef-tiles://esri/10/500/abc",
+        "stalagmight-tiles://esri/10/500/abc",
         None
     );
     parse_case!(
         test_parse_tile_uri_host_based_negative_x,
-        "cavechef-tiles://esri/10/500/-1",
+        "stalagmight-tiles://esri/10/500/-1",
         None
     );
     parse_case!(
         test_parse_tile_uri_host_based_negative_y,
-        "cavechef-tiles://esri/10/-1/250",
+        "stalagmight-tiles://esri/10/-1/250",
         None
     );
     parse_case!(
         test_parse_tile_uri_host_based_negative_z,
-        "cavechef-tiles://esri/-1/500/250",
+        "stalagmight-tiles://esri/-1/500/250",
         None
     );
     parse_case!(
         test_parse_tile_uri_host_based_z_float,
-        "cavechef-tiles://esri/10.5/500/250",
+        "stalagmight-tiles://esri/10.5/500/250",
         None
     );
     parse_case!(
         test_parse_tile_uri_host_based_numeric_first_segment_non_localhost,
-        "cavechef-tiles://tiles/10/20/30",
+        "stalagmight-tiles://tiles/10/20/30",
         expect("tiles", 10, 20, 30)
     );
 

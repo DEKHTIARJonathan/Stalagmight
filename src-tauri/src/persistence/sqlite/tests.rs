@@ -39,7 +39,7 @@ fn test_create_and_save_project() {
 #[test]
 fn test_save_load_multiple_sections() {
     let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test_sections.cvproj");
+    let db_path = temp_dir.path().join("test_sections.stalx");
 
     // Create a project with multiple sections
     let mut project = Project::new("Multi-Section Cave".to_string(), Some("Test Location".to_string()));
@@ -177,7 +177,7 @@ fn test_save_load_multiple_sections() {
 #[test]
 fn test_save_load_station_merges() {
     let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test_merges.cvproj");
+    let db_path = temp_dir.path().join("test_merges.stalx");
 
     let mut project = Project::new("Merge Test".to_string(), None);
 
@@ -249,7 +249,7 @@ fn test_save_load_station_merges() {
 #[test]
 fn test_save_load_zero_datums() {
     let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test_gps.cvproj");
+    let db_path = temp_dir.path().join("test_gps.stalx");
 
     let mut project = Project::new("GPS Test".to_string(), None);
 
@@ -317,7 +317,7 @@ fn test_save_load_zero_datums() {
 #[test]
 fn test_save_load_section_offsets() {
     let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test_offsets.cvproj");
+    let db_path = temp_dir.path().join("test_offsets.stalx");
 
     let mut project = Project::new("Offset Test".to_string(), None);
 
@@ -366,7 +366,7 @@ fn test_save_load_section_offsets() {
 #[test]
 fn test_update_shot_in_database() {
     let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test_update.cvproj");
+    let db_path = temp_dir.path().join("test_update.stalx");
 
     // Create initial project
     let mut project = Project::new("Update Test".to_string(), None);
@@ -436,7 +436,7 @@ fn test_update_shot_in_database() {
 #[test]
 fn test_delete_section_cascades_shots() {
     let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test_cascade.cvproj");
+    let db_path = temp_dir.path().join("test_cascade.stalx");
 
     // Create project with multiple sections
     let mut project = Project::new("Cascade Test".to_string(), None);
@@ -509,7 +509,7 @@ fn test_delete_section_cascades_shots() {
 #[test]
 fn test_database_transaction_rollback() {
     let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test_rollback.cvproj");
+    let db_path = temp_dir.path().join("test_rollback.stalx");
 
     // Create and save a valid project
     let mut project = Project::new("Rollback Test".to_string(), None);
@@ -588,8 +588,8 @@ fn test_database_transaction_rollback() {
 #[test]
 fn test_open_existing_vs_open_new() {
     let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test_open.cvproj");
-    let nonexistent_path = temp_dir.path().join("nonexistent.cvproj");
+    let db_path = temp_dir.path().join("test_open.stalx");
+    let nonexistent_path = temp_dir.path().join("nonexistent.stalx");
 
     // Test 1: open_existing on nonexistent file should fail
     let result = Database::open_existing(&nonexistent_path);
@@ -609,7 +609,7 @@ fn test_open_existing_vs_open_new() {
         let result = Database::open_existing(&db_path);
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
-        assert!(err_msg.contains("valid CaveChef project"), "Expected 'valid CaveChef project' error, got: {}", err_msg);
+        assert!(err_msg.contains("valid Stalagmight project"), "Expected 'valid Stalagmight project' error, got: {}", err_msg);
     }
 
     // Test 4: Save a project, then open_existing should succeed
@@ -641,7 +641,7 @@ fn test_open_existing_vs_open_new() {
 #[test]
 fn test_save_load_loop_closures() {
     let temp_dir = TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("test_loops.cvproj");
+    let db_path = temp_dir.path().join("test_loops.stalx");
 
     let mut project = Project::new("Loop Test".to_string(), None);
 
@@ -783,7 +783,7 @@ fn test_merged_with_from_fractal_iter2() {
         .join("..") // Go up from src-tauri
         .join("e2e")
         .join("fixtures")
-        .join("fractal_plant_iter2.cvproj");
+        .join("fractal_plant_iter2.stalx");
 
     // Make sure the fixture exists
     assert!(fixture_path.exists(), "Fixture file not found: {:?}", fixture_path);
@@ -888,7 +888,7 @@ fn test_merged_with_from_fractal_iter4() {
         .join("..") // Go up from src-tauri
         .join("e2e")
         .join("fixtures")
-        .join("fractal_plant_iter4.cvproj");
+        .join("fractal_plant_iter4.stalx");
 
     // Make sure the fixture exists
     assert!(fixture_path.exists(), "Fixture file not found: {:?}", fixture_path);

@@ -7,7 +7,7 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
 async function waitForMap(page: Page): Promise<void> {
   await page.waitForFunction(
     () => {
-      const map = (window as unknown as { __cavechef_map__?: { loaded: () => boolean; getZoom: () => number } }).__cavechef_map__;
+      const map = (window as unknown as { __stalagmight_map__?: { loaded: () => boolean; getZoom: () => number } }).__stalagmight_map__;
       return map && map.loaded() && typeof map.getZoom() === 'number';
     },
     { timeout: 10000 }
@@ -33,7 +33,7 @@ async function createProjectWithMap(page: Page): Promise<void> {
  */
 async function getMapZoom(page: Page): Promise<number | null> {
   return page.evaluate(() => {
-    const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number } }).__cavechef_map__;
+    const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number } }).__stalagmight_map__;
     return map?.getZoom() ?? null;
   });
 }
@@ -43,7 +43,7 @@ async function getMapZoom(page: Page): Promise<number | null> {
  */
 async function getMapCenter(page: Page): Promise<{ lng: number; lat: number } | null> {
   return page.evaluate(() => {
-    const map = (window as unknown as { __cavechef_map__?: { getCenter: () => { lng: number; lat: number } } }).__cavechef_map__;
+    const map = (window as unknown as { __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } } }).__stalagmight_map__;
     const center = map?.getCenter();
     return center ? { lng: center.lng, lat: center.lat } : null;
   });
@@ -55,7 +55,7 @@ async function getMapCenter(page: Page): Promise<{ lng: number; lat: number } | 
 async function waitForZoomChange(page: Page, startZoom: number, direction: 'in' | 'out'): Promise<number> {
   await page.waitForFunction(
     ({ start, dir }) => {
-      const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number } }).__cavechef_map__;
+      const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number } }).__stalagmight_map__;
       const current = map?.getZoom();
       if (typeof current !== 'number') return false;
       return dir === 'in' ? current > start : current < start;
@@ -159,7 +159,7 @@ test.describe('Zoom Tool', () => {
 
       // Set zoom to max (22)
       await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { setZoom: (z: number) => void } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { setZoom: (z: number) => void } }).__stalagmight_map__;
         map?.setZoom(22);
       });
       await page.waitForTimeout(100);
@@ -193,7 +193,7 @@ test.describe('Zoom Tool', () => {
 
       // Set zoom to min (1 per mock config)
       await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { setZoom: (z: number) => void } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { setZoom: (z: number) => void } }).__stalagmight_map__;
         map?.setZoom(1);
       });
       await page.waitForTimeout(100);
@@ -350,7 +350,7 @@ test.describe('Zoom Tool', () => {
       await page.waitForTimeout(50);
 
       const cursor = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getCanvas: () => HTMLCanvasElement } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getCanvas: () => HTMLCanvasElement } }).__stalagmight_map__;
         return map?.getCanvas()?.style.cursor ?? null;
       });
       expect(cursor).not.toBeNull();
@@ -372,7 +372,7 @@ test.describe('Zoom Tool', () => {
 
       // Cursor should still be zoom-in (not pointer like with select tool)
       const cursor = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getCanvas: () => HTMLCanvasElement } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getCanvas: () => HTMLCanvasElement } }).__stalagmight_map__;
         return map?.getCanvas()?.style.cursor ?? null;
       });
       expect(cursor).not.toBeNull();
@@ -457,7 +457,7 @@ test.describe('Zoom Tool', () => {
 
       // Verify select cursor
       let cursor = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getCanvas: () => HTMLCanvasElement } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getCanvas: () => HTMLCanvasElement } }).__stalagmight_map__;
         return map?.getCanvas()?.style.cursor ?? null;
       });
       expect(cursor).toBe('default');
@@ -468,7 +468,7 @@ test.describe('Zoom Tool', () => {
 
       // Verify zoom cursor
       cursor = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getCanvas: () => HTMLCanvasElement } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getCanvas: () => HTMLCanvasElement } }).__stalagmight_map__;
         return map?.getCanvas()?.style.cursor ?? null;
       });
       expect(cursor).toBe('zoom-in');
@@ -479,7 +479,7 @@ test.describe('Zoom Tool', () => {
 
       // Verify pan cursor
       cursor = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getCanvas: () => HTMLCanvasElement } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getCanvas: () => HTMLCanvasElement } }).__stalagmight_map__;
         return map?.getCanvas()?.style.cursor ?? null;
       });
       expect(cursor).toBe('grab');
@@ -615,7 +615,7 @@ test.describe('Zoom Tool', () => {
 
       // Set zoom to min (1 per mock config)
       await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { setZoom: (z: number) => void } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { setZoom: (z: number) => void } }).__stalagmight_map__;
         map?.setZoom(1);
       });
       await page.waitForTimeout(100);
@@ -642,7 +642,7 @@ test.describe('Zoom Tool', () => {
 
       // Set zoom to max (22 per mock config)
       await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { setZoom: (z: number) => void } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { setZoom: (z: number) => void } }).__stalagmight_map__;
         map?.setZoom(22);
       });
       await page.waitForTimeout(100);

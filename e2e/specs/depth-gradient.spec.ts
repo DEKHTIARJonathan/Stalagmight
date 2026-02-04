@@ -10,7 +10,7 @@
  *
  * Test requirements:
  * - Real backend (not mocked) for actual display settings persistence
- * - Uses window.__cavechef_map__ for map state verification
+ * - Uses window.__stalagmight_map__ for map state verification
  * - Access window.__E2E_TEST__ for store state verification
  */
 

@@ -17,7 +17,7 @@ const LOGS_DIR = path.join(__dirname, 'wdio-logs');
 
 // Detect platform and set appropriate binary path
 const isWindows = process.platform === 'win32';
-const binaryName = isWindows ? 'cavechef.exe' : 'cavechef';
+const binaryName = isWindows ? 'stalagmight.exe' : 'stalagmight';
 // Use CARGO_TARGET_DIR from tauri config (~/.cargo_build)
 const cargoTargetDir = process.env.CARGO_TARGET_DIR || path.join(os.homedir(), '.cargo_build');
 const binaryPath = path.join(cargoTargetDir, 'debug', binaryName);
@@ -58,7 +58,7 @@ function clearRecentProjects(): void {
   const configRoot = isWindows
     ? process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
     : process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-  const configPath = path.join(configRoot, 'cavechef', 'config.toml');
+  const configPath = path.join(configRoot, 'stalagmight', 'config.toml');
 
   if (fs.existsSync(configPath)) {
     try {
@@ -212,7 +212,7 @@ export const config: Options.Testrunner = {
     const nativePort = baseNativePort + workerId;
 
     // Ensure each worker has isolated config/data/cache directories
-    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `cavechef-wdio-${cid}-`));
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `stalagmight-wdio-${cid}-`));
     applyWorkerEnv(tempRoot);
     clearRecentProjects();
 

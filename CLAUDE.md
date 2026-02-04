@@ -1,4 +1,4 @@
-# CaveChef
+# Stalagmight
 
 Tauri desktop app for processing underwater cave survey data (Rust backend + React/TypeScript frontend).
 

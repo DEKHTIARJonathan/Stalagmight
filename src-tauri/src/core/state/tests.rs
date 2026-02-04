@@ -86,8 +86,8 @@ fn test_merge_projects_archives_sources_and_adds_extension() {
         shots: vec![test_shot_data(2.0)],
     });
 
-    let source_a = temp_dir.path().join("a.cvproj");
-    let source_b = temp_dir.path().join("b.cvproj");
+    let source_a = temp_dir.path().join("a.stalx");
+    let source_b = temp_dir.path().join("b.stalx");
 
     let mut db_a = Database::open(&source_a).unwrap();
     db_a.save_project(&project_a).unwrap();
@@ -96,7 +96,7 @@ fn test_merge_projects_archives_sources_and_adds_extension() {
     drop(db_a);
     drop(db_b);
 
-    let existing_archive = temp_dir.path().join("a.cvproj.archived");
+    let existing_archive = temp_dir.path().join("a.stalx.archived");
     std::fs::write(&existing_archive, b"archived").unwrap();
 
     let state = AppState::new().unwrap();
@@ -111,7 +111,7 @@ fn test_merge_projects_archives_sources_and_adds_extension() {
 
     assert!(result.success);
 
-    let output_with_ext = output_path.with_extension("cvproj");
+    let output_with_ext = output_path.with_extension("stalx");
     assert!(output_with_ext.exists());
 
     assert!(!source_a.exists());
@@ -124,13 +124,13 @@ fn test_merge_projects_archives_sources_and_adds_extension() {
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .map(|name| name.starts_with("a.cvproj.archived"))
+                .map(|name| name.starts_with("a.stalx.archived"))
                 .unwrap_or(false)
         })
         .collect();
 
     assert!(!archived_entries.is_empty());
-    assert!(temp_dir.path().join("b.cvproj.archived").exists());
+    assert!(temp_dir.path().join("b.stalx.archived").exists());
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn test_redo_fails_for_command_not_allowed_in_undo_context() {
     let entry = UndoEntry {
         command: Command::MergeProjects {
             source_paths: Vec::new(),
-            output_path: PathBuf::from("out.cvproj"),
+            output_path: PathBuf::from("out.stalx"),
             output_name: "Merged".to_string(),
             archive_originals: false,
         },
@@ -964,7 +964,7 @@ fn test_project_snapshot_pair_undo_redo_roundtrip() {
     stack.push_with_data(
         Command::MergeProjects {
             source_paths: Vec::new(),
-            output_path: PathBuf::from("out.cvproj"),
+            output_path: PathBuf::from("out.stalx"),
             output_name: "Merged".to_string(),
             archive_originals: false,
         },
@@ -1116,7 +1116,7 @@ fn test_project_modification_tracking() {
 fn test_is_undoable_commands() {
     // Non-undoable commands
     assert!(!AppState::is_undoable(&Command::OpenProject {
-        path: PathBuf::from("/test.cvproj"),
+        path: PathBuf::from("/test.stalx"),
     }));
     assert!(!AppState::is_undoable(&Command::SaveProject { path: None }));
     assert!(!AppState::is_undoable(&Command::CloseProject));
@@ -1147,7 +1147,7 @@ fn test_is_undoable_commands() {
 fn test_is_modifying_commands() {
     // Non-modifying commands
     assert!(!AppState::is_modifying(&Command::OpenProject {
-        path: PathBuf::from("/test.cvproj"),
+        path: PathBuf::from("/test.stalx"),
     }));
     assert!(!AppState::is_modifying(&Command::SaveProject { path: None }));
     assert!(!AppState::is_modifying(&Command::CloseProject));
@@ -1263,7 +1263,7 @@ fn test_remove_recent_projects_fails_when_lock_poisoned() {
     let state = AppState::new().unwrap();
     poison_mutex(&state.recent_projects);
 
-    let result = state.remove_from_recent_projects(PathBuf::from("missing.cvproj"));
+    let result = state.remove_from_recent_projects(PathBuf::from("missing.stalx"));
     assert!(!result.success);
     assert_eq!(
         result.error.as_deref(),

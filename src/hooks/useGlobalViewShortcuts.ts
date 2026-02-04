@@ -341,7 +341,7 @@ export function useGlobalViewShortcuts({
             try {
               const selected = await open({
                 multiple: false,
-                filters: [{ name: 'CaveChef Project', extensions: ['cvproj', 'cvchef'] }],
+                filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
               });
 
               let path: string | null = null;
