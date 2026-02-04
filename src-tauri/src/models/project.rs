@@ -2304,6 +2304,13 @@ impl Project {
         strategy: ClosureStrategy,
     ) -> Result<(), String> {
         let colocated_groups = self.build_colocated_groups();
+        let mut station_to_group: HashMap<StationRef, StationRef> = HashMap::new();
+        for (root, members) in &colocated_groups {
+            for member in members {
+                station_to_group.insert(*member, *root);
+            }
+        }
+        let root_for = |station: StationRef| station_to_group.get(&station).copied().unwrap_or(station);
         let zero_datum_set: HashSet<StationRef> = self.zero_datums.iter().map(|zd| zd.station_ref).collect();
 
         let is_group_anchored = |station: StationRef, groups: &HashMap<StationRef, Vec<StationRef>>| -> bool {
@@ -2353,15 +2360,20 @@ impl Project {
                                       targets: &mut HashMap<StationRef, Coordinates>|
          -> Result<(), String> {
             let mut current = start_coords;
-            if let Some(existing) = targets.get(&path.start) {
+            let mut current_root = root_for(path.start);
+            if let Some(existing) = targets.get(&current_root) {
                 if !Self::coords_close(*existing, current, 1e-6) {
                     return Err("Inconsistent target coordinates on path start".to_string());
                 }
             } else {
-                targets.insert(path.start, current);
+                targets.insert(current_root, current);
             }
 
             for step in &path.steps {
+                let next_root = root_for(step.to);
+                if next_root == current_root {
+                    continue;
+                }
                 let vec = match step.edge {
                     PathEdge::Shot {
                         section_id,
@@ -2388,19 +2400,25 @@ impl Project {
                     PathEdge::Merge => Coordinates::new(0.0, 0.0, 0.0),
                 };
                 current = Self::coords_add(current, vec);
-                if let Some(existing) = targets.get(&step.to) {
+                if let Some(existing) = targets.get(&next_root) {
                     if !Self::coords_close(*existing, current, 1e-6) {
                         return Err("Inconsistent target coordinates in closure path".to_string());
                     }
                 } else {
-                    targets.insert(step.to, current);
+                    targets.insert(next_root, current);
                 }
+                current_root = next_root;
             }
             Ok(())
         };
 
         let add_path_stats = |path: &StationPath, total_len: &mut f64, shot_count: &mut usize| {
+            let mut current_root = root_for(path.start);
             for step in &path.steps {
+                let next_root = root_for(step.to);
+                if next_root == current_root {
+                    continue;
+                }
                 if let PathEdge::Shot { section_id, shot_index, .. } = step.edge {
                     if let Some(section) = section_lookup.get(&section_id) {
                         if let Some(shot) = section.shots.get(shot_index) {
@@ -2409,6 +2427,7 @@ impl Project {
                         }
                     }
                 }
+                current_root = next_root;
             }
         };
 
@@ -2559,34 +2578,14 @@ impl Project {
             )?;
         }
 
-        let mut deltas: HashMap<StationRef, Coordinates> = HashMap::new();
-        for (station, target) in &targets {
+        let mut group_delta: HashMap<StationRef, Coordinates> = HashMap::new();
+        for (root, target) in &targets {
             let current = self
-                .compute_station_raw_coords(*station)
+                .compute_station_raw_coords(*root)
                 .ok_or_else(|| "Failed to compute station coordinates".to_string())?;
             let delta = Self::coords_sub(*target, current);
             if Self::coords_norm(delta) > 1e-9 {
-                deltas.insert(*station, delta);
-            }
-        }
-
-        // Propagate deltas to co-located groups (merges + non-KeepRaw closures)
-        let mut group_delta: HashMap<StationRef, Coordinates> = HashMap::new();
-        let mut station_to_group: HashMap<StationRef, StationRef> = HashMap::new();
-        for (root, members) in &colocated_groups {
-            for member in members {
-                station_to_group.insert(*member, *root);
-            }
-        }
-
-        for (station, delta) in &deltas {
-            let root = station_to_group.get(station).copied().unwrap_or(*station);
-            if let Some(existing) = group_delta.get(&root) {
-                if !Self::coords_close(*existing, *delta, 1e-6) {
-                    return Err("Conflicting deltas for co-located station group".to_string());
-                }
-            } else {
-                group_delta.insert(root, *delta);
+                group_delta.insert(*root, delta);
             }
         }
 
