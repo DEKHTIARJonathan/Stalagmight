@@ -16,7 +16,7 @@ All three share the same drag preview engine and Ctrl+drag panning. They differ 
 
 ## Move Station
 
-Click a station to begin dragging it. If the station shares coordinates with other stations (via merges or non-KeepRaw loop closures), all co-located stations move together.
+Click a station to begin dragging it. If the station shares coordinates with other stations (via merges or loop closures), all co-located stations move together.
 
 **Hover**: Only stations get hover highlight. Shot hover is suppressed.
 
@@ -71,7 +71,7 @@ When hovering in Move Segment mode, the connected section IDs are resolved async
 
 ## Immovable Stations
 
-A station is immovable if it is a zero-datum or transitively reachable from one via merges and non-KeepRaw loop closures. Computed in `MapCanvas` via BFS when Move Station or Move Shot is active. Returns `Set<string>` of `"sectionId:stationIndex"` keys.
+A station is immovable if it is a zero-datum or transitively reachable from one via merges and loop closures. Computed in `MapCanvas` via BFS when Move Station or Move Shot is active. Returns `Set<string>` of `"sectionId:stationIndex"` keys.
 
 Visual feedback:
 - Immovable stations and shots with immovable endpoints are dimmed (0.25 opacity via `feature-state: anchored`)
