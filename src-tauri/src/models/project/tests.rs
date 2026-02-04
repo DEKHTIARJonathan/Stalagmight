@@ -67,11 +67,13 @@ fn section_has_zero_datum_with_connected_merges() {
 #[test]
 fn compute_station_raw_coords_applies_offsets_and_bounds() {
     let mut project = Project::new("Coords".to_string(), None);
+    let shot_a = shot(0.0, 0.0, 10.0, 0.0, 0.0);
+    let shot_b = shot(90.0, 90.0, 5.0, 0.0, 2.0);
     let section_id = project
         .add_section(SectionData {
             shots: vec![
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-                shot(90.0, 90.0, 5.0, 0.0, 2.0),
+                shot_a.clone(),
+                shot_b.clone(),
             ],
             ..Default::default()
         })
@@ -82,8 +84,10 @@ fn compute_station_raw_coords_applies_offsets_and_bounds() {
     let coords = project
         .compute_station_raw_coords(StationRef::new(section_id, 2))
         .expect("coords");
-    assert!((coords.x - 7.0).abs() < 1e-6);
-    assert!((coords.y - 7.0).abs() < 1e-6);
+    let expected_x = 2.0 + shot_b.horizontal_length();
+    let expected_y = -3.0 + shot_a.horizontal_length();
+    assert!((coords.x - expected_x).abs() < 1e-6);
+    assert!((coords.y - expected_y).abs() < 1e-6);
     assert!((coords.z - 2.0).abs() < 1e-6);
 
     let invalid = project.compute_station_raw_coords(StationRef::new(section_id, 5));
@@ -94,9 +98,10 @@ fn compute_station_raw_coords_applies_offsets_and_bounds() {
 fn set_zero_datum_first_datum_positions_station_at_origin() {
     let mut project = Project::new("FirstDatum".to_string(), None);
     // Create a section with a shot going north (azimuth 0)
+    let shot_a = shot(0.0, 0.0, 10.0, 0.0, 1.0);
     let section_id = project
         .add_section(SectionData {
-            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 1.0)],
+            shots: vec![shot_a.clone()],
             ..Default::default()
         })
         .id;
@@ -110,9 +115,15 @@ fn set_zero_datum_first_datum_positions_station_at_origin() {
 
     // Check that offset was applied to move station to origin
     let offset = project.section_offsets.get(&section_id).unwrap();
-    // Station was at (0, 10), needs offset (-0, -10) to be at origin
+    // Station was at (0, horizontal), needs offset (-0, -horizontal) to be at origin
     assert!((offset.0 - 0.0).abs() < 1e-6, "Expected x offset ~0, got {}", offset.0);
-    assert!((offset.1 - (-10.0)).abs() < 1e-6, "Expected y offset ~-10, got {}", offset.1);
+    let expected_y_offset = -shot_a.horizontal_length();
+    assert!(
+        (offset.1 - expected_y_offset).abs() < 1e-6,
+        "Expected y offset ~{}, got {}",
+        expected_y_offset,
+        offset.1
+    );
 
     // Verify station coordinates after applying offset
     let coords = project.compute_station_raw_coords(station_ref).unwrap();
@@ -827,7 +838,7 @@ fn create_loop_closure_creates_correct_values() {
     let closure = project.create_loop_closure(
         StationRef::new(a, 0),
         StationRef::new(b, 1),
-        ClosureStrategy::default(),
+        ClosureStrategy::KeepRaw,
     ).unwrap();
 
     assert_eq!(closure.station_a, StationRef::new(a, 0));

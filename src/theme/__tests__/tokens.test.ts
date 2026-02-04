@@ -30,7 +30,10 @@ function extractTokens(block: string): Record<string, string> {
   const tokenRegex = /(--cc-[a-z0-9-]+)\s*:\s*([^;]+);/gi;
   let match: RegExpExecArray | null = null;
   while ((match = tokenRegex.exec(block)) !== null) {
-    tokens[match[1]] = match[2].trim();
+    const name = match[1];
+    const value = match[2];
+    if (!name || !value) continue;
+    tokens[name] = value.trim();
   }
   return tokens;
 }

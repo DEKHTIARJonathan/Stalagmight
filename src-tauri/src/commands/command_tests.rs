@@ -92,6 +92,10 @@ fn create_project(app: &tauri::App<MockRuntime>) {
     assert_success(&result);
 }
 
+fn set_project_for_tests(app: &tauri::App<MockRuntime>, project: Project) {
+    state(app).inner().set_project_for_tests(project);
+}
+
 fn create_section_with_shots(app: &tauri::App<MockRuntime>, shots: Vec<ShotData>) -> u32 {
     let result = section::create_section(
         state(app),
@@ -777,7 +781,7 @@ fn test_create_section_with_validation_warnings() {
         None,
         "#4ecdc4".to_string(),
         None,
-        vec![shot_data(0.0)],
+        vec![shot_data(0.05)],
     );
     assert!(result.success);
     assert!(!result.warnings.is_empty());
@@ -797,7 +801,7 @@ fn test_create_shot_fails_invalid_section() {
     let app = app_with_state();
     create_project(&app);
     let result = shot::create_shot(state(&app), 99, shot_data(1.0), None, None);
-    assert_failure_contains(&result, "Failed to create shot");
+    assert_failure_contains(&result, "Section 99 not found");
 }
 
 #[test]
@@ -1362,8 +1366,8 @@ fn test_get_project_warnings_empty_when_no_project() {
 #[test]
 fn test_get_project_warnings_detects_zero_length() {
     let app = app_with_state();
-    create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(0.0)]);
+    let project = project_with_section(vec![shot_data(0.0)]);
+    set_project_for_tests(&app, project);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.iter().any(|w| w.code == "ZERO_LENGTH"));
 }
@@ -1371,8 +1375,8 @@ fn test_get_project_warnings_detects_zero_length() {
 #[test]
 fn test_get_project_warnings_detects_negative_length() {
     let app = app_with_state();
-    create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(-1.0)]);
+    let project = project_with_section(vec![shot_data(-1.0)]);
+    set_project_for_tests(&app, project);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LENGTH"));
 }
@@ -1398,8 +1402,8 @@ fn test_get_project_warnings_detects_long_shot() {
 #[test]
 fn test_get_project_warnings_orders_error_before_warning() {
     let app = app_with_state();
-    create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(0.0), shot_data(0.05)]);
+    let project = project_with_section(vec![shot_data(0.0), shot_data(0.05)]);
+    set_project_for_tests(&app, project);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(!warnings.is_empty());
     assert_eq!(warnings[0].severity, crate::core::WarningSeverity::Error);
@@ -1408,8 +1412,8 @@ fn test_get_project_warnings_orders_error_before_warning() {
 #[test]
 fn test_get_project_warnings_includes_shot_index() {
     let app = app_with_state();
-    create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(0.0), shot_data(0.0)]);
+    let project = project_with_section(vec![shot_data(0.0), shot_data(0.0)]);
+    set_project_for_tests(&app, project);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.iter().any(|w| w.shot_index == 0));
     assert!(warnings.iter().any(|w| w.shot_index == 1));
@@ -1418,9 +1422,16 @@ fn test_get_project_warnings_includes_shot_index() {
 #[test]
 fn test_get_project_warnings_multiple_sections_sorted_by_section_id() {
     let app = app_with_state();
-    create_project(&app);
-    create_section_with_shots(&app, vec![shot_data(0.0)]);
-    create_section_with_shots(&app, vec![shot_data(0.0)]);
+    let mut project = Project::new("Test Cave".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![shot_data(0.0)],
+        ..Default::default()
+    });
+    project.add_section(SectionData {
+        shots: vec![shot_data(0.0)],
+        ..Default::default()
+    });
+    set_project_for_tests(&app, project);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.len() >= 2);
     assert!(warnings[0].section_id <= warnings[1].section_id);
