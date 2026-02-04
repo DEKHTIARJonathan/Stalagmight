@@ -2,7 +2,7 @@
 
 ## Overview
 
-CaveChef uses a command-pattern undo/redo system. Every state-changing operation is a `Command` enum variant. When executed, the system captures enough data to reverse it (`UndoData`), then pushes both onto an undo stack. Undo pops from the undo stack and pushes to the redo stack; redo does the inverse. Any new command clears the redo stack (standard diverging-timeline semantics).
+Stalagmight uses a command-pattern undo/redo system. Every state-changing operation is a `Command` enum variant. When executed, the system captures enough data to reverse it (`UndoData`), then pushes both onto an undo stack. Undo pops from the undo stack and pushes to the redo stack; redo does the inverse. Any new command clears the redo stack (standard diverging-timeline semantics).
 
 ## Core Types
 

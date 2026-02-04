@@ -7,16 +7,16 @@
 ## Reference Documents
 
 Before implementing, read these documents for context:
-- `/home/ubuntu/projects/CaveChef/CLAUDE.md` - Project commands, critical rules (no `cd`!)
-- `/home/ubuntu/projects/CaveChef/docs/SPEC.md` - Section 2.6 (Offline Support), 6.4 (Map Features), 13.5 (Tile Caching)
-- `/home/ubuntu/projects/CaveChef/docs/TESTING.md` - Test patterns for Playwright, WebdriverIO, Rust
-- `/home/ubuntu/projects/CaveChef/docs/architecture.md` - State flow, key files
+- `/home/ubuntu/projects/Stalagmight/CLAUDE.md` - Project commands, critical rules (no `cd`!)
+- `/home/ubuntu/projects/Stalagmight/docs/SPEC.md` - Section 2.6 (Offline Support), 6.4 (Map Features), 13.5 (Tile Caching)
+- `/home/ubuntu/projects/Stalagmight/docs/TESTING.md` - Test patterns for Playwright, WebdriverIO, Rust
+- `/home/ubuntu/projects/Stalagmight/docs/architecture.md` - State flow, key files
 
 ---
 
 ## Executive Summary
 
-Implement robust satellite map tile caching in CaveChef with comprehensive testing. The implementation covers:
+Implement robust satellite map tile caching in Stalagmight with comprehensive testing. The implementation covers:
 1. **Backend tile cache** in Rust using SQLite storage
 2. **Custom tile protocol** for cache-first tile serving
 3. **Offline support** with graceful degradation
@@ -28,7 +28,7 @@ Implement robust satellite map tile caching in CaveChef with comprehensive testi
 
 ### 1.1 Cache Storage: SQLite
 
-**Rationale**: CaveChef already uses rusqlite. Single file simplifies backup, atomic ops ensure integrity, built-in LRU via indexed access timestamps.
+**Rationale**: Stalagmight already uses rusqlite. Single file simplifies backup, atomic ops ensure integrity, built-in LRU via indexed access timestamps.
 
 **Schema**:
 ```sql
@@ -49,7 +49,7 @@ CREATE INDEX idx_tiles_accessed ON tiles(accessed_at);
 ### 1.2 Tile Request Flow: Custom Protocol Handler
 
 ```
-MapLibre requests: cavechef-tiles://esri/{z}/{y}/{x}
+MapLibre requests: stalagmight-tiles://esri/{z}/{y}/{x}
     ↓
 Tauri Protocol Handler (Rust)
     ├── Cache Hit → Return cached tile
@@ -106,10 +106,10 @@ impl TileCache {
 #### Task 1.3: Register Protocol Handler
 **File**: `src-tauri/src/lib.rs`
 
-Register `cavechef-tiles://` protocol:
+Register `stalagmight-tiles://` protocol:
 ```rust
-.register_uri_scheme_protocol("cavechef-tiles", |app, request| {
-    // Parse: cavechef-tiles://esri/{z}/{y}/{x}
+.register_uri_scheme_protocol("stalagmight-tiles", |app, request| {
+    // Parse: stalagmight-tiles://esri/{z}/{y}/{x}
     // Check cache → fetch if miss → cache → return
 })
 ```
@@ -139,7 +139,7 @@ Change `getSatelliteTileConfig`:
 ```typescript
 const getSatelliteTileConfig = useCallback(() => {
     return {
-        tiles: ['cavechef-tiles://esri/{z}/{y}/{x}'],
+        tiles: ['stalagmight-tiles://esri/{z}/{y}/{x}'],
         attribution: '&copy; Esri, Maxar, Earthstar Geographics',
         tileSize: 256,
     };

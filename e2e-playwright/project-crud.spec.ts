@@ -7,9 +7,9 @@ test.describe('Project CRUD Operations', () => {
   });
 
   test.describe('Start Page', () => {
-    test('should display CaveChef title', async ({ page }) => {
-      // Look for CaveChef title in header
-      const title = page.locator('h1:has-text("CaveChef")');
+    test('should display Stalagmight title', async ({ page }) => {
+      // Look for Stalagmight title in header
+      const title = page.locator('h1:has-text("Stalagmight")');
       await expect(title).toBeVisible({ timeout: 10000 });
     });
 
@@ -57,8 +57,8 @@ test.describe('Project CRUD Operations', () => {
       await page.getByTestId('new-project-cancel-button').click();
       await expect(page.getByTestId('new-project-dialog')).not.toBeVisible({ timeout: 3000 });
 
-      // CaveChef title should still be visible (we're on start page)
-      const title = page.locator('h1:has-text("CaveChef")');
+      // Stalagmight title should still be visible (we're on start page)
+      const title = page.locator('h1:has-text("Stalagmight")');
       await expect(title).toBeVisible();
     });
   });

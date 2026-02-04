@@ -10,7 +10,7 @@
  * Test requirements:
  * - Real backend (not mocked) for actual cache operations
  * - Uses IPC calls via browser.execute() for cache stats/clearing
- * - Access window.__cavechef_map__ for map state verification
+ * - Access window.__stalagmight_map__ for map state verification
  * - Network connectivity required for satellite tile fetching
  */
 
@@ -162,11 +162,11 @@ async function isSatelliteEnabled(): Promise<boolean> {
  */
 async function getMapInfo(): Promise<{ loaded: boolean; zoom?: number; center?: [number, number] }> {
   return await browser.execute(() => {
-    const map = (window as unknown as { __cavechef_map__?: {
+    const map = (window as unknown as { __stalagmight_map__?: {
       loaded: () => boolean;
       getZoom: () => number;
       getCenter: () => { lng: number; lat: number };
-    } }).__cavechef_map__;
+    } }).__stalagmight_map__;
 
     if (!map) {
       return { loaded: false };
@@ -386,10 +386,10 @@ describe('Satellite Display and Cache Verification', () => {
 
       // Zoom in using programmatic map access (more reliable than wheel events)
       await browser.execute(() => {
-        const map = (window as unknown as { __cavechef_map__?: {
+        const map = (window as unknown as { __stalagmight_map__?: {
           zoomIn: () => void;
           zoomOut: () => void;
-        } }).__cavechef_map__;
+        } }).__stalagmight_map__;
         if (map) {
           map.zoomIn();
           map.zoomIn();
@@ -408,9 +408,9 @@ describe('Satellite Display and Cache Verification', () => {
 
       // Zoom out past original level
       await browser.execute(() => {
-        const map = (window as unknown as { __cavechef_map__?: {
+        const map = (window as unknown as { __stalagmight_map__?: {
           zoomOut: () => void;
-        } }).__cavechef_map__;
+        } }).__stalagmight_map__;
         if (map) {
           map.zoomOut();
           map.zoomOut();

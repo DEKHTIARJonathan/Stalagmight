@@ -105,7 +105,7 @@ impl AppState {
             return CommandResult::failure(format!("File not found: {}", path.display()));
         }
 
-        // Use open_existing which validates the file is a valid CaveChef project
+        // Use open_existing which validates the file is a valid Stalagmight project
         let db = match Database::open_existing(&path) {
             Ok(db) => db,
             Err(e) => return CommandResult::failure(format!("{}", e)),

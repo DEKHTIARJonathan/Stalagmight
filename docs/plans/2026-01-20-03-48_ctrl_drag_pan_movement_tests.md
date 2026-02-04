@@ -81,10 +81,10 @@ Add after line ~420 (after map.current is set):
 // Expose map instance for E2E testing (development only)
 useEffect(() => {
   if (map.current) {
-    (window as any).__cavechef_map__ = map.current;
+    (window as any).__stalagmight_map__ = map.current;
   }
   return () => {
-    delete (window as any).__cavechef_map__;
+    delete (window as any).__stalagmight_map__;
   };
 }, []);
 ```
@@ -201,7 +201,7 @@ async function loadFixtureProject(): Promise<void> {
 // Get map center via exposed map instance
 async function getMapCenter(): Promise<{ lng: number; lat: number } | null> {
   return browser.execute(() => {
-    const map = (window as any).__cavechef_map__;
+    const map = (window as any).__stalagmight_map__;
     if (!map) return null;
     const center = map.getCenter();
     return { lng: center.lng, lat: center.lat };
@@ -211,7 +211,7 @@ async function getMapCenter(): Promise<{ lng: number; lat: number } | null> {
 // Get map zoom level
 async function getMapZoom(): Promise<number | null> {
   return browser.execute(() => {
-    const map = (window as any).__cavechef_map__;
+    const map = (window as any).__stalagmight_map__;
     return map?.getZoom() ?? null;
   });
 }
@@ -223,7 +223,7 @@ async function getStationScreenPositions(): Promise<Array<{
   screenY: number;
 }>> {
   return browser.execute(() => {
-    const map = (window as any).__cavechef_map__;
+    const map = (window as any).__stalagmight_map__;
     if (!map) return [];
     const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
     return features.map((f: any) => {
@@ -433,7 +433,7 @@ pnpm test:e2e -- --spec e2e/specs/ctrl-drag-pan-movement.spec.ts
 ## Verification Checklist
 
 ### Stage 1: Playwright (run first)
-1. [ ] Map instance exposed via `window.__cavechef_map__`
+1. [ ] Map instance exposed via `window.__stalagmight_map__`
 2. [ ] Mock stations added to tauri-ipc.ts
 3. [ ] Pan mode baseline tests pass (Playwright)
 4. [ ] Ctrl+drag Select mode tests pass (Playwright)
@@ -471,7 +471,7 @@ Check `MapCanvas.tsx`:
 
 ### If map center doesn't change:
 
-1. Verify map instance is accessible via `window.__cavechef_map__`
+1. Verify map instance is accessible via `window.__stalagmight_map__`
 2. Check if `dragPan` is actually enabled (add console.log)
 3. Verify pan animation completed (increase pause time)
 

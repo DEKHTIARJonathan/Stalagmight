@@ -609,7 +609,7 @@ fn test_open_existing_vs_open_new() {
         let result = Database::open_existing(&db_path);
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
-        assert!(err_msg.contains("valid CaveChef project"), "Expected 'valid CaveChef project' error, got: {}", err_msg);
+        assert!(err_msg.contains("valid Stalagmight project"), "Expected 'valid Stalagmight project' error, got: {}", err_msg);
     }
 
     // Test 4: Save a project, then open_existing should succeed

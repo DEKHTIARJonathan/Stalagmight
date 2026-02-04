@@ -31,7 +31,7 @@ describe('Export Integration', () => {
     await waitForAppReady();
     await resetAppState();
     // Create unique temp directory for each test
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cavechef-export-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-export-'));
   });
 
   afterEach(async () => {

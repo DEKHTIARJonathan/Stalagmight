@@ -44,7 +44,7 @@ async function createProjectWithMap(page: Page): Promise<void> {
  */
 async function getMapCenter(page: Page): Promise<MapCenter | null> {
   return page.evaluate(() => {
-    const map = (window as unknown as { __cavechef_map__?: { getCenter: () => { lng: number; lat: number } } }).__cavechef_map__;
+    const map = (window as unknown as { __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } } }).__stalagmight_map__;
     if (!map) return null;
     const center = map.getCenter();
     return { lng: center.lng, lat: center.lat };
@@ -56,7 +56,7 @@ async function getMapCenter(page: Page): Promise<MapCenter | null> {
  */
 async function getMapZoom(page: Page): Promise<number | null> {
   return page.evaluate(() => {
-    const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number } }).__cavechef_map__;
+    const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number } }).__stalagmight_map__;
     return map?.getZoom() ?? null;
   });
 }
@@ -67,14 +67,14 @@ async function getMapZoom(page: Page): Promise<number | null> {
 async function getStationScreenPositions(page: Page): Promise<StationPosition[]> {
   return page.evaluate(() => {
     const map = (window as unknown as {
-      __cavechef_map__?: {
+      __stalagmight_map__?: {
         queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
           geometry: { coordinates: [number, number] };
           properties: { sectionId: number; stationIndex: number };
         }>;
         project: (coords: [number, number]) => { x: number; y: number };
       };
-    }).__cavechef_map__;
+    }).__stalagmight_map__;
 
     if (!map) return [];
 
@@ -119,7 +119,7 @@ function logMovementDiff(
  */
 async function waitForMap(page: Page): Promise<void> {
   await page.waitForFunction(() => {
-    const map = (window as unknown as { __cavechef_map__?: unknown }).__cavechef_map__;
+    const map = (window as unknown as { __stalagmight_map__?: unknown }).__stalagmight_map__;
     return map !== undefined;
   }, { timeout: 10000 });
 }
@@ -157,7 +157,7 @@ async function ctrlDragWithWarmup(
   // Using animate: false to ensure synchronous completion
   // Multiple warmup cycles ensure handlers are fully registered
   await page.evaluate(() => {
-    const map = (window as unknown as { __cavechef_map__?: { panBy: (o: [number, number], opts?: { animate?: boolean }) => void } }).__cavechef_map__;
+    const map = (window as unknown as { __stalagmight_map__?: { panBy: (o: [number, number], opts?: { animate?: boolean }) => void } }).__stalagmight_map__;
     if (map) {
       // First warmup cycle
       map.panBy([100, 0], { animate: false });
@@ -190,7 +190,7 @@ async function warmupMapDragHandlers(page: Page): Promise<void> {
   await waitForActiveTool(page, 'pan');
   await waitForMapIdle(page);
   await page.evaluate(() => {
-    const map = (window as unknown as { __cavechef_map__?: { panBy: (o: [number, number]) => void } }).__cavechef_map__;
+    const map = (window as unknown as { __stalagmight_map__?: { panBy: (o: [number, number]) => void } }).__stalagmight_map__;
     if (map) { map.panBy([100, 0]); map.panBy([-100, 0]); }
   });
   await waitForMapIdle(page);
