@@ -21,6 +21,7 @@ import { useGlobalViewStore } from '../store/globalViewStore';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { parseKeyEvent, normalizeShortcut } from '../utils/shortcuts';
+import { dmpOpenFilters, projectOpenFilters } from '../utils/fileDialogs';
 import { defaultConfig } from '../types/config';
 import type { ShortcutsConfig } from '../types/config';
 import type { ProjectMetadata } from '../types/project';
@@ -341,7 +342,7 @@ export function useGlobalViewShortcuts({
             try {
               const selected = await open({
                 multiple: false,
-                filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
+                filters: projectOpenFilters(),
               });
 
               let path: string | null = null;
@@ -371,7 +372,7 @@ export function useGlobalViewShortcuts({
             try {
               const selected = await open({
                 multiple: false,
-                filters: [{ name: 'mNemo DMP', extensions: ['dmp'] }],
+                filters: dmpOpenFilters(),
               });
 
               if (!selected || typeof selected !== 'string') {

@@ -1,6 +1,7 @@
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use ts_rs::TS;
 
 use crate::config::TransitVerticalMode;
 use crate::models::{
@@ -127,7 +128,7 @@ pub enum Command {
 }
 
 /// Result of command execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandResult {
     pub success: bool,
     pub warnings: Vec<ValidationWarning>,
@@ -144,15 +145,16 @@ pub struct CommandResult {
 }
 
 /// Validation warning from command execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ValidationWarning {
     pub code: String,
     pub message: String,
     pub severity: WarningSeverity,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
 pub enum WarningSeverity {
     Warning,
     Error,

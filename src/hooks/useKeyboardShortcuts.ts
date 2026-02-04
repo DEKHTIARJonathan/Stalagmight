@@ -5,6 +5,13 @@ import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
+import {
+  ensureExtension,
+  projectOpenFilters,
+  projectSaveFilters,
+  dmpOpenFilters,
+  PROJECT_EXTENSION,
+} from '../utils/fileDialogs';
 import type { ToolType, Selection, DisplayToggleKey } from '../store/uiStore';
 import type { ShortcutsConfig, ShortcutFeedback } from '../types/config';
 import { defaultConfig } from '../types/config';
@@ -543,7 +550,7 @@ export function useKeyboardShortcuts() {
             try {
               const selected = await open({
                 multiple: false,
-                filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
+                filters: projectOpenFilters(),
               });
 
               let path: string | null = null;
@@ -582,11 +589,11 @@ export function useKeyboardShortcuts() {
             (async () => {
               try {
                 const selected = await save({
-                  filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
+                  filters: projectSaveFilters(),
                 });
 
                 if (selected) {
-                  const finalPath = selected.endsWith('.stalx') ? selected : `${selected}.stalx`;
+                  const finalPath = ensureExtension(selected, PROJECT_EXTENSION);
 
                   try {
                     const fileExists = await exists(finalPath);
@@ -602,7 +609,7 @@ export function useKeyboardShortcuts() {
                   }
 
                   const store = useProjectStore.getState();
-                  const result = await store.saveProject(selected);
+                  const result = await store.saveProject(finalPath);
                   if (result && !result.success && result.error) {
                     openDialog('error', { message: result.error, title: 'Save Failed' });
                   }
@@ -626,7 +633,7 @@ export function useKeyboardShortcuts() {
             try {
               const selected = await open({
                 multiple: false,
-                filters: [{ name: 'mNemo DMP', extensions: ['dmp'] }],
+                filters: dmpOpenFilters(),
               });
 
               if (!selected || typeof selected !== 'string') {

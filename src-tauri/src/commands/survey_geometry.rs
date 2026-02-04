@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use tauri::Manager;
 
 use crate::core::AppState;
@@ -20,7 +21,7 @@ use crate::persistence::Database;
 const MIN_COS_LAT: f64 = 0.01;
 
 /// A self-contained shot with GPS coordinates and metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct GeometryShot {
     /// GPS coordinates of the from station [lng, lat] (MapLibre order)
     pub from: [f64; 2],
@@ -33,7 +34,7 @@ pub struct GeometryShot {
 }
 
 /// Survey geometry response containing GPS-transformed shot data.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SurveyGeometry {
     /// Array of shots with GPS coordinates
     pub shots: Vec<GeometryShot>,
@@ -42,7 +43,7 @@ pub struct SurveyGeometry {
 }
 
 /// Error response for survey geometry command.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SurveyGeometryError {
     pub message: String,
 }

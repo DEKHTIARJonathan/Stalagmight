@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use super::SectionId;
 
 /// Reference to a station using section_id:station_index format
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 pub struct StationRef {
     pub section_id: SectionId,
     pub station_index: u32,
@@ -25,7 +26,7 @@ impl std::fmt::Display for StationRef {
 }
 
 /// GPS coordinates in WGS84 format
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 pub struct GpsCoordinates {
     pub latitude: f64,
     pub longitude: f64,
@@ -88,7 +89,7 @@ impl GpsCoordinates {
 /// Uses cardinal directions: north/south for latitude, east/west for longitude
 /// Note: When bounds cross the international dateline, `east < west`.
 /// For example, bounds spanning from 170°E to 170°W would have west=170, east=-170.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 pub struct GpsBounds {
     /// Northern boundary (max latitude)
     pub north: f64,
@@ -101,7 +102,7 @@ pub struct GpsBounds {
 }
 
 /// Internal XYZ coordinates (meters)
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, TS)]
 pub struct Coordinates {
     /// X = East (meters)
     pub x: f64,
@@ -170,7 +171,7 @@ impl Coordinates {
 }
 
 /// A computed station in the cave survey
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Station {
     /// Reference to this station
     pub station_ref: StationRef,
@@ -212,22 +213,23 @@ impl Station {
 }
 
 /// Record of a station merge
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct StationMerge {
     pub station_a: StationRef,
     pub station_b: StationRef,
+    #[ts(type = "string")]
     pub merged_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Zero datum assignment
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ZeroDatum {
     pub station_ref: StationRef,
     pub gps: GpsCoordinates,
 }
 
 /// Strategy for distributing loop closure errors
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, TS)]
 pub enum ClosureStrategy {
     /// Distribute proportionally by shot length (Bowditch method)
     #[default]
@@ -383,7 +385,7 @@ mod tests {
 }
 
 /// A detected loop closure in the survey
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct LoopClosure {
     /// Unique identifier for this closure
     #[serde(default)]
@@ -408,7 +410,7 @@ pub struct LoopClosure {
 }
 
 /// Reference to a loop closure from a station's perspective
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ClosureRef {
     /// References LoopClosure.id
     pub closure_id: u64,
@@ -421,7 +423,7 @@ pub struct ClosureRef {
 }
 
 /// Preview data for a potential loop closure (read-only metrics, no mutation)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ClosurePreview {
     pub path_length: f64,
     pub misclosure_distance: f64,
@@ -431,7 +433,7 @@ pub struct ClosurePreview {
 }
 
 /// Result of a connectivity check between two stations
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ConnectivityResult {
     pub connected: bool,
     pub preview: Option<ClosurePreview>,

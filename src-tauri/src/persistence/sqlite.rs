@@ -11,7 +11,7 @@ use crate::models::{
 
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 /// Database operations for projects
 pub struct Database {
@@ -30,7 +30,19 @@ impl Database {
         tracing::info!("SQLite connection created");
 
         let db = Self { conn };
+        db.enable_foreign_keys()?;
+
+        if let Ok(version) = db.get_user_version() {
+            if version > SCHEMA_VERSION {
+                tracing::warn!(
+                    current = version,
+                    expected = SCHEMA_VERSION,
+                    "Database schema version is newer than this app"
+                );
+            }
+        }
         db.init_schema()?;
+        db.set_user_version(SCHEMA_VERSION)?;
         tracing::info!("Schema initialized");
 
         // Verify tables exist after schema init
@@ -61,6 +73,7 @@ impl Database {
         tracing::info!("SQLite connection opened successfully");
 
         let db = Self { conn };
+        db.enable_foreign_keys()?;
 
         // Check if the project table exists and has data
         let has_data = db.has_project_data()?;
@@ -72,7 +85,8 @@ impl Database {
         }
 
         // Run lightweight migrations to ensure newer tables exist in legacy projects
-        db.migrate_schema()?;
+        db.ensure_schema_version()?;
+        db.validate_foreign_keys()?;
 
         tracing::info!("=== OPEN EXISTING END === Success");
         Ok(db)
@@ -102,12 +116,24 @@ impl Database {
         .context("Failed to open database read-only")?;
 
         let db = Self { conn };
+        db.enable_foreign_keys()?;
+
+        if let Ok(version) = db.get_user_version() {
+            if version > SCHEMA_VERSION {
+                tracing::warn!(
+                    current = version,
+                    expected = SCHEMA_VERSION,
+                    "Database schema version is newer than this app"
+                );
+            }
+        }
 
         // Verify project data exists
         if !db.has_project_data()? {
             anyhow::bail!("File does not contain a valid Stalagmight project");
         }
 
+        db.validate_foreign_keys()?;
         Ok(db)
     }
 
@@ -167,7 +193,32 @@ impl Database {
                 offset_x REAL NOT NULL,
                 offset_y REAL NOT NULL,
                 offset_z REAL NOT NULL,
-                PRIMARY KEY (section_id, station_index)
+                PRIMARY KEY (section_id, station_index),
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        // Ensure resolved_warnings table exists (added for user-resolved warnings)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS resolved_warnings (
+                id INTEGER PRIMARY KEY,
+                section_id INTEGER NOT NULL,
+                shot_id INTEGER NOT NULL,
+                warning_code TEXT NOT NULL,
+                resolved_at TEXT NOT NULL,
+                resolved_comment TEXT,
+                UNIQUE(section_id, shot_id, warning_code),
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        // Ensure imported_file_hashes table exists (added for duplicate import detection)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS imported_file_hashes (
+                id INTEGER PRIMARY KEY,
+                hash TEXT NOT NULL UNIQUE
             )",
             [],
         )?;
@@ -247,6 +298,387 @@ impl Database {
         Ok(())
     }
 
+    /// Enable foreign key enforcement on this connection.
+    fn enable_foreign_keys(&self) -> Result<()> {
+        self.conn.execute("PRAGMA foreign_keys = ON;", [])?;
+        Ok(())
+    }
+
+    /// Check if a table exists in the database.
+    fn table_exists(&self, name: &str) -> Result<bool> {
+        let exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+            params![name],
+            |row| row.get(0),
+        )?;
+        Ok(exists > 0)
+    }
+
+    /// Read schema_version from the project table, if present.
+    fn get_project_schema_version(&self) -> Result<Option<i32>> {
+        if !self.table_exists("project")? {
+            return Ok(None);
+        }
+
+        let has_column: bool = self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('project') WHERE name='schema_version'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_column {
+            return Ok(None);
+        }
+
+        let version: i32 = self
+            .conn
+            .query_row("SELECT schema_version FROM project LIMIT 1", [], |row| row.get(0))?;
+        Ok(Some(version))
+    }
+
+    /// Verify there are no foreign key violations.
+    fn validate_foreign_keys(&self) -> Result<()> {
+        let mut stmt = self.conn.prepare("PRAGMA foreign_key_check")?;
+        let mut rows = stmt.query([])?;
+        let mut count = 0usize;
+        let mut samples = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            count += 1;
+            if samples.len() < 3 {
+                let table: String = row.get(0)?;
+                let rowid: i64 = row.get(1)?;
+                let parent: String = row.get(2)?;
+                let fkid: i64 = row.get(3)?;
+                samples.push(format!("{} rowid={} parent={} fkid={}", table, rowid, parent, fkid));
+            }
+        }
+
+        if count > 0 {
+            anyhow::bail!(
+                "Foreign key violations detected ({}). Sample: {}",
+                count,
+                samples.join("; ")
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Rebuild key tables with foreign key constraints.
+    fn rebuild_tables_with_foreign_keys(&self) -> Result<()> {
+        tracing::info!("Rebuilding tables with foreign key constraints (schema v2)");
+
+        let has_sections = self.table_exists("sections")?;
+        if !has_sections {
+            anyhow::bail!("Missing sections table during FK migration");
+        }
+
+        let has_shots = self.table_exists("shots")?;
+        let has_station_merges = self.table_exists("station_merges")?;
+        let has_zero_datums = self.table_exists("zero_datums")?;
+        let has_section_offsets = self.table_exists("section_offsets")?;
+        let has_station_offsets = self.table_exists("station_offsets")?;
+        let has_loop_closures = self.table_exists("loop_closures")?;
+        let has_resolved_warnings = self.table_exists("resolved_warnings")?;
+
+        self.conn.execute("PRAGMA foreign_keys = OFF;", [])?;
+        let tx = self.conn.transaction()?;
+
+        // Rename old tables
+        tx.execute("ALTER TABLE sections RENAME TO sections_old", [])?;
+        if has_shots {
+            tx.execute("ALTER TABLE shots RENAME TO shots_old", [])?;
+        }
+        if has_station_merges {
+            tx.execute("ALTER TABLE station_merges RENAME TO station_merges_old", [])?;
+        }
+        if has_zero_datums {
+            tx.execute("ALTER TABLE zero_datums RENAME TO zero_datums_old", [])?;
+        }
+        if has_section_offsets {
+            tx.execute("ALTER TABLE section_offsets RENAME TO section_offsets_old", [])?;
+        }
+        if has_station_offsets {
+            tx.execute("ALTER TABLE station_offsets RENAME TO station_offsets_old", [])?;
+        }
+        if has_loop_closures {
+            tx.execute("ALTER TABLE loop_closures RENAME TO loop_closures_old", [])?;
+        }
+        if has_resolved_warnings {
+            tx.execute("ALTER TABLE resolved_warnings RENAME TO resolved_warnings_old", [])?;
+        }
+
+        // Recreate tables with FK constraints
+        tx.execute_batch(
+            r#"
+            CREATE TABLE sections (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                surveyor TEXT,
+                date TEXT,
+                color TEXT NOT NULL,
+                direction TEXT NOT NULL DEFAULT 'in',
+                quality REAL NOT NULL DEFAULT 1.0,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE shots (
+                id INTEGER PRIMARY KEY,
+                section_id INTEGER NOT NULL,
+                sequence_order INTEGER NOT NULL,
+                azimuth_in REAL NOT NULL,
+                azimuth_out REAL NOT NULL,
+                length REAL NOT NULL,
+                depth_in REAL NOT NULL,
+                depth_out REAL NOT NULL,
+                pitch_in REAL,
+                pitch_out REAL,
+                left_distance REAL,
+                right_distance REAL,
+                up_distance REAL,
+                down_distance REAL,
+                comment TEXT,
+                is_virtual INTEGER NOT NULL DEFAULT 0,
+                marker_index INTEGER,
+                temperature REAL,
+                UNIQUE(section_id, sequence_order),
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE station_merges (
+                id INTEGER PRIMARY KEY,
+                station_a_section INTEGER NOT NULL,
+                station_a_index INTEGER NOT NULL,
+                station_b_section INTEGER NOT NULL,
+                station_b_index INTEGER NOT NULL,
+                merged_at TEXT NOT NULL,
+                FOREIGN KEY (station_a_section) REFERENCES sections(id) ON DELETE CASCADE,
+                FOREIGN KEY (station_b_section) REFERENCES sections(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE zero_datums (
+                id INTEGER PRIMARY KEY,
+                section_id INTEGER NOT NULL,
+                station_index INTEGER NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                depth_reference REAL NOT NULL,
+                UNIQUE(section_id, station_index),
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE section_offsets (
+                section_id INTEGER PRIMARY KEY,
+                offset_x REAL NOT NULL,
+                offset_y REAL NOT NULL,
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE station_offsets (
+                section_id INTEGER NOT NULL,
+                station_index INTEGER NOT NULL,
+                offset_x REAL NOT NULL,
+                offset_y REAL NOT NULL,
+                offset_z REAL NOT NULL,
+                PRIMARY KEY (section_id, station_index),
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE loop_closures (
+                id INTEGER PRIMARY KEY,
+                station_a_section INTEGER NOT NULL,
+                station_a_index INTEGER NOT NULL,
+                station_b_section INTEGER NOT NULL,
+                station_b_index INTEGER NOT NULL,
+                path_length REAL NOT NULL,
+                misclosure_distance REAL NOT NULL,
+                error_percentage REAL NOT NULL,
+                horizontal_misclosure REAL NOT NULL,
+                vertical_misclosure REAL NOT NULL,
+                closure_id INTEGER NOT NULL DEFAULT 0,
+                strategy TEXT NOT NULL DEFAULT 'ProportionalByLength',
+                FOREIGN KEY (station_a_section) REFERENCES sections(id) ON DELETE CASCADE,
+                FOREIGN KEY (station_b_section) REFERENCES sections(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE resolved_warnings (
+                id INTEGER PRIMARY KEY,
+                section_id INTEGER NOT NULL,
+                shot_id INTEGER NOT NULL,
+                warning_code TEXT NOT NULL,
+                resolved_at TEXT NOT NULL,
+                resolved_comment TEXT,
+                UNIQUE(section_id, shot_id, warning_code),
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+            );
+            "#,
+        )?;
+
+        // Copy data
+        tx.execute(
+            "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, created_at)
+             SELECT id, name, surveyor, date, color, direction, quality, created_at FROM sections_old",
+            [],
+        )?;
+
+        if has_shots {
+            tx.execute(
+                "INSERT INTO shots (
+                    id, section_id, sequence_order,
+                    azimuth_in, azimuth_out, length, depth_in, depth_out,
+                    pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
+                    comment, is_virtual, marker_index, temperature
+                )
+                SELECT
+                    id, section_id, sequence_order,
+                    azimuth_in, azimuth_out, length, depth_in, depth_out,
+                    pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
+                    comment, is_virtual, marker_index, temperature
+                FROM shots_old",
+                [],
+            )?;
+        }
+
+        if has_station_merges {
+            tx.execute(
+                "INSERT INTO station_merges (id, station_a_section, station_a_index, station_b_section, station_b_index, merged_at)
+                 SELECT id, station_a_section, station_a_index, station_b_section, station_b_index, merged_at
+                 FROM station_merges_old",
+                [],
+            )?;
+        }
+
+        if has_zero_datums {
+            tx.execute(
+                "INSERT INTO zero_datums (id, section_id, station_index, latitude, longitude, depth_reference)
+                 SELECT id, section_id, station_index, latitude, longitude, depth_reference
+                 FROM zero_datums_old",
+                [],
+            )?;
+        }
+
+        if has_section_offsets {
+            tx.execute(
+                "INSERT INTO section_offsets (section_id, offset_x, offset_y)
+                 SELECT section_id, offset_x, offset_y FROM section_offsets_old",
+                [],
+            )?;
+        }
+
+        if has_station_offsets {
+            tx.execute(
+                "INSERT INTO station_offsets (section_id, station_index, offset_x, offset_y, offset_z)
+                 SELECT section_id, station_index, offset_x, offset_y, offset_z FROM station_offsets_old",
+                [],
+            )?;
+        }
+
+        if has_loop_closures {
+            tx.execute(
+                "INSERT INTO loop_closures (
+                    id, station_a_section, station_a_index, station_b_section, station_b_index,
+                    path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure,
+                    closure_id, strategy
+                )
+                SELECT
+                    id, station_a_section, station_a_index, station_b_section, station_b_index,
+                    path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure,
+                    closure_id, strategy
+                FROM loop_closures_old",
+                [],
+            )?;
+        }
+
+        if has_resolved_warnings {
+            tx.execute(
+                "INSERT INTO resolved_warnings (id, section_id, shot_id, warning_code, resolved_at, resolved_comment)
+                 SELECT id, section_id, shot_id, warning_code, resolved_at, resolved_comment
+                 FROM resolved_warnings_old",
+                [],
+            )?;
+        }
+
+        // Drop old tables
+        tx.execute("DROP TABLE sections_old", [])?;
+        if has_shots {
+            tx.execute("DROP TABLE shots_old", [])?;
+        }
+        if has_station_merges {
+            tx.execute("DROP TABLE station_merges_old", [])?;
+        }
+        if has_zero_datums {
+            tx.execute("DROP TABLE zero_datums_old", [])?;
+        }
+        if has_section_offsets {
+            tx.execute("DROP TABLE section_offsets_old", [])?;
+        }
+        if has_station_offsets {
+            tx.execute("DROP TABLE station_offsets_old", [])?;
+        }
+        if has_loop_closures {
+            tx.execute("DROP TABLE loop_closures_old", [])?;
+        }
+        if has_resolved_warnings {
+            tx.execute("DROP TABLE resolved_warnings_old", [])?;
+        }
+
+        // Recreate indexes
+        tx.execute("CREATE INDEX IF NOT EXISTS idx_shots_section ON shots(section_id)", [])?;
+
+        tx.commit()?;
+        self.enable_foreign_keys()?;
+        Ok(())
+    }
+
+    /// Read the current schema version from PRAGMA user_version.
+    fn get_user_version(&self) -> Result<i32> {
+        let version: i32 = self.conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        Ok(version)
+    }
+
+    /// Persist the schema version to PRAGMA user_version.
+    fn set_user_version(&self, version: i32) -> Result<()> {
+        self.conn.execute(&format!("PRAGMA user_version = {}", version), [])?;
+        Ok(())
+    }
+
+    /// Ensure schema migrations are applied and user_version is current.
+    fn ensure_schema_version(&self) -> Result<()> {
+        let mut current = self.get_user_version().unwrap_or(0);
+        if current == 0 {
+            if let Ok(Some(project_version)) = self.get_project_schema_version() {
+                current = project_version;
+            }
+        }
+        if current > SCHEMA_VERSION {
+            tracing::warn!(
+                current = current,
+                expected = SCHEMA_VERSION,
+                "Database schema version is newer than this app"
+            );
+            return Ok(());
+        }
+
+        if current <= SCHEMA_VERSION {
+            self.migrate_schema()?;
+            if current < 2 {
+                self.rebuild_tables_with_foreign_keys()?;
+            }
+            self.set_user_version(SCHEMA_VERSION)?;
+            // Keep project-level schema_version in sync with PRAGMA user_version.
+            let _ = self.conn.execute(
+                "UPDATE project SET schema_version = ?1",
+                params![SCHEMA_VERSION],
+            );
+        }
+
+        Ok(())
+    }
+
     /// Check if the database has valid project data
     pub fn has_project_data(&self) -> Result<bool> {
         tracing::info!("Checking if database has project data...");
@@ -279,7 +711,9 @@ impl Database {
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory().context("Failed to create in-memory database")?;
         let db = Self { conn };
+        db.enable_foreign_keys()?;
         db.init_schema()?;
+        db.set_user_version(SCHEMA_VERSION)?;
         Ok(db)
     }
 
@@ -313,7 +747,7 @@ impl Database {
             -- Shots
             CREATE TABLE IF NOT EXISTS shots (
                 id INTEGER PRIMARY KEY,
-                section_id INTEGER NOT NULL REFERENCES sections(id),
+                section_id INTEGER NOT NULL,
                 sequence_order INTEGER NOT NULL,
                 azimuth_in REAL NOT NULL,
                 azimuth_out REAL NOT NULL,
@@ -330,7 +764,8 @@ impl Database {
                 is_virtual INTEGER NOT NULL DEFAULT 0,
                 marker_index INTEGER,
                 temperature REAL,
-                UNIQUE(section_id, sequence_order)
+                UNIQUE(section_id, sequence_order),
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
 
             -- Station merges
@@ -340,7 +775,9 @@ impl Database {
                 station_a_index INTEGER NOT NULL,
                 station_b_section INTEGER NOT NULL,
                 station_b_index INTEGER NOT NULL,
-                merged_at TEXT NOT NULL
+                merged_at TEXT NOT NULL,
+                FOREIGN KEY (station_a_section) REFERENCES sections(id) ON DELETE CASCADE,
+                FOREIGN KEY (station_b_section) REFERENCES sections(id) ON DELETE CASCADE
             );
 
             -- Zero datums
@@ -351,14 +788,16 @@ impl Database {
                 latitude REAL NOT NULL,
                 longitude REAL NOT NULL,
                 depth_reference REAL NOT NULL,
-                UNIQUE(section_id, station_index)
+                UNIQUE(section_id, station_index),
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
 
             -- Section offsets (for aligning merged sections)
             CREATE TABLE IF NOT EXISTS section_offsets (
                 section_id INTEGER PRIMARY KEY,
                 offset_x REAL NOT NULL,
-                offset_y REAL NOT NULL
+                offset_y REAL NOT NULL,
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
 
             -- Station offsets (for individually moved stations)
@@ -368,7 +807,8 @@ impl Database {
                 offset_x REAL NOT NULL,
                 offset_y REAL NOT NULL,
                 offset_z REAL NOT NULL,
-                PRIMARY KEY (section_id, station_index)
+                PRIMARY KEY (section_id, station_index),
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
 
             -- Undo/redo stack
@@ -400,7 +840,9 @@ impl Database {
                 horizontal_misclosure REAL NOT NULL,
                 vertical_misclosure REAL NOT NULL,
                 closure_id INTEGER NOT NULL DEFAULT 0,
-                strategy TEXT NOT NULL DEFAULT 'ProportionalByLength'
+                strategy TEXT NOT NULL DEFAULT 'ProportionalByLength',
+                FOREIGN KEY (station_a_section) REFERENCES sections(id) ON DELETE CASCADE,
+                FOREIGN KEY (station_b_section) REFERENCES sections(id) ON DELETE CASCADE
             );
 
             -- Display settings
@@ -417,7 +859,8 @@ impl Database {
                 warning_code TEXT NOT NULL,
                 resolved_at TEXT NOT NULL,
                 resolved_comment TEXT,
-                UNIQUE(section_id, shot_id, warning_code)
+                UNIQUE(section_id, shot_id, warning_code),
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
 
             -- Imported file hashes (for duplicate detection)

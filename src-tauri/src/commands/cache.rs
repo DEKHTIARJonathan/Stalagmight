@@ -6,12 +6,13 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::Serialize;
+use ts_rs::TS;
 use tauri::State;
 
 use crate::core::AppState;
 
 /// Statistics for a single tile provider
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 pub struct ProviderStats {
     /// Number of tiles from this provider
     pub tiles: u64,
@@ -22,7 +23,7 @@ pub struct ProviderStats {
 /// Cache statistics returned by the get_cache_stats command.
 ///
 /// Matches the spec-defined CacheStats struct with per-provider breakdown.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 pub struct CacheStats {
     /// Total number of tiles across all providers
     pub total_tiles: u64,

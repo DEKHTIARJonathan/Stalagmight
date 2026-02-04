@@ -3,6 +3,64 @@ use crate::models::ShotData;
 use tempfile::TempDir;
 
 #[test]
+fn test_foreign_keys_enabled_on_open() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("fk_enabled.stalx");
+
+    let db = Database::open(&db_path).unwrap();
+    let enabled: i32 = db
+        .conn
+        .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+        .unwrap();
+
+    assert_eq!(enabled, 1);
+}
+
+#[test]
+fn test_foreign_keys_enabled_on_open_existing() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("fk_enabled_existing.stalx");
+
+    Database::open(&db_path).unwrap();
+    let db = Database::open_existing(&db_path).unwrap();
+    let enabled: i32 = db
+        .conn
+        .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+        .unwrap();
+
+    assert_eq!(enabled, 1);
+}
+
+#[test]
+fn test_foreign_keys_enabled_on_open_readonly() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("fk_enabled_readonly.stalx");
+
+    Database::open(&db_path).unwrap();
+    let db = Database::open_readonly(&db_path).unwrap();
+    let enabled: i32 = db
+        .conn
+        .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+        .unwrap();
+
+    assert_eq!(enabled, 1);
+}
+
+#[test]
+fn test_user_version_set_on_open() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("user_version.stalx");
+
+    let db = Database::open(&db_path).unwrap();
+    let version: i32 = db
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+
+    assert_eq!(version, SCHEMA_VERSION);
+}
+
+#[test]
 fn test_create_and_save_project() {
     let db = Database::in_memory().unwrap();
     let mut project = Project::new("Test Cave".to_string(), Some("Test Location".to_string()));

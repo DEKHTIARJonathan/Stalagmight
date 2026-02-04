@@ -3,6 +3,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { ensureExtension, projectSaveFilters, PROJECT_EXTENSION } from '../../utils/fileDialogs';
 
 export default function NewProjectDialog() {
   const { closeDialog } = useUIStore();
@@ -33,12 +34,13 @@ export default function NewProjectDialog() {
           const { save } = await import('@tauri-apps/plugin-dialog');
           const path = await save({
             title: 'Save Project',
-            filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
+            filters: projectSaveFilters(),
             defaultPath: `${name.replace(/[^a-zA-Z0-9]/g, '_')}.stalx`,
           });
 
           if (path) {
-            await saveProject(path);
+            const finalPath = ensureExtension(path, PROJECT_EXTENSION);
+            await saveProject(finalPath);
           }
         }
 

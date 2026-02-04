@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::{Path, PathBuf};
+use ts_rs::TS;
 
 use crate::models::ClosureStrategy;
 
 /// Application configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Config {
     pub general: GeneralConfig,
     pub units: UnitsConfig,
@@ -36,7 +37,7 @@ pub struct Config {
 }
 
 /// Legacy snap config for migration from old [snap] section
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub(super) struct LegacySnapConfig {
     #[serde(default)]
     enabled_draw: Option<bool>,
@@ -50,7 +51,7 @@ pub(super) struct LegacySnapConfig {
 }
 
 /// Station visual and interaction configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct StationConfig {
     /// Visual radius in pixels (1.0-50.0)
     #[serde(default = "default_station_radius")]
@@ -115,7 +116,7 @@ fn default_station_selection_radius() -> f64 {
 }
 
 /// Shot visual and interaction configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ShotConfig {
     /// Visual line width in pixels (0.5-20.0)
     #[serde(default = "default_shot_width")]
@@ -180,7 +181,7 @@ fn default_shot_selection_width() -> f64 {
 }
 
 /// Snap-to-station configuration for precision tools
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct MapSnapConfig {
     /// Snap threshold in pixels (1.0-50.0)
     #[serde(default = "default_snap_threshold")]
@@ -225,7 +226,7 @@ fn default_true() -> bool {
 }
 
 /// Animation configuration for map focus transitions
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct MapAnimationConfig {
     /// Whether animations are enabled
     #[serde(default = "default_true")]
@@ -257,14 +258,14 @@ fn default_point_zoom() -> u8 {
 }
 
 /// Debug configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct DebugConfig {
     #[serde(default)]
     pub map: MapDebugConfig,
 }
 
 /// Map-specific debug options
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct MapDebugConfig {
     /// Show hitbox visualization for debugging
     #[serde(default)]
@@ -275,7 +276,7 @@ pub struct MapDebugConfig {
 }
 
 /// Panel sizes configuration (persisted across sessions)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct PanelsConfig {
     /// Sections panel width in pixels
     pub sections_panel_width: u32,
@@ -286,7 +287,7 @@ pub struct PanelsConfig {
 }
 
 /// Tile cache configuration for offline satellite imagery
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CacheConfig {
     /// Enable tile caching for offline access
     #[serde(default = "default_tile_cache_enabled")]
@@ -312,7 +313,7 @@ fn default_tile_ttl_days() -> u32 {
 }
 
 /// Global view configuration for multi-system map rendering
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct GlobalViewConfig {
     /// FPS threshold below which auto-throttle activates
     #[serde(default = "default_fps_threshold")]
@@ -358,8 +359,9 @@ impl Default for GlobalViewConfig {
 /// Uses `#[serde(other)]` on Unknown variant so that invalid/unrecognized
 /// theme values in TOML don't prevent config loading; they are coerced to
 /// Dark during normalize().
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
 pub enum ThemeMode {
     #[default]
     Dark,
@@ -371,7 +373,7 @@ pub enum ThemeMode {
 }
 
 /// Appearance configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct AppearanceConfig {
     #[serde(default)]
     pub theme: ThemeMode,
@@ -408,8 +410,9 @@ fn default_throttle_tolerance() -> f64 {
 }
 
 /// Shortcut feedback preference for toast notifications
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum ShortcutFeedback {
     /// No toasts for any shortcuts
     None,
@@ -420,12 +423,13 @@ pub enum ShortcutFeedback {
     All,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct GeneralConfig {
     pub auto_save: bool,
     pub auto_save_interval_seconds: u32,
     pub recent_projects_max: usize,
     #[serde(default)]
+    #[ts(type = "string[]")]
     pub recent_projects: Vec<PathBuf>,
     /// Maximum undo history entries to keep in memory (default: 100)
     #[serde(default = "default_undo_history_limit")]
@@ -453,7 +457,7 @@ fn default_undo_persist_limit() -> usize {
     20
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct UnitsConfig {
     pub length: LengthUnit,
     pub depth: LengthUnit,
@@ -461,21 +465,23 @@ pub struct UnitsConfig {
     pub decimal_precision: u8,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
 pub enum LengthUnit {
     Meters,
     Feet,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
 pub enum AngleUnit {
     Degrees,
     Gradians,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DisplayConfig {
     pub default_background: String,
     pub grid_color: String,
@@ -499,7 +505,7 @@ fn default_pitch_diff_threshold() -> f64 {
     5.0
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DepthGradientConfig {
     pub enabled: bool,
     pub shallow_color: String,
@@ -508,18 +514,18 @@ pub struct DepthGradientConfig {
     pub deep_depth: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SectionColorsConfig {
     pub palette: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct GpsOrigin {
     pub latitude: f64,
     pub longitude: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct MapConfig {
     pub satellite_provider: String,
     pub satellite_enabled: bool,
@@ -583,14 +589,14 @@ fn default_satellite_gps_origin() -> GpsOrigin {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct MapControlsConfig {
     pub pan_speed: f64,
     pub zoom_speed: f64,
     pub invert_scroll: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ValidationConfig {
     pub warn_shot_length_min: f64,
     pub warn_shot_length_max: f64,
@@ -605,8 +611,9 @@ pub struct ValidationConfig {
     pub pitch_diff_threshold: f64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum TransitVerticalMode {
     Ignore,
     LengthProportional,
@@ -619,7 +626,7 @@ impl Default for TransitVerticalMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ClosureAdjustmentConfig {
     #[serde(default = "default_sigma_length_m")]
     pub base_sigma_length_m: f64,
@@ -667,7 +674,7 @@ pub fn default_sigma_depth_m() -> f64 {
     0.05
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ExportConfig {
     pub default_image_format: String,
     pub default_dpi: u32,
@@ -676,7 +683,7 @@ pub struct ExportConfig {
     pub default_include_labels: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct LoggingConfig {
     pub level: String,
     pub max_directory_size_mb: u32,
@@ -687,7 +694,7 @@ const MAX_BINDINGS_PER_ACTION: usize = 2;
 
 /// Keyboard shortcuts configuration
 /// Supports multiple bindings per action (max 2) with backward-compatible deserialization
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(default)]
 pub struct ShortcutsConfig {
     // Tools
@@ -766,7 +773,7 @@ pub struct ShortcutsConfig {
 }
 
 /// Helper enum to deserialize legacy single-string shortcut for migration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(untagged)]
 pub(super) enum LegacyShortcut {
     Single(String),
@@ -1071,7 +1078,7 @@ fn deserialize_shortcut_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::E
 where
     D: Deserializer<'de>,
 {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, TS)]
     #[serde(untagged)]
     enum StringOrVec {
         Single(String),

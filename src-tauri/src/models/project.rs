@@ -4,6 +4,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::cmp::Ordering;
 use std::path::PathBuf;
 use tracing::{debug, info};
+use ts_rs::TS;
 
 use crate::config::{ClosureAdjustmentConfig, TransitVerticalMode};
 
@@ -15,7 +16,7 @@ use super::{
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).
 /// Used by the frontend to show affected relationships before section deletion.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SectionRelationships {
     /// Station merges referencing the section
     pub merges: Vec<StationMerge>,
@@ -29,13 +30,13 @@ pub struct SectionRelationships {
     pub zero_datum_count: usize,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 pub struct StationPair {
     pub station_a: StationRef,
     pub station_b: StationRef,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 pub struct ClosurePair {
     pub closure_id: u64,
     pub station_a: StationRef,
@@ -104,14 +105,14 @@ impl PartialOrd for HeapItem {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 pub struct ClosureUpdate {
     pub closure_id: u64,
     pub old_station: StationRef,
     pub new_station: StationRef,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DeleteShotImpact {
     pub removed_station: StationRef,
     pub removed_merges: Vec<StationPair>,
@@ -127,15 +128,17 @@ pub struct DeleteShotImpact {
 }
 
 /// A complete cave survey project
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Project {
     /// Project name (typically cave system name)
     pub name: String,
     /// Optional location description
     pub location: Option<String>,
     /// Creation timestamp
+    #[ts(type = "string")]
     pub created_at: DateTime<Utc>,
     /// Last modification timestamp
+    #[ts(type = "string")]
     pub modified_at: DateTime<Utc>,
     /// All sections in this project
     pub sections: Vec<Section>,
@@ -147,6 +150,7 @@ pub struct Project {
     #[serde(default)]
     pub loop_closures: Vec<LoopClosure>,
     /// File path if saved (None for new unsaved projects)
+    #[ts(type = "string | null")]
     pub file_path: Option<PathBuf>,
     /// Next section ID to assign
     pub next_section_id: SectionId,
@@ -155,6 +159,7 @@ pub struct Project {
     pub section_offsets: HashMap<SectionId, (f64, f64)>,
     /// Station offsets (x, y, z) applied when individual stations are moved
     #[serde(default, serialize_with = "serialize_station_offsets", deserialize_with = "deserialize_station_offsets")]
+    #[ts(type = "Array<[StationRef, [number, number, number]]>")]
     pub station_offsets: HashMap<StationRef, (f64, f64, f64)>,
     /// SHA256 hashes of imported DMP files (for duplicate detection)
     #[serde(default)]
@@ -165,11 +170,13 @@ pub struct Project {
 }
 
 /// Project metadata for listing
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ProjectMetadata {
     pub name: String,
     pub location: Option<String>,
+    #[ts(type = "string")]
     pub file_path: PathBuf,
+    #[ts(type = "string")]
     pub modified_at: DateTime<Utc>,
     pub section_count: usize,
     pub total_length: f64,
@@ -182,7 +189,7 @@ pub struct ProjectMetadata {
 }
 
 /// Overall project statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ProjectStats {
     pub section_count: usize,
     pub shot_count: usize,

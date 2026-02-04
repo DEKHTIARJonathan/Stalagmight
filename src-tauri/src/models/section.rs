@@ -2,6 +2,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
+use ts_rs::TS;
 
 use super::{Coordinates, GpsCoordinates, Shot, ShotData, ShotId, StationRef};
 
@@ -9,8 +10,9 @@ use super::{Coordinates, GpsCoordinates, Shot, ShotData, ShotId, StationRef};
 pub type SectionId = u32;
 
 /// Survey direction (In = going into cave, Out = returning)
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
 pub enum SurveyDirection {
     #[default]
     In,
@@ -39,7 +41,7 @@ impl FromStr for SurveyDirection {
 }
 
 /// A group of consecutive shots collected during a single survey session
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Section {
     /// Internal immutable ID
     pub id: SectionId,
@@ -48,6 +50,7 @@ pub struct Section {
     /// Surveyor who collected this data
     pub surveyor: Option<String>,
     /// Date of the survey
+    #[ts(type = "string | null")]
     pub date: Option<NaiveDate>,
     /// Display color (hex format, e.g., "#4ecdc4")
     pub color: String,
@@ -63,10 +66,11 @@ pub struct Section {
 }
 
 /// Data for creating a new section
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SectionData {
     pub name: Option<String>,
     pub surveyor: Option<String>,
+    #[ts(type = "string | null")]
     pub date: Option<NaiveDate>,
     pub color: String,
     /// Survey direction (defaults to In if not specified)
@@ -79,13 +83,14 @@ pub struct SectionData {
 }
 
 /// Partial updates to a section
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct SectionUpdates {
     #[serde(default)]
     pub name: Option<Option<String>>,
     #[serde(default)]
     pub surveyor: Option<Option<String>>,
     #[serde(default)]
+    #[ts(type = "string | null")]
     pub date: Option<Option<NaiveDate>>,
     #[serde(default)]
     pub color: Option<String>,
@@ -96,7 +101,7 @@ pub struct SectionUpdates {
 }
 
 /// Section statistics (computed, not stored)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SectionStats {
     pub shot_count: usize,
     pub total_length: f64,
@@ -106,12 +111,13 @@ pub struct SectionStats {
 }
 
 /// Configuration for a single section being imported via the batch import command.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ImportSectionConfig {
     /// Index of this section in the import array (used for fromImporting references)
     pub section_index: u32,
     pub name: Option<String>,
     pub surveyor: Option<String>,
+    #[ts(type = "string | null")]
     pub date: Option<NaiveDate>,
     pub color: String,
     #[serde(default)]
@@ -124,8 +130,9 @@ pub struct ImportSectionConfig {
 }
 
 /// Placement strategy for an imported section.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum ImportPlacement {
     /// Place at origin (0, 0) — no additional operations needed.
     Origin,
