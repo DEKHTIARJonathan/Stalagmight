@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StalagMight - Underwater Cave Survey Software</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --sm-cave-ember-700: #3A251A;
+      --sm-cave-ember-900: #1A120B;
+      --sm-basalt-950: #0F0906;
+      --sm-limestone-50: #F3E8D8;
+      --sm-sandstone-200: #C1A07A;
+      --sm-silt-300: #AE8D67;
+      --sm-border-subtle: rgba(243,232,216,0.18);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+      background: var(--sm-basalt-950);
+      color: var(--sm-limestone-50);
+    }
+    header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 48px;
+      background: rgba(15,9,6,0.9);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--sm-border-subtle);
+      z-index: 100;
+    }
+    .logo { font-weight: 800; font-size: 20px; }
+    nav { display: flex; gap: 24px; align-items: center; }
+    nav a { color: var(--sm-sandstone-200); text-decoration: none; font-size: 13px; }
+    .nav-cta { background: var(--sm-limestone-50); color: var(--sm-cave-ember-900); padding: 8px 16px; border-radius: 6px; font-weight: 600; }
+    section { padding: 120px 48px; max-width: 1100px; margin: 0 auto; }
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      text-align: center;
+      background: radial-gradient(ellipse 80% 50% at 50% 20%, var(--sm-cave-ember-700) 0%, var(--sm-basalt-950) 70%);
+    }
+    .hero h1 {
+      font-size: 56px;
+      font-weight: 800;
+      letter-spacing: -2px;
+      line-height: 1.1;
+      margin-bottom: 24px;
+    }
+    .hero p { font-size: 18px; color: var(--sm-sandstone-200); max-width: 480px; margin: 0 auto 40px; line-height: 1.7; }
+    .btn-group { display: flex; gap: 12px; justify-content: center; }
+    .btn { padding: 14px 28px; border-radius: 8px; font-weight: 600; font-size: 15px; text-decoration: none; }
+    .btn-primary { background: var(--sm-limestone-50); color: var(--sm-cave-ember-900); }
+    .btn-secondary { border: 1px solid var(--sm-border-subtle); color: var(--sm-limestone-50); }
+    .section-title { font-size: 36px; font-weight: 800; margin-bottom: 48px; text-align: center; }
+    .features-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 32px; }
+    .feature-item {
+      background: var(--sm-cave-ember-900);
+      border: 1px solid var(--sm-border-subtle);
+      border-radius: 12px;
+      padding: 32px;
+    }
+    .feature-item h3 { font-size: 20px; margin-bottom: 12px; }
+    .feature-item p { color: var(--sm-sandstone-200); font-size: 15px; line-height: 1.6; }
+    .workflow-section { background: var(--sm-cave-ember-900); border-radius: 16px; padding: 64px; }
+    .workflow-steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 24px;
+    }
+    .step {
+      text-align: center;
+    }
+    .step-num {
+      width: 48px;
+      height: 48px;
+      background: var(--sm-cave-ember-700);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 20px;
+      margin: 0 auto 16px;
+    }
+    .step h4 { font-size: 16px; margin-bottom: 8px; }
+    .step p { font-size: 13px; color: var(--sm-silt-300); }
+    .download-section { text-align: center; }
+    .download-cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+      margin-top: 48px;
+    }
+    .download-card {
+      background: var(--sm-cave-ember-900);
+      border: 1px solid var(--sm-border-subtle);
+      border-radius: 12px;
+      padding: 32px;
+    }
+    .download-card h3 { font-size: 18px; margin-bottom: 12px; }
+    .download-card .size { color: var(--sm-silt-300); font-size: 13px; margin-bottom: 16px; }
+    .download-btn {
+      display: block;
+      background: var(--sm-limestone-50);
+      color: var(--sm-cave-ember-900);
+      padding: 12px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    footer {
+      padding: 48px;
+      text-align: center;
+      border-top: 1px solid var(--sm-border-subtle);
+      color: var(--sm-silt-300);
+      font-size: 13px;
+    }
+    footer a { color: var(--sm-sandstone-200); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">StalagMight</div>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#workflow">Workflow</a>
+      <a href="#download">Download</a>
+      <a href="#" class="nav-cta">GitHub</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <h1>Map underwater caves with precision</h1>
+    <p>Desktop software for processing cave survey data. Import from mNemo, visualize on satellite maps, export publication-ready results.</p>
+    <div class="btn-group">
+      <a href="#download" class="btn btn-primary">Download Free</a>
+      <a href="#features" class="btn btn-secondary">Learn More</a>
+    </div>
+  </section>
+
+  <section id="features">
+    <h2 class="section-title">Built for surveyors</h2>
+    <div class="features-list">
+      <div class="feature-item">
+        <h3>mNemo Import</h3>
+        <p>Direct DMP file import from your mNemo device. Automatic section detection and compass data parsing.</p>
+      </div>
+      <div class="feature-item">
+        <h3>Satellite Overlay</h3>
+        <p>View survey lines on cached satellite imagery. Works offline after initial tile download.</p>
+      </div>
+      <div class="feature-item">
+        <h3>Section Management</h3>
+        <p>Create, merge, split, and reorganize survey sections. Move shots between sections with ease.</p>
+      </div>
+      <div class="feature-item">
+        <h3>Multi-Format Export</h3>
+        <p>Export maps as PNG, SVG, or PDF. Export data as CSV or JSON for further analysis.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="workflow">
+    <div class="workflow-section">
+      <h2 class="section-title">Simple workflow</h2>
+      <div class="workflow-steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <h4>Import</h4>
+          <p>Load DMP from mNemo or enter data manually</p>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <h4>Organize</h4>
+          <p>Structure surveys into sections</p>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <h4>Edit</h4>
+          <p>Refine data with full undo support</p>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <h4>Export</h4>
+          <p>Generate maps and data exports</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="download" class="download-section">
+    <h2 class="section-title">Download StalagMight</h2>
+    <p style="color: var(--sm-sandstone-200);">Free and open source. No account required.</p>
+    <div class="download-cards">
+      <div class="download-card">
+        <h3>Windows</h3>
+        <p class="size">v1.0.0-beta &middot; ~45 MB</p>
+        <a href="#" class="download-btn">Download .exe</a>
+      </div>
+      <div class="download-card">
+        <h3>macOS</h3>
+        <p class="size">v1.0.0-beta &middot; ~50 MB</p>
+        <a href="#" class="download-btn">Download .dmg</a>
+      </div>
+      <div class="download-card">
+        <h3>Linux</h3>
+        <p class="size">v1.0.0-beta &middot; ~45 MB</p>
+        <a href="#" class="download-btn">Download .AppImage</a>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>&copy; 2026 StalagMight &middot; <a href="#">GitHub</a> &middot; <a href="#">Documentation</a> &middot; <a href="#">MIT License</a></p>
+  </footer>
+</body>
+</html>
