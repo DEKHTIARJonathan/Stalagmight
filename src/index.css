@@ -230,8 +230,15 @@ body {
   outline-offset: var(--cc-focus-ring-offset);
 }
 
+label:focus-within {
+  outline: 2px solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+  box-shadow: 0 0 0 2px var(--cc-focus-ring-shadow);
+  border-radius: 4px;
+}
+
 @supports selector(:focus-visible) {
-  input:focus:not(:focus-visible),
+  input:focus:not(:focus-visible):not([type="checkbox"]):not([type="radio"]),
   select:focus:not(:focus-visible),
   textarea:focus:not(:focus-visible),
   button:focus:not(:focus-visible) {
@@ -324,6 +331,13 @@ input[type="radio"]:hover:not(:disabled) {
 
 input[type="checkbox"]:focus-visible,
 input[type="radio"]:focus-visible {
+  outline: 2px solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+  box-shadow: 0 0 0 2px var(--cc-focus-ring-shadow);
+}
+
+input[type="checkbox"]:focus,
+input[type="radio"]:focus {
   outline: 2px solid var(--cc-focus-ring);
   outline-offset: var(--cc-focus-ring-offset);
   box-shadow: 0 0 0 2px var(--cc-focus-ring-shadow);

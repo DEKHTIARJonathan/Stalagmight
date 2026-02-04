@@ -24,9 +24,28 @@ function runNyc(args) {
   execFileSync('pnpm', ['exec', 'nyc', ...args], { stdio: 'inherit' });
 }
 
-function hasCoverageFiles(dir) {
+function hasTopLevelCoverageFiles(dir) {
   if (!fs.existsSync(dir)) return false;
-  return fs.readdirSync(dir).some((file) => file.endsWith('.json'));
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .some((entry) => entry.isFile() && entry.name.endsWith('.json'));
+}
+
+function findCoverageSources(dir) {
+  if (!fs.existsSync(dir)) return [];
+  const sources = [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  if (entries.some((entry) => entry.isFile() && entry.name.endsWith('.json'))) {
+    sources.push(dir);
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const subdir = path.join(dir, entry.name);
+    if (hasTopLevelCoverageFiles(subdir)) {
+      sources.push(subdir);
+    }
+  }
+  return sources;
 }
 
 function writeReport(jsonFile, reportDir) {
@@ -46,11 +65,22 @@ function writeReport(jsonFile, reportDir) {
   ]);
 }
 
-if (!hasCoverageFiles(rawDir)) {
+const rawSources = findCoverageSources(rawDir);
+if (rawSources.length === 0) {
   console.log('No raw E2E coverage files found under docs/coverage/raw.');
 } else {
-  console.log('Merging raw E2E coverage...');
-  runNyc(['merge', rawDir, e2eOut]);
+  console.log(`Merging raw E2E coverage from ${rawSources.length} source(s)...`);
+  resetDir(mergeDir);
+  const partials = rawSources.map((source, index) => {
+    const partialOut = path.join(mergeDir, `e2e-${index}.json`);
+    runNyc(['merge', source, partialOut]);
+    return partialOut;
+  });
+  if (partials.length === 1) {
+    fs.copyFileSync(partials[0], e2eOut);
+  } else {
+    runNyc(['merge', mergeDir, e2eOut]);
+  }
   writeReport(e2eOut, path.join(coverageRoot, 'e2e'));
 }
 

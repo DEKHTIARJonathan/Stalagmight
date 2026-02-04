@@ -21,6 +21,7 @@ const plugins: PluginOption[] = [
           'src/types/ipc.generated.ts',
         ],
         extension: ['.ts', '.tsx'],
+        forceBuildInstrument: true,
         requireEnv: false,
       })
     : undefined,
