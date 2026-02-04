@@ -11,6 +11,7 @@ const __dirname = path.dirname(__filename);
 let tauriDriver: ChildProcess | null = null;
 let tempRoot: string | null = null;
 let workerLogStream: fs.WriteStream | null = null;
+let xvfbProcess: ChildProcess | null = null;
 
 // Directory for per-worker log files
 const LOGS_DIR = path.join(__dirname, 'wdio-logs');
@@ -33,6 +34,14 @@ function readEnvInt(name: string, fallback: number): number {
 const maxInstances = readEnvInt('WDIO_MAX_INSTANCES', DEFAULT_MAX_INSTANCES);
 const basePort = readEnvInt('WDIO_BASE_PORT', 4444);
 const baseNativePort = readEnvInt('WDIO_BASE_NATIVE_PORT', basePort + 1000);
+const xvfbScreen = process.env.WDIO_XVFB_SCREEN || '1280x720x24';
+const xvfbDisplays = [
+  process.env.WDIO_XVFB_DISPLAY,
+  ':99',
+  ':98',
+  ':97',
+  ':96',
+].filter((value): value is string => Boolean(value));
 
 // Check if display is available (Linux only)
 function checkDisplayAvailable(): boolean {
@@ -44,13 +53,59 @@ function checkDisplayAvailable(): boolean {
   // Check for Wayland
   if (process.env.WAYLAND_DISPLAY) return true;
 
-  // Check if xvfb-run is available
+  return false;
+}
+
+async function startXvfb(): Promise<boolean> {
+  if (isWindows) return true;
+  if (process.env.DISPLAY || process.env.WAYLAND_DISPLAY) return true;
+  if (xvfbProcess) return true;
+
   try {
-    execSync('which xvfb-run', { stdio: 'ignore' });
-    return true;
+    execSync('which Xvfb', { stdio: 'ignore' });
   } catch {
     return false;
   }
+
+  for (const display of xvfbDisplays) {
+    const child = spawn('Xvfb', [display, '-screen', '0', xvfbScreen, '-ac', '-nolisten', 'tcp'], {
+      stdio: 'ignore',
+    });
+
+    const started = await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          resolve(child.exitCode === null);
+        }
+      }, 250);
+
+      child.once('error', () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(false);
+        }
+      });
+
+      child.once('exit', () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(false);
+        }
+      });
+    });
+
+    if (started) {
+      xvfbProcess = child;
+      process.env.DISPLAY = display;
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // Clear recent projects from config to ensure clean test state
@@ -121,6 +176,9 @@ export const config: Options.Testrunner = {
   // Run tests in parallel (override with WDIO_MAX_INSTANCES=1 if needed)
   maxInstances,
 
+  // Disable built-in xvfb-run wrapper (we manage Xvfb manually)
+  autoXvfb: false,
+
   // Retry failed specs once to handle parallel execution focus/timing issues
   specFileRetries: 1,
 
@@ -158,7 +216,7 @@ export const config: Options.Testrunner = {
   connectionRetryCount: 1,
 
   // Build the app before running tests
-  onPrepare: function () {
+  onPrepare: async function () {
     // Create/clear logs directory for this run
     if (fs.existsSync(LOGS_DIR)) {
       fs.rmSync(LOGS_DIR, { recursive: true, force: true });
@@ -166,8 +224,9 @@ export const config: Options.Testrunner = {
     fs.mkdirSync(LOGS_DIR, { recursive: true });
     console.log(`Worker logs will be written to: ${LOGS_DIR}`);
 
-    // Fail fast if no display is available
-    if (!checkDisplayAvailable()) {
+    // Ensure a display is available for the Tauri app
+    const displayReady = checkDisplayAvailable() || (await startXvfb());
+    if (!displayReady) {
       console.error('\n' + '='.repeat(70));
       console.error('ERROR: No display available for WebdriverIO E2E tests.');
       console.error('');
@@ -195,6 +254,7 @@ export const config: Options.Testrunner = {
           env: {
             ...process.env,
             VITE_E2E: '1',
+            CARGO_TARGET_DIR: cargoTargetDir,
           },
         });
         console.log('Build completed successfully');
@@ -319,6 +379,11 @@ export const config: Options.Testrunner = {
       console.log(`\n⚠️  ${results.failed} spec(s) failed. Check the corresponding .log file for details.`);
     }
     console.log('='.repeat(70) + '\n');
+
+    if (xvfbProcess) {
+      xvfbProcess.kill();
+      xvfbProcess = null;
+    }
   },
 
   // Auto-compile TypeScript

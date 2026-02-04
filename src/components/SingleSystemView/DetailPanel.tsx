@@ -1095,7 +1095,7 @@ function ClosuresSection({
 
   // Precompute loop closures map for O(1) lookups
   const closureMap = useMemo(() => {
-    const map = new Map<number, LoopClosure>();
+    const map = new Map<bigint, LoopClosure>();
     for (const lc of loopClosures) {
       map.set(lc.id, lc);
     }
@@ -1104,7 +1104,7 @@ function ClosuresSection({
 
   // Group closures by closure_id and sort deterministically
   const sortedGroups = useMemo(() => {
-    const grouped = new Map<number, ClosureRef[]>();
+    const grouped = new Map<bigint, ClosureRef[]>();
     for (const c of closures) {
       const existing = grouped.get(c.closure_id);
       if (existing) {
@@ -1120,7 +1120,8 @@ function ClosuresSection({
       const bHasDirect = refsB.some((r) => !r.is_transitive);
       if (aHasDirect && !bHasDirect) return -1;
       if (!aHasDirect && bHasDirect) return 1;
-      return idA - idB;
+      if (idA === idB) return 0;
+      return idA < idB ? -1 : 1;
     });
   }, [closures]);
 

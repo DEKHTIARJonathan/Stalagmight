@@ -45,6 +45,8 @@ export default function ImportDialog() {
       surveyor: surveyor || null,
       date: date || null,
       color,
+      direction: null,
+      quality: 1.0,
       shots: shots.filter((s) => s.length > 0),
     };
 
@@ -220,6 +222,15 @@ function createEmptyShot(): ShotData {
     length: 0,
     depth_in: 0,
     depth_out: 0,
+    pitch_in: null,
+    pitch_out: null,
+    left: null,
+    right: null,
+    up: null,
+    down: null,
+    comment: null,
     is_virtual: false,
+    marker_index: null,
+    temperature: null,
   };
 }

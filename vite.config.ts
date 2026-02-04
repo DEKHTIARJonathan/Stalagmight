@@ -11,4 +11,14 @@ export default defineConfig({
       ignored: ['**/src-tauri/**'],
     },
   },
+  test: {
+    include: ['src/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
+    exclude: [
+      '**/e2e/**',
+      '**/e2e-playwright/**',
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/src-tauri/**',
+    ],
+  },
 });

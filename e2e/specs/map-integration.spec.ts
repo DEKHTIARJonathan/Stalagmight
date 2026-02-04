@@ -237,8 +237,8 @@ describe('Map Integration', () => {
     const result = await importDmpFile(dmpPath);
     expect(result.success).toBe(true);
 
-    // Switch to move section tool (Shift+V)
-    await selectTool('moveSection');
+    // Switch to move segment tool (V)
+    await selectTool('moveSegment');
     await waitForUiIdle(300);
 
     // Verify tool is active
@@ -257,7 +257,7 @@ describe('Map Integration', () => {
       return e2e.uiStore.getState().activeTool;
     });
 
-    expect(toolState).toBe('move_section');
+    expect(toolState).toBe('move_segment');
 
     // Get the canvas for drag operation
     const mapCanvas = await $('[data-testid="map-canvas"]');

@@ -191,6 +191,7 @@ export default function DmpSectionConfigDialog({
     if (!currentConfig) return null;
 
     return {
+      version: currentDmpSection?.version ?? dmpFile.version,
       name: currentConfig.name ?? currentDmpSection?.name ?? '',
       direction: currentConfig.direction ?? currentDmpSection?.direction ?? 'in',
       date: currentConfig.date ?? currentDmpSection?.date ?? '',
@@ -665,6 +666,7 @@ export default function DmpSectionConfigDialog({
       date: currentConfig.date,
       color: currentConfig.color,
       direction: currentConfig.direction,
+      quality: currentConfig.quality ?? 1.0,
       shots: currentConfig.shots
         .filter((s) => !s.isDeleted)
         .map((s) => ({
@@ -680,7 +682,9 @@ export default function DmpSectionConfigDialog({
           up: s.up,
           down: s.down,
           comment: s.comment,
-          is_virtual: s.is_virtual,
+          is_virtual: s.is_virtual ?? false,
+          marker_index: null,
+          temperature: null,
         })),
     };
 
@@ -1100,6 +1104,23 @@ export default function DmpSectionConfigDialog({
                     ? getSectionWarningCount(sectionIdx, validationConfig)
                     : 0;
                   const showWarnings = sectionWarnings > 0;
+                  const statusType =
+                    status === 'excluded'
+                      ? 'excluded'
+                      : status === 'errors' || sectionDataErrors > 0
+                        ? 'errors'
+                        : showWarnings
+                          ? 'warnings'
+                          : status === 'placed'
+                            ? 'placed'
+                            : 'not_placed';
+                  const statusLabel = {
+                    excluded: 'Excluded',
+                    errors: 'Errors',
+                    warnings: 'Warnings',
+                    placed: 'Placed',
+                    not_placed: 'Not placed',
+                  }[statusType];
 
                   // Status icon - priority: excluded > errors > warnings > placed > default
                   let statusIcon: ReactNode;
@@ -1131,7 +1152,12 @@ export default function DmpSectionConfigDialog({
                       }`}
                       data-testid={`section-list-item-${arrayIdx}`}
                     >
-                      <span className={statusColor} data-testid={`section-status-${arrayIdx}`}>
+                      <span
+                        className={statusColor}
+                        data-testid={`section-status-${arrayIdx}`}
+                        data-status={statusType}
+                        aria-label={`Section status: ${statusLabel}`}
+                      >
                         {statusIcon}
                       </span>
                       <span className="truncate flex-1">{section?.name ?? `Section ${arrayIdx + 1}`}</span>

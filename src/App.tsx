@@ -33,6 +33,8 @@ function editableShotToShotData(shot: ImportedSectionConfig['shots'][0]): ShotDa
     down: shot.down,
     comment: shot.comment,
     is_virtual: shot.is_virtual ?? false,
+    marker_index: null,
+    temperature: null,
   };
 }
 
@@ -166,10 +168,10 @@ function App() {
               },
             };
           } else {
-            backendPlacement = { type: 'manual', align_station_index: alignIdx };
+            backendPlacement = { type: 'manual', align_station_index: alignIdx, offset: null };
           }
         } else {
-          backendPlacement = { type: 'manual', align_station_index: alignIdx };
+          backendPlacement = { type: 'manual', align_station_index: alignIdx, offset: null };
         }
       }
 

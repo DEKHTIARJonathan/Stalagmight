@@ -17,13 +17,14 @@ const MAX_CACHE_SIZE_MB = 10000;
 /**
  * Format bytes to human-readable string (e.g., "12.5 MB")
  */
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
+function formatBytes(bytes: number | bigint): string {
+  const value = typeof bytes === 'bigint' ? Number(bytes) : bytes;
+  if (value === 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  const value = bytes / Math.pow(k, i);
-  return `${formatFixed(value, undefined, 1)} ${sizes[i]}`;
+  const i = Math.floor(Math.log(value) / Math.log(k));
+  const scaled = value / Math.pow(k, i);
+  return `${formatFixed(scaled, undefined, 1)} ${sizes[i]}`;
 }
 
 /**
@@ -105,8 +106,8 @@ export function CacheSettings({
       console.error('[CacheSettings] Failed to load cache stats:', error);
       if (mountedRef.current) {
         setCacheStats({
-          total_tiles: 0,
-          total_bytes: 0,
+          total_tiles: 0n,
+          total_bytes: 0n,
           providers: {},
         });
       }
@@ -212,7 +213,7 @@ export function CacheSettings({
             <>
               <div className="flex justify-between">
                 <span className="text-text-secondary">{t('settings.cache.stats.cachedTiles')}</span>
-                <span data-testid="cache-tile-count">{formatNumber(cacheStats.total_tiles)}</span>
+                <span data-testid="cache-tile-count">{formatNumber(Number(cacheStats.total_tiles))}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-text-secondary">{t('settings.cache.stats.cacheSize')}</span>
@@ -226,7 +227,7 @@ export function CacheSettings({
                       <span className="text-text-secondary capitalize">{provider}:</span>
                       <span>
                         {t('settings.cache.stats.providerTiles', {
-                          tiles: formatNumber(stats.tiles),
+                          tiles: formatNumber(Number(stats.tiles)),
                           size: formatBytes(stats.bytes),
                         })}
                       </span>
@@ -245,7 +246,7 @@ export function CacheSettings({
           <Button
             variant="danger"
             onClick={handleClearCache}
-            disabled={isClearing || (cacheStats?.total_tiles ?? 0) === 0}
+            disabled={isClearing || Number(cacheStats?.total_tiles ?? 0n) === 0}
             data-testid="clear-cache-button"
           >
             {isClearing ? t('settings.cache.clear.clearing') : t('settings.cache.clear.button')}

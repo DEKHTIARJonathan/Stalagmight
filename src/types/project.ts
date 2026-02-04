@@ -25,4 +25,5 @@ export type {
   Project,
   ProjectStats,
   ProjectMetadata,
+  ProjectState,
 } from './ipc.generated';

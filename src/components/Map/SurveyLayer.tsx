@@ -2159,7 +2159,7 @@ export default class SurveyLayer {
     if (!clickedStation) return [];
 
     // Build closure strategy lookup (closure_id → strategy)
-    const closureStrategyById = new Map<number, string>();
+    const closureStrategyById = new Map<bigint, string>();
     for (const lc of this.cachedLoopClosures ?? []) {
       closureStrategyById.set(lc.id, lc.strategy);
     }

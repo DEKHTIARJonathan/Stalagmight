@@ -530,7 +530,7 @@ export function formatActionName(action: string): string {
   const key = ACTION_NAME_KEYS[action];
   if (key) {
     const translated = i18n.t(key);
-    if (translated && translated !== key) {
+    if (translated && translated !== key && translated !== `[${key}]`) {
       return translated;
     }
   }
