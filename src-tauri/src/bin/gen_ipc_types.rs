@@ -11,7 +11,7 @@ use stalagmight_lib::config::{
     DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig, GlobalViewConfig, GpsOrigin,
     LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig,
     MapSnapConfig, PanelsConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig,
-    ShotConfig, StationConfig, ThemeMode, TransitVerticalMode, UnitsConfig, ValidationConfig,
+    ShotConfig, StationConfig, ThemeMode, UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{CommandResult, ValidationWarning, WarningSeverity};
 use stalagmight_lib::core::loading::{
@@ -131,7 +131,6 @@ fn main() {
     export::<MapConfig>(&out_dir);
     export::<MapControlsConfig>(&out_dir);
     export::<ValidationConfig>(&out_dir);
-    export::<TransitVerticalMode>(&out_dir);
     export::<ClosureAdjustmentConfig>(&out_dir);
     export::<ExportConfig>(&out_dir);
     export::<LoggingConfig>(&out_dir);
@@ -221,7 +220,6 @@ fn main() {
         "MapConfig",
         "MapControlsConfig",
         "ValidationConfig",
-        "TransitVerticalMode",
         "ClosureAdjustmentConfig",
         "ExportConfig",
         "LoggingConfig",

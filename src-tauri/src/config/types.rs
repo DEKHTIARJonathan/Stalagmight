@@ -611,21 +611,6 @@ pub struct ValidationConfig {
     pub pitch_diff_threshold: f64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum TransitVerticalMode {
-    Ignore,
-    LengthProportional,
-    Equal,
-}
-
-impl Default for TransitVerticalMode {
-    fn default() -> Self {
-        Self::Ignore
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ClosureAdjustmentConfig {
     #[serde(default = "default_sigma_length_m")]
@@ -634,8 +619,6 @@ pub struct ClosureAdjustmentConfig {
     pub base_sigma_azimuth_deg: f64,
     #[serde(default = "default_sigma_depth_m")]
     pub base_sigma_depth_m: f64,
-    #[serde(default)]
-    pub transit_vertical_mode: TransitVerticalMode,
     #[serde(default)]
     pub sequential_distribution_default: ClosureStrategy,
 }
@@ -652,9 +635,7 @@ impl ClosureAdjustmentConfig {
             self.base_sigma_depth_m = default_sigma_depth_m();
         }
         match self.sequential_distribution_default {
-            ClosureStrategy::ProportionalByLength
-            | ClosureStrategy::EqualDistribution
-            | ClosureStrategy::TransitRule => {}
+            ClosureStrategy::ProportionalByLength | ClosureStrategy::EqualDistribution => {}
             _ => {
                 self.sequential_distribution_default = ClosureStrategy::ProportionalByLength;
             }

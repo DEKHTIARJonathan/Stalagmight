@@ -468,21 +468,12 @@
           "help": "Baseline standard deviation for depth change (meters)",
           "aria": "Base depth sigma in meters"
         },
-        "transitVertical": {
-          "label": "Transit vertical handling",
-          "help": "How transit rule distributes vertical misclosure",
-          "aria": "Transit vertical handling",
-          "ignore": "Ignore vertical",
-          "length": "Length proportional",
-          "equal": "Equal"
-        },
         "sequentialDistribution": {
           "label": "Sequential distribution",
           "help": "Default distribution used when running sequential closure",
           "aria": "Sequential distribution method",
           "proportional": "Proportional by length",
-          "equal": "Equal distribution",
-          "transit": "Transit rule"
+          "equal": "Equal distribution"
         }
       },
       "panels": {

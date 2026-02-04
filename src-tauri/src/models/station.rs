@@ -236,10 +236,10 @@ pub enum ClosureStrategy {
     ProportionalByLength,
     /// Distribute equally across all shots
     EqualDistribution,
+    /// Defer adjustment for batch processing
+    Batch,
     /// Sequential loop closure (batch-adjusted, ordered by quality)
     Sequential,
-    /// Transit Rule distribution (batch-adjusted)
-    TransitRule,
     /// Weighted least-squares adjustment (batch-adjusted)
     LeastSquaresWeighted,
     /// Keep raw data, stations won't align perfectly
@@ -256,8 +256,8 @@ impl ClosureStrategy {
         match self {
             Self::ProportionalByLength => "ProportionalByLength",
             Self::EqualDistribution => "EqualDistribution",
+            Self::Batch => "Batch",
             Self::Sequential => "Sequential",
-            Self::TransitRule => "TransitRule",
             Self::LeastSquaresWeighted => "LeastSquaresWeighted",
             Self::KeepRaw => "KeepRaw",
             Self::ManualAdjustment => "ManualAdjustment",
@@ -270,8 +270,8 @@ impl ClosureStrategy {
         match s {
             "ProportionalByLength" => Self::ProportionalByLength,
             "EqualDistribution" => Self::EqualDistribution,
+            "Batch" => Self::Batch,
             "Sequential" => Self::Sequential,
-            "TransitRule" => Self::TransitRule,
             "LeastSquaresWeighted" => Self::LeastSquaresWeighted,
             "KeepRaw" => Self::KeepRaw,
             "ManualAdjustment" => Self::ManualAdjustment,

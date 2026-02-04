@@ -9,7 +9,7 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
-import type { Config, TransitVerticalMode } from '../../../types/config';
+import type { Config } from '../../../types/config';
 import type { ClosureStrategy } from '../../../types/project';
 import { useProjectStore } from '../../../store/projectStore';
 
@@ -97,13 +97,6 @@ function computeConfigDiff(
       path: 'closure_adjustment.base_sigma_depth_m',
       oldValue: String(oldConfig.closure_adjustment.base_sigma_depth_m),
       newValue: String(newConfig.closure_adjustment.base_sigma_depth_m),
-    });
-  }
-  if (oldConfig.closure_adjustment.transit_vertical_mode !== newConfig.closure_adjustment.transit_vertical_mode) {
-    changes.push({
-      path: 'closure_adjustment.transit_vertical_mode',
-      oldValue: String(oldConfig.closure_adjustment.transit_vertical_mode),
-      newValue: String(newConfig.closure_adjustment.transit_vertical_mode),
     });
   }
   if (oldConfig.closure_adjustment.sequential_distribution_default !== newConfig.closure_adjustment.sequential_distribution_default) {
@@ -304,10 +297,6 @@ export function AdvancedSettings({
     }
   };
 
-  const handleTransitVerticalChange = (value: TransitVerticalMode) => {
-    updateClosureAdjustment({ transit_vertical_mode: value });
-  };
-
   const handleSequentialDistributionChange = (value: ClosureStrategy) => {
     updateClosureAdjustment({ sequential_distribution_default: value });
   };
@@ -483,26 +472,6 @@ export function AdvancedSettings({
         </SettingRow>
 
         <SettingRow
-          label={t('settings.advanced.closureAdjustment.transitVertical.label')}
-          helpText={t('settings.advanced.closureAdjustment.transitVertical.help')}
-          isChanged={isFieldChanged(changedFields, 'closure_adjustment.transit_vertical_mode')}
-          data-testid="setting-closure-transit-vertical"
-        >
-          <Select
-            value={config.closure_adjustment.transit_vertical_mode}
-            onChange={(v) => handleTransitVerticalChange(v as TransitVerticalMode)}
-            options={[
-              { value: 'ignore', label: t('settings.advanced.closureAdjustment.transitVertical.ignore') },
-              { value: 'length_proportional', label: t('settings.advanced.closureAdjustment.transitVertical.length') },
-              { value: 'equal', label: t('settings.advanced.closureAdjustment.transitVertical.equal') },
-            ]}
-            className="w-48"
-            aria-label={t('settings.advanced.closureAdjustment.transitVertical.aria')}
-            data-testid="select-closure-transit-vertical"
-          />
-        </SettingRow>
-
-        <SettingRow
           label={t('settings.advanced.closureAdjustment.sequentialDistribution.label')}
           helpText={t('settings.advanced.closureAdjustment.sequentialDistribution.help')}
           isChanged={isFieldChanged(changedFields, 'closure_adjustment.sequential_distribution_default')}
@@ -514,7 +483,6 @@ export function AdvancedSettings({
             options={[
               { value: 'ProportionalByLength', label: t('settings.advanced.closureAdjustment.sequentialDistribution.proportional') },
               { value: 'EqualDistribution', label: t('settings.advanced.closureAdjustment.sequentialDistribution.equal') },
-              { value: 'TransitRule', label: t('settings.advanced.closureAdjustment.sequentialDistribution.transit') },
             ]}
             className="w-48"
             aria-label={t('settings.advanced.closureAdjustment.sequentialDistribution.aria')}
