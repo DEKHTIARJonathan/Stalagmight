@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
@@ -8,6 +8,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useGlobalViewStore } from '../../store/globalViewStore';
 import { Button } from '../common/Button';
+import { DownloadIcon, FilePlusIcon, FolderOpenIcon, MapIcon } from '../common/icons';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
@@ -648,7 +649,9 @@ function EmptyState({ onImport, onNew, onOpen }: EmptyStateProps) {
   return (
     <div className="flex flex-col items-center justify-center h-full gap-8">
       <div className="text-center">
-        <div className="text-6xl mb-4">🗺️</div>
+        <div className="text-6xl mb-4 flex items-center justify-center">
+          <MapIcon size={48} />
+        </div>
         <h2 className="text-2xl font-bold mb-2">{t('globalView.empty.title')}</h2>
         <p className="text-text-secondary max-w-md">
           {t('globalView.empty.description')}
@@ -656,7 +659,7 @@ function EmptyState({ onImport, onNew, onOpen }: EmptyStateProps) {
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-2xl">
         <EmptyStateCard
-          icon="📥"
+          icon={<DownloadIcon size={28} />}
           title={t('globalView.empty.cards.import.title')}
           description={t('globalView.empty.cards.import.description')}
           onClick={() => onImport()}
@@ -664,14 +667,14 @@ function EmptyState({ onImport, onNew, onOpen }: EmptyStateProps) {
           testId="empty-state-import-dmp"
         />
         <EmptyStateCard
-          icon="📝"
+          icon={<FilePlusIcon size={28} />}
           title={t('globalView.empty.cards.newProject.title')}
           description={t('globalView.empty.cards.newProject.description')}
           onClick={() => onNew()}
           testId="empty-state-new-project"
         />
         <EmptyStateCard
-          icon="📂"
+          icon={<FolderOpenIcon size={28} />}
           title={t('globalView.empty.cards.open.title')}
           description={t('globalView.empty.cards.open.description')}
           onClick={() => onOpen()}
@@ -683,7 +686,7 @@ function EmptyState({ onImport, onNew, onOpen }: EmptyStateProps) {
 }
 
 interface EmptyStateCardProps {
-  icon: string;
+  icon: ReactNode;
   title: string;
   description: string;
   onClick: () => void;
@@ -705,7 +708,7 @@ function EmptyStateCard({ icon, title, description, onClick, primary, testId }: 
       `}
       data-testid={testId}
     >
-      <div className="text-4xl mb-3">{icon}</div>
+      <div className="text-4xl mb-3 flex items-center justify-center">{icon}</div>
       <h3 className="font-semibold mb-1">{title}</h3>
       <p className="text-sm text-text-secondary">{description}</p>
     </button>
