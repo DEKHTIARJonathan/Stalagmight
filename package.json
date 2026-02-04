@@ -44,6 +44,7 @@
     "@types/react-datepicker": "^7.0.0",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "@vitest/coverage-v8": "^2.1.9",
     "@wdio/cli": "^9.23.0",
     "@wdio/local-runner": "^9.23.0",
     "@wdio/mocha-framework": "^9.23.0",

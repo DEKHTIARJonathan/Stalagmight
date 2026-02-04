@@ -36,6 +36,7 @@ test-results/
 .e2e-build-marker
 e2e-playwright/screenshots/
 .cargo_build/
+docs/coverage/
 
 # WebdriverIO test logs
 wdio-logs/
