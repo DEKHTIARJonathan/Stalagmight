@@ -1,20 +1,24 @@
 # Stalagmight TODO - v1.0 Completion Tasks
 
-This document tracks functionality specified in `docs/SPEC.md` and implementation status based on codebase analysis (last updated: 2026-02-03).
+This document tracks functionality specified in `docs/SPEC.md` and implementation status based on codebase analysis.
+
+**Last Updated**: 2026-02-04
+
+---
 
 ## Summary
 
-**DMP Import Refactoring**: 21/22 complete (95%)
-- Core functionality ✅ COMPLETE
-- Minor items remaining: file hash tracking (command exists but unused)
-
-**v1.0 Completion Tasks**: 21/40 complete (52%)
-- ✅ COMPLETE: Loop Closure (3/3), Settings/Configuration (4/4), Data Table (4/4), Accessibility (4/4), Tool Panel & Move (4/4)
-- 🟡 PARTIAL: Performance (1/4 - loading states ✅, no virtual scrolling/auto-save)
-- 🟡 PARTIAL: Error Handling (1/4 - basic network error tracking, no error boundaries)
-- ❌ NOT STARTED: i18n (0/3), Final polish (1/6 - only tile caching done)
-
-**Last Updated**: 2026-02-03
+| Category | Done | Total | Progress |
+|----------|------|-------|----------|
+| Import/Export | 12 | 17 | 71% |
+| UI & Polish | 6 | 13 | 46% |
+| Data & Editing | 4 | 5 | 80% |
+| Loop Closure | 3 | 5 | 60% |
+| Accessibility & i18n | 4 | 7 | 57% |
+| Performance & Stability | 1 | 9 | 11% |
+| Integrations | 0 | 1 | 0% |
+| Testing | 0 | 1 | 0% |
+| **Total** | **30** | **58** | **52%** |
 
 ---
 
@@ -24,268 +28,166 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 - [x] DMP Parser (versions 2-5) with IntBuffer, LRUD, pitch, temperature, time
 - [x] Undo/Redo hybrid system with inverse commands and snapshots
 - [x] File Operations: New/Open/Save with overwrite warnings, recent projects, safe save
-- [x] Dirty state indicator and prompt on close (but no auto-save)
+- [x] Dirty state indicator and prompt on close
 
 ### Map Interactions
 - [x] All tools: Select, Pan, Zoom, Draw, Delete, Merge, Measure, Move Station/Segment/Shot
 - [x] Multi-select (Shift/Ctrl+click), box select, selection in DetailPanel
 - [x] Context menu, snap-to-station, hover highlighting, drag preview
 - [x] Scale bar (MapLibre ScaleControl)
+- [x] Satellite map tile caching
+- [x] Depth gradient display with legend
 
-### Dialogs
+### Dialogs & Settings
 - [x] DialogWrapper with Escape handling and isDirty confirmation
 - [x] All dialogs migrated: Confirm, Import, Export, Edit, Merge, NewProject, etc.
-- [x] DMP Import refactored to two-step process (DmpSelectionDialog + DmpSectionConfigDialog)
+- [x] Settings dialog with 9 tabs (General, Units, Display, Map, Validation, Export, Shortcuts, Cache, Advanced)
+- [x] Configurable keyboard shortcuts
 
 ### Section & Station Management
 - [x] Section position recalculation on merge (graph-based)
 - [x] Visual indicators: merged connections (dashed cyan), loop closure lines
 - [x] Loop closure error detection and percentage calculation
 
-### UI Polish
-- [x] Collapsible/resizable panels with persistence
-- [x] All keyboard shortcuts (tools, panels, file ops, selection)
-- [x] Validation warnings with mark-as-resolved
-- [x] Statistics panel (project/section stats, penetration distance)
-- [x] Display toggles dropdown menu
-- [x] Shot data labels with progressive zoom density
-
 ### Testing Infrastructure
 - [x] Playwright E2E tests with mocked IPC
 - [x] WebdriverIO E2E tests for full app
 - [x] data-testid attributes on dialogs and key UI elements
-- [x] Testing documentation (`docs/TESTING.md`)
 
 ---
 
-## Feature Implementation Status (Based on Codebase Analysis)
+## 🚧 v1.0 Remaining Tasks
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Satellite Map Tile Caching | ✅ Done | CacheSettings.tsx exists |
-| Zoom Tool Click Behavior | ✅ Done | Implemented in MapCanvas |
-| Display Toggle Visibility & Selection | ✅ Done | DisplayMenu component exists |
-| Configurable Hitboxes | ✅ Done | MapSettings has station/shot hit_area options |
-| Depth Gradient Display | ✅ Done | DepthLegend, depth gradient in SurveyLayer |
-| Edit Dialogs Save | ✅ Done | EditSection/EditShot dialogs functional |
-| Back Button Freeze | ✅ Done | Back button navigation works (tests pass) |
-| Disable Interactions for Zoom/Pan | ✅ Done | Non-interactive tools implemented |
-| Section Hover/Selection Highlighting | ✅ Done | Section highlighting on map |
-| Loading Progress Indicator | ✅ Done | LoadingProgress component exists |
-| Export System Enhancement | ✅ Done | ExportDialog, ExportPreview |
-| Double-click Section Zoom | ✅ Done | Section zoom on double-click |
-| Configurable Keyboard Shortcuts | ✅ Done | ShortcutsSettings with ShortcutRecorder |
+### Import/Export (22/28 done)
 
----
+| Task | Status | Notes |
+|------|--------|-------|
+| DMP Import (two-step workflow) | ✅ | DmpSelectionDialog + DmpSectionConfigDialog |
+| Shared ShotTableEditor | ✅ | |
+| Shared SectionMetadataForm | ✅ | |
+| Enhanced SectionPreview | ✅ | |
+| Session Surveyor Memory | ✅ | |
+| Validation Thresholds in Import | ✅ | |
+| Merge Preview Visualization | ✅ | |
+| Manual Placement Mode | ✅ | |
+| Section Creation Logic | ✅ | |
+| Context-Aware Triggering | ✅ | |
+| Error Blocking Logic | ✅ | |
+| Export Dialog & Preview | ✅ | PNG, SVG, PDF, CSV, JSON |
+| File Hash Tracking | 🟡 | Command exists but unused |
+| Ariane .ari Import | ❌ | |
+| Ariane .ari Export | ❌ | |
+| GPX Import | ❌ | Waypoints and tracks |
+| Manual Data Input | ❌ | Full spreadsheet-style entry without device import |
 
-## 🔥 DMP Import Refactoring (COMPLETED)
+**Subtotals**: ✅ 12 done, 🟡 1 partial, ❌ 4 not started
 
-Refactored DMP import workflow from a single monolithic dialog into a two-step process.
+### UI & Polish (6/13 done)
 
-**Step 1 (DmpSelectionDialog)**: User selects sections to import, sets default surveyor/date.
-**Step 2 (DmpSectionConfigDialog)**: Per-section editing with placement options, shot table, and preview.
+| Task | Status | Notes |
+|------|--------|-------|
+| Collapsible/resizable panels | ✅ | With persistence |
+| Display toggles dropdown | ✅ | DisplayMenu component |
+| Shot data labels (zoom density) | ✅ | |
+| Statistics panel | ✅ | Project/section stats, penetration distance |
+| Tool Panel Redesign | ✅ | |
+| Tile Caching Settings | ✅ | CacheSettings.tsx + Rust config |
+| Three-Level Settings Reset | ❌ | Per-setting, per-tab, full reset (SPEC 2.9) |
+| Splash Screen | ❌ | |
+| About Dialog | ❌ | |
+| Keyboard Shortcuts Overlay | ❌ | Help overlay showing all shortcuts |
+| Bug Reporter Dialog | ❌ | Button in Settings bottom bar |
+| Release Automation | ❌ | |
+| Add Comment Tool | ❌ | Text annotations on stations/map |
 
-All components are implemented and working:
+**Subtotals**: ✅ 6 done, ❌ 7 not started
 
-### Phase 1: Shared Components (Parallel)
+### Data & Editing (4/5 done)
 
-| Title | Status |
-|-------|--------|
-| Shared ShotTableEditor | ✅ |
-| Shared SectionMetadataForm | ✅ |
-| Enhanced SectionPreview | ✅ |
-| DmpSelectionDialog Shell | ✅ |
-| File Hash Tracking | ✅ |
+| Task | Status | Notes |
+|------|--------|-------|
+| Inline Editing | ✅ | EditableTable with EditableCell |
+| Add Row | ✅ | Context menu, DrawShotDialog, prepend mode |
+| Delete Row with Split | ✅ | |
+| Row Highlighting Sync | ✅ | |
+| Virtual Scrolling | ❌ | For large data tables |
 
-### Phase 2: Dialog Core (Sequential)
+**Subtotals**: ✅ 4 done, ❌ 1 not started
 
-| Title | Status |
-|-------|--------|
-| DmpSectionConfigDialog Shell | ✅ |
-| Section Parameters Panel | ✅ |
-| Placement Options Panel | ✅ |
-| Shot Table Integration | ✅ |
-| Import State Management | ✅ |
-| Session Surveyor Memory | ✅ |
-| Validation Thresholds in DMP Import | ✅ |
+### Loop Closure (3/5 done)
 
-### Phase 3: Placement Features
+| Task | Status | Notes |
+|------|--------|-------|
+| Loop Detection Algorithm | ✅ | |
+| Closure Error Calculation | ✅ | |
+| Closure Strategy Selector | ✅ | ClosureDialog with 4 strategies |
+| Proportional Distribution | ❌ | Distribute errors proportional to shot lengths |
+| Equal Distribution | ❌ | Distribute errors equally to shots |
 
-| Title | Status |
-|-------|--------|
-| Merge Preview Visualization | ✅ |
-| Manual Placement Mode | ✅ |
-| Section Creation Logic | ✅ |
+**Subtotals**: ✅ 3 done, ❌ 2 not started
 
-### Phase 4: Navigation & Integration
+### Accessibility & i18n (4/7 done)
 
-| Title | Status |
-|-------|--------|
-| Navigation & Import Buttons | ✅ |
-| Context-Aware Triggering | ✅ |
-| Error Blocking Logic | ✅ |
+| Task | Status | Notes |
+|------|--------|-------|
+| Focus Management | ✅ | |
+| Screen Reader Announcements | ✅ | aria-live regions, announceSelection() |
+| Theme Infrastructure | ✅ | |
+| Keyboard Navigation | ✅ | useKeyboardShortcuts, ShortcutRecorder |
+| i18n Infrastructure | ❌ | No i18n libraries detected |
+| Extract UI Strings | ❌ | |
+| Number/Date Locale Formatting | ❌ | |
 
-### Phase 5: Cleanup & Testing
+**Subtotals**: ✅ 4 done, ❌ 3 not started
 
-| Title | Status |
-|-------|--------|
-| Update Edit Section Dialog | ✅ |
-| Remove Old Dialog | ✅ |
-| App Close Confirmation | ✅ |
-| Update Existing Tests | ✅ |
+### Performance & Stability (2/9 done)
 
-### Key Design Decisions
+| Task | Status | Notes |
+|------|--------|-------|
+| Loading States | ✅ | LoadingProgress component with aria-live |
+| Network Error Stats | 🟡 | Basic tile fetch stats in MapDevStats, no retry |
+| Debounced Auto-Save | ❌ | Backend config exists, needs frontend 2-second debounce timer (SPEC 2.11) |
+| SQLite Integrity Checks | ❌ | PRAGMA integrity_check on project open (SPEC 2.11) |
+| Error Boundary Wrapper | ❌ | No React ErrorBoundary components |
+| Network Retry Logic | ❌ | |
+| File Corruption Recovery | ❌ | |
+| Validation Error Recovery | ❌ | |
 
-| Decision | Rationale |
-|----------|-----------|
-| Sections created on placement | Enables granular undo, immediate persistence |
-| Exclusive placement modes | Simpler UX, clearer mental model |
-| Warnings don't block, errors block | Warnings inform, don't impede workflow |
-| Session-only surveyor memory | Respects privacy, not persisted to config |
-| Azimuth as average column | Cleaner table, edit sets both in/out |
+**Subtotals**: ✅ 1 done, 🟡 1 partial, ❌ 6 not started
 
----
+### Integrations (0/1 done)
 
-## 🚧 v1.0 Completion Tasks
+| Task | Status | Notes |
+|------|--------|-------|
+| SpeleoDB Integration | ❌ | Bidirectional sync, authentication, conflict resolution |
 
-Based on codebase analysis as of 2026-02-03.
+**Subtotals**: ❌ 1 not started
 
-### Phase A: Loop Closure Foundation
+### Testing (0/1 done)
 
-| Title | Status |
-|-------|--------|
-| Loop Detection Algorithm | ✅ |
-| Closure Error Calculation | ✅ |
-| Closure Strategy Selector | ✅ (ClosureDialog exists with strategy selection) |
+| Task | Status | Notes |
+|------|--------|-------|
+| 80% Code Coverage | ❌ | Target coverage for Playwright, WebdriverIO, Rust tests (SPEC 2.8) |
 
-### Phase B: Settings & Configuration
-
-| Title | Status |
-|-------|--------|
-| Settings Dialog Shell | ✅ |
-| Display Settings Tab | ✅ (DisplaySettings.tsx exists) |
-| Validation Thresholds Tab | ✅ (ValidationSettings.tsx exists) |
-| Export Defaults Tab | ✅ (ExportSettings.tsx exists) |
-
-### Phase C: Data Table Enhancements
-
-| Title | Status |
-|-------|--------|
-| Inline Editing | ✅ (EditableTable component with EditableCell) |
-| Add Row | ✅ (Context menu on DataTable + map; DrawShotDialog; prepend mode) |
-| Delete Row with Split | ✅ |
-| Row Highlighting Sync | ✅ |
-
-### Phase D: Accessibility
-
-| Title | Status |
-|-------|--------|
-| Focus Management | ✅ |
-| Screen Reader Announcements | ✅ (aria-live regions, announceSelection(), 28 occurrences) |
-| Theme Infrastructure | ✅ |
-| Keyboard Navigation | ✅ (useKeyboardShortcuts hook, ShortcutRecorder, ShortcutsSettings) |
-
-### Phase E: i18n Foundation
-
-| Title | Status |
-|-------|--------|
-| i18n Infrastructure | ❌ (No i18n libraries detected) |
-| Extract UI Strings | ❌ |
-| Number/Date Formatting | ❌ (Only basic ID formatters, no locale support) |
-
-### Phase F: Performance & Polish
-
-| Title | Status |
-|-------|--------|
-| Virtual Scrolling | ❌ (No VirtualList/virtualized libraries) |
-| Debounced Auto-Save | ❌ (Config exists but no useEffect setInterval timer implementation) |
-| Loading States | ✅ (LoadingProgress component with aria-live) |
-
-### Phase G: Error Handling
-
-| Title | Status |
-|-------|--------|
-| Error Boundary Wrapper | ❌ (No React ErrorBoundary class components, only ErrorDialog for displaying errors) |
-| Network Error Handling | 🟡 (Basic tile fetch error stats in MapDevStats, no retry logic) |
-| File Corruption Recovery | ❌ |
-| Validation Error Recovery | ❌ |
-
-### Phase H: Final Polish
-
-| Title | Status |
-|-------|--------|
-| Splash Screen | ❌ |
-| About Dialog | ❌ |
-| Keyboard Shortcuts Overlay | ❌ |
-| Release Automation | ❌ |
-| Bug Reporter | ❌ |
-| Tile Caching | ✅ (CacheSettings.tsx + Rust config) |
-
-### Phase I: Tool Panel & Move Tool
-
-| Title | Status |
-|-------|--------|
-| Tool Panel Redesign | ✅ |
-| Move Segment Tool | ✅ |
-| Move Shot Subtool | ✅ |
-| Move Station Subtool | ✅ |
-| Add Comment Tool | ❌ — Tool for adding text comments/annotations to stations or arbitrary map positions |
-
-### Phase J: Closure Error Distribution
-
-| Title | Status |
-|-------|--------|
-| Proportional by Length | ❌ (Distribute errors proportional to shot lengths; closure stations share new position) |
-| Equal Distribution | ❌ (Distribute errors equally to shots; closure stations share new position) |
-
-### Phase K: Import & Reporting
-
-| Title | Status |
-|-------|--------|
-| Bug Report Dialog | ❌ (Button in Settings bottom bar, left-aligned next to Save/Cancel) |
-| Ariane .ari Import | ❌ |
+**Subtotals**: ❌ 1 not started
 
 ---
 
 ## 📊 Task Statistics
 
-### DMP Import Refactoring - COMPLETED (mostly)
+| Category | Tasks | Done | Partial | Remaining |
+|----------|-------|------|---------|-----------|
+| Import/Export | 17 | 12 | 1 | 4 |
+| UI & Polish | 13 | 6 | 0 | 7 |
+| Data & Editing | 5 | 4 | 0 | 1 |
+| Loop Closure | 5 | 3 | 0 | 2 |
+| Accessibility & i18n | 7 | 4 | 0 | 3 |
+| Performance & Stability | 9 | 1 | 1 | 7 |
+| Integrations | 1 | 0 | 0 | 1 |
+| Testing | 1 | 0 | 0 | 1 |
+| **Total** | **58** | **30** | **2** | **26** |
 
-| Phase | Tasks | Completed | Remaining |
-|-------|-------|-----------|-----------|
-| Shared Components | 5 | 4 | 1 |
-| Dialog Core | 7 | 7 | 0 |
-| Placement Features | 3 | 3 | 0 |
-| Navigation & Integration | 3 | 3 | 0 |
-| Cleanup & Testing | 4 | 4 | 0 |
-| **Import Total** | **22** | **21** | **1** |
-
-**Note**: Main functionality is complete. Remaining items are minor (file hash tracking).
-
-### v1.0 Completion Tasks
-
-| Phase | Tasks | Completed | Remaining |
-|-------|-------|-----------|-----------|
-| A: Loop Closure | 3 | 3 | 0 |
-| B: Settings | 4 | 4 | 0 |
-| C: Data Table | 4 | 4 | 0 |
-| D: Accessibility | 4 | 4 | 0 |
-| E: i18n | 3 | 0 | 3 |
-| F: Performance | 3 | 1 | 2 |
-| G: Error Handling | 4 | 0 | 4 |
-| H: Polish | 6 | 1 | 5 |
-| I: Tool Panel & Move | 5 | 4 | 1 |
-| J: Closure Distribution | 2 | 0 | 2 |
-| K: Import & Reporting | 2 | 0 | 2 |
-| **v1.0 Total** | **40** | **21** | **19** |
-
-### Grand Total
-
-| Category | Tasks | Completed | Remaining |
-|----------|-------|-----------|-----------|
-| DMP Import Refactoring | 22 | 21 | 1 |
-| v1.0 Completion | 40 | 21 | 19 |
-| **Grand Total** | **62** | **42** | **20** |
+**Overall Progress**: 30 done + 2 partial = ~55% complete
 
 ---
 
@@ -295,15 +197,13 @@ Based on codebase analysis as of 2026-02-03.
 - [ ] Least squares adjustment for complex loops
 
 ### Display Features (v2.0)
-- [ ] Depth color gradient rendering
 - [ ] LRUD passage wall visualization
-- [ ] High-contrast theme (beyond infrastructure)
+- [ ] High-contrast theme (full implementation)
 
 ### Import/Export (v2.x)
 - [ ] Additional export formats: Survex, Therion, KML/KMZ
 
 ### Platform (v3.0+)
-- [ ] SpeleoDB integration
 - [ ] 3D visualization
 - [ ] Profile views
 - [ ] Mobile/web versions
@@ -311,78 +211,7 @@ Based on codebase analysis as of 2026-02-03.
 
 ---
 
-## 📝 Dependency Notes
-
-### DMP Import Refactoring Dependencies
-```
-Phase 1: Shared Components (parallel start)
-├── ShotTableEditor
-├── SectionMetadataForm
-├── SectionPreview
-├── DmpSelectionDialog ──> SessionSurveyorMemory
-└── FileHashTracking
-
-Phase 2: Dialog Core
-└── DmpSectionConfigDialog (depends: ShotTableEditor, SectionMetadataForm, SectionPreview)
-    ├── ParametersPanel (depends: SectionMetadataForm)
-    ├── PlacementOptionsPanel
-    │   ├── MergePreview (depends: SectionPreview)
-    │   └── ManualPlacement
-    ├── ShotTableIntegration (depends: ShotTableEditor)
-    └── ImportStateManagement
-        ├── SectionCreationLogic (depends: PlacementOptionsPanel)
-        └── NavigationButtons
-            └── ErrorBlockingLogic
-
-Phase 3: Integration
-├── ContextAwareTriggering (depends: DmpSelectionDialog, DmpSectionConfigDialog)
-├── ValidationThresholds ✅ (depends: ShotTableEditor)
-└── UpdateEditSectionDialog (depends: ShotTableEditor, SectionMetadataForm)
-
-Phase 4: Cleanup
-└── RemoveOldDialog (depends: ContextAwareTriggering, ErrorBlockingLogic, UpdateEditSectionDialog)
-    ├── AppCloseConfirmation
-    └── UpdateExistingTests
-```
-
-### v1.0 Completion Task Dependencies
-```
-Loop Detection ──┐
-                  ├──> Closure Strategy ✅
-Closure Error ───┘
-
-Settings Shell ──┬──> Display Tab ✅
-                  ├──> Validation Tab ✅
-                  └──> Export Tab ✅
-
-Inline Edit ✅ ──┬──> Add Row ❌
-                  └──> Delete Row ✅
-
-Focus ✅ ────────┬──> Screen Reader ✅
-                  └──> Keyboard Nav ✅
-
-i18n Infra ❌ ───┬──> Extract Strings ❌
-                  └──> Number Format ❌
-
-Error Boundary ❌─┬──> Network Errors ❌
-                  └──> Corruption Recovery ❌
-
-About Dialog ❌ ───> Bug Reporter ❌
-```
-
-### Critical Path
-1. **DMP Import Refactoring**: Mostly complete, minor cleanup remaining
-2. **Phase A** (Loop Closure): ✅ COMPLETE
-3. **Phase B** (Settings): ✅ COMPLETE
-4. **Phase C** (Data Table): ✅ COMPLETE
-5. **Phase D** (Accessibility): Focus management and theme switching remaining
-6. **Phase E** (i18n): Full infrastructure needed
-7. **Phase G** (Error Handling): Error boundaries needed for stability
-8. **Phase H** (Polish): About dialog, splash screen, shortcuts overlay
-
----
-
-## Architecture Notes
+## 📝 Architecture Notes
 
 ### Mutex Lock Ordering
 Never hold a Mutex lock while calling methods that acquire other locks. Extract values first, then call methods.
@@ -406,31 +235,18 @@ Wrap each major panel (map, sections, detail, data table) with its own error bou
 
 ---
 
-## Codebase Analysis Methodology
+## Codebase Analysis Notes
 
-This TODO was updated on 2026-01-29 by analyzing the actual codebase:
-
-**Checklist for each feature:**
-- Searched for component files in `src/components/`
-- Checked imports and usage in `src/App.tsx`
-- Verified test files in `e2e/` and `e2e-playwright/`
-- Checked Rust commands in `src-tauri/src/commands/`
-- Looked for related utilities in `src/utils/`
-
-**Key findings:**
-- ✅ Settings dialog fully implemented with 9 tabs (General, Units, Display, Map, Validation, Export, Shortcuts, Cache, Advanced)
-- ✅ Loop closure strategy selector exists in `ClosureDialog.tsx` with 4 strategies
-- ✅ Inline editing works in `EditableTable` component with `EditableCell`
-- ✅ Screen reader announcements via `announceSelection()` and `aria-live` regions
-- ✅ Keyboard shortcuts system with `ShortcutsSettings` and `ShortcutRecorder`
-- ✅ Loading progress indicator with `LoadingProgress` component
-- ✅ Depth gradient rendering in `SurveyLayer.tsx` and `DepthLegend.tsx`
-- ✅ DMP import refactored into two dialogs: `DmpSelectionDialog` and `DmpSectionConfigDialog`
-- ❌ No `ErrorBoundary` components found
-- ❌ No `addShot` or `deleteShot` commands in Rust backend
-- ❌ No theme switching infrastructure (only hardcoded dark mode)
-- ❌ No i18n libraries detected
-- ❌ No virtual scrolling implementation
-- ❌ No auto-save functionality
-- ❌ No About dialog, Splash screen, or Bug reporter components
-- ✅ Old `DmpImportDialog.tsx` removed (was 1316 lines of dead code)
+**Key findings from last analysis (2026-02-03):**
+- ✅ Settings dialog fully implemented with 9 tabs
+- ✅ Loop closure strategy selector in `ClosureDialog.tsx`
+- ✅ Inline editing in `EditableTable` component
+- ✅ Screen reader announcements via `announceSelection()` and `aria-live`
+- ✅ Keyboard shortcuts system with `ShortcutsSettings`
+- ✅ DMP import refactored into two dialogs
+- ✅ Depth gradient rendering in `SurveyLayer.tsx`
+- ❌ No `ErrorBoundary` components
+- ❌ No i18n libraries
+- ❌ No virtual scrolling
+- ❌ No auto-save implementation
+- ❌ No About dialog, Splash screen, or Bug reporter
