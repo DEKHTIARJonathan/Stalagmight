@@ -766,9 +766,11 @@ export default class SurveyLayer {
         (f) => f.layer.id === this.shotsHitboxLayerId
       );
 
-      // Resolve nearest of each type
-      const nearestStation = resolveNearestStation(this.map, e, stationFeatures);
-      const nearestShot = resolveNearestShot(this.map, e, shotFeatures);
+      // Resolve nearest of each type (respect config hit areas)
+      const stationHitArea = this.getStationHitArea();
+      const shotHitArea = this.getShotHitArea();
+      const nearestStation = resolveNearestStation(this.map, e, stationFeatures, stationHitArea);
+      const nearestShot = resolveNearestShot(this.map, e, shotFeatures, shotHitArea);
 
       // Determine what to highlight (stations take priority unless suppressed by tool)
       let newHoveredStationId: string | null = null;
@@ -929,8 +931,13 @@ export default class SurveyLayer {
     const stationFeatures = allFeatures.filter((f) => f.layer.id === this.stationsHitboxLayerId);
     const shotFeatures = allFeatures.filter((f) => f.layer.id === this.shotsHitboxLayerId);
 
+    const stationHitArea = this.getStationHitArea();
+    const shotHitArea = this.getShotHitArea();
+
     // Stations take priority - resolve nearest station first
-    const nearestStation = !suppressStationClick ? resolveNearestStation(this.map, e, stationFeatures) : null;
+    const nearestStation = !suppressStationClick
+      ? resolveNearestStation(this.map, e, stationFeatures, stationHitArea)
+      : null;
     if (nearestStation) {
       const { sectionId, stationIndex } = nearestStation.properties ?? {};
       if (sectionId !== undefined && stationIndex !== undefined) {
@@ -953,7 +960,9 @@ export default class SurveyLayer {
     }
 
     // Then shots - resolve nearest shot
-    const nearestShot = !suppressShotClick ? resolveNearestShot(this.map, e, shotFeatures) : null;
+    const nearestShot = !suppressShotClick
+      ? resolveNearestShot(this.map, e, shotFeatures, shotHitArea)
+      : null;
     if (nearestShot) {
       const { sectionId, shotId } = nearestShot.properties ?? {};
       if (sectionId !== undefined && shotId !== undefined) {
@@ -987,8 +996,11 @@ export default class SurveyLayer {
     const stationFeatures = allFeatures.filter((f) => f.layer.id === this.stationsHitboxLayerId);
     const shotFeatures = allFeatures.filter((f) => f.layer.id === this.shotsHitboxLayerId);
 
+    const stationHitArea = this.getStationHitArea();
+    const shotHitArea = this.getShotHitArea();
+
     // Stations take priority
-    const nearestStation = resolveNearestStation(this.map, e, stationFeatures);
+    const nearestStation = resolveNearestStation(this.map, e, stationFeatures, stationHitArea);
     if (nearestStation) {
       const { sectionId, stationIndex } = nearestStation.properties ?? {};
       if (sectionId !== undefined && stationIndex !== undefined) {
@@ -1011,7 +1023,7 @@ export default class SurveyLayer {
     }
 
     // Then shots
-    const nearestShot = resolveNearestShot(this.map, e, shotFeatures);
+    const nearestShot = resolveNearestShot(this.map, e, shotFeatures, shotHitArea);
     if (nearestShot) {
       const { sectionId, shotId } = nearestShot.properties ?? {};
       if (sectionId !== undefined && shotId !== undefined) {

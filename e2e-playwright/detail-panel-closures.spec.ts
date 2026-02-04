@@ -334,8 +334,8 @@ test.describe('Detail Panel - Loop Closures', () => {
     // Verify metrics are displayed
     const metricsEl = page.getByTestId('closure-metrics-1');
     await expect(metricsEl).toBeVisible();
-    await expect(metricsEl).toContainText('Path: 15.2m');
-    await expect(metricsEl).toContainText('Error: 0.30m');
+    await expect(metricsEl).toContainText('Path 15.2m');
+    await expect(metricsEl).toContainText('Error 0.30m');
     await expect(metricsEl).toContainText('1.97%');
   });
 
@@ -395,12 +395,12 @@ test.describe('Detail Panel - Loop Closures', () => {
     // Verify direct closure is shown
     const directEl = page.getByTestId('closure-direct-10');
     await expect(directEl).toBeVisible();
-    await expect(directEl).toContainText('Closure to');
+    await expect(directEl).toContainText('Direct:');
 
     // Verify transitive closure is shown
     const transitiveEl = page.getByTestId('closure-transitive-20');
     await expect(transitiveEl).toBeVisible();
-    await expect(transitiveEl).toContainText('Transitive closure to');
+    await expect(transitiveEl).toContainText('Transitive:');
     await expect(transitiveEl).toContainText('via');
   });
 

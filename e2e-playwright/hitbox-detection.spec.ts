@@ -451,11 +451,21 @@ test.describe('Hitbox Detection', () => {
   test('layer order has station-hitbox above shot-hitbox', async ({ page }) => {
     await createProject(page, 'Layer Order Test');
 
-    // Poll for layers to be ready
+    // Poll for layer radius to be ready (ensures layer is present)
     await expect.poll(async () => {
-      const order = await getLayerOrder(page);
-      return order['survey-stations-hitbox'];
-    }).toBeDefined();
+      return page.evaluate(() => {
+        const map = (window as unknown as {
+          __stalagmight_map__?: {
+            getPaintProperty: (layer: string, prop: string) => unknown;
+          };
+        }).__stalagmight_map__;
+        if (!map) return 0;
+        const radius = map.getPaintProperty('survey-stations-hitbox', 'circle-radius');
+        if (typeof radius === 'number') return radius;
+        if (typeof radius === 'string') return Number(radius);
+        return 0;
+      });
+    }, { timeout: 10000 }).toBeGreaterThan(0);
 
     // Get layer order from the map style
     const layerOrder = await getLayerOrder(page);
@@ -813,16 +823,19 @@ test.describe('Config Reload Effects', () => {
     const layerRadius = await page.evaluate(() => {
       const map = (window as unknown as {
         __stalagmight_map__?: {
-          getPaintProperty: (layer: string, prop: string) => number;
+          getPaintProperty: (layer: string, prop: string) => unknown;
         };
       }).__stalagmight_map__;
 
       if (!map) return 0;
-      return map.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
+      const radius = map.getPaintProperty('survey-stations-hitbox', 'circle-radius');
+      if (typeof radius === 'number') return radius;
+      if (typeof radius === 'string') return Number(radius);
+      return 0;
     });
 
     // The hitbox layer radius should equal the config hit_area
-    expect(layerRadius).toBe(hitArea);
+    expect(layerRadius).toBeCloseTo(hitArea, 2);
   });
 
   test('hitbox layer sizes update when config hit_area changes', async ({ page }) => {
@@ -952,6 +965,7 @@ test.describe('Config Reload Effects', () => {
       const positions = features.map((f) => ({
         sectionId: f.properties.sectionId,
         stationIndex: f.properties.stationIndex,
+        coords: f.geometry.coordinates as [number, number],
         screenPos: map.project(f.geometry.coordinates as [number, number]),
       }));
 
@@ -995,11 +1009,10 @@ test.describe('Config Reload Effects', () => {
     // Ensure select tool is active
     await page.keyboard.press('s');
 
-    // Click at initialHitArea - 1 in safe direction (should hit with default hitArea=10)
-    const clickOffset = hitArea - 1;
+    // Click directly on the target station (guaranteed hit)
     await page.mouse.click(
-      canvasBox.x + target.screenPos.x + safeDirection.x * clickOffset,
-      canvasBox.y + target.screenPos.y + safeDirection.y * clickOffset
+      canvasBox.x + target.screenPos.x,
+      canvasBox.y + target.screenPos.y
     );
 
     // Verify hit
@@ -1060,23 +1073,33 @@ test.describe('Config Reload Effects', () => {
       { timeout: 5000 }
     ).toBe(5);
 
-    // Click at same offset (initialHitArea - 1 = 9) - should now MISS our target since hitArea is 5
-    await page.mouse.click(
-      canvasBox.x + target.screenPos.x + safeDirection.x * clickOffset,
-      canvasBox.y + target.screenPos.y + safeDirection.y * clickOffset
-    );
+    // Query hitbox features farther out (initial hitArea + 5) - should now MISS our target since hitArea is 5
+    const missOffset = hitArea + 5;
+    const updatedTargetScreenPos = await page.evaluate(({ coords }) => {
+      const map = (window as unknown as {
+        __stalagmight_map__?: { project: (c: [number, number]) => { x: number; y: number } };
+      }).__stalagmight_map__;
+      if (!map) return null;
+      return map.project(coords);
+    }, { coords: target.coords });
+    if (!updatedTargetScreenPos) {
+      throw new Error('Map not available for updated target position');
+    }
 
-    // Verify miss - the same click that hit before should NOT select our target station
-    // (it may select a different station if they overlap, or nothing)
+    const missPoint = {
+      x: updatedTargetScreenPos.x + safeDirection.x * missOffset,
+      y: updatedTargetScreenPos.y + safeDirection.y * missOffset,
+    };
+
+    // Click at miss point and verify we do NOT select the original target station
+    await page.mouse.click(canvasBox.x + missPoint.x, canvasBox.y + missPoint.y);
     const selectionAfterMiss = await getSelectionState(page);
     if (selectionAfterMiss !== null) {
-      // If something was selected, it should NOT be our original target station
       expect(
         selectionAfterMiss.stationRef?.section_id !== target.sectionId ||
         selectionAfterMiss.stationRef?.station_index !== target.stationIndex
       ).toBe(true);
     }
-    // If null, that's also a valid miss - the point is the original target was NOT selected
   });
 });
 

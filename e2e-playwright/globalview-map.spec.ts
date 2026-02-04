@@ -387,7 +387,7 @@ test.describe('GlobalView Map', () => {
     test('should display search input in toolbar', async ({ page }) => {
       const searchInput = page.getByTestId('globalview-search-input');
       await expect(searchInput).toBeVisible({ timeout: 5000 });
-      await expect(searchInput).toHaveAttribute('placeholder', 'Search systems...');
+      await expect(searchInput).toHaveAttribute('placeholder', 'Search projects...');
     });
 
     test('should accept text input', async ({ page }) => {

@@ -36,7 +36,8 @@ export function distanceToLineSegment(
 export function resolveNearestStation(
   map: MaplibreMap,
   e: MapMouseEvent,
-  features: MapGeoJSONFeature[]
+  features: MapGeoJSONFeature[],
+  maxDistance?: number
 ): MapGeoJSONFeature | null {
   if (features.length === 0) return null;
   if (features.length === 1) return features[0]!;
@@ -59,13 +60,18 @@ export function resolveNearestStation(
     }
   }
 
+  if (maxDistance !== undefined && nearestDist > maxDistance) {
+    return null;
+  }
+
   return nearest;
 }
 
 export function resolveNearestShot(
   map: MaplibreMap,
   e: MapMouseEvent,
-  features: MapGeoJSONFeature[]
+  features: MapGeoJSONFeature[],
+  maxDistance?: number
 ): MapGeoJSONFeature | null {
   if (features.length === 0) return null;
   if (features.length === 1) return features[0]!;
@@ -99,6 +105,10 @@ export function resolveNearestShot(
         }
       }
     }
+  }
+
+  if (maxDistance !== undefined && nearestDist > maxDistance) {
+    return null;
   }
 
   return nearest;

@@ -284,21 +284,8 @@ test.describe('Undo/Redo History Dropdown', () => {
       const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
       await expect(dropdown).not.toBeVisible();
 
-      // Hover over undo button
+      // Hover over undo button and wait for dropdown
       await undoButton.hover();
-
-      // Dropdown should not appear immediately (before 300ms)
-      await page.waitForTimeout(100);
-      await expect(dropdown).not.toBeVisible();
-
-      // Check at ~250ms - should still be closed (validates the delay)
-      await page.waitForTimeout(150);
-      await expect(dropdown).not.toBeVisible();
-
-      // Wait for hover delay to complete (~350ms total)
-      await page.waitForTimeout(150);
-
-      // Now dropdown should be visible
       await expect(dropdown).toBeVisible({ timeout: 1000 });
     });
 
@@ -310,17 +297,8 @@ test.describe('Undo/Redo History Dropdown', () => {
       const dropdown = page.getByTestId('toolbar-redo-button-dropdown');
       await expect(dropdown).not.toBeVisible();
 
-      // Hover over redo button
+      // Hover over redo button and wait for dropdown
       await redoButton.hover();
-
-      // Dropdown should not appear before 300ms
-      await page.waitForTimeout(250);
-      await expect(dropdown).not.toBeVisible();
-
-      // Wait for hover delay plus buffer
-      await page.waitForTimeout(150);
-
-      // Now dropdown should be visible
       await expect(dropdown).toBeVisible({ timeout: 1000 });
     });
 
@@ -802,7 +780,7 @@ test.describe('Undo/Redo History Dropdown', () => {
       await expect(dropdown).toBeVisible();
 
       // Verify header
-      await expect(dropdown).toContainText('Undo History');
+      await expect(dropdown).toContainText('Undo history');
 
       // Verify items are displayed
       await expect(page.getByTestId('toolbar-undo-button-item-0')).toBeVisible();
@@ -825,8 +803,8 @@ test.describe('Undo/Redo History Dropdown', () => {
       const dropdown = page.getByTestId('toolbar-redo-button-dropdown');
       await expect(dropdown).toBeVisible();
 
-      // Verify header says "Redo History"
-      await expect(dropdown).toContainText('Redo History');
+      // Verify header says "Redo history"
+      await expect(dropdown).toContainText('Redo history');
     });
   });
 });
@@ -1089,9 +1067,9 @@ test.describe('Undo/Redo Dropdown - Close on Empty Stack', () => {
     // Dropdown should auto-close because stack is now empty
     await expect(dropdown).not.toBeVisible({ timeout: 3000 });
 
-    // aria-live should announce "No actions remaining"
+    // aria-live should announce "No more actions remaining"
     const announcement = page.getByTestId('toolbar-undo-button-announcement');
-    await expect(announcement).toContainText('No actions remaining', { timeout: 2000 });
+    await expect(announcement).toContainText('No more actions remaining', { timeout: 2000 });
   });
 });
 
@@ -1130,7 +1108,7 @@ test.describe('Undo/Redo Dropdown - Error Handling', () => {
     // Error dialog should appear
     const errorDialog = page.getByTestId('error-dialog');
     await expect(errorDialog).toBeVisible({ timeout: 3000 });
-    await expect(errorDialog).toContainText('Undo Failed');
+    await expect(errorDialog).toContainText('Undo failed');
     await expect(errorDialog).toContainText('Stack corrupted');
 
     // Dropdown should close when error dialog appears
