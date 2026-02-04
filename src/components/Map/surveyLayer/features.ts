@@ -9,6 +9,7 @@ import { getDepthColor, getErrorColor } from '../../../utils/colors';
 import { metersToMapCoords } from '../../../utils/coordinates';
 import { formatFixed } from '../../../i18n/format';
 import type { MapThemeColors } from '../../../utils/themeColors';
+import { FEATURE_ID_STRIDE } from '../../../utils/ids';
 
 export type DepthRange = { min: number; max: number };
 
@@ -143,7 +144,7 @@ export function buildSurveyFeatures(
           : null;
         const shotColor = depthColor ?? section.color;
 
-        const shotFeatureId = section.id * 100000 + shot.id;
+        const shotFeatureId = section.id * FEATURE_ID_STRIDE + shot.id;
 
         shotFeatures.push({
           type: 'Feature',
@@ -213,7 +214,8 @@ export function buildSurveyFeatures(
     }
 
     const featureStrokeColor = showDepthGradient && isZeroDatum ? zeroDatum : strokeColor;
-    const featureId = station.station_ref.section_id * 100000 + station.station_ref.station_index;
+    const featureId =
+      station.station_ref.section_id * FEATURE_ID_STRIDE + station.station_ref.station_index;
 
     stationFeatures.push({
       type: 'Feature',

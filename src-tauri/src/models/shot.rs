@@ -3,17 +3,17 @@ use serde::{Deserialize, Serialize};
 /// Unique identifier for a shot within a section
 pub type ShotId = u32;
 
-use super::SectionId;
+use super::{SectionId, FEATURE_ID_STRIDE};
 
 /// Convert a raw ShotId to a 1-indexed display position.
 ///
-/// After database reload, shot IDs have the form `section_id * 100_000 + sequence_order`
+/// After database reload, shot IDs have the form `section_id * FEATURE_ID_STRIDE + sequence_order`
 /// where `sequence_order` is 0-indexed. Before first save, shot IDs are plain
 /// sequential integers (0, 1, 2, …).
 ///
 /// Returns a 1-indexed position suitable for user display (e.g., "13:5").
 pub fn shot_display_position(shot_id: ShotId, section_id: SectionId) -> u32 {
-    let base = section_id.saturating_mul(100_000);
+    let base = section_id.saturating_mul(FEATURE_ID_STRIDE);
     if shot_id >= base {
         shot_id - base + 1
     } else {
@@ -386,10 +386,10 @@ mod tests {
 
     #[test]
     fn shot_display_position_post_reload_ids() {
-        // After reload: shot_id = section_id * 100_000 + sequence_order
-        assert_eq!(shot_display_position(1_300_004, 13), 5); // section 13, seq 4 → pos 5
-        assert_eq!(shot_display_position(100_000, 1), 1);     // section 1, seq 0 → pos 1
-        assert_eq!(shot_display_position(100_009, 1), 10);    // section 1, seq 9 → pos 10
-        assert_eq!(shot_display_position(500_002, 5), 3);     // section 5, seq 2 → pos 3
+        // After reload: shot_id = section_id * FEATURE_ID_STRIDE + sequence_order
+        assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 13 + 4, 13), 5); // section 13, seq 4 → pos 5
+        assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 1, 1), 1);       // section 1, seq 0 → pos 1
+        assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 1 + 9, 1), 10);  // section 1, seq 9 → pos 10
+        assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 5 + 2, 5), 3);   // section 5, seq 2 → pos 3
     }
 }

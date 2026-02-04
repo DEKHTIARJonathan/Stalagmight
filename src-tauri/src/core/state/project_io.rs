@@ -634,8 +634,9 @@ impl AppState {
     /// Load a project with full progress reporting.
     /// This is the main implementation used by load_project_full command.
     ///
-    /// All computation happens locally, then state is mutated atomically at the end.
-    /// Each mutation is guarded by a cancel check for clean abort on cancellation.
+    /// All computation happens locally, then state is committed at the end.
+    /// Cancellation is honored up to finalization; once finalization begins, it is
+    /// non-cancellable to avoid partial AppState updates.
     pub fn do_load_project_full(
         &self,
         path: PathBuf,
@@ -754,8 +755,10 @@ impl AppState {
         check_cancelled!();
         progress.complete_phase(LoadingPhase::LoadingSettings);
 
-        // === PHASE 7: Finalizing (10%) - ALL STATE MUTATIONS GUARDED ===
+        // === PHASE 7: Finalizing (10%) - NON-CANCELLABLE STATE COMMIT ===
         progress.start_phase(LoadingPhase::Finalizing);
+        // Allow cancellation only before any state mutation occurs.
+        check_cancelled!();
 
         // Load undo/redo stacks from database BEFORE storing db
         let loaded_undo = db.load_undo_stack_with_timestamps().unwrap_or_default();
@@ -769,20 +772,16 @@ impl AppState {
             .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
             .collect();
 
-        // Guard 1: Project state mutation
-        check_cancelled!();
+        // Commit 1: Project state mutation
         *self.project.lock().unwrap() = Some(project.clone());
 
-        // Guard 2: Database handle mutation
-        check_cancelled!();
+        // Commit 2: Database handle mutation
         *self.database.lock().unwrap() = Some(db);
 
-        // Guard 3: Display settings cache clear
-        check_cancelled!();
+        // Commit 3: Display settings cache clear
         self.clear_display_settings_cache();
 
-        // Guard 4: Undo/redo stack restore
-        check_cancelled!();
+        // Commit 4: Undo/redo stack restore
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
             if undo_entries.is_empty() && redo_entries.is_empty() {
                 undo_stack.clear();
@@ -792,8 +791,7 @@ impl AppState {
             }
         }
 
-        // Guard 5: Recent projects update
-        check_cancelled!();
+        // Commit 5: Recent projects update
         if let Ok(mut recent) = self.recent_projects.lock() {
             recent.retain(|p| p != &path);
             recent.insert(0, path.clone());
@@ -958,27 +956,24 @@ impl AppState {
         check_cancelled!();
         progress.complete_phase(LoadingPhase::SavingSettings);
 
-        // === FINALIZE: Store in AppState ===
-        // Guard 1: Project state mutation
+        // === FINALIZE: Store in AppState (NON-CANCELLABLE STATE COMMIT) ===
+        // Allow cancellation only before any state mutation occurs.
         check_cancelled!();
+        // Commit 1: Project state mutation
         *self.project.lock().unwrap() = Some(project.clone());
 
-        // Guard 2: Database handle mutation
-        check_cancelled!();
+        // Commit 2: Database handle mutation
         *self.database.lock().unwrap() = Some(db);
 
-        // Guard 3: Clear undo stack (new project)
-        check_cancelled!();
+        // Commit 3: Clear undo stack (new project)
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
             undo_stack.clear();
         }
 
-        // Guard 4: Display settings cache clear
-        check_cancelled!();
+        // Commit 4: Display settings cache clear
         self.clear_display_settings_cache();
 
-        // Guard 5: Add to recent projects
-        check_cancelled!();
+        // Commit 5: Add to recent projects
         if let Ok(mut recent) = self.recent_projects.lock() {
             recent.retain(|p| p != &db_path);
             recent.insert(0, db_path.clone());

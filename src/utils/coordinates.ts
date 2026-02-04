@@ -9,6 +9,117 @@ const EARTH_RADIUS = 6371000;
 // Used to transform local meter coordinates to pseudo-lat/lng for MapLibre
 const METERS_PER_DEGREE = 111320;
 
+const DEG_TO_RAD = Math.PI / 180;
+const RAD_TO_DEG = 180 / Math.PI;
+
+type Ecef = { x: number; y: number; z: number };
+type Enu = { east: number; north: number; up: number };
+
+type OriginFrame = {
+  latRad: number;
+  lonRad: number;
+  sinLat: number;
+  cosLat: number;
+  sinLon: number;
+  cosLon: number;
+  ecef: Ecef;
+};
+
+function toRadians(deg: number): number {
+  return deg * DEG_TO_RAD;
+}
+
+function toDegrees(rad: number): number {
+  return rad * RAD_TO_DEG;
+}
+
+function gpsToEcef(latitude: number, longitude: number): Ecef {
+  const latRad = toRadians(latitude);
+  const lonRad = toRadians(longitude);
+  const cosLat = Math.cos(latRad);
+  return {
+    x: EARTH_RADIUS * cosLat * Math.cos(lonRad),
+    y: EARTH_RADIUS * cosLat * Math.sin(lonRad),
+    z: EARTH_RADIUS * Math.sin(latRad),
+  };
+}
+
+function ecefToGps(ecef: Ecef): { latitude: number; longitude: number } {
+  const p = Math.sqrt(ecef.x * ecef.x + ecef.y * ecef.y);
+  const latRad = Math.atan2(ecef.z, p);
+  const lonRad = Math.atan2(ecef.y, ecef.x);
+  return {
+    latitude: toDegrees(latRad),
+    longitude: toDegrees(lonRad),
+  };
+}
+
+function buildOriginFrame(origin: { latitude: number; longitude: number }): OriginFrame {
+  const latRad = toRadians(origin.latitude);
+  const lonRad = toRadians(origin.longitude);
+  return {
+    latRad,
+    lonRad,
+    sinLat: Math.sin(latRad),
+    cosLat: Math.cos(latRad),
+    sinLon: Math.sin(lonRad),
+    cosLon: Math.cos(lonRad),
+    ecef: gpsToEcef(origin.latitude, origin.longitude),
+  };
+}
+
+function ecefToEnu(ecef: Ecef, origin: OriginFrame): Enu {
+  const dx = ecef.x - origin.ecef.x;
+  const dy = ecef.y - origin.ecef.y;
+  const dz = ecef.z - origin.ecef.z;
+  return {
+    east: -origin.sinLon * dx + origin.cosLon * dy,
+    north:
+      -origin.sinLat * origin.cosLon * dx -
+      origin.sinLat * origin.sinLon * dy +
+      origin.cosLat * dz,
+    up:
+      origin.cosLat * origin.cosLon * dx +
+      origin.cosLat * origin.sinLon * dy +
+      origin.sinLat * dz,
+  };
+}
+
+function enuToEcef(enu: Enu, origin: OriginFrame): Ecef {
+  const dx =
+    -origin.sinLon * enu.east -
+    origin.sinLat * origin.cosLon * enu.north +
+    origin.cosLat * origin.cosLon * enu.up;
+  const dy =
+    origin.cosLon * enu.east -
+    origin.sinLat * origin.sinLon * enu.north +
+    origin.cosLat * origin.sinLon * enu.up;
+  const dz = origin.cosLat * enu.north + origin.sinLat * enu.up;
+  return {
+    x: origin.ecef.x + dx,
+    y: origin.ecef.y + dy,
+    z: origin.ecef.z + dz,
+  };
+}
+
+function gpsToEnu(
+  gps: { latitude: number; longitude: number },
+  origin: { latitude: number; longitude: number }
+): Enu {
+  const frame = buildOriginFrame(origin);
+  const ecef = gpsToEcef(gps.latitude, gps.longitude);
+  return ecefToEnu(ecef, frame);
+}
+
+function enuToGps(
+  enu: Enu,
+  origin: { latitude: number; longitude: number }
+): { latitude: number; longitude: number } {
+  const frame = buildOriginFrame(origin);
+  const ecef = enuToEcef(enu, frame);
+  return ecefToGps(ecef);
+}
+
 /**
  * Transform local meter coordinates to MapLibre-compatible lat/lng
  * If gpsOrigin is provided, coordinates are offset from that origin.
@@ -19,16 +130,16 @@ export function metersToMapCoords(
   y: number,
   gpsOrigin?: GpsOrigin | null
 ): [number, number] {
-  // Calculate meters per degree at the origin latitude for more accurate projection
-  const originLat = gpsOrigin?.latitude ?? 0;
-  const metersPerDegreeLng = METERS_PER_DEGREE * Math.cos((originLat * Math.PI) / 180);
+  if (!gpsOrigin) {
+    // Fallback pseudo-lat/lng for local-only mode (no GPS origin).
+    const metersPerDegreeLng = METERS_PER_DEGREE;
+    const lng = x / metersPerDegreeLng;
+    const lat = y / METERS_PER_DEGREE;
+    return [lng, lat];
+  }
 
-  // Convert meters to degrees and add origin offset
-  const lng = (gpsOrigin?.longitude ?? 0) + x / metersPerDegreeLng;
-  const lat = (gpsOrigin?.latitude ?? 0) + y / METERS_PER_DEGREE;
-
-  // lng, lat format for MapLibre
-  return [lng, lat];
+  const gps = enuToGps({ east: x, north: y, up: 0 }, gpsOrigin);
+  return [gps.longitude, gps.latitude];
 }
 
 /**
@@ -40,14 +151,15 @@ export function mapCoordsToMeters(
   lat: number,
   gpsOrigin?: GpsOrigin | null
 ): { x: number; y: number } {
-  // Calculate meters per degree at the origin latitude
-  const originLat = gpsOrigin?.latitude ?? 0;
-  const metersPerDegreeLng = METERS_PER_DEGREE * Math.cos((originLat * Math.PI) / 180);
+  if (!gpsOrigin) {
+    return {
+      x: lng * METERS_PER_DEGREE,
+      y: lat * METERS_PER_DEGREE,
+    };
+  }
 
-  return {
-    x: (lng - (gpsOrigin?.longitude ?? 0)) * metersPerDegreeLng,
-    y: (lat - (gpsOrigin?.latitude ?? 0)) * METERS_PER_DEGREE,
-  };
+  const enu = gpsToEnu({ latitude: lat, longitude: lng }, gpsOrigin);
+  return { x: enu.east, y: enu.north };
 }
 
 /**
@@ -57,22 +169,8 @@ export function gpsToXY(
   gps: GpsCoordinates,
   origin: GpsCoordinates
 ): Coordinates {
-  const latDiff = gps.latitude - origin.latitude;
-  const lonDiff = gps.longitude - origin.longitude;
-
-  // Convert to meters using simple equirectangular projection
-  const y = latDiff * (Math.PI / 180) * EARTH_RADIUS;
-  const x =
-    lonDiff *
-    (Math.PI / 180) *
-    EARTH_RADIUS *
-    Math.cos((origin.latitude * Math.PI) / 180);
-
-  return {
-    x,
-    y,
-    z: gps.depth_reference,
-  };
+  const enu = gpsToEnu(gps, origin);
+  return { x: enu.east, y: enu.north, z: gps.depth_reference };
 }
 
 /**
@@ -82,16 +180,8 @@ export function xyToGps(
   coords: Coordinates,
   origin: GpsCoordinates
 ): GpsCoordinates {
-  const latDiff = coords.y / ((Math.PI / 180) * EARTH_RADIUS);
-  const lonDiff =
-    coords.x /
-    ((Math.PI / 180) * EARTH_RADIUS * Math.cos((origin.latitude * Math.PI) / 180));
-
-  return {
-    latitude: origin.latitude + latDiff,
-    longitude: origin.longitude + lonDiff,
-    depth_reference: coords.z,
-  };
+  const gps = enuToGps({ east: coords.x, north: coords.y, up: 0 }, origin);
+  return { latitude: gps.latitude, longitude: gps.longitude, depth_reference: coords.z };
 }
 
 /**

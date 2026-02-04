@@ -23,6 +23,7 @@ import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors'
 import { metersToMapCoords } from '../../utils/coordinates';
 import { formatFixed } from '../../i18n/format';
 import { getErrorColor } from '../../utils/colors';
+import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import {
   distanceToLineSegment,
   resolveNearestShot,
@@ -817,11 +818,11 @@ export default class SurveyLayer {
         if (showPointer && (this.activeTool === 'move_station' || this.activeTool === 'move_shot')) {
           if (newHoveredStationId) {
             const [secStr, idxStr] = newHoveredStationId.split(':');
-            const featureId = Number(secStr) * 100000 + Number(idxStr);
+            const featureId = Number(secStr) * FEATURE_ID_STRIDE + Number(idxStr);
             if (this.isStationImmovable(featureId)) showPointer = false;
           } else if (newHoveredShotId) {
             const [secStr, idxStr] = newHoveredShotId.split(':');
-            const featureId = Number(secStr) * 100000 + Number(idxStr);
+            const featureId = Number(secStr) * FEATURE_ID_STRIDE + Number(idxStr);
             if (this.isShotImmovable(featureId)) showPointer = false;
           }
         }
@@ -1088,7 +1089,7 @@ export default class SurveyLayer {
     if (!id) return null;
     const [sectionId, index] = id.split(':').map(Number);
     if (isNaN(sectionId!) || isNaN(index!)) return null;
-    return sectionId! * 100000 + index!;
+    return sectionId! * FEATURE_ID_STRIDE + index!;
   }
 
   // Collect all feature IDs belonging to a section from a given source
@@ -1116,7 +1117,7 @@ export default class SurveyLayer {
   private featureBelongsToHoveredSections(featureId: number): boolean {
     const ids = this.getEffectiveHoverSectionIds();
     if (ids.length === 0) return false;
-    const fSectionId = String(Math.floor(featureId / 100000));
+    const fSectionId = String(Math.floor(featureId / FEATURE_ID_STRIDE));
     return ids.includes(fSectionId);
   }
 
@@ -1164,16 +1165,16 @@ export default class SurveyLayer {
     this.cachedSelectedSectionId = null;
   }
 
-  // Check if a featureId belongs to a section (derived from encoding: sectionId * 100000 + index)
+  // Check if a featureId belongs to a section (derived from encoding: sectionId * FEATURE_ID_STRIDE + index)
   private featureBelongsToSection(featureId: number, sectionIdStr: string | null): boolean {
     if (!sectionIdStr) return false;
-    return Math.floor(featureId / 100000) === Number(sectionIdStr);
+    return Math.floor(featureId / FEATURE_ID_STRIDE) === Number(sectionIdStr);
   }
 
   // Check if a feature belongs to an anchored section (suppresses hover/interaction)
   private isFeatureAnchored(featureId: number): boolean {
     return this.anchoredSectionIds.size > 0 &&
-      this.anchoredSectionIds.has(Math.floor(featureId / 100000));
+      this.anchoredSectionIds.has(Math.floor(featureId / FEATURE_ID_STRIDE));
   }
 
   // Check if a station feature is individually immovable (zero-datum or transitively connected)
@@ -1908,7 +1909,7 @@ export default class SurveyLayer {
   }
 
   // Set text-opacity on label layers: 0.25 for immovable features, normal otherwise.
-  // Uses per-feature ID matching (sectionId * 100000 + stationIndex/shotId) since
+  // Uses per-feature ID matching (sectionId * FEATURE_ID_STRIDE + stationIndex/shotId) since
   // immovable features are per-station, not per-section.
   private updateImmovableLabelOpacity(
     stationIds: Set<number>,
@@ -1919,12 +1920,12 @@ export default class SurveyLayer {
     ] as maplibregl.ExpressionSpecification;
 
     if (stationIds.size > 0 || shotIds.size > 0) {
-      // Station labels: compute featureId from sectionId * 100000 + stationIndex
+      // Station labels: compute featureId from sectionId * FEATURE_ID_STRIDE + stationIndex
       if (stationIds.size > 0) {
         const stationIdsArray = [...stationIds];
         const stationAnchoredCheck: maplibregl.ExpressionSpecification = [
           'in',
-          ['+', ['*', ['get', 'sectionId'], 100000], ['get', 'stationIndex']],
+          ['+', ['*', ['get', 'sectionId'], FEATURE_ID_STRIDE], ['get', 'stationIndex']],
           ['literal', stationIdsArray],
         ] as maplibregl.ExpressionSpecification;
         this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', [
@@ -1934,12 +1935,12 @@ export default class SurveyLayer {
         this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', zoomOpacity);
       }
 
-      // Shot labels: compute featureId from sectionId * 100000 + shotId
+      // Shot labels: compute featureId from sectionId * FEATURE_ID_STRIDE + shotId
       if (shotIds.size > 0) {
         const shotIdsArray = [...shotIds];
         const shotAnchoredCheck: maplibregl.ExpressionSpecification = [
           'in',
-          ['+', ['*', ['get', 'sectionId'], 100000], ['get', 'shotId']],
+          ['+', ['*', ['get', 'sectionId'], FEATURE_ID_STRIDE], ['get', 'shotId']],
           ['literal', shotIdsArray],
         ] as maplibregl.ExpressionSpecification;
         this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', [
@@ -1965,8 +1966,8 @@ export default class SurveyLayer {
       // Build station key strings matching closure feature "sectionId:stationIndex" format
       const immovableKeyStrings: string[] = [];
       for (const fid of immovableStationIds) {
-        const sectionId = Math.floor(fid / 100000);
-        const stationIndex = fid % 100000;
+        const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
+        const stationIndex = fid % FEATURE_ID_STRIDE;
         immovableKeyStrings.push(`${sectionId}:${stationIndex}`);
       }
 

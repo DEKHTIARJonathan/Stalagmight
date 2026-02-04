@@ -10,7 +10,7 @@ use crate::config::{ClosureAdjustmentConfig, TransitVerticalMode};
 use super::{
     gps_to_local, ClosurePreview, ClosureRef, ClosureStrategy, Coordinates, GpsBounds,
     GpsCoordinates, LoopClosure, Section, SectionData, SectionId, SectionUpdates, Shot, ShotData,
-    ShotId, ShotUpdates, Station, StationMerge, StationRef, ZeroDatum,
+    ShotId, ShotUpdates, Station, StationMerge, StationRef, ZeroDatum, FEATURE_ID_STRIDE,
 };
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).
@@ -615,9 +615,16 @@ impl Project {
 
     // === Shot operations ===
 
+    fn max_shots_per_section() -> usize {
+        FEATURE_ID_STRIDE.saturating_sub(1) as usize
+    }
+
     /// Add a shot to a section
     pub fn add_shot(&mut self, section_id: SectionId, data: ShotData) -> Option<&Shot> {
         let section = self.get_section_mut(section_id)?;
+        if section.shots.len() >= Self::max_shots_per_section() {
+            return None;
+        }
         let shot = section.add_shot(data);
         let shot_id = shot.id;
         self.touch();
@@ -632,8 +639,11 @@ impl Project {
         data: ShotData,
     ) -> Option<&Shot> {
         // Look up position before mutable borrow
-        let pos = self.get_section(section_id)?
-            .shots.iter().position(|s| s.id == after_shot_id)?;
+        let section = self.get_section(section_id)?;
+        let pos = section.shots.iter().position(|s| s.id == after_shot_id)?;
+        if section.shots.len() >= Self::max_shots_per_section() {
+            return None;
+        }
         let section = self.get_section_mut(section_id)?;
         let shot = section.insert_shot_after(after_shot_id, data)?;
         let shot_id = shot.id;
@@ -651,8 +661,11 @@ impl Project {
         data: ShotData,
     ) -> Option<&Shot> {
         // Look up position before mutable borrow
-        let pos = self.get_section(section_id)?
-            .shots.iter().position(|s| s.id == before_shot_id)?;
+        let section = self.get_section(section_id)?;
+        let pos = section.shots.iter().position(|s| s.id == before_shot_id)?;
+        if section.shots.len() >= Self::max_shots_per_section() {
+            return None;
+        }
         // Compute displacement before data is consumed (only needed at pos=0)
         let disp = if pos == 0 {
             Some(Self::shot_displacement(&data))
