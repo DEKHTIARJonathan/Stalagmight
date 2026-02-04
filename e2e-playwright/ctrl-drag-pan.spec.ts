@@ -171,7 +171,7 @@ test.describe('Ctrl+Drag Panning', () => {
       await page.mouse.move(box!.x + 200, box!.y + 200);
 
       // Box select overlay should NOT be visible (uses border-dashed bg-accent/10)
-      const boxOverlay = page.locator('.border-dashed.bg-accent\\/10');
+      const boxOverlay = page.getByTestId('box-select-overlay');
       await expect(boxOverlay).not.toBeVisible();
 
       await page.mouse.up();
@@ -193,7 +193,7 @@ test.describe('Ctrl+Drag Panning', () => {
       await page.mouse.move(box!.x + 100, box!.y + 100);
 
       // Box select should be visible at this point
-      const boxOverlay = page.locator('.border-dashed.bg-accent\\/10');
+      const boxOverlay = page.getByTestId('box-select-overlay');
       await expect(boxOverlay).toBeVisible();
 
       // NOW press Ctrl mid-drag - box select should cancel

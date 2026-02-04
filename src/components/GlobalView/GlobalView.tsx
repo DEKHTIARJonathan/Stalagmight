@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { useProject } from '../../hooks/useProject';
 import { useGlobalViewShortcuts } from '../../hooks/useGlobalViewShortcuts';
@@ -16,7 +17,7 @@ import { formatNumber } from '../../i18n/format';
 
 /** Map phase enum values to human-readable labels */
 function formatPhaseLabel(
-  t: (key: string, options?: Record<string, unknown>) => string,
+  t: TFunction,
   phase: string | undefined,
   phaseIndex?: number,
   phaseCount?: number

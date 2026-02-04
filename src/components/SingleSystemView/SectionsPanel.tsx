@@ -215,7 +215,6 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                   aria-selected={isSelected}
                   tabIndex={focusedIndex === index ? 0 : (focusedIndex === -1 && index === 0 ? 0 : -1)}
                   data-testid={`section-row-${section.id}`}
-                  title="Double-click to zoom (Ctrl+G)"
                   title={t('sections.actions.zoom')}
                   className={`px-3 py-2 cursor-pointer group transition-colors outline-none focus:ring-2 focus:ring-accent focus:ring-inset ${
                     isSelected || hoveredSectionId === section.id ? 'bg-accent-20' : 'hover:bg-accent-20'

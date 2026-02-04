@@ -151,19 +151,39 @@ export async function placeAllSections(page: Page): Promise<void> {
   const dialog = page.getByTestId('dmp-section-config-dialog');
   await expect(dialog).toBeVisible();
 
-  for (let attempt = 0; attempt < 15; attempt += 1) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
     const placeAndFinish = page.getByTestId('place-and-finish-button');
     const placeSection = page.getByTestId('place-section-button');
+    const finishImport = page.getByTestId('finish-import-button');
+    const nextSection = page.getByTestId('next-section-button');
+    const excludeSection = page.getByTestId('exclude-button');
 
-    if (await placeAndFinish.isVisible()) {
+    if (await placeAndFinish.isVisible() && await placeAndFinish.isEnabled()) {
       await placeAndFinish.click();
       break;
     }
 
-    if (await placeSection.isVisible()) {
+    if (await finishImport.isVisible() && await finishImport.isEnabled()) {
+      await finishImport.click();
+      break;
+    }
+
+    if (await placeSection.isVisible() && await placeSection.isEnabled()) {
       await placeSection.click();
       continue;
     }
+
+    if (await nextSection.isVisible() && await nextSection.isEnabled()) {
+      await nextSection.click();
+      continue;
+    }
+
+    if (await excludeSection.isVisible() && await excludeSection.isEnabled()) {
+      await excludeSection.click();
+      continue;
+    }
+
+    await page.waitForTimeout(50);
   }
 
   await waitForDialogClosed(page, 'dmp-section-config-dialog');

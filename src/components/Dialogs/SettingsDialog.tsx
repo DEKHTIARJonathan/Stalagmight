@@ -207,6 +207,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
       animation: { ...base.map.animation },
     },
     validation: { ...base.validation },
+    closure_adjustment: { ...base.closure_adjustment },
     export: { ...base.export },
     logging: { ...base.logging },
     shortcuts: { ...base.shortcuts },
@@ -262,6 +263,9 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   }
   if (updates.validation) {
     result.validation = { ...result.validation, ...updates.validation };
+  }
+  if (updates.closure_adjustment) {
+    result.closure_adjustment = { ...result.closure_adjustment, ...updates.closure_adjustment };
   }
   if (updates.export) {
     result.export = { ...result.export, ...updates.export };

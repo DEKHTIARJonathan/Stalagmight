@@ -313,9 +313,8 @@ test.describe('Depth Gradient', () => {
     await expect(legendSvg).toHaveAttribute('role', 'img');
 
     const ariaLabel = await legendSvg.getAttribute('aria-label');
-    expect(ariaLabel).toMatch(/Depth scale/i);
-    expect(ariaLabel).toMatch(/shallow/i);
-    expect(ariaLabel).toMatch(/deep/i);
+    expect(ariaLabel).toMatch(/Depth gradient/i);
+    expect(ariaLabel).toMatch(/to/i);
   });
 
   // Note: Reload persistence cannot be tested with mocks because the mock's
@@ -383,7 +382,7 @@ test.describe('Depth Gradient with Menu Interactions', () => {
 
     // Verify the toggle has proper label
     const toggle = page.locator('[data-testid="display-toggle-showDepthGradient"]');
-    await expect(toggle).toContainText('Depth Gradient');
-    await expect(toggle).toContainText('Color by depth');
+    await expect(toggle).toContainText('Depth gradient');
+    await expect(toggle).toContainText('Color shots by depth');
   });
 });

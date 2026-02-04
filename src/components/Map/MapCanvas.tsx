@@ -23,7 +23,7 @@ import { formatFixed } from '../../i18n/format';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 
 // Tools that support Ctrl+drag for panning
-const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment'];
+const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure'];
 
 interface BoxSelectState {
   start: { x: number; y: number } | null;
@@ -2600,6 +2600,7 @@ export default function MapCanvas() {
         <div
           className="absolute border-2 border-accent border-dashed bg-accent-10 pointer-events-none"
           style={boxSelectStyle}
+          data-testid="box-select-overlay"
         />
       )}
 

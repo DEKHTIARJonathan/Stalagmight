@@ -195,26 +195,29 @@ export default function DmpSectionConfigDialog({
       date: currentConfig.date ?? currentDmpSection?.date ?? '',
       shots: currentConfig.shots
         .filter((shot) => !shot.isDeleted)
-        .map((shot) => ({
-          shot_type: 'Standard',
-          heading_in: shot.azimuth_in,
-          heading_out: shot.azimuth_out,
-          length: shot.length,
-          depth_in: shot.depth_in,
-          depth_out: shot.depth_out,
-          pitch_in: shot.pitch_in ?? 0,
-          pitch_out: shot.pitch_out ?? 0,
-          left: shot.left ?? 0,
-          right: shot.right ?? 0,
-          up: shot.up ?? 0,
-          down: shot.down ?? 0,
-          temperature: 0,
-          hour: 0,
-          minute: 0,
-          second: 0,
-          marker_index: 0,
-          comment: shot.comment ?? undefined,
-        })),
+        .map((shot) => {
+          const comment = shot.comment ?? undefined;
+          return {
+            shot_type: 'Standard',
+            heading_in: shot.azimuth_in,
+            heading_out: shot.azimuth_out,
+            length: shot.length,
+            depth_in: shot.depth_in,
+            depth_out: shot.depth_out,
+            pitch_in: shot.pitch_in ?? 0,
+            pitch_out: shot.pitch_out ?? 0,
+            left: shot.left ?? 0,
+            right: shot.right ?? 0,
+            up: shot.up ?? 0,
+            down: shot.down ?? 0,
+            temperature: 0,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            marker_index: 0,
+            ...(comment !== undefined ? { comment } : {}),
+          };
+        }),
     };
   }, [currentConfig, currentDmpSection]);
 
