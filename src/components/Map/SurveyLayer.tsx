@@ -2149,7 +2149,7 @@ export default class SurveyLayer {
 
     // 1. Find clicked station and all co-located stations via BFS:
     //    - merged_with: always co-located
-    //    - closures_with: co-located only if the closure strategy is NOT KeepRaw
+    //    - closures_with: always co-located
     //    additionalSeeds allows shot drag to seed from both endpoints simultaneously
     const stationByKey = new Map(
       this.cachedStations.map(s => [`${s.station_ref.section_id}:${s.station_ref.station_index}`, s])
@@ -2157,12 +2157,6 @@ export default class SurveyLayer {
     const clickedKey = `${sectionId}:${stationIndex}`;
     const clickedStation = stationByKey.get(clickedKey);
     if (!clickedStation) return [];
-
-    // Build closure strategy lookup (closure_id → strategy)
-    const closureStrategyById = new Map<number, string>();
-    for (const lc of this.cachedLoopClosures ?? []) {
-      closureStrategyById.set(lc.id, lc.strategy);
-    }
 
     // Seed BFS from primary station + any additional seeds (e.g., shot's other endpoint)
     const seedKeys = [clickedKey];
@@ -2185,10 +2179,7 @@ export default class SurveyLayer {
         queue.push(`${ref.section_id}:${ref.station_index}`);
       }
       for (const cr of st.closures_with ?? []) {
-        const strategy = closureStrategyById.get(cr.closure_id);
-        if (strategy && strategy !== 'KeepRaw') {
-          queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
-        }
+        queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
       }
     }
     const movingStations = this.cachedStations.filter(

@@ -52,14 +52,12 @@ pub fn adjust_loop_closures(
     anchor_station: StationRef,
     method: ClosureStrategy,
     use_strategy_filter: bool,
-    sequential_distribution: ClosureStrategy,
 ) -> CommandResult {
     adjust_loop_closures_impl(
         state.inner(),
         anchor_station,
         method,
         use_strategy_filter,
-        sequential_distribution,
     )
 }
 
@@ -68,13 +66,11 @@ pub(crate) fn adjust_loop_closures_impl(
     anchor_station: StationRef,
     method: ClosureStrategy,
     use_strategy_filter: bool,
-    sequential_distribution: ClosureStrategy,
 ) -> CommandResult {
     state.execute(Command::AdjustLoopClosures {
         anchor_station,
         method,
         use_strategy_filter,
-        sequential_distribution,
     })
 }
 

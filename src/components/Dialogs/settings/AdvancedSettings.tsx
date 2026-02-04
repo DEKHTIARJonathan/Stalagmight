@@ -10,7 +10,6 @@ import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
 import type { Config } from '../../../types/config';
-import type { ClosureStrategy } from '../../../types/project';
 import { useProjectStore } from '../../../store/projectStore';
 
 /**
@@ -99,14 +98,6 @@ function computeConfigDiff(
       newValue: String(newConfig.closure_adjustment.base_sigma_depth_m),
     });
   }
-  if (oldConfig.closure_adjustment.sequential_distribution_default !== newConfig.closure_adjustment.sequential_distribution_default) {
-    changes.push({
-      path: 'closure_adjustment.sequential_distribution_default',
-      oldValue: String(oldConfig.closure_adjustment.sequential_distribution_default),
-      newValue: String(newConfig.closure_adjustment.sequential_distribution_default),
-    });
-  }
-
   return changes;
 }
 
@@ -297,10 +288,6 @@ export function AdvancedSettings({
     }
   };
 
-  const handleSequentialDistributionChange = (value: ClosureStrategy) => {
-    updateClosureAdjustment({ sequential_distribution_default: value });
-  };
-
   // Reload config from disk
   const handleReloadConfig = useCallback(async () => {
     setIsReloading(true);
@@ -471,24 +458,6 @@ export function AdvancedSettings({
           />
         </SettingRow>
 
-        <SettingRow
-          label={t('settings.advanced.closureAdjustment.sequentialDistribution.label')}
-          helpText={t('settings.advanced.closureAdjustment.sequentialDistribution.help')}
-          isChanged={isFieldChanged(changedFields, 'closure_adjustment.sequential_distribution_default')}
-          data-testid="setting-closure-sequential-distribution"
-        >
-          <Select
-            value={config.closure_adjustment.sequential_distribution_default}
-            onChange={(v) => handleSequentialDistributionChange(v as ClosureStrategy)}
-            options={[
-              { value: 'ProportionalByLength', label: t('settings.advanced.closureAdjustment.sequentialDistribution.proportional') },
-              { value: 'EqualDistribution', label: t('settings.advanced.closureAdjustment.sequentialDistribution.equal') },
-            ]}
-            className="w-48"
-            aria-label={t('settings.advanced.closureAdjustment.sequentialDistribution.aria')}
-            data-testid="select-closure-sequential-distribution"
-          />
-        </SettingRow>
       </SettingsSection>
 
       <SettingsSection title={t('settings.advanced.sections.panels')} data-testid="section-panels">

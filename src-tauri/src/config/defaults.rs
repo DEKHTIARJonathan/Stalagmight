@@ -1,6 +1,5 @@
 use super::*;
 use super::types::{default_sigma_azimuth_deg, default_sigma_depth_m, default_sigma_length_m};
-use crate::models::ClosureStrategy;
 
 impl Default for Config {
     fn default() -> Self {
@@ -144,7 +143,6 @@ impl Default for ClosureAdjustmentConfig {
             base_sigma_length_m: default_sigma_length_m(),
             base_sigma_azimuth_deg: default_sigma_azimuth_deg(),
             base_sigma_depth_m: default_sigma_depth_m(),
-            sequential_distribution_default: ClosureStrategy::ProportionalByLength,
         }
     }
 }

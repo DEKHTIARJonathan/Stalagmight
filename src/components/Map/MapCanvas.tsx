@@ -178,16 +178,12 @@ export default function MapCanvas() {
 
   // Compute immovable station keys for move_station and move_shot tools.
   // A station is immovable if it is zero-datum, or transitively reachable from a
-  // zero-datum station via merged_with and non-KeepRaw closures_with links.
+  // zero-datum station via merged_with and closures_with links.
   const immovableStationKeys = useMemo(() => {
     if (activeTool !== 'move_station' && activeTool !== 'move_shot') return new Set<string>();
     const stationByKey = new Map(
       stations.map(s => [`${s.station_ref.section_id}:${s.station_ref.station_index}`, s])
     );
-    const closureStrategyById = new Map<number, string>();
-    for (const lc of project?.loop_closures ?? []) {
-      closureStrategyById.set(lc.id, lc.strategy);
-    }
     const immovable = new Set<string>();
     const queue: string[] = [];
     for (const s of stations) {
@@ -205,14 +201,11 @@ export default function MapCanvas() {
         queue.push(`${ref.section_id}:${ref.station_index}`);
       }
       for (const cr of st.closures_with ?? []) {
-        const strat = closureStrategyById.get(cr.closure_id);
-        if (strat && strat !== 'KeepRaw') {
-          queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
-        }
+        queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
       }
     }
     return immovable;
-  }, [activeTool, stations, project?.loop_closures]);
+  }, [activeTool, stations]);
 
   // Convert immovable station keys to feature IDs and compute immovable shot IDs.
   // For move_shot: a shot is immovable if either endpoint is immovable.

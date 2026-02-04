@@ -237,15 +237,11 @@ pub enum ClosureStrategy {
     /// Distribute equally across all shots
     EqualDistribution,
     /// Defer adjustment for batch processing
+    #[serde(alias = "KeepRaw", alias = "ManualAdjustment")]
     Batch,
-    /// Sequential loop closure (batch-adjusted, ordered by quality)
-    Sequential,
     /// Weighted least-squares adjustment (batch-adjusted)
+    #[serde(alias = "Sequential")]
     LeastSquaresWeighted,
-    /// Keep raw data, stations won't align perfectly
-    KeepRaw,
-    /// Manual adjustment later
-    ManualAdjustment,
     /// Created by snap-to-merge move (station was physically moved to align)
     Move,
 }
@@ -257,10 +253,7 @@ impl ClosureStrategy {
             Self::ProportionalByLength => "ProportionalByLength",
             Self::EqualDistribution => "EqualDistribution",
             Self::Batch => "Batch",
-            Self::Sequential => "Sequential",
             Self::LeastSquaresWeighted => "LeastSquaresWeighted",
-            Self::KeepRaw => "KeepRaw",
-            Self::ManualAdjustment => "ManualAdjustment",
             Self::Move => "Move",
         }
     }
@@ -271,10 +264,10 @@ impl ClosureStrategy {
             "ProportionalByLength" => Self::ProportionalByLength,
             "EqualDistribution" => Self::EqualDistribution,
             "Batch" => Self::Batch,
-            "Sequential" => Self::Sequential,
             "LeastSquaresWeighted" => Self::LeastSquaresWeighted,
-            "KeepRaw" => Self::KeepRaw,
-            "ManualAdjustment" => Self::ManualAdjustment,
+            "Sequential" => Self::LeastSquaresWeighted,
+            "KeepRaw" => Self::Batch,
+            "ManualAdjustment" => Self::Batch,
             "Move" => Self::Move,
             _ => Self::default(),
         }

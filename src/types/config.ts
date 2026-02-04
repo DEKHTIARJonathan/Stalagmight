@@ -124,7 +124,6 @@ export const defaultConfig: Config = {
     base_sigma_length_m: 0.05,
     base_sigma_azimuth_deg: 1.0,
     base_sigma_depth_m: 0.05,
-    sequential_distribution_default: 'ProportionalByLength',
   },
   export: {
     default_image_format: 'png',
