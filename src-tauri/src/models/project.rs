@@ -1547,31 +1547,51 @@ impl Project {
                 .collect();
             fixed_nodes_on_path.sort_by(|a, b| (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index)));
             fixed_nodes_on_path.dedup();
-            let mut fixed_roots_on_path: Vec<StationRef> = fixed_nodes_on_path
+            let mut fixed_roots_on_path: Vec<StationRef> = nodes
                 .iter()
                 .map(|n| root_for(*n))
+                .filter(|r| fixed_roots.contains(r))
                 .collect();
             fixed_roots_on_path.sort_by(|a, b| (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index)));
             fixed_roots_on_path.dedup();
 
-            let (_anchor_root, anchor, anchor_index) = if fixed_roots_on_path.len() > 1 {
+            if fixed_roots_on_path.len() > 1 {
                 return Err("Closure path crosses multiple fixed stations".to_string());
-            } else if !fixed_nodes_on_path.is_empty() {
+            }
+
+            let mut extra_fixed: HashSet<StationRef> = HashSet::new();
+            if let Some(fixed_node) = fixed_nodes_on_path.first().copied() {
+                extra_fixed.insert(fixed_node);
+            } else if let Some(root) = fixed_roots_on_path.first().copied() {
+                if let Some(node) = nodes.iter().copied().find(|n| root_for(*n) == root) {
+                    extra_fixed.insert(node);
+                }
+            }
+
+            if distribution != ClosureStrategy::TransitRule {
+                self.distribute_closure_error_internal(
+                    station_a,
+                    station_b,
+                    distribution,
+                    Some(&extra_fixed),
+                    true,
+                )?;
+
+                if lock_loops {
+                    for node in nodes {
+                        fixed.insert(root_for(node));
+                    }
+                }
+
+                continue;
+            }
+
+            let (_anchor_root, anchor, anchor_index) = if !fixed_nodes_on_path.is_empty() {
                 let anchor = fixed_nodes_on_path[0];
                 let anchor_root = root_for(anchor);
                 let anchor_index = nodes.iter().position(|n| *n == anchor).unwrap_or(0);
                 (anchor_root, anchor, anchor_index)
             } else {
-                let mut fixed_roots_on_path: Vec<StationRef> = nodes
-                    .iter()
-                    .map(|n| root_for(*n))
-                    .filter(|r| fixed_roots.contains(r))
-                    .collect();
-                fixed_roots_on_path.sort_by(|a, b| (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index)));
-                fixed_roots_on_path.dedup();
-                if fixed_roots_on_path.len() > 1 {
-                    return Err("Closure path crosses multiple fixed stations".to_string());
-                }
                 let anchor_root = if fixed_roots_on_path.is_empty() {
                     root_for(station_a)
                 } else {
@@ -1659,18 +1679,12 @@ impl Project {
             }
             self.enforce_merge_alignment(&sections_to_align, &colocated_groups, fixed_initial)?;
 
-            let coords_a_after = self
+            let mut coords_a_after = self
                 .compute_station_raw_coords(station_a)
                 .ok_or_else(|| "Failed to compute station A after adjustment".to_string())?;
-            let coords_b_after = self
+            let mut coords_b_after = self
                 .compute_station_raw_coords(station_b)
                 .ok_or_else(|| "Failed to compute station B after adjustment".to_string())?;
-            let mut residual = Self::coords_sub(coords_b_after, coords_a_after);
-            if distribution == ClosureStrategy::TransitRule
-                && transit_vertical_mode == TransitVerticalMode::Ignore
-            {
-                residual.z = 0.0;
-            }
             let mut aligned = if distribution == ClosureStrategy::TransitRule
                 && transit_vertical_mode == TransitVerticalMode::Ignore
             {
@@ -1678,61 +1692,96 @@ impl Project {
             } else {
                 Self::coords_close(coords_a_after, coords_b_after, 1e-6)
             };
-            if !aligned && Self::coords_norm(residual) > 1e-9 {
-                let a_root = root_for(station_a);
-                let b_root = root_for(station_b);
-                let a_locked = fixed.contains(&a_root);
-                let b_locked = fixed.contains(&b_root);
-                let mut applied = false;
-
-                if !b_locked {
-                    if let Some(members) = colocated_groups.get(&b_root) {
-                        for member in members {
-                            self.apply_station_move_internal(*member, Self::coords_scale(residual, -1.0))?;
-                        }
-                    } else {
-                        self.apply_station_move_internal(station_b, Self::coords_scale(residual, -1.0))?;
+            if !aligned {
+                let mut attempts = 0;
+                let max_attempts = 3;
+                let mut coords_a_iter = coords_a_after;
+                let mut coords_b_iter = coords_b_after;
+                while attempts < max_attempts {
+                    let mut residual = Self::coords_sub(coords_b_iter, coords_a_iter);
+                    if distribution == ClosureStrategy::TransitRule
+                        && transit_vertical_mode == TransitVerticalMode::Ignore
+                    {
+                        residual.z = 0.0;
                     }
-                    applied = true;
+                    if Self::coords_norm(residual) <= 1e-9 {
+                        break;
+                    }
+                    if all_shots.is_empty() {
+                        break;
+                    }
+
                     debug!(
                         ?station_a,
                         ?station_b,
                         ?residual,
-                        moved_root = ?b_root,
-                        "Applied residual alignment by moving station B merge group"
+                        attempt = attempts + 1,
+                        "Reapplying residual closure correction along path shots"
                     );
-                } else if !a_locked {
-                    if let Some(members) = colocated_groups.get(&a_root) {
-                        for member in members {
-                            self.apply_station_move_internal(*member, residual)?;
-                        }
-                    } else {
-                        self.apply_station_move_internal(station_a, residual)?;
-                    }
-                    applied = true;
-                    debug!(
-                        ?station_a,
-                        ?station_b,
-                        ?residual,
-                        moved_root = ?a_root,
-                        "Applied residual alignment by moving station A merge group"
-                    );
-                }
 
-                if applied {
-                    let coords_a_after = self
+                    self.apply_correction_to_shots(
+                        &all_shots,
+                        residual,
+                        distribution,
+                        transit_vertical_mode,
+                    )?;
+                    self.enforce_merge_alignment(&sections_to_align, &colocated_groups, fixed_initial)?;
+
+                    coords_a_iter = self
                         .compute_station_raw_coords(station_a)
-                        .ok_or_else(|| "Failed to compute station A after residual alignment".to_string())?;
-                    let coords_b_after = self
+                        .ok_or_else(|| "Failed to compute station A after residual correction".to_string())?;
+                    coords_b_iter = self
                         .compute_station_raw_coords(station_b)
-                        .ok_or_else(|| "Failed to compute station B after residual alignment".to_string())?;
+                        .ok_or_else(|| "Failed to compute station B after residual correction".to_string())?;
                     aligned = if distribution == ClosureStrategy::TransitRule
                         && transit_vertical_mode == TransitVerticalMode::Ignore
                     {
-                        Self::coords_close_xy(coords_a_after, coords_b_after, 1e-6)
+                        Self::coords_close_xy(coords_a_iter, coords_b_iter, 1e-6)
                     } else {
-                        Self::coords_close(coords_a_after, coords_b_after, 1e-6)
+                        Self::coords_close(coords_a_iter, coords_b_iter, 1e-6)
                     };
+                    if aligned {
+                        break;
+                    }
+
+                    attempts += 1;
+                }
+                coords_a_after = coords_a_iter;
+                coords_b_after = coords_b_iter;
+
+                if !aligned && all_shots.is_empty() {
+                    let a_root = root_for(station_a);
+                    let b_root = root_for(station_b);
+                    let a_locked = fixed.contains(&a_root);
+                    let b_locked = fixed.contains(&b_root);
+                    let mut residual = Self::coords_sub(coords_b_after, coords_a_after);
+                    if distribution == ClosureStrategy::TransitRule
+                        && transit_vertical_mode == TransitVerticalMode::Ignore
+                    {
+                        residual.z = 0.0;
+                    }
+
+                    if !b_locked {
+                        self.apply_group_translation(b_root, Self::coords_scale(residual, -1.0), &colocated_groups)?;
+                    } else if !a_locked {
+                        self.apply_group_translation(a_root, residual, &colocated_groups)?;
+                    }
+
+                    if !b_locked || !a_locked {
+                        coords_a_after = self
+                            .compute_station_raw_coords(station_a)
+                            .ok_or_else(|| "Failed to compute station A after residual alignment".to_string())?;
+                        coords_b_after = self
+                            .compute_station_raw_coords(station_b)
+                            .ok_or_else(|| "Failed to compute station B after residual alignment".to_string())?;
+                        aligned = if distribution == ClosureStrategy::TransitRule
+                            && transit_vertical_mode == TransitVerticalMode::Ignore
+                        {
+                            Self::coords_close_xy(coords_a_after, coords_b_after, 1e-6)
+                        } else {
+                            Self::coords_close(coords_a_after, coords_b_after, 1e-6)
+                        };
+                    }
                 }
             }
 
@@ -1763,6 +1812,56 @@ impl Project {
         Ok(())
     }
 
+    /// Apply a translation to all sections in a merge group.
+    fn apply_group_translation(
+        &mut self,
+        root: StationRef,
+        delta: Coordinates,
+        colocated_groups: &HashMap<StationRef, Vec<StationRef>>,
+    ) -> Result<(), String> {
+        let fallback = vec![root];
+        let members: &[StationRef] = colocated_groups
+            .get(&root)
+            .map(|m| m.as_slice())
+            .unwrap_or(&fallback);
+        let mut section_ids: HashSet<SectionId> = HashSet::new();
+        for member in members {
+            section_ids.insert(member.section_id);
+        }
+        let section_count = section_ids.len();
+
+        // Build section station counts
+        let mut section_station_counts: HashMap<SectionId, usize> = HashMap::new();
+        for section in self.sections.iter().filter(|s| section_ids.contains(&s.id)) {
+            section_station_counts.insert(section.id, section.shots.len());
+        }
+
+        for section_id in section_ids {
+            if delta.x.abs() > 1e-9 || delta.y.abs() > 1e-9 {
+                let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+                self.section_offsets
+                    .insert(section_id, (current.0 + delta.x, current.1 + delta.y));
+            }
+            if delta.z.abs() > 1e-9 {
+                if let Some(shot_count) = section_station_counts.get(&section_id).copied() {
+                    for idx in 0..=shot_count {
+                        let station = StationRef::new(section_id, idx as u32);
+                        let entry = self.station_offsets.entry(station).or_insert((0.0, 0.0, 0.0));
+                        entry.2 += delta.z;
+                    }
+                }
+            }
+        }
+
+        debug!(
+            ?root,
+            ?delta,
+            sections = section_count,
+            "Applied residual alignment via rigid merge-group translation"
+        );
+        Ok(())
+    }
+
     /// Enforce merge alignment by adjusting section and station offsets.
     fn enforce_merge_alignment(
         &mut self,
@@ -1778,6 +1877,7 @@ impl Project {
         let mut conflict_samples: Vec<(SectionId, StationRef, StationRef, Coordinates, Coordinates)> = Vec::new();
         let mut conflicted_sections: HashSet<SectionId> = HashSet::new();
         let mut section_station_counts: HashMap<SectionId, usize> = HashMap::new();
+        let mut section_targets: HashMap<SectionId, HashMap<StationRef, Coordinates>> = HashMap::new();
 
         for section in self.sections.iter().filter(|s| sections_to_align.contains(&s.id)) {
             section_station_counts.insert(section.id, section.shots.len());
@@ -1803,6 +1903,10 @@ impl Project {
                     .compute_station_raw_coords(*member)
                     .ok_or_else(|| "Failed to compute merge member coordinates".to_string())?;
                 let delta = Self::coords_sub(anchor_coords, coords);
+                section_targets
+                    .entry(member.section_id)
+                    .or_default()
+                    .insert(*member, anchor_coords);
                 let entry = section_deltas.entry(member.section_id).or_insert(delta);
                 if !Self::coords_close(*entry, delta, 1e-6) {
                     conflicted_sections.insert(member.section_id);
@@ -1839,27 +1943,118 @@ impl Project {
         }
 
         if !conflicted_sections.is_empty() {
-            for (_root, members) in colocated_groups {
-                let anchor = members
-                    .iter()
-                    .copied()
-                    .find(|m| fixed_initial.contains(m))
-                    .unwrap_or_else(|| members[0]);
-                let anchor_coords = self
-                    .compute_station_raw_coords(anchor)
-                    .ok_or_else(|| "Failed to compute merge anchor coordinates".to_string())?;
+            for section_id in conflicted_sections.iter().copied() {
+                let mut anchor_map: HashMap<StationRef, Coordinates> = HashMap::new();
+                if let Some(targets) = section_targets.get(&section_id) {
+                    for (station, target) in targets {
+                        anchor_map.insert(*station, *target);
+                    }
+                }
 
-                for member in members {
-                    if *member == anchor || !conflicted_sections.contains(&member.section_id) {
-                        continue;
-                    }
+                for fixed in fixed_initial.iter().filter(|s| s.section_id == section_id) {
                     let coords = self
-                        .compute_station_raw_coords(*member)
-                        .ok_or_else(|| "Failed to compute merge member coordinates".to_string())?;
-                    let delta = Self::coords_sub(anchor_coords, coords);
-                    if Self::coords_norm(delta) > 1e-9 {
-                        self.apply_station_move_internal(*member, delta)?;
+                        .compute_station_raw_coords(*fixed)
+                        .ok_or_else(|| "Failed to compute fixed station coordinates".to_string())?;
+                    anchor_map.insert(*fixed, coords);
+                }
+
+                if anchor_map.is_empty() {
+                    continue;
+                }
+
+                let mut anchors: Vec<(StationRef, Coordinates)> = anchor_map.into_iter().collect();
+                anchors.sort_by(|a, b| (a.0.station_index).cmp(&b.0.station_index));
+
+                let ref_index = anchors
+                    .iter()
+                    .position(|(s, _)| fixed_initial.contains(s))
+                    .unwrap_or(0);
+                let (ref_station, ref_target) = anchors[ref_index];
+                let ref_current = self
+                    .compute_station_raw_coords(ref_station)
+                    .ok_or_else(|| "Failed to compute reference anchor coordinates".to_string())?;
+                let ref_delta = Self::coords_sub(ref_target, ref_current);
+                if Self::coords_norm(ref_delta) > 1e-9 {
+                    if ref_delta.x.abs() > 1e-9 || ref_delta.y.abs() > 1e-9 {
+                        let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+                        self.section_offsets
+                            .insert(section_id, (current.0 + ref_delta.x, current.1 + ref_delta.y));
                     }
+                    if ref_delta.z.abs() > 1e-9 {
+                        if let Some(shot_count) = section_station_counts.get(&section_id).copied() {
+                            for idx in 0..=shot_count {
+                                let station = StationRef::new(section_id, idx as u32);
+                                let entry = self.station_offsets.entry(station).or_insert((0.0, 0.0, 0.0));
+                                entry.2 += ref_delta.z;
+                            }
+                        }
+                    }
+                }
+
+                let mut apply_segment_alignment = |start: StationRef,
+                                                   end: StationRef,
+                                                   target_end: Coordinates|
+                 -> Result<(), String> {
+                    if start.station_index == end.station_index {
+                        return Ok(());
+                    }
+                    let current_end = self
+                        .compute_station_raw_coords(end)
+                        .ok_or_else(|| "Failed to compute merge segment end coordinates".to_string())?;
+                    let correction = Self::coords_sub(target_end, current_end);
+                    if Self::coords_norm(correction) <= 1e-9 {
+                        return Ok(());
+                    }
+
+                    let section_lookup = self.build_section_lookup();
+                    let section = section_lookup
+                        .get(&section_id)
+                        .ok_or_else(|| "Section not found for merge alignment".to_string())?;
+                    let (start_idx, end_idx, forward) = if start.station_index < end.station_index {
+                        (start.station_index as usize, end.station_index as usize, true)
+                    } else {
+                        (end.station_index as usize, start.station_index as usize, false)
+                    };
+                    let mut shots: Vec<SegmentShot> = Vec::new();
+                    for idx in start_idx..end_idx {
+                        let shot = section
+                            .shots
+                            .get(idx)
+                            .ok_or_else(|| "Shot not found for merge alignment".to_string())?;
+                        let path_vec = Self::shot_vector_along(shot, forward);
+                        shots.push(SegmentShot {
+                            section_id,
+                            shot_index: idx,
+                            forward,
+                            length: shot.length,
+                            path_vec,
+                            sign: 1.0,
+                        });
+                    }
+
+                    if shots.is_empty() {
+                        self.apply_station_move_internal(end, correction)?;
+                        return Ok(());
+                    }
+
+                    self.apply_correction_to_shots(
+                        &shots,
+                        correction,
+                        ClosureStrategy::ProportionalByLength,
+                        TransitVerticalMode::Ignore,
+                    )?;
+                    Ok(())
+                };
+
+                for idx in ref_index..anchors.len().saturating_sub(1) {
+                    let (start, _) = anchors[idx];
+                    let (end, target_end) = anchors[idx + 1];
+                    apply_segment_alignment(start, end, target_end)?;
+                }
+                for idx in (1..=ref_index).rev() {
+                    let (start, _) = anchors[idx];
+                    let (end, target_end) = anchors[idx - 1];
+                    apply_segment_alignment(start, end, target_end)?;
                 }
             }
         }
@@ -2651,13 +2846,19 @@ impl Project {
         Ok(())
     }
 
-    fn distribute_closure_error(
+    fn distribute_closure_error_internal(
         &mut self,
         station_a: StationRef,
         station_b: StationRef,
         strategy: ClosureStrategy,
+        extra_fixed: Option<&HashSet<StationRef>>,
+        use_merge_groups: bool,
     ) -> Result<(), String> {
-        let colocated_groups = self.build_colocated_groups();
+        let colocated_groups = if use_merge_groups {
+            self.build_merge_groups()
+        } else {
+            self.build_colocated_groups()
+        };
         let mut station_to_group: HashMap<StationRef, StationRef> = HashMap::new();
         for (root, members) in &colocated_groups {
             for member in members {
@@ -2665,7 +2866,10 @@ impl Project {
             }
         }
         let root_for = |station: StationRef| station_to_group.get(&station).copied().unwrap_or(station);
-        let zero_datum_set: HashSet<StationRef> = self.zero_datums.iter().map(|zd| zd.station_ref).collect();
+        let mut zero_datum_set: HashSet<StationRef> = self.zero_datums.iter().map(|zd| zd.station_ref).collect();
+        if let Some(extra) = extra_fixed {
+            zero_datum_set.extend(extra.iter().copied());
+        }
 
         let is_group_anchored = |station: StationRef, groups: &HashMap<StationRef, Vec<StationRef>>| -> bool {
             let root = groups
@@ -3025,6 +3229,15 @@ impl Project {
         }
 
         Ok(())
+    }
+
+    fn distribute_closure_error(
+        &mut self,
+        station_a: StationRef,
+        station_b: StationRef,
+        strategy: ClosureStrategy,
+    ) -> Result<(), String> {
+        self.distribute_closure_error_internal(station_a, station_b, strategy, None, false)
     }
 
     /// Merge two stations
