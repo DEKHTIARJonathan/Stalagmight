@@ -79,7 +79,7 @@ async function toggleDisplayOption(page: Page, toggleKey: string): Promise<void>
  */
 async function getLayerVisibility(page: Page, layerId: string): Promise<string | undefined> {
   return page.evaluate((id) => {
-    const map = (window as unknown as { __cavechef_map__?: { getLayoutProperty: (l: string, p: string) => string } }).__cavechef_map__;
+    const map = (window as unknown as { __stalagmight_map__?: { getLayoutProperty: (l: string, p: string) => string } }).__stalagmight_map__;
     if (!map) return undefined;
     try {
       return map.getLayoutProperty(id, 'visibility');
@@ -102,14 +102,14 @@ async function waitForLayerVisible(page: Page, layerId: string): Promise<void> {
 async function getStationScreenPositions(page: Page): Promise<StationPosition[]> {
   return page.evaluate(() => {
     const map = (window as unknown as {
-      __cavechef_map__?: {
+      __stalagmight_map__?: {
         queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
           geometry: { coordinates: [number, number] };
           properties: { sectionId: number; stationIndex: number };
         }>;
         project: (coords: [number, number]) => { x: number; y: number };
       };
-    }).__cavechef_map__;
+    }).__stalagmight_map__;
     if (!map) return [];
 
     try {

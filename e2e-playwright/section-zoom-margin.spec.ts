@@ -9,7 +9,7 @@
  * Key pitfalls addressed:
  * - Pan map off-target before each zoom trigger to avoid false passes
  * - Assert precondition that margins are invalid before triggering zoom
- * - Wait for __cavechef_map__ after canvas appears
+ * - Wait for __stalagmight_map__ after canvas appears
  * - Use map.project() for screen-space assertions
  * - Use expect.poll() for all state change assertions
  * - Read zoom_max from config instead of hard-coding
@@ -109,11 +109,11 @@ async function getSectionIdByName(page: Page, name: string): Promise<number> {
 async function panMapOffTarget(page: Page): Promise<void> {
   await page.evaluate(() => {
     const map = (window as unknown as {
-      __cavechef_map__?: {
+      __stalagmight_map__?: {
         jumpTo: (opts: { center: [number, number]; zoom: number }) => void;
         stop: () => void;
       };
-    }).__cavechef_map__;
+    }).__stalagmight_map__;
     if (map) {
       // Stop any running animation, then instantly jump far away at a zoom
       // level high enough that the target section is off-screen
@@ -126,8 +126,8 @@ async function panMapOffTarget(page: Page): Promise<void> {
     async () => {
       return page.evaluate(() => {
         const m = (window as unknown as {
-          __cavechef_map__?: { isMoving: () => boolean };
-        }).__cavechef_map__;
+          __stalagmight_map__?: { isMoving: () => boolean };
+        }).__stalagmight_map__;
         return m ? !m.isMoving() : false;
       });
     },
@@ -187,13 +187,13 @@ async function getStationScreenMargins(page: Page, sectionId: number): Promise<M
     }).__E2E_TEST__;
 
     const map = (window as unknown as {
-      __cavechef_map__?: {
+      __stalagmight_map__?: {
         project: (lngLat: [number, number]) => { x: number; y: number };
         getContainer: () => HTMLElement;
         getZoom: () => number;
         isMoving: () => boolean;
       };
-    }).__cavechef_map__;
+    }).__stalagmight_map__;
 
     if (!stores || !map) return null;
 
@@ -396,8 +396,8 @@ test.describe('Section zoom margin', () => {
     // Get the zoom level after first zoom
     const zoomBefore = await page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: { getZoom: () => number };
-      }).__cavechef_map__;
+        __stalagmight_map__?: { getZoom: () => number };
+      }).__stalagmight_map__;
       return map?.getZoom() ?? 0;
     });
 
@@ -409,8 +409,8 @@ test.describe('Section zoom margin', () => {
       async () => {
         return page.evaluate(() => {
           const m = (window as unknown as {
-            __cavechef_map__?: { isMoving: () => boolean };
-          }).__cavechef_map__;
+            __stalagmight_map__?: { isMoving: () => boolean };
+          }).__stalagmight_map__;
           return m ? !m.isMoving() : false;
         });
       },
@@ -420,8 +420,8 @@ test.describe('Section zoom margin', () => {
     // Zoom level should not have changed significantly (only centering occurred)
     const zoomAfter = await page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: { getZoom: () => number };
-      }).__cavechef_map__;
+        __stalagmight_map__?: { getZoom: () => number };
+      }).__stalagmight_map__;
       return map?.getZoom() ?? 0;
     });
     expect(Math.abs(zoomAfter - zoomBefore)).toBeLessThan(0.5);

@@ -67,8 +67,8 @@ impl Database {
         tracing::info!("has_project_data returned: {}", has_data);
 
         if !has_data {
-            tracing::error!("File does not contain valid CaveChef project data");
-            anyhow::bail!("File does not contain a valid CaveChef project");
+            tracing::error!("File does not contain valid Stalagmight project data");
+            anyhow::bail!("File does not contain a valid Stalagmight project");
         }
 
         // Run lightweight migrations to ensure newer tables exist in legacy projects
@@ -88,10 +88,10 @@ impl Database {
             anyhow::bail!("File does not exist: {:?}", path);
         }
 
-        // Validate it's a CaveChef project file by extension
+        // Validate it's a Stalagmight project file by extension
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-        if extension != "cvchef" && extension != "cvproj" {
-            anyhow::bail!("Not a CaveChef project file: {:?}", path);
+        if extension != "stalx" {
+            anyhow::bail!("Not a Stalagmight project file: {:?}", path);
         }
 
         // Open in read-only mode - no writes possible
@@ -105,7 +105,7 @@ impl Database {
 
         // Verify project data exists
         if !db.has_project_data()? {
-            anyhow::bail!("File does not contain a valid CaveChef project");
+            anyhow::bail!("File does not contain a valid Stalagmight project");
         }
 
         Ok(db)

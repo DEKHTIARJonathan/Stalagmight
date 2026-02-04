@@ -365,7 +365,7 @@ test.describe('Zoom Tool Click Behavior', () => {
 
       // Get initial zoom level via exposed map instance
       const initialZoom = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number } }).__stalagmight_map__;
         return map?.getZoom() ?? 0;
       });
 
@@ -374,7 +374,7 @@ test.describe('Zoom Tool Click Behavior', () => {
       await page.waitForTimeout(400); // Wait for animation
 
       const zoomAfterClick = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number } }).__stalagmight_map__;
         return map?.getZoom() ?? 0;
       });
 
@@ -385,7 +385,7 @@ test.describe('Zoom Tool Click Behavior', () => {
       await page.waitForTimeout(400); // Wait for animation
 
       const zoomAfterRightClick = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number } }).__stalagmight_map__;
         return map?.getZoom() ?? 0;
       });
 
@@ -453,7 +453,7 @@ test.describe('Zoom Tool Click Behavior', () => {
 
     // Check cursor on canvas
     const cursorStyle = await page.evaluate(() => {
-      const map = (window as unknown as { __cavechef_map__?: { getCanvas: () => HTMLCanvasElement } }).__cavechef_map__;
+      const map = (window as unknown as { __stalagmight_map__?: { getCanvas: () => HTMLCanvasElement } }).__stalagmight_map__;
       return map?.getCanvas()?.style.cursor ?? '';
     });
 

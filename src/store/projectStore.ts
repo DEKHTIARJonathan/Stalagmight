@@ -337,7 +337,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     await get().cancelLoading();
 
     // Use cross-platform path splitting for project name extraction
-    const initialName = path.split(/[/\\]/).pop()?.replace(/\.(cvproj|cvchef)$/, '') ?? 'Project';
+    const initialName = path.split(/[/\\]/).pop()?.replace(/\.(stalx)$/, '') ?? 'Project';
     const clientOpId = get().startLoading(initialName, path);
 
     try {
@@ -443,7 +443,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     await get().cancelLoading();
 
     // Use cross-platform path splitting for project name extraction
-    const initialName = path.split(/[/\\]/).pop()?.replace(/\.(cvproj|cvchef)$/, '') ?? 'Project';
+    const initialName = path.split(/[/\\]/).pop()?.replace(/\.(stalx)$/, '') ?? 'Project';
     const clientOpId = get().startLoading(initialName, path);
 
     try {

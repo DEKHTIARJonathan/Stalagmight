@@ -345,7 +345,7 @@ export default function GlobalView() {
           </Button>
         </div>
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-bold">CaveChef</h1>
+          <h1 className="text-xl font-bold">Stalagmight</h1>
           <Button
             onClick={() => openDialog('settings')}
             data-testid="settings-button"

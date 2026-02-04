@@ -16,7 +16,7 @@ export function useProject() {
   const handleOpenProject = useCallback(async () => {
     const selected = await open({
       multiple: false,
-      filters: [{ name: 'CaveChef Project', extensions: ['cvproj', 'cvchef'] }],
+      filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
     });
 
     console.log('[useProject] Open dialog result:', selected, typeof selected);
@@ -41,12 +41,12 @@ export function useProject() {
 
   const handleSaveProjectAs = useCallback(async () => {
     const selected = await save({
-      filters: [{ name: 'CaveChef Project', extensions: ['cvproj'] }],
+      filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
     });
 
     if (selected) {
-      // Ensure .cvproj extension (matching backend logic)
-      const finalPath = selected.endsWith('.cvproj') ? selected : `${selected}.cvproj`;
+      // Ensure .stalx extension (matching backend logic)
+      const finalPath = selected.endsWith('.stalx') ? selected : `${selected}.stalx`;
 
       // Check if file already exists
       try {

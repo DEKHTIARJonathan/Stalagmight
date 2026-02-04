@@ -235,14 +235,14 @@ function App() {
   // Update window title based on project state
   useEffect(() => {
     const updateTitle = async () => {
-      let title = 'CaveChef';
+      let title = 'Stalagmight';
       if (project) {
         if (project.file_path) {
           // Extract filename from path
           const filename = project.file_path.split(/[/\\]/).pop() ?? project.file_path;
-          title = `CaveChef - ${filename}`;
+          title = `Stalagmight - ${filename}`;
         } else {
-          title = `CaveChef - ${project.name} (unsaved)`;
+          title = `Stalagmight - ${project.name} (unsaved)`;
         }
         if (isDirty) {
           title = `${title} *`;

@@ -10,14 +10,14 @@ use super::AppState;
 
 impl AppState {
     /// Resolve the project file path from a name and optional directory.
-    /// Sanitizes the name and ensures .cvproj extension.
+    /// Sanitizes the name and ensures .stalx extension.
     ///
     /// # Arguments
     /// * `name` - Project name (will be sanitized for filesystem use)
     /// * `directory` - Optional directory to save in. If None, uses user's documents directory.
     ///
     /// # Returns
-    /// The full path to the project file (e.g., `/path/to/dir/ProjectName.cvproj`)
+    /// The full path to the project file (e.g., `/path/to/dir/ProjectName.stalx`)
     fn resolve_project_path(&self, name: &str, directory: Option<&PathBuf>) -> Result<PathBuf, String> {
         // Validate name is not empty
         if name.trim().is_empty() {
@@ -74,8 +74,8 @@ impl AppState {
             }
         };
 
-        // Build the full path with .cvproj extension
-        let filename = format!("{}.cvproj", sanitized_name);
+        // Build the full path with .stalx extension
+        let filename = format!("{}.stalx", sanitized_name);
         let full_path = dir.join(filename);
 
         Ok(full_path)
@@ -105,7 +105,7 @@ impl AppState {
             return CommandResult::failure(format!("File not found: {}", path.display()));
         }
 
-        // Use open_existing which validates the file is a valid CaveChef project
+        // Use open_existing which validates the file is a valid Stalagmight project
         let db = match Database::open_existing(&path) {
             Ok(db) => db,
             Err(e) => return CommandResult::failure(format!("{}", e)),
@@ -183,13 +183,13 @@ impl AppState {
             None => return CommandResult::failure("No project open".to_string()),
         };
 
-        // Determine save path and ensure .cvproj extension
+        // Determine save path and ensure .stalx extension
         let save_path = path.or_else(|| project.file_path.clone());
         let save_path = match save_path {
             Some(p) => {
-                // Ensure .cvproj extension
-                if p.extension().map_or(true, |ext| ext != "cvproj") {
-                    p.with_extension("cvproj")
+                // Ensure .stalx extension
+                if p.extension().map_or(true, |ext| ext != "stalx") {
+                    p.with_extension("stalx")
                 } else {
                     p
                 }
@@ -198,7 +198,7 @@ impl AppState {
         };
 
         // Create a temporary file path in the same directory (for atomic rename)
-        let temp_path = save_path.with_extension("cvproj.tmp");
+        let temp_path = save_path.with_extension("stalx.tmp");
         tracing::info!(final_path = ?save_path, temp_path = ?temp_path, "Starting safe save operation");
 
         // Load display settings from current database or in-memory cache
@@ -537,15 +537,15 @@ impl AppState {
         // Set the output file path
         merged_project.file_path = Some(output_path.clone());
 
-        // Ensure .cvproj extension
-        let output_path = if output_path.extension().map_or(true, |ext| ext != "cvproj") {
-            output_path.with_extension("cvproj")
+        // Ensure .stalx extension
+        let output_path = if output_path.extension().map_or(true, |ext| ext != "stalx") {
+            output_path.with_extension("stalx")
         } else {
             output_path
         };
 
         // Save the merged project using safe save pattern (temp file + atomic rename)
-        let temp_path = output_path.with_extension("cvproj.tmp");
+        let temp_path = output_path.with_extension("stalx.tmp");
 
         // Remove any leftover temp file
         if temp_path.exists() {
@@ -601,8 +601,8 @@ impl AppState {
 
     /// Archive a project file by renaming it with .archived suffix
     fn archive_project_file(path: &PathBuf) -> std::io::Result<()> {
-        // Create archive filename: original.cvproj -> original.cvproj.archived
-        // If archived file exists, add timestamp: original.cvproj.archived.20260117_123456
+        // Create archive filename: original.stalx -> original.stalx.archived
+        // If archived file exists, add timestamp: original.stalx.archived.20260117_123456
         let mut archive_path = path.clone();
         let mut new_name = path
             .file_name()

@@ -12,12 +12,12 @@ pub fn init() -> WorkerGuard {
     let _ = std::fs::create_dir_all(&log_dir);
 
     // Create a rolling file appender
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "cavechef.log");
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "stalagmight.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
     // Build the subscriber
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,cavechef=debug"));
+        .unwrap_or_else(|_| EnvFilter::new("info,stalagmight=debug"));
 
     tracing_subscriber::registry()
         .with(filter)
@@ -43,7 +43,7 @@ pub fn init() -> WorkerGuard {
 
 /// Get the log directory path
 pub fn log_directory() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("com", "cavechef", "CaveChef")
+    let dirs = directories::ProjectDirs::from("com", "stalagmight", "Stalagmight")
         .ok_or_else(|| anyhow::anyhow!("No home directory"))?;
     Ok(dirs.data_local_dir().join("logs"))
 }

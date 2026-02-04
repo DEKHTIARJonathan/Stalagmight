@@ -10,7 +10,7 @@ describe('getTileConfig', () => {
   it('returns correct config for esri provider', () => {
     const config = getTileConfig('esri');
 
-    expect(config.tiles).toEqual(['cavechef-tiles://esri/{z}/{y}/{x}']);
+    expect(config.tiles).toEqual(['stalagmight-tiles://esri/{z}/{y}/{x}']);
     expect(config.attribution).toBe('&copy; Esri, Maxar, Earthstar Geographics');
     expect(config.tileSize).toBe(256);
     expect(config.minZoom).toBe(0);

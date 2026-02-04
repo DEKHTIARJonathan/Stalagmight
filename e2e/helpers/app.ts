@@ -1,5 +1,5 @@
 /**
- * Helper functions for common E2E test actions in CaveChef.
+ * Helper functions for common E2E test actions in Stalagmight.
  * These helpers interact with the real Tauri application through WebdriverIO.
  */
 
@@ -9,7 +9,7 @@
  */
 export async function getMapZoom(): Promise<number> {
   return browser.execute(() => {
-    const map = (window as unknown as { __cavechef_map__?: { getZoom: () => number } }).__cavechef_map__;
+    const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number } }).__stalagmight_map__;
     return map?.getZoom() ?? 0;
   });
 }
@@ -288,7 +288,7 @@ export async function waitForMapReady(): Promise<void> {
       }
 
       const loaded = await browser.execute(() => {
-        const map = (window as unknown as { __cavechef_map__?: { loaded?: () => boolean } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { loaded?: () => boolean } }).__stalagmight_map__;
         return map?.loaded?.() ?? false;
       });
 
@@ -312,14 +312,14 @@ export async function waitForMapIdle(minDelayMs = 0): Promise<void> {
     async () => {
       const mapIdle = await browser.execute(() => {
         const map = (window as unknown as {
-          __cavechef_map__?: {
+          __stalagmight_map__?: {
             loaded?: () => boolean;
             isMoving?: () => boolean;
             isZooming?: () => boolean;
             isRotating?: () => boolean;
             isPitching?: () => boolean;
           };
-        }).__cavechef_map__;
+        }).__stalagmight_map__;
 
         if (!map) return true;
         const loaded = map.loaded?.() ?? true;
@@ -363,14 +363,14 @@ export async function waitForUiIdle(minDelayMs = 0): Promise<void> {
       if (mapExists) {
         const mapIdle = await browser.execute(() => {
           const map = (window as unknown as {
-            __cavechef_map__?: {
+            __stalagmight_map__?: {
               loaded?: () => boolean;
               isMoving?: () => boolean;
               isZooming?: () => boolean;
               isRotating?: () => boolean;
               isPitching?: () => boolean;
             };
-          }).__cavechef_map__;
+          }).__stalagmight_map__;
 
           if (!map) return false;
           const loaded = map.loaded?.() ?? false;

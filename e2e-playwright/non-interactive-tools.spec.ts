@@ -28,10 +28,10 @@ async function createProjectWithStations(page: Page): Promise<void> {
     async () => {
       return page.evaluate(() => {
         const map = (window as unknown as {
-          __cavechef_map__?: {
+          __stalagmight_map__?: {
             queryRenderedFeatures: (options?: { layers?: string[] }) => unknown[];
           };
-        }).__cavechef_map__;
+        }).__stalagmight_map__;
         return map?.queryRenderedFeatures({ layers: ['survey-stations'] })?.length ?? 0;
       });
     },
@@ -63,13 +63,13 @@ const sectionSeeds: SectionSeed[] = [
 async function getStationPosition(page: Page): Promise<{ x: number; y: number } | null> {
   return page.evaluate(() => {
     const map = (window as unknown as {
-      __cavechef_map__?: {
+      __stalagmight_map__?: {
         project: (coords: [number, number]) => { x: number; y: number };
         queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
           geometry: { type: string; coordinates: [number, number] };
         }>;
       };
-    }).__cavechef_map__;
+    }).__stalagmight_map__;
 
     if (!map) return null;
     const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
@@ -167,12 +167,12 @@ test.describe('Non-interactive tools', () => {
     // The MapCanvas useEffect syncs this to SurveyLayer.setHoveredStation automatically.
     const hoverSetup = await page.evaluate(() => {
       const map = (window as unknown as {
-        __cavechef_map__?: {
+        __stalagmight_map__?: {
           queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
             properties: { sectionId: number; stationIndex: number };
           }>;
         };
-      }).__cavechef_map__;
+      }).__stalagmight_map__;
 
       if (!map) return { success: false, error: 'No map' };
 

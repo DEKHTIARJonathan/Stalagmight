@@ -33,8 +33,8 @@ export default function NewProjectDialog() {
           const { save } = await import('@tauri-apps/plugin-dialog');
           const path = await save({
             title: 'Save Project',
-            filters: [{ name: 'CaveChef Project', extensions: ['cvproj'] }],
-            defaultPath: `${name.replace(/[^a-zA-Z0-9]/g, '_')}.cvproj`,
+            filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
+            defaultPath: `${name.replace(/[^a-zA-Z0-9]/g, '_')}.stalx`,
           });
 
           if (path) {

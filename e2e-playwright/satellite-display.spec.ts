@@ -24,7 +24,7 @@ function getSatelliteToggle(page: Page) {
 async function waitForMapLayer(page: Page, layerId: string): Promise<boolean> {
   return await expect.poll(async () => {
     return await page.evaluate((id) => {
-      const map = (window as unknown as { __cavechef_map__?: { getLayer: (id: string) => unknown } }).__cavechef_map__;
+      const map = (window as unknown as { __stalagmight_map__?: { getLayer: (id: string) => unknown } }).__stalagmight_map__;
       return map ? !!map.getLayer(id) : false;
     }, layerId);
   }, { timeout: 5000 }).toBe(true).then(() => true).catch(() => false);
@@ -36,7 +36,7 @@ async function waitForMapLayer(page: Page, layerId: string): Promise<boolean> {
 async function waitForNoMapLayer(page: Page, layerId: string): Promise<boolean> {
   return await expect.poll(async () => {
     return await page.evaluate((id) => {
-      const map = (window as unknown as { __cavechef_map__?: { getLayer: (id: string) => unknown } }).__cavechef_map__;
+      const map = (window as unknown as { __stalagmight_map__?: { getLayer: (id: string) => unknown } }).__stalagmight_map__;
       return map ? !!map.getLayer(id) : false;
     }, layerId);
   }, { timeout: 5000 }).toBe(false).then(() => true).catch(() => false);
@@ -160,7 +160,7 @@ test.describe('Satellite Display', () => {
       // Check layer opacity using polling
       await expect.poll(async () => {
         return await page.evaluate(() => {
-          const map = (window as unknown as { __cavechef_map__?: { getPaintProperty: (layer: string, prop: string) => number } }).__cavechef_map__;
+          const map = (window as unknown as { __stalagmight_map__?: { getPaintProperty: (layer: string, prop: string) => number } }).__stalagmight_map__;
           return map ? map.getPaintProperty('satellite-tiles', 'raster-opacity') : null;
         });
       }, { timeout: 5000 }).toBe(0.7);
@@ -178,7 +178,7 @@ test.describe('Satellite Display', () => {
       expect(hasLayer).toBe(true);
     });
 
-    test('should use custom tile protocol (cavechef-tiles://)', async ({ page }) => {
+    test('should use custom tile protocol (stalagmight-tiles://)', async ({ page }) => {
       await openDisplayMenu(page);
       const { button } = getSatelliteToggle(page);
 
@@ -191,13 +191,13 @@ test.describe('Satellite Display', () => {
       // Check source uses custom protocol using polling
       await expect.poll(async () => {
         return await page.evaluate(() => {
-          const map = (window as unknown as { __cavechef_map__?: { getSource: (id: string) => { tiles?: string[] } | null } }).__cavechef_map__;
+          const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => { tiles?: string[] } | null } }).__stalagmight_map__;
           if (!map) return null;
           const source = map.getSource('satellite-tiles');
           if (!source || !('tiles' in source)) return null;
           return source.tiles?.[0] ?? null;
         });
-      }, { timeout: 5000 }).toMatch(/^cavechef-tiles:\/\//);
+      }, { timeout: 5000 }).toMatch(/^stalagmight-tiles:\/\//);
     });
 
     test('should have source attribution present', async ({ page }) => {
@@ -213,7 +213,7 @@ test.describe('Satellite Display', () => {
       // Check source attribution using polling
       const attribution = await expect.poll(async () => {
         return await page.evaluate(() => {
-          const map = (window as unknown as { __cavechef_map__?: { getSource: (id: string) => { attribution?: string } | null } }).__cavechef_map__;
+          const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => { attribution?: string } | null } }).__stalagmight_map__;
           if (!map) return null;
           const source = map.getSource('satellite-tiles');
           return source?.attribution ?? null;
@@ -221,7 +221,7 @@ test.describe('Satellite Display', () => {
       }, { timeout: 5000 }).toBeTruthy();
 
       const attributionText = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getSource: (id: string) => { attribution?: string } | null } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => { attribution?: string } | null } }).__stalagmight_map__;
         if (!map) return '';
         const source = map.getSource('satellite-tiles');
         return source?.attribution ?? '';
@@ -242,7 +242,7 @@ test.describe('Satellite Display', () => {
 
       // Check layer order - satellite should be below survey layers
       const layerOrder = await page.evaluate(() => {
-        const map = (window as unknown as { __cavechef_map__?: { getStyle: () => { layers: { id: string }[] } } }).__cavechef_map__;
+        const map = (window as unknown as { __stalagmight_map__?: { getStyle: () => { layers: { id: string }[] } } }).__stalagmight_map__;
         if (!map) return [];
         const layers = map.getStyle().layers;
         return layers.map((l: { id: string }) => l.id);
@@ -282,7 +282,7 @@ test.describe('Satellite Display', () => {
       }
 
       // Wait for GlobalView to load
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("CaveChef")', { timeout: 8000 });
+      await page.waitForSelector('[data-testid="global-view"], h1:has-text("Stalagmight")', { timeout: 8000 });
 
       // Click Settings button
       await page.click('[data-testid="settings-button"], button:has-text("Settings")');

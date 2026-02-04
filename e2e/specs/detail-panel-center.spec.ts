@@ -27,8 +27,8 @@ import {
 async function getMapCenter(): Promise<{ lng: number; lat: number } | null> {
   return browser.execute(() => {
     const map = (window as unknown as {
-      __cavechef_map__?: { getCenter: () => { lng: number; lat: number } };
-    }).__cavechef_map__;
+      __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } };
+    }).__stalagmight_map__;
     if (!map) return null;
     const center = map.getCenter();
     return { lng: center.lng, lat: center.lat };
@@ -43,10 +43,10 @@ async function getMapCenter(): Promise<{ lng: number; lat: number } | null> {
 async function panMapOffTarget(): Promise<void> {
   await browser.execute(() => {
     const map = (window as unknown as {
-      __cavechef_map__?: { panBy: (offset: [number, number], options?: { animate: boolean }) => void };
-    }).__cavechef_map__;
+      __stalagmight_map__?: { panBy: (offset: [number, number], options?: { animate: boolean }) => void };
+    }).__stalagmight_map__;
     if (!map) {
-      throw new Error('Map instance not available - __cavechef_map__ is not defined');
+      throw new Error('Map instance not available - __stalagmight_map__ is not defined');
     }
     map.panBy([200, 100], { animate: false });
   });

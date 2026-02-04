@@ -1,4 +1,4 @@
-# CaveChef - Cave Survey Processing Application
+# Stalagmight - Cave Survey Processing Application
 
 ## Specification Document v1.0
 
@@ -39,7 +39,7 @@
 
 ### 1.1 Purpose
 
-CaveChef is a desktop application for processing underwater cave survey data. It provides tools to import, visualize, edit, and export cave survey data collected by cave divers using mNemo devices or manual methods.
+Stalagmight is a desktop application for processing underwater cave survey data. It provides tools to import, visualize, edit, and export cave survey data collected by cave divers using mNemo devices or manual methods.
 
 ### 1.2 Target Users
 
@@ -393,7 +393,7 @@ Shows all cave systems the user has loaded, with survey geometry rendering for G
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  [Import] [New Project] [Settings]                    CaveChef │
+│  [Import] [New Project] [Settings]                    Stalagmight │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  [Fit All]                                    [Navigation]      │
@@ -1493,7 +1493,7 @@ Managed entirely in Zustand store on frontend.
 
 ### 9.1 Config File Format
 
-TOML format at `~/.config/cavechef/config.toml` (Linux/Mac) or `%APPDATA%\cavechef\config.toml` (Windows).
+TOML format at `~/.config/stalagmight/config.toml` (Linux/Mac) or `%APPDATA%\stalagmight\config.toml` (Windows).
 
 ```toml
 [general]
@@ -1965,7 +1965,7 @@ const virtualizer = useVirtualizer({
 Satellite tiles are cached using SQLite storage for offline access:
 
 ```
-~/.cache/cavechef/tile_cache.db
+~/.cache/stalagmight/tile_cache.db
 
 -- Schema
 CREATE TABLE tiles (
@@ -1982,7 +1982,7 @@ CREATE TABLE tiles (
 ```
 
 **Cache Flow:**
-1. MapLibre requests tile via `cavechef-tiles://esri/{z}/{y}/{x}` protocol
+1. MapLibre requests tile via `stalagmight-tiles://esri/{z}/{y}/{x}` protocol
 2. Frontend calls `invoke('fetch_tile', {provider, z, y, x})`
 3. Backend checks SQLite cache → returns if fresh
 4. On cache miss: fetch from ESRI servers → store in cache → return
@@ -2058,7 +2058,7 @@ function useNetworkStatus() {
 Always create backup before attempting repair:
 ```rust
 fn backup_before_repair(path: &Path) -> Result<PathBuf> {
-    let backup = path.with_extension("cvproj.backup");
+    let backup = path.with_extension("stalx.backup");
     fs::copy(path, &backup)?;
     Ok(backup)
 }
@@ -2132,8 +2132,8 @@ All dialogs must have:
 
 ### 16.2 Log File Management
 
-- **Location**: `~/.local/share/cavechef/logs/` (Linux), `~/Library/Application Support/cavechef/logs/` (Mac), `%APPDATA%\cavechef\logs\` (Windows)
-- **Naming**: `cavechef_YYYY-MM-DD_HH-MM-SS.log`
+- **Location**: `~/.local/share/stalagmight/logs/` (Linux), `~/Library/Application Support/stalagmight/logs/` (Mac), `%APPDATA%\stalagmight\logs\` (Windows)
+- **Naming**: `stalagmight_YYYY-MM-DD_HH-MM-SS.log`
 - **New file**: Created each application session
 - **Rotation**: Delete oldest logs when directory exceeds `max_directory_size_mb` (default 128MB)
 - **Level**: Configurable in settings
@@ -2143,9 +2143,9 @@ All dialogs must have:
 Structured JSON for machine parsing:
 
 ```json
-{"ts":"2024-01-12T14:32:15.123Z","level":"INFO","target":"cavechef::commands","msg":"Command executed","command":"CreateSection","section_name":"Main Line","shots":24}
-{"ts":"2024-01-12T14:32:15.125Z","level":"DEBUG","target":"cavechef::commands","msg":"Undo data generated","type":"InverseCommand","inverse":"DeleteSection"}
-{"ts":"2024-01-12T14:32:15.130Z","level":"INFO","target":"cavechef::persistence","msg":"Project saved","path":"/home/user/caves/sistema.cave","size_kb":245}
+{"ts":"2024-01-12T14:32:15.123Z","level":"INFO","target":"stalagmight::commands","msg":"Command executed","command":"CreateSection","section_name":"Main Line","shots":24}
+{"ts":"2024-01-12T14:32:15.125Z","level":"DEBUG","target":"stalagmight::commands","msg":"Undo data generated","type":"InverseCommand","inverse":"DeleteSection"}
+{"ts":"2024-01-12T14:32:15.130Z","level":"INFO","target":"stalagmight::persistence","msg":"Project saved","path":"/home/user/caves/sistema.cave","size_kb":245}
 ```
 
 ### 16.4 Instrumentation Requirements
@@ -2518,7 +2518,7 @@ directories = "5"
 ### 18.4 Project Structure
 
 ```
-cavechef/
+stalagmight/
 ├── src-tauri/                    # Rust backend
 │   ├── Cargo.toml
 │   ├── tauri.conf.json
