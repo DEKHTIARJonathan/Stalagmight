@@ -10,15 +10,15 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
-| Import/Export | 12 | 17 | 71% |
-| UI & Polish | 6 | 13 | 46% |
+| Import/Export | 12 | 19 | 63% |
+| UI & Polish | 6 | 14 | 43% |
 | Data & Editing | 4 | 5 | 80% |
 | Loop Closure | 3 | 5 | 60% |
 | Accessibility & i18n | 4 | 7 | 57% |
 | Performance & Stability | 1 | 9 | 11% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **30** | **58** | **52%** |
+| **Total** | **30** | **61** | **49%** |
 
 ---
 
@@ -79,8 +79,10 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Ariane .ari Export | ❌ | |
 | GPX Import | ❌ | Waypoints and tracks |
 | Manual Data Input | ❌ | Full spreadsheet-style entry without device import |
+| Automatic Reference Shot Alignment | ❌ | Auto-align imported sections using reference shots |
+| Import Dialog/Shot Placement Refactoring | ❌ | Improve shot placement UX in import workflow |
 
-**Subtotals**: ✅ 12 done, 🟡 1 partial, ❌ 4 not started
+**Subtotals**: ✅ 12 done, 🟡 1 partial, ❌ 6 not started
 
 ### UI & Polish (6/13 done)
 
@@ -93,6 +95,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Tool Panel Redesign | ✅ | |
 | Tile Caching Settings | ✅ | CacheSettings.tsx + Rust config |
 | Three-Level Settings Reset | ❌ | Per-setting, per-tab, full reset (SPEC 2.9) |
+| Automatic Reference Shot Alignment Settings | ❌ | Configure auto-alignment behavior in Settings |
 | Splash Screen | ❌ | |
 | About Dialog | ❌ | |
 | Keyboard Shortcuts Overlay | ❌ | Help overlay showing all shortcuts |
@@ -100,7 +103,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Release Automation | ❌ | |
 | Add Comment Tool | ❌ | Text annotations on stations/map |
 
-**Subtotals**: ✅ 6 done, ❌ 7 not started
+**Subtotals**: ✅ 6 done, ❌ 8 not started
 
 ### Data & Editing (4/5 done)
 
@@ -177,17 +180,17 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
-| Import/Export | 17 | 12 | 1 | 4 |
-| UI & Polish | 13 | 6 | 0 | 7 |
+| Import/Export | 19 | 12 | 1 | 6 |
+| UI & Polish | 14 | 6 | 0 | 8 |
 | Data & Editing | 5 | 4 | 0 | 1 |
 | Loop Closure | 5 | 3 | 0 | 2 |
 | Accessibility & i18n | 7 | 4 | 0 | 3 |
 | Performance & Stability | 9 | 1 | 1 | 7 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **58** | **30** | **2** | **26** |
+| **Total** | **61** | **30** | **2** | **29** |
 
-**Overall Progress**: 30 done + 2 partial = ~55% complete
+**Overall Progress**: 30 done + 2 partial = ~52% complete
 
 ---
 
