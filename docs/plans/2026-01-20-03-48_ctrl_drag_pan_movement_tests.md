@@ -60,7 +60,7 @@ Implement comprehensive E2E tests that verify Ctrl+drag pan in Select mode actua
 - `e2e/helpers/app.ts` - WebdriverIO helpers including `selectTool()`, `importDmpFile()`
 
 ### Fixture Files
-- `e2e/fixtures/fractal_plant_iter3.cvproj` - Pre-generated fractal cave survey (~85 sections)
+- `e2e/fixtures/fractal_plant_iter3.stalx` - Pre-generated fractal cave survey (~85 sections)
 
 ## Implementation Steps
 
@@ -151,7 +151,7 @@ Use WebdriverIO because:
 Structure:
 ```
 ├── Helper Functions
-│   ├── loadFixtureProject() - Load fractal_plant_iter3.cvproj
+│   ├── loadFixtureProject() - Load fractal_plant_iter3.stalx
 │   ├── getMapCenter() - Get map center coordinates
 │   ├── getMapZoom() - Get zoom level
 │   ├── getStationScreenPositions() - Get all station screen positions
@@ -188,7 +188,7 @@ Structure:
 import * as path from 'path';
 
 const FIXTURES_DIR = path.join(__dirname, '..', 'fixtures');
-const FIXTURE_PATH = path.join(FIXTURES_DIR, 'fractal_plant_iter3.cvproj');
+const FIXTURE_PATH = path.join(FIXTURES_DIR, 'fractal_plant_iter3.stalx');
 
 // Load fixture project via store API
 async function loadFixtureProject(): Promise<void> {

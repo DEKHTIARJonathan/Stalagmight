@@ -18,7 +18,7 @@ pub struct TestDb {
 impl TestDb {
     pub fn with_project(project: &Project) -> Result<(Self, Database)> {
         let dir = TempDir::new()?;
-        let path = dir.path().join("project.cvproj");
+        let path = dir.path().join("project.stalx");
         let mut db = Database::open(&path)?;
         db.save_project(project)?;
         Ok((Self { _dir: dir, path }, db))

@@ -499,7 +499,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
         case 'plugin:dialog|open':
           return '/mock/test-survey.dmp';
         case 'plugin:dialog|save':
-          return '/mock/saved-project.cvproj';
+          return '/mock/saved-project.stalx';
 
         case 'plugin:fs|read':
         case 'plugin:fs|readFile':
@@ -558,7 +558,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
 
     const mockDialogModule = {
       open: async () => '/mock/test-survey.dmp',
-      save: async () => '/mock/saved-project.cvproj',
+      save: async () => '/mock/saved-project.stalx',
       message: async () => undefined,
       ask: async () => true,
       confirm: async () => true,

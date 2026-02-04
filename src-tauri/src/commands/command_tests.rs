@@ -124,7 +124,7 @@ fn save_project_to_temp(app: &tauri::App<MockRuntime>, dir: &TempDir) -> PathBuf
     let path = dir.path().join("project");
     let result = project::save_project(state(app), Some(path.clone()));
     assert_success(&result);
-    path.with_extension("cvproj")
+    path.with_extension("stalx")
 }
 
 // === Config commands ===
@@ -174,7 +174,7 @@ fn test_update_config_roundtrip_recent_projects() {
         let app = app_with_state();
         with_restored_config(&app, || {
             let mut cfg = config::get_config(state(&app));
-            cfg.general.recent_projects = vec![PathBuf::from("/tmp/example.cvproj")];
+            cfg.general.recent_projects = vec![PathBuf::from("/tmp/example.stalx")];
             config::update_config(state(&app), cfg).expect("update config");
             let updated = config::get_config(state(&app));
             assert_eq!(updated.general.recent_projects.len(), 1);
@@ -184,7 +184,7 @@ fn test_update_config_roundtrip_recent_projects() {
                 .first()
                 .unwrap()
                 .to_string_lossy()
-                .contains("example.cvproj"));
+                .contains("example.stalx"));
         });
     });
 }
@@ -535,19 +535,19 @@ fn test_close_project_clears_state() {
 #[test]
 fn test_save_project_fails_when_no_project() {
     let app = app_with_state();
-    let result = project::save_project(state(&app), Some(PathBuf::from("/tmp/nope.cvproj")));
+    let result = project::save_project(state(&app), Some(PathBuf::from("/tmp/nope.stalx")));
     assert_failure_contains(&result, "No project open");
 }
 
 #[test]
 fn test_open_project_fails_when_missing() {
     let app = app_with_state();
-    let result = project::open_project(state(&app), PathBuf::from("/tmp/missing.cvproj"));
+    let result = project::open_project(state(&app), PathBuf::from("/tmp/missing.stalx"));
     assert_failure_contains(&result, "File not found");
 }
 
 #[test]
-fn test_save_project_creates_cvproj_extension() {
+fn test_save_project_creates_stalx_extension() {
     with_config_lock(|| {
         let app = app_with_state();
         create_project(&app);
@@ -555,7 +555,7 @@ fn test_save_project_creates_cvproj_extension() {
         let raw_path = dir.path().join("project_data");
         let result = project::save_project(state(&app), Some(raw_path));
         assert_success(&result);
-        let saved_path = dir.path().join("project_data.cvproj");
+        let saved_path = dir.path().join("project_data.stalx");
         assert!(saved_path.exists());
     });
 }
@@ -611,7 +611,7 @@ fn test_remove_from_recent_projects_fails_missing() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let missing = PathBuf::from("/tmp/does-not-exist.cvproj");
+            let missing = PathBuf::from("/tmp/does-not-exist.stalx");
             let result = project::remove_from_recent_projects(state(&app), missing);
             assert_failure_contains(&result, "Project not found");
         });
@@ -1635,7 +1635,7 @@ fn test_create_section_and_merge_success() {
 fn test_merge_projects_requires_sources() {
     let app = app_with_state();
     let output_dir = TempDir::new().unwrap();
-    let output_path = output_dir.path().join("merged.cvproj");
+    let output_path = output_dir.path().join("merged.stalx");
 
     let result = project::merge_projects(
         state(&app),
@@ -1654,7 +1654,7 @@ fn test_merge_projects_requires_two_sources() {
     let project = project_with_section(vec![shot_data(1.0)]);
     let (db, _database) = TestDb::with_project(&project).unwrap();
     let output_dir = TempDir::new().unwrap();
-    let output_path = output_dir.path().join("merged.cvproj");
+    let output_path = output_dir.path().join("merged.stalx");
 
     let result = project::merge_projects(
         state(&app),
@@ -1674,7 +1674,7 @@ fn test_merge_projects_fails_when_output_exists() {
     let (db_a, _database_a) = TestDb::with_project(&project).unwrap();
     let (db_b, _database_b) = TestDb::with_project(&project).unwrap();
     let output_dir = TempDir::new().unwrap();
-    let output_path = output_dir.path().join("merged.cvproj");
+    let output_path = output_dir.path().join("merged.stalx");
     std::fs::write(&output_path, b"exists").unwrap();
 
     let result = project::merge_projects(
@@ -1696,7 +1696,7 @@ fn test_merge_projects_success_creates_output() {
     let (db_a, _database_a) = TestDb::with_project(&project_a).unwrap();
     let (db_b, _database_b) = TestDb::with_project(&project_b).unwrap();
     let output_dir = TempDir::new().unwrap();
-    let output_path = output_dir.path().join("merged.cvproj");
+    let output_path = output_dir.path().join("merged.stalx");
 
     let result = project::merge_projects(
         state(&app),

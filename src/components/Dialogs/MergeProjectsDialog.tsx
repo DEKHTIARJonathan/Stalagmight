@@ -74,13 +74,13 @@ export default function MergeProjectsDialog() {
       }
       const firstProjectPath = firstProject.file_path;
       const defaultDir = firstProjectPath.substring(0, firstProjectPath.lastIndexOf('/'));
-      const defaultFileName = `${outputName.trim()}.cvchef`;
+      const defaultFileName = `${outputName.trim()}.stalx`;
 
       // Show save dialog to let user choose output location
       const outputPath = await save({
         title: 'Save Merged Project',
         defaultPath: `${defaultDir}/${defaultFileName}`,
-        filters: [{ name: 'Stalagmight Project', extensions: ['cvchef'] }],
+        filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
       });
 
       if (!outputPath) {
@@ -188,7 +188,7 @@ export default function MergeProjectsDialog() {
               data-testid="merge-archive-checkbox"
             />
             <span className="text-sm">
-              Archive original project files (rename to .cvchef.bak)
+              Archive original project files (rename to .stalx.archived)
             </span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">

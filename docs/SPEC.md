@@ -2058,7 +2058,7 @@ function useNetworkStatus() {
 Always create backup before attempting repair:
 ```rust
 fn backup_before_repair(path: &Path) -> Result<PathBuf> {
-    let backup = path.with_extension("cvproj.backup");
+    let backup = path.with_extension("stalx.backup");
     fs::copy(path, &backup)?;
     Ok(backup)
 }

@@ -3,9 +3,9 @@
  *
  * Generates complex cave survey data following an L-system fractal plant pattern.
  * Creates fixture files for use in other tests:
- *   - fractal_plant_iter2.cvproj (medium complexity, ~25 sections)
- *   - fractal_plant_iter3.cvproj (large complexity, ~85 sections)
- *   - fractal_plant_iter4.cvproj (stress test, ~300+ sections)
+ *   - fractal_plant_iter2.stalx (medium complexity, ~25 sections)
+ *   - fractal_plant_iter3.stalx (large complexity, ~85 sections)
+ *   - fractal_plant_iter4.stalx (stress test, ~300+ sections)
  */
 
 import * as path from 'path';
@@ -58,7 +58,7 @@ describe('Fractal Data Generation', function () {
     totalShots: number;
   }> {
     const projectName = `Fractal Plant (${iterations} iterations)`;
-    const fixturePath = path.join(FIXTURES_DIR, `fractal_plant_iter${iterations}.cvproj`);
+    const fixturePath = path.join(FIXTURES_DIR, `fractal_plant_iter${iterations}.stalx`);
 
     // 1. Create new project
     await createNewProject(projectName);

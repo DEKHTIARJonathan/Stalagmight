@@ -90,7 +90,7 @@ impl Database {
 
         // Validate it's a Stalagmight project file by extension
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-        if extension != "cvchef" && extension != "cvproj" {
+        if extension != "stalx" {
             anyhow::bail!("Not a Stalagmight project file: {:?}", path);
         }
 

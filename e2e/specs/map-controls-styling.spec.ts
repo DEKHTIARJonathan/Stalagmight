@@ -179,7 +179,7 @@ async function saveCurrentProject(): Promise<{ success: boolean; error?: string 
       }
 
       try {
-        const path = `/tmp/map-controls-test-${Date.now()}.cvproj`;
+        const path = `/tmp/map-controls-test-${Date.now()}.stalx`;
         const result = await e2e.projectStore.getState().saveProject(path);
         done(result);
       } catch (err) {

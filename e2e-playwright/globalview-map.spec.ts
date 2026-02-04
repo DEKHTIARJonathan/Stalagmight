@@ -97,9 +97,9 @@ test.describe('GlobalView Map', () => {
       await expect(markers).toHaveCount(3, { timeout: 5000 }); // 3 GPS projects in mock data
 
       // Verify markers are actually visible (not just counted in DOM)
-      const alphaMarker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
-      const betaMarker = page.locator('[data-testid="system-marker-/projects/cave-beta.cvproj"]');
-      const gammaMarker = page.locator('[data-testid="system-marker-/projects/cave-gamma.cvproj"]');
+      const alphaMarker = page.locator('[data-testid="system-marker-/projects/cave-alpha.stalx"]');
+      const betaMarker = page.locator('[data-testid="system-marker-/projects/cave-beta.stalx"]');
+      const gammaMarker = page.locator('[data-testid="system-marker-/projects/cave-gamma.stalx"]');
       await expect(alphaMarker).toHaveCSS('display', 'flex', { timeout: 5000 });
       await expect(betaMarker).toHaveCSS('display', 'flex', { timeout: 5000 });
       await expect(gammaMarker).toHaveCSS('display', 'flex', { timeout: 5000 });
@@ -112,7 +112,7 @@ test.describe('GlobalView Map', () => {
       await toggle.click();
 
       // Check for specific project marker
-      const alphaMarker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      const alphaMarker = page.locator('[data-testid="system-marker-/projects/cave-alpha.stalx"]');
       await expect(alphaMarker).toBeVisible({ timeout: 5000 });
     });
 
@@ -149,7 +149,7 @@ test.describe('GlobalView Map', () => {
 
     test('should select project on marker click', async ({ page }) => {
       // Click on a marker - dispatch click event directly for reliability
-      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.stalx"]');
       const inner = marker.locator('.marker-inner');
 
       // Verify initial unselected state (semi-transparent border from --cc-stroke-light)
@@ -164,7 +164,7 @@ test.describe('GlobalView Map', () => {
     });
 
     test('should show tooltip on marker hover', async ({ page }) => {
-      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.stalx"]');
 
       // Dispatch mouseenter event directly to trigger tooltip
       await marker.dispatchEvent('mouseenter');
@@ -176,7 +176,7 @@ test.describe('GlobalView Map', () => {
     });
 
     test('should open project on marker double-click', async ({ page }) => {
-      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.stalx"]');
 
       // Dispatch dblclick event directly for reliability
       await marker.dispatchEvent('dblclick');
@@ -211,9 +211,9 @@ test.describe('GlobalView Map', () => {
 
         const store = e2e.globalViewStore.getState();
         await store.loadGeometryBatch([
-          '/projects/cave-alpha.cvproj',
-          '/projects/cave-beta.cvproj',
-          '/projects/cave-gamma.cvproj',
+          '/projects/cave-alpha.stalx',
+          '/projects/cave-beta.stalx',
+          '/projects/cave-gamma.stalx',
         ]);
       });
     }
@@ -234,7 +234,7 @@ test.describe('GlobalView Map', () => {
 
       // All markers should now be hidden (display: none) because we're in survey mode
       // and geometry loaded successfully for all systems.
-      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.stalx"]');
       await expect(marker).toHaveCSS('display', 'none', { timeout: 10000 });
     });
 
@@ -257,7 +257,7 @@ test.describe('GlobalView Map', () => {
       // Configure a long delay for the alpha system's geometry loading
       await page.evaluate(() => {
         (window as unknown as Record<string, (path: string, delay: number) => void>).__MOCK_SET_GEOMETRY_DELAY__(
-          '/projects/cave-alpha.cvproj', 60000
+          '/projects/cave-alpha.stalx', 60000
         );
       });
 
@@ -274,11 +274,11 @@ test.describe('GlobalView Map', () => {
           };
         }).__E2E_TEST__;
         if (!e2e?.globalViewStore) throw new Error('globalViewStore not available');
-        e2e.globalViewStore.getState().loadGeometry('/projects/cave-alpha.cvproj');
+        e2e.globalViewStore.getState().loadGeometry('/projects/cave-alpha.stalx');
       });
 
       // Wait for marker to update to loading state (spinner visible, marker visible)
-      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.stalx"]');
       await expect(marker).toHaveCSS('display', 'flex', { timeout: 10000 });
 
       // Spinner element should be present inside the marker
@@ -305,7 +305,7 @@ test.describe('GlobalView Map', () => {
       // Configure one system to fail geometry loading
       await page.evaluate(() => {
         (window as unknown as Record<string, (path: string) => void>).__MOCK_SET_GEOMETRY_ERROR__(
-          '/projects/cave-alpha.cvproj'
+          '/projects/cave-alpha.stalx'
         );
       });
 
@@ -321,11 +321,11 @@ test.describe('GlobalView Map', () => {
           };
         }).__E2E_TEST__;
         if (!e2e?.globalViewStore) throw new Error('globalViewStore not available');
-        await e2e.globalViewStore.getState().loadGeometry('/projects/cave-alpha.cvproj');
+        await e2e.globalViewStore.getState().loadGeometry('/projects/cave-alpha.stalx');
       });
 
       // The error marker should remain visible in survey mode (error markers are not hidden)
-      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.stalx"]');
       await expect(marker).toHaveCSS('display', 'flex', { timeout: 10000 });
 
       // Error marker inner circle should be red
@@ -338,7 +338,7 @@ test.describe('GlobalView Map', () => {
       await loadAllGeometry(page);
 
       // Verify markers are hidden in survey mode
-      const alphaMarker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      const alphaMarker = page.locator('[data-testid="system-marker-/projects/cave-alpha.stalx"]');
       await expect(alphaMarker).toHaveCSS('display', 'none', { timeout: 10000 });
 
       // Switch to markers mode
@@ -349,10 +349,10 @@ test.describe('GlobalView Map', () => {
       // All markers should now be visible regardless of geometry state
       await expect(alphaMarker).toHaveCSS('display', 'flex', { timeout: 5000 });
       await expect(
-        page.locator('[data-testid="system-marker-/projects/cave-beta.cvproj"]')
+        page.locator('[data-testid="system-marker-/projects/cave-beta.stalx"]')
       ).toHaveCSS('display', 'flex', { timeout: 5000 });
       await expect(
-        page.locator('[data-testid="system-marker-/projects/cave-gamma.cvproj"]')
+        page.locator('[data-testid="system-marker-/projects/cave-gamma.stalx"]')
       ).toHaveCSS('display', 'flex', { timeout: 5000 });
     });
 
@@ -361,7 +361,7 @@ test.describe('GlobalView Map', () => {
       await loadAllGeometry(page);
 
       // Wait for marker to be hidden
-      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.cvproj"]');
+      const marker = page.locator('[data-testid="system-marker-/projects/cave-alpha.stalx"]');
       await expect(marker).toHaveCSS('display', 'none', { timeout: 10000 });
 
       const toggle = page.getByTestId('view-mode-toggle');
@@ -489,7 +489,7 @@ test.describe('GlobalView Map', () => {
 
     test('should select project on single click (for metadata panel)', async ({ page }) => {
       // Single click on a project card to select it
-      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.cvproj"]');
+      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]');
       await card.click();
 
       // Card should show selected state
