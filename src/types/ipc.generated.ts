@@ -1,0 +1,96 @@
+// Temporary stub file. Run `pnpm gen:ipc-types` to generate real IPC types.
+// This keeps the project compiling when the generator can't run (e.g., offline).
+
+export type CommandResult = any;
+export type ValidationWarning = any;
+export type WarningSeverity = any;
+export type ProjectWarning = any;
+export type DmpFile = any;
+export type DmpSection = any;
+export type DmpShot = any;
+export type DmpDirection = any;
+export type DmpShotType = any;
+export type ImportSectionConfig = any;
+export type ImportPlacement = any;
+export type SectionRelationships = any;
+export type StationPair = any;
+export type ClosurePair = any;
+export type ClosureUpdate = any;
+export type DeleteShotImpact = any;
+export type ConnectivityResult = any;
+export type ClosurePreview = any;
+export type UndoHistoryItem = any;
+export type PreviewData = any;
+export type FieldChange = any;
+export type ExportImageOptions = any;
+export type ImageFormat = any;
+export type ColorMode = any;
+export type DepthPreset = any;
+export type DepthPresetColors = any;
+export type ColorStop = any;
+
+export type DisplaySettings = any;
+export type LoadingPhase = any;
+export type LoadingProgress = any;
+export type LoadProjectFullResult = any;
+export type CreateProjectFullResult = any;
+
+export type SurveyDirection = any;
+export type Shot = any;
+export type ShotData = any;
+export type ShotUpdates = any;
+export type Section = any;
+export type SectionData = any;
+export type SectionUpdates = any;
+export type SectionStats = any;
+export type StationRef = any;
+export type GpsCoordinates = any;
+export type GpsBounds = any;
+export type Coordinates = any;
+export type Station = any;
+export type StationMerge = any;
+export type LoopClosure = any;
+export type ClosureRef = any;
+export type ZeroDatum = any;
+export type ClosureStrategy = any;
+export type Project = any;
+export type ProjectStats = any;
+export type ProjectMetadata = any;
+
+export type ProviderStats = any;
+export type CacheStats = any;
+export type TileProviderInfo = any;
+
+export type GeometryShot = any;
+export type SurveyGeometry = any;
+export type SurveyGeometryError = any;
+
+export type LengthUnit = any;
+export type AngleUnit = any;
+export type ShortcutFeedback = any;
+export type ThemeMode = any;
+export type TransitVerticalMode = any;
+export type AppearanceConfig = any;
+export type Config = any;
+export type GeneralConfig = any;
+export type UnitsConfig = any;
+export type DisplayConfig = any;
+export type DepthGradientConfig = any;
+export type SectionColorsConfig = any;
+export type GpsOrigin = any;
+export type StationConfig = any;
+export type ShotConfig = any;
+export type MapSnapConfig = any;
+export type MapAnimationConfig = any;
+export type DebugConfig = any;
+export type MapDebugConfig = any;
+export type MapConfig = any;
+export type MapControlsConfig = any;
+export type ValidationConfig = any;
+export type ClosureAdjustmentConfig = any;
+export type ExportConfig = any;
+export type LoggingConfig = any;
+export type ShortcutsConfig = any;
+export type PanelsConfig = any;
+export type CacheConfig = any;
+export type GlobalViewConfig = any;

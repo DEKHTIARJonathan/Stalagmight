@@ -6,6 +6,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use std::path::Path;
 
 // ============================================================================
@@ -122,7 +123,7 @@ impl IntBuffer {
 // ============================================================================
 
 /// Parsed DMP file
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DmpFile {
     /// File format version (2-5)
     pub version: u8,
@@ -131,7 +132,7 @@ pub struct DmpFile {
 }
 
 /// A section from a DMP file
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DmpSection {
     /// DMP version for this section
     pub version: u8,
@@ -140,14 +141,16 @@ pub struct DmpSection {
     /// Survey direction
     pub direction: DmpDirection,
     /// Survey date and time
+    #[ts(type = "string")]
     pub date: NaiveDateTime,
     /// Shots in this section
     pub shots: Vec<DmpShot>,
 }
 
 /// Survey direction
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
 pub enum DmpDirection {
     In,
     Out,
@@ -166,7 +169,7 @@ impl TryFrom<u8> for DmpDirection {
 }
 
 /// Shot type from mNemo
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub enum DmpShotType {
     /// Cross-section A
     CsA,
@@ -193,7 +196,7 @@ impl TryFrom<u8> for DmpShotType {
 }
 
 /// A shot from a DMP file
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DmpShot {
     /// Shot type
     pub shot_type: DmpShotType,

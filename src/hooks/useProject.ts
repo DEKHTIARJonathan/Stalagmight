@@ -3,6 +3,14 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { exists } from '@tauri-apps/plugin-fs';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
+import {
+  ensureExtension,
+  projectOpenFilters,
+  projectSaveFilters,
+  dmpOpenFilters,
+  exportSaveFilters,
+  PROJECT_EXTENSION,
+} from '../utils/fileDialogs';
 
 export function useProject() {
   const store = useProjectStore();
@@ -16,7 +24,7 @@ export function useProject() {
   const handleOpenProject = useCallback(async () => {
     const selected = await open({
       multiple: false,
-      filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
+      filters: projectOpenFilters(),
     });
 
     console.log('[useProject] Open dialog result:', selected, typeof selected);
@@ -41,12 +49,11 @@ export function useProject() {
 
   const handleSaveProjectAs = useCallback(async () => {
     const selected = await save({
-      filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
+      filters: projectSaveFilters(),
     });
 
     if (selected) {
-      // Ensure .stalx extension (matching backend logic)
-      const finalPath = selected.endsWith('.stalx') ? selected : `${selected}.stalx`;
+      const finalPath = ensureExtension(selected, PROJECT_EXTENSION);
 
       // Check if file already exists
       try {
@@ -63,7 +70,7 @@ export function useProject() {
         // If exists check fails, proceed with save (backend will handle errors)
       }
 
-      const result = await store.saveProject(selected);
+      const result = await store.saveProject(finalPath);
       if (result && !result.success && result.error) {
         openDialog('error', { message: result.error, title: 'Save Failed' });
       }
@@ -116,7 +123,7 @@ export function useProject() {
     if (!skipFilePicker) {
       const selected = await open({
         multiple: false,
-        filters: [{ name: 'mNemo DMP', extensions: ['dmp'] }],
+        filters: dmpOpenFilters(),
       });
 
       if (!selected || typeof selected !== 'string') {
@@ -175,12 +182,12 @@ export function useProject() {
 
   const handleExportCsv = useCallback(async () => {
     const selected = await save({
-      filters: [{ name: 'CSV', extensions: ['csv'] }],
+      filters: exportSaveFilters('CSV', 'csv'),
     });
 
     if (selected) {
       try {
-        await store.exportCsv(selected);
+        await store.exportCsv(ensureExtension(selected, 'csv'));
       } catch (e) {
         console.error('Failed to export CSV:', e);
       }
@@ -189,12 +196,12 @@ export function useProject() {
 
   const handleExportJson = useCallback(async () => {
     const selected = await save({
-      filters: [{ name: 'JSON', extensions: ['json'] }],
+      filters: exportSaveFilters('JSON', 'json'),
     });
 
     if (selected) {
       try {
-        await store.exportJson(selected);
+        await store.exportJson(ensureExtension(selected, 'json'));
       } catch (e) {
         console.error('Failed to export JSON:', e);
       }

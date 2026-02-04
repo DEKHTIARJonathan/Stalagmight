@@ -5,6 +5,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { ProjectMetadata } from '../../types/project';
+import { ensureExtension, projectSaveFilters, PROJECT_EXTENSION } from '../../utils/fileDialogs';
 
 /**
  * MergeProjectsDialog allows users to merge multiple projects into a single new project.
@@ -80,7 +81,7 @@ export default function MergeProjectsDialog() {
       const outputPath = await save({
         title: 'Save Merged Project',
         defaultPath: `${defaultDir}/${defaultFileName}`,
-        filters: [{ name: 'Stalagmight Project', extensions: ['stalx'] }],
+        filters: projectSaveFilters(),
       });
 
       if (!outputPath) {
@@ -89,15 +90,16 @@ export default function MergeProjectsDialog() {
         return;
       }
 
+      const finalPath = ensureExtension(outputPath, PROJECT_EXTENSION);
       const sourcePaths = selectedProjects.map((p) => p.file_path);
-      const result = await mergeProjects(sourcePaths, outputPath, outputName.trim(), archiveOriginals);
+      const result = await mergeProjects(sourcePaths, finalPath, outputName.trim(), archiveOriginals);
 
       if (result.success) {
         closeDialog();
         // Open the merged project if requested
         // loadProject handles view switching internally
         if (openAfterMerge) {
-          await loadProject(outputPath);
+          await loadProject(finalPath);
         }
       } else {
         setError(result.error ?? 'Failed to merge projects');

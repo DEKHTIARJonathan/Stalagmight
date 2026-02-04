@@ -7,9 +7,10 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Internal tile provider definition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct TileProvider {
     /// Short identifier (e.g. "esri")
     #[serde(default)]
@@ -45,7 +46,7 @@ pub struct TileProvider {
 
 /// Response DTO returned by IPC commands — includes all `TileProvider` fields
 /// plus a computed `available` flag.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct TileProviderInfo {
     #[serde(default)]
     pub name: String,

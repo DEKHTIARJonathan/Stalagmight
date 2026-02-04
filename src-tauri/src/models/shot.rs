@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Unique identifier for a shot within a section
 pub type ShotId = u32;
@@ -44,7 +45,7 @@ pub(crate) fn pitch_from_components(horizontal: f64, dz: f64) -> f64 {
 }
 
 /// A single survey measurement between two stations
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Shot {
     /// Internal immutable ID
     pub id: ShotId,
@@ -81,7 +82,7 @@ pub struct Shot {
 }
 
 /// Data for creating or updating a shot
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct ShotData {
     pub azimuth_in: f64,
     pub azimuth_out: f64,
@@ -111,7 +112,7 @@ pub struct ShotData {
 }
 
 /// Partial updates to a shot
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct ShotUpdates {
     #[serde(default)]
     pub azimuth_in: Option<f64>,

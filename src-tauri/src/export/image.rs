@@ -3,6 +3,7 @@ use resvg::tiny_skia;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use usvg::{Options, Tree};
+use ts_rs::TS;
 
 use super::depth_colors::{get_depth_color, DepthPreset};
 use crate::models::Project;
@@ -11,8 +12,9 @@ use crate::models::Project;
 const METERS_TO_FEET: f64 = 3.28084;
 
 /// Color mode for export visualization.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
 pub enum ColorMode {
     /// Use section colors (default behavior)
     #[default]
@@ -37,7 +39,7 @@ fn default_true() -> bool {
 }
 
 /// Options for image export
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ExportImageOptions {
     /// Image format (png, svg, pdf)
     pub format: ImageFormat,
@@ -70,8 +72,9 @@ pub struct ExportImageOptions {
     pub decimal_precision: u8,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
 pub enum ImageFormat {
     Png,
     Svg,

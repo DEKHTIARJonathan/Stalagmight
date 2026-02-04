@@ -4,6 +4,7 @@
 //! and display settings during project load operations.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -128,8 +129,9 @@ impl std::error::Error for LoadError {}
 /// NOTE: showShots is intentionally excluded per spec - the frontend's showShots
 /// toggle exists but this API struct matches the 11 persisted settings only.
 /// Frontend showShots state is managed separately (session-based, always defaults true).
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct DisplaySettings {
     pub show_stations: bool,
     pub show_section_names: bool,
@@ -193,8 +195,9 @@ impl DisplaySettings {
 /// The `weight()` method on this enum is provided for convenience/reference.
 /// The authoritative weights used for progress calculation are in ProgressEmitter's
 /// phase_weights vec, which allows different weight distributions per flow type.
-#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum LoadingPhase {
     // Project opening phases (8 total)
     OpeningDatabase,
@@ -270,8 +273,9 @@ impl LoadingPhase {
 // ============================================================================
 
 /// Progress event payload sent to frontend.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct LoadingProgress {
     pub loading_id: u64,
     pub phase: LoadingPhase,
@@ -526,8 +530,9 @@ impl ProgressEmitter {
 
 /// Result of a successful load_project_full operation.
 /// Contains all data needed to initialize the frontend state.
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct LoadProjectFullResult {
     /// Unique ID for this load operation (for filtering stale events)
     pub loading_id: u64,
@@ -549,8 +554,9 @@ pub struct LoadProjectFullResult {
 
 /// Result of a successful create_project_full operation.
 /// Contains all data needed to initialize the frontend state for a new project.
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct CreateProjectFullResult {
     /// Unique ID for this load operation (for filtering stale events)
     pub loading_id: u64,

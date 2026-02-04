@@ -15,6 +15,7 @@
     "test:ui": "playwright test",
     "test:ui:headed": "playwright test --headed",
     "test:ui:debug": "playwright test --debug",
+    "gen:ipc-types": "cargo run --manifest-path src-tauri/Cargo.toml --bin gen_ipc_types",
     "test:all": "pnpm test && pnpm test:ui"
   },
   "dependencies": {

@@ -1,274 +1,37 @@
 import { themeTokens } from '../theme/tokens';
+import type { Config, DisplayConfig, SectionColorsConfig } from './ipc.generated';
 
-// Configuration types matching Rust config
-
-export type LengthUnit = 'meters' | 'feet';
-export type AngleUnit = 'degrees' | 'gradians';
-
-/**
- * Shortcut feedback preference for toast notifications.
- * - 'none': No toasts for any shortcuts
- * - 'non_obvious': Toast for view/panel toggles only (default)
- * - 'all': Toast for all shortcut actions
- */
-export type ShortcutFeedback = 'none' | 'non_obvious' | 'all';
-
-export type ThemeMode = 'dark' | 'light' | 'auto';
-
-export interface AppearanceConfig {
-  theme: ThemeMode;
-}
-
-export interface Config {
-  general: GeneralConfig;
-  units: UnitsConfig;
-  display: DisplayConfig;
-  section_colors: SectionColorsConfig;
-  map: MapConfig;
-  validation: ValidationConfig;
-  closure_adjustment: ClosureAdjustmentConfig;
-  export: ExportConfig;
-  logging: LoggingConfig;
-  shortcuts: ShortcutsConfig;
-  panels: PanelsConfig;
-  cache: CacheConfig;
-  debug: DebugConfig;
-  global_view: GlobalViewConfig;
-  appearance: AppearanceConfig;
-}
-
-export interface GeneralConfig {
-  auto_save: boolean;
-  auto_save_interval_seconds: number;
-  recent_projects_max: number;
-  undo_history_limit: number;
-  undo_persist_limit: number;
-  /** Shortcut feedback preference: none, non_obvious (default), or all */
-  shortcut_feedback: ShortcutFeedback;
-  /** Locale setting: 'system' or a specific locale tag like 'en-US' */
-  locale: string;
-}
-
-export interface UnitsConfig {
-  length: LengthUnit;
-  depth: LengthUnit;
-  angle: AngleUnit;
-  decimal_precision: number;
-}
-
-export interface DisplayConfig {
-  default_background: string;
-  grid_color: string;
-  /** Grid spacing in meters (e.g., 1, 5, 10, 25, 50) */
-  grid_spacing: number;
-  font_size: number;
-  font_color: string;
-  depth_gradient: DepthGradientConfig;
-}
-
-export interface DepthGradientConfig {
-  enabled: boolean;
-  shallow_color: string;
-  deep_color: string;
-  shallow_depth: number;
-  deep_depth: number;
-}
-
-export interface SectionColorsConfig {
-  palette: string[];
-}
-
-export interface GpsOrigin {
-  latitude: number;
-  longitude: number;
-}
-
-/** Station visual and interaction configuration */
-export interface StationConfig {
-  /** Visual radius in pixels (1.0-50.0) */
-  radius: number;
-  /** Clickable area radius in pixels (1.0-50.0, >= radius) */
-  hit_area: number;
-  /** Radius when hovered (1.0-50.0, typically > radius) */
-  hover_radius: number;
-  /** Radius when selected (1.0-50.0, typically > radius) */
-  selection_radius: number;
-}
-
-/** Shot visual and interaction configuration */
-export interface ShotConfig {
-  /** Visual line width in pixels (0.5-20.0) */
-  width: number;
-  /** Clickable area width in pixels (0.5-20.0, >= width) */
-  hit_area: number;
-  /** Width when hovered (0.5-20.0, typically > width) */
-  hover_width: number;
-  /** Width when selected (0.5-20.0, typically > width) */
-  selection_width: number;
-}
-
-/** Snap-to-station configuration for precision tools */
-export interface MapSnapConfig {
-  /** Snap threshold in pixels (1.0-50.0) */
-  threshold: number;
-  /** Enable snap for draw tool */
-  enabled_draw: boolean;
-  /** Enable snap for merge tool */
-  enabled_merge: boolean;
-  /** Enable snap for measure tool */
-  enabled_measure: boolean;
-}
-
-/** Animation configuration for map focus transitions */
-export interface MapAnimationConfig {
-  /** Whether animations are enabled */
-  enabled: boolean;
-  /** Animation duration in milliseconds */
-  duration: number;
-  /** Zoom level for single-point focus */
-  point_zoom: number;
-}
-
-/** Debug configuration */
-export interface DebugConfig {
-  map: MapDebugConfig;
-}
-
-/** Map-specific debug options */
-export interface MapDebugConfig {
-  /** Show hitbox visualization for debugging */
-  show_hitboxes: boolean;
-  /** Log hit detection events to console */
-  log_hit_detection: boolean;
-}
-
-export interface MapConfig {
-  satellite_provider: string;
-  satellite_enabled: boolean;
-  /** GPS origin for satellite tile alignment. Defaults to Florida Keys area. */
-  satellite_gps_origin: GpsOrigin;
-  zoom_default: number;
-  zoom_min: number;
-  zoom_max: number;
-  /** Zoom step for click-to-zoom (default: 1.0, range: 0.1-5.0) */
-  zoom_step: number;
-  controls: MapControlsConfig;
-  /** Station visual and interaction settings */
-  station: StationConfig;
-  /** Shot visual and interaction settings */
-  shot: ShotConfig;
-  /** Snap-to-station settings */
-  snap: MapSnapConfig;
-  /** Animation settings for map focus transitions */
-  animation: MapAnimationConfig;
-}
-
-export interface MapControlsConfig {
-  pan_speed: number;
-  zoom_speed: number;
-  invert_scroll: boolean;
-}
-
-export interface ValidationConfig {
-  warn_shot_length_min: number;
-  warn_shot_length_max: number;
-  warn_depth_change_per_shot_max: number;
-  warn_azimuth_deviation_max: number;
-  /** Threshold for azimuth in/out difference warning (degrees). Default: 10 */
-  azimuth_diff_threshold: number;
-  /** Threshold for pitch in/out difference warning (degrees). Default: 5 */
-  pitch_diff_threshold: number;
-}
-
-export type TransitVerticalMode = 'ignore' | 'length_proportional' | 'equal';
-
-export interface ClosureAdjustmentConfig {
-  base_sigma_length_m: number;
-  base_sigma_azimuth_deg: number;
-  base_sigma_depth_m: number;
-  transit_vertical_mode: TransitVerticalMode;
-  sequential_distribution_default: import('./project').ClosureStrategy;
-}
-
-export interface ExportConfig {
-  default_image_format: string;
-  default_dpi: number;
-  default_include_satellite: boolean;
-  default_include_grid: boolean;
-  default_include_labels: boolean;
-}
-
-export interface LoggingConfig {
-  level: string;
-  max_directory_size_mb: number;
-}
-
-export interface ShortcutsConfig {
-  // Tools
-  select: string[];
-  pan: string[];
-  zoom: string[];
-  draw: string[];
-  delete_tool: string[];
-  merge: string[];
-  measure: string[];
-  move_station: string[];
-  move_segment: string[];
-  move_shot: string[];
-
-  // Edit
-  undo: string[];
-  redo: string[];
-
-  // View
-  toggle_depth_gradient: string[];
-  toggle_grid: string[];
-  toggle_satellite: string[];
-  toggle_station_labels: string[];
-  toggle_shot_labels: string[];
-  toggle_section_labels: string[];
-  fit_to_bounds: string[];
-  zoom_in: string[];
-  zoom_out: string[];
-
-  // Panels
-  toggle_sections_panel: string[];
-  toggle_detail_panel: string[];
-  toggle_data_table: string[];
-
-  // File
-  new_file: string[];
-  open_file: string[];
-  save: string[];
-  save_as: string[];
-  import_dmp: string[];
-  export: string[];
-}
-
-export interface PanelsConfig {
-  sections_panel_width: number;
-  detail_panel_width: number;
-  data_table_height: number;
-}
-
-export interface CacheConfig {
-  /** Enable tile caching for offline access */
-  tile_cache_enabled: boolean;
-  /** Maximum cache size in megabytes */
-  tile_cache_max_mb: number;
-  /** Time-to-live for cached tiles in days */
-  tile_ttl_days: number;
-}
-
-/** Global view (multi-system map) configuration */
-export interface GlobalViewConfig {
-  /** FPS threshold below which auto-throttle activates (default: 30) */
-  fps_threshold: number;
-  /** GeoJSON simplification tolerance at normal FPS (default: 0.5) */
-  tolerance: number;
-  /** GeoJSON simplification tolerance when throttled (default: 1.0) */
-  throttle_tolerance: number;
-}
+export type {
+  LengthUnit,
+  AngleUnit,
+  ShortcutFeedback,
+  ThemeMode,
+  TransitVerticalMode,
+  AppearanceConfig,
+  Config,
+  GeneralConfig,
+  UnitsConfig,
+  DisplayConfig,
+  DepthGradientConfig,
+  SectionColorsConfig,
+  GpsOrigin,
+  StationConfig,
+  ShotConfig,
+  MapSnapConfig,
+  MapAnimationConfig,
+  DebugConfig,
+  MapDebugConfig,
+  MapConfig,
+  MapControlsConfig,
+  ValidationConfig,
+  ClosureAdjustmentConfig,
+  ExportConfig,
+  LoggingConfig,
+  ShortcutsConfig,
+  PanelsConfig,
+  CacheConfig,
+  GlobalViewConfig,
+} from './ipc.generated';
 
 export const defaultConfig: Config = {
   general: {

@@ -4,10 +4,12 @@
 //! Colors are interpolated using HSL interpolation with shortest hue path for multi-stop support.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Depth color preset enum with default implementation.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
 pub enum DepthPreset {
     /// Blue to red gradient with multiple stops (5 stops)
     #[default]
@@ -23,7 +25,7 @@ pub enum DepthPreset {
 }
 
 /// A single color stop in a gradient.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ColorStop {
     /// Position in the gradient (0.0 to 1.0)
     pub position: f64,
@@ -32,7 +34,7 @@ pub struct ColorStop {
 }
 
 /// Preset colors as a list of color stops.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DepthPresetColors {
     /// Full list of color stops for the gradient
     pub stops: Vec<ColorStop>,

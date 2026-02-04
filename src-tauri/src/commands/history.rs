@@ -1,14 +1,16 @@
 use std::collections::HashMap;
 
 use serde::Serialize;
+use ts_rs::TS;
 use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult, UndoData, UndoEntry};
 use crate::models::SectionId;
 
 /// DTO for undo history item sent to frontend
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct UndoHistoryItem {
     /// Index in the stack (0 = most recent)
     pub index: usize,
@@ -23,8 +25,9 @@ pub struct UndoHistoryItem {
 }
 
 /// Preview data showing field changes
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct PreviewData {
     /// List of field changes (up to 3)
     pub changes: Vec<FieldChange>,
@@ -33,8 +36,9 @@ pub struct PreviewData {
 }
 
 /// A single field change
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct FieldChange {
     /// Field name (e.g., "length", "azimuth")
     pub field: String,

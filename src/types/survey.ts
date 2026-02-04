@@ -1,36 +1,4 @@
-import type { SectionId } from './project';
-
-/**
- * A self-contained shot with GPS coordinates and metadata.
- * Coordinates are in [lng, lat] order (MapLibre format).
- */
-export interface GeometryShot {
-  /** GPS coordinates of the from station [lng, lat] */
-  from: [number, number];
-  /** GPS coordinates of the to station [lng, lat] */
-  to: [number, number];
-  /** Whether this shot is virtual (temporary connection) */
-  is_virtual: boolean;
-  /** Section ID this shot belongs to */
-  section_id: SectionId;
-}
-
-/**
- * Survey geometry response containing GPS-transformed shot data.
- */
-export interface SurveyGeometry {
-  /** Array of shots with GPS coordinates */
-  shots: GeometryShot[];
-  /** GPS origin used for the transformation [lng, lat] */
-  origin: [number, number];
-}
-
-/**
- * Error response for survey geometry command.
- */
-export interface SurveyGeometryError {
-  message: string;
-}
+export type { GeometryShot, SurveyGeometry, SurveyGeometryError } from './ipc.generated';
 
 /**
  * Convert local meters to GPS coordinates relative to origin.

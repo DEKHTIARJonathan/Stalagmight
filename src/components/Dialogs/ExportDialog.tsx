@@ -11,6 +11,7 @@ import { LoadingProgress } from '../LoadingProgress/LoadingProgress';
 import ExportPreview, { type ExportTheme, type DepthPresetColors } from './ExportPreview';
 import type { ExportImageOptions, ImageFormat, DepthPreset } from '../../types/commands';
 import type { LoadingProgressPayload } from '../../types/loading';
+import { ensureExtension, exportSaveFilters } from '../../utils/fileDialogs';
 
 /** Phase label mapping for export phases (matches backend LoadingPhase) */
 const EXPORT_PHASE_LABELS: Record<string, string> = {
@@ -116,17 +117,18 @@ export default function ExportDialog() {
       if (exportType === 'data') {
         const extension = dataFormat;
         const selected = await save({
-          filters: [{ name: dataFormat.toUpperCase(), extensions: [extension] }],
+          filters: exportSaveFilters(dataFormat.toUpperCase(), extension),
         });
 
         if (selected) {
+          const finalPath = ensureExtension(selected, extension);
           // Disable button during data export (no progress events for CSV/JSON)
           setIsExporting(true);
           try {
             if (dataFormat === 'csv') {
-              await exportCsv(selected);
+              await exportCsv(finalPath);
             } else {
-              await exportJson(selected);
+              await exportJson(finalPath);
             }
           } finally {
             if (isMountedRef.current) {
@@ -137,10 +139,11 @@ export default function ExportDialog() {
       } else {
         const extension = imageFormat;
         const selected = await save({
-          filters: [{ name: imageFormat.toUpperCase(), extensions: [extension] }],
+          filters: exportSaveFilters(imageFormat.toUpperCase(), extension),
         });
 
         if (selected) {
+          const finalPath = ensureExtension(selected, extension);
           // Register listener BEFORE starting export to avoid race condition with early events
           // Uses shared loading-progress events for consistency with LoadingProgress infrastructure
           const unlisten = await listen<LoadingProgressPayload>('loading-progress', (event) => {
@@ -173,7 +176,7 @@ export default function ExportDialog() {
             // to ensure they reflect the latest config, even if config loaded after dialog opened
             const currentDepthUnit = config?.units?.depth === 'feet' ? 'ft' : 'm';
             const currentDecimalPrecision = config?.units?.decimal_precision ?? 1;
-            await exportImage(selected, {
+            await exportImage(finalPath, {
               ...imageOptions,
               format: imageFormat,
               depth_unit: currentDepthUnit,
