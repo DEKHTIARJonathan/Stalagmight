@@ -1,10 +1,24 @@
-import { useState, useRef, useEffect, useCallback, useId } from 'react';
+import { useState, useRef, useEffect, useCallback, useId, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { formatDate, formatRelativeTime, formatNumber } from '../../i18n/format';
 import type { CommandResult, UndoHistoryItem, PreviewData } from '../../types/commands';
+import {
+  CircleIcon,
+  DashedLineIcon,
+  DotIcon,
+  LayersIcon,
+  LinkIcon,
+  LinkOffIcon,
+  MoveAllIcon,
+  MoveHorizontalIcon,
+  PencilIcon,
+  PlusIcon,
+  TargetIcon,
+  TrashIcon,
+} from '../common/icons';
 
 interface UndoHistoryDropdownProps {
   /** 'undo' for undo button, 'redo' for redo button */
@@ -20,37 +34,37 @@ interface UndoHistoryDropdownProps {
   testId: string;
 }
 
-/** Map command types to icon characters (matching toolbar icon style) */
-function getCommandIcon(commandType: string): string {
+/** Map command types to icon components (matching toolbar icon style) */
+function getCommandIcon(commandType: string): ReactNode {
   switch (commandType) {
     case 'create_section':
-      return '+';
+      return <PlusIcon size={14} />;
     case 'update_shot':
     case 'update_section_metadata':
-      return '✏';
+      return <PencilIcon size={14} />;
     case 'delete_section':
     case 'delete_shot':
-      return '✕';
+      return <TrashIcon size={14} />;
     case 'merge_stations':
-      return '⊕';
+      return <LinkIcon size={14} />;
     case 'batch':
-      return '▤';
+      return <LayersIcon size={14} />;
     case 'create_shot':
-      return '+';
+      return <PlusIcon size={14} />;
     case 'set_zero_datum':
-      return '◉';
+      return <TargetIcon size={14} />;
     case 'remove_zero_datum':
-      return '○';
+      return <CircleIcon size={14} />;
     case 'move_section':
     case 'move_segment':
     case 'move_station':
-      return '↔';
+      return commandType === 'move_segment' ? <MoveHorizontalIcon size={14} /> : <MoveAllIcon size={14} />;
     case 'unmerge_stations':
-      return '⊖';
+      return <LinkOffIcon size={14} />;
     case 'set_shot_virtual':
-      return '┄';
+      return <DashedLineIcon size={14} />;
     default:
-      return '•';
+      return <DotIcon size={14} />;
   }
 }
 

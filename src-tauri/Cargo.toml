@@ -4,6 +4,7 @@ version = "1.0.0"
 description = "Cave Survey Processing Application"
 authors = ["Stalagmight Team"]
 edition = "2021"
+default-run = "stalagmight"
 
 [lib]
 name = "stalagmight_lib"

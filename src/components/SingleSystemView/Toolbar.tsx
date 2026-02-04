@@ -1,8 +1,22 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button, IconButton } from '../common/Button';
+import {
+  ArrowLeftIcon,
+  ChevronDownIcon,
+  CursorIcon,
+  HandIcon,
+  LinkIcon,
+  MagnifierIcon,
+  MoveAllIcon,
+  MoveDiagonalIcon,
+  MoveHorizontalIcon,
+  PencilIcon,
+  RulerIcon,
+  TrashIcon,
+} from '../common/icons';
 import DisplayMenu from './DisplayMenu';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, type ToolGroupDef } from '../../utils/toolGroups';
@@ -125,8 +139,13 @@ export default function Toolbar({
     <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
       {/* Left section */}
       <div className="flex items-center gap-2">
-        <Button onClick={onBack} size="sm" data-testid="back-button">
-          ← {t('common.actions.back')}
+        <Button
+          onClick={onBack}
+          size="sm"
+          icon={<ArrowLeftIcon size={14} />}
+          data-testid="back-button"
+        >
+          {t('common.actions.back')}
         </Button>
         <Button onClick={onSave} size="sm" data-testid="toolbar-save-button">
           {t('common.actions.save')}
@@ -146,7 +165,11 @@ export default function Toolbar({
         >
           <span className="inline-flex items-center gap-0.5">
             {t('common.actions.undo')}
-            {canUndo && <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="undo-chevron">{' '}▾</span>}
+            {canUndo && (
+              <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="undo-chevron">
+                <ChevronDownIcon size={10} />
+              </span>
+            )}
           </span>
         </UndoHistoryDropdown>
         <UndoHistoryDropdown
@@ -157,7 +180,11 @@ export default function Toolbar({
         >
           <span className="inline-flex items-center gap-0.5">
             {t('common.actions.redo')}
-            {canRedo && <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="redo-chevron">{' '}▾</span>}
+            {canRedo && (
+              <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="redo-chevron">
+                <ChevronDownIcon size={10} />
+              </span>
+            )}
           </span>
         </UndoHistoryDropdown>
       </div>
@@ -180,6 +207,7 @@ export default function Toolbar({
                   active={activeTool === item.id}
                   onClick={() => setActiveTool(item.id)}
                   tooltip={formatTooltip(t(TOOL_LABEL_KEYS[item.id]), item.shortcut)}
+                  aria-label={formatTooltip(t(TOOL_LABEL_KEYS[item.id]), item.shortcut)}
                   size="sm"
                   aria-pressed={activeTool === item.id}
                   data-testid={`tool-${item.id}`}
@@ -380,32 +408,30 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
 
   return (
     <div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
-      <button
+      <IconButton
         ref={buttonRef}
-        className={`
-          relative inline-flex items-center justify-center rounded
-          transition-colors w-6 h-6
-          text-text-primary hover:bg-panel
-          disabled:opacity-50 disabled:cursor-not-allowed
-          ${isGroupActive ? 'ring-2 ring-accent' : ''}
-        `}
+        icon={(
+          <span className="relative flex items-center justify-center">
+            <ToolIcon tool={displayTool} />
+            <span
+              className="absolute -bottom-1 -right-1 text-text-secondary pointer-events-none"
+              aria-hidden="true"
+            >
+              <ChevronDownIcon size={8} />
+            </span>
+          </span>
+        )}
+        size="sm"
+        active={isGroupActive}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
-        title={formatTooltip(t(TOOL_LABEL_KEYS[displayTool]), displayShortcut)}
+        tooltip={formatTooltip(t(TOOL_LABEL_KEYS[displayTool]), displayShortcut)}
+        aria-label={formatTooltip(t(TOOL_LABEL_KEYS[displayTool]), displayShortcut)}
         aria-pressed={isGroupActive}
         aria-haspopup="true"
         aria-expanded={flyoutOpen}
         data-testid={`tool-group-${group.id}`}
-      >
-        <ToolIcon tool={displayTool} />
-        {/* Triangle indicator for grouped button */}
-        <span
-          className="absolute bottom-0 right-0 text-[6px] leading-none text-text-secondary pointer-events-none"
-          aria-hidden="true"
-        >
-          ▾
-        </span>
-      </button>
+      />
 
       {flyoutOpen && (
         <div
@@ -448,18 +474,17 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
 }
 
 function ToolIcon({ tool }: { tool: ToolType }) {
-  // Simple text icons - can be replaced with SVG icons
-  const icons: Record<ToolType, string> = {
-    select: '↖',
-    pan: '✋',
-    zoom: '🔍',
-    draw: '✏',
-    delete: '✕',
-    merge: '⊕',
-    measure: '📏',
-    move_station: '⤢',
-    move_segment: '⇔',
-    move_shot: '↗',
+  const icons: Record<ToolType, ReactNode> = {
+    select: <CursorIcon size={14} />,
+    pan: <HandIcon size={14} />,
+    zoom: <MagnifierIcon size={14} />,
+    draw: <PencilIcon size={14} />,
+    delete: <TrashIcon size={14} />,
+    merge: <LinkIcon size={14} />,
+    measure: <RulerIcon size={14} />,
+    move_station: <MoveAllIcon size={14} />,
+    move_segment: <MoveHorizontalIcon size={14} />,
+    move_shot: <MoveDiagonalIcon size={14} />,
   };
 
   return <span className="text-sm">{icons[tool]}</span>;

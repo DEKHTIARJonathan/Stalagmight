@@ -1,4 +1,5 @@
 import { type ReactNode, useState, useRef, useCallback, useEffect } from 'react';
+import { ChevronDownIcon, ChevronRightIcon } from './icons';
 
 interface PanelProps {
   title?: string;
@@ -32,7 +33,7 @@ export function Panel({
           <div className="flex items-center gap-2">
             {collapsible && (
               <span className="text-text-secondary">
-                {isOpen ? '▼' : '▶'}
+                {isOpen ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
               </span>
             )}
             <h3 className="font-medium text-text-primary">{title}</h3>

@@ -83,12 +83,14 @@ export function Table<T extends object>({
                     ${isSelected ? 'bg-accent-20' : ''}
                   `}
                   onClick={() => onRowClick?.(item, index)}
+                  data-selected={isSelected ? 'true' : undefined}
                 >
-                  {columns.map((column) => {
+                  {columns.map((column, columnIndex) => {
                     // Use getValue for virtual columns, otherwise access property directly
                     const value = column.getValue
                       ? column.getValue(item)
                       : (item as Record<string, unknown>)[column.key];
+                    const isFirstColumn = columnIndex === 0;
                     // Apply formatValue if provided, otherwise stringify
                     const displayValue = column.formatValue
                       ? column.formatValue(value)
@@ -97,7 +99,8 @@ export function Table<T extends object>({
                     return (
                       <td
                         key={column.key}
-                        className={alignmentClasses[column.align ?? 'left']}
+                        className={`${alignmentClasses[column.align ?? 'left']} ${isFirstColumn && isSelected ? 'selected-cell-indicator' : ''}`}
+                        data-selected={isFirstColumn && isSelected ? 'true' : undefined}
                       >
                         {column.render ? column.render(item, index) : displayValue}
                       </td>
@@ -367,8 +370,9 @@ export function EditableTable<T extends object>({
     // Default styling: hovered has subtle background
     const classes: string[] = [];
 
-    // External hover state takes precedence, otherwise use default hover:bg-accent-10
-    if (isHovered) {
+    if (isSelected) {
+      classes.push('bg-accent-20');
+    } else if (isHovered) {
       classes.push('bg-accent-10');
     } else if (hoveredKey === undefined) {
       // Only add hover:bg-accent-10 when no external hover state is being managed
@@ -442,6 +446,7 @@ export function EditableTable<T extends object>({
                   onMouseEnter={() => handleRowMouseEnter(item, index)}
                   onMouseLeave={handleRowMouseLeave}
                   data-testid={`table-row-${String(key)}`}
+                  data-selected={isSelected ? 'true' : undefined}
                 >
                   {columns.map((column, columnIndex) => {
                     const isEditable = editableColumns.includes(column.key);
