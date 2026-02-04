@@ -5,7 +5,7 @@ import type { GeometryShot, SurveyGeometry } from '../../types/survey';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import { hasLiveStyle } from '../Map/mapUtils';
 import i18n from '../../i18n';
-import { formatFixed, formatNumber } from '../../i18n/format';
+import { formatFixed } from '../../i18n/format';
 
 /**
  * System geometry data with associated metadata for the global view.
@@ -922,7 +922,7 @@ export default class GlobalSurveyLayer {
     // Station count row
     const stationDiv = document.createElement('div');
     stationDiv.style.color = grayText;
-    stationDiv.textContent = i18n.t('globalView.tooltip.stations', { count: formatNumber(stationCount) });
+    stationDiv.textContent = i18n.t('globalView.tooltip.stations', { count: stationCount });
     this.tooltip.appendChild(stationDiv);
 
     // Position tooltip near cursor (offset by 15px)

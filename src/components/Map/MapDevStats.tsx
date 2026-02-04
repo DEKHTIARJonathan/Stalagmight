@@ -460,7 +460,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
           )}
           {lastZoomLevels !== null && (
             <span className="text-text-secondary opacity-80 ml-1">
-              {t('map.devStats.zoomLevels', { count: formatNumber(lastZoomLevels) })}
+              {t('map.devStats.zoomLevels', { count: lastZoomLevels })}
             </span>
           )}
           {worstFrameTime !== null && worstFrameTime > 20 && (
@@ -525,7 +525,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
               <>
                 <span className="text-text-secondary opacity-80 ml-2">{t('map.devStats.msaa')}:</span>{' '}
                 <span className="text-success">
-                  {t('map.devStats.msaaValue', { count: formatNumber(webglInfo.samples) })}
+                  {t('map.devStats.msaaValue', { count: webglInfo.samples })}
                 </span>
               </>
             )}
@@ -614,7 +614,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
             <span className="text-text-primary">{formatNumber(tileFetchStats.totalFetched)}</span>
             {tileFetchStats.totalErrors > 0 && (
               <span className="text-error ml-1">
-                {t('map.devStats.errors', { count: formatNumber(tileFetchStats.totalErrors) })}
+                {t('map.devStats.errors', { count: tileFetchStats.totalErrors })}
               </span>
             )}
           </div>

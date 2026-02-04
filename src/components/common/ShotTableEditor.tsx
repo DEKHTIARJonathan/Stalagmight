@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { formatFixed, formatNumber } from '../../i18n/format';
+import type { TFunction } from 'i18next';
+import { formatFixed } from '../../i18n/format';
 import type { Shot } from '../../types/project';
 import { defaultConfig } from '../../types/config';
 import { hasAzimuthDiscrepancy, hasPitchDiscrepancy, validateEditableShot } from '../../utils/validation';
@@ -94,7 +95,7 @@ function hasPitchWarning(shot: EditableShot, threshold: number): boolean {
 function getShotWarnings(
   shot: EditableShot,
   config: ValidationConfig,
-  t: (key: string, options?: Record<string, unknown>) => string
+  t: TFunction
 ): ShotWarning[] {
   const warnings: ShotWarning[] = [];
 
@@ -128,7 +129,7 @@ function getShotErrors(shot: EditableShot, shotIndex: number): string[] {
       length: shot.length,
       azimuth_in: shot.azimuth_in,
       azimuth_out: shot.azimuth_out,
-      isDeleted: shot.isDeleted,
+      isDeleted: shot.isDeleted ?? false,
     },
     shotIndex,
     0
@@ -382,7 +383,7 @@ export function ShotTableEditor({
       {/* Header with count and add button */}
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm text-text-secondary">
-          {t('shotTable.header', { count: formatNumber(visibleShots.length) })}
+          {t('shotTable.header', { count: visibleShots.length })}
         </span>
         {showAddButton && !readOnly && (
           <button

@@ -104,7 +104,7 @@ test.describe('Table Numeric Column Alignment', () => {
     }
 
     // Numeric columns should be right-aligned
-    const numericHeaders = ['Length', 'Azimuth', 'Depth In', 'Depth Out', 'L', 'R', 'U', 'D'];
+    const numericHeaders = ['Len', 'Az', 'Depth In', 'Depth Out', 'L', 'R', 'U', 'D'];
     for (const name of numericHeaders) {
       const header = headerInfo.find((h) => h.text === name);
       expect(header, `Header "${name}" should exist`).toBeDefined();
@@ -112,7 +112,7 @@ test.describe('Table Numeric Column Alignment', () => {
     }
 
     // Text columns should be left-aligned (browsers may report 'start' or 'left')
-    const textHeaders = ['#', 'Comment'];
+    const textHeaders = ['ID', 'Comment'];
     for (const name of textHeaders) {
       const header = headerInfo.find((h) => h.text === name);
       expect(header, `Header "${name}" should exist`).toBeDefined();

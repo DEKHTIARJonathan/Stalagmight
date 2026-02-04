@@ -413,7 +413,7 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       await page.mouse.move(centerX + 100, centerY + 100, { steps: 5 });
 
       // Check for box select overlay (should NOT exist)
-      const boxOverlay = page.locator('.border-dashed.bg-accent\\/10');
+      const boxOverlay = page.getByTestId('box-select-overlay');
       await expect(boxOverlay).not.toBeVisible();
 
       await page.mouse.up();

@@ -118,7 +118,7 @@ test.describe('GlobalView Map', () => {
 
     test('should display project count indicator', async ({ page }) => {
       // Look for the system count indicator
-      await expect(page.locator('text=3 systems on map')).toBeVisible({ timeout: 5000 });
+      await expect(page.locator('text=Systems: 3')).toBeVisible({ timeout: 5000 });
     });
 
     test('should have Fit All button', async ({ page }) => {

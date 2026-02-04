@@ -22,7 +22,7 @@ const baseShot: EditableShot = {
 
 const baseConfig: SectionConfig = {
   sectionIndex: 0,
-  name: null,
+  name: 'Test Section',
   surveyor: null,
   date: null,
   color: '#ffffff',

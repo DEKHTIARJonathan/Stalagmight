@@ -56,11 +56,13 @@ fn test_station_coordinates_computed_correctly() {
     let mut project = create_test_project();
 
     // Create shots: North 10m, then East 10m
+    let shot_a = create_shot_data(0.0, 10.0, 5.0, 5.0);
+    let shot_b = create_shot_data(90.0, 10.0, 5.0, 6.0);
     project.add_section(create_section_with_shots(
         "Main",
         vec![
-            create_shot_data(0.0, 10.0, 5.0, 5.0),   // North 10m
-            create_shot_data(90.0, 10.0, 5.0, 6.0),  // East 10m
+            shot_a.clone(),   // North 10m (horizontal)
+            shot_b.clone(),   // East 10m (slope)
         ],
     ));
 
@@ -76,8 +78,9 @@ fn test_station_coordinates_computed_correctly() {
     assert!((stations[1].coordinates.x - 0.0).abs() < 0.001);
     assert!((stations[1].coordinates.y - 10.0).abs() < 0.001);
 
-    // Station 2: after east 10m (x=10, y=10)
-    assert!((stations[2].coordinates.x - 10.0).abs() < 0.001);
+    // Station 2: after east 10m slope (x=horizontal, y=10)
+    let expected_x = shot_b.horizontal_length();
+    assert!((stations[2].coordinates.x - expected_x).abs() < 0.001);
     assert!((stations[2].coordinates.y - 10.0).abs() < 0.001);
 }
 
@@ -735,6 +738,7 @@ fn test_section_metadata_update() {
         color: Some("#ff0000".to_string()),
         date: None,
         direction: None,
+        quality: Some(1.2),
     };
 
     project.update_section(0, &updates);
@@ -743,6 +747,7 @@ fn test_section_metadata_update() {
     assert_eq!(section.name, Some("Updated Name".to_string()));
     assert_eq!(section.surveyor, Some("New Surveyor".to_string()));
     assert_eq!(section.color, "#ff0000");
+    assert_eq!(section.quality, 1.2);
 }
 
 /// Test 20: Section color auto-assign (verify unique colors)
