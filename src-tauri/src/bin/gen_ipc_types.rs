@@ -30,7 +30,7 @@ use stalagmight_lib::models::{
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
-fn export<T: TS>(out_dir: &Path) {
+fn export<T: TS + 'static>(out_dir: &Path) {
     T::export_to(out_dir).expect("Failed to export TS type");
 }
 
