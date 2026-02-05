@@ -46,6 +46,8 @@ async function pressUntilActiveDescendant(
   maxAttempts = 5,
 ): Promise<void> {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await trigger.focus();
+    await expect(trigger).toBeFocused();
     await page.keyboard.press(key);
     const active = await trigger.getAttribute('aria-activedescendant');
     if (active === expectedId) {

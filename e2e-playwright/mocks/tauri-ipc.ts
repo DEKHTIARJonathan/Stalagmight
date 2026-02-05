@@ -126,19 +126,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Cache mock state - tracks cache operations for verification
       // Use explicit types so providers can be empty and keys can be deleted
       interface MockProviderStats {
-        tiles: number;
-        bytes: number;
+        tiles: bigint;
+        bytes: bigint;
       }
       interface MockCacheStats {
-        total_tiles: number;
-        total_bytes: number;
+        total_tiles: bigint;
+        total_bytes: bigint;
         providers: Record<string, MockProviderStats>;
       }
       const defaultCacheStats: MockCacheStats = {
-        total_tiles: 150,
-        total_bytes: 25600000, // ~25MB
+        total_tiles: 150n,
+        total_bytes: 25600000n, // ~25MB
         providers: {
-          esri: { tiles: 150, bytes: 25600000 },
+          esri: { tiles: 150n, bytes: 25600000n },
         },
       };
       let mockCacheStats: MockCacheStats = {
@@ -1817,8 +1817,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Clear specific provider
               delete mockCacheStats.providers[provider];
               // Recalculate totals
-              let totalTiles = 0;
-              let totalBytes = 0;
+              let totalTiles = 0n;
+              let totalBytes = 0n;
               for (const p of Object.values(mockCacheStats.providers)) {
                 totalTiles += p.tiles;
                 totalBytes += p.bytes;
@@ -1827,7 +1827,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               mockCacheStats.total_bytes = totalBytes;
             } else {
               // Clear all
-              mockCacheStats = { total_tiles: 0, total_bytes: 0, providers: {} };
+              mockCacheStats = { total_tiles: 0n, total_bytes: 0n, providers: {} };
             }
             return null; // Tauri serializes () as null
           }
