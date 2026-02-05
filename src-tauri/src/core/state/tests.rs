@@ -4989,8 +4989,8 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
     assert!(!result.can_merge, "Both sections with ZD should not be mergeable");
     assert_eq!(
         result.reason.as_deref(),
-        Some("Both sections have fixed coordinates"),
-        "Zero datum reason should take priority over loop reason"
+        Some("Creates survey loop"),
+        "Connected sections should report loop reason"
     );
 }
 

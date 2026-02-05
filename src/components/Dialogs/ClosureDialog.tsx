@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
@@ -25,6 +25,7 @@ export default function ClosureDialog() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [strategy, setStrategy] = useState<ClosureStrategy>('Batch');
+  const strategyOptions = STRATEGY_OPTIONS;
 
   // Get section names
   const sectionAName = useMemo(() => {
@@ -136,7 +137,7 @@ export default function ClosureDialog() {
           <div className="space-y-2">
             <label className="text-sm text-text-secondary font-medium">Closure Strategy</label>
             <div className="space-y-1">
-              {STRATEGY_OPTIONS.map((opt) => (
+              {strategyOptions.map((opt) => (
                 <label key={opt.value} className="flex items-center gap-2 py-1 cursor-pointer">
                   <input
                     type="radio"

@@ -2954,8 +2954,13 @@ impl Project {
 
         // Check stations are connected (via merges or closures)
         let connected_a = self.get_connected_section_ids(station_a.section_id);
-        if !connected_a.contains(&station_b.section_id) {
-            return Err("Stations are not connected. They must be in the same connected group to create a loop closure.".to_string());
+        let connected = connected_a.contains(&station_b.section_id);
+        if !connected {
+            let a_has_zd = self.section_has_zero_datum(station_a.section_id);
+            let b_has_zd = self.section_has_zero_datum(station_b.section_id);
+            if !(a_has_zd && b_has_zd) {
+                return Err("Stations are not connected. They must be in the same connected group to create a loop closure.".to_string());
+            }
         }
 
         // Check for duplicate closure between same station pair

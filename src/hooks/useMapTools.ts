@@ -118,8 +118,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             stationA,
             stationB,
           });
-        } else if (result.connected) {
-          // Connected — redirect to closure dialog (creates survey loop)
+        } else if (result.connected || result.reason === 'Both sections have fixed coordinates') {
+          // Connected (or both sections fixed) — redirect to closure dialog
           openDialog('closure', {
             stationA,
             stationB,
