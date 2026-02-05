@@ -23,6 +23,8 @@ import type { Config } from '../types/config';
 import type { CommandResult, ConnectivityResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
+type ShotUpdatesPatch = Partial<ShotUpdates>;
+
 /**
  * Structured loading state for project load/create operations.
  * Tracks progress phases, current/total counts, and error states.
@@ -187,7 +189,7 @@ interface ProjectStore {
   deleteSection: (sectionId: SectionId) => Promise<CommandResult>;
 
   createShot: (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => Promise<CommandResult>;
-  updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdates) => Promise<CommandResult>;
+  updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdatesPatch) => Promise<CommandResult>;
   deleteShot: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
   deleteShotAndSplit: (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
   deleteLastShotAndSection: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
@@ -359,7 +361,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       }
 
       // Set backend loadingId from result for event correlation
-      get().setLoadingProgress({ loadingId: result.loadingId });
+      get().setLoadingProgress({ loadingId: Number(result.loadingId) });
 
       // Update loading title with actual project name from result
       if (result.project.name !== initialName) {
@@ -421,7 +423,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       }
 
       // Set backend loadingId from result for event correlation
-      get().setLoadingProgress({ loadingId: result.loadingId });
+      get().setLoadingProgress({ loadingId: Number(result.loadingId) });
 
       // Apply project state from result
       set({
@@ -606,6 +608,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       date: data.date,
       color: data.color,
       direction: data.direction,
+      quality: data.quality,
       shots: data.shots,
     });
     console.log('[projectStore] create_section result:', result);
@@ -631,6 +634,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       date: data.date,
       color: data.color,
       direction: data.direction,
+      quality: data.quality,
       shots: data.shots,
       importStationIndex,
       targetStation,
@@ -679,7 +683,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     return result;
   },
 
-  updateShot: async (sectionId: SectionId, shotId: ShotId, updates: ShotUpdates) => {
+  updateShot: async (sectionId: SectionId, shotId: ShotId, updates: ShotUpdatesPatch) => {
     const result = await invoke<CommandResult>('update_shot', { sectionId, shotId, updates });
     if (result.success) {
       await get().refreshProjectState();

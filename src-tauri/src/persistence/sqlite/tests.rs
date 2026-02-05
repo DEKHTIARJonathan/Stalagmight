@@ -21,7 +21,11 @@ fn test_foreign_keys_enabled_on_open_existing() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("fk_enabled_existing.stalx");
 
-    Database::open(&db_path).unwrap();
+    let mut db = Database::open(&db_path).unwrap();
+    let project = Project::new("Foreign Keys Existing".to_string(), None);
+    db.save_project(&project).unwrap();
+    drop(db);
+
     let db = Database::open_existing(&db_path).unwrap();
     let enabled: i32 = db
         .conn
@@ -36,7 +40,11 @@ fn test_foreign_keys_enabled_on_open_readonly() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("fk_enabled_readonly.stalx");
 
-    Database::open(&db_path).unwrap();
+    let mut db = Database::open(&db_path).unwrap();
+    let project = Project::new("Foreign Keys Readonly".to_string(), None);
+    db.save_project(&project).unwrap();
+    drop(db);
+
     let db = Database::open_readonly(&db_path).unwrap();
     let enabled: i32 = db
         .conn

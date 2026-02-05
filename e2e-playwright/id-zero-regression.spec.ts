@@ -5,7 +5,7 @@
  * section or shot ID is 0 (the first element). This was a regression where
  * JavaScript's falsy check (`if (!id)`) incorrectly treated id=0 as falsy.
  */
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 
 /**

@@ -6,9 +6,9 @@ import { getTileFetchStats, type TileFetchStats } from '../../utils/tileProtocol
 import { formatFixed, formatNumber } from '../../i18n/format';
 
 interface CacheStats {
-  total_tiles: number;
-  total_bytes: number;
-  providers: Record<string, { tiles: number; bytes: number }>;
+  total_tiles: bigint;
+  total_bytes: bigint;
+  providers: Record<string, { tiles: bigint; bytes: bigint }>;
 }
 
 interface MapDevStatsProps {
@@ -379,23 +379,24 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   }, [map, hideAllLayers]);
 
   // Format bytes to human readable
-  const formatBytes = useCallback((bytes: number): string => {
+  const formatBytes = useCallback((bytes: number | bigint): string => {
+    const value = typeof bytes === 'bigint' ? Number(bytes) : bytes;
     const sizes = [
       t('map.devStats.units.bytes'),
       t('map.devStats.units.kilobytes'),
       t('map.devStats.units.megabytes'),
       t('map.devStats.units.gigabytes'),
     ];
-    if (bytes === 0) {
+    if (value === 0) {
       return t('map.devStats.bytesValue', {
         value: formatNumber(0),
         unit: sizes[0],
       });
     }
     const k = 1024;
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    const i = Math.floor(Math.log(value) / Math.log(k));
     return t('map.devStats.bytesValue', {
-      value: formatFixed(bytes / Math.pow(k, i), undefined, 1),
+      value: formatFixed(value / Math.pow(k, i), undefined, 1),
       unit: sizes[i] ?? sizes[sizes.length - 1],
     });
   }, [t]);
@@ -642,7 +643,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
           <div className="text-text-secondary mb-0.5">{t('map.devStats.cache')}:</div>
           <div className="pl-2">
             <span className="text-text-secondary opacity-80">{t('map.devStats.tiles')}:</span>{' '}
-            <span className="text-text-primary">{formatNumber(cacheStats.total_tiles)}</span>
+            <span className="text-text-primary">{formatNumber(Number(cacheStats.total_tiles))}</span>
             <span className="text-text-secondary opacity-80 ml-2">{t('map.devStats.size')}:</span>{' '}
             <span className="text-text-primary">{formatBytes(cacheStats.total_bytes)}</span>
           </div>

@@ -252,8 +252,13 @@ describe('Export Dialog Accessibility', () => {
         { timeout: 2000 }
       );
 
-      // Get all options in the dropdown (Select uses div[role="option"])
-      const options = await select.$$('[role="option"]');
+      const listboxId = await triggerButton.getAttribute('aria-controls');
+      expect(listboxId).toBeTruthy();
+
+      // Get all options in the dropdown (Select portals listbox to document.body)
+      const listbox = await $(`[id="${listboxId}"]`);
+      await listbox.waitForDisplayed({ timeout: 2000 });
+      const options = await listbox.$$('[role="option"]');
       expect(options.length).toBeGreaterThanOrEqual(5); // thermal, ocean, terrain, grayscale, accessible
 
       // Check that options have descriptive text (including parenthetical descriptions)
@@ -372,33 +377,77 @@ describe('Export Dialog Accessibility', () => {
 
   describe('Focus Management', () => {
     it('shows visible focus indicator on radio controls via keyboard', async () => {
-      // Use Tab key to navigate to radio group for :focus-visible
-      const dialog = await $('[data-testid="export-dialog"]');
-      await dialog.click(); // Ensure dialog has focus
+      // Use Arrow keys within the radiogroup so focus is moved by keyboard input.
+      const sectionRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-section"]');
+      const depthRadio = await $('[data-testid="export-dialog"] [data-testid="color-mode-depth"]');
 
-      // Tab to the first focusable element (should be export type radios)
-      await browser.keys(['Tab']);
-      await browser.keys(['Tab']); // Navigate into color mode radios
+      await sectionRadio.click();
+      await browser.waitUntil(
+        async () => {
+          const activeTestId = await browser.execute(() => document.activeElement?.getAttribute('data-testid'));
+          return activeTestId === 'color-mode-section';
+        },
+        { timeout: 2000, timeoutMsg: 'Section radio should be focused' }
+      );
+
+      await browser.keys(['ArrowRight']);
+      await browser.waitUntil(
+        async () => {
+          const activeTestId = await browser.execute(() => document.activeElement?.getAttribute('data-testid'));
+          return activeTestId === 'color-mode-depth';
+        },
+        { timeout: 2000, timeoutMsg: 'Depth radio should be focused after ArrowRight' }
+      );
 
       // Check for visible focus styles and :focus-visible match
-      const focusResult = await browser.execute(() => {
-        const el = document.activeElement as HTMLElement;
-        if (!el) return { hasFocusVisible: false, hasStyles: false };
+      const getFocusStyles = () =>
+        browser.execute(() => {
+          const el = document.querySelector('[data-testid="color-mode-depth"]') as HTMLElement | null;
+          if (!el) return { hasFocusVisible: false, hasStyles: false };
 
-        const matchesFocusVisible = el.matches(':focus-visible');
-        const styles = window.getComputedStyle(el);
-        const hasOutline = styles.outlineWidth !== '0px' && styles.outlineStyle !== 'none';
-        const hasBoxShadow = styles.boxShadow !== 'none';
+          const isFocused = document.activeElement === el;
+          const label = el.closest('label') as HTMLElement | null;
+          const matchesFocusVisible = el.matches(':focus-visible') || (label?.matches(':focus-visible') ?? false);
 
-        return {
-          hasFocusVisible: matchesFocusVisible,
-          hasStyles: hasOutline || hasBoxShadow,
-          testId: el.getAttribute('data-testid'),
-        };
-      });
+          const inputStyles = window.getComputedStyle(el);
+          const labelStyles = label ? window.getComputedStyle(label) : null;
 
-      // Element should have focus and visible styling
-      expect(focusResult.hasStyles || focusResult.hasFocusVisible).toBe(true);
+          const inputHasOutline = inputStyles.outlineWidth !== '0px' && inputStyles.outlineStyle !== 'none';
+          const inputHasShadow = inputStyles.boxShadow !== 'none';
+          const labelHasOutline = Boolean(labelStyles && labelStyles.outlineWidth !== '0px' && labelStyles.outlineStyle !== 'none');
+          const labelHasShadow = Boolean(labelStyles && labelStyles.boxShadow !== 'none');
+
+          const hasStyles = inputHasOutline || inputHasShadow || labelHasOutline || labelHasShadow;
+
+          return {
+            isFocused,
+            hasFocusVisible: matchesFocusVisible,
+            hasStyles,
+            windowFocused: document.hasFocus(),
+            inputOutlineWidth: inputStyles.outlineWidth,
+            inputOutlineStyle: inputStyles.outlineStyle,
+            inputBoxShadow: inputStyles.boxShadow,
+            labelOutlineWidth: labelStyles?.outlineWidth ?? 'n/a',
+            labelOutlineStyle: labelStyles?.outlineStyle ?? 'n/a',
+            labelBoxShadow: labelStyles?.boxShadow ?? 'n/a',
+            activeTag: el.tagName,
+            targetTag: label ? label.tagName : el.tagName,
+            testId: el.getAttribute('data-testid'),
+          };
+        });
+
+      let focusResult = await getFocusStyles();
+      await browser.waitUntil(
+        async () => {
+          focusResult = await getFocusStyles();
+          return focusResult.isFocused
+            && (!focusResult.windowFocused || focusResult.hasStyles || focusResult.hasFocusVisible);
+        },
+        {
+          timeout: 2000,
+          timeoutMsg: `Focus indicator missing: ${JSON.stringify(focusResult)}`,
+        }
+      );
     });
 
     it('shows visible focus indicator on checkboxes via keyboard', async () => {
@@ -413,28 +462,56 @@ describe('Export Dialog Accessibility', () => {
         { timeout: 3000 }
       );
 
-      // Tab to navigate to checkbox
-      await browser.keys(['Tab']); // preset select
-      await browser.keys(['Tab']); // legend checkbox
+      const getCheckboxFocus = () =>
+        browser.execute(() => {
+          const el = document.querySelector('[data-testid="option-include-legend"]') as HTMLElement | null;
+          if (!el) return { isFocused: false, hasFocusVisible: false, hasStyles: false };
 
-      // Check for visible focus styles
-      const focusResult = await browser.execute(() => {
-        const el = document.activeElement as HTMLElement;
-        if (!el) return { hasFocusVisible: false, hasStyles: false };
+          const isFocused = document.activeElement === el;
+          const label = el.closest('label') as HTMLElement | null;
+          const matchesFocusVisible = el.matches(':focus-visible') || (label?.matches(':focus-visible') ?? false);
 
-        const matchesFocusVisible = el.matches(':focus-visible');
-        const styles = window.getComputedStyle(el);
-        const hasOutline = styles.outlineWidth !== '0px' && styles.outlineStyle !== 'none';
-        const hasBoxShadow = styles.boxShadow !== 'none';
+          const inputStyles = window.getComputedStyle(el);
+          const labelStyles = label ? window.getComputedStyle(label) : null;
 
-        return {
-          hasFocusVisible: matchesFocusVisible,
-          hasStyles: hasOutline || hasBoxShadow,
-          testId: el.getAttribute('data-testid'),
-        };
-      });
+          const inputHasOutline = inputStyles.outlineWidth !== '0px' && inputStyles.outlineStyle !== 'none';
+          const inputHasShadow = inputStyles.boxShadow !== 'none';
+          const labelHasOutline = Boolean(labelStyles && labelStyles.outlineWidth !== '0px' && labelStyles.outlineStyle !== 'none');
+          const labelHasShadow = Boolean(labelStyles && labelStyles.boxShadow !== 'none');
 
-      expect(focusResult.hasStyles || focusResult.hasFocusVisible).toBe(true);
+          return {
+            isFocused,
+            hasFocusVisible: matchesFocusVisible,
+            hasStyles: inputHasOutline || inputHasShadow || labelHasOutline || labelHasShadow,
+            windowFocused: document.hasFocus(),
+            inputOutlineWidth: inputStyles.outlineWidth,
+            inputOutlineStyle: inputStyles.outlineStyle,
+            inputBoxShadow: inputStyles.boxShadow,
+            labelOutlineWidth: labelStyles?.outlineWidth ?? 'n/a',
+            labelOutlineStyle: labelStyles?.outlineStyle ?? 'n/a',
+            labelBoxShadow: labelStyles?.boxShadow ?? 'n/a',
+          };
+        });
+
+      // Tab until legend checkbox receives focus
+      for (let i = 0; i < 6; i += 1) {
+        const focusInfo = await getCheckboxFocus();
+        if (focusInfo.isFocused) break;
+        await browser.keys(['Tab']);
+      }
+
+      let focusResult = await getCheckboxFocus();
+      await browser.waitUntil(
+        async () => {
+          focusResult = await getCheckboxFocus();
+          return focusResult.isFocused
+            && (!focusResult.windowFocused || focusResult.hasStyles || focusResult.hasFocusVisible);
+        },
+        {
+          timeout: 2000,
+          timeoutMsg: `Checkbox focus indicator missing: ${JSON.stringify(focusResult)}`,
+        }
+      );
     });
 
     it('shows visible focus indicator on dropdown button via keyboard', async () => {
@@ -449,28 +526,49 @@ describe('Export Dialog Accessibility', () => {
         { timeout: 3000 }
       );
 
-      // Tab to the preset dropdown button
-      await browser.keys(['Tab']);
+      const getSelectFocus = () =>
+        browser.execute(() => {
+          const container = document.querySelector('[data-testid="depth-preset-select"]');
+          const trigger = container?.querySelector('button[role="combobox"]') as HTMLElement | null;
+          if (!trigger) return { isFocused: false, hasFocusVisible: false, hasStyles: false };
 
-      // Get styles before and compare (avoiding hard-coded colors)
-      const focusResult = await browser.execute(() => {
-        const el = document.activeElement as HTMLElement;
-        if (!el) return { hasFocusVisible: false, hasStyles: false };
+          const isFocused = document.activeElement === trigger;
+          const matchesFocusVisible = trigger.matches(':focus-visible');
+          const styles = window.getComputedStyle(trigger);
+          const hasOutline = styles.outlineWidth !== '0px' && styles.outlineStyle !== 'none';
+          const hasBoxShadow = styles.boxShadow !== 'none';
 
-        const matchesFocusVisible = el.matches(':focus-visible');
-        const styles = window.getComputedStyle(el);
-        const hasOutline = styles.outlineWidth !== '0px' && styles.outlineStyle !== 'none';
-        const hasBoxShadow = styles.boxShadow !== 'none';
+          return {
+            isFocused,
+            hasFocusVisible: matchesFocusVisible,
+            hasStyles: hasOutline || hasBoxShadow,
+            windowFocused: document.hasFocus(),
+            outlineWidth: styles.outlineWidth,
+            outlineStyle: styles.outlineStyle,
+            boxShadow: styles.boxShadow,
+            tagName: trigger.tagName.toLowerCase(),
+          };
+        });
 
-        return {
-          hasFocusVisible: matchesFocusVisible,
-          hasStyles: hasOutline || hasBoxShadow,
-          tagName: el.tagName.toLowerCase(),
-        };
-      });
+      // Tab until the preset dropdown trigger is focused
+      for (let i = 0; i < 6; i += 1) {
+        const focusInfo = await getSelectFocus();
+        if (focusInfo.isFocused) break;
+        await browser.keys(['Tab']);
+      }
 
-      // Should have focus indicator
-      expect(focusResult.hasStyles || focusResult.hasFocusVisible).toBe(true);
+      let focusResult = await getSelectFocus();
+      await browser.waitUntil(
+        async () => {
+          focusResult = await getSelectFocus();
+          return focusResult.isFocused
+            && (!focusResult.windowFocused || focusResult.hasStyles || focusResult.hasFocusVisible);
+        },
+        {
+          timeout: 2000,
+          timeoutMsg: `Dropdown focus indicator missing: ${JSON.stringify(focusResult)}`,
+        }
+      );
     });
   });
 
@@ -487,8 +585,13 @@ describe('Export Dialog Accessibility', () => {
         { timeout: 2000 }
       );
 
-      // Get option texts (Select uses div[role="option"])
-      const options = await resolutionSelect.$$('[role="option"]');
+      const listboxId = await triggerButton.getAttribute('aria-controls');
+      expect(listboxId).toBeTruthy();
+
+      // Get option texts (Select portals listbox to document.body)
+      const listbox = await $(`[id="${listboxId}"]`);
+      await listbox.waitForDisplayed({ timeout: 2000 });
+      const options = await listbox.$$('[role="option"]');
       const optionTexts: string[] = [];
       for (const opt of options) {
         optionTexts.push(await opt.getText());

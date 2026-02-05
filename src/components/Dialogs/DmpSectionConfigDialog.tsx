@@ -682,7 +682,7 @@ export default function DmpSectionConfigDialog({
           up: s.up,
           down: s.down,
           comment: s.comment,
-          is_virtual: s.is_virtual,
+          is_virtual: s.is_virtual ?? false,
           marker_index: null,
           temperature: null,
         })),
@@ -1104,6 +1104,23 @@ export default function DmpSectionConfigDialog({
                     ? getSectionWarningCount(sectionIdx, validationConfig)
                     : 0;
                   const showWarnings = sectionWarnings > 0;
+                  const statusType =
+                    status === 'excluded'
+                      ? 'excluded'
+                      : status === 'errors' || sectionDataErrors > 0
+                        ? 'errors'
+                        : showWarnings
+                          ? 'warnings'
+                          : status === 'placed'
+                            ? 'placed'
+                            : 'not_placed';
+                  const statusLabel = {
+                    excluded: 'Excluded',
+                    errors: 'Errors',
+                    warnings: 'Warnings',
+                    placed: 'Placed',
+                    not_placed: 'Not placed',
+                  }[statusType];
 
                   // Status icon - priority: excluded > errors > warnings > placed > default
                   let statusIcon: ReactNode;
@@ -1135,7 +1152,12 @@ export default function DmpSectionConfigDialog({
                       }`}
                       data-testid={`section-list-item-${arrayIdx}`}
                     >
-                      <span className={statusColor} data-testid={`section-status-${arrayIdx}`}>
+                      <span
+                        className={statusColor}
+                        data-testid={`section-status-${arrayIdx}`}
+                        data-status={statusType}
+                        aria-label={`Section status: ${statusLabel}`}
+                      >
                         {statusIcon}
                       </span>
                       <span className="truncate flex-1">{section?.name ?? `Section ${arrayIdx + 1}`}</span>

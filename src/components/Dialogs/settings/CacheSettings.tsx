@@ -17,13 +17,14 @@ const MAX_CACHE_SIZE_MB = 10000;
 /**
  * Format bytes to human-readable string (e.g., "12.5 MB")
  */
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
+function formatBytes(bytes: number | bigint): string {
+  const value = typeof bytes === 'bigint' ? Number(bytes) : bytes;
+  if (value === 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  const value = bytes / Math.pow(k, i);
-  return `${formatFixed(value, undefined, 1)} ${sizes[i]}`;
+  const i = Math.floor(Math.log(value) / Math.log(k));
+  const scaled = value / Math.pow(k, i);
+  return `${formatFixed(scaled, undefined, 1)} ${sizes[i]}`;
 }
 
 /**
@@ -227,7 +228,7 @@ export function CacheSettings({
                       <span>
                         {t('settings.cache.stats.providerTiles', {
                           tiles: formatNumber(Number(stats.tiles)),
-                          size: formatBytes(Number(stats.bytes)),
+                          size: formatBytes(stats.bytes),
                         })}
                       </span>
                     </div>

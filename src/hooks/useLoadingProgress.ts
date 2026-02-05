@@ -46,7 +46,7 @@ export function useLoadingProgress() {
     const setupListener = async () => {
       const listener = await listen<LoadingProgressPayload>('loading-progress', (event) => {
         const currentState = useProjectStore.getState().loading;
-        const { loadingId: eventLoadingId } = event.payload;
+        const eventLoadingId = Number(event.payload.loadingId);
 
         // Check if a newer load started (clientOpId changed)
         if (currentState.clientOpId !== clientOpIdRef.current) {

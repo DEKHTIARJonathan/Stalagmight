@@ -30,9 +30,9 @@ export const themeTokens = {
     '--cc-map-ctrl-active': '#0f3460',
     '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(15, 52, 96, 0.3)',
-    '--cc-map-scale-bg': 'rgba(26, 26, 46, 0.85)',
-    '--cc-map-scale-border': 'rgba(255, 255, 255, 0.7)',
-    '--cc-map-scale-text': '#ffffff',
+    '--cc-map-scale-bg': 'transparent',
+    '--cc-map-scale-border': '#0f3460',
+    '--cc-map-scale-text': '#f5f5f5',
 
     // Map Visualization (dark only)
     '--cc-map-background': '#1a1a2e',
@@ -125,8 +125,8 @@ export const themeTokens = {
     '--cc-map-ctrl-active': '#d4c5a9',
     '--cc-map-ctrl-icon-filter': 'none',
     '--cc-map-ctrl-shadow': 'rgba(0, 0, 0, 0.15)',
-    '--cc-map-scale-bg': 'rgba(255, 255, 255, 0.9)',
-    '--cc-map-scale-border': 'rgba(0, 0, 0, 0.4)',
+    '--cc-map-scale-bg': 'transparent',
+    '--cc-map-scale-border': '#d4c5a9',
     '--cc-map-scale-text': '#1a120b',
 
     // Opacity Variants: accent

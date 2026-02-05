@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 
 /**
@@ -456,17 +456,33 @@ test.describe('Undo/Redo History Dropdown', () => {
       await undoButton.focus();
       await page.keyboard.press('ArrowDown');
       await expect(dropdown).toBeVisible();
+      await expect(dropdown).toHaveAttribute('aria-activedescendant', /.+/);
+      await dropdown.focus();
+      await expect(dropdown).toBeFocused();
 
       // Use End to go to last item (index 3)
+      const lastItem = dropdown.locator('[role="menuitem"]').last();
+      const lastItemId = await lastItem.getAttribute('id');
+      const lastItemTestId = await lastItem.getAttribute('data-testid');
+      if (!lastItemId || !lastItemTestId) {
+        throw new Error('Expected last undo history item to have id and data-testid.');
+      }
+      const match = lastItemTestId.match(/item-(\d+)/);
+      if (!match) {
+        throw new Error(`Unexpected undo history test id: ${lastItemTestId}`);
+      }
+      const expectedIndex = Number(match[1]);
+
       await page.keyboard.press('End');
+      await expect(dropdown).toHaveAttribute('aria-activedescendant', lastItemId);
 
       // Press Enter to select
       await page.keyboard.press('Enter');
 
-      // Verify undo_to was called with index 3 (last item)
+      // Verify undo_to was called with index from last item
       const calls = await getUndoRedoCalls(page);
       expect(calls).toHaveLength(1);
-      expect(calls[0]).toEqual({ cmd: 'undo_to', index: 3 });
+      expect(calls[0]).toEqual({ cmd: 'undo_to', index: expectedIndex });
     });
 
     test('Escape closes dropdown', async ({ page }) => {

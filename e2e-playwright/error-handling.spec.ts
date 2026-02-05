@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 
 /**
@@ -497,7 +497,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
           return [];
 
         case 'plugin:dialog|open':
-          return '/mock/test-survey.dmp';
+          return '/mock./fixtures/coverage-survey.dmp';
         case 'plugin:dialog|save':
           return '/mock/saved-project.stalx';
 
@@ -557,7 +557,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
     };
 
     const mockDialogModule = {
-      open: async () => '/mock/test-survey.dmp',
+      open: async () => '/mock./fixtures/coverage-survey.dmp',
       save: async () => '/mock/saved-project.stalx',
       message: async () => undefined,
       ask: async () => true,

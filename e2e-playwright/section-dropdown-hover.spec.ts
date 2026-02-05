@@ -10,7 +10,7 @@
  * the string value to a section ID and calls `setHoveredSectionId`.
  */
 
-import { test, expect, Page, Locator } from '@playwright/test';
+import { test, expect, Page, Locator } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,

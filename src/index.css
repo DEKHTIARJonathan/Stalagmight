@@ -42,9 +42,9 @@
   --cc-map-ctrl-active: #0f3460;
   --cc-map-ctrl-icon-filter: brightness(0) invert(1);
   --cc-map-ctrl-shadow: rgba(15, 52, 96, 0.3);
-  --cc-map-scale-bg: rgba(26, 26, 46, 0.85);
-  --cc-map-scale-border: rgba(255, 255, 255, 0.7);
-  --cc-map-scale-text: #ffffff;
+  --cc-map-scale-bg: transparent;
+  --cc-map-scale-border: #0f3460;
+  --cc-map-scale-text: #f5f5f5;
 
   /* --- Map Visualization --- */
   --cc-map-background: #1a1a2e;
@@ -140,8 +140,8 @@
   --cc-map-ctrl-active: #d4c5a9;
   --cc-map-ctrl-icon-filter: none;
   --cc-map-ctrl-shadow: rgba(0, 0, 0, 0.15);
-  --cc-map-scale-bg: rgba(255, 255, 255, 0.9);
-  --cc-map-scale-border: rgba(0, 0, 0, 0.4);
+  --cc-map-scale-bg: transparent;
+  --cc-map-scale-border: #d4c5a9;
   --cc-map-scale-text: #1a120b;
 
   /* --- Map Visualization ---
@@ -221,20 +221,26 @@ body {
 /* Focus ring variables (--cc-focus-ring and --cc-focus-glow defined in theme blocks above) */
 :root {
   --cc-focus-ring-offset: 2px;
-  --cc-focus-ring-shadow: var(--cc-focus-glow);
+  --cc-focus-ring-shadow: var(--cc-focus-glow, rgba(78, 205, 196, 0.5));
 }
 
 /* Focus styles */
 *:focus-visible {
-  outline: 2px solid var(--cc-focus-ring);
-  outline-offset: var(--cc-focus-ring-offset);
+  outline: 2px solid var(--cc-focus-ring, #4ecdc4);
+  outline-offset: var(--cc-focus-ring-offset, 2px);
+}
+
+label:focus-within {
+  outline: 2px solid var(--cc-focus-ring, #4ecdc4);
+  outline-offset: var(--cc-focus-ring-offset, 2px);
+  box-shadow: 0 0 0 2px var(--cc-focus-ring-shadow, rgba(78, 205, 196, 0.5));
+  border-radius: 4px;
 }
 
 @supports selector(:focus-visible) {
-  input:focus:not(:focus-visible),
+  input:focus:not(:focus-visible):not([type="checkbox"]):not([type="radio"]),
   select:focus:not(:focus-visible),
-  textarea:focus:not(:focus-visible),
-  button:focus:not(:focus-visible) {
+  textarea:focus:not(:focus-visible) {
     outline: none;
   }
 }
@@ -244,8 +250,8 @@ body {
   select:focus,
   textarea:focus,
   button:focus {
-    outline: 2px solid var(--cc-focus-ring);
-    outline-offset: var(--cc-focus-ring-offset);
+    outline: 2px solid var(--cc-focus-ring, #4ecdc4);
+    outline-offset: var(--cc-focus-ring-offset, 2px);
   }
 }
 
@@ -260,6 +266,12 @@ input, select, textarea {
 
 input:focus, select:focus, textarea:focus {
   border-color: var(--cc-accent);
+}
+
+button:focus {
+  outline: 2px solid var(--cc-focus-ring, #4ecdc4);
+  outline-offset: var(--cc-focus-ring-offset, 2px);
+  box-shadow: 0 0 0 2px var(--cc-focus-ring-shadow, rgba(78, 205, 196, 0.5));
 }
 
 /* Themed checkboxes and radio buttons */
@@ -324,9 +336,16 @@ input[type="radio"]:hover:not(:disabled) {
 
 input[type="checkbox"]:focus-visible,
 input[type="radio"]:focus-visible {
-  outline: 2px solid var(--cc-focus-ring);
-  outline-offset: var(--cc-focus-ring-offset);
-  box-shadow: 0 0 0 2px var(--cc-focus-ring-shadow);
+  outline: 2px solid var(--cc-focus-ring, #4ecdc4);
+  outline-offset: var(--cc-focus-ring-offset, 2px);
+  box-shadow: 0 0 0 2px var(--cc-focus-ring-shadow, rgba(78, 205, 196, 0.5));
+}
+
+input[type="checkbox"]:focus,
+input[type="radio"]:focus {
+  outline: 2px solid var(--cc-focus-ring, #4ecdc4);
+  outline-offset: var(--cc-focus-ring-offset, 2px);
+  box-shadow: 0 0 0 2px var(--cc-focus-ring-shadow, rgba(78, 205, 196, 0.5));
 }
 
 /* Color picker */

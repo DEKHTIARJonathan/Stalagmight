@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const coverageEnabled = process.env.E2E_COVERAGE === '1';
+const devServerCommand = coverageEnabled ? 'VITE_COVERAGE=1 pnpm dev' : 'pnpm dev';
+
 /**
  * Playwright configuration for fast UI tests with Tauri IPC mocking.
  * These tests run against the Vite dev server with mocked Tauri commands.
@@ -57,7 +60,7 @@ export default defineConfig({
 
   // Run local dev server before starting tests
   webServer: {
-    command: 'pnpm dev',
+    command: devServerCommand,
     url: 'http://localhost:1420',
     reuseExistingServer: !process.env.CI,
     timeout: 120000, // 2 minutes to start dev server
