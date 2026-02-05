@@ -336,6 +336,8 @@ export default function SettingsDialog() {
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   // Reset confirmation dialog state
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  // About dialog state
+  const [showAbout, setShowAbout] = useState(false);
 
   // Initialize local config from store
   useEffect(() => {
@@ -427,6 +429,10 @@ export default function SettingsDialog() {
   // Short-circuit if an overlay is already open to prevent Escape conflicts
   const handleRequestClose = useCallback(() => {
     // If an overlay is open, close it instead of the main dialog
+    if (showAbout) {
+      setShowAbout(false);
+      return;
+    }
     if (showResetConfirm) {
       setShowResetConfirm(false);
       return;
@@ -441,7 +447,7 @@ export default function SettingsDialog() {
     } else {
       closeDialog();
     }
-  }, [isDirty, closeDialog, showResetConfirm, showUnsavedDialog]);
+  }, [isDirty, closeDialog, showAbout, showResetConfirm, showUnsavedDialog]);
 
   // Handle custom unsaved dialog - Save
   const handleSaveAndClose = useCallback(async () => {
@@ -589,19 +595,28 @@ export default function SettingsDialog() {
               </div>
             </div>
 
-            {/* Footer with Save/Cancel */}
-            <div className="flex justify-end gap-2 px-4 py-3 border-t border-border bg-panel">
-              <Button onClick={requestClose} data-testid="settings-cancel-button">
-                {t('common.actions.cancel')}
-              </Button>
+            {/* Footer with About on left, Save/Cancel on right */}
+            <div className="flex justify-between gap-2 px-4 py-3 border-t border-border bg-panel">
               <Button
-                variant="primary"
-                onClick={handleSave}
-                disabled={!isDirty || hasAnyError}
-                data-testid="settings-save-button"
+                variant="secondary"
+                onClick={() => setShowAbout(true)}
+                data-testid="settings-about-button"
               >
-                {t('common.actions.save')}
+                {t('dialogs.about.title')}
               </Button>
+              <div className="flex gap-2">
+                <Button onClick={requestClose} data-testid="settings-cancel-button">
+                  {t('common.actions.cancel')}
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={handleSave}
+                  disabled={!isDirty || hasAnyError}
+                  data-testid="settings-save-button"
+                >
+                  {t('common.actions.save')}
+                </Button>
+              </div>
             </div>
           </div>
         )}
@@ -671,6 +686,37 @@ export default function SettingsDialog() {
             {t('dialogs.resetDefaults.note', { action: t('common.actions.save') })}
           </p>
         </>
+      </AlertDialog>
+
+      <AlertDialog
+        open={showAbout}
+        title={t('dialogs.about.title')}
+        onClose={() => setShowAbout(false)}
+        data-testid="about-dialog"
+        actions={
+          <Button onClick={() => setShowAbout(false)} data-testid="about-close">
+            {t('dialogs.about.close')}
+          </Button>
+        }
+      >
+        <div className="space-y-2">
+          <p className="font-medium">{t('dialogs.about.version', { version: '1.0.0' })}</p>
+          <p className="text-sm text-text-secondary">{t('dialogs.about.description')}</p>
+          <p>
+            <a
+              href="https://stalagmight.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-accent hover:underline"
+              onClick={(e) => {
+                e.preventDefault();
+                window.open('https://stalagmight.com', '_blank');
+              }}
+            >
+              {t('dialogs.about.website')}
+            </a>
+          </p>
+        </div>
       </AlertDialog>
     </>
   );
