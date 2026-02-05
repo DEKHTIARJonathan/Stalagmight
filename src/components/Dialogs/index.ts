@@ -20,3 +20,4 @@ export { default as OverwriteConfirmDialog } from './OverwriteConfirmDialog';
 export { default as SectionAdjustDialog } from './SectionAdjustDialog';
 export { default as SettingsDialog } from './SettingsDialog';
 export { default as SplitSectionDialog } from './SplitSectionDialog';
+export { default as DebugDialog } from './DebugDialog';

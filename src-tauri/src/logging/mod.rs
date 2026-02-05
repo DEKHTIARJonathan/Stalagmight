@@ -1,7 +1,108 @@
 use anyhow::Result;
+use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+/// Maximum number of log entries kept in the ring buffer.
+const RING_BUFFER_CAPACITY: usize = 500;
+
+/// Global ring buffer for recent log entries, readable by the `get_recent_logs` command.
+static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<String>>>> = OnceLock::new();
+
+/// A tracing `Layer` that captures formatted log lines into a shared ring buffer.
+struct RingBufferLayer {
+    buffer: Arc<Mutex<VecDeque<String>>>,
+}
+
+impl<S> tracing_subscriber::Layer<S> for RingBufferLayer
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        use std::fmt::Write;
+        use tracing::field::{Field, Visit};
+
+        /// Collects the message and all other fields from a tracing event.
+        struct FieldVisitor {
+            message: String,
+            fields: Vec<(String, String)>,
+        }
+
+        impl Visit for FieldVisitor {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                let s = format!("{:?}", value);
+                if field.name() == "message" {
+                    self.message = s;
+                } else {
+                    self.fields.push((field.name().to_string(), s));
+                }
+            }
+            fn record_str(&mut self, field: &Field, value: &str) {
+                if field.name() == "message" {
+                    self.message = value.to_string();
+                } else {
+                    self.fields
+                        .push((field.name().to_string(), value.to_string()));
+                }
+            }
+            fn record_i64(&mut self, field: &Field, value: i64) {
+                self.fields
+                    .push((field.name().to_string(), value.to_string()));
+            }
+            fn record_u64(&mut self, field: &Field, value: u64) {
+                self.fields
+                    .push((field.name().to_string(), value.to_string()));
+            }
+            fn record_f64(&mut self, field: &Field, value: f64) {
+                self.fields
+                    .push((field.name().to_string(), value.to_string()));
+            }
+            fn record_bool(&mut self, field: &Field, value: bool) {
+                self.fields
+                    .push((field.name().to_string(), value.to_string()));
+            }
+        }
+
+        let metadata = event.metadata();
+        let mut visitor = FieldVisitor {
+            message: String::new(),
+            fields: Vec::new(),
+        };
+        event.record(&mut visitor);
+
+        let mut line = format!(
+            "{} {}: {}",
+            metadata.level(),
+            metadata.target(),
+            visitor.message
+        );
+
+        // Append structured fields as key=value pairs
+        if !visitor.fields.is_empty() {
+            line.push_str(" {");
+            for (i, (key, val)) in visitor.fields.iter().enumerate() {
+                if i > 0 {
+                    line.push_str(", ");
+                }
+                write!(&mut line, "{}={}", key, val).ok();
+            }
+            line.push('}');
+        }
+
+        if let Ok(mut buf) = self.buffer.lock() {
+            if buf.len() >= RING_BUFFER_CAPACITY {
+                buf.pop_front();
+            }
+            buf.push_back(line);
+        }
+    }
+}
 
 /// Initialize the logging system
 /// Returns a guard that must be kept alive for the duration of the application
@@ -14,6 +115,11 @@ pub fn init() -> WorkerGuard {
     // Create a rolling file appender
     let file_appender = tracing_appender::rolling::daily(&log_dir, "stalagmight.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    // Create the in-memory ring buffer
+    let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(RING_BUFFER_CAPACITY)));
+    LOG_BUFFER.set(Arc::clone(&buffer)).ok();
+    let ring_layer = RingBufferLayer { buffer };
 
     // Build the subscriber
     let filter = EnvFilter::try_from_default_env()
@@ -33,12 +139,22 @@ pub fn init() -> WorkerGuard {
                 .with_ansi(true)
                 .pretty(),
         )
+        .with(ring_layer)
         .init();
 
     tracing::info!("Logging initialized");
     tracing::debug!(log_dir = ?log_dir, "Log directory");
 
     guard
+}
+
+/// Return recent log entries from the in-memory ring buffer.
+pub fn get_recent_logs() -> Vec<String> {
+    LOG_BUFFER
+        .get()
+        .and_then(|buf| buf.lock().ok())
+        .map(|buf| buf.iter().cloned().collect())
+        .unwrap_or_default()
 }
 
 /// Get the log directory path

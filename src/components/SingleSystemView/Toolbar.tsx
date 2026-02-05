@@ -5,6 +5,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button, IconButton } from '../common/Button';
 import {
   ArrowLeftIcon,
+  BugIcon,
   ChevronDownIcon,
   CursorIcon,
   HandIcon,
@@ -228,6 +229,14 @@ export default function Toolbar({
           })}
         </div>
         <DisplayMenu />
+        <IconButton
+          icon={<BugIcon />}
+          onClick={() => openDialog('debug')}
+          tooltip="Debug Logs"
+          aria-label="Debug Logs"
+          size="sm"
+          data-testid="toolbar-debug-button"
+        />
       </div>
     </header>
   );

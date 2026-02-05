@@ -7,8 +7,8 @@ import { useGlobalViewShortcuts } from '../../hooks/useGlobalViewShortcuts';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useGlobalViewStore } from '../../store/globalViewStore';
-import { Button } from '../common/Button';
-import { DownloadIcon, FilePlusIcon, FolderOpenIcon, MapIcon } from '../common/icons';
+import { Button, IconButton } from '../common/Button';
+import { BugIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, MapIcon } from '../common/icons';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
@@ -355,6 +355,14 @@ export default function GlobalView() {
           >
             {t('globalView.actions.settings')}
           </Button>
+          <IconButton
+            icon={<BugIcon />}
+            onClick={() => openDialog('debug')}
+            tooltip="Debug Logs"
+            aria-label="Debug Logs"
+            size="sm"
+            data-testid="global-debug-button"
+          />
         </div>
       </header>
 

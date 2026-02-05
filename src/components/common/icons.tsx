@@ -371,3 +371,22 @@ export function LockIcon(props: IconProps) {
     </BaseIcon>
   );
 }
+
+export function BugIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      {/* Body */}
+      <ellipse cx="10" cy="12" rx="4" ry="5" />
+      {/* Head */}
+      <circle cx="10" cy="6" r="2" />
+      {/* Antennae */}
+      <line x1="8.5" y1="4.5" x2="6" y2="2" />
+      <line x1="11.5" y1="4.5" x2="14" y2="2" />
+      {/* Legs */}
+      <line x1="6" y1="10" x2="3" y2="8" />
+      <line x1="6" y1="13" x2="3" y2="14" />
+      <line x1="14" y1="10" x2="17" y2="8" />
+      <line x1="14" y1="13" x2="17" y2="14" />
+    </BaseIcon>
+  );
+}
