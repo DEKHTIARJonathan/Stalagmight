@@ -13,7 +13,6 @@ export default function AdjustClosuresDialog() {
   const anchorStation = dialogData.anchorStation as StationRef | undefined;
   const anchorSection = project?.sections.find((s) => s.id === anchorStation?.section_id);
 
-  const [useStrategyFilter, setUseStrategyFilter] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,11 +29,7 @@ export default function AdjustClosuresDialog() {
     setError(null);
 
     try {
-      const result = await adjustLoopClosures(
-        anchorStation,
-        METHOD,
-        useStrategyFilter
-      );
+      const result = await adjustLoopClosures(anchorStation, METHOD);
       if (result.success) {
         closeDialog();
       } else {
@@ -69,17 +64,6 @@ export default function AdjustClosuresDialog() {
         </div>
 
         <div className="space-y-3">
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={useStrategyFilter}
-              onChange={(e) => setUseStrategyFilter(e.target.checked)}
-              className="accent-accent"
-              data-testid="adjust-closures-filter"
-            />
-            Use only batch closures
-          </label>
-
           <div className="text-xs text-text-secondary space-y-1">
             <div>Method: Least Squares (Weighted)</div>
             <div>Base sigma (length): {baseSigmas.length} m</div>

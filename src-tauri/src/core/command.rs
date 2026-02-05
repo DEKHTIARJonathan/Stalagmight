@@ -82,7 +82,6 @@ pub enum Command {
     AdjustLoopClosures {
         anchor_station: StationRef,
         method: ClosureStrategy,
-        use_strategy_filter: bool,
     },
     SetZeroDatum {
         station_ref: StationRef,

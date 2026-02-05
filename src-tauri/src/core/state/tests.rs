@@ -3495,7 +3495,7 @@ fn test_undo_create_loop_closure_has_closure_info() {
 }
 
 #[test]
-fn test_undo_create_loop_closure_distributed_restores_shots() {
+fn test_create_loop_closure_deferred_strategy_is_rejected() {
     let state = AppState::new().unwrap();
 
     state.execute(Command::CreateProject {
@@ -3527,7 +3527,7 @@ fn test_undo_create_loop_closure_distributed_restores_shots() {
         station_b: StationRef::new(section_id, 2),
         closure_strategy: ClosureStrategy::ProportionalByLength,
     });
-    assert!(closure_result.success, "Distributed closure should succeed");
+    assert!(!closure_result.success);
 
     let after_project = state.get_project_state().unwrap();
     let after_shots = after_project
@@ -3537,33 +3537,7 @@ fn test_undo_create_loop_closure_distributed_restores_shots() {
         .unwrap()
         .shots
         .clone();
-    assert_ne!(before_shots[0].length, after_shots[0].length);
-
-    let undo_result = state.undo();
-    assert!(undo_result.success, "Undo should succeed");
-
-    let undo_project = state.get_project_state().unwrap();
-    let undo_shots = undo_project
-        .sections
-        .iter()
-        .find(|s| s.id == section_id)
-        .unwrap()
-        .shots
-        .clone();
-    assert!((undo_shots[0].length - before_shots[0].length).abs() < 1e-6);
-
-    let redo_result = state.redo();
-    assert!(redo_result.success, "Redo should succeed");
-
-    let redo_project = state.get_project_state().unwrap();
-    let redo_shots = redo_project
-        .sections
-        .iter()
-        .find(|s| s.id == section_id)
-        .unwrap()
-        .shots
-        .clone();
-    assert!((redo_shots[0].length - before_shots[0].length).abs() > 1e-6);
+    assert!((before_shots[0].length - after_shots[0].length).abs() < 1e-6);
 }
 
 #[test]
@@ -6047,7 +6021,7 @@ fn test_split_remaps_closures() {
     let closure_result = state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(sec_a_id, 4),
         station_b: StationRef::new(sec_b_id, 1),
-        closure_strategy: crate::models::ClosureStrategy::ProportionalByLength,
+        closure_strategy: crate::models::ClosureStrategy::Batch,
     });
     assert!(closure_result.success, "Closure should succeed: {:?}", closure_result.error);
 

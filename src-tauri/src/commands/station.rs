@@ -51,13 +51,11 @@ pub fn adjust_loop_closures(
     state: State<AppState>,
     anchor_station: StationRef,
     method: ClosureStrategy,
-    use_strategy_filter: bool,
 ) -> CommandResult {
     adjust_loop_closures_impl(
         state.inner(),
         anchor_station,
         method,
-        use_strategy_filter,
     )
 }
 
@@ -65,12 +63,10 @@ pub(crate) fn adjust_loop_closures_impl(
     state: &AppState,
     anchor_station: StationRef,
     method: ClosureStrategy,
-    use_strategy_filter: bool,
 ) -> CommandResult {
     state.execute(Command::AdjustLoopClosures {
         anchor_station,
         method,
-        use_strategy_filter,
     })
 }
 

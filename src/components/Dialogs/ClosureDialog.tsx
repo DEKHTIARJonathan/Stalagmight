@@ -7,12 +7,6 @@ import { getErrorColor } from '../../utils/colors';
 import type { StationRef, ClosureStrategy } from '../../types/project';
 import type { ClosurePreview, BatchCommand } from '../../types/commands';
 
-const STRATEGY_OPTIONS: { value: ClosureStrategy; label: string }[] = [
-  { value: 'Batch', label: 'Batch (recommended)' },
-  { value: 'ProportionalByLength', label: 'Proportional by Length' },
-  { value: 'EqualDistribution', label: 'Equal Distribution' },
-];
-
 export default function ClosureDialog() {
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
   const { createLoopClosure, executeBatch, project } = useProjectStore();
@@ -24,8 +18,6 @@ export default function ClosureDialog() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [strategy, setStrategy] = useState<ClosureStrategy>('Batch');
-  const strategyOptions = STRATEGY_OPTIONS;
 
   // Get section names
   const sectionAName = useMemo(() => {
@@ -60,7 +52,7 @@ export default function ClosureDialog() {
     try {
       if (onBeforeConfirm) await onBeforeConfirm();
       // When preCommands exist (snap-to-merge), batch move + closure as single undo operation
-      const effectiveStrategy = isFromMove ? 'Move' as ClosureStrategy : strategy;
+      const effectiveStrategy = isFromMove ? 'Move' as ClosureStrategy : 'Batch';
       const closureCmd: BatchCommand = { type: 'create_loop_closure', station_a: stationA, station_b: stationB, closure_strategy: effectiveStrategy };
       const result = preCommands
         ? await executeBatch([...preCommands, closureCmd])
@@ -128,28 +120,6 @@ export default function ClosureDialog() {
             <div className="flex justify-between">
               <span className="text-text-secondary">Vertical misclosure:</span>
               <span>{preview.vertical_misclosure.toFixed(2)}m</span>
-            </div>
-          </div>
-        )}
-
-        {/* Strategy selector — hidden for move-triggered closures (auto-assigned Move) */}
-        {!isFromMove && (
-          <div className="space-y-2">
-            <label className="text-sm text-text-secondary font-medium">Closure Strategy</label>
-            <div className="space-y-1">
-              {strategyOptions.map((opt) => (
-                <label key={opt.value} className="flex items-center gap-2 py-1 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="closure-strategy"
-                    value={opt.value}
-                    checked={strategy === opt.value}
-                    onChange={() => setStrategy(opt.value)}
-                    className="accent-accent"
-                  />
-                  <span className="text-sm">{opt.label}</span>
-                </label>
-              ))}
             </div>
           </div>
         )}
