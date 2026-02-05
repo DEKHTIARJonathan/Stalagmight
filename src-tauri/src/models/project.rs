@@ -159,6 +159,7 @@ pub struct Project {
     pub section_offsets: HashMap<SectionId, (f64, f64)>,
     /// Station offsets (x, y, z) applied when individual stations are moved
     #[serde(default, serialize_with = "serialize_station_offsets", deserialize_with = "deserialize_station_offsets")]
+    #[ts(skip)]
     #[ts(type = "Array<[StationRef, [number, number, number]]>")]
     pub station_offsets: HashMap<StationRef, (f64, f64, f64)>,
     /// SHA256 hashes of imported DMP files (for duplicate detection)
@@ -255,6 +256,9 @@ impl Project {
             if lc.id == 0 {
                 lc.id = self.next_closure_id;
                 self.next_closure_id += 1;
+            }
+            if lc.strategy == ClosureStrategy::Move {
+                lc.is_aligned = true;
             }
         }
     }
@@ -1008,6 +1012,46 @@ impl Project {
         connected
     }
 
+    /// Get all section IDs connected through merges and aligned closures (rigid groups).
+    /// Unaligned closures are ignored so sections can move independently before adjustment.
+    pub fn get_rigid_connected_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
+        let mut connected = HashSet::new();
+        let mut queue = vec![section_id];
+
+        while let Some(current) = queue.pop() {
+            if connected.insert(current) {
+                // Follow merges as edges
+                for merge in &self.station_merges {
+                    if merge.station_a.section_id == current {
+                        if !connected.contains(&merge.station_b.section_id) {
+                            queue.push(merge.station_b.section_id);
+                        }
+                    } else if merge.station_b.section_id == current {
+                        if !connected.contains(&merge.station_a.section_id) {
+                            queue.push(merge.station_a.section_id);
+                        }
+                    }
+                }
+                // Follow aligned closures as edges (bidirectional, same as merges)
+                for closure in &self.loop_closures {
+                    if !closure.is_aligned {
+                        continue;
+                    }
+                    if closure.station_a.section_id == current {
+                        if !connected.contains(&closure.station_b.section_id) {
+                            queue.push(closure.station_b.section_id);
+                        }
+                    } else if closure.station_b.section_id == current {
+                        if !connected.contains(&closure.station_a.section_id) {
+                            queue.push(closure.station_a.section_id);
+                        }
+                    }
+                }
+            }
+        }
+        connected
+    }
+
     /// Get all section IDs connected through station merges only (rigid groups).
     /// Closures are NOT followed. Use this for rigid-group operations:
     /// datum propagation, offset application, zero-datum validation.
@@ -1441,6 +1485,14 @@ impl Project {
 
         // Recompute closure metrics for the affected component
         self.recompute_closure_metrics_for_component(&component);
+
+        // Mark adjusted closures as aligned (locked for future moves)
+        let adjusted_ids: HashSet<u64> = closures.iter().map(|lc| lc.id).collect();
+        for closure in &mut self.loop_closures {
+            if adjusted_ids.contains(&closure.id) {
+                closure.is_aligned = true;
+            }
+        }
 
         Ok(())
     }
@@ -2251,6 +2303,9 @@ impl Project {
         }
 
         for closure in &self.loop_closures {
+            if !closure.is_aligned {
+                continue;
+            }
             union(&mut parent, &mut rank, closure.station_a, closure.station_b);
         }
 
@@ -3001,6 +3056,7 @@ impl Project {
             horizontal_misclosure: metrics.horizontal_misclosure,
             vertical_misclosure: metrics.vertical_misclosure,
             strategy,
+            is_aligned: strategy == ClosureStrategy::Move,
         };
 
         self.loop_closures.push(closure.clone());

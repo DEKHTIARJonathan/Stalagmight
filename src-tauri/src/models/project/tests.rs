@@ -1067,6 +1067,7 @@ fn unmerge_stations_removes_matching_closure_and_preserves_others() {
         horizontal_misclosure: 0.15,
         vertical_misclosure: 0.05,
         strategy: ClosureStrategy::default(),
+        is_aligned: false,
     });
 
     // Also inject an unrelated closure for B-C pair
@@ -1080,6 +1081,7 @@ fn unmerge_stations_removes_matching_closure_and_preserves_others() {
         horizontal_misclosure: 0.1,
         vertical_misclosure: 0.0,
         strategy: ClosureStrategy::default(),
+        is_aligned: false,
     });
 
     assert_eq!(project.loop_closures.len(), 2);
@@ -1133,6 +1135,7 @@ fn unmerge_stations_preserves_unrelated_closures() {
         horizontal_misclosure: 0.1,
         vertical_misclosure: 0.0,
         strategy: ClosureStrategy::default(),
+        is_aligned: false,
     });
 
     assert_eq!(project.loop_closures.len(), 1);
@@ -1189,6 +1192,7 @@ fn closure_expands_connected_sections_with_existing_merges() {
         horizontal_misclosure: 0.1,
         vertical_misclosure: 0.0,
         strategy: ClosureStrategy::default(),
+        is_aligned: false,
     });
     project.next_closure_id += 1;
 
@@ -1328,6 +1332,7 @@ fn new_merge_expands_existing_closure_connectivity() {
         horizontal_misclosure: 0.1,
         vertical_misclosure: 0.0,
         strategy: ClosureStrategy::default(),
+        is_aligned: false,
     });
     project.next_closure_id += 1;
 
@@ -1419,6 +1424,7 @@ fn transitive_closure_computation_correct() {
         horizontal_misclosure: 0.2,
         vertical_misclosure: 0.0,
         strategy: ClosureStrategy::default(),
+        is_aligned: false,
     });
     let closure_id = project.next_closure_id;
     project.next_closure_id += 1;
@@ -1549,6 +1555,7 @@ fn transitive_closure_both_endpoints_merged() {
         horizontal_misclosure: 0.2,
         vertical_misclosure: 0.0,
         strategy: ClosureStrategy::default(),
+        is_aligned: false,
     });
     let closure_id = project.next_closure_id;
     project.next_closure_id += 1;
@@ -2180,6 +2187,7 @@ fn build_project_with_relationships() -> (Project, SectionId, SectionId, Section
         horizontal_misclosure: 0.08,
         vertical_misclosure: 0.06,
         strategy: ClosureStrategy::default(),
+        is_aligned: false,
     });
     project.next_closure_id = 2;
 

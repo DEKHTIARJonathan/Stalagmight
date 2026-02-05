@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use tauri::{Manager, State};
+use ts_rs::TS;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
@@ -136,7 +137,7 @@ pub(crate) fn merge_projects_impl(
 }
 
 /// Combined project state for frontend
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, TS)]
 pub struct ProjectState {
     pub project: Project,
     pub stations: Vec<Station>,

@@ -1114,7 +1114,7 @@ impl AppState {
         let existing: std::collections::HashSet<SectionId> =
             project.sections.iter().map(|s| s.id).collect();
         let connected: Vec<SectionId> = project
-            .get_connected_section_ids(section_id)
+            .get_rigid_connected_section_ids(section_id)
             .into_iter()
             .filter(|id| existing.contains(id))
             .collect();
@@ -1950,9 +1950,38 @@ impl AppState {
         Ok(result)
     }
 
+    /// Get all section IDs connected through merges and aligned closures (rigid groups).
+    pub fn get_rigid_connected_section_ids(&self, section_id: SectionId) -> Result<Vec<SectionId>, String> {
+        // Serialize with command execution to avoid observing intermediate batch state
+        let _cmd_guard = self
+            .command_lock
+            .lock()
+            .map_err(|_| "Failed to acquire command lock".to_string())?;
+        let proj_guard = self
+            .project
+            .lock()
+            .map_err(|_| "Failed to lock project".to_string())?;
+        let project = proj_guard
+            .as_ref()
+            .ok_or_else(|| "No project open".to_string())?;
+
+        // Validate section exists
+        if !project.sections.iter().any(|s| s.id == section_id) {
+            return Err(format!("Section {} not found", section_id));
+        }
+
+        // Filter to existing sections (stale merges/closures may reference deleted sections)
+        let existing: std::collections::HashSet<SectionId> =
+            project.sections.iter().map(|s| s.id).collect();
+        let connected = project.get_rigid_connected_section_ids(section_id);
+        let mut result: Vec<SectionId> = connected.into_iter().filter(|id| existing.contains(id)).collect();
+        result.sort_unstable();
+        Ok(result)
+    }
+
     /// Get all section IDs anchored by a zero datum.
-    /// A zero datum anchors every section reachable through merges AND closures,
-    /// since the entire connected network is positioned relative to the fixed point.
+    /// A zero datum anchors every section reachable through merges AND aligned closures,
+    /// since unaligned closures are not rigidly constrained yet.
     pub fn get_anchored_section_ids(&self) -> Result<Vec<SectionId>, String> {
         // Serialize with command execution to avoid observing intermediate batch state
         let _cmd_guard = self
@@ -1972,7 +2001,7 @@ impl AppState {
             project.sections.iter().map(|s| s.id).collect();
         let mut anchored = std::collections::HashSet::new();
         for zd in &project.zero_datums {
-            let connected = project.get_connected_section_ids(zd.station_ref.section_id);
+            let connected = project.get_rigid_connected_section_ids(zd.station_ref.section_id);
             anchored.extend(connected.into_iter().filter(|id| existing.contains(id)));
         }
         let mut result: Vec<SectionId> = anchored.into_iter().collect();

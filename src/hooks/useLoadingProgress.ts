@@ -12,7 +12,7 @@ const TIMEOUT_MS = 30000; // 30 second timeout
 
 // Track the highest seen backend loadingId globally to filter truly stale events
 // when store.loadingId is 0 (awaiting first event from new load)
-let lastSeenBackendLoadingId = 0;
+let lastSeenBackendLoadingId = 0n;
 
 export function useLoadingProgress() {
   const setLoadingProgress = useProjectStore((s) => s.setLoadingProgress);
@@ -59,7 +59,7 @@ export function useLoadingProgress() {
         // Filter stale events:
         // - If store.loadingId is 0, only accept events with ID > lastSeenBackendLoadingId
         // - If store.loadingId is set, only accept events with matching ID
-        if (currentState.loadingId === 0) {
+        if (currentState.loadingId === 0n) {
           // Awaiting first event - only accept if it's newer than any we've seen
           if (eventLoadingId <= lastSeenBackendLoadingId) {
             if (import.meta.env.DEV) {

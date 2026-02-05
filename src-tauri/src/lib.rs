@@ -421,6 +421,7 @@ pub fn run() {
             commands::section::move_segment,
             commands::section::execute_batch,
             commands::section::get_connected_section_ids,
+            commands::section::get_rigid_connected_section_ids,
             commands::section::get_anchored_section_ids,
             commands::section::create_section_and_merge,
             commands::section::get_section_relationships,

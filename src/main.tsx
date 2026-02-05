@@ -16,7 +16,7 @@ declare global {
       globalViewStore?: typeof useGlobalViewStore;
       // Loading progress E2E hooks
       getLoadingId?: () => number;
-      getBackendLoadingId?: () => number;
+      getBackendLoadingId?: () => bigint;
       simulateLoadingProgress?: (payload: Partial<LoadingState>) => void;
       simulateLoadingError?: (message: string, details?: string) => void;
       resetLoading?: () => void;

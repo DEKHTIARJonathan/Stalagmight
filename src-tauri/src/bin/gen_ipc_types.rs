@@ -5,6 +5,7 @@ use ts_rs::TS;
 
 use stalagmight_lib::commands::cache::{CacheStats, ProviderStats};
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
+use stalagmight_lib::commands::project::ProjectState;
 use stalagmight_lib::commands::survey_geometry::{GeometryShot, SurveyGeometry, SurveyGeometryError};
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
@@ -31,7 +32,11 @@ use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, 
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
 fn export<T: TS + 'static>(out_dir: &Path) {
-    T::export_to(out_dir).expect("Failed to export TS type");
+    let export_to = T::EXPORT_TO
+        .and_then(|path| Path::new(path).file_name())
+        .expect("TS type must have an export path");
+    let out_path = out_dir.join(export_to);
+    T::export_to(out_path).expect("Failed to export TS type");
 }
 
 fn main() {
@@ -83,6 +88,7 @@ fn main() {
     export::<ConnectivityResult>(&out_dir);
     export::<ClosurePreview>(&out_dir);
     export::<ProjectWarning>(&out_dir);
+    export::<ProjectState>(&out_dir);
 
     // Undo history
     export::<UndoHistoryItem>(&out_dir);
@@ -184,6 +190,7 @@ fn main() {
         "ConnectivityResult",
         "ClosurePreview",
         "ProjectWarning",
+        "ProjectState",
         "UndoHistoryItem",
         "PreviewData",
         "FieldChange",

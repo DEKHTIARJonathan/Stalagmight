@@ -54,7 +54,7 @@ export default function ExportDialog() {
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<LoadingProgressPayload | null>(null);
   // Track the loadingId we're expecting (to filter out events from other operations)
-  const exportLoadingIdRef = useRef<number | null>(null);
+  const exportLoadingIdRef = useRef<bigint | null>(null);
 
   // Track if component is mounted to prevent setState on unmounted component
   const isMountedRef = useRef(true);

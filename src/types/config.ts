@@ -37,6 +37,7 @@ export const defaultConfig: Config = {
     auto_save: true,
     auto_save_interval_seconds: 30,
     recent_projects_max: 20,
+    recent_projects: [],
     undo_history_limit: 100,
     undo_persist_limit: 20,
     shortcut_feedback: 'non_obvious',

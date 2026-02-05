@@ -176,9 +176,18 @@ export default function MapCanvas() {
     resolvedTheme,
   } = useUIStore();
 
+  const alignedClosureIds = useMemo(() => {
+    if (!project?.loop_closures) return new Set<bigint>();
+    return new Set(
+      project.loop_closures
+        .filter((closure) => closure.is_aligned)
+        .map((closure) => closure.id)
+    );
+  }, [project?.loop_closures]);
+
   // Compute immovable station keys for move_station and move_shot tools.
   // A station is immovable if it is zero-datum, or transitively reachable from a
-  // zero-datum station via merged_with and closures_with links.
+  // zero-datum station via merged_with and aligned closures_with links.
   const immovableStationKeys = useMemo(() => {
     if (activeTool !== 'move_station' && activeTool !== 'move_shot') return new Set<string>();
     const stationByKey = new Map(
@@ -201,11 +210,12 @@ export default function MapCanvas() {
         queue.push(`${ref.section_id}:${ref.station_index}`);
       }
       for (const cr of st.closures_with ?? []) {
+        if (!alignedClosureIds.has(cr.closure_id)) continue;
         queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
       }
     }
     return immovable;
-  }, [activeTool, stations]);
+  }, [activeTool, stations, alignedClosureIds]);
 
   // Convert immovable station keys to feature IDs and compute immovable shot IDs.
   // For move_shot: a shot is immovable if either endpoint is immovable.

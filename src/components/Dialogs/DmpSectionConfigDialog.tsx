@@ -191,6 +191,7 @@ export default function DmpSectionConfigDialog({
     if (!currentConfig) return null;
 
     return {
+      version: currentDmpSection?.version ?? dmpFile.version,
       name: currentConfig.name ?? currentDmpSection?.name ?? '',
       direction: currentConfig.direction ?? currentDmpSection?.direction ?? 'in',
       date: currentConfig.date ?? currentDmpSection?.date ?? '',
@@ -665,6 +666,7 @@ export default function DmpSectionConfigDialog({
       date: currentConfig.date,
       color: currentConfig.color,
       direction: currentConfig.direction,
+      quality: currentConfig.quality ?? 1.0,
       shots: currentConfig.shots
         .filter((s) => !s.isDeleted)
         .map((s) => ({
@@ -681,6 +683,8 @@ export default function DmpSectionConfigDialog({
           down: s.down,
           comment: s.comment,
           is_virtual: s.is_virtual,
+          marker_index: null,
+          temperature: null,
         })),
     };
 

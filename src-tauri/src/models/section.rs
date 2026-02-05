@@ -86,17 +86,23 @@ pub struct SectionData {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct SectionUpdates {
     #[serde(default)]
+    #[ts(optional)]
     pub name: Option<Option<String>>,
     #[serde(default)]
+    #[ts(optional)]
     pub surveyor: Option<Option<String>>,
     #[serde(default)]
     #[ts(type = "string | null")]
+    #[ts(optional)]
     pub date: Option<Option<NaiveDate>>,
     #[serde(default)]
+    #[ts(optional)]
     pub color: Option<String>,
     #[serde(default)]
+    #[ts(optional)]
     pub direction: Option<SurveyDirection>,
     #[serde(default)]
+    #[ts(optional)]
     pub quality: Option<f64>,
 }
 

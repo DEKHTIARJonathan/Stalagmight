@@ -6,9 +6,9 @@ Developer reference for the three move tools: **Move Station**, **Move Shot**, a
 
 | Tool | Shortcut | Scope | What moves |
 |------|----------|-------|------------|
-| Move Station | T | Single station | Station + co-located stations (merged/closured) |
+| Move Station | T | Single station | Station + co-located stations (merged/aligned-closure) |
 | Move Shot | Y | One shot | Both endpoints + all co-located stations |
-| Move Segment | U | Entire branch | All sections connected via merges/closures |
+| Move Segment | U | Entire branch | All sections connected via merges/aligned-closures |
 
 All three share the same drag preview engine and Ctrl+drag panning. They differ in scope and hover behavior.
 
@@ -16,7 +16,7 @@ All three share the same drag preview engine and Ctrl+drag panning. They differ 
 
 ## Move Station
 
-Click a station to begin dragging it. If the station shares coordinates with other stations (via merges or loop closures), all co-located stations move together.
+Click a station to begin dragging it. If the station shares coordinates with other stations (via merges or **aligned** loop closures), all co-located stations move together.
 
 **Hover**: Only stations get hover highlight. Shot hover is suppressed.
 
@@ -28,7 +28,7 @@ Click a station to begin dragging it. If the station shares coordinates with oth
 
 ## Move Shot
 
-Click a shot to begin dragging it. Both endpoints move rigidly together, along with any stations co-located at either endpoint.
+Click a shot to begin dragging it. Both endpoints move rigidly together, along with any stations co-located at either endpoint (merges + aligned closures).
 
 **Hover**: Only shots get hover highlight. Station hover is suppressed.
 
@@ -38,7 +38,7 @@ Click a shot to begin dragging it. Both endpoints move rigidly together, along w
 
 ## Move Segment
 
-Click any station or shot in a section to drag the entire connected branch. Connected sections (via merges/closures) move together as a rigid unit.
+Click any station or shot in a section to drag the entire connected branch. Connected sections (via merges/aligned closures) move together as a rigid unit.
 
 **Hover**: Both stations and shots get hover. Hovering highlights the full connected segment (all connected sections).
 
@@ -71,7 +71,7 @@ When hovering in Move Segment mode, the connected section IDs are resolved async
 
 ## Immovable Stations
 
-A station is immovable if it is a zero-datum or transitively reachable from one via merges and loop closures. Computed in `MapCanvas` via BFS when Move Station or Move Shot is active. Returns `Set<string>` of `"sectionId:stationIndex"` keys.
+A station is immovable if it is a zero-datum or transitively reachable from one via merges and **aligned** loop closures. Computed in `MapCanvas` via BFS when Move Station or Move Shot is active. Returns `Set<string>` of `"sectionId:stationIndex"` keys.
 
 Visual feedback:
 - Immovable stations and shots with immovable endpoints are dimmed (0.25 opacity via `feature-state: anchored`)

@@ -57,14 +57,25 @@ function extractStations(shots: GeometryShot[]): [number, number][] {
   const stationSet = new Map<string, [number, number]>();
 
   for (const shot of shots) {
-    const fromKey = `${shot.from[0].toFixed(8)},${shot.from[1].toFixed(8)}`;
-    const toKey = `${shot.to[0].toFixed(8)},${shot.to[1].toFixed(8)}`;
-
-    if (!stationSet.has(fromKey)) {
-      stationSet.set(fromKey, shot.from);
+    if (shot.from.length >= 2) {
+      const fromX = shot.from[0];
+      const fromY = shot.from[1];
+      if (fromX === undefined || fromY === undefined) continue;
+      const from: [number, number] = [fromX, fromY];
+      const fromKey = `${from[0].toFixed(8)},${from[1].toFixed(8)}`;
+      if (!stationSet.has(fromKey)) {
+        stationSet.set(fromKey, from);
+      }
     }
-    if (!stationSet.has(toKey)) {
-      stationSet.set(toKey, shot.to);
+    if (shot.to.length >= 2) {
+      const toX = shot.to[0];
+      const toY = shot.to[1];
+      if (toX === undefined || toY === undefined) continue;
+      const to: [number, number] = [toX, toY];
+      const toKey = `${to[0].toFixed(8)},${to[1].toFixed(8)}`;
+      if (!stationSet.has(toKey)) {
+        stationSet.set(toKey, to);
+      }
     }
   }
 

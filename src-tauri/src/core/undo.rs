@@ -1390,6 +1390,7 @@ mod tests {
             horizontal_misclosure: 1.0,
             vertical_misclosure: 0.7,
             strategy: crate::models::ClosureStrategy::ProportionalByLength,
+            is_aligned: false,
         };
 
         let entry = UndoEntry {
