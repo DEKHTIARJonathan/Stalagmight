@@ -479,6 +479,7 @@ pub fn run() {
             commands::survey_geometry::get_survey_geometry_for_file,
             // Logging
             commands::logging::get_recent_logs,
+            commands::logging::push_frontend_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

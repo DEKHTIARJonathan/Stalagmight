@@ -3,9 +3,13 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './i18n';
 import './index.css';
+import { installConsoleCapture } from './utils/consoleCapture';
 import { useUIStore } from './store/uiStore';
 import { useProjectStore, type LoadingState } from './store/projectStore';
 import { useGlobalViewStore } from './store/globalViewStore';
+
+// Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
+installConsoleCapture();
 
 // Expose stores for E2E testing
 declare global {
