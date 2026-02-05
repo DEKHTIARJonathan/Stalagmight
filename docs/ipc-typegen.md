@@ -17,6 +17,15 @@ This runs `src-tauri/src/bin/gen_ipc_types.rs` and produces:
 - `src/types/ipc.generated.ts` (re-exports for all generated IPC types)
 - `src/types/ipc/*.ts` (one file per exported Rust type)
 
+## Automation Policy
+
+These IPC types are **always generated**, never written by hand:
+
+- Do not create or edit files under `src/types/ipc/`.
+- Do not edit `src/types/ipc.generated.ts`.
+- If a type changes, update the Rust source + export list, run `pnpm gen:ipc-types`,
+  and commit the regenerated output.
+
 ## Adding a New IPC Type
 
 1. Add `#[derive(TS)]` to the Rust type definition.
