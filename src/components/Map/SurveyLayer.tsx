@@ -94,6 +94,7 @@ export default class SurveyLayer {
   private snappedStationId: string | null = null;
   private hoveredSectionId: string | null = null;
   private selectedSectionId: string | null = null;
+  private highlightedStationIds: string[] = [];
   // Multi-section hover for Move Segment tool (highlights all connected sections)
   private hoveredSegmentSectionIds: string[] = [];
 
@@ -801,11 +802,25 @@ export default class SurveyLayer {
       const shotChanged = newHoveredShotId !== this.hoveredShotId;
 
       if (stationChanged || shotChanged) {
+        if (this.shouldLogInteraction()) {
+          console.debug('[HitDetection] Hover update', {
+            activeTool: this.activeTool,
+            newHoveredStationId,
+            newHoveredShotId,
+            suppressStationHover,
+            suppressShotHover,
+            stationHitArea,
+            shotHitArea,
+            stationFeatureCount: stationFeatures.length,
+            shotFeatureCount: shotFeatures.length,
+          });
+        }
         this.hoveredStationId = newHoveredStationId;
         this.hoveredShotId = newHoveredShotId;
 
         // Update cursor - suppress for anchored/immovable features
         let showPointer = Boolean(newHoveredStationId || newHoveredShotId);
+        let suppressReason: string | null = null;
         if (showPointer && this.activeTool === 'move_segment' && this.anchoredSectionIds.size > 0) {
           // Check if hovered feature belongs to an anchored section
           const hoveredId = newHoveredStationId || newHoveredShotId;
@@ -813,6 +828,7 @@ export default class SurveyLayer {
             const sectionId = parseInt(hoveredId.split(':')[0]!, 10);
             if (this.anchoredSectionIds.has(sectionId)) {
               showPointer = false;
+              suppressReason = 'anchored_section';
             }
           }
         }
@@ -821,17 +837,31 @@ export default class SurveyLayer {
           if (newHoveredStationId) {
             const [secStr, idxStr] = newHoveredStationId.split(':');
             const featureId = Number(secStr) * FEATURE_ID_STRIDE + Number(idxStr);
-            if (this.isStationImmovable(featureId)) showPointer = false;
+            if (this.isStationImmovable(featureId)) {
+              showPointer = false;
+              suppressReason = 'immovable_station';
+            }
           } else if (newHoveredShotId) {
             const [secStr, idxStr] = newHoveredShotId.split(':');
             const featureId = Number(secStr) * FEATURE_ID_STRIDE + Number(idxStr);
-            if (this.isShotImmovable(featureId)) showPointer = false;
+            if (this.isShotImmovable(featureId)) {
+              showPointer = false;
+              suppressReason = 'immovable_shot';
+            }
           }
         }
         // Move Station/Shot tools: use arrow cursor when not over a movable feature
         // (prevents MapLibre's default grab cursor from showing through)
         const useArrowFallback = this.activeTool === 'move_station' || this.activeTool === 'move_shot';
         this.map.getCanvas().style.cursor = showPointer ? 'pointer' : (useArrowFallback ? 'default' : '');
+        if (this.shouldLogInteraction() && suppressReason) {
+          console.debug('[HitDetection] Hover suppressed', {
+            activeTool: this.activeTool,
+            suppressReason,
+            newHoveredStationId,
+            newHoveredShotId,
+          });
+        }
 
         // Update MapLibre visual state
         this.updateVisualState();
@@ -887,6 +917,12 @@ export default class SurveyLayer {
     // Clear all hover when cursor leaves the map canvas
     this.boundMapLeave = () => {
       if (this.hoveredStationId || this.hoveredShotId) {
+        if (this.shouldLogInteraction()) {
+          console.debug('[HitDetection] Hover cleared on map leave', {
+            previousHoveredStationId: this.hoveredStationId,
+            previousHoveredShotId: this.hoveredShotId,
+          });
+        }
         this.hoveredStationId = null;
         this.hoveredShotId = null;
         this.map.getCanvas().style.cursor = '';
@@ -1199,6 +1235,10 @@ export default class SurveyLayer {
     return this.immovableShotFeatureIds.has(featureId);
   }
 
+  private shouldLogInteraction(): boolean {
+    return this.config?.debug?.map?.log_hit_detection ?? false;
+  }
+
   // Update visual state using setFeatureState (much faster than setPaintProperty)
   // Only updates the specific features that changed, not the entire layer
   private updateVisualState() {
@@ -1480,13 +1520,27 @@ export default class SurveyLayer {
 
   // Set selected station (called from outside to sync with uiStore)
   setSelectedStation(ref: StationRef | null) {
-    this.selectedStationId = ref ? `${ref.section_id}:${ref.station_index}` : null;
+    const newId = ref ? `${ref.section_id}:${ref.station_index}` : null;
+    if (this.shouldLogInteraction() && newId !== this.selectedStationId) {
+      console.debug('[Selection] Selected station changed', {
+        previous: this.selectedStationId,
+        next: newId,
+      });
+    }
+    this.selectedStationId = newId;
     this.updateVisualState();
   }
 
   // Set selected shot (called from outside to sync with uiStore)
   setSelectedShot(sectionId: SectionId | null, shotId: ShotId | null) {
-    this.selectedShotId = sectionId !== null && shotId !== null ? `${sectionId}:${shotId}` : null;
+    const newId = sectionId !== null && shotId !== null ? `${sectionId}:${shotId}` : null;
+    if (this.shouldLogInteraction() && newId !== this.selectedShotId) {
+      console.debug('[Selection] Selected shot changed', {
+        previous: this.selectedShotId,
+        next: newId,
+      });
+    }
+    this.selectedShotId = newId;
     this.updateVisualState();
   }
 
@@ -1495,6 +1549,11 @@ export default class SurveyLayer {
     const newId = ref ? `${ref.section_id}:${ref.station_index}` : null;
     if (this.snappedStationId === newId) return;
     this.snappedStationId = newId;
+    if (this.shouldLogInteraction()) {
+      console.debug('[Highlight] Snapped station changed', {
+        next: newId,
+      });
+    }
     // Update highlight layer for snapped station
     if (newId !== null) {
       this.setHighlightedStations([newId]);
@@ -1514,6 +1573,12 @@ export default class SurveyLayer {
     // Convert numeric SectionId to string for consistent comparison
     const stringId = sectionId !== null ? String(sectionId) : null;
     if (this.hoveredSectionId === stringId) return;
+    if (this.shouldLogInteraction()) {
+      console.debug('[Highlight] Hovered section changed', {
+        previous: this.hoveredSectionId,
+        next: stringId,
+      });
+    }
     this.hoveredSectionId = stringId;
     this.updateVisualState();
   }
@@ -1529,6 +1594,12 @@ export default class SurveyLayer {
     // Quick equality check (arrays are small, typically <10 sections)
     if (stringIds.length === this.hoveredSegmentSectionIds.length &&
         stringIds.every((id, i) => id === this.hoveredSegmentSectionIds[i])) return;
+    if (this.shouldLogInteraction()) {
+      console.debug('[Highlight] Hovered segment changed', {
+        previous: this.hoveredSegmentSectionIds,
+        next: stringIds,
+      });
+    }
     this.hoveredSegmentSectionIds = stringIds;
     this.updateVisualState();
   }
@@ -1543,6 +1614,12 @@ export default class SurveyLayer {
     // Convert to composite string ID format used internally
     const stringId = sectionId !== null && shotId !== null ? `${sectionId}:${shotId}` : null;
     if (this.hoveredShotId === stringId) return;
+    if (this.shouldLogInteraction()) {
+      console.debug('[Highlight] Hovered shot changed', {
+        previous: this.hoveredShotId,
+        next: stringId,
+      });
+    }
     this.hoveredShotId = stringId;
     this.updateVisualState();
   }
@@ -1556,6 +1633,12 @@ export default class SurveyLayer {
     // Convert to composite string ID format used internally
     const stringId = ref !== null ? `${ref.section_id}:${ref.station_index}` : null;
     if (this.hoveredStationId === stringId) return;
+    if (this.shouldLogInteraction()) {
+      console.debug('[Highlight] Hovered station changed', {
+        previous: this.hoveredStationId,
+        next: stringId,
+      });
+    }
     this.hoveredStationId = stringId;
     this.updateVisualState();
   }
@@ -1570,6 +1653,12 @@ export default class SurveyLayer {
     // Convert numeric SectionId to string for consistent comparison
     const stringId = sectionId !== null ? String(sectionId) : null;
     if (this.selectedSectionId === stringId) return;
+    if (this.shouldLogInteraction()) {
+      console.debug('[Selection] Selected section changed', {
+        previous: this.selectedSectionId,
+        next: stringId,
+      });
+    }
     this.selectedSectionId = stringId;
     this.updateVisualState();
   }
@@ -1658,6 +1747,17 @@ export default class SurveyLayer {
   // Set highlighted stations by their string IDs (format: "sectionId:stationIndex")
   setHighlightedStations(stationIds: string[]): void {
     if (!this.map) return;
+    if (this.shouldLogInteraction()) {
+      const changed = stationIds.length !== this.highlightedStationIds.length ||
+        stationIds.some((id, i) => id !== this.highlightedStationIds[i]);
+      if (changed) {
+        console.debug('[Highlight] Highlighted stations changed', {
+          previous: this.highlightedStationIds,
+          next: stationIds,
+        });
+      }
+    }
+    this.highlightedStationIds = stationIds;
     // Build filter expression to match stations in the highlight set
     // Uses compound expression matching the internal ID format used elsewhere (sectionId:stationIndex)
     const idExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]];
@@ -1674,6 +1774,11 @@ export default class SurveyLayer {
 
   // Clear station hover state
   clearStationHover(): void {
+    if (this.shouldLogInteraction() && this.hoveredStationId) {
+      console.debug('[Highlight] Clearing station hover', {
+        previous: this.hoveredStationId,
+      });
+    }
     this.hoveredStationId = null;
     this.callbacks.onStationHover?.(null);
     // Only clear feature hover if no shot is being hovered
@@ -1685,6 +1790,11 @@ export default class SurveyLayer {
 
   // Clear shot hover state
   clearShotHover(): void {
+    if (this.shouldLogInteraction() && this.hoveredShotId) {
+      console.debug('[Highlight] Clearing shot hover', {
+        previous: this.hoveredShotId,
+      });
+    }
     this.hoveredShotId = null;
     this.callbacks.onShotHover?.(null);
     // Only clear feature hover if no station is being hovered

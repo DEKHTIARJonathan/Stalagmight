@@ -104,6 +104,7 @@ export default function MapCanvas() {
   const { t } = useTranslation();
 
   const { project, stations, stats, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
+  const logMapInteractions = config?.debug?.map?.log_hit_detection ?? false;
 
   // Get GPS origin for coordinate transforms (enables satellite tile alignment)
   // Priority: project's zero-datum GPS > config's satellite_gps_origin
@@ -216,6 +217,14 @@ export default function MapCanvas() {
     }
     return immovable;
   }, [activeTool, stations, alignedClosureIds]);
+
+  useEffect(() => {
+    if (!logMapInteractions) return;
+    console.debug('[Selection] Computed immovable stations', {
+      count: immovableStationKeys.size,
+      activeTool,
+    });
+  }, [logMapInteractions, immovableStationKeys, activeTool]);
 
   // Convert immovable station keys to feature IDs and compute immovable shot IDs.
   // For move_shot: a shot is immovable if either endpoint is immovable.
@@ -1369,6 +1378,11 @@ export default function MapCanvas() {
 
     // Only resolve segment hover when move_segment tool is active
     if (activeTool !== 'move_segment') {
+      if (logMapInteractions) {
+        console.debug('[Highlight] Segment hover cleared (tool inactive)', {
+          activeTool,
+        });
+      }
       surveyLayerRef.current.setHoveredSegment([]);
       return undefined;
     }
@@ -1382,6 +1396,9 @@ export default function MapCanvas() {
       // segment highlight flickers off because the async IPC re-resolution
       // hasn't completed yet when the mouse reaches the next feature.
       segmentHoverTokenRef.current++; // Cancel any pending async results
+      if (logMapInteractions) {
+        console.debug('[Highlight] Segment hover pending clear (no hovered feature)', {});
+      }
       const timer = setTimeout(() => {
         surveyLayerRef.current?.setHoveredSegment([]);
       }, 150);
@@ -1390,6 +1407,11 @@ export default function MapCanvas() {
 
     // Don't highlight anchored sections
     if (anchoredSectionIds.has(sectionId)) {
+      if (logMapInteractions) {
+        console.debug('[Highlight] Segment hover suppressed (anchored section)', {
+          sectionId,
+        });
+      }
       surveyLayerRef.current.setHoveredSegment([]);
       return undefined;
     }
@@ -1400,14 +1422,26 @@ export default function MapCanvas() {
       if (segmentHoverTokenRef.current !== token) return;
       // Filter out anchored sections
       const movable = ids.filter((id) => !anchoredSectionIds.has(id));
+      if (logMapInteractions) {
+        console.debug('[Highlight] Segment hover resolved', {
+          sectionId,
+          connectedCount: ids.length,
+          movableCount: movable.length,
+        });
+      }
       surveyLayerRef.current?.setHoveredSegment(movable);
     }).catch(() => {
       if (segmentHoverTokenRef.current !== token) return;
       // On failure, highlight just the single section
+      if (logMapInteractions) {
+        console.debug('[Highlight] Segment hover fallback (IPC failed)', {
+          sectionId,
+        });
+      }
       surveyLayerRef.current?.setHoveredSegment([sectionId]);
     });
     return undefined;
-  }, [activeTool, hoveredStation, hoveredShot, anchoredSectionIds, getConnectedSectionIds, mapLoaded]);
+  }, [activeTool, hoveredStation, hoveredShot, anchoredSectionIds, getConnectedSectionIds, mapLoaded, logMapInteractions]);
 
   // Sync highlight layer with snap/draw/merge state
   // Shows snapped/origin stations even when stations layer is hidden
@@ -1428,8 +1462,14 @@ export default function MapCanvas() {
     const mergeBId = stationRefToId(mergeStationB);
     if (mergeBId && !highlightIds.includes(mergeBId)) highlightIds.push(mergeBId);
 
+    if (logMapInteractions) {
+      console.debug('[Highlight] Station highlight set', {
+        count: highlightIds.length,
+        ids: highlightIds,
+      });
+    }
     surveyLayerRef.current.setHighlightedStations(highlightIds);
-  }, [snappedStation, drawFromStation, mergeStationA, mergeStationB, mapLoaded]);
+  }, [snappedStation, drawFromStation, mergeStationA, mergeStationB, mapLoaded, logMapInteractions]);
 
   // Sync shot data labels visibility with SurveyLayer (gated by showShots)
   useEffect(() => {
