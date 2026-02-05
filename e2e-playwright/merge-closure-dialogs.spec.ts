@@ -81,7 +81,7 @@ test.describe('Merge and Closure Dialogs', () => {
     await expect(mergeDialog).toBeHidden({ timeout: 3000 });
   });
 
-  test('ClosureDialog renders with preview data and strategy options', async ({ page }) => {
+  test('ClosureDialog renders with preview data and action buttons', async ({ page }) => {
     const sectionIds = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return [];
@@ -125,11 +125,8 @@ test.describe('Merge and Closure Dialogs', () => {
     await expect(closureDialog.getByText('23.00m')).toBeVisible();
     await expect(closureDialog.getByText('0.50m').first()).toBeVisible();
 
-    // Should show closure strategy options
-    await expect(closureDialog.getByText('Proportional by Length')).toBeVisible();
-    await expect(closureDialog.getByText('Equal Distribution')).toBeVisible();
-    await expect(closureDialog.getByText('Keep Raw')).toBeVisible();
-    await expect(closureDialog.getByText('Manual Adjustment')).toBeVisible();
+    // Closure dialog no longer exposes strategy options (auto strategy is applied)
+    await expect(closureDialog.locator('input[type="radio"]')).toHaveCount(0);
 
     // Should have Cancel and Create Closure buttons
     const cancelButton = closureDialog.getByRole('button', { name: /Cancel/i });
@@ -177,7 +174,7 @@ test.describe('Merge and Closure Dialogs', () => {
     await expect(mergeDialog).toBeHidden({ timeout: 5000 });
   });
 
-  test('ClosureDialog strategy selection changes strategy', async ({ page }) => {
+  test('ClosureDialog create button triggers closure and dialog closes', async ({ page }) => {
     const sectionIds = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return [];
@@ -211,15 +208,9 @@ test.describe('Merge and Closure Dialogs', () => {
     const closureDialog = page.getByTestId('closure-dialog');
     await expect(closureDialog).toBeVisible({ timeout: 5000 });
 
-    // Default should be ProportionalByLength
-    const proportionalRadio = closureDialog.locator('input[value="ProportionalByLength"]');
-    await expect(proportionalRadio).toBeChecked();
-
-    // Select a different strategy
-    const keepRawRadio = closureDialog.locator('input[value="KeepRaw"]');
-    await keepRawRadio.click();
-    await expect(keepRawRadio).toBeChecked();
-    await expect(proportionalRadio).not.toBeChecked();
+    const createButton = closureDialog.getByRole('button', { name: /Create Closure/i });
+    await createButton.click();
+    await expect(closureDialog).toBeHidden({ timeout: 5000 });
   });
 
   test('Merge Tool opens MergeDialog when checkMergeConnectivity returns not connected', async ({ page }) => {
