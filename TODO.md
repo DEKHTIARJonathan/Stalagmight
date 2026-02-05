@@ -15,10 +15,10 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Data & Editing | 4 | 5 | 80% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
-| Performance & Stability | 1 | 10 | 10% |
+| Performance & Stability | 2 | 10 | 20% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **39** | **65** | **60%** |
+| **Total** | **40** | **65** | **62%** |
 
 ---
 
@@ -156,11 +156,11 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | SQLite Integrity Checks | ❌ | PRAGMA integrity_check on project open (SPEC 2.11) |
 | Error Boundary Wrapper | ❌ | No React ErrorBoundary components |
 | Network Retry Logic | ❌ | |
-| Improve Algorithm/Workflow Tracing | ❌ | Warnings on recoverable errors, debug prints in all major algorithms |
+| Improve Algorithm/Workflow Tracing | ✅ | Warnings on recoverable errors, debug prints in all major algorithms |
 | File Corruption Recovery | ❌ | |
 | Validation Error Recovery | ❌ | |
 
-**Subtotals**: ✅ 1 done, 🟡 1 partial, ❌ 7 not started
+**Subtotals**: ✅ 2 done, 🟡 1 partial, ❌ 7 not started
 
 ### Integrations (0/1 done)
 
@@ -189,12 +189,12 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Data & Editing | 5 | 4 | 0 | 1 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
-| Performance & Stability | 10 | 1 | 1 | 8 |
+| Performance & Stability | 10 | 2 | 1 | 7 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **65** | **39** | **1** | **25** |
+| **Total** | **65** | **40** | **1** | **24** |
 
-**Overall Progress**: 39 done + 1 partial = ~60% complete
+**Overall Progress**: 40 done + 1 partial = ~63% complete
 
 ---
 
