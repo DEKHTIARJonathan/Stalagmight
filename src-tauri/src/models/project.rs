@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::cmp::Ordering;
 use std::path::PathBuf;
-use tracing::{debug, info};
+use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
 
 use crate::config::ClosureAdjustmentConfig;
@@ -1436,6 +1436,15 @@ impl Project {
             .map(|zd| zd.station_ref)
             .collect();
 
+        debug!(
+            anchor_station = ?anchor_station,
+            method = ?method,
+            component_section_count = component.len(),
+            zero_datum_count = zero_datum_set.len(),
+            purpose = "adjust loop closures",
+            "Preparing loop closure adjustment"
+        );
+
         let mut zero_datum_coords: HashMap<StationRef, Coordinates> = HashMap::new();
         for zd in &zero_datum_set {
             let coords = self
@@ -1456,6 +1465,12 @@ impl Project {
             .collect();
 
         if closures.is_empty() {
+            warn!(
+                anchor_station = ?anchor_station,
+                method = ?method,
+                purpose = "adjust loop closures",
+                "No eligible loop closures found for adjustment"
+            );
             return Err("No eligible loop closures found for adjustment".to_string());
         }
 
@@ -1479,6 +1494,13 @@ impl Project {
                 .compute_station_raw_coords(*zd)
                 .ok_or_else(|| "Failed to compute zero datum coordinates".to_string())?;
             if !Self::coords_close(*before, after, 1e-6) {
+                error!(
+                    zero_datum = ?zd,
+                    before = ?before,
+                    after = ?after,
+                    purpose = "protect zero datum position",
+                    "Adjustment would move a zero datum station"
+                );
                 return Err("Adjustment would move a zero datum station".to_string());
             }
         }
@@ -2399,6 +2421,17 @@ impl Project {
         station_ref: StationRef,
         delta: Coordinates,
     ) -> Result<(), String> {
+        if self.zero_datums.iter().any(|zd| zd.station_ref == station_ref)
+            && Self::coords_norm(delta) > 1e-9
+        {
+            error!(
+                station_ref = ?station_ref,
+                delta = ?delta,
+                purpose = "protect zero datum position",
+                "Zero datum station move requested outside GPS update"
+            );
+        }
+
         let existing = self.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0));
         let total_dx = existing.0 + delta.x;
         let total_dy = existing.1 + delta.y;
@@ -2507,6 +2540,18 @@ impl Project {
             zero_datum_set.extend(extra.iter().copied());
         }
 
+        debug!(
+            station_a = ?station_a,
+            station_b = ?station_b,
+            strategy = ?strategy,
+            use_merge_groups,
+            extra_fixed_count = extra_fixed.map(|e| e.len()).unwrap_or(0),
+            group_count = colocated_groups.len(),
+            zero_datum_count = zero_datum_set.len(),
+            purpose = "distribute loop closure error",
+            "Starting closure error distribution"
+        );
+
         let is_group_anchored = |station: StationRef, groups: &HashMap<StationRef, Vec<StationRef>>| -> bool {
             let root = groups
                 .iter()
@@ -2528,6 +2573,16 @@ impl Project {
         } else {
             (station_a, station_b)
         };
+        debug!(
+            station_a = ?station_a,
+            station_b = ?station_b,
+            a_anchored,
+            b_anchored,
+            start = ?start,
+            end = ?end,
+            purpose = "select closure anchor order",
+            "Resolved anchor order for closure distribution"
+        );
 
         let coords_a_orig = self
             .compute_station_raw_coords(station_a)
@@ -2541,6 +2596,12 @@ impl Project {
 
         let base_correction = Self::coords_sub(coords_end, coords_start);
         let correction = Self::coords_sub(coords_b_orig, coords_a_orig);
+        trace!(
+            base_correction = ?base_correction,
+            correction = ?correction,
+            purpose = "compute closure correction vectors",
+            "Computed closure correction vectors"
+        );
 
         let mut targets: HashMap<StationRef, Coordinates> = HashMap::new();
         let section_lookup = self.build_section_lookup();
@@ -2704,6 +2765,13 @@ impl Project {
                 if (strategy == ClosureStrategy::ProportionalByLength && total_len <= 0.0)
                     || (strategy == ClosureStrategy::EqualDistribution && shot_count == 0)
                 {
+                    warn!(
+                        strategy = ?strategy,
+                        total_len,
+                        shot_count,
+                        purpose = "distribute loop closure error",
+                        "No distributable shots found for closure path"
+                    );
                     return Err("No distributable shots found for closure path".to_string());
                 }
 
@@ -2720,6 +2788,13 @@ impl Project {
             }
         } else {
             // Fallback: use zero datum paths
+            debug!(
+                station_a = ?station_a,
+                station_b = ?station_b,
+                strategy = ?strategy,
+                purpose = "distribute loop closure error",
+                "Using zero datum fallback paths for closure distribution"
+            );
             let (zd_a, _) = self
                 .shortest_path_to_any_zero_datum(station_a)
                 .ok_or_else(|| "No zero datum path found from station A".to_string())?;
@@ -2749,6 +2824,13 @@ impl Project {
             if (strategy == ClosureStrategy::ProportionalByLength && total_len <= 0.0)
                 || (strategy == ClosureStrategy::EqualDistribution && shot_count == 0)
             {
+                warn!(
+                    strategy = ?strategy,
+                    total_len,
+                    shot_count,
+                    purpose = "distribute loop closure error",
+                    "No distributable shots found for zero datum fallback"
+                );
                 return Err("No distributable shots found for zero datum fallback".to_string());
             }
 
@@ -2782,6 +2864,12 @@ impl Project {
                 group_delta.insert(*root, delta);
             }
         }
+        debug!(
+            target_count = targets.len(),
+            move_group_count = group_delta.len(),
+            purpose = "distribute loop closure error",
+            "Computed closure target deltas"
+        );
 
         let mut final_deltas: HashMap<StationRef, Coordinates> = HashMap::new();
         for (root, delta) in &group_delta {
@@ -2797,6 +2885,13 @@ impl Project {
         // Prevent moving zero datum stations
         for (station, delta) in &final_deltas {
             if zero_datum_set.contains(station) && Self::coords_norm(*delta) > 1e-9 {
+                error!(
+                    station_ref = ?station,
+                    delta = ?delta,
+                    strategy = ?strategy,
+                    purpose = "protect zero datum position",
+                    "Closure distribution would move a zero datum station"
+                );
                 return Err("Closure distribution would move a zero datum station".to_string());
             }
         }
@@ -2860,6 +2955,13 @@ impl Project {
                     self.apply_station_move_internal(station_a, residual)?;
                 }
             } else {
+                error!(
+                    residual = ?residual,
+                    station_a = ?station_a,
+                    station_b = ?station_b,
+                    purpose = "align closure endpoints",
+                    "Closure distribution failed to align endpoints without moving zero datum"
+                );
                 return Err("Closure distribution failed to align endpoints".to_string());
             }
         }
@@ -2894,6 +2996,12 @@ impl Project {
         station_a: StationRef,
         station_b: StationRef,
     ) -> Result<bool, String> {
+        debug!(
+            station_a = ?station_a,
+            station_b = ?station_b,
+            purpose = "merge stations",
+            "Merging stations"
+        );
         // Check that both stations exist
         if !self.station_exists(station_a) || !self.station_exists(station_b) {
             return Err("One or both stations do not exist".to_string());
@@ -2919,6 +3027,15 @@ impl Project {
         if a_has_zd && b_has_zd {
             return Err("Both stations are connected to zero datums. Remove one zero datum before merging, or create a loop closure if the sections are connected.".to_string());
         }
+
+        debug!(
+            station_a = ?station_a,
+            station_b = ?station_b,
+            a_has_zero_datum = a_has_zd,
+            b_has_zero_datum = b_has_zd,
+            purpose = "merge stations",
+            "Resolved zero datum anchors for merge"
+        );
 
         // Compute current coordinates (includes existing section offsets)
         // Coordinates are in the world coordinate system established by the datum
@@ -2950,6 +3067,28 @@ impl Project {
         // Apply offset to all sections in the moving merge group (rigid body)
         // This repositions the entire moving group relative to the datum coordinate system
         let moving_sections = self.get_merged_section_ids(moving_section_id);
+        let moving_has_zero_datum = moving_sections
+            .iter()
+            .any(|sid| self.zero_datums.iter().any(|zd| zd.station_ref.section_id == *sid));
+        if moving_has_zero_datum && (offset_x.abs() > 1e-9 || offset_y.abs() > 1e-9) {
+            error!(
+                moving_section_id,
+                offset_x,
+                offset_y,
+                moving_section_count = moving_sections.len(),
+                purpose = "protect zero datum position",
+                "Merge would move a zero datum section"
+            );
+        }
+
+        debug!(
+            moving_section_id,
+            moving_section_count = moving_sections.len(),
+            offset_x,
+            offset_y,
+            purpose = "merge stations",
+            "Computed merge offset for moving sections"
+        );
         for section_id in moving_sections {
             let current_offset = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
             self.section_offsets.insert(section_id, (
@@ -2976,6 +3115,12 @@ impl Project {
         station_a: StationRef,
         station_b: StationRef,
     ) -> Result<ClosurePreview, String> {
+        trace!(
+            station_a = ?station_a,
+            station_b = ?station_b,
+            purpose = "compute closure metrics",
+            "Computing closure metrics"
+        );
         let coords_a = self.compute_station_raw_coords(station_a)
             .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
         let coords_b = self.compute_station_raw_coords(station_b)
@@ -2991,6 +3136,18 @@ impl Project {
         } else {
             0.0
         };
+
+        debug!(
+            station_a = ?station_a,
+            station_b = ?station_b,
+            path_length,
+            misclosure_distance,
+            error_percentage,
+            horizontal_misclosure,
+            vertical_misclosure,
+            purpose = "compute closure metrics",
+            "Computed closure metrics"
+        );
 
         Ok(ClosurePreview {
             path_length,
@@ -3009,6 +3166,13 @@ impl Project {
         station_b: StationRef,
         strategy: ClosureStrategy,
     ) -> Result<LoopClosure, String> {
+        debug!(
+            station_a = ?station_a,
+            station_b = ?station_b,
+            strategy = ?strategy,
+            purpose = "create loop closure",
+            "Creating loop closure"
+        );
         // Check that both stations exist
         if !self.station_exists(station_a) || !self.station_exists(station_b) {
             return Err("One or both stations do not exist".to_string());
@@ -3071,6 +3235,15 @@ impl Project {
 
         self.loop_closures.push(closure.clone());
         self.touch();
+
+        info!(
+            closure_id = closure.id,
+            station_a = ?station_a,
+            station_b = ?station_b,
+            strategy = ?strategy,
+            purpose = "create loop closure",
+            "Loop closure created"
+        );
 
         Ok(closure)
     }
@@ -3248,15 +3421,21 @@ impl Project {
         }
 
         info!(
-            "Setting zero datum on station {}:{} with GPS ({}, {})",
-            station_ref.section_id, station_ref.station_index, gps.latitude, gps.longitude
+            station_ref = ?station_ref,
+            gps_lat = gps.latitude,
+            gps_lng = gps.longitude,
+            purpose = "anchor survey to GPS",
+            "Setting zero datum"
         );
 
         // Get all sections connected through merges (rigid group for offset propagation)
         let connected_sections = self.get_merged_section_ids(station_ref.section_id);
         debug!(
-            "Connected sections for datum station: {:?}",
-            connected_sections
+            station_ref = ?station_ref,
+            connected_section_count = connected_sections.len(),
+            connected_sections = ?connected_sections,
+            purpose = "reposition connected sections",
+            "Computed connected sections for zero datum"
         );
 
         // Compute current raw coordinates of the datum station
@@ -3264,8 +3443,10 @@ impl Project {
             .compute_station_raw_coords(station_ref)
             .ok_or_else(|| "Failed to compute station coordinates".to_string())?;
         debug!(
-            "Current station raw coords: ({}, {}, {})",
-            current_coords.x, current_coords.y, current_coords.z
+            station_ref = ?station_ref,
+            coords = ?current_coords,
+            purpose = "reposition connected sections",
+            "Computed raw station coordinates for zero datum"
         );
 
         // Determine target position based on whether this is the first datum
@@ -3283,29 +3464,43 @@ impl Project {
             // Updating the first datum: keep at origin (0, 0)
             target_x = 0.0;
             target_y = 0.0;
-            debug!("Updating first datum: keeping at origin (0, 0)");
+            debug!(
+                station_ref = ?station_ref,
+                purpose = "anchor survey to GPS",
+                "Updating first datum; keeping at origin"
+            );
         } else if let Some(first_datum) = self.zero_datums.first() {
             // Subsequent datum: compute GPS offset from first datum
             let (east, north) = gps_to_local(&gps, &first_datum.gps);
             target_x = east;
             target_y = north;
             debug!(
-                "Subsequent datum: GPS offset from first datum = ({}, {})",
-                east, north
+                station_ref = ?station_ref,
+                offset_x = east,
+                offset_y = north,
+                purpose = "anchor survey to GPS",
+                "Computed GPS offset from first datum"
             );
         } else {
             // First datum: position at origin (0, 0)
             target_x = 0.0;
             target_y = 0.0;
-            debug!("First datum: positioning at origin (0, 0)");
+            debug!(
+                station_ref = ?station_ref,
+                purpose = "anchor survey to GPS",
+                "First datum; positioning at origin"
+            );
         }
 
         // Compute the offset needed to move station from current position to target
         let offset_delta_x = target_x - current_coords.x;
         let offset_delta_y = target_y - current_coords.y;
         debug!(
-            "Offset delta to apply: ({}, {})",
-            offset_delta_x, offset_delta_y
+            station_ref = ?station_ref,
+            offset_delta_x,
+            offset_delta_y,
+            purpose = "reposition connected sections",
+            "Computed offset delta for zero datum"
         );
 
         // Apply offset to all connected sections
@@ -3316,28 +3511,37 @@ impl Project {
                 current_offset.1 + offset_delta_y,
             );
             self.section_offsets.insert(*section_id, new_offset);
-            debug!(
-                "Section {}: offset {:?} -> {:?}",
-                section_id, current_offset, new_offset
+            trace!(
+                section_id = *section_id,
+                from = ?current_offset,
+                to = ?new_offset,
+                purpose = "reposition connected sections",
+                "Applied section offset for zero datum"
             );
         }
 
         // Store the GPS datum
         // Update in-place if datum exists (preserves order/position for stable center)
+        let mut updated_existing = false;
         if let Some(existing) = self
             .zero_datums
             .iter_mut()
             .find(|zd| zd.station_ref == station_ref)
         {
             existing.gps = gps;
+            updated_existing = true;
         } else {
             self.zero_datums.push(ZeroDatum { station_ref, gps });
         }
 
         self.touch();
         info!(
-            "Zero datum set successfully. {} sections repositioned.",
-            connected_sections.len()
+            station_ref = ?station_ref,
+            updated_existing,
+            connected_section_count = connected_sections.len(),
+            total_zero_datums = self.zero_datums.len(),
+            purpose = "anchor survey to GPS",
+            "Zero datum set successfully"
         );
         Ok(true)
     }
@@ -3372,22 +3576,34 @@ impl Project {
         }
 
         debug!(
-            "Storing zero datum without repositioning on station {}:{} with GPS ({}, {})",
-            station_ref.section_id, station_ref.station_index, gps.latitude, gps.longitude
+            station_ref = ?station_ref,
+            gps_lat = gps.latitude,
+            gps_lng = gps.longitude,
+            purpose = "store zero datum without repositioning",
+            "Storing zero datum without repositioning"
         );
 
         // Store the GPS datum without computing or applying offsets
+        let mut updated_existing = false;
         if let Some(existing) = self
             .zero_datums
             .iter_mut()
             .find(|zd| zd.station_ref == station_ref)
         {
             existing.gps = gps;
+            updated_existing = true;
         } else {
             self.zero_datums.push(ZeroDatum { station_ref, gps });
         }
 
         self.touch();
+        debug!(
+            station_ref = ?station_ref,
+            updated_existing,
+            total_zero_datums = self.zero_datums.len(),
+            purpose = "store zero datum without repositioning",
+            "Zero datum stored without repositioning"
+        );
         Ok(true)
     }
 
@@ -3398,8 +3614,19 @@ impl Project {
             .retain(|zd| zd.station_ref != station_ref);
         if self.zero_datums.len() != len_before {
             self.touch();
+            info!(
+                station_ref = ?station_ref,
+                remaining_zero_datums = self.zero_datums.len(),
+                purpose = "remove zero datum",
+                "Zero datum removed"
+            );
             true
         } else {
+            debug!(
+                station_ref = ?station_ref,
+                purpose = "remove zero datum",
+                "Zero datum not found for removal"
+            );
             false
         }
     }

@@ -1256,6 +1256,16 @@ impl AppState {
         };
 
         if project.sections.iter().any(|s| s.id == section_id) {
+            if project.zero_datums.iter().any(|zd| zd.station_ref.section_id == section_id)
+                && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
+            {
+                tracing::error!(
+                    section_id,
+                    ?offset,
+                    purpose = "protect zero datum position",
+                    "Section move would shift a zero datum station"
+                );
+            }
             let current = project.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
             let new_offset = (current.0 + offset.x, current.1 + offset.y);
             project.section_offsets.insert(section_id, new_offset);
@@ -1298,6 +1308,26 @@ impl AppState {
             .filter(|id| existing.contains(id))
             .collect();
 
+        let mut zero_datum_sections: Vec<SectionId> = project
+            .zero_datums
+            .iter()
+            .map(|zd| zd.station_ref.section_id)
+            .filter(|sid| connected.contains(sid))
+            .collect();
+        zero_datum_sections.sort();
+        zero_datum_sections.dedup();
+        if !zero_datum_sections.is_empty()
+            && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
+        {
+            tracing::error!(
+                ?offset,
+                section_id,
+                zero_datum_sections = ?zero_datum_sections,
+                purpose = "protect zero datum position",
+                "Segment move would shift zero datum stations"
+            );
+        }
+
         // Apply offset to every section in the connected set
         for sid in &connected {
             let current = project.section_offsets.get(sid).copied().unwrap_or((0.0, 0.0));
@@ -1325,6 +1355,17 @@ impl AppState {
             Some(p) => p,
             None => return CommandResult::failure("No project open".to_string()),
         };
+
+        if project.zero_datums.iter().any(|zd| zd.station_ref == station_ref)
+            && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
+        {
+            tracing::error!(
+                ?station_ref,
+                ?offset,
+                purpose = "protect zero datum position",
+                "Station move would shift a zero datum station"
+            );
+        }
 
         // Incorporate any existing station offset
         let existing = project.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0));
