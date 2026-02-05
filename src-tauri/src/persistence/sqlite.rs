@@ -21,7 +21,6 @@ pub struct Database {
 impl Database {
     /// Open or create a database at the given path
     pub fn open(path: &Path) -> Result<Self> {
-        tracing::info!("=== DATABASE OPEN (for save) ===");
         tracing::info!("Opening database at: {:?}", path);
         let exists = path.exists();
         tracing::info!("File existed before open: {}", exists);
@@ -58,7 +57,6 @@ impl Database {
 
     /// Open an existing database (does not create if missing)
     pub fn open_existing(path: &Path) -> Result<Self> {
-        tracing::info!("=== OPEN EXISTING START ===");
         tracing::info!("Opening existing database at: {:?}", path);
 
         if !path.exists() {
@@ -88,7 +86,6 @@ impl Database {
         db.ensure_schema_version()?;
         db.validate_foreign_keys()?;
 
-        tracing::info!("=== OPEN EXISTING END === Success");
         Ok(db)
     }
 
@@ -908,7 +905,6 @@ impl Database {
 
     /// Save a project to the database
     pub fn save_project(&mut self, project: &Project) -> Result<()> {
-        tracing::info!("=== SAVE PROJECT START ===");
         tracing::info!("Saving project: name={}, sections={}", project.name, project.sections.len());
 
         tracing::info!("About to start transaction...");
@@ -1136,7 +1132,7 @@ impl Database {
             [],
             |row| row.get(0),
         ).unwrap_or(0);
-        tracing::info!("=== SAVE PROJECT END === Verification: project table has {} rows", verify_count);
+        tracing::info!("Save verification: project table has {} rows", verify_count);
 
         Ok(())
     }
