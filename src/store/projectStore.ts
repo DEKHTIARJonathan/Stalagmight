@@ -33,7 +33,7 @@ export interface LoadingState {
    * Set from the first progress event or result.loadingId.
    * Value of 0 means "accept events until we learn the backend ID".
    */
-  loadingId: number;
+  loadingId: bigint;
   /**
    * Client operation ID for race detection (local to frontend).
    * Incremented on each load start. Used to detect if a newer load started.
@@ -66,7 +66,7 @@ export interface LoadingState {
 }
 
 const initialLoadingState: LoadingState = {
-  loadingId: 0,
+  loadingId: 0n,
   clientOpId: 0,
   isLoading: false,
   overallProgress: 0,
@@ -82,6 +82,19 @@ interface LoadError {
   code: string;
   message: string;
   details?: string | undefined;
+}
+
+function emptyCommandResult(
+  success: boolean,
+  error?: string | null,
+  warnings: CommandResult['warnings'] = []
+): CommandResult {
+  return {
+    success,
+    warnings,
+    error: success ? null : (error ?? null),
+    section_ids: [],
+  };
 }
 
 /**
@@ -260,9 +273,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       await invoke('update_config', { config });
       // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
       await get().loadConfig();
-      return { success: true, error: null, warnings: [] };
+      return emptyCommandResult(true, null);
     } catch (e) {
-      return { success: false, error: String(e), warnings: [] };
+      return emptyCommandResult(false, String(e));
     }
   },
 
@@ -277,7 +290,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     set({
       loading: {
         ...initialLoadingState,
-        loadingId: 0, // Will be set from first progress event or result
+        loadingId: 0n, // Will be set from first progress event or result
         clientOpId: newClientOpId,
         isLoading: true,
         projectName,
@@ -404,7 +417,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
       // Check clientOpId hasn't changed
       if (get().loading.clientOpId !== clientOpId) {
-        return { success: false, error: 'Cancelled', warnings: [] };
+        return emptyCommandResult(false, 'Cancelled');
       }
 
       // Set backend loadingId from result for event correlation
@@ -425,13 +438,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       await get().loadRecentProjects();
       get().resetLoading();
 
-      return { success: true, error: null, warnings: [] };
+      return emptyCommandResult(true, null);
     } catch (e) {
       const error = parseLoadError(e);
       if (get().loading.clientOpId === clientOpId) {
         get().setLoadingError(error.message, error.details);
       }
-      return { success: false, error: error.message, warnings: [] };
+      return emptyCommandResult(false, error.message);
     }
   },
 
@@ -448,7 +461,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
       // Check clientOpId hasn't changed
       if (get().loading.clientOpId !== clientOpId) {
-        return { success: false, error: 'Cancelled', warnings: [] };
+        return emptyCommandResult(false, 'Cancelled');
       }
 
       if (result.success) {
@@ -470,7 +483,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       if (get().loading.clientOpId === clientOpId) {
         get().setLoadingError(error.message, error.details);
       }
-      return { success: false, error: error.message, warnings: [] };
+      return emptyCommandResult(false, error.message);
     }
   },
 
@@ -496,7 +509,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     // Guard against concurrent close operations (rapid Back clicks or double Discard)
     if (get().isClosing) {
       console.log('[projectStore] closeProject ignored - already closing');
-      return { success: false, error: 'Already closing', warnings: [] };
+      return emptyCommandResult(false, 'Already closing');
     }
 
     set({ isClosing: true });
@@ -580,7 +593,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       return result;
     } catch (e) {
       console.error('Failed to remove from recent projects:', e);
-      return { success: false, error: String(e), warnings: [] };
+      return emptyCommandResult(false, String(e));
     }
   },
 
@@ -592,6 +605,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       surveyor: data.surveyor,
       date: data.date,
       color: data.color,
+      direction: data.direction,
       shots: data.shots,
     });
     console.log('[projectStore] create_section result:', result);
@@ -803,7 +817,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   getConnectedSectionIds: async (sectionId: SectionId) => {
-    return await invoke<number[]>('get_connected_section_ids', { sectionId });
+    return await invoke<number[]>('get_rigid_connected_section_ids', { sectionId });
   },
 
   getAnchoredSectionIds: async () => {
@@ -821,7 +835,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed');
       }
     } catch (e) {
-      result = { success: false, warnings: [], error: String(e) };
+      result = emptyCommandResult(false, String(e));
       useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed');
     } finally {
       await get().refreshProjectState();
@@ -839,7 +853,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         useUIStore.getState().showToast(result.error ?? 'Unknown error', 'redo-failed');
       }
     } catch (e) {
-      result = { success: false, warnings: [], error: String(e) };
+      result = emptyCommandResult(false, String(e));
       useUIStore.getState().showToast(result.error ?? 'Unknown error', 'redo-failed');
     } finally {
       await get().refreshProjectState();
@@ -861,7 +875,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed');
       }
     } catch (e) {
-      result = { success: false, warnings: [], error: String(e) };
+      result = emptyCommandResult(false, String(e));
       useUIStore.getState().showToast(result.error ?? 'Unknown error', 'undo-failed');
     } finally {
       await get().refreshProjectState();
@@ -883,7 +897,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         useUIStore.getState().showToast(result.error ?? 'Unknown error', 'redo-failed');
       }
     } catch (e) {
-      result = { success: false, warnings: [], error: String(e) };
+      result = emptyCommandResult(false, String(e));
       useUIStore.getState().showToast(result.error ?? 'Unknown error', 'redo-failed');
     } finally {
       await get().refreshProjectState();
@@ -977,7 +991,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       return result;
     } catch (e) {
       console.error('Failed to merge projects:', e);
-      return { success: false, error: String(e), warnings: [] };
+      return emptyCommandResult(false, String(e));
     }
   },
 }));

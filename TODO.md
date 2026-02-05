@@ -13,12 +13,12 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Import/Export | 12 | 19 | 63% |
 | UI & Polish | 7 | 17 | 41% |
 | Data & Editing | 4 | 5 | 80% |
-| Loop Closure | 3 | 4 | 75% |
+| Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
 | Performance & Stability | 1 | 10 | 10% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **34** | **64** | **53%** |
+| **Total** | **36** | **65** | **55%** |
 
 ---
 
@@ -120,16 +120,17 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 4 done, ❌ 1 not started
 
-### Loop Closure (3/4 done)
+### Loop Closure (5/5 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
 | Loop Detection Algorithm | ✅ | |
 | Closure Error Calculation | ✅ | |
 | Closure Strategy Selector | ✅ | ClosureDialog with 4 strategies |
-| Fix Quality Setting → Closure Weight | ❌ | Quality setting incorrectly sets properties; rename/refactor to closure weight |
+| Closure Alignment Locks Movement | ✅ | Unaligned closures move independently; aligned closures move together |
+| Fix Quality Setting → Closure Weight | ✅ | Quality setting incorrectly sets properties; rename/refactor to closure weight |
 
-**Subtotals**: ✅ 3 done, ❌ 1 not started
+**Subtotals**: ✅ 5 done, ❌ 0 not started
 
 ### Accessibility & i18n (7/7 done)
 
@@ -184,16 +185,16 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
 | Import/Export | 19 | 12 | 1 | 6 |
-| UI & Polish | 17 | 6 | 0 | 11 |
+| UI & Polish | 17 | 7 | 0 | 10 |
 | Data & Editing | 5 | 4 | 0 | 1 |
-| Loop Closure | 4 | 3 | 0 | 1 |
+| Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
 | Performance & Stability | 10 | 1 | 1 | 8 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **64** | **33** | **2** | **29** |
+| **Total** | **65** | **36** | **2** | **27** |
 
-**Overall Progress**: 33 done + 2 partial = ~55% complete
+**Overall Progress**: 36 done + 2 partial = ~58% complete
 
 ---
 

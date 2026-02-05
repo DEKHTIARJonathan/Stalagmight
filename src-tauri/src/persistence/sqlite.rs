@@ -276,6 +276,32 @@ impl Database {
             }
         }
 
+        // Add is_aligned column to loop_closures table if it doesn't exist
+        let has_is_aligned: bool = self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='is_aligned'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_is_aligned {
+            let loop_table_exists: bool = self.conn.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='loop_closures'",
+                [],
+                |row| row.get::<_, i64>(0),
+            ).map(|c| c > 0).unwrap_or(false);
+
+            if loop_table_exists {
+                self.conn.execute(
+                    "ALTER TABLE loop_closures ADD COLUMN is_aligned INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+                tracing::info!("Added is_aligned column to loop_closures table");
+            }
+        }
+
         // Add next_closure_id column to project table if it doesn't exist (persists monotonic counter)
         let has_next_closure_id: bool = self.conn
             .query_row(
@@ -501,6 +527,7 @@ impl Database {
                 vertical_misclosure REAL NOT NULL,
                 closure_id INTEGER NOT NULL DEFAULT 0,
                 strategy TEXT NOT NULL DEFAULT 'Batch',
+                is_aligned INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (station_a_section) REFERENCES sections(id) ON DELETE CASCADE,
                 FOREIGN KEY (station_b_section) REFERENCES sections(id) ON DELETE CASCADE
             );
@@ -841,6 +868,7 @@ impl Database {
                 vertical_misclosure REAL NOT NULL,
                 closure_id INTEGER NOT NULL DEFAULT 0,
                 strategy TEXT NOT NULL DEFAULT 'Batch',
+                is_aligned INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (station_a_section) REFERENCES sections(id) ON DELETE CASCADE,
                 FOREIGN KEY (station_b_section) REFERENCES sections(id) ON DELETE CASCADE
             );
@@ -1053,11 +1081,27 @@ impl Database {
             )?;
         }
 
+        // Ensure is_aligned column exists
+        let has_is_aligned: bool = tx
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='is_aligned'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_is_aligned {
+            tx.execute(
+                "ALTER TABLE loop_closures ADD COLUMN is_aligned INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+
         for lc in &project.loop_closures {
             let closure_id_i64 = i64::try_from(lc.id)
                 .map_err(|_| anyhow::anyhow!("Closure ID {} exceeds i64 range", lc.id))?;
             tx.execute(
-                "INSERT INTO loop_closures (station_a_section, station_a_index, station_b_section, station_b_index, path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure, closure_id, strategy) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                "INSERT INTO loop_closures (station_a_section, station_a_index, station_b_section, station_b_index, path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure, closure_id, strategy, is_aligned) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     lc.station_a.section_id,
                     lc.station_a.station_index,
@@ -1069,7 +1113,8 @@ impl Database {
                     lc.horizontal_misclosure,
                     lc.vertical_misclosure,
                     closure_id_i64,
-                    lc.strategy.as_str()
+                    lc.strategy.as_str(),
+                    if lc.is_aligned { 1 } else { 0 }
                 ],
             )?;
         }
@@ -1531,14 +1576,26 @@ impl Database {
             )
             .map(|c| c > 0)
             .unwrap_or(false);
+        let has_is_aligned: bool = self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='is_aligned'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
 
         // Build SELECT dynamically based on available columns
-        let extra_cols = match (has_closure_id, has_strategy) {
-            (true, true) => ", closure_id, strategy",
-            (true, false) => ", closure_id",
-            (false, true) => ", strategy",
-            (false, false) => "",
-        };
+        let mut extra_cols = String::new();
+        if has_closure_id {
+            extra_cols.push_str(", closure_id");
+        }
+        if has_strategy {
+            extra_cols.push_str(", strategy");
+        }
+        if has_is_aligned {
+            extra_cols.push_str(", is_aligned");
+        }
         let query = format!(
             "SELECT station_a_section, station_a_index, station_b_section, station_b_index, \
              path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure{} \
@@ -1556,9 +1613,16 @@ impl Database {
             } else { 0 };
             let strategy = if has_strategy {
                 let s: String = row.get::<_, String>(col).unwrap_or_default();
+                col += 1;
                 ClosureStrategy::from_str_lossy(&s)
             } else {
                 ClosureStrategy::default()
+            };
+            let is_aligned = if has_is_aligned {
+                let v = row.get::<_, i64>(col).unwrap_or(0);
+                v != 0
+            } else {
+                false
             };
             Ok(LoopClosure {
                 id,
@@ -1570,6 +1634,7 @@ impl Database {
                 horizontal_misclosure: row.get(7)?,
                 vertical_misclosure: row.get(8)?,
                 strategy,
+                is_aligned,
             })
         })?;
 

@@ -1095,7 +1095,7 @@ function ClosuresSection({
 
   // Precompute loop closures map for O(1) lookups
   const closureMap = useMemo(() => {
-    const map = new Map<number, LoopClosure>();
+    const map = new Map<bigint, LoopClosure>();
     for (const lc of loopClosures) {
       map.set(lc.id, lc);
     }
@@ -1104,7 +1104,7 @@ function ClosuresSection({
 
   // Group closures by closure_id and sort deterministically
   const sortedGroups = useMemo(() => {
-    const grouped = new Map<number, ClosureRef[]>();
+    const grouped = new Map<bigint, ClosureRef[]>();
     for (const c of closures) {
       const existing = grouped.get(c.closure_id);
       if (existing) {
@@ -1120,7 +1120,9 @@ function ClosuresSection({
       const bHasDirect = refsB.some((r) => !r.is_transitive);
       if (aHasDirect && !bHasDirect) return -1;
       if (!aHasDirect && bHasDirect) return 1;
-      return idA - idB;
+      if (idA < idB) return -1;
+      if (idA > idB) return 1;
+      return 0;
     });
   }, [closures]);
 
@@ -1152,6 +1154,7 @@ function ClosuresSection({
             </Button>
           </div>
           {sortedGroups.map(([closureId, refs]) => {
+            const closureIdLabel = closureId.toString();
             const closure = closureMap.get(closureId);
             const directRefs = refs.filter((r) => !r.is_transitive);
             const transitiveRefs = refs.filter((r) => r.is_transitive);
@@ -1159,9 +1162,9 @@ function ClosuresSection({
             const isTransitiveOnly = directRefs.length === 0 && transitiveRefs.length > 0;
 
             return (
-              <div key={closureId} className={`space-y-1${isTransitiveOnly ? ' opacity-50' : ''}`}>
+              <div key={closureIdLabel} className={`space-y-1${isTransitiveOnly ? ' opacity-50' : ''}`}>
                 {directRefs.length > 0 && (
-                  <div className="text-sm" data-testid={`closure-direct-${closureId}`}>
+                  <div className="text-sm" data-testid={`closure-direct-${closureIdLabel}`}>
                     <span className="text-text-secondary">{t('detailPanel.closures.direct')} </span>
                     {directRefs.map((ref, i) => (
                       <span key={i}>
@@ -1181,7 +1184,7 @@ function ClosuresSection({
                   </div>
                 )}
                 {transitiveRefs.length > 0 && (
-                  <div className="text-sm" data-testid={`closure-transitive-${closureId}`}>
+                  <div className="text-sm" data-testid={`closure-transitive-${closureIdLabel}`}>
                     <span className="text-text-secondary">{t('detailPanel.closures.transitive')} </span>
                     {transitiveRefs.map((ref, i) => (
                       <span key={i}>
@@ -1217,7 +1220,7 @@ function ClosuresSection({
                   </div>
                 )}
                 {closure ? (
-                  <div className="text-xs text-text-secondary" data-testid={`closure-metrics-${closureId}`}>
+                  <div className="text-xs text-text-secondary" data-testid={`closure-metrics-${closureIdLabel}`}>
                     {t('detailPanel.closures.metrics', {
                       path: `${formatFixed(closure.path_length, undefined, 1)}${t('common.units.meters')}`,
                       error: `${formatFixed(closure.misclosure_distance, undefined, 2)}${t('common.units.meters')}`,

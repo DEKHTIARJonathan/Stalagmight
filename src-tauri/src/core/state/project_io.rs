@@ -514,6 +514,7 @@ impl AppState {
                         horizontal_misclosure: closure.horizontal_misclosure,
                         vertical_misclosure: closure.vertical_misclosure,
                         strategy: closure.strategy,
+                        is_aligned: closure.is_aligned,
                     });
                 }
             }

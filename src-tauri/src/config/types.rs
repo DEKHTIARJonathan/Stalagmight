@@ -32,6 +32,7 @@ pub struct Config {
     // Legacy fields for backwards compatibility (deserialize only, never serialize)
     // Uses alias to match old TOML key name while keeping internal field name distinct
     #[serde(default, skip_serializing, alias = "snap")]
+    #[ts(skip)]
     pub(super) legacy_snap: Option<LegacySnapConfig>,
 }
 

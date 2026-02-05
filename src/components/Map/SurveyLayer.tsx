@@ -2149,10 +2149,15 @@ export default class SurveyLayer {
 
     // 1. Find clicked station and all co-located stations via BFS:
     //    - merged_with: always co-located
-    //    - closures_with: always co-located
+    //    - closures_with: only when the closure has been aligned
     //    additionalSeeds allows shot drag to seed from both endpoints simultaneously
     const stationByKey = new Map(
       this.cachedStations.map(s => [`${s.station_ref.section_id}:${s.station_ref.station_index}`, s])
+    );
+    const alignedClosureIds = new Set<bigint>(
+      (this.cachedLoopClosures ?? [])
+        .filter((closure) => closure.is_aligned)
+        .map((closure) => closure.id)
     );
     const clickedKey = `${sectionId}:${stationIndex}`;
     const clickedStation = stationByKey.get(clickedKey);
@@ -2179,6 +2184,7 @@ export default class SurveyLayer {
         queue.push(`${ref.section_id}:${ref.station_index}`);
       }
       for (const cr of st.closures_with ?? []) {
+        if (!alignedClosureIds.has(cr.closure_id)) continue;
         queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
       }
     }

@@ -89,10 +89,11 @@ Algorithm overview:
 
 ## Co-location and Move Tools
 
-Closures are treated as co-location relationships (like merges):
-- Dragging a station moves all stations in its merge/closure co-location set.
-- Immovable stations (zero datums and their closure/merge-connected neighbors) are computed via BFS over merges + closures.
-- There is no longer a KeepRaw exception; all closures participate in co-location.
+Closures are treated as co-location relationships **only after alignment** (like merges):
+- Dragging a station moves all stations in its merge set plus any **aligned** closures.
+- Before batch adjustment, closure endpoints move independently (not co-located).
+- Immovable stations (zero datums and their merge/aligned-closure neighbors) are computed via BFS over merges + aligned closures.
+- There is no longer a KeepRaw exception; closure participation is gated by alignment.
 
 ## Legacy Strategy Mapping
 

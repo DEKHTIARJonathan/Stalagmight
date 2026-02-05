@@ -105,8 +105,8 @@ export function CacheSettings({
       console.error('[CacheSettings] Failed to load cache stats:', error);
       if (mountedRef.current) {
         setCacheStats({
-          total_tiles: 0,
-          total_bytes: 0,
+          total_tiles: 0n,
+          total_bytes: 0n,
           providers: {},
         });
       }
@@ -212,11 +212,11 @@ export function CacheSettings({
             <>
               <div className="flex justify-between">
                 <span className="text-text-secondary">{t('settings.cache.stats.cachedTiles')}</span>
-                <span data-testid="cache-tile-count">{formatNumber(cacheStats.total_tiles)}</span>
+                <span data-testid="cache-tile-count">{formatNumber(Number(cacheStats.total_tiles))}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-text-secondary">{t('settings.cache.stats.cacheSize')}</span>
-                <span data-testid="cache-size">{formatBytes(cacheStats.total_bytes)}</span>
+                <span data-testid="cache-size">{formatBytes(Number(cacheStats.total_bytes))}</span>
               </div>
               {Object.entries(cacheStats.providers).length > 0 && (
                 <div className="pt-2 border-t border-border">
@@ -226,8 +226,8 @@ export function CacheSettings({
                       <span className="text-text-secondary capitalize">{provider}:</span>
                       <span>
                         {t('settings.cache.stats.providerTiles', {
-                          tiles: formatNumber(stats.tiles),
-                          size: formatBytes(stats.bytes),
+                          tiles: formatNumber(Number(stats.tiles)),
+                          size: formatBytes(Number(stats.bytes)),
                         })}
                       </span>
                     </div>
@@ -245,7 +245,7 @@ export function CacheSettings({
           <Button
             variant="danger"
             onClick={handleClearCache}
-            disabled={isClearing || (cacheStats?.total_tiles ?? 0) === 0}
+            disabled={isClearing || (cacheStats?.total_tiles ?? 0n) === 0n}
             data-testid="clear-cache-button"
           >
             {isClearing ? t('settings.cache.clear.clearing') : t('settings.cache.clear.button')}

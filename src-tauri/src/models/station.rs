@@ -402,6 +402,9 @@ pub struct LoopClosure {
     /// Strategy for distributing the closure error
     #[serde(default)]
     pub strategy: ClosureStrategy,
+    /// Whether the closure endpoints have been aligned (post-adjustment or snap-to-merge)
+    #[serde(default)]
+    pub is_aligned: bool,
 }
 
 /// Reference to a loop closure from a station's perspective

@@ -125,6 +125,15 @@ pub fn get_connected_section_ids(
     state.get_connected_section_ids(section_id)
 }
 
+/// Get all section IDs connected through merges and aligned closures (rigid groups)
+#[tauri::command]
+pub fn get_rigid_connected_section_ids(
+    state: State<AppState>,
+    section_id: SectionId,
+) -> Result<Vec<SectionId>, String> {
+    state.get_rigid_connected_section_ids(section_id)
+}
+
 /// Get all section IDs belonging to segments that contain a zero datum
 #[tauri::command]
 pub fn get_anchored_section_ids(

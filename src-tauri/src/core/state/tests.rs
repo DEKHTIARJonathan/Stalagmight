@@ -3593,7 +3593,8 @@ fn test_undo_unmerge_restores_removed_closures() {
             error_percentage: 2.0,
             horizontal_misclosure: 0.2,
             vertical_misclosure: 0.1,
-        strategy: ClosureStrategy::default(),
+            strategy: ClosureStrategy::default(),
+            is_aligned: false,
         });
     }
 
@@ -4946,7 +4947,8 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
             error_percentage: 2.5,
             horizontal_misclosure: 0.2,
             vertical_misclosure: 0.0,
-        strategy: ClosureStrategy::default(),
+            strategy: ClosureStrategy::default(),
+            is_aligned: false,
         });
         project.next_closure_id += 1;
     }
@@ -5067,7 +5069,8 @@ fn test_transitive_closures_in_computed_stations() {
             error_percentage: 2.5,
             horizontal_misclosure: 0.4,
             vertical_misclosure: 0.3,
-        strategy: ClosureStrategy::default(),
+            strategy: ClosureStrategy::default(),
+            is_aligned: false,
         });
         project.next_closure_id += 1;
     }
@@ -5195,7 +5198,8 @@ fn test_transitive_closures_serialization_preserves_data() {
             error_percentage: 2.0,
             horizontal_misclosure: 0.2,
             vertical_misclosure: 0.2,
-        strategy: ClosureStrategy::default(),
+            strategy: ClosureStrategy::default(),
+            is_aligned: false,
         });
         project.next_closure_id += 1;
     }
@@ -5435,8 +5439,8 @@ fn test_move_segment_nonexistent_section() {
 }
 
 #[test]
-fn test_move_segment_closure_connectivity() {
-    // Sections connected only via a loop closure (not merge) should both move
+fn test_move_segment_unaligned_closure_independent() {
+    // Sections connected only via an unaligned loop closure should move independently
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "Test".to_string(),
@@ -5477,7 +5481,8 @@ fn test_move_segment_closure_connectivity() {
             error_percentage: 1.0,
             horizontal_misclosure: 0.08,
             vertical_misclosure: 0.06,
-        strategy: ClosureStrategy::default(),
+            strategy: ClosureStrategy::default(),
+            is_aligned: false,
         });
         project.next_closure_id += 1;
     }
@@ -5494,7 +5499,91 @@ fn test_move_segment_closure_connectivity() {
     });
     assert!(result.success);
 
-    // Both sections should have moved (connected via closure, not merge)
+    // Only the starting section should move (closure is not aligned yet)
+    let project = state.get_project_state().unwrap();
+    let a_after = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let b_after = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
+
+    assert!(
+        (a_after.0 - a_before.0 - 5.0).abs() < 0.001,
+        "Section A x should increase by 5"
+    );
+    assert!(
+        (a_after.1 - a_before.1 - 15.0).abs() < 0.001,
+        "Section A y should increase by 15"
+    );
+    assert!(
+        (b_after.0 - b_before.0).abs() < 0.001,
+        "Section B x should remain unchanged before closure alignment"
+    );
+    assert!(
+        (b_after.1 - b_before.1).abs() < 0.001,
+        "Section B y should remain unchanged before closure alignment"
+    );
+}
+
+#[test]
+fn test_move_segment_aligned_closure_connectivity() {
+    // Sections connected via an aligned loop closure should move together
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let r1 = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let sid_a = r1.section_id.unwrap();
+
+    let r2 = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+    let sid_b = r2.section_id.unwrap();
+
+    // Inject an aligned loop closure directly (no merge needed) connecting A.1 ↔ B.0
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        let closure_id = project.next_closure_id;
+        project.loop_closures.push(crate::models::LoopClosure {
+            id: closure_id,
+            station_a: StationRef::new(sid_a, 1),
+            station_b: StationRef::new(sid_b, 0),
+            path_length: 10.0,
+            misclosure_distance: 0.1,
+            error_percentage: 1.0,
+            horizontal_misclosure: 0.08,
+            vertical_misclosure: 0.06,
+            strategy: ClosureStrategy::default(),
+            is_aligned: true,
+        });
+        project.next_closure_id += 1;
+    }
+
+    // Record offsets before move
+    let project = state.get_project_state().unwrap();
+    let a_before = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
+    let b_before = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
+
+    // Move segment starting from section A
+    let result = state.execute(Command::MoveSegment {
+        section_id: sid_a,
+        offset: Coordinates::new(5.0, 15.0, 0.0),
+    });
+    assert!(result.success);
+
+    // Both sections should have moved (connected via aligned closure)
     let project = state.get_project_state().unwrap();
     let a_after = project.section_offsets.get(&sid_a).copied().unwrap_or((0.0, 0.0));
     let b_after = project.section_offsets.get(&sid_b).copied().unwrap_or((0.0, 0.0));
@@ -5509,11 +5598,11 @@ fn test_move_segment_closure_connectivity() {
     );
     assert!(
         (b_after.0 - b_before.0 - 5.0).abs() < 0.001,
-        "Section B x (connected via closure) should increase by 5"
+        "Section B x (aligned closure) should increase by 5"
     );
     assert!(
         (b_after.1 - b_before.1 - 15.0).abs() < 0.001,
-        "Section B y (connected via closure) should increase by 15"
+        "Section B y (aligned closure) should increase by 15"
     );
 }
 
@@ -6521,7 +6610,8 @@ fn test_delete_last_shot_cleans_up_closures() {
             error_percentage: 5.0,
             horizontal_misclosure: 0.4,
             vertical_misclosure: 0.3,
-        strategy: ClosureStrategy::default(),
+            strategy: ClosureStrategy::default(),
+            is_aligned: false,
         });
         project.next_closure_id += 1;
     }
@@ -6594,7 +6684,8 @@ fn test_delete_last_shot_undo_restores_references() {
             error_percentage: 5.0,
             horizontal_misclosure: 0.4,
             vertical_misclosure: 0.3,
-        strategy: ClosureStrategy::default(),
+            strategy: ClosureStrategy::default(),
+            is_aligned: false,
         });
         project.next_closure_id += 1;
     }

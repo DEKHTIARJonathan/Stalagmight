@@ -115,34 +115,49 @@ pub struct ShotData {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct ShotUpdates {
     #[serde(default)]
+    #[ts(optional)]
     pub azimuth_in: Option<f64>,
     #[serde(default)]
+    #[ts(optional)]
     pub azimuth_out: Option<f64>,
     #[serde(default)]
+    #[ts(optional)]
     pub length: Option<f64>,
     #[serde(default)]
+    #[ts(optional)]
     pub depth_in: Option<f64>,
     #[serde(default)]
+    #[ts(optional)]
     pub depth_out: Option<f64>,
     #[serde(default)]
+    #[ts(optional)]
     pub pitch_in: Option<Option<f64>>,
     #[serde(default)]
+    #[ts(optional)]
     pub pitch_out: Option<Option<f64>>,
     #[serde(default)]
+    #[ts(optional)]
     pub left: Option<Option<f64>>,
     #[serde(default)]
+    #[ts(optional)]
     pub right: Option<Option<f64>>,
     #[serde(default)]
+    #[ts(optional)]
     pub up: Option<Option<f64>>,
     #[serde(default)]
+    #[ts(optional)]
     pub down: Option<Option<f64>>,
     #[serde(default)]
+    #[ts(optional)]
     pub comment: Option<Option<String>>,
     #[serde(default)]
+    #[ts(optional)]
     pub is_virtual: Option<bool>,
     #[serde(default)]
+    #[ts(optional)]
     pub marker_index: Option<Option<u32>>,
     #[serde(default)]
+    #[ts(optional)]
     pub temperature: Option<Option<f64>>,
 }
 

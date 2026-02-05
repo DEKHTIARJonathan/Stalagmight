@@ -290,7 +290,7 @@ impl AppState {
                 let existing: std::collections::HashSet<SectionId> =
                     project.sections.iter().map(|s| s.id).collect();
                 let connected: Vec<SectionId> = project
-                    .get_connected_section_ids(*section_id)
+                    .get_rigid_connected_section_ids(*section_id)
                     .into_iter()
                     .filter(|id| existing.contains(id))
                     .collect();

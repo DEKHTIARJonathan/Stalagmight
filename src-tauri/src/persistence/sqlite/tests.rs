@@ -724,6 +724,7 @@ fn test_save_load_loop_closures() {
         horizontal_misclosure: 0.4,
         vertical_misclosure: 0.3,
         strategy: ClosureStrategy::default(),
+        is_aligned: false,
     });
 
     // Save and load

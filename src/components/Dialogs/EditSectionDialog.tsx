@@ -321,6 +321,8 @@ export default function EditSectionDialog() {
           down: shot.down,
           comment: shot.comment,
           is_virtual: shot.is_virtual,
+          marker_index: null,
+          temperature: null,
         };
         const result = await createShot(sectionId, shotData);
         if (!result.success) {
