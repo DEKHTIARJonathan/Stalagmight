@@ -10,7 +10,7 @@
  * - ARIA live announcements for selection changes
  */
 
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
@@ -669,7 +669,7 @@ test.describe('Detail Panel Links', () => {
 
       // Verify aria-label
       const ariaLabel = await centerButton.getAttribute('aria-label');
-      expect(ariaLabel).toContain('Center on shot');
+      expect(ariaLabel).toContain('Center map on shot');
       expect(ariaLabel).toContain(`${mainSectionId}:1`);
 
       // Verify button attributes for accessibility
@@ -729,7 +729,7 @@ test.describe('Detail Panel Links', () => {
 
       // Verify aria-label
       const ariaLabel = await centerButton.getAttribute('aria-label');
-      expect(ariaLabel).toContain('Center on station');
+      expect(ariaLabel).toContain('Center map on station');
       expect(ariaLabel).toContain(`${mainSectionId}:0`);
 
       // Verify button attributes for accessibility
@@ -787,7 +787,7 @@ test.describe('Detail Panel Links', () => {
 
       // Verify aria-label
       const ariaLabel = await centerButton.getAttribute('aria-label');
-      expect(ariaLabel).toContain('Center on section');
+      expect(ariaLabel).toContain('Center map on section');
       expect(ariaLabel).toContain('Main Tunnel');
 
       // Verify button attributes for accessibility

@@ -154,13 +154,14 @@ export default function ExportDialog() {
               const isExportPhase = phase.startsWith('export_');
 
               if (isExportPhase) {
+                const eventLoadingId = Number(event.payload.loadingId);
                 // Accept this event and track its loadingId for future filtering
                 if (exportLoadingIdRef.current === null) {
-                  exportLoadingIdRef.current = event.payload.loadingId;
+                  exportLoadingIdRef.current = eventLoadingId;
                 }
 
                 // Only process events matching our export's loadingId
-                if (event.payload.loadingId === exportLoadingIdRef.current) {
+                if (eventLoadingId === exportLoadingIdRef.current) {
                   setExportProgress(event.payload);
                 }
               }

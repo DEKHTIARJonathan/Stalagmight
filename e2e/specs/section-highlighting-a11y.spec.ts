@@ -27,7 +27,7 @@ describe('Section Panel Accessibility', () => {
 
       const ariaLabel = await listbox.getAttribute('aria-label');
       expect(ariaLabel).toBeTruthy();
-      expect(ariaLabel).toContain('sections');
+      expect(ariaLabel?.toLowerCase()).toContain('sections');
     });
 
     it('section rows have option role and aria-selected', async () => {

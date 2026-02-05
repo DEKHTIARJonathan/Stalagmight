@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
@@ -80,12 +80,12 @@ test.describe('Import Placement Flow', () => {
 
       // First section should show default status (not placed, no warnings)
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('○');
+      await expect(status0).toHaveAttribute('data-status', 'not_placed');
       await expect(status0).toHaveClass(/text-text-secondary/);
 
       // Second section should also show default status
       const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toContainText('○');
+      await expect(status1).toHaveAttribute('data-status', 'not_placed');
       await expect(status1).toHaveClass(/text-text-secondary/);
     });
 
@@ -135,14 +135,14 @@ test.describe('Import Placement Flow', () => {
 
       // Verify first section starts with default status (not placed)
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('○');
+      await expect(status0).toHaveAttribute('data-status', 'not_placed');
 
       // Click "Place section"
       await page.locator('[data-testid="place-section-button"]').click();
       await waitForMapIdle(page);
 
       // First section should now show placed status (checkmark)
-      await expect(status0).toContainText('✓');
+      await expect(status0).toHaveAttribute('data-status', 'placed');
       await expect(status0).toHaveClass(/text-success/);
     });
 
@@ -204,21 +204,21 @@ test.describe('Import Placement Flow', () => {
 
       // First section should still show default status (not placed)
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('○');
+      await expect(status0).toHaveAttribute('data-status', 'not_placed');
 
       // Navigate to third section
       await page.locator('[data-testid="section-list-item-2"]').click();
       await waitForMapIdle(page);
 
       // Both first and second should still show default status (not placed)
-      await expect(status0).toContainText('○');
+      await expect(status0).toHaveAttribute('data-status', 'not_placed');
       const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toContainText('○');
+      await expect(status1).toHaveAttribute('data-status', 'not_placed');
 
       // Navigate back to first and all should still be unplaced
       await page.locator('[data-testid="section-list-item-0"]').click();
       await waitForMapIdle(page);
-      await expect(status0).toContainText('○');
+      await expect(status0).toHaveAttribute('data-status', 'not_placed');
     });
 
     /**
@@ -267,7 +267,7 @@ test.describe('Import Placement Flow', () => {
 
       // First section should show excluded status (red X)
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('✕');
+      await expect(status0).toHaveAttribute('data-status', 'excluded');
       await expect(status0).toHaveClass(/text-error/);
     });
 
@@ -316,7 +316,7 @@ test.describe('Import Placement Flow', () => {
 
       // Should show default status again (not placed)
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('○');
+      await expect(status0).toHaveAttribute('data-status', 'not_placed');
       await expect(status0).toHaveClass(/text-text-secondary/);
 
       // Exclude button should be visible again
@@ -337,7 +337,7 @@ test.describe('Import Placement Flow', () => {
 
       // Wait for excluded status to appear
       const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toContainText('✕');
+      await expect(status1).toHaveAttribute('data-status', 'excluded');
 
       // After excluding section 1, should auto-advance to section 3
       // Verify section 3 (array index 2) is now active
@@ -486,7 +486,7 @@ test.describe('Import Placement Flow', () => {
       await selectSectionsAndProceed(page, [0]); // Main Passage only
 
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('○');
+      await expect(status0).toHaveAttribute('data-status', 'not_placed');
       await expect(status0).toHaveClass(/text-text-secondary/);
     });
 
@@ -503,7 +503,7 @@ test.describe('Import Placement Flow', () => {
 
       // First section should show checkmark
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('✓');
+      await expect(status0).toHaveAttribute('data-status', 'placed');
       await expect(status0).toHaveClass(/text-success/);
     });
 
@@ -519,7 +519,7 @@ test.describe('Import Placement Flow', () => {
       await waitForMapIdle(page);
 
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('✕');
+      await expect(status0).toHaveAttribute('data-status', 'excluded');
       await expect(status0).toHaveClass(/text-error/);
     });
 
@@ -533,11 +533,11 @@ test.describe('Import Placement Flow', () => {
 
       // Main Passage should show default status (no errors)
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('○');
+      await expect(status0).toHaveAttribute('data-status', 'not_placed');
 
       // Validation Test Section should show error
       const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toContainText('!');
+      await expect(status1).toHaveAttribute('data-status', 'errors');
       await expect(status1).toHaveClass(/text-error/);
     });
   });
@@ -587,7 +587,7 @@ test.describe('Import Placement Flow', () => {
 
       // Should be excluded
       const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toContainText('✕');
+      await expect(status1).toHaveAttribute('data-status', 'excluded');
     });
 
     /**
@@ -729,10 +729,10 @@ test.describe('Import Placement Flow', () => {
 
       // Let me just verify the app state is correct
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('✓'); // placed
+      await expect(status0).toHaveAttribute('data-status', 'placed'); // placed
 
       const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toContainText('✕'); // excluded
+      await expect(status1).toHaveAttribute('data-status', 'excluded'); // excluded
     });
 
     /**
@@ -756,13 +756,13 @@ test.describe('Import Placement Flow', () => {
 
       // Verify all statuses
       const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toContainText('✓'); // placed
+      await expect(status0).toHaveAttribute('data-status', 'placed'); // placed
 
       const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toContainText('✕'); // excluded
+      await expect(status1).toHaveAttribute('data-status', 'excluded'); // excluded
 
       const status2 = page.locator('[data-testid="section-status-2"]');
-      await expect(status2).toContainText('○'); // not placed
+      await expect(status2).toHaveAttribute('data-status', 'not_placed'); // not placed
 
       // Should show "Place and finish" since this is the last unplaced
       const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');

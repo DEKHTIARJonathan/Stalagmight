@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import { seedProjectWithSections, type SectionSeed } from './helpers/app';
 
@@ -313,7 +313,7 @@ test.describe('Depth Gradient', () => {
     await expect(legendSvg).toHaveAttribute('role', 'img');
 
     const ariaLabel = await legendSvg.getAttribute('aria-label');
-    expect(ariaLabel).toMatch(/Depth gradient/i);
+    expect(ariaLabel).toMatch(/Depth scale/i);
     expect(ariaLabel).toMatch(/to/i);
   });
 
@@ -382,7 +382,7 @@ test.describe('Depth Gradient with Menu Interactions', () => {
 
     // Verify the toggle has proper label
     const toggle = page.locator('[data-testid="display-toggle-showDepthGradient"]');
-    await expect(toggle).toContainText('Depth gradient');
-    await expect(toggle).toContainText('Color shots by depth');
+    await expect(toggle).toContainText('Depth Gradient');
+    await expect(toggle).toContainText('Color by depth');
   });
 });

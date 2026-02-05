@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
@@ -343,7 +343,7 @@ test.describe('DMP Import Dialog', () => {
     // Project name field should be pre-filled with filename
     const nameInput = projectDialog.locator('[data-testid="project-name-input"]');
     await expect(nameInput).toBeVisible();
-    // Mock returns /mock/test-survey.dmp, so default name should be 'test-survey'
+    // Mock returns /mock./fixtures/coverage-survey.dmp, so default name should be 'test-survey'
     await expect(nameInput).toHaveValue('test-survey');
 
     // Fill in project name and create
@@ -383,13 +383,16 @@ test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
     await continueButton.click();
     await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
 
-    // Check that the section has error indicator (! icon or error badge)
+    // Check that the section has error indicator and badge
     const sectionStatus = page.locator('[data-testid="section-status-0"]');
     await expect(sectionStatus).toBeVisible();
-    await expect(sectionStatus).toContainText('!');
+    await expect(sectionStatus).toHaveAttribute('data-status', 'errors');
     // The section has azimuth error (400 degrees out of range)
     // Status icon should show error
     await expect(sectionStatus).toHaveClass(/text-error/);
+    const errorBadge = page.locator('[data-testid="section-error-count-0"]');
+    await expect(errorBadge).toBeVisible();
+    await expect(errorBadge).toHaveText('1');
   });
 
   /**
@@ -520,12 +523,12 @@ test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
 
     // First section (Main Passage) is NOT placed yet - no warnings/errors, shows default icon
     const status0 = page.locator('[data-testid="section-status-0"]');
-    await expect(status0).toContainText('○');
+    await expect(status0).toHaveAttribute('data-status', 'not_placed');
     await expect(status0).toHaveClass(/text-text-secondary/);
 
     // Second section (Validation Test) should show error icon
     const status1 = page.locator('[data-testid="section-status-1"]');
-    await expect(status1).toContainText('!');
+    await expect(status1).toHaveAttribute('data-status', 'errors');
     await expect(status1).toHaveClass(/text-error/);
   });
 });

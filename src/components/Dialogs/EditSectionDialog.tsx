@@ -295,7 +295,9 @@ export default function EditSectionDialog() {
             up: shot.up,
             down: shot.down,
             comment: shot.comment,
-            is_virtual: shot.is_virtual,
+            is_virtual: shot.is_virtual ?? false,
+            marker_index: original.marker_index ?? null,
+            temperature: original.temperature ?? null,
           });
           if (!result.success) {
             setError(result.error ?? 'Failed to update shot');
@@ -320,7 +322,7 @@ export default function EditSectionDialog() {
           up: shot.up,
           down: shot.down,
           comment: shot.comment,
-          is_virtual: shot.is_virtual,
+          is_virtual: shot.is_virtual ?? false,
           marker_index: null,
           temperature: null,
         };

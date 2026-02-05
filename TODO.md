@@ -10,7 +10,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
-| Import/Export | 12 | 19 | 63% |
+| Import/Export | 13 | 19 | 68% |
 | UI & Polish | 7 | 17 | 41% |
 | Data & Editing | 4 | 5 | 80% |
 | Loop Closure | 5 | 5 | 100% |
@@ -18,7 +18,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Performance & Stability | 1 | 10 | 10% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **36** | **65** | **55%** |
+| **Total** | **37** | **65** | **57%** |
 
 ---
 
@@ -74,7 +74,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Context-Aware Triggering | ✅ | |
 | Error Blocking Logic | ✅ | |
 | Export Dialog & Preview | ✅ | PNG, SVG, PDF, CSV, JSON |
-| File Hash Tracking | 🟡 | Command exists but unused |
+| File Hash Tracking | ✅ | |
 | Ariane .ari Import | ❌ | |
 | Ariane .ari Export | ❌ | |
 | GPX Import | ❌ | Waypoints and tracks |
@@ -82,7 +82,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Automatic Reference Shot Alignment | ❌ | Auto-align imported sections using reference shots |
 | Import Dialog/Shot Placement Refactoring | ❌ | Improve shot placement UX in import workflow |
 
-**Subtotals**: ✅ 12 done, 🟡 1 partial, ❌ 6 not started
+**Subtotals**: ✅ 13 done, ❌ 6 not started
 
 ### UI & Polish (7/17 done)
 
@@ -184,7 +184,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
-| Import/Export | 19 | 12 | 1 | 6 |
+| Import/Export | 19 | 13 | 0 | 6 |
 | UI & Polish | 17 | 7 | 0 | 10 |
 | Data & Editing | 5 | 4 | 0 | 1 |
 | Loop Closure | 5 | 5 | 0 | 0 |
@@ -192,9 +192,9 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Performance & Stability | 10 | 1 | 1 | 8 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **65** | **36** | **2** | **27** |
+| **Total** | **65** | **37** | **1** | **27** |
 
-**Overall Progress**: 36 done + 2 partial = ~58% complete
+**Overall Progress**: 37 done + 1 partial = ~58% complete
 
 ---
 
