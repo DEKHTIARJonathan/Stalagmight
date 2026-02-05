@@ -11,14 +11,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
 | Import/Export | 12 | 19 | 63% |
-| UI & Polish | 6 | 16 | 38% |
+| UI & Polish | 6 | 17 | 35% |
 | Data & Editing | 4 | 5 | 80% |
 | Loop Closure | 3 | 6 | 50% |
 | Accessibility & i18n | 4 | 7 | 57% |
 | Performance & Stability | 1 | 10 | 10% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **30** | **65** | **46%** |
+| **Total** | **30** | **66** | **45%** |
 
 ---
 
@@ -104,8 +104,9 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Bug Reporter Dialog | ❌ | Button in Settings bottom bar |
 | Release Automation | ❌ | |
 | Add Comment Tool | ❌ | Text annotations on stations/map |
+| Use Best Available Tile Resolution | ❌ | Show best available tile resolution instead of "Map not yet available" for very zoomed in tiles |
 
-**Subtotals**: ✅ 6 done, ❌ 10 not started
+**Subtotals**: ✅ 6 done, ❌ 11 not started
 
 ### Data & Editing (4/5 done)
 
@@ -185,16 +186,16 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
 | Import/Export | 19 | 12 | 1 | 6 |
-| UI & Polish | 16 | 6 | 0 | 10 |
+| UI & Polish | 17 | 6 | 0 | 11 |
 | Data & Editing | 5 | 4 | 0 | 1 |
 | Loop Closure | 6 | 3 | 0 | 3 |
 | Accessibility & i18n | 7 | 4 | 0 | 3 |
 | Performance & Stability | 10 | 1 | 1 | 8 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **65** | **30** | **2** | **33** |
+| **Total** | **66** | **30** | **2** | **34** |
 
-**Overall Progress**: 30 done + 2 partial = ~49% complete
+**Overall Progress**: 30 done + 2 partial = ~48% complete
 
 ---
 
