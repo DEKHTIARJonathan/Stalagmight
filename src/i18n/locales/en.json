@@ -1205,10 +1205,13 @@
       "in": "In",
       "out": "Out"
     },
+    "help": {
+      "quality": "Higher values apply more closure adjustment to this section."
+    },
     "labels": {
       "color": "Color",
       "directionShort": "Dir",
-      "quality": "Quality",
+      "quality": "Closure Adj. Weight",
       "surveyor": "Surveyor"
     },
     "placeholders": {
