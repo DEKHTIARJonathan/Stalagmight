@@ -15,7 +15,11 @@ impl AppState {
             Ok(g) => g,
             Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
         };
-        tracing::info!(command = ?cmd.description(), "Executing command");
+        tracing::info!(
+            command = ?cmd.description(),
+            purpose = "apply user action",
+            "Executing command to update project state"
+        );
 
         // Generate undo data before executing the command
         let undo_data = if Self::is_undoable(&cmd) {
@@ -159,7 +163,10 @@ impl AppState {
             Ok(g) => g,
             Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
         };
-        tracing::info!("Executing create_section_and_merge as single undo unit");
+        tracing::info!(
+            purpose = "keep undo atomic for import merge",
+            "Executing create_section_and_merge as single undo unit"
+        );
 
         // Take a project snapshot BEFORE any modifications
         let snapshot = {
@@ -209,22 +216,35 @@ impl AppState {
             // Merge failed after section was created — rollback to pre-mutation snapshot
             // to avoid leaving a created section with no undo entry.
             // Use unwrap_or_else to recover from poisoned mutex (rollback must succeed).
-            tracing::error!("Merge failed after section creation; rolling back to pre-mutation snapshot");
+            tracing::error!(
+                purpose = "keep project consistent after failed merge",
+                "Merge failed after section creation; rolling back to pre-mutation snapshot"
+            );
             match serde_json::from_str::<crate::models::Project>(&snapshot) {
                 Ok(restored) => {
                     match self.project.lock() {
                         Ok(mut proj) => {
                             *proj = Some(restored);
-                            tracing::info!("Successfully rolled back create_and_merge after merge failure");
+                            tracing::info!(
+                                purpose = "restore project after failed merge",
+                                "Successfully rolled back create_and_merge after merge failure"
+                            );
                         }
                         Err(poisoned) => {
                             let mut proj = poisoned.into_inner();
                             *proj = Some(restored);
-                            tracing::warn!("Rolled back create_and_merge via poisoned mutex after merge failure");
+                            tracing::warn!(
+                                purpose = "restore project after failed merge",
+                                "Rolled back create_and_merge via poisoned mutex after merge failure"
+                            );
                         }
                     }
                 }
-                Err(e) => tracing::error!("Failed to deserialize snapshot for rollback: {e}"),
+                Err(e) => tracing::error!(
+                    purpose = "restore project after failed merge",
+                    reason = %e,
+                    "Failed to deserialize snapshot for rollback"
+                ),
             }
             return merge_result;
         }
@@ -236,7 +256,10 @@ impl AppState {
                 Ok(g) => g,
                 Err(poisoned) => {
                     // Mutex was poisoned — recover the guard so we can still capture snapshot
-                    tracing::warn!("Project mutex poisoned during after-snapshot; recovering");
+                    tracing::warn!(
+                        purpose = "finalize undo snapshot",
+                        "Project mutex poisoned during after-snapshot; recovering"
+                    );
                     poisoned.into_inner()
                 }
             };
@@ -245,23 +268,41 @@ impl AppState {
                     Ok(json) => json,
                     Err(e) => {
                         // Serialization failure — rollback to pre-mutation snapshot
-                        tracing::error!("Failed to serialize after snapshot: {e}; rolling back");
+                        tracing::error!(
+                            purpose = "finalize undo snapshot",
+                            reason = %e,
+                            "Failed to serialize after snapshot; rolling back"
+                        );
                         match serde_json::from_str::<crate::models::Project>(&snapshot) {
                             Ok(restored) => {
                                 *proj_guard = Some(restored);
-                                tracing::info!("Successfully rolled back create_and_merge after serialization failure");
+                                tracing::info!(
+                                    purpose = "restore project after snapshot failure",
+                                    "Successfully rolled back create_and_merge after serialization failure"
+                                );
                             }
-                            Err(re) => tracing::error!("Failed to deserialize snapshot for rollback: {re}"),
+                            Err(re) => tracing::error!(
+                                purpose = "restore project after snapshot failure",
+                                reason = %re,
+                                "Failed to deserialize snapshot for rollback"
+                            ),
                         }
                         return CommandResult::failure(format!("Failed to serialize after snapshot: {}", e));
                     }
                 },
                 None => {
                     // Project became None — rollback to pre-mutation snapshot
-                    tracing::error!("Project became None after mutation; rolling back");
+                    tracing::error!(
+                        purpose = "restore project after mutation error",
+                        "Project became None after mutation; rolling back"
+                    );
                     match serde_json::from_str::<crate::models::Project>(&snapshot) {
                         Ok(restored) => *proj_guard = Some(restored),
-                        Err(e) => tracing::error!("Failed to deserialize snapshot for rollback: {e}"),
+                        Err(e) => tracing::error!(
+                            purpose = "restore project after mutation error",
+                            reason = %e,
+                            "Failed to deserialize snapshot for rollback"
+                        ),
                     }
                     return CommandResult::failure("No project for after snapshot".to_string());
                 }
@@ -333,7 +374,11 @@ impl AppState {
             return CommandResult::success();
         }
 
-        tracing::info!(count = sections.len(), "Executing import_sections as single undo unit");
+        tracing::info!(
+            count = sections.len(),
+            purpose = "apply imported sections as single undo",
+            "Executing import_sections as single undo unit"
+        );
 
         // Take a project snapshot BEFORE any modifications
         let before_snapshot = {
@@ -518,7 +563,11 @@ impl AppState {
         if let Some(ref hash) = file_hash {
             let track_result = self.track_imported_file(hash.clone());
             if !track_result.success {
-                tracing::warn!("Failed to track imported file hash: {:?}", track_result.error);
+                tracing::warn!(
+                    purpose = "prevent duplicate imports",
+                    error = ?track_result.error,
+                    "Failed to track imported file hash"
+                );
                 // Non-fatal: don't rollback the entire import for a hash tracking failure
             }
         }
@@ -528,7 +577,10 @@ impl AppState {
             let proj_guard = match self.project.lock() {
                 Ok(g) => g,
                 Err(poisoned) => {
-                    tracing::warn!("Project mutex poisoned during after-snapshot; recovering");
+                    tracing::warn!(
+                        purpose = "finalize import snapshot",
+                        "Project mutex poisoned during after-snapshot; recovering"
+                    );
                     poisoned.into_inner()
                 }
             };
@@ -536,14 +588,21 @@ impl AppState {
                 Some(p) => match serde_json::to_string(p) {
                     Ok(json) => json,
                     Err(e) => {
-                        tracing::error!("Failed to serialize after-snapshot: {e}; rolling back");
+                        tracing::error!(
+                            purpose = "finalize import snapshot",
+                            reason = %e,
+                            "Failed to serialize after-snapshot; rolling back"
+                        );
                         drop(proj_guard);
                         self.rollback_to_snapshot(&before_snapshot);
                         return CommandResult::failure(format!("Failed to capture after-snapshot: {e}"));
                     }
                 },
                 None => {
-                    tracing::error!("Project became None after import; rolling back");
+                    tracing::error!(
+                        purpose = "restore project after import failure",
+                        "Project became None after import; rolling back"
+                    );
                     drop(proj_guard);
                     self.rollback_to_snapshot(&before_snapshot);
                     return CommandResult::failure("No project after import".to_string());
@@ -582,17 +641,27 @@ impl AppState {
                 match self.project.lock() {
                     Ok(mut proj) => {
                         *proj = Some(restored);
-                        tracing::info!("Successfully rolled back to snapshot");
+                        tracing::info!(
+                            purpose = "restore project after failed command",
+                            "Successfully rolled back to snapshot"
+                        );
                     }
                     Err(poisoned) => {
                         let mut proj = poisoned.into_inner();
                         *proj = Some(restored);
-                        tracing::warn!("Rolled back via poisoned mutex");
+                        tracing::warn!(
+                            purpose = "restore project after failed command",
+                            "Rolled back via poisoned mutex"
+                        );
                     }
                 }
             }
             Err(e) => {
-                tracing::error!("Failed to deserialize snapshot for rollback: {e}");
+                tracing::error!(
+                    purpose = "restore project after failed command",
+                    reason = %e,
+                    "Failed to deserialize snapshot for rollback"
+                );
             }
         }
     }
@@ -644,7 +713,11 @@ impl AppState {
 
         let section = project.add_section(data);
         let section_id = section.id;
-        tracing::info!(section_id = section_id, "Section created");
+        tracing::info!(
+            section_id = section_id,
+            purpose = "add section to project",
+            "Section created"
+        );
 
         if warnings.is_empty() {
             CommandResult::success_with_section_id(section_id)
@@ -668,7 +741,11 @@ impl AppState {
         if project.get_section(section_id).is_some() {
             project.cleanup_section_references(section_id);
             project.remove_section(section_id);
-            tracing::info!(section_id, "Section deleted (with cleanup)");
+            tracing::info!(
+                section_id,
+                purpose = "remove section and cleanup references",
+                "Section deleted (with cleanup)"
+            );
             CommandResult::success()
         } else {
             CommandResult::failure(format!("Section {} not found", section_id))
@@ -687,7 +764,11 @@ impl AppState {
         };
 
         if project.update_section(section_id, &updates).is_some() {
-            tracing::info!(section_id, "Section updated");
+            tracing::info!(
+                section_id,
+                purpose = "update section metadata or shots",
+                "Section updated"
+            );
             CommandResult::success()
         } else {
             CommandResult::failure(format!("Section {} not found", section_id))
@@ -784,7 +865,12 @@ impl AppState {
 
         if let Some(new_shot) = shot {
             let new_shot_id = new_shot.id;
-            tracing::info!(section_id, shot_id = new_shot_id, "Shot created");
+            tracing::info!(
+                section_id,
+                shot_id = new_shot_id,
+                purpose = "add shot to section",
+                "Shot created"
+            );
             if warnings.is_empty() {
                 CommandResult::success_with_shot_id(new_shot_id)
             } else {
@@ -855,7 +941,12 @@ impl AppState {
         }
 
         if project.update_shot(section_id, shot_id, &updates).is_some() {
-            tracing::info!(section_id, shot_id, "Shot updated");
+            tracing::info!(
+                section_id,
+                shot_id,
+                purpose = "update shot measurements",
+                "Shot updated"
+            );
             CommandResult::success()
         } else {
             CommandResult::failure(format!("Shot {}:{} not found", section_id, shot_id))
@@ -889,7 +980,12 @@ impl AppState {
 
         match project.remove_shot_with_rewire(section_id, shot_id) {
             Ok(_) => {
-                tracing::info!(section_id, shot_id, "Shot deleted");
+                tracing::info!(
+                    section_id,
+                    shot_id,
+                    purpose = "remove shot and rewire geometry",
+                    "Shot deleted"
+                );
                 CommandResult::success()
             }
             Err(e) => CommandResult::failure(e),
@@ -916,7 +1012,13 @@ impl AppState {
             .set_shot_virtual(section_id, shot_id, is_virtual)
             .is_some()
         {
-            tracing::info!(section_id, shot_id, is_virtual, "Shot virtual status updated");
+            tracing::info!(
+                section_id,
+                shot_id,
+                is_virtual,
+                purpose = "toggle virtual shot visibility",
+                "Shot virtual status updated"
+            );
             CommandResult::success()
         } else {
             CommandResult::failure(format!("Shot {}:{} not found", section_id, shot_id))
@@ -949,11 +1051,22 @@ impl AppState {
 
         match project.merge_stations(station_a, station_b) {
             Ok(_) => {
-                tracing::info!(?station_a, ?station_b, "Stations merged");
+                tracing::info!(
+                    ?station_a,
+                    ?station_b,
+                    purpose = "connect survey sections",
+                    "Stations merged"
+                );
                 CommandResult::success()
             }
             Err(e) => {
-                tracing::warn!(?station_a, ?station_b, error = %e, "Failed to merge stations");
+                tracing::warn!(
+                    ?station_a,
+                    ?station_b,
+                    error = %e,
+                    purpose = "connect survey sections",
+                    "Failed to merge stations"
+                );
                 CommandResult::failure(e)
             }
         }
@@ -977,11 +1090,22 @@ impl AppState {
 
         match project.create_loop_closure(station_a, station_b, strategy) {
             Ok(_) => {
-                tracing::info!(?station_a, ?station_b, "Loop closure created");
+                tracing::info!(
+                    ?station_a,
+                    ?station_b,
+                    purpose = "add loop closure to improve accuracy",
+                    "Loop closure created"
+                );
                 CommandResult::success()
             }
             Err(e) => {
-                tracing::warn!(?station_a, ?station_b, error = %e, "Failed to create loop closure");
+                tracing::warn!(
+                    ?station_a,
+                    ?station_b,
+                    error = %e,
+                    purpose = "add loop closure to improve accuracy",
+                    "Failed to create loop closure"
+                );
                 CommandResult::failure(e)
             }
         }
@@ -1013,11 +1137,22 @@ impl AppState {
             Ok(_) => {
                 working.touch();
                 *proj_guard = Some(working);
-                tracing::info!(?anchor_station, ?method, "Loop closures adjusted");
+                tracing::info!(
+                    ?anchor_station,
+                    ?method,
+                    purpose = "reduce misclosure error",
+                    "Loop closures adjusted"
+                );
                 CommandResult::success()
             }
             Err(e) => {
-                tracing::warn!(?anchor_station, ?method, error = %e, "Failed to adjust loop closures");
+                tracing::warn!(
+                    ?anchor_station,
+                    ?method,
+                    error = %e,
+                    purpose = "reduce misclosure error",
+                    "Failed to adjust loop closures"
+                );
                 CommandResult::failure(e)
             }
         }
@@ -1046,7 +1181,11 @@ impl AppState {
             project.unmerge_stations(a, b);
         }
 
-        tracing::info!(?station_ref, "Station unmerged");
+        tracing::info!(
+            ?station_ref,
+            purpose = "disconnect merged stations",
+            "Station unmerged"
+        );
         CommandResult::success()
     }
 
@@ -1063,11 +1202,20 @@ impl AppState {
 
         match project.set_zero_datum(station_ref, gps) {
             Ok(_) => {
-                tracing::info!(?station_ref, "Zero datum set");
+                tracing::info!(
+                    ?station_ref,
+                    purpose = "anchor survey to GPS coordinates",
+                    "Zero datum set"
+                );
                 CommandResult::success()
             }
             Err(e) => {
-                tracing::warn!(?station_ref, error = %e, "Failed to set zero datum");
+                tracing::warn!(
+                    ?station_ref,
+                    error = %e,
+                    purpose = "anchor survey to GPS coordinates",
+                    "Failed to set zero datum"
+                );
                 CommandResult::failure(e)
             }
         }
@@ -1085,7 +1233,11 @@ impl AppState {
         };
 
         if project.remove_zero_datum(station_ref) {
-            tracing::info!(?station_ref, "Zero datum removed");
+            tracing::info!(
+                ?station_ref,
+                purpose = "remove GPS anchor",
+                "Zero datum removed"
+            );
             CommandResult::success()
         } else {
             CommandResult::failure("Station is not a zero datum".to_string())
@@ -1108,7 +1260,13 @@ impl AppState {
             let new_offset = (current.0 + offset.x, current.1 + offset.y);
             project.section_offsets.insert(section_id, new_offset);
             project.touch();
-            tracing::info!(?section_id, ?offset, ?new_offset, "Section moved");
+            tracing::info!(
+                ?section_id,
+                ?offset,
+                ?new_offset,
+                purpose = "reposition section for alignment",
+                "Section moved"
+            );
             CommandResult::success()
         } else {
             CommandResult::failure("Section not found".to_string())
@@ -1147,7 +1305,13 @@ impl AppState {
             project.section_offsets.insert(*sid, new_offset);
         }
         project.touch();
-        tracing::info!(?section_id, ?offset, section_count = connected.len(), "Segment moved");
+        tracing::info!(
+            ?section_id,
+            ?offset,
+            section_count = connected.len(),
+            purpose = "move connected segment as rigid group",
+            "Segment moved"
+        );
         CommandResult::success()
     }
 
@@ -1273,7 +1437,12 @@ impl AppState {
         project.station_offsets.remove(&station_ref);
         project.touch();
 
-        tracing::info!(?station_ref, ?offset, "Station moved (shot data updated)");
+        tracing::info!(
+            ?station_ref,
+            ?offset,
+            purpose = "adjust station position",
+            "Station moved (shot data updated)"
+        );
         CommandResult::success()
     }
 
@@ -1339,13 +1508,23 @@ impl AppState {
                     Ok(project) => {
                         if let Ok(mut proj) = self.project.lock() {
                             *proj = Some(project);
-                            tracing::info!("Successfully rolled back batch after sub-command failure");
+                            tracing::info!(
+                                purpose = "restore project after batch failure",
+                                "Successfully rolled back batch after sub-command failure"
+                            );
                         } else {
-                            tracing::error!("Failed to acquire project lock during batch rollback — project state may be inconsistent");
+                            tracing::error!(
+                                purpose = "restore project after batch failure",
+                                "Failed to acquire project lock during batch rollback; project state may be inconsistent"
+                            );
                         }
                     }
                     Err(e) => {
-                        tracing::error!("Failed to deserialize before-snapshot during batch rollback: {e} — project state may be inconsistent");
+                        tracing::error!(
+                            purpose = "restore project after batch failure",
+                            reason = %e,
+                            "Failed to deserialize before-snapshot during batch rollback; project state may be inconsistent"
+                        );
                     }
                 }
                 return result;
@@ -1372,16 +1551,26 @@ impl AppState {
                     Some(p) => match serde_json::to_string(p) {
                         Ok(json) => json,
                         Err(e) => {
-                            tracing::error!("Failed to capture after-snapshot for batch: {e}; rolling back");
+                            tracing::error!(
+                                purpose = "finalize batch undo snapshot",
+                                reason = %e,
+                                "Failed to capture after-snapshot for batch; rolling back"
+                            );
                             drop(proj_guard);
                             // Rollback: restore pre-batch state
                             if let Ok(project) = serde_json::from_str::<crate::models::Project>(&before_snapshot) {
                                 if let Ok(mut proj) = self.project.lock() {
                                     *proj = Some(project);
-                                    tracing::info!("Successfully rolled back batch after after-snapshot failure");
+                                    tracing::info!(
+                                        purpose = "restore project after batch snapshot failure",
+                                        "Successfully rolled back batch after after-snapshot failure"
+                                    );
                                 }
                             } else {
-                                tracing::error!("Failed to deserialize before-snapshot during rollback — project state may be inconsistent");
+                                tracing::error!(
+                                    purpose = "restore project after batch snapshot failure",
+                                    "Failed to deserialize before-snapshot during rollback; project state may be inconsistent"
+                                );
                             }
                             return CommandResult::failure(format!("Failed to capture after-snapshot for batch undo: {e}"));
                         }
@@ -1426,7 +1615,12 @@ impl AppState {
             Ok(g) => g,
             Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
         };
-        tracing::info!(section_id, shot_id, "Executing delete_shot_and_split as single undo unit");
+        tracing::info!(
+            section_id,
+            shot_id,
+            purpose = "split section after deleting shot",
+            "Executing delete_shot_and_split as single undo unit"
+        );
 
         // Step 1: Take BEFORE snapshot
         let before_snapshot = {
@@ -1673,6 +1867,7 @@ impl AppState {
             section_id,
             shot_id,
             new_section_id,
+            purpose = "split section after deleting shot",
             "Delete shot and split section completed"
         );
 
@@ -1693,7 +1888,12 @@ impl AppState {
             Ok(g) => g,
             Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
         };
-        tracing::info!(section_id, shot_id, "Executing delete_last_shot_and_section as single undo unit");
+        tracing::info!(
+            section_id,
+            shot_id,
+            purpose = "remove single-shot section",
+            "Executing delete_last_shot_and_section as single undo unit"
+        );
 
         // Step 1: Take BEFORE snapshot
         let before_snapshot = {
@@ -1779,15 +1979,28 @@ impl AppState {
             if project.remove_section(section_id).is_none() {
                 // Section vanished between validation and removal (should not happen).
                 // Rollback to before_snapshot to undo reference cleanup.
-                tracing::error!(section_id, "remove_section returned None after validation; rolling back");
+                tracing::error!(
+                    section_id,
+                    purpose = "remove single-shot section",
+                    "remove_section returned None after validation; rolling back"
+                );
                 match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
                     Ok(restored) => *proj_guard = Some(restored),
-                    Err(e) => tracing::error!("Failed to rollback from before_snapshot: {e}"),
+                    Err(e) => tracing::error!(
+                        purpose = "remove single-shot section",
+                        reason = %e,
+                        "Failed to rollback from before_snapshot"
+                    ),
                 }
                 return CommandResult::failure(format!("Section {} not found during removal", section_id));
             }
 
-            tracing::info!(section_id, shot_id, "Deleted last shot and removed section");
+            tracing::info!(
+                section_id,
+                shot_id,
+                purpose = "remove single-shot section",
+                "Deleted last shot and removed section"
+            );
 
             // Step 5: Take AFTER snapshot while still holding the lock
             match proj_guard.as_ref() {
@@ -1795,23 +2008,41 @@ impl AppState {
                     Ok(json) => json,
                     Err(e) => {
                         // Rollback: restore before_snapshot since we already mutated
-                        tracing::error!("Failed to serialize after snapshot: {e}; rolling back");
+                        tracing::error!(
+                            purpose = "finalize delete_last_shot snapshot",
+                            reason = %e,
+                            "Failed to serialize after snapshot; rolling back"
+                        );
                         match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
                             Ok(restored) => {
                                 *proj_guard = Some(restored);
-                                tracing::info!("Successfully rolled back after snapshot failure");
+                                tracing::info!(
+                                    purpose = "restore after snapshot failure",
+                                    "Successfully rolled back after snapshot failure"
+                                );
                             }
-                            Err(re) => tracing::error!("Failed to rollback from before_snapshot: {re}"),
+                            Err(re) => tracing::error!(
+                                purpose = "restore after snapshot failure",
+                                reason = %re,
+                                "Failed to rollback from before_snapshot"
+                            ),
                         }
                         return CommandResult::failure(format!("Failed to serialize after snapshot: {}", e));
                     }
                 },
                 None => {
                     // Project became None -- restore
-                    tracing::error!("Project became None after mutation; rolling back");
+                    tracing::error!(
+                        purpose = "restore after mutation failure",
+                        "Project became None after mutation; rolling back"
+                    );
                     match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
                         Ok(restored) => *proj_guard = Some(restored),
-                        Err(e) => tracing::error!("Failed to rollback from before_snapshot: {e}"),
+                        Err(e) => tracing::error!(
+                            purpose = "restore after mutation failure",
+                            reason = %e,
+                            "Failed to rollback from before_snapshot"
+                        ),
                     }
                     return CommandResult::failure("No project after mutation".to_string());
                 }
@@ -1840,15 +2071,25 @@ impl AppState {
             }
             Err(_) => {
                 // Undo stack lock failure: rollback to preserve atomicity
-                tracing::error!("Failed to lock undo stack; rolling back mutation");
+                tracing::error!(
+                    purpose = "preserve atomic delete operation",
+                    "Failed to lock undo stack; rolling back mutation"
+                );
                 match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
                     Ok(restored) => {
                         if let Ok(mut proj) = self.project.lock() {
                             *proj = Some(restored);
-                            tracing::info!("Successfully rolled back after undo-stack lock failure");
+                            tracing::info!(
+                                purpose = "restore after undo-stack lock failure",
+                                "Successfully rolled back after undo-stack lock failure"
+                            );
                         }
                     }
-                    Err(e) => tracing::error!("Failed to rollback from before_snapshot: {e}"),
+                    Err(e) => tracing::error!(
+                        purpose = "restore after undo-stack lock failure",
+                        reason = %e,
+                        "Failed to rollback from before_snapshot"
+                    ),
                 }
                 return CommandResult::failure("Failed to lock undo stack".to_string());
             }

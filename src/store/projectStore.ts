@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeIpc } from '../utils/ipc';
 import { useUIStore } from './uiStore';
 import { useGlobalViewStore } from './globalViewStore';
 import type {
@@ -267,7 +267,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   // Config
   loadConfig: async () => {
     try {
-      const config = await invoke<Config>('get_config');
+      const config = await invokeIpc<Config>('get_config', undefined, {
+        purpose: 'load user configuration',
+      });
       set({ config });
     } catch (e) {
       console.error('Failed to load config:', e);
@@ -277,7 +279,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   updateConfig: async (config: Config) => {
     try {
       // Rust command returns Result<(), String> - success returns nothing, error throws
-      await invoke('update_config', { config });
+      await invokeIpc('update_config', { config }, { purpose: 'persist user settings' });
       // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
       await get().loadConfig();
       return emptyCommandResult(true, null);
@@ -336,7 +338,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   cancelLoading: async () => {
     // Safe to call even when no load is active - backend is idempotent
     try {
-      await invoke('cancel_loading');
+      await invokeIpc('cancel_loading', undefined, {
+        purpose: 'cancel project loading',
+      });
     } catch {
       // Ignore errors - might be called when no load active
     }
@@ -358,7 +362,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const clientOpId = get().startLoading(initialName, path);
 
     try {
-      const result = await invoke<LoadProjectFullResult>('load_project_full', { path });
+      const result = await invokeIpc<LoadProjectFullResult>(
+        'load_project_full',
+        { path },
+        { purpose: 'load project for workspace', fields: { path } }
+      );
 
       // Check clientOpId hasn't changed (cancelled/new load started)
       if (get().loading.clientOpId !== clientOpId) {
@@ -420,7 +428,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const clientOpId = get().startLoading(name, '');
 
     try {
-      const result = await invoke<CreateProjectFullResult>('create_project_full', { name, location });
+      const result = await invokeIpc<CreateProjectFullResult>(
+        'create_project_full',
+        { name, location },
+        { purpose: 'create new project on disk', fields: { name } }
+      );
 
       // Check clientOpId hasn't changed
       if (get().loading.clientOpId !== clientOpId) {
@@ -465,7 +477,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const clientOpId = get().startLoading(initialName, path);
 
     try {
-      const result = await invoke<CommandResult>('open_project', { path });
+      const result = await invokeIpc<CommandResult>(
+        'open_project',
+        { path },
+        { purpose: 'open project without progress UI', fields: { path } }
+      );
 
       // Check clientOpId hasn't changed
       if (get().loading.clientOpId !== clientOpId) {
@@ -497,7 +513,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   saveProject: async (path?: string) => {
     console.log('[projectStore] saveProject called, current isDirty:', get().isDirty);
-    const result = await invoke<CommandResult>('save_project', { path });
+    const result = await invokeIpc<CommandResult>(
+      'save_project',
+      { path },
+      { purpose: 'persist project changes', fields: { path } }
+    );
     console.log('[projectStore] save_project result:', result);
     if (result.success) {
       // Refresh project state to get updated file_path first
@@ -522,7 +542,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
     set({ isClosing: true });
     try {
-      const result = await invoke<CommandResult>('close_project');
+      const result = await invokeIpc<CommandResult>('close_project', undefined, {
+        purpose: 'close project and release resources',
+      });
       if (result.success) {
         set({ project: null, stations: [], stats: null, frozenShots: [], isDirty: false });
       }
@@ -541,7 +563,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   refreshProjectState: async () => {
     try {
       console.log('[projectStore] refreshProjectState: invoking get_project_state...');
-      const state = await invoke<ProjectState | null>('get_project_state');
+      const state = await invokeIpc<ProjectState | null>('get_project_state', undefined, {
+        purpose: 'refresh project state in UI',
+      });
       console.log('[projectStore] refreshProjectState: got state, sections:', state?.project?.sections?.length);
       if (state) {
         set({
@@ -563,7 +587,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   refreshWarnings: async () => {
     try {
-      const warnings = await invoke<ProjectWarning[]>('get_project_warnings');
+      const warnings = await invokeIpc<ProjectWarning[]>('get_project_warnings', undefined, {
+        purpose: 'refresh validation warnings',
+      });
       set({ warnings });
     } catch (e) {
       console.error('Failed to refresh warnings:', e);
@@ -573,7 +599,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   resolveWarning: async (sectionId: number, shotId: number, warningCode: string, comment?: string) => {
     try {
-      await invoke('resolve_warning', { sectionId, shotId, warningCode, comment });
+      await invokeIpc(
+        'resolve_warning',
+        { sectionId, shotId, warningCode, comment },
+        { purpose: 'acknowledge validation warning', fields: { sectionId, shotId, warningCode } }
+      );
       await get().refreshWarnings();
     } catch (e) {
       console.error('Failed to resolve warning:', e);
@@ -582,7 +612,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   unresolveWarning: async (sectionId: number, shotId: number, warningCode: string) => {
     try {
-      await invoke('unresolve_warning', { sectionId, shotId, warningCode });
+      await invokeIpc(
+        'unresolve_warning',
+        { sectionId, shotId, warningCode },
+        { purpose: 'reopen validation warning', fields: { sectionId, shotId, warningCode } }
+      );
       await get().refreshWarnings();
     } catch (e) {
       console.error('Failed to unresolve warning:', e);
@@ -591,7 +625,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   loadRecentProjects: async () => {
     try {
-      const recent = await invoke<ProjectMetadata[]>('list_recent_projects');
+      const recent = await invokeIpc<ProjectMetadata[]>('list_recent_projects', undefined, {
+        purpose: 'load recent projects list',
+      });
       set({ recentProjects: recent });
     } catch (e) {
       console.error('Failed to load recent projects:', e);
@@ -600,7 +636,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   removeFromRecentProjects: async (path: string) => {
     try {
-      const result = await invoke<CommandResult>('remove_from_recent_projects', { path });
+      const result = await invokeIpc<CommandResult>(
+        'remove_from_recent_projects',
+        { path },
+        { purpose: 'update recent projects list', fields: { path } }
+      );
       if (result.success) {
         // Refresh the list after removal
         await get().loadRecentProjects();
@@ -615,15 +655,22 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   // Section operations
   createSection: async (data: SectionData) => {
     console.log('[projectStore] createSection called:', data.name, 'shots:', data.shots?.length);
-    const result = await invoke<CommandResult>('create_section', {
-      name: data.name,
-      surveyor: data.surveyor,
-      date: data.date,
-      color: data.color,
-      direction: data.direction,
-      quality: data.quality,
-      shots: data.shots,
-    });
+    const result = await invokeIpc<CommandResult>(
+      'create_section',
+      {
+        name: data.name,
+        surveyor: data.surveyor,
+        date: data.date,
+        color: data.color,
+        direction: data.direction,
+        quality: data.quality,
+        shots: data.shots,
+      },
+      {
+        purpose: 'add section to project',
+        fields: { name: data.name ?? 'unnamed', shot_count: data.shots?.length ?? 0 },
+      }
+    );
     console.log('[projectStore] create_section result:', result);
     if (result.success) {
       console.log('[projectStore] Refreshing after section create...');
@@ -641,18 +688,25 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     closureStrategy: ClosureStrategy
   ) => {
     console.log('[projectStore] createSectionAndMerge called:', data.name, 'shots:', data.shots?.length);
-    const result = await invoke<CommandResult>('create_section_and_merge', {
-      name: data.name,
-      surveyor: data.surveyor,
-      date: data.date,
-      color: data.color,
-      direction: data.direction,
-      quality: data.quality,
-      shots: data.shots,
-      importStationIndex,
-      targetStation,
-      closureStrategy,
-    });
+    const result = await invokeIpc<CommandResult>(
+      'create_section_and_merge',
+      {
+        name: data.name,
+        surveyor: data.surveyor,
+        date: data.date,
+        color: data.color,
+        direction: data.direction,
+        quality: data.quality,
+        shots: data.shots,
+        importStationIndex,
+        targetStation,
+        closureStrategy,
+      },
+      {
+        purpose: 'add section and merge stations',
+        fields: { name: data.name ?? 'unnamed', shot_count: data.shots?.length ?? 0 },
+      }
+    );
     console.log('[projectStore] create_section_and_merge result:', result);
     if (result.success) {
       console.log('[projectStore] Refreshing after section create and merge...');
@@ -664,7 +718,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   updateSection: async (sectionId: SectionId, updates: SectionUpdates) => {
-    const result = await invoke<CommandResult>('update_section', { sectionId, updates });
+    const result = await invokeIpc<CommandResult>(
+      'update_section',
+      { sectionId, updates },
+      { purpose: 'update section metadata', fields: { sectionId } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -673,7 +731,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   deleteSection: async (sectionId: SectionId) => {
-    const result = await invoke<CommandResult>('delete_section', { sectionId });
+    const result = await invokeIpc<CommandResult>(
+      'delete_section',
+      { sectionId },
+      { purpose: 'remove section from project', fields: { sectionId } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -683,12 +745,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   // Shot operations
   createShot: async (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => {
-    const result = await invoke<CommandResult>('create_shot', {
-      sectionId,
-      shot,
-      afterShotId: afterShotId ?? null,
-      beforeShotId: beforeShotId ?? null,
-    });
+    const result = await invokeIpc<CommandResult>(
+      'create_shot',
+      {
+        sectionId,
+        shot,
+        afterShotId: afterShotId ?? null,
+        beforeShotId: beforeShotId ?? null,
+      },
+      {
+        purpose: 'add shot to section',
+        fields: { sectionId, afterShotId: afterShotId ?? null, beforeShotId: beforeShotId ?? null },
+      }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -697,7 +766,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   updateShot: async (sectionId: SectionId, shotId: ShotId, updates: ShotUpdatesPatch) => {
-    const result = await invoke<CommandResult>('update_shot', { sectionId, shotId, updates });
+    const result = await invokeIpc<CommandResult>(
+      'update_shot',
+      { sectionId, shotId, updates },
+      { purpose: 'update shot measurements', fields: { sectionId, shotId } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -706,7 +779,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   deleteShot: async (sectionId: SectionId, shotId: ShotId) => {
-    const result = await invoke<CommandResult>('delete_shot', { sectionId, shotId });
+    const result = await invokeIpc<CommandResult>(
+      'delete_shot',
+      { sectionId, shotId },
+      { purpose: 'delete shot from section', fields: { sectionId, shotId } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -715,7 +792,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   deleteShotAndSplit: async (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => {
-    const result = await invoke<CommandResult>('delete_shot_and_split', { sectionId, shotId, nameA, nameB });
+    const result = await invokeIpc<CommandResult>(
+      'delete_shot_and_split',
+      { sectionId, shotId, nameA, nameB },
+      { purpose: 'delete shot and split section', fields: { sectionId, shotId } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -724,7 +805,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   deleteLastShotAndSection: async (sectionId: SectionId, shotId: ShotId) => {
-    const result = await invoke<CommandResult>('delete_last_shot_and_section', { sectionId, shotId });
+    const result = await invokeIpc<CommandResult>(
+      'delete_last_shot_and_section',
+      { sectionId, shotId },
+      { purpose: 'remove single-shot section', fields: { sectionId, shotId } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -733,7 +818,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   setShotVirtual: async (sectionId: SectionId, shotId: ShotId, isVirtual: boolean) => {
-    const result = await invoke<CommandResult>('set_shot_virtual', { sectionId, shotId, isVirtual });
+    const result = await invokeIpc<CommandResult>(
+      'set_shot_virtual',
+      { sectionId, shotId, isVirtual },
+      { purpose: 'toggle virtual shot visibility', fields: { sectionId, shotId, isVirtual } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -743,7 +832,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   // Station operations
   mergeStations: async (stationA: StationRef, stationB: StationRef) => {
-    const result = await invoke<CommandResult>('merge_stations', { stationA, stationB });
+    const result = await invokeIpc<CommandResult>(
+      'merge_stations',
+      { stationA, stationB },
+      { purpose: 'connect survey sections', fields: { stationA, stationB } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -752,7 +845,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   unmergeStations: async (stationRef: StationRef) => {
-    const result = await invoke<CommandResult>('unmerge_stations', { stationRef });
+    const result = await invokeIpc<CommandResult>(
+      'unmerge_stations',
+      { stationRef },
+      { purpose: 'disconnect merged stations', fields: { stationRef } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -761,11 +858,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   checkMergeConnectivity: async (stationA: StationRef, stationB: StationRef) => {
-    return await invoke<ConnectivityResult>('check_merge_connectivity', { stationA, stationB });
+    return await invokeIpc<ConnectivityResult>(
+      'check_merge_connectivity',
+      { stationA, stationB },
+      { purpose: 'check merge connectivity', fields: { stationA, stationB } }
+    );
   },
 
   createLoopClosure: async (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => {
-    const result = await invoke<CommandResult>('create_loop_closure', { stationA, stationB, closureStrategy });
+    const result = await invokeIpc<CommandResult>(
+      'create_loop_closure',
+      { stationA, stationB, closureStrategy },
+      { purpose: 'add loop closure for accuracy', fields: { stationA, stationB, closureStrategy } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -774,10 +879,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   adjustLoopClosures: async (anchorStation: StationRef, method: ClosureStrategy) => {
-    const result = await invoke<CommandResult>('adjust_loop_closures', {
-      anchorStation,
-      method,
-    });
+    const result = await invokeIpc<CommandResult>(
+      'adjust_loop_closures',
+      {
+        anchorStation,
+        method,
+      },
+      { purpose: 'reduce misclosure error', fields: { anchorStation, method } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -786,7 +895,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   setZeroDatum: async (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => {
-    const result = await invoke<CommandResult>('set_zero_datum', { stationRef, coordinates });
+    const result = await invokeIpc<CommandResult>(
+      'set_zero_datum',
+      { stationRef, coordinates },
+      { purpose: 'anchor survey to GPS coordinates', fields: { stationRef } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -798,7 +911,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   removeZeroDatum: async (stationRef: StationRef) => {
-    const result = await invoke<CommandResult>('remove_zero_datum', { stationRef });
+    const result = await invokeIpc<CommandResult>(
+      'remove_zero_datum',
+      { stationRef },
+      { purpose: 'remove GPS anchor', fields: { stationRef } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -807,7 +924,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   moveSection: async (sectionId: SectionId, offset: Coordinates) => {
-    const result = await invoke<CommandResult>('move_section', { sectionId, offset });
+    const result = await invokeIpc<CommandResult>(
+      'move_section',
+      { sectionId, offset },
+      { purpose: 'reposition section for alignment', fields: { sectionId } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -816,7 +937,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   moveSegment: async (sectionId: SectionId, offset: Coordinates) => {
-    const result = await invoke<CommandResult>('move_segment', { sectionId, offset });
+    const result = await invokeIpc<CommandResult>(
+      'move_segment',
+      { sectionId, offset },
+      { purpose: 'move connected segment', fields: { sectionId } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -825,7 +950,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   moveStation: async (stationRef: StationRef, offset: Coordinates) => {
-    const result = await invoke<CommandResult>('move_station', { stationRef, offset });
+    const result = await invokeIpc<CommandResult>(
+      'move_station',
+      { stationRef, offset },
+      { purpose: 'adjust station position', fields: { stationRef } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -834,18 +963,28 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   getConnectedSectionIds: async (sectionId: SectionId) => {
-    return await invoke<number[]>('get_rigid_connected_section_ids', { sectionId });
+    return await invokeIpc<number[]>(
+      'get_rigid_connected_section_ids',
+      { sectionId },
+      { purpose: 'query connected section ids', fields: { sectionId } }
+    );
   },
 
   getAnchoredSectionIds: async () => {
-    return await invoke<number[]>('get_anchored_section_ids');
+    return await invokeIpc<number[]>(
+      'get_anchored_section_ids',
+      undefined,
+      { purpose: 'query anchored section ids' }
+    );
   },
 
   // Undo/Redo
   undo: async () => {
     let result: CommandResult;
     try {
-      result = await invoke<CommandResult>('undo');
+      result = await invokeIpc<CommandResult>('undo', undefined, {
+        purpose: 'undo last action',
+      });
       if (result.success) {
         set({ isDirty: true });
       } else {
@@ -863,7 +1002,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   redo: async () => {
     let result: CommandResult;
     try {
-      result = await invoke<CommandResult>('redo');
+      result = await invokeIpc<CommandResult>('redo', undefined, {
+        purpose: 'redo last undone action',
+      });
       if (result.success) {
         set({ isDirty: true });
       } else {
@@ -881,7 +1022,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   undoTo: async (index: number) => {
     let result: CommandResult;
     try {
-      result = await invoke<CommandResult>('undo_to', { index });
+      result = await invokeIpc<CommandResult>(
+        'undo_to',
+        { index },
+        { purpose: 'undo to history index', fields: { index } }
+      );
       if (result.success) {
         set({ isDirty: true });
       } else {
@@ -903,7 +1048,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   redoTo: async (index: number) => {
     let result: CommandResult;
     try {
-      result = await invoke<CommandResult>('redo_to', { index });
+      result = await invokeIpc<CommandResult>(
+        'redo_to',
+        { index },
+        { purpose: 'redo to history index', fields: { index } }
+      );
       if (result.success) {
         set({ isDirty: true });
       } else {
@@ -923,18 +1072,22 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   getUndoStack: async () => {
-    return await invoke<UndoHistoryItem[]>('get_undo_stack');
+    return await invokeIpc<UndoHistoryItem[]>('get_undo_stack', undefined, {
+      purpose: 'fetch undo history',
+    });
   },
 
   getRedoStack: async () => {
-    return await invoke<UndoHistoryItem[]>('get_redo_stack');
+    return await invokeIpc<UndoHistoryItem[]>('get_redo_stack', undefined, {
+      purpose: 'fetch redo history',
+    });
   },
 
   refreshUndoState: async () => {
     try {
       const [canUndo, canRedo] = await Promise.all([
-        invoke<boolean>('can_undo'),
-        invoke<boolean>('can_redo'),
+        invokeIpc<boolean>('can_undo', undefined, { purpose: 'check undo availability' }),
+        invokeIpc<boolean>('can_redo', undefined, { purpose: 'check redo availability' }),
       ]);
       set({ canUndo, canRedo });
     } catch (e) {
@@ -944,7 +1097,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   // Batch execution - groups multiple commands into a single undo/redo unit
   executeBatch: async (commands: BatchCommand[]) => {
-    const result = await invoke<CommandResult>('execute_batch', { commands });
+    const result = await invokeIpc<CommandResult>(
+      'execute_batch',
+      { commands },
+      { purpose: 'apply batch edits', fields: { command_count: commands.length } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -954,26 +1111,42 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   // Import/Export
   importDmp: async (path: string) => {
-    return await invoke<DmpFile>('import_dmp', { path });
+    return await invokeIpc<DmpFile>('import_dmp', { path }, {
+      purpose: 'parse DMP for import preview',
+      fields: { path },
+    });
   },
 
   calculateFileHash: async (path: string) => {
-    return await invoke<string>('calculate_file_hash', { path });
+    return await invokeIpc<string>('calculate_file_hash', { path }, {
+      purpose: 'detect duplicate imports',
+      fields: { path },
+    });
   },
 
   checkDuplicateImport: async (hash: string) => {
-    return await invoke<boolean>('check_duplicate_import', { hash });
+    return await invokeIpc<boolean>('check_duplicate_import', { hash }, {
+      purpose: 'detect duplicate imports',
+      fields: { hash },
+    });
   },
 
   trackImportedFile: async (hash: string) => {
-    await invoke('track_imported_file', { hash });
+    await invokeIpc('track_imported_file', { hash }, {
+      purpose: 'track imported file hash',
+      fields: { hash },
+    });
   },
 
   importSections: async (sections: ImportSectionConfig[], fileHash?: string | null) => {
-    const result = await invoke<CommandResult>('import_sections', {
-      sections,
-      fileHash: fileHash ?? null,
-    });
+    const result = await invokeIpc<CommandResult>(
+      'import_sections',
+      {
+        sections,
+        fileHash: fileHash ?? null,
+      },
+      { purpose: 'apply imported sections', fields: { section_count: sections.length } }
+    );
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
@@ -982,25 +1155,41 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   exportCsv: async (path: string) => {
-    await invoke('export_csv', { path });
+    await invokeIpc('export_csv', { path }, {
+      purpose: 'export project as CSV',
+      fields: { path },
+    });
   },
 
   exportJson: async (path: string) => {
-    await invoke('export_json', { path });
+    await invokeIpc('export_json', { path }, {
+      purpose: 'export project as JSON',
+      fields: { path },
+    });
   },
 
   exportImage: async (path: string, options: ExportImageOptions) => {
-    await invoke('export_image', { path, options });
+    await invokeIpc('export_image', { path, options }, {
+      purpose: 'export map image',
+      fields: { path, format: options.format },
+    });
   },
 
   mergeProjects: async (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => {
     try {
-      const result = await invoke<CommandResult>('merge_projects', {
-        sourcePaths,
-        outputPath,
-        outputName,
-        archiveOriginals,
-      });
+      const result = await invokeIpc<CommandResult>(
+        'merge_projects',
+        {
+          sourcePaths,
+          outputPath,
+          outputName,
+          archiveOriginals,
+        },
+        {
+          purpose: 'merge projects into single file',
+          fields: { source_count: sourcePaths.length, outputPath },
+        }
+      );
       if (result.success) {
         // Refresh recent projects to reflect any changes (archived files removed, new file added)
         await get().loadRecentProjects();

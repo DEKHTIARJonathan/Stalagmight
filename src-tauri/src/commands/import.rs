@@ -11,19 +11,53 @@ use crate::parsers::DmpFile;
 /// Import a DMP file and return parsed data
 #[tauri::command]
 pub fn import_dmp(path: PathBuf) -> Result<DmpFile, String> {
-    crate::parsers::parse_dmp(&path).map_err(|e| e.to_string())
+    tracing::info!(
+        path = ?path,
+        purpose = "prepare import preview",
+        "Parsing DMP file for import preview"
+    );
+    let result = crate::parsers::parse_dmp(&path);
+    if let Err(ref e) = result {
+        tracing::error!(
+            path = ?path,
+            purpose = "prepare import preview",
+            reason = %e,
+            "Failed to parse DMP file for import preview"
+        );
+    }
+    result.map_err(|e| e.to_string())
 }
 
 /// Calculate SHA256 hash of a file
 #[tauri::command]
 pub fn calculate_file_hash(path: PathBuf) -> Result<String, String> {
-    let contents = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
+    tracing::debug!(
+        path = ?path,
+        purpose = "detect duplicate imports",
+        "Calculating file hash for import deduplication"
+    );
+    let contents = fs::read(&path).map_err(|e| {
+        tracing::error!(
+            path = ?path,
+            purpose = "detect duplicate imports",
+            reason = %e,
+            "Failed to read file while calculating import hash"
+        );
+        format!("Failed to read file: {}", e)
+    })?;
 
     let mut hasher = Sha256::new();
     hasher.update(&contents);
     let result = hasher.finalize();
 
-    Ok(format!("{:x}", result))
+    let hash = format!("{:x}", result);
+    tracing::debug!(
+        path = ?path,
+        purpose = "detect duplicate imports",
+        hash = %hash,
+        "Calculated file hash for import deduplication"
+    );
+    Ok(hash)
 }
 
 /// Check if a file hash has already been imported to the project
@@ -33,6 +67,11 @@ pub fn check_duplicate_import(state: State<'_, AppState>, hash: String) -> Resul
 }
 
 pub(crate) fn check_duplicate_import_impl(state: &AppState, hash: String) -> Result<bool, String> {
+    tracing::debug!(
+        hash = %hash,
+        purpose = "detect duplicate imports",
+        "Checking whether file hash was previously imported"
+    );
     state.check_duplicate_import(&hash).map_err(|e| e.to_string())
 }
 
@@ -43,6 +82,11 @@ pub fn track_imported_file(state: State<'_, AppState>, hash: String) -> CommandR
 }
 
 pub(crate) fn track_imported_file_impl(state: &AppState, hash: String) -> CommandResult {
+    tracing::debug!(
+        hash = %hash,
+        purpose = "prevent duplicate imports",
+        "Tracking imported file hash"
+    );
     state.track_imported_file(hash)
 }
 

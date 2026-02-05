@@ -61,13 +61,17 @@ impl AppState {
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        "Failed to initialize tile cache - offline tile access will be unavailable"
+                        purpose = "enable offline tiles at startup",
+                        "Failed to initialize tile cache; offline tile access will be unavailable"
                     );
                     None
                 }
             }
         } else {
-            tracing::info!("Tile cache disabled in configuration");
+            tracing::info!(
+                purpose = "respect user cache settings",
+                "Tile cache disabled in configuration"
+            );
             None
         };
 

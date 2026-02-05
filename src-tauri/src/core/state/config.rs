@@ -12,6 +12,10 @@ impl AppState {
 
     /// Update config
     pub fn update_config(&self, mut config: Config) -> Result<()> {
+        tracing::info!(
+            purpose = "apply user settings",
+            "Updating configuration"
+        );
         // Check if cache setting changed before saving
         let old_cache_enabled = self
             .config
@@ -21,7 +25,14 @@ impl AppState {
             .unwrap_or(true);
         let new_cache_enabled = config.cache.tile_cache_enabled;
 
-        config.save()?;
+        if let Err(e) = config.save() {
+            tracing::error!(
+                reason = %e,
+                purpose = "persist user settings",
+                "Failed to save configuration"
+            );
+            return Err(e);
+        }
 
         // Sync tile cache if cache setting changed
         if old_cache_enabled != new_cache_enabled {
@@ -30,16 +41,26 @@ impl AppState {
                     // Enable cache - create new cache
                     match Self::init_tile_cache(&config) {
                         Ok(cache) => {
-                            tracing::info!("Tile cache enabled");
+                            tracing::info!(
+                                purpose = "enable offline tiles",
+                                "Tile cache enabled"
+                            );
                             *cache_guard = Some(cache);
                         }
                         Err(e) => {
-                            tracing::warn!(error = %e, "Failed to initialize tile cache");
+                            tracing::warn!(
+                                error = %e,
+                                purpose = "enable offline tiles",
+                                "Failed to initialize tile cache"
+                            );
                         }
                     }
                 } else {
                     // Disable cache - set to None (existing cache data remains on disk)
-                    tracing::info!("Tile cache disabled");
+                    tracing::info!(
+                        purpose = "disable offline tiles",
+                        "Tile cache disabled"
+                    );
                     *cache_guard = None;
                 }
             }

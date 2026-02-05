@@ -426,7 +426,11 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
         match parse_shot(&mut buffer, version) {
             Ok(shot) => shots.push(shot),
             Err(e) => {
-                tracing::debug!("Shot parsing ended: {}", e);
+                tracing::debug!(
+                    reason = %e,
+                    purpose = "parse section shots for import",
+                    "Stopping shot parsing after terminal or invalid data"
+                );
                 break;
             }
         }
@@ -494,7 +498,12 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
         );
     }
 
-    tracing::info!(path = ?path, version = version, "Parsing DMP file");
+    tracing::info!(
+        path = ?path,
+        version = version,
+        purpose = "prepare import preview",
+        "Parsing DMP file for import preview"
+    );
 
     // Split into sections
     let section_data = split_into_sections(&data, version);
@@ -508,15 +517,21 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
         match parse_section(section_bytes) {
             Ok(section) => {
                 tracing::debug!(
+                    section_index = i,
                     section_name = %section.name,
                     shot_count = section.shots.len(),
-                    "Parsed section {}",
-                    i
+                    purpose = "build import preview",
+                    "Parsed section for import preview"
                 );
                 sections.push(section);
             }
             Err(e) => {
-                tracing::warn!("Failed to parse section {}: {}", i, e);
+                tracing::warn!(
+                    section_index = i,
+                    purpose = "build import preview",
+                    reason = %e,
+                    "Failed to parse section for import preview"
+                );
             }
         }
     }
@@ -528,7 +543,8 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
     tracing::info!(
         section_count = sections.len(),
         total_shots = sections.iter().map(|s| s.shots.len()).sum::<usize>(),
-        "DMP file parsed successfully"
+        purpose = "complete import preview",
+        "DMP file parsed for import preview"
     );
 
     Ok(DmpFile { version, sections })

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeIpc } from '../../../utils/ipc';
 import { Toggle } from '../../common/Toggle';
 import { Button } from '../../common/Button';
 import { SettingsSection } from './SettingsSection';
@@ -98,7 +98,9 @@ export function CacheSettings({
     if (!mountedRef.current) return;
     setIsLoadingStats(true);
     try {
-      const stats = await invoke<CacheStats>('get_cache_stats');
+      const stats = await invokeIpc<CacheStats>('get_cache_stats', undefined, {
+        purpose: 'load tile cache statistics',
+      });
       if (mountedRef.current) {
         setCacheStats(stats);
       }
@@ -127,7 +129,10 @@ export function CacheSettings({
   const handleClearCache = async () => {
     setIsClearing(true);
     try {
-      await invoke('clear_tile_cache', { provider: null });
+      await invokeIpc('clear_tile_cache', { provider: null }, {
+        purpose: 'clear tile cache',
+        fields: { provider: null },
+      });
       await loadCacheStats();
     } catch (error) {
       console.error('[CacheSettings] Failed to clear cache:', error);

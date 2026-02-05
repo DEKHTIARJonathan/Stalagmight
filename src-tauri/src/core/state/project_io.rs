@@ -84,6 +84,12 @@ impl AppState {
     pub(super) fn create_project(&self, name: String, location: Option<String>) -> CommandResult {
         let project = Project::new(name, location);
 
+        tracing::info!(
+            project_name = %project.name,
+            purpose = "start new project",
+            "Project created in memory"
+        );
+
         if let Ok(mut proj) = self.project.lock() {
             *proj = Some(project);
         }
@@ -95,25 +101,51 @@ impl AppState {
         // Clear display settings cache for new project
         self.clear_display_settings_cache();
 
-        tracing::info!("Project created");
         CommandResult::success()
     }
 
     pub(super) fn open_project(&self, path: PathBuf) -> CommandResult {
+        tracing::info!(
+            path = ?path,
+            purpose = "resume editing",
+            "Opening project file"
+        );
         // Verify file exists before trying to open
         if !path.exists() {
+            tracing::warn!(
+                path = ?path,
+                purpose = "resume editing",
+                reason = "file not found",
+                "Project open failed"
+            );
             return CommandResult::failure(format!("File not found: {}", path.display()));
         }
 
         // Use open_existing which validates the file is a valid Stalagmight project
         let db = match Database::open_existing(&path) {
             Ok(db) => db,
-            Err(e) => return CommandResult::failure(format!("{}", e)),
+            Err(e) => {
+                tracing::error!(
+                    path = ?path,
+                    purpose = "resume editing",
+                    reason = %e,
+                    "Failed to open project database"
+                );
+                return CommandResult::failure(format!("{}", e));
+            }
         };
 
         let mut project = match db.load_project() {
             Ok(p) => p,
-            Err(e) => return CommandResult::failure(format!("Failed to load project data: {}", e)),
+            Err(e) => {
+                tracing::error!(
+                    path = ?path,
+                    purpose = "resume editing",
+                    reason = %e,
+                    "Failed to load project data"
+                );
+                return CommandResult::failure(format!("Failed to load project data: {}", e));
+            }
         };
 
         project.file_path = Some(path.clone());
@@ -150,11 +182,16 @@ impl AppState {
                 undo_stack.clear();
             } else {
                 undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
-                tracing::info!(undo = undo_stack.len(), "Restored undo/redo stacks from database");
+                tracing::info!(
+                    undo = undo_stack.len(),
+                    purpose = "restore edit history",
+                    "Restored undo/redo stacks from database"
+                );
             }
         }
 
         // Add to recent projects and persist to config
+        let path_display = format!("{}", path.display());
         if let Ok(mut recent) = self.recent_projects.lock() {
             recent.retain(|p| p != &path);
             recent.insert(0, path);
@@ -163,12 +200,20 @@ impl AppState {
                 // Update config with recent projects and save
                 config.general.recent_projects = recent.clone();
                 if let Err(e) = config.save() {
-                    tracing::warn!("Failed to save config with recent projects: {}", e);
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "persist recent projects list",
+                        "Failed to save config with recent projects"
+                    );
                 }
             }
         }
 
-        tracing::info!("Project opened");
+        tracing::info!(
+            path = %path_display,
+            purpose = "resume editing",
+            "Project opened"
+        );
         CommandResult::success()
     }
 
@@ -199,7 +244,12 @@ impl AppState {
 
         // Create a temporary file path in the same directory (for atomic rename)
         let temp_path = save_path.with_extension("stalx.tmp");
-        tracing::info!(final_path = ?save_path, temp_path = ?temp_path, "Starting safe save operation");
+        tracing::info!(
+            final_path = ?save_path,
+            temp_path = ?temp_path,
+            purpose = "persist edits safely",
+            "Starting safe save operation"
+        );
 
         // Load display settings from current database or in-memory cache
         let display_settings = {
@@ -237,14 +287,23 @@ impl AppState {
             // Clean up temp file on failure
             drop(db);
             let _ = std::fs::remove_file(&temp_path);
-            tracing::error!(error = %e, "Save failed, temp file cleaned up");
+            tracing::error!(
+                error = %e,
+                purpose = "persist edits safely",
+                "Save failed; temp file cleaned up"
+            );
             return CommandResult::failure(format!("Failed to save project: {}", e));
         }
 
         // Copy display settings to the new database
         for (key, value) in &display_settings {
             if let Err(e) = db.save_display_setting(key, value) {
-                tracing::warn!(key = %key, error = %e, "Failed to copy display setting");
+                tracing::warn!(
+                    key = %key,
+                    error = %e,
+                    purpose = "preserve display settings on save",
+                    "Failed to copy display setting"
+                );
             }
         }
 
@@ -255,7 +314,11 @@ impl AppState {
         // This is safe: if rename fails, original file is untouched
         if let Err(e) = std::fs::rename(&temp_path, &save_path) {
             let _ = std::fs::remove_file(&temp_path);
-            tracing::error!(error = %e, "Failed to rename temp file to final destination");
+            tracing::error!(
+                error = %e,
+                purpose = "persist edits safely",
+                "Failed to rename temp file to final destination"
+            );
             return CommandResult::failure(format!("Failed to finalize save: {}", e));
         }
 
@@ -263,7 +326,11 @@ impl AppState {
         let db = match Database::open(&save_path) {
             Ok(db) => db,
             Err(e) => {
-                tracing::warn!(error = %e, "Failed to reopen saved database (file was saved successfully)");
+                tracing::warn!(
+                    error = %e,
+                    purpose = "reopen saved project for continued editing",
+                    "Failed to reopen saved database (file was saved successfully)"
+                );
                 // File was saved, just can't reopen - not a critical failure
                 project.file_path = Some(save_path.clone());
                 drop(proj_guard);
@@ -285,7 +352,11 @@ impl AppState {
                 .collect();
 
             if let Err(e) = db.save_undo_stack_with_timestamps(undo_entries) {
-                tracing::warn!(error = %e, "Failed to persist undo stack (project was saved)");
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve undo history",
+                    "Failed to persist undo stack (project was saved)"
+                );
             }
 
             let redo_entries: Vec<_> = undo_stack
@@ -294,7 +365,11 @@ impl AppState {
                 .collect();
 
             if let Err(e) = db.save_redo_stack_with_timestamps(redo_entries) {
-                tracing::warn!(error = %e, "Failed to persist redo stack (project was saved)");
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve redo history",
+                    "Failed to persist redo stack (project was saved)"
+                );
             }
         }
 
@@ -318,12 +393,20 @@ impl AppState {
                 recent.truncate(config.general.recent_projects_max);
                 config.general.recent_projects = recent.clone();
                 if let Err(e) = config.save() {
-                    tracing::warn!("Failed to save config with recent projects: {}", e);
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "persist recent projects list",
+                        "Failed to save config with recent projects"
+                    );
                 }
             }
         }
 
-        tracing::info!(path = ?save_path, "Project saved successfully");
+        tracing::info!(
+            path = ?save_path,
+            purpose = "persist edits safely",
+            "Project saved successfully"
+        );
         CommandResult::success()
     }
 
@@ -352,7 +435,10 @@ impl AppState {
         // Clear display settings cache
         self.clear_display_settings_cache();
 
-        tracing::info!("Project closed");
+        tracing::info!(
+            purpose = "release project resources",
+            "Project closed"
+        );
         tracing::debug!("close_project: returning success");
         CommandResult::success()
     }
@@ -580,6 +666,7 @@ impl AppState {
         tracing::info!(
             output = ?output_path,
             section_count = merged_project.sections.len(),
+            purpose = "combine projects into single file",
             "Projects merged successfully"
         );
 
@@ -590,6 +677,7 @@ impl AppState {
                     tracing::warn!(
                         path = ?source_path,
                         error = %e,
+                        purpose = "archive source projects after merge",
                         "Failed to archive original project (merge completed)"
                     );
                     // Don't fail the operation - merge was successful
@@ -625,6 +713,7 @@ impl AppState {
         tracing::info!(
             original = ?path,
             archived = ?archive_path,
+            purpose = "archive source project after merge",
             "Project file archived"
         );
         Ok(())
@@ -648,6 +737,12 @@ impl AppState {
 
         let handle = self.get_app_handle()
             .ok_or_else(|| LoadError::internal("AppHandle not initialized"))?;
+
+        tracing::info!(
+            path = ?path,
+            purpose = "load project for workspace",
+            "Starting full project load"
+        );
 
         // Check if the same project is already open (avoid unnecessary reload)
         if let Ok(proj_guard) = self.project.lock() {
@@ -788,7 +883,11 @@ impl AppState {
                 undo_stack.clear();
             } else {
                 undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
-                tracing::info!(undo = undo_stack.len(), "Restored undo/redo stacks from database");
+                tracing::info!(
+                    undo = undo_stack.len(),
+                    purpose = "restore edit history",
+                    "Restored undo/redo stacks from database"
+                );
             }
         }
 
@@ -800,7 +899,11 @@ impl AppState {
                 recent.truncate(config.general.recent_projects_max);
                 config.general.recent_projects = recent.clone();
                 if let Err(e) = config.save() {
-                    tracing::warn!("Failed to save config with recent projects: {}", e);
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "persist recent projects list",
+                        "Failed to save config with recent projects"
+                    );
                 }
             }
         }
@@ -813,7 +916,11 @@ impl AppState {
         // Clear active load AFTER all mutations and computations complete
         self.clear_active_load(&cancel_token);
 
-        tracing::info!(path = ?path, "Project loaded via load_project_full");
+        tracing::info!(
+            path = ?path,
+            purpose = "load project for workspace",
+            "Project loaded via load_project_full"
+        );
 
         Ok(LoadProjectFullResult {
             loading_id,
@@ -982,7 +1089,11 @@ impl AppState {
                 recent.truncate(config.general.recent_projects_max);
                 config.general.recent_projects = recent.clone();
                 if let Err(e) = config.save() {
-                    tracing::warn!("Failed to save config with recent projects: {}", e);
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "persist recent projects list",
+                        "Failed to save config with recent projects"
+                    );
                 }
             }
         }
@@ -993,7 +1104,12 @@ impl AppState {
         // Clear active load AFTER all mutations complete
         self.clear_active_load(&cancel_token);
 
-        tracing::info!(path = ?db_path, name = %name, "Project created via create_project_full");
+        tracing::info!(
+            path = ?db_path,
+            name = %name,
+            purpose = "create new project on disk",
+            "Project created via create_project_full"
+        );
 
         Ok(CreateProjectFullResult {
             loading_id,
