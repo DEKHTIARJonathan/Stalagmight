@@ -2,6 +2,7 @@ import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
 import { ResizablePanel } from '../common/Panel';
+import { ErrorBoundary } from '../common/ErrorBoundary';
 import { OfflineIndicator } from '../common/OfflineIndicator';
 import Toolbar from './Toolbar';
 import SectionsPanel from './SectionsPanel';
@@ -75,7 +76,9 @@ export default function SingleSystemView() {
             onResizeEnd={(size) => savePanelSizes(size, undefined, undefined)}
             className="border-r border-border"
           >
-            <SectionsPanel sections={project.sections} />
+            <ErrorBoundary panelName="Sections">
+              <SectionsPanel sections={project.sections} />
+            </ErrorBoundary>
           </ResizablePanel>
         )}
 
@@ -83,7 +86,9 @@ export default function SingleSystemView() {
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Map */}
           <div className="flex-1 relative">
-            <MapCanvas />
+            <ErrorBoundary panelName="Map">
+              <MapCanvas />
+            </ErrorBoundary>
             {/* Offline indicator - positioned in top-right of map area */}
             <OfflineIndicator className="absolute top-2 right-14" />
           </div>
@@ -99,7 +104,9 @@ export default function SingleSystemView() {
               onResizeEnd={(size) => savePanelSizes(undefined, undefined, size)}
               className="border-t border-border"
             >
-              <DataTable sections={project.sections} />
+              <ErrorBoundary panelName="Data Table">
+                <DataTable sections={project.sections} />
+              </ErrorBoundary>
             </ResizablePanel>
           )}
         </div>
@@ -116,7 +123,9 @@ export default function SingleSystemView() {
             handlePosition="start"
             className="border-l border-border"
           >
-            <DetailPanel />
+            <ErrorBoundary panelName="Details">
+              <DetailPanel />
+            </ErrorBoundary>
           </ResizablePanel>
         )}
       </div>
