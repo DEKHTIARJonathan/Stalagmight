@@ -737,6 +737,13 @@
       "title": "Reset to Defaults",
       "message": "Reset all {{category}} settings to their default values?",
       "note": "This will only affect the current category. Changes are not saved until you click {{action}}."
+    },
+    "about": {
+      "title": "About Stalagmight",
+      "version": "Version {{version}}",
+      "description": "Desktop application for processing underwater cave survey data.",
+      "website": "stalagmight.com",
+      "close": "Close"
     }
   },
   "undo": {
