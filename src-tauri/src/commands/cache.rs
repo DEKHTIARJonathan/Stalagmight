@@ -103,11 +103,18 @@ pub(crate) fn clear_tile_cache_impl(
 
     match provider {
         Some(p) => {
-            tracing::info!(provider = %p, "Clearing tile cache for provider");
+            tracing::info!(
+                provider = %p,
+                purpose = "refresh cached map tiles",
+                "Clearing tile cache for provider"
+            );
             cache.clear_provider(&p).map_err(|e| e.to_string())
         }
         None => {
-            tracing::info!("Clearing all tile cache");
+            tracing::info!(
+                purpose = "free disk space or refresh cached tiles",
+                "Clearing all tile cache"
+            );
             cache.clear_all().map_err(|e| e.to_string())
         }
     }
@@ -194,12 +201,20 @@ pub(crate) fn get_network_status_impl() -> bool {
         }
         Err(ureq::Error::StatusCode(code)) => {
             // HTTP error (4xx, 5xx) - network IS reachable, server responded
-            tracing::debug!(status = code, "Network reachable but server returned error status");
+            tracing::debug!(
+                status = code,
+                purpose = "check tile provider availability",
+                "Network reachable but tile server returned error status"
+            );
             true
         }
         Err(e) => {
             // Transport error (DNS, connection, timeout) - network is NOT reachable
-            tracing::debug!(error = %e, "Network status check failed - transport error");
+            tracing::debug!(
+                error = %e,
+                purpose = "check tile provider availability",
+                "Network status check failed due to transport error"
+            );
             false
         }
     }

@@ -203,7 +203,14 @@ where
     }
 
     // Cache miss - fetch from network
-    tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache miss, fetching from network");
+    tracing::debug!(
+        provider = %provider,
+        z = z,
+        y = y,
+        x = x,
+        purpose = "render map tiles",
+        "Cache miss, fetching tile from network"
+    );
     match fetch_fn(provider, z, y, x) {
         Ok((data, content_type)) => {
             // Store in cache
@@ -218,7 +225,15 @@ where
             build_ok_response(data, &content_type)
         }
         Err(e) => {
-            tracing::warn!(error = %e, provider = %provider, z = z, y = y, x = x, "Network fetch failed");
+            tracing::warn!(
+                error = %e,
+                provider = %provider,
+                z = z,
+                y = y,
+                x = x,
+                purpose = "render map tiles",
+                "Network fetch failed; attempting offline fallback"
+            );
 
             // Try to serve stale cached tile as offline fallback
             let stale_tile = {
@@ -310,7 +325,14 @@ pub fn tile_fetch_impl(
             };
 
             if let Some(entry) = stale_tile {
-                tracing::info!(provider = %provider, z = z, y = y, x = x, "Serving stale cached tile as offline fallback");
+                tracing::info!(
+                    provider = %provider,
+                    z = z,
+                    y = y,
+                    x = x,
+                    purpose = "keep map usable offline",
+                    "Serving stale cached tile as offline fallback"
+                );
                 return Ok(entry.data);
             }
 
@@ -338,7 +360,11 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 // Parse the tile coordinates from the URI
                 let Some((provider, z, y, x)) = parse_tile_uri(&uri) else {
-                    tracing::warn!(uri = %uri, "Invalid tile URI format");
+                    tracing::warn!(
+                        uri = %uri,
+                        purpose = "handle map tile request",
+                        "Invalid tile URI format; rejecting request"
+                    );
                     responder.respond(build_error_response(
                         http::StatusCode::BAD_REQUEST,
                         "Invalid tile URI format. Expected: /esri/{z}/{y}/{x} or esri/{z}/{y}/{x}",
@@ -346,7 +372,14 @@ pub fn run() {
                     return;
                 };
 
-                tracing::debug!(provider = %provider, z = z, y = y, x = x, "Processing tile request");
+                tracing::debug!(
+                    provider = %provider,
+                    z = z,
+                    y = y,
+                    x = x,
+                    purpose = "render map tiles",
+                    "Processing tile request"
+                );
 
                 // Run the blocking tile fetch in the blocking threadpool
                 let response = tauri::async_runtime::spawn_blocking(move || {
@@ -354,7 +387,11 @@ pub fn run() {
                 })
                 .await
                 .unwrap_or_else(|e| {
-                    tracing::error!(error = %e, "Tile request task panicked");
+                    tracing::error!(
+                        error = %e,
+                        purpose = "render map tiles",
+                        "Tile request task panicked"
+                    );
                     build_error_response(
                         http::StatusCode::INTERNAL_SERVER_ERROR,
                         "Internal error processing tile request",
@@ -371,11 +408,19 @@ pub fn run() {
                 api.prevent_close();
                 // Emit the close-requested event so the frontend can handle it
                 if let Err(e) = window.emit("tauri://close-requested", ()) {
-                    tracing::error!("Failed to emit close-requested event: {}", e);
+                    tracing::error!(
+                        error = %e,
+                        purpose = "allow frontend to confirm close",
+                        "Failed to emit close-requested event"
+                    );
                     // If we can't emit the event, allow the close to proceed
                     // by destroying the window
                     if let Err(destroy_err) = window.destroy() {
-                        tracing::error!("Failed to destroy window: {}", destroy_err);
+                        tracing::error!(
+                            error = %destroy_err,
+                            purpose = "close window after emit failure",
+                            "Failed to destroy window after close-requested emit failed"
+                        );
                     }
                 }
             }

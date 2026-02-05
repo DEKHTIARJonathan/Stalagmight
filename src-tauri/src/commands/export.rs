@@ -14,9 +14,43 @@ pub fn export_csv(state: State<AppState>, path: PathBuf) -> Result<(), String> {
 pub(crate) fn export_csv_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
     let project = state
         .get_project_state()
-        .ok_or_else(|| "No project open".to_string())?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                path = ?path,
+                purpose = "export project for sharing",
+                format = "csv",
+                "Export requested with no project open"
+            );
+            "No project open".to_string()
+        })?;
 
-    crate::export::export_csv(&project, &path).map_err(|e| e.to_string())
+    tracing::info!(
+        path = ?path,
+        purpose = "export project for sharing",
+        format = "csv",
+        "Exporting project to CSV"
+    );
+    match crate::export::export_csv(&project, &path) {
+        Ok(_) => {
+            tracing::info!(
+                path = ?path,
+                purpose = "export project for sharing",
+                format = "csv",
+                "CSV export completed"
+            );
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!(
+                path = ?path,
+                purpose = "export project for sharing",
+                format = "csv",
+                reason = %e,
+                "CSV export failed"
+            );
+            Err(e.to_string())
+        }
+    }
 }
 
 /// Export project data to JSON
@@ -28,9 +62,43 @@ pub fn export_json(state: State<AppState>, path: PathBuf) -> Result<(), String> 
 pub(crate) fn export_json_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
     let project = state
         .get_project_state()
-        .ok_or_else(|| "No project open".to_string())?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                path = ?path,
+                purpose = "export project for sharing",
+                format = "json",
+                "Export requested with no project open"
+            );
+            "No project open".to_string()
+        })?;
 
-    crate::export::export_json(&project, &path).map_err(|e| e.to_string())
+    tracing::info!(
+        path = ?path,
+        purpose = "export project for sharing",
+        format = "json",
+        "Exporting project to JSON"
+    );
+    match crate::export::export_json(&project, &path) {
+        Ok(_) => {
+            tracing::info!(
+                path = ?path,
+                purpose = "export project for sharing",
+                format = "json",
+                "JSON export completed"
+            );
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!(
+                path = ?path,
+                purpose = "export project for sharing",
+                format = "json",
+                reason = %e,
+                "JSON export failed"
+            );
+            Err(e.to_string())
+        }
+    }
 }
 
 /// Export map image with progress events via shared loading-progress infrastructure.
@@ -48,11 +116,27 @@ pub async fn export_image(
 ) -> Result<(), String> {
     let project = state
         .get_project_state()
-        .ok_or_else(|| "No project open".to_string())?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                path = ?path,
+                purpose = "export map image for sharing",
+                format = ?options.format,
+                "Export requested with no project open"
+            );
+            "No project open".to_string()
+        })?;
+    let format = options.format;
+    let log_path = path.clone();
 
     // Run heavy export work in spawn_blocking to avoid freezing UI
     // and ensure progress events are delivered during processing
     tauri::async_runtime::spawn_blocking(move || {
+        tracing::info!(
+            path = ?path,
+            purpose = "export map image for sharing",
+            format = ?options.format,
+            "Starting image export"
+        );
         // Use shared ProgressEmitter for consistent progress events
         let mut emitter = ProgressEmitter::new_for_export(app_handle);
 
@@ -73,12 +157,35 @@ pub async fn export_image(
             // Complete phase
             emitter.start_phase(LoadingPhase::ExportComplete);
             emitter.complete_phase(LoadingPhase::ExportComplete);
+            tracing::info!(
+                path = ?path,
+                purpose = "export map image for sharing",
+                format = ?options.format,
+                "Image export completed"
+            );
+        } else if let Err(ref e) = result {
+            tracing::error!(
+                path = ?path,
+                purpose = "export map image for sharing",
+                format = ?options.format,
+                reason = %e,
+                "Image export failed"
+            );
         }
 
         result.map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| format!("Export task panicked: {}", e))?
+    .map_err(|e| {
+        tracing::error!(
+            path = ?log_path,
+            purpose = "export map image for sharing",
+            format = ?format,
+            reason = %e,
+            "Image export task panicked"
+        );
+        format!("Export task panicked: {}", e)
+    })?
 }
 
 pub(crate) fn export_image_impl(
@@ -88,9 +195,43 @@ pub(crate) fn export_image_impl(
 ) -> Result<(), String> {
     let project = state
         .get_project_state()
-        .ok_or_else(|| "No project open".to_string())?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                path = ?path,
+                purpose = "export map image for sharing",
+                format = ?options.format,
+                "Export requested with no project open"
+            );
+            "No project open".to_string()
+        })?;
 
-    crate::export::export_image(&project, &path, &options).map_err(|e| e.to_string())
+    tracing::info!(
+        path = ?path,
+        purpose = "export map image for sharing",
+        format = ?options.format,
+        "Exporting map image"
+    );
+    match crate::export::export_image(&project, &path, &options) {
+        Ok(_) => {
+            tracing::info!(
+                path = ?path,
+                purpose = "export map image for sharing",
+                format = ?options.format,
+                "Map image export completed"
+            );
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!(
+                path = ?path,
+                purpose = "export map image for sharing",
+                format = ?options.format,
+                reason = %e,
+                "Map image export failed"
+            );
+            Err(e.to_string())
+        }
+    }
 }
 
 /// Get depth color preset colors

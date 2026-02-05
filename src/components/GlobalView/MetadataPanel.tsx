@@ -1,6 +1,6 @@
 import { type FC, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeIpc } from '../../utils/ipc';
 import type { ProjectMetadata } from '../../types/project';
 import { ResizablePanel } from '../common/Panel';
 import { Button } from '../common/Button';
@@ -52,13 +52,21 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
     try {
       // Use Tauri shell plugin to reveal in file explorer
       // Note: This command opens the parent folder with the file selected
-      await invoke('plugin:opener|reveal_item_in_dir', { path: singleProject.file_path });
+      await invokeIpc(
+        'plugin:opener|reveal_item_in_dir',
+        { path: singleProject.file_path },
+        { purpose: 'reveal project in folder', fields: { path: singleProject.file_path } }
+      );
     } catch (error) {
       console.error('Failed to show in folder:', error);
       // Fallback: try to open the directory
       try {
         const dirPath = singleProject.file_path.substring(0, singleProject.file_path.lastIndexOf('/'));
-        await invoke('plugin:opener|open_path', { path: dirPath });
+        await invokeIpc(
+          'plugin:opener|open_path',
+          { path: dirPath },
+          { purpose: 'open project folder after reveal failed', fields: { path: dirPath } }
+        );
       } catch (fallbackError) {
         console.error('Fallback also failed:', fallbackError);
       }

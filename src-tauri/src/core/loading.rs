@@ -440,8 +440,9 @@ impl ProgressEmitter {
         } else {
             // Phase not in this emitter's flow - log warning but don't change index
             tracing::warn!(
-                "start_phase called with phase {:?} not in emitter's phase_weights",
-                phase
+                phase = ?phase,
+                purpose = "report loading progress to UI",
+                "start_phase called with phase not in emitter's phase_weights"
             );
         }
         self.last_item = 0;
@@ -497,7 +498,11 @@ impl ProgressEmitter {
         };
 
         if let Err(e) = self.handle.emit("loading-progress", &progress) {
-            tracing::warn!("Failed to emit loading progress: {}", e);
+            tracing::warn!(
+                error = %e,
+                purpose = "report loading progress to UI",
+                "Failed to emit loading progress event"
+            );
         }
     }
 

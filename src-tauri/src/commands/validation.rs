@@ -21,7 +21,13 @@ pub(crate) fn get_project_warnings_impl(state: &AppState) -> Vec<ProjectWarning>
     };
 
     // Delegate to AppState method (uses self.database since project is already loaded)
-    state.compute_project_warnings(&project, None)
+    let warnings = state.compute_project_warnings(&project, None);
+    tracing::debug!(
+        count = warnings.len(),
+        purpose = "surface validation issues",
+        "Computed project validation warnings"
+    );
+    warnings
 }
 
 /// Resolve a warning (mark it as acknowledged)
@@ -43,6 +49,13 @@ pub(crate) fn resolve_warning_impl(
     warning_code: String,
     comment: Option<String>,
 ) -> Result<(), String> {
+    tracing::info!(
+        section_id = section_id,
+        shot_id = shot_id,
+        warning_code = %warning_code,
+        purpose = "acknowledge validation warning",
+        "Resolving warning"
+    );
     let warning = ResolvedWarning {
         section_id,
         shot_id,
@@ -50,7 +63,17 @@ pub(crate) fn resolve_warning_impl(
         resolved_at: Utc::now(),
         resolved_comment: comment,
     };
-    state.save_resolved_warning(&warning).map_err(|e| e.to_string())
+    state.save_resolved_warning(&warning).map_err(|e| {
+        tracing::error!(
+            section_id = warning.section_id,
+            shot_id = warning.shot_id,
+            warning_code = %warning.warning_code,
+            purpose = "acknowledge validation warning",
+            reason = %e,
+            "Failed to resolve warning"
+        );
+        e.to_string()
+    })
 }
 
 /// Unresolve a warning (remove acknowledgment)
@@ -70,5 +93,24 @@ pub(crate) fn unresolve_warning_impl(
     shot_id: ShotId,
     warning_code: String,
 ) -> Result<(), String> {
-    state.delete_resolved_warning(section_id, shot_id, &warning_code).map_err(|e| e.to_string())
+    tracing::info!(
+        section_id = section_id,
+        shot_id = shot_id,
+        warning_code = %warning_code,
+        purpose = "reopen validation warning",
+        "Unresolving warning"
+    );
+    state
+        .delete_resolved_warning(section_id, shot_id, &warning_code)
+        .map_err(|e| {
+            tracing::error!(
+                section_id = section_id,
+                shot_id = shot_id,
+                warning_code = %warning_code,
+                purpose = "reopen validation warning",
+                reason = %e,
+                "Failed to unresolve warning"
+            );
+            e.to_string()
+        })
 }

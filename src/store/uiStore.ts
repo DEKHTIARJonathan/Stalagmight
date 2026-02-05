@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeIpc } from '../utils/ipc';
 import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 import type { PanelsConfig, ThemeMode } from '../types/config';
 import type { DisplaySettings } from '../types/loading';
@@ -415,11 +415,15 @@ export const useUIStore = create<UIStore>((set) => ({
     }),
   savePanelSizes: async (sectionsPanelWidth, detailPanelWidth, dataTableHeight) => {
     try {
-      await invoke('update_panel_sizes', {
-        sectionsPanelWidth,
-        detailPanelWidth,
-        dataTableHeight,
-      });
+      await invokeIpc(
+        'update_panel_sizes',
+        {
+          sectionsPanelWidth,
+          detailPanelWidth,
+          dataTableHeight,
+        },
+        { purpose: 'persist panel layout', fields: { sectionsPanelWidth, detailPanelWidth, dataTableHeight } }
+      );
     } catch (e) {
       console.error('Failed to save panel sizes:', e);
     }
@@ -470,13 +474,19 @@ export const useUIStore = create<UIStore>((set) => ({
   setGridSpacing: (spacing) => {
     set({ gridSpacing: spacing });
     // Persist the spacing setting
-    invoke('save_display_setting', { key: 'gridSpacing', value: String(spacing) }).catch((e) => {
+    invokeIpc(
+      'save_display_setting',
+      { key: 'gridSpacing', value: String(spacing) },
+      { purpose: 'persist display setting', fields: { key: 'gridSpacing' } }
+    ).catch((e) => {
       console.warn('Failed to save grid spacing:', e);
     });
   },
   loadDisplaySettings: async () => {
     try {
-      const settings = await invoke<Record<string, string>>('load_display_settings');
+      const settings = await invokeIpc<Record<string, string>>('load_display_settings', undefined, {
+        purpose: 'load display settings for UI',
+      });
       const displayState: Partial<Record<DisplayToggleKey, boolean>> = {};
       let gridSpacing: number | undefined;
       for (const [key, value] of Object.entries(settings)) {
@@ -505,7 +515,10 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   saveDisplaySetting: async (key, value) => {
     try {
-      await invoke('save_display_setting', { key, value: String(value) });
+      await invokeIpc('save_display_setting', { key, value: String(value) }, {
+        purpose: 'persist display setting',
+        fields: { key: String(key) },
+      });
     } catch (e) {
       console.warn('Failed to save display setting:', e);
     }
