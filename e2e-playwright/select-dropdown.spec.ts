@@ -121,41 +121,46 @@ test.describe('Select Dropdown (Portal)', () => {
     const sectionSelect = page.getByTestId('data-table-section-select');
     const trigger = sectionSelect.locator('button').first();
     await trigger.focus();
+    await expect(trigger).toBeFocused();
 
-    // Open dropdown via Enter key
-    await page.keyboard.press('Enter');
+    // Open dropdown via Enter key (press on trigger to avoid focus drift)
+    await trigger.press('Enter');
     let listbox = await getSelectListbox(page, trigger);
     await expect(listbox).toBeVisible();
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
 
     // Verify aria-activedescendant is set on the trigger (wait for React state update)
     await expect(trigger).toHaveAttribute('aria-activedescendant', /.+/);
 
     // Navigate down with ArrowDown
-    await page.keyboard.press('ArrowDown');
+    await trigger.press('ArrowDown');
 
     // aria-activedescendant should update
     const newActiveDescendant = await trigger.getAttribute('aria-activedescendant');
     expect(newActiveDescendant).not.toBeNull();
 
     // Navigate up with ArrowUp
-    await page.keyboard.press('ArrowUp');
+    await trigger.press('ArrowUp');
     const afterUpDescendant = await trigger.getAttribute('aria-activedescendant');
     expect(afterUpDescendant).not.toBeNull();
 
     // Close with Escape
-    await page.keyboard.press('Escape');
+    await trigger.press('Escape');
     await expect(listbox).not.toBeVisible({ timeout: 2000 });
+    await expect(trigger).toHaveAttribute('aria-expanded', 'false');
 
     // Re-open with ArrowDown (avoids button click/Space double-toggle)
-    await page.keyboard.press('ArrowDown');
+    await trigger.focus();
+    await expect(trigger).toBeFocused();
+    await trigger.press('ArrowDown');
     listbox = await getSelectListbox(page, trigger);
     await expect(listbox).toBeVisible();
 
     // Navigate to "Side Tunnel" with ArrowDown
     // Current highlight is on currently selected option (Main Passage, index 0).
     // Side Tunnel is index 1, so one ArrowDown.
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('Enter');
+    await trigger.press('ArrowDown');
+    await trigger.press('Enter');
 
     // Dropdown should close after selection
     await expect(listbox).not.toBeVisible({ timeout: 2000 });
