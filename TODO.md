@@ -11,14 +11,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
 | Import/Export | 12 | 19 | 63% |
-| UI & Polish | 6 | 14 | 43% |
+| UI & Polish | 6 | 16 | 38% |
 | Data & Editing | 4 | 5 | 80% |
-| Loop Closure | 3 | 5 | 60% |
+| Loop Closure | 3 | 6 | 50% |
 | Accessibility & i18n | 4 | 7 | 57% |
-| Performance & Stability | 1 | 9 | 11% |
+| Performance & Stability | 1 | 10 | 10% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **30** | **61** | **49%** |
+| **Total** | **30** | **65** | **46%** |
 
 ---
 
@@ -84,7 +84,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 12 done, 🟡 1 partial, ❌ 6 not started
 
-### UI & Polish (6/13 done)
+### UI & Polish (6/16 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -96,6 +96,8 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Tile Caching Settings | ✅ | CacheSettings.tsx + Rust config |
 | Three-Level Settings Reset | ❌ | Per-setting, per-tab, full reset (SPEC 2.9) |
 | Automatic Reference Shot Alignment Settings | ❌ | Configure auto-alignment behavior in Settings |
+| Fix Undo Stack Section Modification Details | ❌ | Unchanged date shows as detail instead of relevant changes |
+| Fix Section Hyperlink Highlighting Not Clearing | ❌ | Highlight persists after navigating away from section link |
 | Splash Screen | ❌ | |
 | About Dialog | ❌ | |
 | Keyboard Shortcuts Overlay | ❌ | Help overlay showing all shortcuts |
@@ -103,7 +105,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Release Automation | ❌ | |
 | Add Comment Tool | ❌ | Text annotations on stations/map |
 
-**Subtotals**: ✅ 6 done, ❌ 8 not started
+**Subtotals**: ✅ 6 done, ❌ 10 not started
 
 ### Data & Editing (4/5 done)
 
@@ -117,17 +119,18 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 4 done, ❌ 1 not started
 
-### Loop Closure (3/5 done)
+### Loop Closure (3/6 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
 | Loop Detection Algorithm | ✅ | |
 | Closure Error Calculation | ✅ | |
 | Closure Strategy Selector | ✅ | ClosureDialog with 4 strategies |
+| Fix Quality Setting → Closure Weight | ❌ | Quality setting incorrectly sets properties; rename/refactor to closure weight |
 | Proportional Distribution | ❌ | Distribute errors proportional to shot lengths |
 | Equal Distribution | ❌ | Distribute errors equally to shots |
 
-**Subtotals**: ✅ 3 done, ❌ 2 not started
+**Subtotals**: ✅ 3 done, ❌ 3 not started
 
 ### Accessibility & i18n (4/7 done)
 
@@ -143,7 +146,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 4 done, ❌ 3 not started
 
-### Performance & Stability (2/9 done)
+### Performance & Stability (2/10 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -153,10 +156,11 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | SQLite Integrity Checks | ❌ | PRAGMA integrity_check on project open (SPEC 2.11) |
 | Error Boundary Wrapper | ❌ | No React ErrorBoundary components |
 | Network Retry Logic | ❌ | |
+| Improve Algorithm/Workflow Tracing | ❌ | Warnings on recoverable errors, debug prints in all major algorithms |
 | File Corruption Recovery | ❌ | |
 | Validation Error Recovery | ❌ | |
 
-**Subtotals**: ✅ 1 done, 🟡 1 partial, ❌ 6 not started
+**Subtotals**: ✅ 1 done, 🟡 1 partial, ❌ 7 not started
 
 ### Integrations (0/1 done)
 
@@ -181,16 +185,16 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
 | Import/Export | 19 | 12 | 1 | 6 |
-| UI & Polish | 14 | 6 | 0 | 8 |
+| UI & Polish | 16 | 6 | 0 | 10 |
 | Data & Editing | 5 | 4 | 0 | 1 |
-| Loop Closure | 5 | 3 | 0 | 2 |
+| Loop Closure | 6 | 3 | 0 | 3 |
 | Accessibility & i18n | 7 | 4 | 0 | 3 |
-| Performance & Stability | 9 | 1 | 1 | 7 |
+| Performance & Stability | 10 | 1 | 1 | 8 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **61** | **30** | **2** | **29** |
+| **Total** | **65** | **30** | **2** | **33** |
 
-**Overall Progress**: 30 done + 2 partial = ~52% complete
+**Overall Progress**: 30 done + 2 partial = ~49% complete
 
 ---
 
