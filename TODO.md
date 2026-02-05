@@ -11,14 +11,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
 | Import/Export | 13 | 19 | 68% |
-| UI & Polish | 9 | 17 | 53% |
+| UI & Polish | 10 | 17 | 59% |
 | Data & Editing | 4 | 5 | 80% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
 | Performance & Stability | 3 | 10 | 30% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **40** | **65** | **62%** |
+| **Total** | **41** | **65** | **63%** |
 
 ---
 
@@ -84,7 +84,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 13 done, ❌ 6 not started
 
-### UI & Polish (7/17 done)
+### UI & Polish (10/17 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -97,7 +97,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Three-Level Settings Reset | ❌ | Per-setting, per-tab, full reset (SPEC 2.9) |
 | Automatic Reference Shot Alignment Settings | ❌ | Configure auto-alignment behavior in Settings |
 | Fix Undo Stack Section Modification Details | ✅ | Only shows changed fields; includes closure adjustment weight |
-| Fix Section Hyperlink Highlighting Not Clearing | ❌ | Highlight persists after navigating away from section link |
+| Fix Section Hyperlink Highlighting Not Clearing | ✅ | Highlight persists after navigating away from section link |
 | Splash Screen | ❌ | |
 | About Dialog | ✅ | AlertDialog in Settings footer |
 | Keyboard Shortcuts Overlay | ❌ | Help overlay showing all shortcuts |
@@ -106,7 +106,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Add Comment Tool | ❌ | Text annotations on stations/map |
 | Use Best Available Tile Resolution | ❌ | Show best available tile resolution instead of "Map not yet available" for very zoomed in tiles |
 
-**Subtotals**: ✅ 9 done, ❌ 8 not started
+**Subtotals**: ✅ 10 done, ❌ 7 not started
 
 ### Data & Editing (4/5 done)
 
@@ -185,16 +185,16 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
 | Import/Export | 19 | 13 | 0 | 6 |
-| UI & Polish | 17 | 9 | 0 | 8 |
+| UI & Polish | 17 | 10 | 0 | 7 |
 | Data & Editing | 5 | 4 | 0 | 1 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
 | Performance & Stability | 10 | 3 | 1 | 6 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **65** | **40** | **1** | **24** |
+| **Total** | **65** | **41** | **1** | **23** |
 
-**Overall Progress**: 40 done + 1 partial = ~63% complete
+**Overall Progress**: 41 done + 1 partial = ~65% complete
 
 ---
 

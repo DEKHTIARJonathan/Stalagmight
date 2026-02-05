@@ -123,6 +123,7 @@ export function DetailLink({
   onHoverEnd,
 }: DetailLinkProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const mouseDownRef = useRef(false);
   const computedTestId = testId ?? generateTestId(type, target);
   const ariaLabel = generateAriaLabel(type, displayText);
 
@@ -131,20 +132,31 @@ export function DetailLink({
       // Don't navigate to missing targets
       return;
     }
+    const shouldClearHover = mouseDownRef.current;
+    mouseDownRef.current = false;
+    if (shouldClearHover && onHoverEnd) {
+      onHoverEnd();
+    }
     onSelect();
     if (onAnnounce) {
       onAnnounce(`Selected ${type} ${displayText}`);
     }
-  }, [type, displayText, onSelect, onAnnounce, isMissing]);
+  }, [type, displayText, onSelect, onAnnounce, isMissing, onHoverEnd]);
 
   const handleMouseEnter = useCallback(() => {
     if (isMissing || !onHoverStart) return;
     onHoverStart();
   }, [isMissing, onHoverStart]);
 
+  const handleMouseDown = useCallback(() => {
+    if (isMissing) return;
+    mouseDownRef.current = true;
+  }, [isMissing]);
+
   const handleMouseLeave = useCallback(() => {
     // Skip for missing links (they never started hover, so nothing to clear)
     if (isMissing || !onHoverEnd) return;
+    mouseDownRef.current = false;
     // Only clear highlight if element is not focused (keyboard focus takes precedence)
     const isFocused = typeof document !== 'undefined' && document.activeElement === buttonRef.current;
     if (!isFocused) {
@@ -173,6 +185,7 @@ export function DetailLink({
       ref={buttonRef}
       type="button"
       onClick={handleClick}
+      onMouseDown={handleMouseDown}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onFocus={handleFocus}
