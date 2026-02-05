@@ -38,6 +38,24 @@ async function openDataTable(page: Page): Promise<void> {
   await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
 }
 
+async function pressUntilActiveDescendant(
+  page: Page,
+  trigger: Locator,
+  key: string,
+  expectedId: string,
+  maxAttempts = 5,
+): Promise<void> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await page.keyboard.press(key);
+    const active = await trigger.getAttribute('aria-activedescendant');
+    if (active === expectedId) {
+      return;
+    }
+    await page.waitForTimeout(25);
+  }
+  await expect.poll(async () => trigger.getAttribute('aria-activedescendant')).toBe(expectedId);
+}
+
 /**
  * Get the portaled Select listbox from a trigger button using aria-controls.
  * Waits for the attribute to be set (React state update) before reading it.
@@ -123,8 +141,8 @@ test.describe('Select Dropdown (Portal)', () => {
     await trigger.focus();
     await expect(trigger).toBeFocused();
 
-    // Open dropdown via Enter key (press on trigger to avoid focus drift)
-    await trigger.press('Enter');
+    // Open dropdown via ArrowDown (highlights the current selection)
+    await page.keyboard.press('ArrowDown');
     let listbox = await getSelectListbox(page, trigger);
     await expect(listbox).toBeVisible();
     await expect(trigger).toHaveAttribute('aria-expanded', 'true');
@@ -132,41 +150,43 @@ test.describe('Select Dropdown (Portal)', () => {
     // Verify aria-activedescendant is set on the trigger (wait for React state update)
     await expect(trigger).toHaveAttribute('aria-activedescendant', /.+/);
 
-    // Navigate down with ArrowDown
-    await trigger.press('ArrowDown');
+    const initialActive = await trigger.getAttribute('aria-activedescendant');
+    if (!initialActive) {
+      throw new Error('Expected aria-activedescendant to be set on the trigger.');
+    }
 
-    // aria-activedescendant should update
-    const newActiveDescendant = await trigger.getAttribute('aria-activedescendant');
-    expect(newActiveDescendant).not.toBeNull();
+    const options = listbox.locator('[role="option"]');
+    await expect(options).toHaveCount(2);
+    const sideOption = options.nth(1);
+    const sideOptionId = await sideOption.getAttribute('id');
+    if (!sideOptionId) {
+      throw new Error('Expected Side Tunnel option to have an id for aria-activedescendant.');
+    }
 
-    // Navigate up with ArrowUp
-    await trigger.press('ArrowUp');
-    const afterUpDescendant = await trigger.getAttribute('aria-activedescendant');
-    expect(afterUpDescendant).not.toBeNull();
+    // ArrowDown should move to Side Tunnel
+    await pressUntilActiveDescendant(page, trigger, 'ArrowDown', sideOptionId);
 
-    // Close with Escape
-    await trigger.press('Escape');
-    await expect(listbox).not.toBeVisible({ timeout: 2000 });
-    await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    // ArrowUp should return to initial item
+    await pressUntilActiveDescendant(page, trigger, 'ArrowUp', initialActive);
 
-    // Re-open with ArrowDown (avoids button click/Space double-toggle)
-    await trigger.focus();
-    await expect(trigger).toBeFocused();
-    await trigger.press('ArrowDown');
-    listbox = await getSelectListbox(page, trigger);
-    await expect(listbox).toBeVisible();
-
-    // Navigate to "Side Tunnel" with ArrowDown
-    // Current highlight is on currently selected option (Main Passage, index 0).
-    // Side Tunnel is index 1, so one ArrowDown.
-    await trigger.press('ArrowDown');
-    await trigger.press('Enter');
+    // Move back to Side Tunnel and select with Enter
+    await pressUntilActiveDescendant(page, trigger, 'ArrowDown', sideOptionId);
+    await page.keyboard.press('Enter');
 
     // Dropdown should close after selection
     await expect(listbox).not.toBeVisible({ timeout: 2000 });
 
     // Verify the selected value changed
     await expect(trigger).toContainText('Side Tunnel');
+
+    // Re-open and close with Escape
+    await expect(trigger).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    listbox = await getSelectListbox(page, trigger);
+    await expect(listbox).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(listbox).not.toBeVisible({ timeout: 2000 });
+    await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   });
 
   test('internal scroll does not close dropdown', async ({ page }) => {

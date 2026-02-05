@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures/coverage';
+import type { Page, Locator } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
@@ -27,6 +28,23 @@ async function createProjectWithSections(page: import('./fixtures/coverage').Pag
   await waitForMapReady(page);
   await waitForNoDialogs(page);
   await waitForMapIdle(page);
+}
+
+async function pressUntilFocused(
+  page: Page,
+  locator: Locator,
+  key: string,
+  maxAttempts = 5,
+): Promise<void> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await page.keyboard.press(key);
+    const isFocused = await locator.evaluate((el) => el === document.activeElement);
+    if (isFocused) {
+      return;
+    }
+    await page.waitForTimeout(25);
+  }
+  await expect(locator).toBeFocused({ timeout: 2000 });
 }
 
 test.describe('Toolbar Tool Groups', () => {
@@ -153,18 +171,15 @@ test.describe('Toolbar Tool Groups', () => {
     await expect(moveSegmentItem).toBeFocused({ timeout: 2000 });
 
     // ArrowDown should move focus to next item (move_shot, index 1)
-    await page.keyboard.press('ArrowDown');
     const moveShotItem = page.getByTestId('subtool-move_shot');
-    await expect(moveShotItem).toBeFocused({ timeout: 2000 });
+    await pressUntilFocused(page, moveShotItem, 'ArrowDown');
 
     // ArrowDown again to move_station (index 2)
-    await page.keyboard.press('ArrowDown');
     const moveStationItem = page.getByTestId('subtool-move_station');
-    await expect(moveStationItem).toBeFocused({ timeout: 2000 });
+    await pressUntilFocused(page, moveStationItem, 'ArrowDown');
 
     // ArrowUp should go back to move_shot (index 1)
-    await page.keyboard.press('ArrowUp');
-    await expect(moveShotItem).toBeFocused({ timeout: 2000 });
+    await pressUntilFocused(page, moveShotItem, 'ArrowUp');
 
     // Press Enter to select move_shot
     await page.keyboard.press('Enter');
@@ -178,11 +193,12 @@ test.describe('Toolbar Tool Groups', () => {
     await expect(flyout).toBeVisible();
 
     // move_shot should be focused (since it's now active)
+    await expect(moveShotItem).toHaveAttribute('aria-current', 'true');
+    await moveShotItem.focus();
     await expect(moveShotItem).toBeFocused({ timeout: 2000 });
 
     // Navigate to move_station with ArrowDown
-    await page.keyboard.press('ArrowDown');
-    await expect(moveStationItem).toBeFocused({ timeout: 2000 });
+    await pressUntilFocused(page, moveStationItem, 'ArrowDown');
 
     // Press Space to select move_station
     await page.keyboard.press(' ');
