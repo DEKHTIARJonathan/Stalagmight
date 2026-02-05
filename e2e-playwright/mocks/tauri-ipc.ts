@@ -1824,9 +1824,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'set_shot_virtual': {
             console.log('[Mock IPC] set_shot_virtual called with:', args);
-            const sectionId = args?.section_id as number;
-            const shotId = args?.shot_id as number;
-            const isVirtual = args?.is_virtual as boolean;
+            const sectionId = (args?.sectionId ?? args?.section_id) as number;
+            const shotId = (args?.shotId ?? args?.shot_id) as number;
+            const isVirtual = (args?.isVirtual ?? args?.is_virtual) as boolean;
             if (currentProject && sectionId && shotId !== undefined) {
               const section = currentProject.sections.find(s => s.id === sectionId);
               if (section) {
