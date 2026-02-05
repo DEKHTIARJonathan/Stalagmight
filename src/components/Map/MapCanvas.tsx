@@ -878,7 +878,7 @@ export default function MapCanvas() {
           : {};
         if (result.can_merge) {
           openDialog('merge', { stationA: originStation, stationB: targetStation, ...extra });
-        } else if (result.connected) {
+        } else if (result.connected || result.reason === 'Both sections have fixed coordinates') {
           openDialog('closure', {
             stationA: originStation,
             stationB: targetStation,
