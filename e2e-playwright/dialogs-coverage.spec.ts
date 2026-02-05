@@ -384,3 +384,242 @@ test.describe('Dialog Coverage - Settings Map', () => {
     await expect(saveButton).toBeEnabled();
   });
 });
+
+test.describe('Dialog Coverage - Section Adjust', () => {
+  test('shows missing section state for invalid section id', async ({ page }) => {
+    await setupMockedPage(page);
+
+    await openDialog(page, 'section-adjust', { sectionId: 9999 });
+
+    const dialog = page.getByTestId('section-adjust-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('text=Section not found')).toBeVisible();
+  });
+
+  test('applies preview offset and cancels to revert', async ({ page }) => {
+    const { sectionId } = await setupProjectWithShots(page, 2);
+
+    await openDialog(page, 'section-adjust', { sectionId });
+
+    const dialog = page.getByTestId('section-adjust-dialog');
+    await expect(dialog).toBeVisible();
+
+    const dxInput = dialog.getByTestId('dx-input');
+    await dxInput.fill('2.5');
+
+    await expect(dialog.locator('text=Preview applied')).toBeVisible({ timeout: 3000 });
+
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+  });
+});
+
+test.describe('Dialog Coverage - Edit Station', () => {
+  test('validates zero datum coordinates before saving', async ({ page }) => {
+    const { stationRef } = await setupProjectWithShots(page, 2);
+
+    await openDialog(page, 'edit-station', { stationRef });
+
+    const dialog = page.getByTestId('edit-station-dialog');
+    await expect(dialog).toBeVisible();
+
+    const zeroDatumToggle = dialog.locator('#zeroDatum');
+    await zeroDatumToggle.check();
+
+    const latInput = dialog.getByTestId('station-latitude-input');
+    const lonInput = dialog.locator('input[placeholder="e.g., -77.4010"]');
+
+    await latInput.fill('200');
+    await lonInput.fill('-80');
+    await dialog.getByRole('button', { name: 'Save' }).click();
+    await expect(dialog.locator('text=Latitude must be between -90 and 90')).toBeVisible();
+
+    await latInput.fill('25');
+    await lonInput.fill('-200');
+    await dialog.getByRole('button', { name: 'Save' }).click();
+    await expect(dialog.locator('text=Longitude must be between -180 and 180')).toBeVisible();
+
+    await latInput.fill('25');
+    await lonInput.fill('-80');
+    await dialog.getByRole('button', { name: 'Save' }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+  });
+});
+
+test.describe('Dialog Coverage - Delete Shot Choice', () => {
+  test('renders impact details and shifts geometry', async ({ page }) => {
+    const { sectionId, shotId } = await setupProjectWithShots(page, 3);
+
+    await page.evaluate(({ sectionId: sId, shotId: shId }) => {
+      (window as any).__E2E_TEST__.uiStore.getState().setSelection({
+        type: 'shot',
+        sectionId: sId,
+        shotId: shId,
+      });
+    }, { sectionId, shotId });
+
+    await openDialog(page, 'delete-shot-choice', {
+      sectionId,
+      shotId,
+      sectionName: 'Impact Section',
+    });
+
+    const dialog = page.getByTestId('delete-shot-choice-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('text=Removed merges')).toBeVisible();
+    await expect(dialog.locator('text=Removed closures')).toBeVisible();
+
+    const shiftButton = dialog.getByRole('button', { name: 'Shift Geometry' });
+    await expect(shiftButton).toBeEnabled();
+    await shiftButton.click();
+
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    const selection = await page.evaluate(() => {
+      return (window as any).__E2E_TEST__.uiStore.getState().selection;
+    });
+    expect(selection).toBeNull();
+  });
+
+  test('opens split section dialog from split action', async ({ page }) => {
+    const { sectionId, shotId } = await setupProjectWithShots(page, 3);
+
+    await openDialog(page, 'delete-shot-choice', {
+      sectionId,
+      shotId,
+      sectionName: 'SplitTarget',
+    });
+
+    const dialog = page.getByTestId('delete-shot-choice-dialog');
+    await expect(dialog).toBeVisible();
+
+    await dialog.getByRole('button', { name: 'Split Section' }).click();
+
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('split-section-dialog')).toBeVisible({ timeout: 5000 });
+  });
+});
+
+test.describe('Dialog Coverage - Split Section', () => {
+  test('validates split names and selects the original section', async ({ page }) => {
+    const { sectionId, shotId } = await setupProjectWithShots(page, 3);
+
+    await openDialog(page, 'split-section', {
+      sectionId,
+      shotId,
+      sectionName: 'SplitTarget',
+    });
+
+    const dialog = page.getByTestId('split-section-dialog');
+    await expect(dialog).toBeVisible();
+
+    const nameA = dialog.getByTestId('split-name-a');
+    const nameB = dialog.getByTestId('split-name-b');
+    await expect(nameA).toHaveValue('SplitTarget-A');
+    await expect(nameB).toHaveValue('SplitTarget-B');
+
+    await nameA.fill('');
+    await nameB.fill('');
+
+    const confirmButton = dialog.getByTestId('split-confirm');
+    await expect(confirmButton).toBeDisabled();
+
+    await nameA.fill('Split A');
+    await nameB.fill('Split B');
+    await expect(confirmButton).toBeEnabled();
+
+    await confirmButton.click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    const selection = await page.evaluate(() => {
+      return (window as any).__E2E_TEST__.uiStore.getState().selection;
+    });
+    expect(selection?.type).toBe('section');
+    expect(selection?.sectionId).toBe(sectionId);
+  });
+});
+
+test.describe('Dialog Coverage - Merge Projects', () => {
+  test('validates output name and merges selected projects', async ({ page }) => {
+    await setupMockedPage(page);
+
+    const selectedProjects = [
+      {
+        name: 'Alpha',
+        location: null,
+        file_path: '/mock/alpha.stalx',
+        modified_at: '2026-01-15T00:00:00Z',
+        section_count: 2,
+        total_length: 120.5,
+        station_count: 5,
+        gps_center: null,
+        gps_bounds: null,
+      },
+      {
+        name: 'Beta',
+        location: null,
+        file_path: '/mock/beta.stalx',
+        modified_at: '2026-01-20T00:00:00Z',
+        section_count: 3,
+        total_length: 1500,
+        station_count: 6,
+        gps_center: null,
+        gps_bounds: null,
+      },
+    ];
+
+    await openDialog(page, 'merge-projects', { selectedProjects });
+
+    const dialog = page.getByTestId('merge-projects-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByTestId('merge-output-name-input')).toHaveValue('Alpha_merged');
+    await expect(dialog.locator('text=Total sections:')).toBeVisible();
+    await expect(dialog.locator('text=1.62 km')).toBeVisible();
+
+    const outputInput = dialog.getByTestId('merge-output-name-input');
+    await outputInput.fill('');
+    const confirmButton = dialog.getByTestId('merge-projects-confirm-button');
+    await expect(confirmButton).toBeDisabled();
+
+    await outputInput.fill('Combined Project');
+
+    const archiveCheckbox = dialog.getByTestId('merge-archive-checkbox');
+    await archiveCheckbox.check();
+    const openCheckbox = dialog.getByTestId('merge-open-checkbox');
+    await openCheckbox.uncheck();
+
+    await confirmButton.click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+  });
+});
+
+test.describe('Dialog Coverage - Error Dialog', () => {
+  test('copies error details to clipboard and closes', async ({ page }) => {
+    await setupMockedPage(page);
+
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText: async () => {} },
+        configurable: true,
+      });
+    });
+
+    await openDialog(page, 'error', {
+      title: 'Failure',
+      message: 'Something went wrong',
+      stackTrace: 'Error: Boom\\n  at line 1',
+    });
+
+    const dialog = page.getByTestId('error-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('text=Something went wrong')).toBeVisible();
+    await expect(dialog.getByTestId('error-dialog-stack-trace')).toContainText('Error: Boom');
+
+    const copyButton = dialog.getByTestId('error-dialog-copy-btn');
+    await copyButton.click();
+    await expect(copyButton).toHaveText('Copied!');
+
+    await dialog.getByRole('button', { name: 'OK' }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+  });
+});
