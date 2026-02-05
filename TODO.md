@@ -13,12 +13,12 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Import/Export | 12 | 19 | 63% |
 | UI & Polish | 6 | 17 | 35% |
 | Data & Editing | 4 | 5 | 80% |
-| Loop Closure | 3 | 6 | 50% |
-| Accessibility & i18n | 4 | 7 | 57% |
+| Loop Closure | 3 | 4 | 75% |
+| Accessibility & i18n | 7 | 7 | 100% |
 | Performance & Stability | 1 | 10 | 10% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **30** | **66** | **45%** |
+| **Total** | **33** | **64** | **52%** |
 
 ---
 
@@ -120,7 +120,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 4 done, ❌ 1 not started
 
-### Loop Closure (3/6 done)
+### Loop Closure (3/4 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -128,12 +128,10 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Closure Error Calculation | ✅ | |
 | Closure Strategy Selector | ✅ | ClosureDialog with 4 strategies |
 | Fix Quality Setting → Closure Weight | ❌ | Quality setting incorrectly sets properties; rename/refactor to closure weight |
-| Proportional Distribution | ❌ | Distribute errors proportional to shot lengths |
-| Equal Distribution | ❌ | Distribute errors equally to shots |
 
-**Subtotals**: ✅ 3 done, ❌ 3 not started
+**Subtotals**: ✅ 3 done, ❌ 1 not started
 
-### Accessibility & i18n (4/7 done)
+### Accessibility & i18n (7/7 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -141,11 +139,11 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Screen Reader Announcements | ✅ | aria-live regions, announceSelection() |
 | Theme Infrastructure | ✅ | |
 | Keyboard Navigation | ✅ | useKeyboardShortcuts, ShortcutRecorder |
-| i18n Infrastructure | ❌ | No i18n libraries detected |
-| Extract UI Strings | ❌ | |
-| Number/Date Locale Formatting | ❌ | |
+| i18n Infrastructure | ✅ | |
+| Extract UI Strings | ✅ | |
+| Number/Date Locale Formatting | ✅ | |
 
-**Subtotals**: ✅ 4 done, ❌ 3 not started
+**Subtotals**: ✅ 7 done, ❌ 0 not started
 
 ### Performance & Stability (2/10 done)
 
@@ -188,14 +186,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Import/Export | 19 | 12 | 1 | 6 |
 | UI & Polish | 17 | 6 | 0 | 11 |
 | Data & Editing | 5 | 4 | 0 | 1 |
-| Loop Closure | 6 | 3 | 0 | 3 |
-| Accessibility & i18n | 7 | 4 | 0 | 3 |
+| Loop Closure | 4 | 3 | 0 | 1 |
+| Accessibility & i18n | 7 | 7 | 0 | 0 |
 | Performance & Stability | 10 | 1 | 1 | 8 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **66** | **30** | **2** | **34** |
+| **Total** | **64** | **33** | **2** | **29** |
 
-**Overall Progress**: 30 done + 2 partial = ~48% complete
+**Overall Progress**: 33 done + 2 partial = ~55% complete
 
 ---
 
@@ -203,6 +201,10 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 ### Loop Closure (v2.0)
 - [ ] Least squares adjustment for complex loops
+
+### Loop Closure (v3.0+)
+- [ ] Proportional distribution (distribute errors proportional to shot lengths)
+- [ ] Equal distribution (distribute errors equally to shots)
 
 ### Display Features (v2.0)
 - [ ] LRUD passage wall visualization
