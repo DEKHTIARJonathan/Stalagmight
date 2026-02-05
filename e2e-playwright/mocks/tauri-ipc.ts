@@ -1762,6 +1762,37 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] delete_shot called with:', args);
             return { success: true };
 
+          case 'preview_delete_shot': {
+            console.log('[Mock IPC] preview_delete_shot called with:', args);
+            const sectionId = (args?.sectionId as number | undefined) ?? 1;
+            return {
+              removed_station: { section_id: sectionId, station_index: 0 },
+              removed_merges: [
+                {
+                  station_a: { section_id: sectionId, station_index: 0 },
+                  station_b: { section_id: sectionId, station_index: 1 },
+                },
+              ],
+              removed_closures: [
+                {
+                  closure_id: 1n,
+                  station_a: { section_id: sectionId, station_index: 0 },
+                  station_b: { section_id: sectionId, station_index: 2 },
+                },
+              ],
+              replacement_merges: [],
+              replacement_closure_updates: [],
+              merge_rewire_skipped: false,
+              closure_rewire_skipped: true,
+              shift_blocked: false,
+              shift_blocked_reasons: [],
+            };
+          }
+
+          case 'delete_shot_and_split':
+            console.log('[Mock IPC] delete_shot_and_split called with:', args);
+            return { success: true };
+
           case 'update_section': {
             console.log('[Mock IPC] update_section called with:', args);
             // Mutate currentProject to support persistence testing
@@ -1786,6 +1817,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'create_shot':
             console.log('[Mock IPC] create_shot called with:', args);
             return { success: true, shot_id: Date.now() };
+
+          case 'merge_projects':
+            console.log('[Mock IPC] merge_projects called with:', args);
+            return { success: true };
 
           case 'set_shot_virtual': {
             console.log('[Mock IPC] set_shot_virtual called with:', args);
