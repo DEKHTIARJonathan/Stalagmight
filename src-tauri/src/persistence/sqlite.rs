@@ -269,7 +269,7 @@ impl Database {
 
             if loop_table_exists {
                 self.conn.execute(
-                    "ALTER TABLE loop_closures ADD COLUMN strategy TEXT NOT NULL DEFAULT 'ProportionalByLength'",
+                    "ALTER TABLE loop_closures ADD COLUMN strategy TEXT NOT NULL DEFAULT 'Batch'",
                     [],
                 )?;
                 tracing::info!("Added strategy column to loop_closures table");
@@ -500,7 +500,7 @@ impl Database {
                 horizontal_misclosure REAL NOT NULL,
                 vertical_misclosure REAL NOT NULL,
                 closure_id INTEGER NOT NULL DEFAULT 0,
-                strategy TEXT NOT NULL DEFAULT 'ProportionalByLength',
+                strategy TEXT NOT NULL DEFAULT 'Batch',
                 FOREIGN KEY (station_a_section) REFERENCES sections(id) ON DELETE CASCADE,
                 FOREIGN KEY (station_b_section) REFERENCES sections(id) ON DELETE CASCADE
             );
@@ -840,7 +840,7 @@ impl Database {
                 horizontal_misclosure REAL NOT NULL,
                 vertical_misclosure REAL NOT NULL,
                 closure_id INTEGER NOT NULL DEFAULT 0,
-                strategy TEXT NOT NULL DEFAULT 'ProportionalByLength',
+                strategy TEXT NOT NULL DEFAULT 'Batch',
                 FOREIGN KEY (station_a_section) REFERENCES sections(id) ON DELETE CASCADE,
                 FOREIGN KEY (station_b_section) REFERENCES sections(id) ON DELETE CASCADE
             );
@@ -1048,7 +1048,7 @@ impl Database {
             .unwrap_or(false);
         if !has_strategy {
             tx.execute(
-                "ALTER TABLE loop_closures ADD COLUMN strategy TEXT NOT NULL DEFAULT 'ProportionalByLength'",
+                "ALTER TABLE loop_closures ADD COLUMN strategy TEXT NOT NULL DEFAULT 'Batch'",
                 [],
             )?;
         }

@@ -951,11 +951,7 @@ Shown when creating a loop closure between two **connected** stations.
 │  Misclosure: 2.4m (1.5%)                                        │
 │  Horizontal: 2.1m  Vertical: 0.5m                               │
 │                                                                  │
-│  How to handle closure error?                                    │
-│  (●) Distribute proportionally by shot length                   │
-│  (○) Distribute equally across all shots                        │
-│  (○) Keep raw data (stations won't align perfectly)             │
-│  (○) Adjust manually later                                      │
+│  Closure strategy: Batch (distribution deferred)                │
 │                                                                  │
 │  [ Cancel ]                              [ Create Closure ]      │
 └──────────────────────────────────────────────────────────────────┘

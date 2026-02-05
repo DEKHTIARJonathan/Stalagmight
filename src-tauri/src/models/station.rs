@@ -231,13 +231,15 @@ pub struct ZeroDatum {
 /// Strategy for distributing loop closure errors
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, TS)]
 pub enum ClosureStrategy {
-    /// Distribute proportionally by shot length (Bowditch method)
-    #[default]
+    /// Distribute proportionally by shot length (Bowditch method).
+    /// Deferred for now; retained for legacy data and potential future use.
     ProportionalByLength,
-    /// Distribute equally across all shots
+    /// Distribute equally across all shots.
+    /// Deferred for now; retained for legacy data and potential future use.
     EqualDistribution,
     /// Defer adjustment for batch processing
     #[serde(alias = "KeepRaw", alias = "ManualAdjustment")]
+    #[default]
     Batch,
     /// Weighted least-squares adjustment (batch-adjusted)
     #[serde(alias = "Sequential")]
@@ -258,7 +260,7 @@ impl ClosureStrategy {
         }
     }
 
-    /// Parse from a SQLite string value, defaulting to ProportionalByLength
+    /// Parse from a SQLite string value, defaulting to Batch
     pub fn from_str_lossy(s: &str) -> Self {
         match s {
             "ProportionalByLength" => Self::ProportionalByLength,

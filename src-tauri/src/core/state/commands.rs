@@ -85,12 +85,7 @@ impl AppState {
             Command::AdjustLoopClosures {
                 anchor_station,
                 method,
-                use_strategy_filter,
-            } => self.adjust_loop_closures(
-                *anchor_station,
-                *method,
-                *use_strategy_filter,
-            ),
+            } => self.adjust_loop_closures(*anchor_station, *method),
             Command::SetZeroDatum {
                 station_ref,
                 coordinates,
@@ -975,7 +970,6 @@ impl AppState {
         &self,
         anchor_station: StationRef,
         method: ClosureStrategy,
-        use_strategy_filter: bool,
     ) -> CommandResult {
         let mut proj_guard = match self.project.lock() {
             Ok(g) => g,
@@ -993,7 +987,6 @@ impl AppState {
         match working.adjust_loop_closures(
             anchor_station,
             method,
-            use_strategy_filter,
             &config.closure_adjustment,
         ) {
             Ok(_) => {

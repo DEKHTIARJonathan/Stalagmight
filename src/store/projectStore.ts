@@ -186,8 +186,7 @@ interface ProjectStore {
   createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
   adjustLoopClosures: (
     anchorStation: StationRef,
-    method: ClosureStrategy,
-    useStrategyFilter: boolean
+    method: ClosureStrategy
   ) => Promise<CommandResult>;
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
@@ -743,15 +742,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     return result;
   },
 
-  adjustLoopClosures: async (
-    anchorStation: StationRef,
-    method: ClosureStrategy,
-    useStrategyFilter: boolean
-  ) => {
+  adjustLoopClosures: async (anchorStation: StationRef, method: ClosureStrategy) => {
     const result = await invoke<CommandResult>('adjust_loop_closures', {
       anchorStation,
       method,
-      useStrategyFilter,
     });
     if (result.success) {
       await get().refreshProjectState();

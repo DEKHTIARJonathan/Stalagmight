@@ -6,8 +6,8 @@ This document summarizes how loop closures work in the current codebase (post-re
 
 | Strategy | When used | What it does |
 |----------|-----------|--------------|
-| `ProportionalByLength` | Create loop closure | Distributes misclosure along the path by shot length (Bowditch-style). |
-| `EqualDistribution` | Create loop closure | Distributes misclosure equally across shots on the path. |
+| `ProportionalByLength` | Deferred | Legacy strategy; create-time distribution is disabled and not exposed in the UI (only revisited if users request it). |
+| `EqualDistribution` | Deferred | Legacy strategy; create-time distribution is disabled and not exposed in the UI (only revisited if users request it). |
 | `Batch` | Create loop closure | Records the closure only; no immediate geometry adjustment. |
 | `LeastSquaresWeighted` | Adjust loop closures (batch) | Weighted least-squares adjustment over the connected component. |
 | `Move` | Snap-to-merge workflow | Closure created during a move; no extra distribution at create time. |
@@ -31,9 +31,11 @@ Metrics are computed from current station coordinates:
 - Path length is computed via `calculate_path_length_between`, which treats merges and **existing closures** as zero-distance edges. This can shorten the path length if other closures already exist.
 - Error percentage = misclosure / path length * 100 (0 if path length is 0).
 
-If strategy is `ProportionalByLength` or `EqualDistribution`, the closure error is distributed immediately (mutates shots). Otherwise, the closure is just recorded for later adjustment.
+Create-time distribution strategies (`ProportionalByLength`, `EqualDistribution`) are **deferred** and not available in the UI (only revisited if users request them). Loop closures are currently recorded only (`Batch`), unless created by the Move workflow.
 
-## Distribution at Create Time (Proportional/Equal)
+## Deferred: Distribution at Create Time (Proportional/Equal)
+
+These algorithms remain in the codebase for possible future use, but are **disabled** today.
 
 The adjustment path uses `shortest_path_shots_merges`:
 - Edges are **shots + merges only** (closures are not used for this path).
@@ -71,7 +73,7 @@ Common error conditions:
 
 Inputs:
 - `anchor_station` (used only if the component has no zero datum).
-- `use_strategy_filter` (UI label: "Use only batch closures"). When true, only closures with strategy `Batch` are selected for the adjustment.
+Adjustment currently uses **batch closures only** (plus the selected method).
 
 Algorithm overview:
 - Build constraint groups where stations connected via merges **or closures** are in the same group.

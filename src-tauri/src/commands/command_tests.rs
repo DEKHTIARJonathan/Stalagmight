@@ -1606,7 +1606,7 @@ fn test_create_section_and_merge_fails_without_project() {
         vec![shot_data(1.0)],
         0,
         StationRef::new(0, 0),
-        ClosureStrategy::ProportionalByLength,
+        ClosureStrategy::Batch,
     );
     assert_failure_contains(&result, "No project open");
 }
@@ -1627,7 +1627,7 @@ fn test_create_section_and_merge_success() {
         vec![shot_data(2.0)],
         0,
         StationRef::new(existing_section_id, 0),
-        ClosureStrategy::EqualDistribution,
+        ClosureStrategy::Batch,
     );
 
     assert_success(&result);

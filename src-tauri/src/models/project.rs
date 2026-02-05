@@ -1378,7 +1378,6 @@ impl Project {
         &mut self,
         anchor_station: StationRef,
         method: ClosureStrategy,
-        use_strategy_filter: bool,
         config: &ClosureAdjustmentConfig,
     ) -> Result<(), String> {
         if !self.station_exists(anchor_station) {
@@ -1401,13 +1400,13 @@ impl Project {
             zero_datum_coords.insert(*zd, coords);
         }
 
-        let mut closures: Vec<LoopClosure> = self
+        let closures: Vec<LoopClosure> = self
             .loop_closures
             .iter()
             .filter(|lc| {
                 component.contains(&lc.station_a.section_id)
                     && component.contains(&lc.station_b.section_id)
-                    && (!use_strategy_filter || lc.strategy == method || lc.strategy == ClosureStrategy::Batch)
+                    && (lc.strategy == method || lc.strategy == ClosureStrategy::Batch)
             })
             .cloned()
             .collect();
@@ -2426,6 +2425,8 @@ impl Project {
         Ok(())
     }
 
+    // Deferred: create-time distribution algorithms are disabled; retained for potential future use.
+    #[allow(dead_code)]
     fn distribute_closure_error_internal(
         &mut self,
         station_a: StationRef,
@@ -2811,6 +2812,7 @@ impl Project {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn distribute_closure_error(
         &mut self,
         station_a: StationRef,
@@ -2972,12 +2974,12 @@ impl Project {
         // Compute closure values using shared helper
         let metrics = self.compute_closure_metrics(station_a, station_b)?;
 
-        // Apply closure error distribution for supported strategies (mutates shot data)
+        // Deferred: create-time distribution strategies are disabled for now.
         if matches!(
             strategy,
             ClosureStrategy::ProportionalByLength | ClosureStrategy::EqualDistribution
         ) {
-            self.distribute_closure_error(station_a, station_b, strategy)?;
+            return Err("Closure distribution strategies are deferred. Use Batch.".to_string());
         }
 
         // Normalize next_closure_id in case of legacy deserialization (default 0)
