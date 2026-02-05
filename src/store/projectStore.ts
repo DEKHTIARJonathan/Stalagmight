@@ -361,7 +361,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       }
 
       // Set backend loadingId from result for event correlation
-      get().setLoadingProgress({ loadingId: Number(result.loadingId) });
+      get().setLoadingProgress({ loadingId: result.loadingId });
 
       // Update loading title with actual project name from result
       if (result.project.name !== initialName) {
@@ -423,7 +423,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       }
 
       // Set backend loadingId from result for event correlation
-      get().setLoadingProgress({ loadingId: Number(result.loadingId) });
+      get().setLoadingProgress({ loadingId: result.loadingId });
 
       // Apply project state from result
       set({

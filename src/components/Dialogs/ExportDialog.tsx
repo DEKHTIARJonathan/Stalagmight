@@ -154,7 +154,7 @@ export default function ExportDialog() {
               const isExportPhase = phase.startsWith('export_');
 
               if (isExportPhase) {
-                const eventLoadingId = Number(event.payload.loadingId);
+                const eventLoadingId = event.payload.loadingId;
                 // Accept this event and track its loadingId for future filtering
                 if (exportLoadingIdRef.current === null) {
                   exportLoadingIdRef.current = eventLoadingId;
