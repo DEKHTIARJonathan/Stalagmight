@@ -11,14 +11,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
 | Import/Export | 13 | 19 | 68% |
-| UI & Polish | 7 | 17 | 41% |
+| UI & Polish | 8 | 17 | 47% |
 | Data & Editing | 4 | 5 | 80% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
 | Performance & Stability | 1 | 10 | 10% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **37** | **65** | **57%** |
+| **Total** | **38** | **65** | **58%** |
 
 ---
 
@@ -101,12 +101,12 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Splash Screen | ❌ | |
 | About Dialog | ❌ | |
 | Keyboard Shortcuts Overlay | ❌ | Help overlay showing all shortcuts |
-| Bug Reporter Dialog | ❌ | Button in Settings bottom bar |
+| Bug Reporter Dialog | ✅ | Debug log dialog with ring buffer, level filtering, colored output |
 | Release Automation | ❌ | |
 | Add Comment Tool | ❌ | Text annotations on stations/map |
 | Use Best Available Tile Resolution | ❌ | Show best available tile resolution instead of "Map not yet available" for very zoomed in tiles |
 
-**Subtotals**: ✅ 7 done, ❌ 10 not started
+**Subtotals**: ✅ 8 done, ❌ 9 not started
 
 ### Data & Editing (4/5 done)
 
@@ -185,16 +185,16 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
 | Import/Export | 19 | 13 | 0 | 6 |
-| UI & Polish | 17 | 7 | 0 | 10 |
+| UI & Polish | 17 | 8 | 0 | 9 |
 | Data & Editing | 5 | 4 | 0 | 1 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
 | Performance & Stability | 10 | 1 | 1 | 8 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **65** | **37** | **1** | **27** |
+| **Total** | **65** | **38** | **1** | **26** |
 
-**Overall Progress**: 37 done + 1 partial = ~58% complete
+**Overall Progress**: 38 done + 1 partial = ~59% complete
 
 ---
 
@@ -260,4 +260,5 @@ Wrap each major panel (map, sections, detail, data table) with its own error bou
 - ❌ No i18n libraries
 - ❌ No virtual scrolling
 - ❌ No auto-save implementation
-- ❌ No About dialog, Splash screen, or Bug reporter
+- ❌ No About dialog or Splash screen
+- ✅ Bug/debug log dialog with in-memory ring buffer
