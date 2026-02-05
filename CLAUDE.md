@@ -46,6 +46,12 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 Always use `./scripts/dev.sh` to restart the dev server (handles process cleanup).
 
+### IPC Types Are Generated
+
+TypeScript IPC types are generated from Rust via `ts-rs`. Do **not** hand-edit or
+create files under `src/types/ipc/` or `src/types/ipc.generated.ts`; run
+`pnpm gen:ipc-types` and commit the regenerated output instead.
+
 ## Plans
 
 Implementation plans are stored in `docs/plans/`.
@@ -60,6 +66,7 @@ Implementation plans are stored in `docs/plans/`.
 | [Project Structure](docs/project-structure.md) | Directory tree, tech stack |
 | [Configuration](docs/configuration.md) | Config file locations, options, logging |
 | [Roadmap](docs/roadmap.md) | v1.0 phases, PRDs, backend changes |
+| [IPC Type Generation](docs/ipc-typegen.md) | How IPC TS types are generated and updated |
 
 <!-- BEGIN FLOW-NEXT -->
 ## Flow-Next
