@@ -157,6 +157,18 @@ pub fn get_recent_logs() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Push a pre-formatted log line into the ring buffer (used for frontend console logs).
+pub fn push_to_buffer(line: String) {
+    if let Some(buf) = LOG_BUFFER.get() {
+        if let Ok(mut buf) = buf.lock() {
+            if buf.len() >= RING_BUFFER_CAPACITY {
+                buf.pop_front();
+            }
+            buf.push_back(line);
+        }
+    }
+}
+
 /// Get the log directory path
 pub fn log_directory() -> Result<PathBuf> {
     let dirs = directories::ProjectDirs::from("com", "stalagmight", "Stalagmight")

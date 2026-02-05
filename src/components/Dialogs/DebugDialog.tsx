@@ -62,6 +62,7 @@ const LEVEL_RANK: Record<string, number> = { ERROR: 0, WARN: 1, INFO: 2, DEBUG: 
 function LogLine({ line }: { line: string }) {
   const { level, target, message, fields } = parseLine(line);
   const style = LEVEL_STYLES[level] ?? DEFAULT_STYLE;
+  const isFrontend = target === '[frontend]';
 
   return (
     <div className="flex items-start gap-2 py-0.5 leading-snug hover:bg-white/5 px-1 rounded">
@@ -70,7 +71,13 @@ function LogLine({ line }: { line: string }) {
       >
         {level}
       </span>
-      <span className="text-text-secondary shrink-0 text-[11px] opacity-70">{target}</span>
+      {isFrontend ? (
+        <span className="shrink-0 text-[10px] font-semibold rounded px-1 py-px bg-purple-700 text-purple-200">
+          FE
+        </span>
+      ) : (
+        <span className="text-text-secondary shrink-0 text-[11px] opacity-70">{target}</span>
+      )}
       <span className={`${style.text} flex-1`}>
         {message}
         {fields && (
