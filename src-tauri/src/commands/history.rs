@@ -336,35 +336,87 @@ fn derive_preview_data(
             let mut changes = Vec::new();
 
             if let Ok(prev) = serde_json::from_str::<serde_json::Value>(values_json) {
-                if let Some(Some(new_name)) = &updates.name {
+                if let Some(new_name_opt) = &updates.name {
+                    let new_name = new_name_opt.as_deref().unwrap_or("");
                     let old_name = prev.get("name")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("unnamed");
-                    changes.push(FieldChange {
-                        field: "Name".to_string(),
-                        old_value: old_name.to_string(),
-                        new_value: new_name.clone(),
-                    });
+                        .unwrap_or("");
+                    if old_name != new_name {
+                        let old_display = if old_name.is_empty() { "unnamed" } else { old_name };
+                        let new_display = if new_name.is_empty() { "unnamed" } else { new_name };
+                        changes.push(FieldChange {
+                            field: "Name".to_string(),
+                            old_value: old_display.to_string(),
+                            new_value: new_display.to_string(),
+                        });
+                    }
                 }
-                if let Some(Some(new_surveyor)) = &updates.surveyor {
+                if let Some(new_surveyor_opt) = &updates.surveyor {
+                    let new_surveyor = new_surveyor_opt.as_deref().unwrap_or("");
                     let old_surveyor = prev.get("surveyor")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    changes.push(FieldChange {
-                        field: "Surveyor".to_string(),
-                        old_value: old_surveyor.to_string(),
-                        new_value: new_surveyor.clone(),
-                    });
+                    if old_surveyor != new_surveyor {
+                        changes.push(FieldChange {
+                            field: "Surveyor".to_string(),
+                            old_value: old_surveyor.to_string(),
+                            new_value: new_surveyor.to_string(),
+                        });
+                    }
                 }
-                if let Some(Some(new_date)) = &updates.date {
+                if let Some(new_date_opt) = &updates.date {
+                    let new_date = new_date_opt.as_ref().map(|date| date.to_string()).unwrap_or_default();
                     let old_date = prev.get("date")
                         .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if old_date != new_date {
+                        changes.push(FieldChange {
+                            field: "Date".to_string(),
+                            old_value: old_date,
+                            new_value: new_date,
+                        });
+                    }
+                }
+                if let Some(new_color) = &updates.color {
+                    let old_color = prev.get("color")
+                        .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    changes.push(FieldChange {
-                        field: "Date".to_string(),
-                        old_value: old_date.to_string(),
-                        new_value: new_date.to_string(),
-                    });
+                    if old_color != new_color {
+                        changes.push(FieldChange {
+                            field: "Color".to_string(),
+                            old_value: old_color.to_string(),
+                            new_value: new_color.clone(),
+                        });
+                    }
+                }
+                if let Some(new_direction) = updates.direction {
+                    let new_direction_str = new_direction.to_string();
+                    let old_direction = prev.get("direction")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if old_direction != new_direction_str {
+                        changes.push(FieldChange {
+                            field: "Direction".to_string(),
+                            old_value: old_direction.to_string(),
+                            new_value: new_direction_str,
+                        });
+                    }
+                }
+                if let Some(new_quality) = updates.quality {
+                    let old_quality = prev.get("quality").and_then(|v| v.as_f64());
+                    let differs = old_quality
+                        .map(|old| (old - new_quality).abs() > 1e-6)
+                        .unwrap_or(true);
+                    if differs {
+                        let old_value = old_quality.map(|v| format!("{:.2}", v)).unwrap_or_default();
+                        let new_value = format!("{:.2}", new_quality);
+                        changes.push(FieldChange {
+                            field: "Closure Adj. Weight".to_string(),
+                            old_value,
+                            new_value,
+                        });
+                    }
                 }
             }
 

@@ -2,7 +2,7 @@
 
 This document tracks functionality specified in `docs/SPEC.md` and implementation status based on codebase analysis.
 
-**Last Updated**: 2026-02-04
+**Last Updated**: 2026-02-05
 
 ---
 
@@ -11,14 +11,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
 | Import/Export | 12 | 19 | 63% |
-| UI & Polish | 6 | 17 | 35% |
+| UI & Polish | 7 | 17 | 41% |
 | Data & Editing | 4 | 5 | 80% |
 | Loop Closure | 3 | 4 | 75% |
 | Accessibility & i18n | 7 | 7 | 100% |
 | Performance & Stability | 1 | 10 | 10% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **33** | **64** | **52%** |
+| **Total** | **34** | **64** | **53%** |
 
 ---
 
@@ -84,7 +84,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 12 done, 🟡 1 partial, ❌ 6 not started
 
-### UI & Polish (6/16 done)
+### UI & Polish (7/17 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -96,7 +96,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Tile Caching Settings | ✅ | CacheSettings.tsx + Rust config |
 | Three-Level Settings Reset | ❌ | Per-setting, per-tab, full reset (SPEC 2.9) |
 | Automatic Reference Shot Alignment Settings | ❌ | Configure auto-alignment behavior in Settings |
-| Fix Undo Stack Section Modification Details | ❌ | Unchanged date shows as detail instead of relevant changes |
+| Fix Undo Stack Section Modification Details | ✅ | Only shows changed fields; includes closure adjustment weight |
 | Fix Section Hyperlink Highlighting Not Clearing | ❌ | Highlight persists after navigating away from section link |
 | Splash Screen | ❌ | |
 | About Dialog | ❌ | |
@@ -106,7 +106,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Add Comment Tool | ❌ | Text annotations on stations/map |
 | Use Best Available Tile Resolution | ❌ | Show best available tile resolution instead of "Map not yet available" for very zoomed in tiles |
 
-**Subtotals**: ✅ 6 done, ❌ 11 not started
+**Subtotals**: ✅ 7 done, ❌ 10 not started
 
 ### Data & Editing (4/5 done)
 
