@@ -74,7 +74,19 @@ export function SectionMetadataForm({
 
       {showQuality && (
         <div>
-          <label className="block text-sm text-text-secondary mb-1">{t('sectionMetadata.labels.quality')}</label>
+          <label className="block text-sm text-text-secondary mb-1">
+            <span className="inline-flex items-center gap-1">
+              {t('sectionMetadata.labels.quality')}
+              <span
+                className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-border text-[10px] font-bold text-text-secondary cursor-help"
+                title={t('sectionMetadata.help.quality')}
+                aria-label={t('sectionMetadata.help.quality')}
+                role="img"
+              >
+                ?
+              </span>
+            </span>
+          </label>
           <input
             type="number"
             min={0.1}
