@@ -325,6 +325,13 @@ input[type="radio"]:checked::after {
   transform: translate(-50%, -50%);
 }
 
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 input[type="checkbox"]:disabled,
 input[type="radio"]:disabled {
   opacity: 0.5;

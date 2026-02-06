@@ -488,6 +488,15 @@ export default function DataTable({ sections }: DataTableProps) {
     'comment',
   ];
 
+  const isRowEditable = useCallback(
+    (shot: Shot, _index: number) => {
+      if (selectedSectionId === null) return true;
+      const index = selectedSection?.shots.indexOf(shot) ?? -1;
+      return index < 0 || !isShotFrozen(selectedSectionId, index);
+    },
+    [selectedSectionId, selectedSection, isShotFrozen]
+  );
+
   return (
     <div
       className="flex flex-col bg-panel border-t border-border transition-all duration-300 ease-in-out"
@@ -545,6 +554,7 @@ export default function DataTable({ sections }: DataTableProps) {
               keyField="id"
               onCellEdit={handleCellEdit}
               editableColumns={editableColumns}
+              isRowEditable={isRowEditable}
               selectedKey={highlightedShotId}
               hoveredKey={
                 hoveredShot?.sectionId === selectedSectionId
