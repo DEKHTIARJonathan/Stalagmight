@@ -81,7 +81,8 @@ export default {
         'error-80': 'var(--cc-error-80)',
         'error-90': 'var(--cc-error-90)',
 
-        // Opacity variants: warning (3 entries)
+        // Opacity variants: warning (4 entries)
+        'warning-5': 'var(--cc-warning-5)',
         'warning-10': 'var(--cc-warning-10)',
         'warning-20': 'var(--cc-warning-20)',
         'warning-30': 'var(--cc-warning-30)',

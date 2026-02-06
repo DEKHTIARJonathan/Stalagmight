@@ -362,3 +362,12 @@ export function DashedLineIcon(props: IconProps) {
     </BaseIcon>
   );
 }
+
+export function LockIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <rect x="5" y="9" width="10" height="8" rx="1" />
+      <path d="M7 9V6a3 3 0 0 1 6 0v3" fill="none" />
+    </BaseIcon>
+  );
+}
