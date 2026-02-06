@@ -2,6 +2,7 @@ import { type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { formatDate as formatDateIntl, formatFixed, formatNumber } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 
 interface SystemCardProps {
   name: string;
@@ -29,6 +30,7 @@ export default function SystemCard({
   onContextMenu,
 }: SystemCardProps) {
   const { t } = useTranslation();
+  const precision = useDecimalPrecision();
   const { loadProject } = useProjectStore();
 
   const handleClick = (e: MouseEvent) => {
@@ -70,9 +72,9 @@ export default function SystemCard({
 
   const formatLength = (meters: number) => {
     if (meters >= 1000) {
-      return `${formatFixed(meters / 1000, undefined, 1)} ${t('common.units.kilometers')}`;
+      return `${formatFixed(meters / 1000, undefined, precision.length)} ${t('common.units.kilometers')}`;
     }
-    return `${formatFixed(meters, undefined, 0)} ${t('common.units.meters')}`;
+    return `${formatFixed(meters, undefined, precision.length)} ${t('common.units.meters')}`;
   };
 
   return (

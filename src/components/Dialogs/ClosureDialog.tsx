@@ -5,10 +5,12 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { getErrorColor } from '../../utils/colors';
 import { formatFixed, formatPercent } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import type { StationRef, ClosureStrategy } from '../../types/project';
 import type { ClosurePreview, BatchCommand } from '../../types/commands';
 
 export default function ClosureDialog() {
+  const precision = useDecimalPrecision();
   const { closeDialog, dialogData, clearMergeStations } = useUIStore();
   const { createLoopClosure, executeBatch, project } = useProjectStore();
 
@@ -108,19 +110,19 @@ export default function ClosureDialog() {
             </div>
             <div className="flex justify-between">
               <span className="text-text-secondary">Path length:</span>
-              <span>{formatFixed(preview.path_length, undefined, 2)}m</span>
+              <span>{formatFixed(preview.path_length, undefined, precision.length)}m</span>
             </div>
             <div className="flex justify-between">
               <span className="text-text-secondary">Misclosure distance:</span>
-              <span>{formatFixed(preview.misclosure_distance, undefined, 2)}m</span>
+              <span>{formatFixed(preview.misclosure_distance, undefined, precision.length)}m</span>
             </div>
             <div className="flex justify-between">
               <span className="text-text-secondary">Horizontal misclosure:</span>
-              <span>{formatFixed(preview.horizontal_misclosure, undefined, 2)}m</span>
+              <span>{formatFixed(preview.horizontal_misclosure, undefined, precision.length)}m</span>
             </div>
             <div className="flex justify-between">
               <span className="text-text-secondary">Vertical misclosure:</span>
-              <span>{formatFixed(preview.vertical_misclosure, undefined, 2)}m</span>
+              <span>{formatFixed(preview.vertical_misclosure, undefined, precision.length)}m</span>
             </div>
           </div>
         )}

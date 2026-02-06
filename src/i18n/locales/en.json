@@ -214,10 +214,37 @@
           "gradians": "Gradians"
         }
       },
-      "decimal": {
-        "label": "Decimal places",
-        "help": "Number of decimal places for numeric values (0-6)",
-        "aria": "Decimal precision"
+      "precision": {
+        "length": {
+          "label": "Lengths",
+          "help": "Shot lengths, path lengths, LRUD (0-6)",
+          "aria": "Length decimal precision"
+        },
+        "coordinates": {
+          "label": "Coordinates",
+          "help": "Station X, Y positions (0-6)",
+          "aria": "Coordinate decimal precision"
+        },
+        "depth": {
+          "label": "Depth",
+          "help": "Z coordinate, depth values (0-6)",
+          "aria": "Depth decimal precision"
+        },
+        "azimuth": {
+          "label": "Azimuth",
+          "help": "Compass bearings (0-6)",
+          "aria": "Azimuth decimal precision"
+        },
+        "inclination": {
+          "label": "Inclination",
+          "help": "Pitch / dip angles (0-6)",
+          "aria": "Inclination decimal precision"
+        },
+        "gps": {
+          "label": "GPS",
+          "help": "Latitude, longitude (0-6)",
+          "aria": "GPS decimal precision"
+        }
       },
       "validation": {
         "decimalPrecision": "Decimal precision must be between 0 and 6"

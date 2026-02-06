@@ -5,6 +5,7 @@ import type { ProjectMetadata } from '../../types/project';
 import { ResizablePanel } from '../common/Panel';
 import { Button } from '../common/Button';
 import { formatDate, formatFixed, formatNumber } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 
 interface MetadataPanelProps {
   /** The selected project metadata to display (legacy single-selection) */
@@ -35,6 +36,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(collapsed);
   const { t } = useTranslation();
+  const precision = useDecimalPrecision();
 
   // Normalize selection: prefer selectedProjects if non-empty, fallback to project
   const projects = selectedProjects?.length ? selectedProjects : (project ? [project] : []);
@@ -108,16 +110,16 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
     const [lng, lat] = center;
     const latDir = lat >= 0 ? 'N' : 'S';
     const lngDir = lng >= 0 ? 'E' : 'W';
-    return `${formatFixed(Math.abs(lat), undefined, 6)}${latDir}, ${formatFixed(Math.abs(lng), undefined, 6)}${lngDir}`;
+    return `${formatFixed(Math.abs(lat), undefined, precision.gps)}${latDir}, ${formatFixed(Math.abs(lng), undefined, precision.gps)}${lngDir}`;
   };
 
   // Format length for display
   const formatLength = (length: number | null | undefined): string => {
     if (length === null || length === undefined) return `0 ${t('common.units.meters')}`;
     if (length >= 1000) {
-      return `${formatFixed(length / 1000, undefined, 2)} ${t('common.units.kilometers')}`;
+      return `${formatFixed(length / 1000, undefined, precision.length)} ${t('common.units.kilometers')}`;
     }
-    return `${formatFixed(length, undefined, 1)} ${t('common.units.meters')}`;
+    return `${formatFixed(length, undefined, precision.length)} ${t('common.units.meters')}`;
   };
 
   if (isCollapsed) {
@@ -300,10 +302,10 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
                 <div className="text-xs text-text-secondary">
                   <span className="font-medium">{t('globalView.metadata.fields.bounds')}:</span>{' '}
                   {t('globalView.metadata.boundsValue', {
-                    north: formatFixed(singleProject.gps_bounds.north, undefined, 4),
-                    south: formatFixed(singleProject.gps_bounds.south, undefined, 4),
-                    east: formatFixed(singleProject.gps_bounds.east, undefined, 4),
-                    west: formatFixed(singleProject.gps_bounds.west, undefined, 4),
+                    north: formatFixed(singleProject.gps_bounds.north, undefined, precision.gps),
+                    south: formatFixed(singleProject.gps_bounds.south, undefined, precision.gps),
+                    east: formatFixed(singleProject.gps_bounds.east, undefined, precision.gps),
+                    west: formatFixed(singleProject.gps_bounds.west, undefined, precision.gps),
                   })}
                 </div>
               )}

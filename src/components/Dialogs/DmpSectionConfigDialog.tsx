@@ -13,6 +13,7 @@ import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
 import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
 import { formatFixed } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
@@ -76,6 +77,7 @@ export default function DmpSectionConfigDialog({
 
   // Get config for unit conversion (fallback to defaults)
   const config = useProjectStore((state) => state.config);
+  const precision = useDecimalPrecision();
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
   const depthUnit = config?.units?.depth ?? defaultConfig.units.depth;
 
@@ -1402,7 +1404,7 @@ export default function DmpSectionConfigDialog({
                           )}
                           {gpsCoords && (
                             <div className="text-xs text-success ml-14" data-testid="gps-parsed">
-                              Lat: {formatFixed(gpsCoords.latitude, undefined, 6)}, Lon: {formatFixed(gpsCoords.longitude, undefined, 6)}
+                              Lat: {formatFixed(gpsCoords.latitude, undefined, precision.gps)}, Lon: {formatFixed(gpsCoords.longitude, undefined, precision.gps)}
                             </div>
                           )}
 

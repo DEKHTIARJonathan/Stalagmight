@@ -11,6 +11,7 @@ import type { ProjectWarning } from '../../types/commands';
 import { formatShotId, formatStationId } from '../../utils/formatters';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { formatFixed, formatPercent, formatNumber, formatDate } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 
 export default function DetailPanel() {
   const { t } = useTranslation();
@@ -278,6 +279,7 @@ function StationDetail({ station }: { station: Station }) {
   const { t } = useTranslation();
   const { project, stations } = useProjectStore();
   const { openDialog, setSelection, triggerCenterOnStation, announceSelection, setHoveredStation, setHoveredShot, setHoveredSectionId } = useUIStore();
+  const precision = useDecimalPrecision();
   const section = project?.sections.find(
     (s) => s.id === station.station_ref.section_id
   );
@@ -385,9 +387,9 @@ function StationDetail({ station }: { station: Station }) {
             value={formatStationId(sectionId, stationPosition)}
           />
           <DetailRow label={t('detailPanel.labels.section')} value={section?.name ?? t('sections.defaultName', { id: sectionId })} />
-          <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(station.coordinates.x, undefined, 2)} ${t('common.units.meters')}`} />
-          <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(station.coordinates.y, undefined, 2)} ${t('common.units.meters')}`} />
-          <DetailRow label={t('detailPanel.labels.depth')} value={`${formatFixed(station.coordinates.z, undefined, 1)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(station.coordinates.x, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(station.coordinates.y, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.depth')} value={`${formatFixed(station.coordinates.z, undefined, precision.depth)} ${t('common.units.meters')}`} />
 
           {station.is_zero_datum && (
             <div className="pt-2 border-t border-border">
@@ -396,11 +398,11 @@ function StationDetail({ station }: { station: Station }) {
                 <div className="mt-2 text-sm">
                   <DetailRow
                     label={t('detailPanel.labels.latitude')}
-                    value={formatFixed(station.gps_coordinates.latitude, undefined, 6)}
+                    value={formatFixed(station.gps_coordinates.latitude, undefined, precision.gps)}
                   />
                   <DetailRow
                     label={t('detailPanel.labels.longitude')}
-                    value={formatFixed(station.gps_coordinates.longitude, undefined, 6)}
+                    value={formatFixed(station.gps_coordinates.longitude, undefined, precision.gps)}
                   />
                 </div>
               )}
@@ -524,6 +526,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
   const { t } = useTranslation();
   const { setShotVirtual } = useProjectStore();
   const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore();
+  const precision = useDecimalPrecision();
 
   // Calculate shot index (0-indexed) and positions (1-indexed for display)
   const shotIndex = section.shots.indexOf(shot);
@@ -621,26 +624,26 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
         <div className="space-y-3">
           <DetailRow label={t('detailPanel.labels.id')} value={formatShotId(section.id, shotPosition)} />
           <DetailRow label={t('detailPanel.labels.section')} value={section.name ?? t('sections.defaultName', { id: section.id })} />
-          <DetailRow label={t('detailPanel.labels.length')} value={`${formatFixed(shot.length, undefined, 2)} ${t('common.units.meters')}`} />
-          <DetailRow label={t('detailPanel.labels.azimuthIn')} value={`${formatFixed(shot.azimuth_in, undefined, 1)}°`} />
-          <DetailRow label={t('detailPanel.labels.azimuthOut')} value={`${formatFixed(shot.azimuth_out, undefined, 1)}°`} />
-          <DetailRow label={t('detailPanel.labels.depthIn')} value={`${formatFixed(shot.depth_in, undefined, 1)} ${t('common.units.meters')}`} />
-          <DetailRow label={t('detailPanel.labels.depthOut')} value={`${formatFixed(shot.depth_out, undefined, 1)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.length')} value={`${formatFixed(shot.length, undefined, precision.length)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.azimuthIn')} value={`${formatFixed(shot.azimuth_in, undefined, precision.azimuth)}°`} />
+          <DetailRow label={t('detailPanel.labels.azimuthOut')} value={`${formatFixed(shot.azimuth_out, undefined, precision.azimuth)}°`} />
+          <DetailRow label={t('detailPanel.labels.depthIn')} value={`${formatFixed(shot.depth_in, undefined, precision.depth)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.depthOut')} value={`${formatFixed(shot.depth_out, undefined, precision.depth)} ${t('common.units.meters')}`} />
 
           {(shot.pitch_in !== null || shot.pitch_out !== null || shot.length > 0) && (
             <div className="pt-2 border-t border-border">
               <span className="text-sm text-text-secondary">{t('detailPanel.shot.inclination')}:</span>
               <div className="mt-1 space-y-1 text-sm">
                 {shot.pitch_in !== null && (
-                  <DetailRow label={t('detailPanel.labels.pitchIn')} value={`${formatFixed(shot.pitch_in, undefined, 1)}°`} />
+                  <DetailRow label={t('detailPanel.labels.pitchIn')} value={`${formatFixed(shot.pitch_in, undefined, precision.inclination)}°`} />
                 )}
                 {shot.pitch_out !== null && (
-                  <DetailRow label={t('detailPanel.labels.pitchOut')} value={`${formatFixed(shot.pitch_out, undefined, 1)}°`} />
+                  <DetailRow label={t('detailPanel.labels.pitchOut')} value={`${formatFixed(shot.pitch_out, undefined, precision.inclination)}°`} />
                 )}
                 {shot.length > 0 && (() => {
                   const incl = computeInclination(shot.depth_in, shot.depth_out, shot.length);
                   return incl !== null ? (
-                    <DetailRow label={t('detailPanel.shot.computed')} value={`${formatFixed(incl, undefined, 1)}°`} />
+                    <DetailRow label={t('detailPanel.shot.computed')} value={`${formatFixed(incl, undefined, precision.inclination)}°`} />
                   ) : null;
                 })()}
               </div>
@@ -651,10 +654,10 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
             <div className="pt-2 border-t border-border">
               <span className="text-sm text-text-secondary">{t('detailPanel.shot.lrud')}:</span>
               <div className="grid grid-cols-2 gap-2 mt-1 text-sm">
-                <DetailRow label={t('detailPanel.labels.leftShort')} value={shot.left != null ? formatFixed(shot.left, undefined, 1) : t('detailPanel.placeholder.none')} />
-                <DetailRow label={t('detailPanel.labels.rightShort')} value={shot.right != null ? formatFixed(shot.right, undefined, 1) : t('detailPanel.placeholder.none')} />
-                <DetailRow label={t('detailPanel.labels.upShort')} value={shot.up != null ? formatFixed(shot.up, undefined, 1) : t('detailPanel.placeholder.none')} />
-                <DetailRow label={t('detailPanel.labels.downShort')} value={shot.down != null ? formatFixed(shot.down, undefined, 1) : t('detailPanel.placeholder.none')} />
+                <DetailRow label={t('detailPanel.labels.leftShort')} value={shot.left != null ? formatFixed(shot.left, undefined, precision.length) : t('detailPanel.placeholder.none')} />
+                <DetailRow label={t('detailPanel.labels.rightShort')} value={shot.right != null ? formatFixed(shot.right, undefined, precision.length) : t('detailPanel.placeholder.none')} />
+                <DetailRow label={t('detailPanel.labels.upShort')} value={shot.up != null ? formatFixed(shot.up, undefined, precision.length) : t('detailPanel.placeholder.none')} />
+                <DetailRow label={t('detailPanel.labels.downShort')} value={shot.down != null ? formatFixed(shot.down, undefined, precision.length) : t('detailPanel.placeholder.none')} />
               </div>
             </div>
           )}
@@ -738,6 +741,7 @@ interface SectionDetailProps {
 function SectionDetail({ section, stations, totalProjectLength }: SectionDetailProps) {
   const { t } = useTranslation();
   const { openDialog, setSelection, triggerZoomToSection, announceSelection, setHoveredStation } = useUIStore();
+  const precision = useDecimalPrecision();
 
   // Calculate section statistics
   const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
@@ -845,9 +849,9 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
               {t('detailPanel.section.statsTitle')}
             </h4>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-              <StatCard label={t('detailPanel.section.totalLength')} value={`${formatFixed(sectionLength, undefined, 1)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.section.totalLength')} value={`${formatFixed(sectionLength, undefined, precision.length)} ${t('common.units.meters')}`} />
               <StatCard label={t('detailPanel.section.shotCount')} value={formatNumber(shotCount)} />
-              <StatCard label={t('detailPanel.section.avgShot')} value={`${formatFixed(avgShotLength, undefined, 2)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.section.avgShot')} value={`${formatFixed(avgShotLength, undefined, precision.length)} ${t('common.units.meters')}`} />
               {virtualCount > 0 && (
                 <StatCard label={t('detailPanel.section.virtualShots')} value={formatNumber(virtualCount)} />
               )}
@@ -861,8 +865,8 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
                 {t('detailPanel.section.depthRange')}
               </h4>
               <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                <StatCard label={t('detailPanel.section.shallowest')} value={`${formatFixed(minDepth, undefined, 1)} ${t('common.units.meters')}`} />
-                <StatCard label={t('detailPanel.section.deepest')} value={`${formatFixed(maxDepth, undefined, 1)} ${t('common.units.meters')}`} />
+                <StatCard label={t('detailPanel.section.shallowest')} value={`${formatFixed(minDepth, undefined, precision.depth)} ${t('common.units.meters')}`} />
+                <StatCard label={t('detailPanel.section.deepest')} value={`${formatFixed(maxDepth, undefined, precision.depth)} ${t('common.units.meters')}`} />
               </div>
             </div>
           )}
@@ -961,6 +965,7 @@ interface ProjectStatsProps {
 
 function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
   const { t } = useTranslation();
+  const precision = useDecimalPrecision();
   if (!project || !stats) {
     return (
       <div className="p-4 text-center text-text-secondary">
@@ -992,8 +997,8 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
               {t('detailPanel.projectStats.overview')}
             </h4>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-              <StatCard label={t('detailPanel.projectStats.totalLength')} value={`${formatFixed(stats.total_length, undefined, 1)} ${t('common.units.meters')}`} />
-              <StatCard label={t('detailPanel.projectStats.penetration')} value={`${formatFixed(stats.penetration_distance, undefined, 1)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.projectStats.totalLength')} value={`${formatFixed(stats.total_length, undefined, precision.length)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.projectStats.penetration')} value={`${formatFixed(stats.penetration_distance, undefined, precision.length)} ${t('common.units.meters')}`} />
               <StatCard label={t('detailPanel.projectStats.sections')} value={formatNumber(stats.section_count)} />
               <StatCard label={t('detailPanel.projectStats.shots')} value={formatNumber(stats.shot_count)} />
               <StatCard label={t('detailPanel.projectStats.stations')} value={formatNumber(stats.station_count)} />
@@ -1009,9 +1014,9 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
               {t('detailPanel.projectStats.depthRange')}
             </h4>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-              <StatCard label={t('detailPanel.projectStats.shallowest')} value={`${formatFixed(minDepth, undefined, 1)} ${t('common.units.meters')}`} />
-              <StatCard label={t('detailPanel.projectStats.deepest')} value={`${formatFixed(maxDepth, undefined, 1)} ${t('common.units.meters')}`} />
-              <StatCard label={t('detailPanel.projectStats.totalDepth')} value={`${formatFixed(maxDepth - minDepth, undefined, 1)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.projectStats.shallowest')} value={`${formatFixed(minDepth, undefined, precision.depth)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.projectStats.deepest')} value={`${formatFixed(maxDepth, undefined, precision.depth)} ${t('common.units.meters')}`} />
+              <StatCard label={t('detailPanel.projectStats.totalDepth')} value={`${formatFixed(maxDepth - minDepth, undefined, precision.depth)} ${t('common.units.meters')}`} />
             </div>
           </div>
 
@@ -1077,6 +1082,7 @@ function ClosuresSection({
 }: ClosuresSectionProps) {
   const { t } = useTranslation();
   const { openDialog } = useUIStore();
+  const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
   const contentId = 'closures-section-content';
 
@@ -1222,8 +1228,8 @@ function ClosuresSection({
                 {closure ? (
                   <div className="text-xs text-text-secondary" data-testid={`closure-metrics-${closureIdLabel}`}>
                     {t('detailPanel.closures.metrics', {
-                      path: `${formatFixed(closure.path_length, undefined, 1)}${t('common.units.meters')}`,
-                      error: `${formatFixed(closure.misclosure_distance, undefined, 2)}${t('common.units.meters')}`,
+                      path: `${formatFixed(closure.path_length, undefined, precision.length)}${t('common.units.meters')}`,
+                      error: `${formatFixed(closure.misclosure_distance, undefined, precision.length)}${t('common.units.meters')}`,
                       percent: formatPercent(closure.error_percentage, undefined, 2),
                     })}
                   </div>

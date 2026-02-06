@@ -85,6 +85,7 @@ export * from './ipc/PanelsConfig';
 export * from './ipc/CacheConfig';
 export * from './ipc/GlobalViewConfig';
 export * from './ipc/AppearanceConfig';
+export * from './ipc/DecimalPrecision';
 export * from './ipc/LengthUnit';
 export * from './ipc/AngleUnit';
 export * from './ipc/ShortcutFeedback';

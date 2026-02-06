@@ -6,11 +6,20 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
-import type { LengthUnit, AngleUnit } from '../../../types/config';
+import type { LengthUnit, AngleUnit, DecimalPrecision } from '../../../types/config';
+
+const precisionFields: Array<{ key: keyof DecimalPrecision; i18nKey: string }> = [
+  { key: 'length', i18nKey: 'length' },
+  { key: 'coordinates', i18nKey: 'coordinates' },
+  { key: 'depth', i18nKey: 'depth' },
+  { key: 'azimuth', i18nKey: 'azimuth' },
+  { key: 'inclination', i18nKey: 'inclination' },
+  { key: 'gps', i18nKey: 'gps' },
+];
 
 /**
  * Units settings category content.
- * Maps to config.units: length, depth, angle, decimal_precision.
+ * Maps to config.units: length, depth, angle, decimal_precision (per-category).
  */
 export function UnitsSettings({
   config,
@@ -20,24 +29,20 @@ export function UnitsSettings({
   panelIdBase,
 }: SettingsCategoryProps) {
   const { t } = useTranslation();
-  // Validation state
   const hasErrorRef = useRef(false);
 
   // Validate on mount and when config changes
   useEffect(() => {
-    const errors: string[] = [];
+    const dp = config.units.decimal_precision;
+    const hasError = precisionFields.some(
+      ({ key }) => dp[key] < 0 || dp[key] > 6,
+    );
 
-    // Validate decimal_precision
-    if (config.units.decimal_precision < 0 || config.units.decimal_precision > 6) {
-      errors.push(t('settings.units.validation.decimalPrecision'));
-    }
-
-    const hasError = errors.length > 0;
     if (hasError !== hasErrorRef.current) {
       hasErrorRef.current = hasError;
       onValidationError('units', hasError);
     }
-  }, [config.units, onValidationError, t]);
+  }, [config.units, onValidationError]);
 
   const handleLengthChange = (value: string) => {
     onChange({
@@ -66,13 +71,16 @@ export function UnitsSettings({
     });
   };
 
-  const handleDecimalPrecisionChange = (value: string) => {
+  const handlePrecisionChange = (field: keyof DecimalPrecision, value: string) => {
     const num = parseInt(value, 10);
     if (!isNaN(num)) {
       onChange({
         units: {
           ...config.units,
-          decimal_precision: num,
+          decimal_precision: {
+            ...config.units.decimal_precision,
+            [field]: num,
+          },
         },
       });
     }
@@ -147,23 +155,26 @@ export function UnitsSettings({
       </SettingsSection>
 
       <SettingsSection title={t('settings.units.sections.precision')} data-testid="section-precision">
-        <SettingRow
-          label={t('settings.units.decimal.label')}
-          helpText={t('settings.units.decimal.help')}
-          isChanged={isFieldChanged(changedFields, 'units.decimal_precision')}
-          data-testid="setting-decimal-precision"
-        >
-          <input
-            type="number"
-            min={0}
-            max={6}
-            value={config.units.decimal_precision}
-            onChange={(e) => handleDecimalPrecisionChange(e.target.value)}
-            className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label={t('settings.units.decimal.aria')}
-            data-testid="input-decimal-precision"
-          />
-        </SettingRow>
+        {precisionFields.map(({ key, i18nKey }) => (
+          <SettingRow
+            key={key}
+            label={t(`settings.units.precision.${i18nKey}.label`)}
+            helpText={t(`settings.units.precision.${i18nKey}.help`)}
+            isChanged={isFieldChanged(changedFields, `units.decimal_precision.${key}`)}
+            data-testid={`setting-precision-${key}`}
+          >
+            <input
+              type="number"
+              min={0}
+              max={6}
+              value={config.units.decimal_precision[key]}
+              onChange={(e) => handlePrecisionChange(key, e.target.value)}
+              className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
+              aria-label={t(`settings.units.precision.${i18nKey}.aria`)}
+              data-testid={`input-precision-${key}`}
+            />
+          </SettingRow>
+        ))}
       </SettingsSection>
     </div>
   );

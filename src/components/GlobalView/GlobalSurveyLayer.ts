@@ -6,6 +6,7 @@ import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors'
 import { hasLiveStyle } from '../Map/mapUtils';
 import i18n from '../../i18n';
 import { formatFixed, formatNumber } from '../../i18n/format';
+import type { DecimalPrecision } from '../../types/config';
 
 /**
  * System geometry data with associated metadata for the global view.
@@ -135,6 +136,9 @@ export default class GlobalSurveyLayer {
   // Seeded at construction so first paint uses current theme, not legacy fallbacks
   private themeColors: MapThemeColors = getMapThemeColors();
 
+  // Precision settings for formatting
+  private precision: DecimalPrecision | undefined;
+
   // Bound event handlers for cleanup
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
   private boundMapLeave: (() => void) | null = null;
@@ -156,6 +160,13 @@ export default class GlobalSurveyLayer {
    */
   setCallbacks(callbacks: GlobalSurveyLayerCallbacks): void {
     this.callbacks = callbacks;
+  }
+
+  /**
+   * Update precision settings for formatting.
+   */
+  setPrecision(precision: DecimalPrecision): void {
+    this.precision = precision;
   }
 
   private initializeSources(): void {
@@ -903,11 +914,12 @@ export default class GlobalSurveyLayer {
 
     // Format total length
     const length = properties.totalLength ?? 0;
+    const lengthPrec = this.precision?.length ?? 1;
     let lengthStr: string;
     if (length >= 1000) {
-      lengthStr = `${formatFixed(length / 1000, undefined, 2)} ${i18n.t('common.units.kilometers')}`;
+      lengthStr = `${formatFixed(length / 1000, undefined, lengthPrec)} ${i18n.t('common.units.kilometers')}`;
     } else {
-      lengthStr = `${formatFixed(length, undefined, 1)} ${i18n.t('common.units.meters')}`;
+      lengthStr = `${formatFixed(length, undefined, lengthPrec)} ${i18n.t('common.units.meters')}`;
     }
 
     // Build tooltip content using textContent to avoid XSS

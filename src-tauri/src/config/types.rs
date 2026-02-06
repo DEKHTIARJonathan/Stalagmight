@@ -467,12 +467,82 @@ fn default_undo_persist_limit() -> usize {
     20
 }
 
+/// Per-category decimal precision settings.
+/// Each field controls the number of decimal places for a specific measurement category.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct DecimalPrecision {
+    /// Shot lengths, path lengths, misclosure distances, LRUD
+    #[serde(default = "default_precision_length")]
+    pub length: u8,
+    /// Station X, Y positions
+    #[serde(default = "default_precision_coordinates")]
+    pub coordinates: u8,
+    /// Z coordinate, depth values
+    #[serde(default = "default_precision_depth")]
+    pub depth: u8,
+    /// Compass bearings / azimuths
+    #[serde(default = "default_precision_azimuth")]
+    pub azimuth: u8,
+    /// Pitch / dip angles
+    #[serde(default = "default_precision_inclination")]
+    pub inclination: u8,
+    /// Latitude, longitude
+    #[serde(default = "default_precision_gps")]
+    pub gps: u8,
+}
+
+impl DecimalPrecision {
+    /// Clamp all fields to the valid range 0-6
+    pub fn normalize(&mut self) {
+        self.length = self.length.min(6);
+        self.coordinates = self.coordinates.min(6);
+        self.depth = self.depth.min(6);
+        self.azimuth = self.azimuth.min(6);
+        self.inclination = self.inclination.min(6);
+        self.gps = self.gps.min(6);
+    }
+}
+
+fn default_precision_length() -> u8 { 1 }
+fn default_precision_coordinates() -> u8 { 2 }
+fn default_precision_depth() -> u8 { 1 }
+fn default_precision_azimuth() -> u8 { 1 }
+fn default_precision_inclination() -> u8 { 1 }
+fn default_precision_gps() -> u8 { 6 }
+
+/// Custom deserializer for backward compatibility: accepts either a bare integer
+/// (old `decimal_precision = 1` format) or the new struct format.
+fn deserialize_decimal_precision<'de, D>(deserializer: D) -> Result<DecimalPrecision, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum DecimalPrecisionOrU8 {
+        Struct(DecimalPrecision),
+        Bare(u8),
+    }
+
+    match DecimalPrecisionOrU8::deserialize(deserializer)? {
+        DecimalPrecisionOrU8::Struct(dp) => Ok(dp),
+        DecimalPrecisionOrU8::Bare(v) => Ok(DecimalPrecision {
+            length: v,
+            coordinates: v,
+            depth: v,
+            azimuth: v,
+            inclination: v,
+            gps: v,
+        }),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct UnitsConfig {
     pub length: LengthUnit,
     pub depth: LengthUnit,
     pub angle: AngleUnit,
-    pub decimal_precision: u8,
+    #[serde(deserialize_with = "deserialize_decimal_precision")]
+    pub decimal_precision: DecimalPrecision,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -1148,6 +1218,7 @@ impl Config {
         self.global_view.normalize();
         self.appearance.normalize();
         self.closure_adjustment.normalize();
+        self.units.decimal_precision.normalize();
         if self.general.locale.trim().is_empty() {
             self.general.locale = default_locale();
         }

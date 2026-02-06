@@ -14,9 +14,11 @@ import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
 import { useTranslation } from 'react-i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 
 export default function SingleSystemView() {
   const { t } = useTranslation();
+  const precision = useDecimalPrecision();
   useKeyboardShortcuts();
 
   const {
@@ -147,7 +149,7 @@ export default function SingleSystemView() {
           {t('singleView.status.summary', {
             sections: formatNumber(stats?.section_count ?? 0),
             shots: formatNumber(stats?.shot_count ?? 0),
-            length: formatLength(stats?.total_length ?? 0),
+            length: formatLength(stats?.total_length ?? 0, precision.length),
           })}
         </span>
         <SaveStatus status={autoSave.status} countdown={autoSave.countdown} isDirty={isDirty} />
@@ -200,10 +202,10 @@ function SaveStatus({
   );
 }
 
-function formatLength(meters: number): string {
+function formatLength(meters: number, lengthPrecision: number): string {
   if (meters >= 1000) {
-    return `${formatFixed(meters / 1000, undefined, 2)} km`;
+    return `${formatFixed(meters / 1000, undefined, lengthPrecision)} km`;
   }
-  return `${formatFixed(meters, undefined, 1)} m`;
+  return `${formatFixed(meters, undefined, lengthPrecision)} m`;
 }
 

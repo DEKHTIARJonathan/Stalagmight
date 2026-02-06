@@ -41,13 +41,26 @@ impl Default for GeneralConfig {
     }
 }
 
+impl Default for DecimalPrecision {
+    fn default() -> Self {
+        Self {
+            length: 1,
+            coordinates: 2,
+            depth: 1,
+            azimuth: 1,
+            inclination: 1,
+            gps: 6,
+        }
+    }
+}
+
 impl Default for UnitsConfig {
     fn default() -> Self {
         Self {
             length: LengthUnit::Meters,
             depth: LengthUnit::Meters,
             angle: AngleUnit::Degrees,
-            decimal_precision: 1,
+            decimal_precision: DecimalPrecision::default(),
         }
     }
 }

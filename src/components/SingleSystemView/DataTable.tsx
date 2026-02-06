@@ -10,6 +10,7 @@ import type { ProjectWarning } from '../../types/commands';
 import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
 import { formatShotId } from '../../utils/formatters';
 import { formatFixed, formatNumber } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 
 interface DataTableProps {
   sections: Section[];
@@ -17,6 +18,7 @@ interface DataTableProps {
 
 export default function DataTable({ sections }: DataTableProps) {
   const { t } = useTranslation();
+  const precision = useDecimalPrecision();
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(
     sections[0]?.id ?? null
   );
@@ -453,7 +455,7 @@ export default function DataTable({ sections }: DataTableProps) {
         circularMeanDegrees(shot.azimuth_in, shot.azimuth_out),
       formatValue: (value: unknown) =>
         typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, 1)
+          ? formatFixed(value, undefined, precision.azimuth)
           : '',
       inputType: 'number' as const,
       inputStep: '0.1',

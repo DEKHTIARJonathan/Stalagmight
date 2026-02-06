@@ -1,6 +1,7 @@
 import { useId, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatFixed } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { getDepthColor } from '../../utils/colors';
 import { getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
@@ -33,6 +34,7 @@ export function DepthLegend({
 }: DepthLegendProps) {
   const gradientId = useId();
   const { t } = useTranslation();
+  const precision = useDecimalPrecision();
   // Subscribe to theme for reactive color updates (value triggers re-render)
   useUIStore((s) => s.resolvedTheme);
   const effectiveShallow = shallowColor ?? getThemeColor('--cc-depth-shallow');
@@ -82,8 +84,8 @@ export function DepthLegend({
         height="80"
         role="img"
         aria-label={t('map.depthLegend.aria', {
-          min: `${formatFixed(minDepth, undefined, 1)}${t('common.units.meters')}`,
-          max: `${formatFixed(maxDepth, undefined, 1)}${t('common.units.meters')}`,
+          min: `${formatFixed(minDepth, undefined, precision.depth)}${t('common.units.meters')}`,
+          max: `${formatFixed(maxDepth, undefined, precision.depth)}${t('common.units.meters')}`,
         })}
       >
         <defs>
@@ -106,13 +108,13 @@ export function DepthLegend({
           textShadow: `0 1px 2px ${textHaloAlt}`,
         }}
       >
-        <span data-testid="depth-legend-min">{`${formatFixed(minDepth, undefined, 1)}${t('common.units.meters')}`}</span>
+        <span data-testid="depth-legend-min">{`${formatFixed(minDepth, undefined, precision.depth)}${t('common.units.meters')}`}</span>
         {isFlat && (
           <span style={{ fontSize: 10, opacity: 0.7 }}>
             {t('map.depthLegend.flat')}
           </span>
         )}
-        <span data-testid="depth-legend-max">{`${formatFixed(maxDepth, undefined, 1)}${t('common.units.meters')}`}</span>
+        <span data-testid="depth-legend-max">{`${formatFixed(maxDepth, undefined, precision.depth)}${t('common.units.meters')}`}</span>
       </div>
     </div>
   );

@@ -13,6 +13,7 @@ import { getTileConfig } from '../../utils/tileConfig';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
 import { formatFixed, formatNumber } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 
 /** Local storage key for persisting map position/zoom. */
 const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
@@ -137,6 +138,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   const contextMenuOpenRef = useRef(false);
   const [mapLoaded, setMapLoaded] = useState(false);
   const { t } = useTranslation();
+  const precision = useDecimalPrecision();
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   // Buffer for geometry data that arrives before map is ready
   const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
@@ -634,6 +636,13 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     }
   }, [resolvedTheme, mapLoaded]);
 
+  // Sync precision to survey layer
+  useEffect(() => {
+    if (surveyLayerRef.current) {
+      surveyLayerRef.current.setPrecision(precision);
+    }
+  }, [precision]);
+
   // Sync search filter to survey layer (searchTerm is owned by GlobalView, passed as prop)
   useEffect(() => {
     surveyLayerRef.current?.setSearchFilter(searchTerm || null);
@@ -884,9 +893,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           // Format length like survey view
           let lengthStr: string;
           if (totalLength >= 1000) {
-            lengthStr = `${formatFixed(totalLength / 1000, undefined, 2)} ${t('common.units.kilometers')}`;
+            lengthStr = `${formatFixed(totalLength / 1000, undefined, precision.length)} ${t('common.units.kilometers')}`;
           } else {
-            lengthStr = `${formatFixed(totalLength, undefined, 1)} ${t('common.units.meters')}`;
+            lengthStr = `${formatFixed(totalLength, undefined, precision.length)} ${t('common.units.meters')}`;
           }
 
           // Build tooltip content using DOM to prevent XSS (matches survey view format)

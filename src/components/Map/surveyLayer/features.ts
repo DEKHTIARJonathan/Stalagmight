@@ -1,4 +1,4 @@
-import type { GpsOrigin } from '../../../types/config';
+import type { GpsOrigin, DecimalPrecision } from '../../../types/config';
 import type {
   LoopClosure,
   Section,
@@ -109,7 +109,8 @@ export function buildSurveyFeatures(
   gpsOrigin: GpsOrigin | null,
   showDepthGradient: boolean,
   depthRange: DepthRange,
-  themeColors: MapThemeColors
+  themeColors: MapThemeColors,
+  precision?: DecimalPrecision
 ): SurveyFeatureSets {
   // Theme colors (resolved from CSS variables by the caller)
   const depthShallow = themeColors.depthShallow;
@@ -170,7 +171,7 @@ export function buildSurveyFeatures(
         const midY = (fromStation.coordinates.y + toStation.coordinates.y) / 2;
         const labelDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
 
-        const label = `${formatFixed(shot.azimuth_in, undefined, 0)}° ${formatFixed(shot.length, undefined, 1)}m ${formatFixed(labelDepth, undefined, 1)}m`;
+        const label = `${formatFixed(shot.azimuth_in, undefined, precision?.azimuth ?? 0)}° ${formatFixed(shot.length, undefined, precision?.length ?? 1)}m ${formatFixed(labelDepth, undefined, precision?.depth ?? 1)}m`;
 
         const shotLabelDepthColor = showDepthGradient
           ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
