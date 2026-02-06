@@ -4,7 +4,7 @@ import { useUIStore, type Selection } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
-import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon } from '../common/icons';
+import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
 import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
@@ -18,8 +18,9 @@ export default function DetailPanel() {
   const { selection, detailPanelTab, setDetailPanelTab, setSelection } = useUIStore();
   const { project, stations, warnings } = useProjectStore();
 
-  const errorCount = warnings.filter((w) => w.severity === 'error').length;
-  const totalWarnings = warnings.length;
+  const unresolvedWarnings = warnings.filter((w) => !w.isResolved);
+  const errorCount = unresolvedWarnings.filter((w) => w.severity === 'error').length;
+  const unresolvedCount = unresolvedWarnings.length;
 
   return (
     <div className="h-full bg-panel flex flex-col" data-testid="detail-panel">
@@ -35,7 +36,7 @@ export default function DetailPanel() {
         <TabButton
           active={detailPanelTab === 'warnings'}
           onClick={() => setDetailPanelTab('warnings')}
-          badge={totalWarnings > 0 ? totalWarnings : undefined}
+          badge={unresolvedCount > 0 ? unresolvedCount : undefined}
           badgeType={errorCount > 0 ? 'error' : 'warning'}
           testId="detail-tab-warnings"
         >
@@ -172,7 +173,7 @@ interface WarningsContentProps {
 
 function WarningsContent({ warnings, project, onWarningClick }: WarningsContentProps) {
   const { t } = useTranslation();
-  const { resolveWarning, unresolveWarning } = useProjectStore();
+  const { resolveWarning, resolveAllWarnings, unresolveWarning } = useProjectStore();
   const [showResolved, setShowResolved] = useState(false);
 
   const unresolvedCount = warnings.filter((w) => !w.isResolved).length;
@@ -195,17 +196,18 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
     return section?.name ?? t('sections.defaultName', { id: sectionId });
   };
 
-  const handleToggleResolved = (e: React.MouseEvent, warning: ProjectWarning) => {
+  const handleDismiss = (e: React.MouseEvent, warning: ProjectWarning) => {
     e.stopPropagation();
-    if (warning.isResolved) {
-      unresolveWarning(warning.sectionId, warning.shotId, warning.code);
-    } else {
-      resolveWarning(warning.sectionId, warning.shotId, warning.code);
-    }
+    resolveWarning(warning.sectionId, warning.shotId, warning.code);
+  };
+
+  const handleUndoResolve = (e: React.MouseEvent, warning: ProjectWarning) => {
+    e.stopPropagation();
+    unresolveWarning(warning.sectionId, warning.shotId, warning.code);
   };
 
   return (
-    <div className="p-2">
+    <div className="p-2" data-testid="warnings-content">
       <div className="flex items-center justify-between mb-2 px-2">
         <span className="text-sm text-text-secondary">
           {t('detailPanel.warnings.count', {
@@ -217,19 +219,32 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
             countFormatted: formatNumber(resolvedCount),
           })}`}
         </span>
-        {resolvedCount > 0 && (
-          <button
-            onClick={() => setShowResolved(!showResolved)}
-            className="text-xs text-accent hover:underline"
-          >
-            {showResolved ? t('detailPanel.warnings.hideResolved') : t('detailPanel.warnings.showResolved')}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {resolvedCount > 0 && (
+            <button
+              onClick={() => setShowResolved(!showResolved)}
+              className="text-xs text-accent hover:underline"
+            >
+              {showResolved ? t('detailPanel.warnings.hideResolved') : t('detailPanel.warnings.showResolved')}
+            </button>
+          )}
+          {unresolvedCount > 0 && (
+            <button
+              onClick={() => resolveAllWarnings()}
+              className="text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-secondary"
+              data-testid="clear-all-warnings"
+              title={t('detailPanel.warnings.clearAll')}
+            >
+              {t('detailPanel.warnings.clearAll')}
+            </button>
+          )}
+        </div>
       </div>
-      <div className="space-y-1">
+      <div className="space-y-1" role="list" aria-label={t('detailPanel.tabs.warnings')}>
         {displayedWarnings.map((warning, index) => (
           <div
             key={`${warning.sectionId}-${warning.shotId}-${warning.code}-${index}`}
+            role="listitem"
             className={`
               p-2 rounded transition-colors
               ${warning.isResolved ? 'opacity-50' : ''}
@@ -260,13 +275,25 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                   </div>
                 </div>
               </button>
-              <button
-                onClick={(e) => handleToggleResolved(e, warning)}
-                className="text-xs px-2 py-1 rounded bg-background-50 hover:bg-background text-text-secondary"
-                title={warning.isResolved ? t('detailPanel.warnings.markUnresolved') : t('detailPanel.warnings.markResolved')}
-              >
-                {warning.isResolved ? t('common.actions.undo') : t('detailPanel.warnings.resolve')}
-              </button>
+              {warning.isResolved ? (
+                <button
+                  onClick={(e) => handleUndoResolve(e, warning)}
+                  className="text-xs px-2 py-1 rounded bg-background-50 hover:bg-background text-text-secondary"
+                  title={t('detailPanel.warnings.markUnresolved')}
+                >
+                  {t('common.actions.undo')}
+                </button>
+              ) : (
+                <button
+                  onClick={(e) => handleDismiss(e, warning)}
+                  className="shrink-0 p-1 rounded text-text-secondary hover:text-text-primary hover:bg-background-50"
+                  title={t('detailPanel.warnings.markResolved')}
+                  aria-label={t('detailPanel.warnings.markResolved')}
+                  data-testid="dismiss-warning"
+                >
+                  <CloseIcon size={14} />
+                </button>
+              )}
             </div>
           </div>
         ))}

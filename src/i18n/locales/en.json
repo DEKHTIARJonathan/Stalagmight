@@ -881,7 +881,8 @@
       "location": "Section {{section}} - Shot {{shot}}",
       "markResolved": "Mark resolved",
       "markUnresolved": "Mark unresolved",
-      "resolve": "Resolve"
+      "resolve": "Resolve",
+      "clearAll": "Clear All"
     },
     "labels": {
       "id": "ID",

@@ -1203,6 +1203,7 @@ pub fn run() {
             // Validation
             commands::validation::get_project_warnings,
             commands::validation::resolve_warning,
+            commands::validation::resolve_all_warnings,
             commands::validation::unresolve_warning,
             // Survey geometry
             commands::survey_geometry::get_survey_geometry,

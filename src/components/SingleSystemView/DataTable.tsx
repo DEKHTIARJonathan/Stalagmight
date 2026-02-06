@@ -413,7 +413,7 @@ export default function DataTable({ sections }: DataTableProps) {
       render: (shot: Shot, index: number) => {
         if (selectedSectionId === null) return null;
         const frozen = isShotFrozen(selectedSectionId, index);
-        const shotWarnings = getShotWarnings(selectedSectionId, shot.id);
+        const shotWarnings = getShotWarnings(selectedSectionId, shot.id).filter((w) => !w.isResolved);
         if (shotWarnings.length === 0 && !frozen) return null;
         const hasError = shotWarnings.some((w) => w.severity === 'error');
         const tooltipText = [
