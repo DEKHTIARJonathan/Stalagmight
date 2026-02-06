@@ -2877,6 +2877,16 @@ impl Project {
         self.distribute_closure_error_internal(station_a, station_b, strategy, None, false)
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_distribute_closure_error(
+        &mut self,
+        station_a: StationRef,
+        station_b: StationRef,
+        strategy: ClosureStrategy,
+    ) -> Result<(), String> {
+        self.distribute_closure_error_internal(station_a, station_b, strategy, None, false)
+    }
+
     /// Merge two stations
     /// Returns Err if validation fails, Ok(true) on success
     pub fn merge_stations(
