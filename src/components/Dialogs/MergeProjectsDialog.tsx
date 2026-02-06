@@ -6,6 +6,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { ProjectMetadata } from '../../types/project';
 import { ensureExtension, projectSaveFilters, PROJECT_EXTENSION } from '../../utils/fileDialogs';
+import { formatFixed } from '../../i18n/format';
 
 /**
  * MergeProjectsDialog allows users to merge multiple projects into a single new project.
@@ -46,9 +47,9 @@ export default function MergeProjectsDialog() {
   // Format length for display
   const formatLength = (meters: number): string => {
     if (meters >= 1000) {
-      return `${(meters / 1000).toFixed(2)} km`;
+      return `${formatFixed(meters / 1000, undefined, 2)} km`;
     }
-    return `${meters.toFixed(1)} m`;
+    return `${formatFixed(meters, undefined, 1)} m`;
   };
 
   const handleClose = useCallback(() => {

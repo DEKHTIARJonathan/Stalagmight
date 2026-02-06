@@ -12,6 +12,7 @@ import SectionPreview, { type MergePreviewConfig } from './SectionPreview';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
 import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
+import { formatFixed } from '../../i18n/format';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
@@ -1401,7 +1402,7 @@ export default function DmpSectionConfigDialog({
                           )}
                           {gpsCoords && (
                             <div className="text-xs text-success ml-14" data-testid="gps-parsed">
-                              Lat: {gpsCoords.latitude.toFixed(6)}, Lon: {gpsCoords.longitude.toFixed(6)}
+                              Lat: {formatFixed(gpsCoords.latitude, undefined, 6)}, Lon: {formatFixed(gpsCoords.longitude, undefined, 6)}
                             </div>
                           )}
 

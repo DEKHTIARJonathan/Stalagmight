@@ -3,6 +3,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { formatFixed } from '../../i18n/format';
 import type { StationRef } from '../../types/project';
 
 export default function EditStationDialog() {
@@ -155,9 +156,9 @@ export default function EditStationDialog() {
             label="Section"
             value={section?.name ?? `Section ${stationRef.section_id}`}
           />
-          <DetailRow label="X" value={`${station.coordinates.x.toFixed(2)} m`} />
-          <DetailRow label="Y" value={`${station.coordinates.y.toFixed(2)} m`} />
-          <DetailRow label="Depth" value={`${station.coordinates.z.toFixed(1)} m`} />
+          <DetailRow label="X" value={`${formatFixed(station.coordinates.x, undefined, 2)} m`} />
+          <DetailRow label="Y" value={`${formatFixed(station.coordinates.y, undefined, 2)} m`} />
+          <DetailRow label="Depth" value={`${formatFixed(station.coordinates.z, undefined, 1)} m`} />
         </div>
 
         {station.merged_with.length > 0 && (

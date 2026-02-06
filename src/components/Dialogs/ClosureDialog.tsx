@@ -4,6 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { getErrorColor } from '../../utils/colors';
+import { formatFixed, formatPercent } from '../../i18n/format';
 import type { StationRef, ClosureStrategy } from '../../types/project';
 import type { ClosurePreview, BatchCommand } from '../../types/commands';
 
@@ -102,24 +103,24 @@ export default function ClosureDialog() {
             <div className="flex justify-between">
               <span className="text-text-secondary">Error:</span>
               <span className="font-medium" style={{ color: getErrorColor(preview.error_percentage) }}>
-                {preview.error_percentage.toFixed(1)}%
+                {formatPercent(preview.error_percentage, undefined, 1)}
               </span>
             </div>
             <div className="flex justify-between">
               <span className="text-text-secondary">Path length:</span>
-              <span>{preview.path_length.toFixed(2)}m</span>
+              <span>{formatFixed(preview.path_length, undefined, 2)}m</span>
             </div>
             <div className="flex justify-between">
               <span className="text-text-secondary">Misclosure distance:</span>
-              <span>{preview.misclosure_distance.toFixed(2)}m</span>
+              <span>{formatFixed(preview.misclosure_distance, undefined, 2)}m</span>
             </div>
             <div className="flex justify-between">
               <span className="text-text-secondary">Horizontal misclosure:</span>
-              <span>{preview.horizontal_misclosure.toFixed(2)}m</span>
+              <span>{formatFixed(preview.horizontal_misclosure, undefined, 2)}m</span>
             </div>
             <div className="flex justify-between">
               <span className="text-text-secondary">Vertical misclosure:</span>
-              <span>{preview.vertical_misclosure.toFixed(2)}m</span>
+              <span>{formatFixed(preview.vertical_misclosure, undefined, 2)}m</span>
             </div>
           </div>
         )}
