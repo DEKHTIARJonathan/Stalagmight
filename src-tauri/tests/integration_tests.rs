@@ -1,7 +1,7 @@
 //! Comprehensive integration tests for Stalagmight
 //!
 //! Tests are organized by category. Run `cargo test` to execute all tests.
-#![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_cmp)]
 
 use stalagmight_lib::config::{CacheConfig, Config, ValidationConfig};
 use stalagmight_lib::core::{Command, UndoData, UndoEntry, UndoStack, Validator};
@@ -62,7 +62,7 @@ fn test_station_coordinates_computed_correctly() {
     project.add_section(create_section_with_shots(
         "Main",
         vec![
-            shot_a.clone(),   // North 10m (horizontal)
+            shot_a,   // North 10m (horizontal)
             shot_b.clone(),   // East 10m (slope)
         ],
     ));
@@ -514,7 +514,7 @@ fn test_undo_stack_limit() {
     // Push 110 commands
     for i in 0..110 {
         stack.push(Command::CreateSection {
-            name: Some(format!("Section {}", i)),
+            name: Some(format!("Section {i}")),
             surveyor: None,
             date: None,
             color: "#4ecdc4".to_string(),
@@ -760,7 +760,7 @@ fn test_section_colors_unique() {
 
     for (i, color) in colors.iter().enumerate() {
         project.add_section(SectionData {
-            name: Some(format!("Section {}", i)),
+            name: Some(format!("Section {i}")),
             surveyor: None,
             date: None,
             color: color.to_string(),
@@ -950,9 +950,9 @@ fn test_config_includes_cache_config() {
 #[test]
 fn test_cache_config_partial_toml_deserialization() {
     // Test partial cache config - only tile_cache_enabled specified
-    let toml_str = r#"
+    let toml_str = r"
         tile_cache_enabled = false
-    "#;
+    ";
     let cache: CacheConfig = toml::from_str(toml_str).expect("Should deserialize partial CacheConfig");
     assert!(!cache.tile_cache_enabled, "Explicit value should be respected");
     assert_eq!(cache.tile_cache_max_mb, 500, "Missing field should use default");
@@ -1267,7 +1267,7 @@ fn test_large_survey_data_structure() {
 
     // Create section with 1000 shots
     let shots: Vec<_> = (0..1000)
-        .map(|i| create_shot_data(i as f64 % 360.0, 1.0, 5.0, 5.0 + (i as f64 * 0.01)))
+        .map(|i| create_shot_data(f64::from(i) % 360.0, 1.0, 5.0, 5.0 + (f64::from(i) * 0.01)))
         .collect();
 
     project.add_section(create_section_with_shots("Large", shots));

@@ -303,7 +303,7 @@ mod tests {
         cache.is_tile_available("esri", 18, 0, 0);
 
         // Insert third entry, should evict second (LRU)
-        cache.insert("esri", 18, 128, 0, data.clone());
+        cache.insert("esri", 18, 128, 0, data);
         assert_eq!(cache.len(), 2);
 
         // First should still exist (was accessed)

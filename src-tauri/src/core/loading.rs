@@ -55,7 +55,7 @@ impl LoadError {
 
     /// Error when a file is not found.
     pub fn not_found(path: &str) -> Self {
-        Self::new("NOT_FOUND", format!("File not found: {}", path))
+        Self::new("NOT_FOUND", format!("File not found: {path}"))
     }
 
     /// Internal error with a message.
@@ -82,7 +82,8 @@ fn escape_json_string(s: &str) -> String {
             '\t' => escaped.push_str("\\t"),
             c if c.is_control() => {
                 // Escape other control characters as \uXXXX
-                escaped.push_str(&format!("\\u{:04x}", c as u32));
+                use std::fmt::Write as _;
+                let _ = write!(escaped, "\\u{:04x}", c as u32);
             }
             c => escaped.push(c),
         }
@@ -93,28 +94,23 @@ fn escape_json_string(s: &str) -> String {
 impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // ALWAYS produce valid JSON - use serde_json with fallback
-        match serde_json::to_string(self) {
-            Ok(json) => write!(f, "{}", json),
-            Err(_) => {
-                // Fallback: manually construct valid JSON with fully escaped strings
-                let escaped_code = escape_json_string(&self.code);
-                let escaped_msg = escape_json_string(&self.message);
-                match &self.details {
-                    Some(details) => {
-                        let escaped_details = escape_json_string(details);
-                        write!(
-                            f,
-                            r#"{{"code":"{}","message":"{}","details":"{}"}}"#,
-                            escaped_code, escaped_msg, escaped_details
-                        )
-                    }
-                    None => {
-                        write!(
-                            f,
-                            r#"{{"code":"{}","message":"{}","details":null}}"#,
-                            escaped_code, escaped_msg
-                        )
-                    }
+        if let Ok(json) = serde_json::to_string(self) { write!(f, "{json}") } else {
+            // Fallback: manually construct valid JSON with fully escaped strings
+            let escaped_code = escape_json_string(&self.code);
+            let escaped_msg = escape_json_string(&self.message);
+            match &self.details {
+                Some(details) => {
+                    let escaped_details = escape_json_string(details);
+                    write!(
+                        f,
+                        r#"{{"code":"{escaped_code}","message":"{escaped_msg}","details":"{escaped_details}"}}"#
+                    )
+                }
+                None => {
+                    write!(
+                        f,
+                        r#"{{"code":"{escaped_code}","message":"{escaped_msg}","details":null}}"#
+                    )
                 }
             }
         }
@@ -177,16 +173,16 @@ impl DisplaySettings {
     /// Default values match uiStore/DISPLAY_DEFAULTS.
     pub fn from_stored(map: &HashMap<String, String>) -> Self {
         Self {
-            show_stations: map.get("showStations").map(|s| s == "true").unwrap_or(true),
-            show_section_names: map.get("showSectionNames").map(|s| s == "true").unwrap_or(true),
-            show_station_labels: map.get("showStationLabels").map(|s| s == "true").unwrap_or(false),
-            show_shot_data: map.get("showShotData").map(|s| s == "true").unwrap_or(false),
-            show_virtual_shots: map.get("showVirtualShots").map(|s| s == "true").unwrap_or(true),
-            show_zero_datum: map.get("showZeroDatum").map(|s| s == "true").unwrap_or(true),
-            show_grid: map.get("showGrid").map(|s| s == "true").unwrap_or(false),
-            show_scale_bar: map.get("showScaleBar").map(|s| s == "true").unwrap_or(true),
-            show_satellite: map.get("showSatellite").map(|s| s == "true").unwrap_or(false),
-            show_depth_gradient: map.get("showDepthGradient").map(|s| s == "true").unwrap_or(false),
+            show_stations: map.get("showStations").is_none_or(|s| s == "true"),
+            show_section_names: map.get("showSectionNames").is_none_or(|s| s == "true"),
+            show_station_labels: map.get("showStationLabels").is_some_and(|s| s == "true"),
+            show_shot_data: map.get("showShotData").is_some_and(|s| s == "true"),
+            show_virtual_shots: map.get("showVirtualShots").is_none_or(|s| s == "true"),
+            show_zero_datum: map.get("showZeroDatum").is_none_or(|s| s == "true"),
+            show_grid: map.get("showGrid").is_some_and(|s| s == "true"),
+            show_scale_bar: map.get("showScaleBar").is_none_or(|s| s == "true"),
+            show_satellite: map.get("showSatellite").is_some_and(|s| s == "true"),
+            show_depth_gradient: map.get("showDepthGradient").is_some_and(|s| s == "true"),
             grid_spacing: map.get("gridSpacing").and_then(|s| s.parse().ok()).unwrap_or(10.0),
         }
     }
@@ -421,7 +417,7 @@ impl ProgressEmitter {
             cancelled,
             phase_weights,
             current_phase_idx: 0,
-            last_emit: Instant::now() - Duration::from_secs(10), // Ensure first emit goes through
+            last_emit: Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or(Instant::now()), // Ensure first emit goes through
             last_item: 0,
         }
     }
@@ -523,8 +519,7 @@ impl ProgressEmitter {
         let current_weight = self
             .phase_weights
             .get(self.current_phase_idx)
-            .map(|(_, w)| *w)
-            .unwrap_or(0.0);
+            .map_or(0.0, |(_, w)| *w);
 
         let phase_progress = match (current, total) {
             (Some(c), Some(t)) if t > 0 => (c as f32 / t as f32) * current_weight,
@@ -736,8 +731,8 @@ mod tests {
             LoadingPhase::LoadingSettings,
             LoadingPhase::Finalizing,
         ];
-        let sum: f32 = open_phases.iter().map(|p| p.weight()).sum();
-        assert!((sum - 100.0).abs() < 0.01, "Open phases should sum to 100, got {}", sum);
+        let sum: f32 = open_phases.iter().map(LoadingPhase::weight).sum();
+        assert!((sum - 100.0).abs() < 0.01, "Open phases should sum to 100, got {sum}");
     }
 
     #[test]
@@ -747,8 +742,8 @@ mod tests {
             LoadingPhase::InitializingProject,
             LoadingPhase::SavingSettings,
         ];
-        let sum: f32 = create_phases.iter().map(|p| p.weight()).sum();
-        assert!((sum - 100.0).abs() < 0.01, "Create phases should sum to 100, got {}", sum);
+        let sum: f32 = create_phases.iter().map(LoadingPhase::weight).sum();
+        assert!((sum - 100.0).abs() < 0.01, "Create phases should sum to 100, got {sum}");
     }
 
     #[test]

@@ -120,13 +120,12 @@ fn test_merge_projects_archives_sources_and_adds_extension() {
 
     let archived_entries: Vec<_> = std::fs::read_dir(temp_dir.path())
         .unwrap()
-        .filter_map(|entry| entry.ok())
+        .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .map(|name| name.starts_with("a.stalx.archived"))
-                .unwrap_or(false)
+                .is_some_and(|name| name.starts_with("a.stalx.archived"))
         })
         .collect();
 
@@ -220,7 +219,7 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
     drop(db);
 
     let state = AppState::new().unwrap();
-    let result = state.open_project(project_path.clone());
+    let result = state.open_project(project_path);
     assert!(result.success);
 
     let project = state.get_project_state().unwrap();
@@ -237,13 +236,13 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
             assert_eq!(name, "Undo Project");
             assert!(location.is_none());
         }
-        other => panic!("Unexpected undo entry: {:?}", other),
+        other => panic!("Unexpected undo entry: {other:?}"),
     }
 
     let redo_entry = undo_stack.redo_entries().next().unwrap();
     match &redo_entry.command {
         Command::CloseProject => {}
-        other => panic!("Unexpected redo entry: {:?}", other),
+        other => panic!("Unexpected redo entry: {other:?}"),
     }
 }
 
@@ -321,7 +320,7 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
     let state = AppState::new().unwrap();
     let output_path = temp_dir.path().join("merged-output.stalx");
     let result = state.execute(Command::MergeProjects {
-        source_paths: vec![source_a.clone(), source_b.clone()],
+        source_paths: vec![source_a, source_b],
         output_path: output_path.clone(),
         output_name: "Merged".to_string(),
         archive_originals: false,
@@ -2052,7 +2051,7 @@ fn test_multiple_undo_redo_sequence() {
     // Create 3 sections
     for i in 1..=3 {
         state.execute(Command::CreateSection {
-            name: Some(format!("Section {}", i)),
+            name: Some(format!("Section {i}")),
             surveyor: None,
             date: None,
             color: "#ff0000".to_string(),
@@ -2716,14 +2715,14 @@ fn test_execute_commands_with_invalid_ids() {
     // Test with nonexistent shot ID
     let result = state.execute(Command::UpdateShot {
         section_id,
-        shot_id: 999999,
+        shot_id: 999_999,
         updates: ShotUpdates::default(),
     });
     assert!(!result.success);
 
     let result = state.execute(Command::DeleteShot {
         section_id,
-        shot_id: 999999,
+        shot_id: 999_999,
     });
     assert!(!result.success);
 }
@@ -2959,7 +2958,7 @@ fn test_undo_stack_limits() {
     // Create 5 sections (more than the limit of 3)
     for i in 0..5 {
         state.execute(Command::CreateSection {
-            name: Some(format!("Section {}", i)),
+            name: Some(format!("Section {i}")),
             surveyor: None,
             date: None,
             color: "#ff0000".to_string(),
@@ -3193,7 +3192,7 @@ fn test_undo_to_partial_completion_stops_at_failed_step() {
     // Create 3 valid sections (3 undo entries)
     for i in 0..3 {
         state.execute(Command::CreateSection {
-            name: Some(format!("Section {}", i)),
+            name: Some(format!("Section {i}")),
             surveyor: None,
             date: None,
             color: "#ff0000".to_string(),
@@ -3248,13 +3247,11 @@ fn test_undo_to_partial_completion_stops_at_failed_step() {
     // Verify enhanced message format: "Undo failed at step {current} of {total}: {reason}"
     assert!(
         error_msg.contains("Undo failed at step 2 of 3"),
-        "Expected enhanced message with step count, got: {}",
-        error_msg
+        "Expected enhanced message with step count, got: {error_msg}"
     );
     assert!(
         error_msg.contains("Failed to parse undo data"),
-        "Expected original failure reason in message, got: {}",
-        error_msg
+        "Expected original failure reason in message, got: {error_msg}"
     );
 
     // Verify partial completion: Section 2 was undone (step 1 succeeded),
@@ -3346,13 +3343,11 @@ fn test_redo_to_partial_completion_stops_at_failed_step() {
     let error_msg = result.error.as_deref().unwrap();
     assert!(
         error_msg.contains("Redo failed at step 2 of 3"),
-        "Expected enhanced message with step count, got: {}",
-        error_msg
+        "Expected enhanced message with step count, got: {error_msg}"
     );
     assert!(
         error_msg.contains("Failed to parse project snapshot"),
-        "Expected original failure reason in message, got: {}",
-        error_msg
+        "Expected original failure reason in message, got: {error_msg}"
     );
 
     // Verify partial completion: SectionA was re-created (step 1 succeeded)
@@ -3554,8 +3549,7 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
             // Assert previous_offsets contains the datum section and matches the pre-update value
             assert!(
                 previous_offsets.contains_key(&section_a),
-                "previous_offsets must contain the datum section ({})",
-                section_a
+                "previous_offsets must contain the datum section ({section_a})"
             );
             let captured_offset = previous_offsets.get(&section_a).unwrap();
             let expected_offset = offsets_before_update.get(&section_a).copied();
@@ -4049,7 +4043,7 @@ fn test_move_station_updates_shot_data() {
     let shot = &project.get_section(section_id).unwrap().shots[0];
     assert!((shot.length - 15.0).abs() < 1e-6, "Length should be 15.0, got {}", shot.length);
     assert!((shot.azimuth_in - 90.0).abs() < 1e-6, "Azimuth should still be 90°");
-    assert!(project.station_offsets.get(&station_ref).is_none(), "Station offset should be cleared");
+    assert!(!project.station_offsets.contains_key(&station_ref), "Station offset should be cleared");
 
     // Second move: (0, 10, 3) — shot vector becomes (15, 10, 3)
     let result = state.execute(Command::MoveStation {
@@ -4284,18 +4278,15 @@ fn test_station_offset_applied_in_coordinates() {
 
     assert!(
         (dx - 100.0).abs() < 1e-6,
-        "X coordinate should shift by 100.0, got delta {}",
-        dx
+        "X coordinate should shift by 100.0, got delta {dx}"
     );
     assert!(
         (dy - 200.0).abs() < 1e-6,
-        "Y coordinate should shift by 200.0, got delta {}",
-        dy
+        "Y coordinate should shift by 200.0, got delta {dy}"
     );
     assert!(
         (dz - 50.0).abs() < 1e-6,
-        "Z coordinate should shift by 50.0, got delta {}",
-        dz
+        "Z coordinate should shift by 50.0, got delta {dz}"
     );
 }
 
@@ -6379,8 +6370,8 @@ fn test_split_recalculates_offset_b() {
     let (bx, by) = b_offset.unwrap();
     let expected = (10.0_f64.powi(2) - 1.0_f64.powi(2)).sqrt()
         + (5.0_f64.powi(2) - 1.0_f64.powi(2)).sqrt();
-    assert!((*bx - expected).abs() < 0.001, "bx should be ~{}, got {}", expected, bx);
-    assert!(by.abs() < 0.001, "by should be ~0, got {}", by);
+    assert!((*bx - expected).abs() < 0.001, "bx should be ~{expected}, got {bx}");
+    assert!(by.abs() < 0.001, "by should be ~0, got {by}");
 }
 
 #[test]
@@ -6557,7 +6548,7 @@ fn test_split_remaps_station_offsets() {
 
     // Old ref should not exist
     let old_ref = StationRef::new(section_id, 3);
-    assert!(proj.station_offsets.get(&old_ref).is_none(), "Old station offset should be removed");
+    assert!(!proj.station_offsets.contains_key(&old_ref), "Old station offset should be removed");
 }
 
 #[test]

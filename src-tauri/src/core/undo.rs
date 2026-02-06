@@ -13,6 +13,7 @@ const DEFAULT_UNDO_HISTORY_LIMIT: usize = 100;
 
 /// Undo/redo stack
 #[derive(Debug)]
+#[expect(clippy::struct_field_names)]
 pub struct UndoStack {
     /// Commands that can be undone
     undo_stack: Vec<UndoEntry>,
@@ -457,7 +458,7 @@ impl UndoStack {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::models::ShotData;
@@ -568,7 +569,7 @@ mod tests {
         let mut stack = UndoStack::new();
         let cmd = test_create_section_command("Test");
 
-        stack.push_with_data(cmd.clone(), UndoData::None);
+        stack.push_with_data(cmd, UndoData::None);
 
         let peeked = stack.peek_undo();
         assert!(peeked.is_some());
@@ -713,7 +714,7 @@ mod tests {
 
         for i in 0..5 {
             stack.push_with_data(
-                test_create_section_command(&format!("Section {}", i)),
+                test_create_section_command(&format!("Section {i}")),
                 UndoData::None,
             );
         }
@@ -735,7 +736,7 @@ mod tests {
 
         for i in 0..10 {
             stack.push_with_data(
-                test_create_section_command(&format!("Section {}", i)),
+                test_create_section_command(&format!("Section {i}")),
                 UndoData::None,
             );
         }
@@ -777,7 +778,7 @@ mod tests {
         let inverse = Command::DeleteSection { section_id: 42 };
         stack.push_with_data(
             test_create_section_command("Test"),
-            UndoData::InverseCommand(inverse.clone()),
+            UndoData::InverseCommand(inverse),
         );
 
         let data = stack.peek_undo_data().unwrap();
@@ -801,7 +802,7 @@ mod tests {
             test_delete_section_command(5),
             UndoData::SectionSnapshot {
                 section_id: 5,
-                section_data: section_data.clone(),
+                section_data,
             },
         );
 
@@ -839,7 +840,7 @@ mod tests {
             UndoData::ShotSnapshot {
                 section_id: 1,
                 shot_id: 100,
-                shot_data: shot_data.clone(),
+                shot_data,
                 position: 2,
             },
         );
@@ -1022,7 +1023,7 @@ mod tests {
         let entries: Vec<(String, String)> = (0..3)
             .map(|i| {
                 let entry = UndoEntry {
-                    command: test_create_section_command(&format!("Section {}", i)),
+                    command: test_create_section_command(&format!("Section {i}")),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(i as u32)),
                     timestamp: None,
                 };
@@ -1053,7 +1054,7 @@ mod tests {
         let entries: Vec<(String, String)> = (0..5)
             .map(|i| {
                 let entry = UndoEntry {
-                    command: test_create_section_command(&format!("Section {}", i)),
+                    command: test_create_section_command(&format!("Section {i}")),
                     undo_data: UndoData::None,
                     timestamp: None,
                 };
@@ -1129,7 +1130,7 @@ mod tests {
 
         for i in 0..5 {
             stack.push_with_data(
-                test_create_section_command(&format!("Section {}", i)),
+                test_create_section_command(&format!("Section {i}")),
                 UndoData::None,
             );
         }
@@ -1144,7 +1145,7 @@ mod tests {
 
         for i in 0..10 {
             stack.push_with_data(
-                test_create_section_command(&format!("Section {}", i)),
+                test_create_section_command(&format!("Section {i}")),
                 UndoData::None,
             );
         }
@@ -1172,14 +1173,14 @@ mod tests {
             undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
             timestamp: None,
         };
-        stack.push_with_data(entry.command.clone(), entry.undo_data.clone());
+        stack.push_with_data(entry.command.clone(), entry.undo_data);
 
         assert!(stack.can_undo());
         assert!(!stack.can_redo());
 
         // Simulate undo: pop from undo, push to redo
         let undone = stack.pop_undo().unwrap();
-        stack.push_redo(undone.clone());
+        stack.push_redo(undone);
 
         assert!(!stack.can_undo());
         assert!(stack.can_redo());
@@ -1199,7 +1200,7 @@ mod tests {
         // Push 3 commands
         for i in 0..3 {
             stack.push_with_data(
-                test_create_section_command(&format!("Section {}", i)),
+                test_create_section_command(&format!("Section {i}")),
                 UndoData::InverseCommand(test_delete_section_command(i as u32)),
             );
         }
@@ -1365,16 +1366,14 @@ mod tests {
             let serialized = UndoStack::serialize_entry(original);
             assert!(
                 serialized.is_some(),
-                "Failed to serialize test case {}",
-                i
+                "Failed to serialize test case {i}"
             );
 
             let (cmd_json, undo_json) = serialized.unwrap();
             let deserialized = UndoStack::deserialize_entry(&cmd_json, &undo_json);
             assert!(
                 deserialized.is_some(),
-                "Failed to deserialize test case {}",
-                i
+                "Failed to deserialize test case {i}"
             );
         }
     }
@@ -1401,7 +1400,7 @@ mod tests {
                 closure_strategy: crate::models::ClosureStrategy::ProportionalByLength,
             },
             undo_data: UndoData::ClosureInfo {
-                closure: closure.clone(),
+                closure,
             },
             timestamp: None,
         };
