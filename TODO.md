@@ -11,14 +11,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
 | Import/Export | 13 | 19 | 68% |
-| UI & Polish | 11 | 17 | 65% |
+| UI & Polish | 12 | 17 | 71% |
 | Data & Editing | 5 | 5 | 100% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
-| Performance & Stability | 7 | 9 | 78% |
+| Performance & Stability | 8 | 9 | 89% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **48** | **64** | **75%** |
+| **Total** | **50** | **64** | **78%** |
 
 ---
 
@@ -84,7 +84,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 13 done, ❌ 6 not started
 
-### UI & Polish (11/17 done)
+### UI & Polish (12/17 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -94,7 +94,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Statistics panel | ✅ | Project/section stats, penetration distance |
 | Tool Panel Redesign | ✅ | |
 | Tile Caching Settings | ✅ | CacheSettings.tsx + Rust config |
-| Three-Level Settings Reset | ❌ | Per-setting, per-tab, full reset (SPEC 2.9) |
+| Three-Level Settings Reset | ✅ | Per-setting, per-tab, full reset (SPEC 2.9) |
 | Automatic Reference Shot Alignment Settings | ❌ | Configure auto-alignment behavior in Settings |
 | Fix Undo Stack Section Modification Details | ✅ | Only shows changed fields; includes closure adjustment weight |
 | Fix Section Hyperlink Highlighting Not Clearing | ✅ | Highlight persists after navigating away from section link |
@@ -106,7 +106,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Add Comment Tool | ❌ | Text annotations on stations/map |
 | Use Best Available Tile Resolution | ✅ | ArcGIS tilemap API + parent tile fallback with upscaling |
 
-**Subtotals**: ✅ 11 done, ❌ 6 not started
+**Subtotals**: ✅ 12 done, ❌ 5 not started
 
 ### Data & Editing (4/5 done)
 
@@ -157,10 +157,10 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Error Boundary Wrapper | ✅ | Wraps Sections, Map, Data Table, Details panels |
 | Network Retry Logic | ✅ | Max 2 retries with 200ms/500ms backoff on transport errors |
 | Improve Algorithm/Workflow Tracing | ✅ | Warnings on recoverable errors, debug prints in all major algorithms |
-| File Corruption Recovery | ❌ | |
+| File Corruption Recovery | ✅ | Recovery dialog with repair, backup restore, data salvage (SPEC 14.4) |
 | Validation Error Recovery | ❌ | |
 
-**Subtotals**: ✅ 7 done, ❌ 2 not started
+**Subtotals**: ✅ 8 done, ❌ 1 not started
 
 ### Integrations (0/1 done)
 
@@ -185,16 +185,16 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
 | Import/Export | 19 | 13 | 0 | 6 |
-| UI & Polish | 17 | 11 | 0 | 6 |
+| UI & Polish | 17 | 12 | 0 | 5 |
 | Data & Editing | 5 | 5 | 0 | 0 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
-| Performance & Stability | 9 | 7 | 0 | 2 |
+| Performance & Stability | 9 | 8 | 0 | 1 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **64** | **48** | **0** | **16** |
+| **Total** | **64** | **50** | **0** | **14** |
 
-**Overall Progress**: 48 done = ~75% complete
+**Overall Progress**: 50 done = ~78% complete
 
 ---
 
