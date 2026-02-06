@@ -146,10 +146,11 @@ pub(crate) async fn fetch_tile_impl(
     use crate::tile_fetch_impl;
 
     let tile_cache = state.tile_cache();
+    let tilemap_cache = state.tilemap_cache();
 
     // Run blocking I/O in a separate thread
     let result = tauri::async_runtime::spawn_blocking(move || {
-        tile_fetch_impl(&provider, z, y, x, &tile_cache)
+        tile_fetch_impl(&provider, z, y, x, &tile_cache, &tilemap_cache)
     })
     .await
     .map_err(|e| format!("Tile fetch task failed: {}", e))?;

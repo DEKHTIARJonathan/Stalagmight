@@ -10,24 +10,38 @@ pub mod persistence;
 #[cfg(test)]
 pub mod test_helpers;
 pub mod tile_providers;
+pub mod tilemap_cache;
 
+use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use image::{DynamicImage, ImageFormat, GenericImageView};
+use image::imageops::FilterType;
 use tauri::{Emitter, Manager};
 
 use cache::TileCache;
+use tilemap_cache::TilemapCache;
 
 /// HTTP request timeout for tile fetches
 const TILE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// HTTP request timeout for tilemap API fetches
+const TILEMAP_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Allowed content types for tile responses (whitelist for security)
 const ALLOWED_CONTENT_TYPES: &[&str] = &["image/jpeg", "image/jpg", "image/png"];
 
 /// Default content type when upstream doesn't provide one or it's invalid
 const DEFAULT_CONTENT_TYPE: &str = "image/jpeg";
+/// Minimum byte size considered a plausible imagery tile before overzoom fallback.
+const MIN_SUSPECT_TILE_BYTES: usize = 2048;
+/// Max size for running pixel-level heuristics (avoid heavy decode on large tiles).
+const MAX_DETAIL_ANALYSIS_BYTES: usize = 256_000;
+/// Only run image-content heuristics at or above this zoom (avoid extra work at low zoom).
+const OVERZOOM_HEURISTIC_MIN_ZOOM: u32 = 17;
 
 /// Fetches a tile from the network based on provider
-fn fetch_tile_from_network(provider: &str, z: u32, y: u32, x: u32) -> Result<(Vec<u8>, String), String> {
+fn fetch_tile_from_network(provider: &str, z: u32, y: u32, x: u32) -> Result<FetchedTile, String> {
     // Look up provider in registry
     let tile_provider = tile_providers::get_provider(provider)
         .ok_or_else(|| format!("Unknown provider: {}", provider))?;
@@ -53,13 +67,154 @@ fn fetch_tile_from_network(provider: &str, z: u32, y: u32, x: u32) -> Result<(Ve
         .unwrap_or(DEFAULT_CONTENT_TYPE);
 
     let content_type = sanitize_content_type(raw_content_type);
+    let etag = response
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string());
 
     let body = response
         .into_body()
         .read_to_vec()
         .map_err(|e| format!("Failed to read response body: {}", e))?;
 
-    Ok((body, content_type))
+    Ok(FetchedTile {
+        data: body,
+        content_type,
+        etag,
+    })
+}
+
+/// Response from the ArcGIS tilemap API.
+#[derive(serde::Deserialize)]
+struct TilemapResponse {
+    /// Availability data: 0 = no data, 1 = real imagery.
+    data: Vec<u8>,
+}
+
+/// Fetch tilemap data from the provider's tilemap API.
+///
+/// Returns a Vec<bool> where true = tile available, false = no data.
+/// The vector contains TILEMAP_GRID_SIZE × TILEMAP_GRID_SIZE (16,384) entries.
+fn fetch_tilemap(
+    provider: &tile_providers::TileProvider,
+    z: u32,
+    base_y: u32,
+    base_x: u32,
+) -> Result<Vec<bool>, String> {
+    let url = tile_providers::expand_tilemap_url(provider, z, base_y, base_x)
+        .ok_or_else(|| "Provider has no tilemap URL configured".to_string())?;
+
+    tracing::debug!(url = %url, provider = %provider.name, z = z, base_y = base_y, base_x = base_x, "Fetching tilemap");
+
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(TILEMAP_FETCH_TIMEOUT))
+        .build()
+        .new_agent();
+
+    let response = agent
+        .get(&url)
+        .call()
+        .map_err(|e| format!("Tilemap network error: {}", e))?;
+
+    let body = response
+        .into_body()
+        .read_to_vec()
+        .map_err(|e| format!("Failed to read tilemap response: {}", e))?;
+
+    let tilemap_response: TilemapResponse = serde_json::from_slice(&body)
+        .map_err(|e| format!("Failed to parse tilemap JSON: {}", e))?;
+
+    // Convert u8 (0/1) to bool
+    let data: Vec<bool> = tilemap_response.data.into_iter().map(|v| v != 0).collect();
+
+    let expected_len = (tilemap_cache::TILEMAP_GRID_SIZE * tilemap_cache::TILEMAP_GRID_SIZE) as usize;
+    if data.len() != expected_len {
+        return Err(format!(
+            "Unexpected tilemap data length: got {}, expected {}",
+            data.len(),
+            expected_len
+        ));
+    }
+
+    Ok(data)
+}
+
+/// Check tile availability using the tilemap cache and API.
+///
+/// Returns:
+/// - `Some(true)` if the tile is known to have real imagery
+/// - `Some(false)` if the tile is known to have no data
+/// - `None` if availability is unknown (API unavailable, provider has no tilemap, etc.)
+fn check_tile_availability(
+    tilemap_cache: &Arc<Mutex<TilemapCache>>,
+    provider: &tile_providers::TileProvider,
+    z: u32,
+    y: u32,
+    x: u32,
+) -> Option<bool> {
+    // Only check tilemap if provider supports it
+    if provider.tilemap_url_template.is_none() {
+        return None;
+    }
+
+    // Check cache first
+    {
+        let mut cache = tilemap_cache.lock().ok()?;
+        if let Some(available) = cache.is_tile_available(&provider.name, z, y, x) {
+            tracing::trace!(
+                provider = %provider.name,
+                z = z,
+                y = y,
+                x = x,
+                available = available,
+                "Tilemap cache hit"
+            );
+            return Some(available);
+        }
+    }
+
+    // Cache miss - fetch tilemap for this region
+    let (base_y, base_x) = TilemapCache::get_region_origin(y, x);
+
+    match fetch_tilemap(provider, z, base_y, base_x) {
+        Ok(data) => {
+            // Cache the result
+            {
+                if let Ok(mut cache) = tilemap_cache.lock() {
+                    cache.insert(&provider.name, z, base_y, base_x, data.clone());
+                }
+            }
+
+            // Calculate index and return availability
+            let offset_y = y - base_y;
+            let offset_x = x - base_x;
+            let index = (offset_y * tilemap_cache::TILEMAP_GRID_SIZE + offset_x) as usize;
+            let available = data.get(index).copied().unwrap_or(true);
+
+            tracing::debug!(
+                provider = %provider.name,
+                z = z,
+                y = y,
+                x = x,
+                available = available,
+                "Tilemap fetched and cached"
+            );
+
+            Some(available)
+        }
+        Err(e) => {
+            tracing::warn!(
+                provider = %provider.name,
+                z = z,
+                y = y,
+                x = x,
+                error = %e,
+                "Failed to fetch tilemap, falling back to heuristics"
+            );
+            None
+        }
+    }
 }
 
 /// Sanitize content type to only allow whitelisted image types
@@ -72,6 +227,120 @@ fn sanitize_content_type(raw: &str) -> String {
     } else {
         DEFAULT_CONTENT_TYPE.to_string()
     }
+}
+
+/// Attempt to detect common image formats from leading bytes.
+fn detect_image_format(data: &[u8]) -> Option<ImageFormat> {
+    if data.len() >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
+        return Some(ImageFormat::Jpeg);
+    }
+    if data.len() >= 8
+        && data[0..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+    {
+        return Some(ImageFormat::Png);
+    }
+    None
+}
+
+fn normalize_content_type(content_type: &str) -> &str {
+    match content_type {
+        "image/jpg" => "image/jpeg",
+        other => other,
+    }
+}
+
+fn output_format_from_hint(content_type_hint: &str) -> ImageFormat {
+    match normalize_content_type(content_type_hint) {
+        "image/png" => ImageFormat::Png,
+        _ => ImageFormat::Jpeg,
+    }
+}
+
+fn output_content_type_for_format(format: ImageFormat) -> &'static str {
+    match format {
+        ImageFormat::Png => "image/png",
+        _ => "image/jpeg",
+    }
+}
+
+fn is_low_detail_tile(img: &DynamicImage) -> bool {
+    let gray = img.to_luma8();
+    let (w, h) = gray.dimensions();
+    let min_dim = w.min(h).max(1);
+    let step = (min_dim / 32).max(1);
+    let mut counts = [0u32; 256];
+    let mut total = 0u32;
+
+    let mut y = 0;
+    while y < h {
+        let mut x = 0;
+        while x < w {
+            let v = gray.get_pixel(x, y)[0] as usize;
+            counts[v] += 1;
+            total += 1;
+            x += step;
+        }
+        y += step;
+    }
+
+    if total == 0 {
+        return true;
+    }
+
+    let mut max_count = 0u32;
+    let mut dominant_bins = 0u32;
+    for count in counts {
+        if count > max_count {
+            max_count = count;
+        }
+        if (count as f32 / total as f32) > 0.02 {
+            dominant_bins += 1;
+        }
+    }
+
+    let dominance = max_count as f32 / total as f32;
+    dominance > 0.9 || dominant_bins <= 4
+}
+
+fn is_likely_no_data_tile(
+    provider: &tile_providers::TileProvider,
+    z: u32,
+    _content_type: &str,
+    data: &[u8],
+) -> bool {
+    if data.is_empty() {
+        return true;
+    }
+
+    let expected_content_type = normalize_content_type(&provider.content_type_hint);
+    let format = detect_image_format(data);
+
+    if let Some(fmt) = format {
+        if expected_content_type == "image/jpeg" && fmt == ImageFormat::Png {
+            return true;
+        }
+        if expected_content_type == "image/png" && fmt == ImageFormat::Jpeg {
+            return true;
+        }
+    }
+
+    if z >= OVERZOOM_HEURISTIC_MIN_ZOOM && data.len() < MIN_SUSPECT_TILE_BYTES && format.is_some() {
+        return true;
+    }
+
+    if z >= OVERZOOM_HEURISTIC_MIN_ZOOM
+        && format.is_some()
+        && data.len() <= MAX_DETAIL_ANALYSIS_BYTES
+    {
+        if let Ok(img) = image::load_from_memory(data) {
+            if is_low_detail_tile(&img) {
+                return true;
+            }
+        }
+    }
+
+    // Be conservative: treat unknown formats as valid to avoid false positives.
+    false
 }
 
 /// Parses tile coordinates from a URI.
@@ -151,40 +420,56 @@ fn build_error_response(status: http::StatusCode, message: &str) -> http::Respon
         })
 }
 
-/// Handle a tile request - check cache, fetch from network, return response
-fn handle_tile_request(
-    provider: &str,
-    z: u32,
-    y: u32,
-    x: u32,
-    tile_cache: &Arc<Mutex<Option<TileCache>>>,
-) -> http::Response<Vec<u8>> {
-    handle_tile_request_with_fetcher(provider, z, y, x, tile_cache, fetch_tile_from_network)
+struct TileFetchResult {
+    data: Vec<u8>,
+    content_type: String,
 }
 
-/// Internal implementation that accepts a fetch function for testability.
-/// The fetch function signature: (provider, z, y, x) -> Result<(data, content_type), error_message>
-fn handle_tile_request_with_fetcher<F>(
+#[derive(Debug)]
+struct FetchedTile {
+    data: Vec<u8>,
+    content_type: String,
+    etag: Option<String>,
+}
+
+enum TileFetchOutcome {
+    Tile { tile: TileFetchResult, is_no_data: bool },
+    Missing { error: String },
+}
+
+fn cache_put_best_effort(
+    tile_cache: &Arc<Mutex<Option<TileCache>>>,
+    provider: &str,
+    z: u32,
+    y: u32,
+    x: u32,
+    data: &[u8],
+    content_type: &str,
+) {
+    if let Ok(mut cache_guard) = tile_cache.lock() {
+        if let Some(cache) = cache_guard.as_mut() {
+            if let Err(e) = cache.put(provider, z, y, x, data, content_type) {
+                tracing::warn!(error = %e, "Failed to cache tile");
+            }
+        }
+    }
+}
+
+fn fetch_tile_candidate<F>(
+    provider_info: &tile_providers::TileProvider,
     provider: &str,
     z: u32,
     y: u32,
     x: u32,
     tile_cache: &Arc<Mutex<Option<TileCache>>>,
-    fetch_fn: F,
-) -> http::Response<Vec<u8>>
+    fetch_fn: &F,
+) -> TileFetchOutcome
 where
-    F: FnOnce(&str, u32, u32, u32) -> Result<(Vec<u8>, String), String>,
+    F: Fn(&str, u32, u32, u32) -> Result<FetchedTile, String>,
 {
-    // Validate provider against registry
-    if tile_providers::get_provider(provider).is_none() {
-        tracing::warn!(provider = %provider, "Unknown tile provider requested");
-        return build_error_response(
-            http::StatusCode::BAD_REQUEST,
-            &format!("Unknown provider: {}", provider),
-        );
-    }
+    let mut fallback_no_data: Option<TileFetchResult> = None;
 
-    // Check cache first (fresh tiles)
+    // Fresh cache first
     let cached_tile = {
         if let Ok(mut cache_guard) = tile_cache.lock() {
             if let Some(cache) = cache_guard.as_mut() {
@@ -198,44 +483,45 @@ where
     };
 
     if let Some(entry) = cached_tile {
-        tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache hit (fresh)");
-        return build_ok_response(entry.data, &entry.content_type);
+        let result = TileFetchResult {
+            data: entry.data,
+            content_type: entry.content_type,
+        };
+        let is_no_data = is_likely_no_data_tile(provider_info, z, &result.content_type, &result.data);
+        if !is_no_data {
+            tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache hit (fresh)");
+            return TileFetchOutcome::Tile { tile: result, is_no_data: false };
+        }
+        fallback_no_data = Some(result);
     }
 
-    // Cache miss - fetch from network
-    tracing::debug!(
-        provider = %provider,
-        z = z,
-        y = y,
-        x = x,
-        purpose = "render map tiles",
-        "Cache miss, fetching tile from network"
-    );
+    // Cache miss or cached "no data" tile - fetch from network
     match fetch_fn(provider, z, y, x) {
-        Ok((data, content_type)) => {
-            // Store in cache
-            if let Ok(mut cache_guard) = tile_cache.lock() {
-                if let Some(cache) = cache_guard.as_mut() {
-                    if let Err(e) = cache.put(provider, z, y, x, &data, &content_type) {
-                        tracing::warn!(error = %e, "Failed to cache tile");
-                    }
-                }
+        Ok(fetched) => {
+            let FetchedTile { data, content_type, etag } = fetched;
+            let is_no_data = is_likely_no_data_tile(provider_info, z, &content_type, &data);
+            if !is_no_data {
+                cache_put_best_effort(tile_cache, provider, z, y, x, &data, &content_type);
+                return TileFetchOutcome::Tile {
+                    tile: TileFetchResult { data, content_type },
+                    is_no_data: false,
+                };
             }
 
-            build_ok_response(data, &content_type)
-        }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                provider = %provider,
-                z = z,
-                y = y,
-                x = x,
-                purpose = "render map tiles",
-                "Network fetch failed; attempting offline fallback"
-            );
+            if let Some(tag) = etag.as_deref() {
+                tracing::info!(
+                    provider = %provider,
+                    z = z,
+                    y = y,
+                    x = x,
+                    bytes = data.len(),
+                    etag = %tag,
+                    purpose = "detect placeholder tiles",
+                    "Tile flagged as no-data; captured ETag"
+                );
+            }
 
-            // Try to serve stale cached tile as offline fallback
+            // If network returned "no data", check for a stale cached tile that might be usable.
             let stale_tile = {
                 if let Ok(cache_guard) = tile_cache.lock() {
                     if let Some(cache) = cache_guard.as_ref() {
@@ -249,16 +535,317 @@ where
             };
 
             if let Some(entry) = stale_tile {
-                tracing::info!(provider = %provider, z = z, y = y, x = x, "Serving stale cached tile as offline fallback");
-                return build_ok_response(entry.data, &entry.content_type);
+                let result = TileFetchResult {
+                    data: entry.data,
+                    content_type: entry.content_type,
+                };
+                let stale_no_data =
+                    is_likely_no_data_tile(provider_info, z, &result.content_type, &result.data);
+                if !stale_no_data {
+                    return TileFetchOutcome::Tile {
+                        tile: result,
+                        is_no_data: false,
+                    };
+                }
             }
 
-            // No cached tile at all - return 404
-            build_error_response(
-                http::StatusCode::NOT_FOUND,
-                &format!("Tile not available: {}", e),
-            )
+            TileFetchOutcome::Tile {
+                tile: TileFetchResult { data, content_type },
+                is_no_data: true,
+            }
         }
+        Err(e) => {
+            tracing::warn!(error = %e, provider = %provider, z = z, y = y, x = x, "Network fetch failed");
+
+            // Try stale cached tile as offline fallback
+            let stale_tile = {
+                if let Ok(cache_guard) = tile_cache.lock() {
+                    if let Some(cache) = cache_guard.as_ref() {
+                        cache.get_stale(provider, z, y, x)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
+            if let Some(entry) = stale_tile {
+                let result = TileFetchResult {
+                    data: entry.data,
+                    content_type: entry.content_type,
+                };
+                let is_no_data =
+                    is_likely_no_data_tile(provider_info, z, &result.content_type, &result.data);
+                tracing::info!(
+                    provider = %provider,
+                    z = z,
+                    y = y,
+                    x = x,
+                    purpose = "keep map usable offline",
+                    "Serving stale cached tile as offline fallback"
+                );
+                return TileFetchOutcome::Tile { tile: result, is_no_data };
+            }
+
+            if let Some(fallback) = fallback_no_data {
+                return TileFetchOutcome::Tile { tile: fallback, is_no_data: true };
+            }
+
+            TileFetchOutcome::Missing {
+                error: format!("Tile not available: {}", e),
+            }
+        }
+    }
+}
+
+fn derive_tile_from_parent(
+    provider_info: &tile_providers::TileProvider,
+    parent_z: u32,
+    parent_x: u32,
+    parent_y: u32,
+    target_z: u32,
+    target_x: u32,
+    target_y: u32,
+    parent_tile: &TileFetchResult,
+) -> Result<TileFetchResult, String> {
+    if parent_z >= target_z {
+        return Ok(TileFetchResult {
+            data: parent_tile.data.clone(),
+            content_type: parent_tile.content_type.clone(),
+        });
+    }
+
+    let delta = target_z - parent_z;
+    let scale = 1u32
+        .checked_shl(delta)
+        .ok_or_else(|| "Overzoom scale overflow".to_string())?;
+
+    let img = image::load_from_memory(&parent_tile.data)
+        .map_err(|e| format!("Failed to decode parent tile: {}", e))?;
+    let (img_w, img_h) = img.dimensions();
+    let base_size = img_w.min(img_h);
+    if base_size == 0 {
+        return Err("Parent tile has zero dimensions".to_string());
+    }
+
+    if base_size % scale != 0 {
+        return Err("Parent tile size not divisible by overzoom scale".to_string());
+    }
+    let sub_size = base_size / scale;
+
+    let parent_x_scaled = parent_x
+        .checked_mul(scale)
+        .ok_or_else(|| "Overzoom x overflow".to_string())?;
+    let parent_y_scaled = parent_y
+        .checked_mul(scale)
+        .ok_or_else(|| "Overzoom y overflow".to_string())?;
+    let offset_x = target_x
+        .checked_sub(parent_x_scaled)
+        .ok_or_else(|| "Overzoom x underflow".to_string())?;
+    let offset_y = target_y
+        .checked_sub(parent_y_scaled)
+        .ok_or_else(|| "Overzoom y underflow".to_string())?;
+
+    if offset_x >= scale || offset_y >= scale {
+        return Err("Overzoom offset out of range".to_string());
+    }
+
+    let crop_x = offset_x * sub_size;
+    let crop_y = offset_y * sub_size;
+    let cropped = img.crop_imm(crop_x, crop_y, sub_size, sub_size);
+
+    let output_size = if provider_info.tile_size > 0 {
+        provider_info.tile_size
+    } else {
+        base_size
+    };
+
+    let resized = cropped.resize_exact(output_size, output_size, FilterType::CatmullRom);
+    let format = output_format_from_hint(&provider_info.content_type_hint);
+    let mut buffer = Vec::new();
+    {
+        let mut cursor = Cursor::new(&mut buffer);
+        resized
+            .write_to(&mut cursor, format)
+            .map_err(|e| format!("Failed to encode derived tile: {}", e))?;
+    }
+
+    Ok(TileFetchResult {
+        data: buffer,
+        content_type: output_content_type_for_format(format).to_string(),
+    })
+}
+
+fn fetch_best_available_with_fetcher<F>(
+    provider: &str,
+    z: u32,
+    y: u32,
+    x: u32,
+    tile_cache: &Arc<Mutex<Option<TileCache>>>,
+    tilemap_cache: &Arc<Mutex<TilemapCache>>,
+    fetch_fn: &F,
+) -> Result<TileFetchResult, String>
+where
+    F: Fn(&str, u32, u32, u32) -> Result<FetchedTile, String>,
+{
+    let provider_info = tile_providers::get_provider(provider)
+        .ok_or_else(|| format!("Unknown provider: {}", provider))?;
+
+    let min_target = provider_info.min_zoom;
+
+    let mut current_z = z;
+    let mut current_x = x;
+    let mut current_y = y;
+    let mut fallback_no_data: Option<TileFetchResult> = None;
+    let mut last_error: Option<String> = None;
+
+    // Check tilemap for tile availability before entering the fetch loop.
+    // If tilemap says tile is unavailable, skip directly to parent.
+    if let Some(false) = check_tile_availability(tilemap_cache, provider_info, z, y, x) {
+        tracing::debug!(
+            provider = %provider,
+            z = z,
+            y = y,
+            x = x,
+            "Tilemap indicates no data, skipping to parent"
+        );
+        // Start from parent zoom level
+        if z > min_target {
+            current_z = z - 1;
+            current_x = x / 2;
+            current_y = y / 2;
+        }
+    }
+
+    loop {
+        // For tiles at current_z < z, we can also check tilemap before fetching
+        if current_z < z {
+            if let Some(false) = check_tile_availability(tilemap_cache, provider_info, current_z, current_y, current_x) {
+                tracing::debug!(
+                    provider = %provider,
+                    z = current_z,
+                    y = current_y,
+                    x = current_x,
+                    "Tilemap indicates parent has no data, continuing up"
+                );
+                if current_z > min_target {
+                    current_z -= 1;
+                    current_x /= 2;
+                    current_y /= 2;
+                    continue;
+                }
+            }
+        }
+
+        match fetch_tile_candidate(
+            provider_info,
+            provider,
+            current_z,
+            current_y,
+            current_x,
+            tile_cache,
+            fetch_fn,
+        ) {
+            TileFetchOutcome::Tile { tile, is_no_data } => {
+                if !is_no_data {
+                    if current_z == z {
+                        return Ok(tile);
+                    }
+
+                    let derived = derive_tile_from_parent(
+                        provider_info,
+                        current_z,
+                        current_x,
+                        current_y,
+                        z,
+                        x,
+                        y,
+                        &tile,
+                    )?;
+                    cache_put_best_effort(
+                        tile_cache,
+                        provider,
+                        z,
+                        y,
+                        x,
+                        &derived.data,
+                        &derived.content_type,
+                    );
+                    tracing::info!(
+                        provider = %provider,
+                        z = z,
+                        y = y,
+                        x = x,
+                        fallback_z = current_z,
+                        purpose = "use best available tile resolution",
+                        "Serving overzoomed parent tile"
+                    );
+                    return Ok(derived);
+                }
+
+                if fallback_no_data.is_none() {
+                    fallback_no_data = Some(tile);
+                }
+            }
+            TileFetchOutcome::Missing { error } => {
+                last_error = Some(error);
+            }
+        }
+
+        if current_z <= min_target {
+            break;
+        }
+        current_z -= 1;
+        current_x /= 2;
+        current_y /= 2;
+    }
+
+    if let Some(fallback) = fallback_no_data {
+        return Ok(fallback);
+    }
+
+    Err(last_error.unwrap_or_else(|| "Tile not available".to_string()))
+}
+
+/// Handle a tile request - check cache, fetch from network, return response
+fn handle_tile_request(
+    provider: &str,
+    z: u32,
+    y: u32,
+    x: u32,
+    tile_cache: &Arc<Mutex<Option<TileCache>>>,
+    tilemap_cache: &Arc<Mutex<TilemapCache>>,
+) -> http::Response<Vec<u8>> {
+    handle_tile_request_with_fetcher(provider, z, y, x, tile_cache, tilemap_cache, fetch_tile_from_network)
+}
+
+/// Internal implementation that accepts a fetch function for testability.
+/// The fetch function signature: (provider, z, y, x) -> Result<(data, content_type), error_message>
+fn handle_tile_request_with_fetcher<F>(
+    provider: &str,
+    z: u32,
+    y: u32,
+    x: u32,
+    tile_cache: &Arc<Mutex<Option<TileCache>>>,
+    tilemap_cache: &Arc<Mutex<TilemapCache>>,
+    fetch_fn: F,
+) -> http::Response<Vec<u8>>
+where
+    F: Fn(&str, u32, u32, u32) -> Result<FetchedTile, String>,
+{
+    // Validate provider against registry
+    if tile_providers::get_provider(provider).is_none() {
+        tracing::warn!(provider = %provider, "Unknown tile provider requested");
+        return build_error_response(
+            http::StatusCode::BAD_REQUEST,
+            &format!("Unknown provider: {}", provider),
+        );
+    }
+
+    match fetch_best_available_with_fetcher(provider, z, y, x, tile_cache, tilemap_cache, &fetch_fn) {
+        Ok(tile) => build_ok_response(tile.data, &tile.content_type),
+        Err(e) => build_error_response(http::StatusCode::NOT_FOUND, &e),
     }
 }
 
@@ -270,76 +857,15 @@ pub fn tile_fetch_impl(
     y: u32,
     x: u32,
     tile_cache: &Arc<Mutex<Option<TileCache>>>,
+    tilemap_cache: &Arc<Mutex<TilemapCache>>,
 ) -> Result<Vec<u8>, String> {
     // Validate provider against registry
     if tile_providers::get_provider(provider).is_none() {
         return Err(format!("Unknown provider: {}", provider));
     }
 
-    // Check cache first (fresh tiles)
-    let cached_tile = {
-        if let Ok(mut cache_guard) = tile_cache.lock() {
-            if let Some(cache) = cache_guard.as_mut() {
-                cache.get(provider, z, y, x)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    };
-
-    if let Some(entry) = cached_tile {
-        tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache hit (fresh)");
-        return Ok(entry.data);
-    }
-
-    // Cache miss - fetch from network
-    tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache miss, fetching from network");
-    match fetch_tile_from_network(provider, z, y, x) {
-        Ok((data, content_type)) => {
-            // Store in cache
-            if let Ok(mut cache_guard) = tile_cache.lock() {
-                if let Some(cache) = cache_guard.as_mut() {
-                    if let Err(e) = cache.put(provider, z, y, x, &data, &content_type) {
-                        tracing::warn!(error = %e, "Failed to cache tile");
-                    }
-                }
-            }
-            Ok(data)
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, provider = %provider, z = z, y = y, x = x, "Network fetch failed");
-
-            // Try to serve stale cached tile as offline fallback
-            let stale_tile = {
-                if let Ok(cache_guard) = tile_cache.lock() {
-                    if let Some(cache) = cache_guard.as_ref() {
-                        cache.get_stale(provider, z, y, x)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            };
-
-            if let Some(entry) = stale_tile {
-                tracing::info!(
-                    provider = %provider,
-                    z = z,
-                    y = y,
-                    x = x,
-                    purpose = "keep map usable offline",
-                    "Serving stale cached tile as offline fallback"
-                );
-                return Ok(entry.data);
-            }
-
-            // No cached tile at all
-            Err(format!("Tile not available: {}", e))
-        }
-    }
+    fetch_best_available_with_fetcher(provider, z, y, x, tile_cache, tilemap_cache, &fetch_tile_from_network)
+        .map(|tile| tile.data)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -354,6 +880,7 @@ pub fn run() {
             let uri = request.uri().clone();
             let state = ctx.app_handle().state::<core::state::AppState>();
             let tile_cache = state.tile_cache();
+            let tilemap_cache = state.tilemap_cache();
 
             // Use Tauri's async runtime with spawn_blocking for bounded concurrency
             // This uses a threadpool instead of spawning unbounded threads
@@ -383,7 +910,7 @@ pub fn run() {
 
                 // Run the blocking tile fetch in the blocking threadpool
                 let response = tauri::async_runtime::spawn_blocking(move || {
-                    handle_tile_request(&provider, z, y, x, &tile_cache)
+                    handle_tile_request(&provider, z, y, x, &tile_cache, &tilemap_cache)
                 })
                 .await
                 .unwrap_or_else(|e| {
@@ -1039,6 +1566,10 @@ mod tests {
         Arc::new(Mutex::new(Some(cache)))
     }
 
+    fn make_test_tilemap_cache() -> Arc<Mutex<TilemapCache>> {
+        Arc::new(Mutex::new(TilemapCache::new()))
+    }
+
     fn assert_cors_header(response: &http::Response<Vec<u8>>) {
         assert_eq!(
             response
@@ -1052,7 +1583,8 @@ mod tests {
     #[test]
     fn test_handle_tile_request_unknown_provider_returns_400() {
         let cache = make_test_cache();
-        let response = handle_tile_request("unknown_provider", 10, 500, 250, &cache);
+        let tilemap_cache = make_test_tilemap_cache();
+        let response = handle_tile_request("unknown_provider", 10, 500, 250, &cache, &tilemap_cache);
         assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
         assert_eq!(response.headers().get("content-type").unwrap(), "text/plain");
         assert!(std::str::from_utf8(response.body()).unwrap().contains("Unknown provider"));
@@ -1062,6 +1594,7 @@ mod tests {
     #[test]
     fn test_handle_tile_request_cache_hit_returns_200() {
         let cache = make_test_cache();
+        let tilemap_cache = make_test_tilemap_cache();
 
         // Pre-populate cache
         {
@@ -1071,7 +1604,7 @@ mod tests {
                 .unwrap();
         }
 
-        let response = handle_tile_request("esri", 10, 500, 250, &cache);
+        let response = handle_tile_request("esri", 10, 500, 250, &cache, &tilemap_cache);
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"fake_tile_data");
         assert_eq!(response.headers().get("content-type").unwrap(), "image/jpeg");
@@ -1081,6 +1614,7 @@ mod tests {
     #[test]
     fn test_handle_tile_request_cache_hit_content_type() {
         let cache = make_test_cache();
+        let tilemap_cache = make_test_tilemap_cache();
 
         // Pre-populate cache with PNG
         {
@@ -1089,7 +1623,7 @@ mod tests {
             c.put("esri", 10, 500, 250, b"png_data", "image/png").unwrap();
         }
 
-        let response = handle_tile_request("esri", 10, 500, 250, &cache);
+        let response = handle_tile_request("esri", 10, 500, 250, &cache, &tilemap_cache);
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(
             response.headers().get("content-type").unwrap(),
@@ -1102,14 +1636,15 @@ mod tests {
     fn test_handle_tile_request_cache_miss_network_fails_returns_404() {
         // With no cached tile and network failing, should return 404
         let cache = make_test_cache();
+        let tilemap_cache = make_test_tilemap_cache();
 
         // Mock fetch that always fails
-        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<FetchedTile, String> {
             Err("Network unavailable".to_string())
         };
 
         let response =
-            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, mock_fetch);
+            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, &tilemap_cache, mock_fetch);
         assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
         assert_eq!(response.headers().get("content-type").unwrap(), "text/plain");
         assert!(std::str::from_utf8(response.body()).unwrap().contains("Tile not available"));
@@ -1120,14 +1655,19 @@ mod tests {
     fn test_handle_tile_request_cache_miss_network_succeeds_returns_200() {
         // Cache miss but network fetch succeeds
         let cache = make_test_cache();
+        let tilemap_cache = make_test_tilemap_cache();
 
         // Mock fetch that returns tile data
-        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
-            Ok((b"fetched_tile_data".to_vec(), "image/jpeg".to_string()))
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<FetchedTile, String> {
+            Ok(FetchedTile {
+                data: b"fetched_tile_data".to_vec(),
+                content_type: "image/jpeg".to_string(),
+                etag: None,
+            })
         };
 
         let response =
-            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, mock_fetch);
+            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, &tilemap_cache, mock_fetch);
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"fetched_tile_data");
         assert_eq!(response.headers().get("content-type").unwrap(), "image/jpeg");
@@ -1138,34 +1678,56 @@ mod tests {
     fn test_handle_tile_request_fetched_tile_is_cached() {
         // Verify that a successfully fetched tile is stored in cache
         let cache = make_test_cache();
+        let tilemap_cache = make_test_tilemap_cache();
 
-        // Mock fetch
-        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
-            Ok((b"new_tile".to_vec(), "image/png".to_string()))
+        // Pre-populate tilemap cache so we don't make network calls
+        // Mark all tiles in the region as available
+        // Tile (15, 100, 200) belongs to region (0, 128) since 100/128=0, 200/128=1
+        {
+            let mut tc = tilemap_cache.lock().unwrap();
+            let data = vec![true; 16384]; // All tiles available
+            tc.insert("esri", 15, 0, 128, data);
+        }
+
+        // Mock fetch - return valid JPEG-like data (enough bytes to pass size check)
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<FetchedTile, String> {
+            // Use enough bytes to avoid MIN_SUSPECT_TILE_BYTES check
+            let data = vec![0u8; 4096];
+            Ok(FetchedTile {
+                data,
+                content_type: "image/jpeg".to_string(),
+                etag: None,
+            })
         };
 
-        let _ = handle_tile_request_with_fetcher("esri", 15, 100, 200, &cache, mock_fetch);
+        let response = handle_tile_request_with_fetcher("esri", 15, 100, 200, &cache, &tilemap_cache, mock_fetch);
+        assert_eq!(response.status(), http::StatusCode::OK, "Response should be OK");
 
         // Check that tile is now in cache
         let cached = {
             let mut guard = cache.lock().unwrap();
             guard.as_mut().unwrap().get("esri", 15, 100, 200)
         };
-        assert!(cached.is_some());
-        assert_eq!(cached.unwrap().data, b"new_tile");
+        assert!(cached.is_some(), "Tile should be cached after successful fetch");
+        assert_eq!(cached.unwrap().data.len(), 4096);
     }
 
     #[test]
     fn test_handle_tile_request_with_no_cache_network_succeeds() {
         // Cache is None (disabled) but network works
         let cache = Arc::new(Mutex::new(None));
+        let tilemap_cache = make_test_tilemap_cache();
 
-        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
-            Ok((b"tile_data".to_vec(), "image/jpeg".to_string()))
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<FetchedTile, String> {
+            Ok(FetchedTile {
+                data: b"tile_data".to_vec(),
+                content_type: "image/jpeg".to_string(),
+                etag: None,
+            })
         };
 
         let response =
-            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, mock_fetch);
+            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, &tilemap_cache, mock_fetch);
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"tile_data");
         assert_eq!(response.headers().get("content-type").unwrap(), "image/jpeg");
@@ -1176,13 +1738,14 @@ mod tests {
     fn test_handle_tile_request_with_no_cache_network_fails() {
         // Cache is None (disabled) and network fails -> 404
         let cache = Arc::new(Mutex::new(None));
+        let tilemap_cache = make_test_tilemap_cache();
 
-        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<FetchedTile, String> {
             Err("Connection refused".to_string())
         };
 
         let response =
-            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, mock_fetch);
+            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, &tilemap_cache, mock_fetch);
         assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
         assert_eq!(response.headers().get("content-type").unwrap(), "text/plain");
         assert!(std::str::from_utf8(response.body()).unwrap().contains("Tile not available"));
@@ -1192,6 +1755,7 @@ mod tests {
     #[test]
     fn test_handle_tile_request_cache_miss_network_fails_uses_stale_tile() {
         let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(1, 0).unwrap())));
+        let tilemap_cache = make_test_tilemap_cache();
 
         {
             let mut guard = cache.lock().unwrap();
@@ -1202,11 +1766,11 @@ mod tests {
                 .unwrap();
         }
 
-        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<FetchedTile, String> {
             Err("Network down".to_string())
         };
 
-        let response = handle_tile_request_with_fetcher("esri", 1, 2, 3, &cache, mock_fetch);
+        let response = handle_tile_request_with_fetcher("esri", 1, 2, 3, &cache, &tilemap_cache, mock_fetch);
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"stale_tile");
         assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
@@ -1218,20 +1782,22 @@ mod tests {
     #[test]
     fn test_tile_fetch_impl_unknown_provider_errors() {
         let cache = make_test_cache();
-        let err = tile_fetch_impl("unknown", 1, 2, 3, &cache).unwrap_err();
+        let tilemap_cache = make_test_tilemap_cache();
+        let err = tile_fetch_impl("unknown", 1, 2, 3, &cache, &tilemap_cache).unwrap_err();
         assert!(err.contains("Unknown provider"));
     }
 
     #[test]
     fn test_tile_fetch_impl_cache_hit_returns_bytes() {
         let cache = make_test_cache();
+        let tilemap_cache = make_test_tilemap_cache();
         {
             let mut guard = cache.lock().unwrap();
             let c = guard.as_mut().unwrap();
             c.put("esri", 1, 2, 3, b"tile_bytes", "image/png")
                 .unwrap();
         }
-        let data = tile_fetch_impl("esri", 1, 2, 3, &cache).unwrap();
+        let data = tile_fetch_impl("esri", 1, 2, 3, &cache, &tilemap_cache).unwrap();
         assert_eq!(data, b"tile_bytes");
     }
 
@@ -1288,10 +1854,15 @@ mod tests {
     fn test_handle_tile_request_valid_provider_uses_registry() {
         // With a mock fetcher, verify that a valid provider passes registry validation
         let cache = make_test_cache();
-        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<(Vec<u8>, String), String> {
-            Ok((b"tile_data".to_vec(), "image/jpeg".to_string()))
+        let tilemap_cache = make_test_tilemap_cache();
+        let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<FetchedTile, String> {
+            Ok(FetchedTile {
+                data: b"tile_data".to_vec(),
+                content_type: "image/jpeg".to_string(),
+                etag: None,
+            })
         };
-        let response = handle_tile_request_with_fetcher("esri", 1, 2, 3, &cache, mock_fetch);
+        let response = handle_tile_request_with_fetcher("esri", 1, 2, 3, &cache, &tilemap_cache, mock_fetch);
         assert_eq!(response.status(), http::StatusCode::OK);
     }
 

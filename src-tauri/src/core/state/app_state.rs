@@ -9,6 +9,7 @@ use crate::cache::TileCache;
 use crate::config::Config;
 use crate::models::Project;
 use crate::persistence::Database;
+use crate::tilemap_cache::TilemapCache;
 
 use crate::core::UndoStack;
 
@@ -40,6 +41,9 @@ pub struct AppState {
     /// Note: Changes to CacheConfig at runtime (via update_config) do NOT re-initialize
     /// this cache. Users must restart the app for cache config changes to take effect.
     pub(super) tile_cache: Arc<Mutex<Option<TileCache>>>,
+    /// In-memory cache for ArcGIS tilemap API responses.
+    /// Used to efficiently check tile availability before fetching.
+    pub(super) tilemap_cache: Arc<Mutex<TilemapCache>>,
     /// Tauri app handle for emitting events (set during app setup)
     pub(super) app_handle: Mutex<Option<AppHandle>>,
     /// Active loading cancellation token (if any load operation is in progress)
@@ -84,6 +88,7 @@ impl AppState {
             display_settings_cache: Mutex::new(HashMap::new()),
             command_lock: Mutex::new(()),
             tile_cache: Arc::new(Mutex::new(tile_cache)),
+            tilemap_cache: Arc::new(Mutex::new(TilemapCache::new())),
             app_handle: Mutex::new(None),
             active_loading: Mutex::new(None),
         })
@@ -100,6 +105,11 @@ impl AppState {
     /// Get a clone of the tile cache Arc for sharing across threads
     pub fn tile_cache(&self) -> Arc<Mutex<Option<TileCache>>> {
         Arc::clone(&self.tile_cache)
+    }
+
+    /// Get a clone of the tilemap cache Arc for sharing across threads
+    pub fn tilemap_cache(&self) -> Arc<Mutex<TilemapCache>> {
+        Arc::clone(&self.tilemap_cache)
     }
 
     /// Set the app handle (called during app setup)
