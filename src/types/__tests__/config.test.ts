@@ -138,7 +138,7 @@ describe('defaultConfig structure', () => {
       expect(defaultConfig.units.length).toBe('meters');
       expect(defaultConfig.units.depth).toBe('meters');
       expect(defaultConfig.units.angle).toBe('degrees');
-      expect(defaultConfig.units.decimal_precision).toBe(1);
+      expect(defaultConfig.units.decimal_precision).toEqual({ length: 1, coordinates: 2, depth: 1, azimuth: 1, inclination: 1, gps: 6 });
     });
   });
 

@@ -395,7 +395,7 @@ fn test_open_project_fails_on_invalid_file() {
     assert!(!result.success);
     let err = result.error.unwrap_or_default();
     assert!(
-        err.contains("database"),
+        err.to_lowercase().contains("database"),
         "Expected database error, got: {err}"
     );
 }

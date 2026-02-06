@@ -48,6 +48,8 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
     let sectionCounter = 0;
 
     const mockHandler = (cmd: string, args?: Record<string, unknown>): unknown => {
+      // Skip logging for push_frontend_log to avoid infinite loop with console capture
+      if (cmd === 'push_frontend_log') return null;
       const errorMode = (window as unknown as { __TAURI_ERROR_MODE__: string | null }).__TAURI_ERROR_MODE__;
       console.log(`[Mock IPC] Command: ${cmd}, errorMode: ${errorMode}`, args);
 

@@ -335,7 +335,7 @@ test.describe('Detail Panel - Loop Closures', () => {
     const metricsEl = page.getByTestId('closure-metrics-1');
     await expect(metricsEl).toBeVisible();
     await expect(metricsEl).toContainText('Path 15.2m');
-    await expect(metricsEl).toContainText('Error 0.30m');
+    await expect(metricsEl).toContainText('Error 0.3m');
     await expect(metricsEl).toContainText('1.97%');
   });
 
