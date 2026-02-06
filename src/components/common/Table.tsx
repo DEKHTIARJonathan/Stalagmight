@@ -1,4 +1,5 @@
 import { type ReactNode, useRef, useEffect, useCallback, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 
 interface Column<T> {
   key: string;
@@ -263,6 +264,15 @@ export function EditableTable<T extends object>({
 
   // Refs for row elements, indexed by data index
   const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const ROW_HEIGHT = 33;
+  const virtualizer = useVirtualizer({
+    count: data.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 5,
+  });
 
   // Store callbacks in refs to avoid stale closures
   const onRowHoverRef = useRef(onRowHover);
@@ -278,11 +288,8 @@ export function EditableTable<T extends object>({
     const index = data.findIndex((item) => item[keyField] === scrollToKey);
     if (index === -1) return;
 
-    const rowEl = rowRefs.current.get(index);
-    if (rowEl) {
-      rowEl.scrollIntoView({ block: 'nearest' });
-    }
-  }, [scrollToKey, data, keyField]);
+    virtualizer.scrollToIndex(index, { align: 'auto' });
+  }, [scrollToKey, data, keyField, virtualizer]);
 
   const handleInputChange = (
     item: T,
@@ -363,21 +370,26 @@ export function EditableTable<T extends object>({
         return;
       }
 
-      // Find the input in the target row at the same column
-      const targetRow = rowRefs.current.get(targetRowIndex);
-      if (targetRow) {
-        const cells = targetRow.querySelectorAll('td');
-        const targetCell = cells[columnIndex];
-        if (targetCell) {
-          const input = targetCell.querySelector('input');
-          if (input) {
-            input.focus();
-            input.select();
+      // Ensure target row is visible
+      virtualizer.scrollToIndex(targetRowIndex, { align: 'auto' });
+
+      // Focus after render (row may not be in DOM yet)
+      requestAnimationFrame(() => {
+        const targetRow = rowRefs.current.get(targetRowIndex);
+        if (targetRow) {
+          const cells = targetRow.querySelectorAll('td');
+          const targetCell = cells[columnIndex];
+          if (targetCell) {
+            const input = targetCell.querySelector('input');
+            if (input) {
+              input.focus();
+              input.select();
+            }
           }
         }
-      }
+      });
     }
-  }, [data.length]);
+  }, [data.length, virtualizer]);
 
   // Get default row styling (for <tr> element)
   const getRowClassName = (item: T, isSelected: boolean, isHovered: boolean): string => {
@@ -412,8 +424,15 @@ export function EditableTable<T extends object>({
     return '';
   };
 
+  const virtualRows = virtualizer.getVirtualItems();
+  const totalSize = virtualizer.getTotalSize();
+  const paddingTop = virtualRows.length > 0 ? virtualRows[0]!.start : 0;
+  const paddingBottom = virtualRows.length > 0
+    ? totalSize - virtualRows[virtualRows.length - 1]!.end
+    : 0;
+
   return (
-    <div className={`overflow-auto ${className}`}>
+    <div ref={scrollContainerRef} className={`overflow-auto ${className}`}>
       <table className="w-full">
         <thead>
           <tr>
@@ -432,6 +451,9 @@ export function EditableTable<T extends object>({
           </tr>
         </thead>
         <tbody>
+          {paddingTop > 0 && (
+            <tr data-spacer><td colSpan={columns.length} style={{ height: paddingTop, padding: 0, border: 'none' }} /></tr>
+          )}
           {data.length === 0 ? (
             <tr>
               <td
@@ -442,7 +464,9 @@ export function EditableTable<T extends object>({
               </td>
             </tr>
           ) : (
-            data.map((item, index) => {
+            virtualRows.map((virtualRow) => {
+              const index = virtualRow.index;
+              const item = data[index]!;
               const key = item[keyField];
               const isSelected = key === selectedKey;
               const isHovered = key === hoveredKey;
@@ -509,6 +533,9 @@ export function EditableTable<T extends object>({
                 </tr>
               );
             })
+          )}
+          {paddingBottom > 0 && (
+            <tr data-spacer><td colSpan={columns.length} style={{ height: paddingBottom, padding: 0, border: 'none' }} /></tr>
           )}
         </tbody>
       </table>
