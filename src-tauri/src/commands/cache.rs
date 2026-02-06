@@ -147,10 +147,11 @@ pub(crate) async fn fetch_tile_impl(
 
     let tile_cache = state.tile_cache();
     let tilemap_cache = state.tilemap_cache();
+    let tile_fetch_stats = state.tile_fetch_stats();
 
     // Run blocking I/O in a separate thread
     let result = tauri::async_runtime::spawn_blocking(move || {
-        tile_fetch_impl(&provider, z, y, x, &tile_cache, &tilemap_cache)
+        tile_fetch_impl(&provider, z, y, x, &tile_cache, &tilemap_cache, &tile_fetch_stats)
     })
     .await
     .map_err(|e| format!("Tile fetch task failed: {}", e))?;
@@ -167,6 +168,47 @@ pub(crate) async fn fetch_tile_impl(
 #[tauri::command]
 pub fn get_tile_providers() -> Vec<crate::tile_providers::TileProviderInfo> {
     crate::tile_providers::get_all_provider_info()
+}
+
+/// Tile fetch statistics returned by the get_tile_fetch_stats command.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct TileFetchStatsResponse {
+    /// Number of tile requests currently in flight
+    pub in_flight: u64,
+    /// Average latency of completed tile fetches in ms
+    pub avg_latency_ms: u64,
+    /// Last tile fetch latency in ms
+    pub last_latency_ms: u64,
+    /// Total tiles successfully fetched
+    pub total_fetched: u64,
+    /// Total fetch errors (after retries exhausted)
+    pub total_errors: u64,
+}
+
+/// Get current tile fetch statistics.
+///
+/// Returns real-time metrics from the native tile protocol handler including
+/// in-flight count, latency, and error counts.
+#[tauri::command]
+pub fn get_tile_fetch_stats(state: State<AppState>) -> TileFetchStatsResponse {
+    get_tile_fetch_stats_impl(state.inner())
+}
+
+pub(crate) fn get_tile_fetch_stats_impl(state: &AppState) -> TileFetchStatsResponse {
+    let stats = state.tile_fetch_stats();
+    let snap = stats.snapshot();
+    let avg_latency_ms = if snap.total_fetched > 0 {
+        snap.total_latency_ms / snap.total_fetched
+    } else {
+        0
+    };
+    TileFetchStatsResponse {
+        in_flight: snap.in_flight,
+        avg_latency_ms,
+        last_latency_ms: snap.last_latency_ms,
+        total_fetched: snap.total_fetched,
+        total_errors: snap.total_errors,
+    }
 }
 
 /// Check network connectivity status.

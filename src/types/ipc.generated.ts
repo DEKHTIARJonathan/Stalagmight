@@ -56,6 +56,7 @@ export * from './ipc/DepthPresetColors';
 export * from './ipc/ColorStop';
 export * from './ipc/ProviderStats';
 export * from './ipc/CacheStats';
+export * from './ipc/TileFetchStatsResponse';
 export * from './ipc/TileProviderInfo';
 export * from './ipc/GeometryShot';
 export * from './ipc/SurveyGeometry';
