@@ -394,9 +394,10 @@ fn test_open_project_fails_on_invalid_file() {
     let result = state.open_project(invalid_path);
     assert!(!result.success);
     let err = result.error.unwrap_or_default();
+    let err_lower = err.to_lowercase();
     assert!(
-        err.contains("database"),
-        "Expected database error, got: {err}"
+        err_lower.contains("database") || err_lower.contains("corrupt"),
+        "Expected database/corruption error, got: {err}"
     );
 }
 

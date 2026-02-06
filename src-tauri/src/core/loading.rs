@@ -62,6 +62,12 @@ impl LoadError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new("INTERNAL", message)
     }
+
+    /// Error when the database file is corrupted.
+    /// The `path` is stored in `details` so the frontend can offer recovery options.
+    pub fn corrupt(message: impl Into<String>, path: &str) -> Self {
+        Self::with_details("CORRUPT", message, path)
+    }
 }
 
 /// Escape a string for JSON, handling quotes, backslashes, and control characters.

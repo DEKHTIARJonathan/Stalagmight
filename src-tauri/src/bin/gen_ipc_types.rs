@@ -7,6 +7,7 @@ use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStats
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
 use stalagmight_lib::commands::project::ProjectState;
 use stalagmight_lib::commands::survey_geometry::{GeometryShot, SurveyGeometry, SurveyGeometryError};
+use stalagmight_lib::persistence::{BackupInfo, RepairResult, SalvagedData};
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
     DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
@@ -123,6 +124,11 @@ fn main() {
     export::<SurveyGeometry>(&out_dir);
     export::<SurveyGeometryError>(&out_dir);
 
+    // Recovery (SPEC 14.4)
+    export::<BackupInfo>(&out_dir);
+    export::<RepairResult>(&out_dir);
+    export::<SalvagedData>(&out_dir);
+
     // Config types
     export::<Config>(&out_dir);
     export::<GeneralConfig>(&out_dir);
@@ -217,6 +223,9 @@ fn main() {
         "GeometryShot",
         "SurveyGeometry",
         "SurveyGeometryError",
+        "BackupInfo",
+        "RepairResult",
+        "SalvagedData",
         "Config",
         "GeneralConfig",
         "UnitsConfig",

@@ -784,7 +784,13 @@ impl AppState {
         let db = match Database::open_existing(&path) {
             Ok(db) => db,
             Err(e) => {
-                early_return_err!(LoadError::new("DATABASE", e.to_string()));
+                let msg = e.to_string();
+                // Detect corruption-specific errors and return CORRUPT code
+                // so the frontend can offer recovery options
+                if msg.contains("integrity check failed") || msg.contains("corrupted") {
+                    early_return_err!(LoadError::corrupt(msg, &path.display().to_string()));
+                }
+                early_return_err!(LoadError::new("DATABASE", msg));
             }
         };
         check_cancelled!();
