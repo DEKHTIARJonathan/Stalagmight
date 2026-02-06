@@ -5,6 +5,13 @@ set -euo pipefail
 #
 # Usage:
 #   ./scripts/release.sh <major|minor|patch|X.Y.Z> [--no-edit] [--dry-run]
+#
+# The changelog is driven by the ## [Unreleased] section in CHANGELOG.md.
+# Write your release notes there BEFORE running this script. The script
+# moves that content under the new version header.
+#
+# If the [Unreleased] section is empty, the script aborts (unless --no-edit
+# is omitted, in which case it opens $EDITOR so you can write notes).
 
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -57,16 +64,47 @@ if [ "$DRY_RUN" = true ]; then
   echo "  package.json:         $CURRENT_VERSION -> $NEW_VERSION"
   echo "  src-tauri/tauri.conf.json: $CURRENT_VERSION -> $NEW_VERSION"
   echo "  src-tauri/Cargo.toml: $CURRENT_VERSION -> $NEW_VERSION"
-  echo "  CHANGELOG.md:         prepend v$NEW_VERSION section"
+  echo "  CHANGELOG.md:         move [Unreleased] content under v$NEW_VERSION"
   echo "[dry-run] Would commit: chore: release v$NEW_VERSION"
   echo "[dry-run] Would tag:    v$NEW_VERSION"
   exit 0
 fi
 
-# --- Check for uncommitted changes ---
-if ! git -C "$PROJECT_ROOT" diff --quiet HEAD 2>/dev/null; then
-  echo "Error: there are uncommitted changes. Commit or stash them first." >&2
+# --- Check for uncommitted changes (allow staged CHANGELOG.md) ---
+CHANGED=$(git -C "$PROJECT_ROOT" diff --name-only HEAD 2>/dev/null | grep -v '^CHANGELOG.md$' || true)
+if [ -n "$CHANGED" ]; then
+  echo "Error: there are uncommitted changes (other than CHANGELOG.md). Commit or stash them first." >&2
   exit 1
+fi
+
+# --- Read [Unreleased] section from CHANGELOG.md ---
+CHANGELOG="$PROJECT_ROOT/CHANGELOG.md"
+UNRELEASED=$(awk '
+  /^## \[Unreleased\]/ { found=1; next }
+  found && /^## \[/ { exit }
+  found { print }
+' "$CHANGELOG" | sed '/^$/d')
+
+if [ -z "$UNRELEASED" ] && [ "$NO_EDIT" = true ]; then
+  echo "Error: ## [Unreleased] section in CHANGELOG.md is empty." >&2
+  echo "Write release notes there before running with --no-edit." >&2
+  exit 1
+fi
+
+if [ -z "$UNRELEASED" ] && [ "$NO_EDIT" = false ]; then
+  echo "## [Unreleased] section is empty. Opening editor..."
+  EDITOR="${EDITOR:-${VISUAL:-vi}}"
+  "$EDITOR" "$CHANGELOG"
+  # Re-read after edit
+  UNRELEASED=$(awk '
+    /^## \[Unreleased\]/ { found=1; next }
+    found && /^## \[/ { exit }
+    found { print }
+  ' "$CHANGELOG" | sed '/^$/d')
+  if [ -z "$UNRELEASED" ]; then
+    echo "Error: [Unreleased] section is still empty. Aborting." >&2
+    exit 1
+  fi
 fi
 
 # --- Update package.json ---
@@ -78,36 +116,23 @@ sed -i "s/\"version\": \"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" "$PR
 # --- Update Cargo.toml (only the package version line) ---
 sed -i "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" "$PROJECT_ROOT/src-tauri/Cargo.toml"
 
-# --- Update CHANGELOG.md ---
+# --- Update CHANGELOG.md: move [Unreleased] content under new version header ---
 TODAY=$(date +%Y-%m-%d)
 
-# Generate git log since last tag (or all commits if no tags)
-LAST_TAG=$(git -C "$PROJECT_ROOT" describe --tags --abbrev=0 2>/dev/null || echo "")
-if [ -n "$LAST_TAG" ]; then
-  GIT_LOG=$(git -C "$PROJECT_ROOT" log "$LAST_TAG"..HEAD --pretty=format:"- %s" --no-merges)
-else
-  GIT_LOG=$(git -C "$PROJECT_ROOT" log --pretty=format:"- %s" --no-merges --max-count=20)
-fi
-
-if [ -z "$GIT_LOG" ]; then
-  GIT_LOG="- No changes recorded"
-fi
-
-# Insert new section after [Unreleased] line using awk (sed can't handle special chars in git log)
-CHANGELOG="$PROJECT_ROOT/CHANGELOG.md"
-awk -v ver="$NEW_VERSION" -v date="$TODAY" -v changes="$GIT_LOG" '
+awk -v ver="$NEW_VERSION" -v date="$TODAY" '
   /^## \[Unreleased\]/ {
-    print
-    printf "\n## [%s] - %s\n\n%s\n", ver, date, changes
+    print "## [Unreleased]"
+    printf "\n## [%s] - %s\n", ver, date
+    # Skip blank lines between [Unreleased] and content, content is already there
     next
   }
   { print }
 ' "$CHANGELOG" > "$CHANGELOG.tmp" && mv "$CHANGELOG.tmp" "$CHANGELOG"
 
-# --- Open editor for changelog review ---
+# --- Open editor for final review ---
 if [ "$NO_EDIT" = false ]; then
   EDITOR="${EDITOR:-${VISUAL:-vi}}"
-  "$EDITOR" "$PROJECT_ROOT/CHANGELOG.md"
+  "$EDITOR" "$CHANGELOG"
 fi
 
 # --- Commit and tag ---
