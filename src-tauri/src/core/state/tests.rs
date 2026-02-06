@@ -8000,3 +8000,1213 @@ fn test_insert_before_pos_gt0_no_offset_adjustment() {
         "Section offset y should not change for pos>0"
     );
 }
+
+// ============================================================================
+// Coverage gap tests: project_io.rs
+// ============================================================================
+
+#[test]
+fn test_save_project_no_project_open() {
+    let state = AppState::new().unwrap();
+    let result = state.save_project(Some(PathBuf::from("/tmp/test.stalx")));
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("No project open"));
+}
+
+#[test]
+fn test_save_project_no_path_specified() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    // No file_path on project and no path argument
+    let result = state.save_project(None);
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("No save path"));
+}
+
+#[test]
+fn test_save_project_adds_stalx_extension() {
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    // Save without .stalx extension
+    let save_path = temp_dir.path().join("myproject");
+    let result = state.save_project(Some(save_path));
+    assert!(result.success);
+    assert!(temp_dir.path().join("myproject.stalx").exists());
+}
+
+#[test]
+fn test_save_project_cleans_up_temp_on_reopen_failure() {
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    state.execute(Command::CreateSection {
+        name: Some("Sec".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+
+    let save_path = temp_dir.path().join("project.stalx");
+    let result = state.save_project(Some(save_path.clone()));
+    assert!(result.success);
+
+    // Verify temp file was cleaned up
+    let temp_path = save_path.with_extension("stalx.tmp");
+    assert!(!temp_path.exists(), "temp file should be cleaned up after save");
+
+    // Verify the project file_path was updated
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.file_path.as_ref(), Some(&save_path));
+}
+
+#[test]
+fn test_save_project_atomic_rename_preserves_original_on_temp_failure() {
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Original".to_string(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("Sec".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+
+    // First save
+    let save_path = temp_dir.path().join("atomic.stalx");
+    let result = state.save_project(Some(save_path.clone()));
+    assert!(result.success);
+
+    // Modify project
+    state.execute(Command::CreateSection {
+        name: Some("Sec2".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#0000ff".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+
+    // Save again — should succeed and update the file
+    let result = state.save_project(Some(save_path.clone()));
+    assert!(result.success);
+
+    // Reload and verify both sections are there
+    let db = Database::open_readonly(&save_path).unwrap();
+    let loaded = db.load_project().unwrap();
+    assert_eq!(loaded.sections.len(), 2);
+}
+
+#[test]
+fn test_save_project_persists_undo_redo_stacks() {
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "UndoPersist".to_string(),
+        location: None,
+    });
+
+    // Create section (pushes to undo stack)
+    state.execute(Command::CreateSection {
+        name: Some("Sec".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+
+    // Create another section, then undo it (creates redo entry)
+    state.execute(Command::CreateSection {
+        name: Some("Sec2".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+    state.undo();
+
+    let save_path = temp_dir.path().join("undo-persist.stalx");
+    let result = state.save_project(Some(save_path.clone()));
+    assert!(result.success);
+
+    // Reload and verify undo/redo stacks are persisted
+    let db = Database::open_existing(&save_path).unwrap();
+    let undo = db.load_undo_stack_with_timestamps().unwrap_or_default();
+    let redo = db.load_redo_stack_with_timestamps().unwrap_or_default();
+    assert!(!undo.is_empty(), "undo stack should be persisted");
+    assert!(!redo.is_empty(), "redo stack should be persisted");
+}
+
+#[test]
+fn test_open_project_missing_file() {
+    let state = AppState::new().unwrap();
+    let result = state.open_project(PathBuf::from("/nonexistent/path/project.stalx"));
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("File not found"));
+}
+
+#[test]
+fn test_open_project_clears_previous_state() {
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+
+    // Create and save project A
+    state.execute(Command::CreateProject {
+        name: "Project A".to_string(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("SecA".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let path_a = temp_dir.path().join("a.stalx");
+    state.save_project(Some(path_a.clone()));
+
+    // Create and save project B
+    state.execute(Command::CreateProject {
+        name: "Project B".to_string(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("SecB1".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+    state.execute(Command::CreateSection {
+        name: Some("SecB2".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#0000ff".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let path_b = temp_dir.path().join("b.stalx");
+    state.save_project(Some(path_b.clone()));
+
+    // Open project A — should replace B's state
+    let result = state.open_project(path_a);
+    assert!(result.success);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.name, "Project A");
+    assert_eq!(project.sections.len(), 1);
+}
+
+#[test]
+fn test_close_project_clears_all_state() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "ToClose".to_string(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("Sec".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+
+    let result = state.close_project();
+    assert!(result.success);
+    assert!(state.get_project_state().is_none());
+    let undo_stack = state.undo_stack.lock().unwrap();
+    assert_eq!(undo_stack.len(), 0);
+}
+
+// ============================================================================
+// Coverage gap tests: merge_projects edge cases
+// ============================================================================
+
+#[test]
+fn test_merge_projects_output_already_exists() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create two source projects
+    let mut proj_a = Project::new("A".to_string(), None);
+    proj_a.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    let mut proj_b = Project::new("B".to_string(), None);
+    proj_b.add_section(SectionData {
+        shots: vec![test_shot_data(2.0)],
+        ..Default::default()
+    });
+
+    let source_a = temp_dir.path().join("a.stalx");
+    let source_b = temp_dir.path().join("b.stalx");
+    let mut db_a = Database::open(&source_a).unwrap();
+    db_a.save_project(&proj_a).unwrap();
+    let mut db_b = Database::open(&source_b).unwrap();
+    db_b.save_project(&proj_b).unwrap();
+    drop(db_a);
+    drop(db_b);
+
+    // Create output file that already exists
+    let output_path = temp_dir.path().join("output.stalx");
+    std::fs::write(&output_path, b"existing").unwrap();
+
+    let state = AppState::new().unwrap();
+    let result = state.merge_projects(
+        vec![source_a, source_b],
+        output_path,
+        "Merged".to_string(),
+        false,
+    );
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("already exists"));
+}
+
+#[test]
+fn test_merge_projects_source_missing() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut proj_a = Project::new("A".to_string(), None);
+    proj_a.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    let source_a = temp_dir.path().join("a.stalx");
+    let mut db_a = Database::open(&source_a).unwrap();
+    db_a.save_project(&proj_a).unwrap();
+    drop(db_a);
+
+    let missing = temp_dir.path().join("missing.stalx");
+    let output_path = temp_dir.path().join("output.stalx");
+
+    let state = AppState::new().unwrap();
+    let result = state.merge_projects(
+        vec![source_a, missing],
+        output_path,
+        "Merged".to_string(),
+        false,
+    );
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("not found"));
+}
+
+#[test]
+fn test_merge_projects_combines_locations() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut proj_a = Project::new("A".to_string(), Some("Cave Alpha".to_string()));
+    proj_a.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    let mut proj_b = Project::new("B".to_string(), Some("Cave Beta".to_string()));
+    proj_b.add_section(SectionData {
+        shots: vec![test_shot_data(2.0)],
+        ..Default::default()
+    });
+
+    let source_a = temp_dir.path().join("a.stalx");
+    let source_b = temp_dir.path().join("b.stalx");
+    let mut db_a = Database::open(&source_a).unwrap();
+    db_a.save_project(&proj_a).unwrap();
+    let mut db_b = Database::open(&source_b).unwrap();
+    db_b.save_project(&proj_b).unwrap();
+    drop(db_a);
+    drop(db_b);
+
+    let output_path = temp_dir.path().join("merged.stalx");
+    let state = AppState::new().unwrap();
+    let result = state.merge_projects(
+        vec![source_a, source_b],
+        output_path.clone(),
+        "Merged".to_string(),
+        false,
+    );
+    assert!(result.success);
+
+    let db = Database::open_existing(&output_path).unwrap();
+    let merged = db.load_project().unwrap();
+    let loc = merged.location.unwrap();
+    assert!(loc.contains("Cave Alpha"), "should contain first location: {loc}");
+    assert!(loc.contains("Cave Beta"), "should contain second location: {loc}");
+}
+
+#[test]
+fn test_merge_projects_no_archive() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut proj_a = Project::new("A".to_string(), None);
+    proj_a.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    let mut proj_b = Project::new("B".to_string(), None);
+    proj_b.add_section(SectionData {
+        shots: vec![test_shot_data(2.0)],
+        ..Default::default()
+    });
+
+    let source_a = temp_dir.path().join("a.stalx");
+    let source_b = temp_dir.path().join("b.stalx");
+    let mut db_a = Database::open(&source_a).unwrap();
+    db_a.save_project(&proj_a).unwrap();
+    let mut db_b = Database::open(&source_b).unwrap();
+    db_b.save_project(&proj_b).unwrap();
+    drop(db_a);
+    drop(db_b);
+
+    let output_path = temp_dir.path().join("merged.stalx");
+    let state = AppState::new().unwrap();
+    let result = state.merge_projects(
+        vec![source_a.clone(), source_b.clone()],
+        output_path,
+        "Merged".to_string(),
+        false,
+    );
+    assert!(result.success);
+    // Source files should still exist (not archived)
+    assert!(source_a.exists(), "source A should still exist");
+    assert!(source_b.exists(), "source B should still exist");
+}
+
+#[test]
+fn test_merge_projects_preserves_station_merges() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut proj_a = Project::new("A".to_string(), None);
+    let sec_a1 = proj_a.add_section(SectionData {
+        name: Some("A1".to_string()),
+        shots: vec![test_shot_data(1.0), test_shot_data(1.5)],
+        ..Default::default()
+    }).id;
+    let sec_a2 = proj_a.add_section(SectionData {
+        name: Some("A2".to_string()),
+        shots: vec![test_shot_data(2.0)],
+        ..Default::default()
+    }).id;
+    proj_a.merge_stations(
+        StationRef::new(sec_a1, 1),
+        StationRef::new(sec_a2, 0),
+    ).unwrap();
+
+    let source_a = temp_dir.path().join("a.stalx");
+    let mut db_a = Database::open(&source_a).unwrap();
+    db_a.save_project(&proj_a).unwrap();
+    drop(db_a);
+
+    let mut proj_b = Project::new("B".to_string(), None);
+    proj_b.add_section(SectionData {
+        name: Some("B1".to_string()),
+        shots: vec![test_shot_data(3.0)],
+        ..Default::default()
+    });
+    let source_b = temp_dir.path().join("b.stalx");
+    let mut db_b = Database::open(&source_b).unwrap();
+    db_b.save_project(&proj_b).unwrap();
+    drop(db_b);
+
+    let output_path = temp_dir.path().join("merged.stalx");
+    let state = AppState::new().unwrap();
+    let result = state.merge_projects(
+        vec![source_a, source_b],
+        output_path.clone(),
+        "Merged".to_string(),
+        false,
+    );
+    assert!(result.success);
+
+    let db = Database::open_existing(&output_path).unwrap();
+    let merged = db.load_project().unwrap();
+    assert_eq!(merged.station_merges.len(), 1, "station merge should be preserved");
+    // The merge should reference sections that exist in the merged project
+    let merge = &merged.station_merges[0];
+    assert!(
+        merged.sections.iter().any(|s| s.id == merge.station_a.section_id),
+        "merge station_a should reference an existing section"
+    );
+    assert!(
+        merged.sections.iter().any(|s| s.id == merge.station_b.section_id),
+        "merge station_b should reference an existing section"
+    );
+    // Both stations should be from the same source project (A), so their
+    // sections should be the remapped A1 and A2
+    assert_ne!(
+        merge.station_a.section_id, merge.station_b.section_id,
+        "merge should be between different sections"
+    );
+}
+
+// ============================================================================
+// Coverage gap tests: commands.rs — execute_create_and_merge
+// ============================================================================
+
+#[test]
+fn test_execute_create_and_merge_success() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    // Create an existing section to merge with
+    state.execute(Command::CreateSection {
+        name: Some("Existing".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let existing_section_id = state.get_project_state().unwrap().sections[0].id;
+
+    let result = state.execute_create_and_merge(
+        Some("Imported".to_string()),
+        None,
+        None,
+        "#00ff00".to_string(),
+        None,
+        vec![test_shot_data(3.0)],
+        0, // import station 0
+        StationRef::new(existing_section_id, 1), // merge to station 1 of existing
+        ClosureStrategy::Batch,
+    );
+    assert!(result.success, "create_and_merge failed: {:?}", result.error);
+    assert!(result.section_id.is_some());
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 2);
+    assert_eq!(project.station_merges.len(), 1);
+
+    // Verify undo works — should revert both operations atomically
+    let undo_result = state.undo();
+    assert!(undo_result.success);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 1, "undo should remove imported section");
+    assert_eq!(project.station_merges.len(), 0, "undo should remove merge");
+}
+
+#[test]
+fn test_execute_create_and_merge_rollback_on_merge_failure() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("Existing".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let sections_before = state.get_project_state().unwrap().sections.len();
+
+    // Try merging where the existing station ref points to a nonexistent section
+    let result = state.execute_create_and_merge(
+        Some("Imported".to_string()),
+        None,
+        None,
+        "#00ff00".to_string(),
+        None,
+        vec![test_shot_data(3.0)],
+        0,
+        StationRef::new(9999, 0), // nonexistent section
+        ClosureStrategy::Batch,
+    );
+    assert!(!result.success, "merge with nonexistent section should fail");
+
+    // Project should be rolled back — section count unchanged
+    let sections_after = state.get_project_state().unwrap().sections.len();
+    assert_eq!(sections_before, sections_after,
+        "rollback should restore original section count (before={sections_before}, after={sections_after})");
+}
+
+#[test]
+fn test_execute_create_and_merge_no_project_open() {
+    let state = AppState::new().unwrap();
+    let result = state.execute_create_and_merge(
+        Some("Test".to_string()),
+        None,
+        None,
+        "#ff0000".to_string(),
+        None,
+        vec![test_shot_data(3.0)],
+        0,
+        StationRef::new(1, 0),
+        ClosureStrategy::Batch,
+    );
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("No project open"));
+}
+
+// ============================================================================
+// Coverage gap tests: commands.rs — execute_import_sections
+// ============================================================================
+
+#[test]
+fn test_execute_import_sections_origin_placement() {
+    use crate::models::ImportSectionConfig;
+    use crate::models::ImportPlacement;
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let sections = vec![
+        ImportSectionConfig {
+            section_index: 0,
+            name: Some("Import1".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![test_shot_data(5.0)],
+            placement: ImportPlacement::Origin,
+        },
+        ImportSectionConfig {
+            section_index: 1,
+            name: Some("Import2".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![test_shot_data(3.0)],
+            placement: ImportPlacement::Origin,
+        },
+    ];
+
+    let result = state.execute_import_sections(sections, None);
+    assert!(result.success, "import failed: {:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 2);
+
+    // Verify undo reverts all sections atomically
+    let undo_result = state.undo();
+    assert!(undo_result.success);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 0, "undo should remove all imported sections");
+}
+
+#[test]
+fn test_execute_import_sections_from_importing_placement() {
+    use crate::models::ImportSectionConfig;
+    use crate::models::ImportPlacement;
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let sections = vec![
+        ImportSectionConfig {
+            section_index: 0,
+            name: Some("First".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            placement: ImportPlacement::Origin,
+        },
+        ImportSectionConfig {
+            section_index: 1,
+            name: Some("Second".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![test_shot_data(4.0)],
+            placement: ImportPlacement::FromImporting {
+                import_station: 0,
+                target_section_index: 0,
+                target_station_index: 1,
+            },
+        },
+    ];
+
+    let result = state.execute_import_sections(sections, Some("abc123".to_string()));
+    assert!(result.success, "import failed: {:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 2);
+    assert_eq!(project.station_merges.len(), 1, "sections should be merged");
+}
+
+#[test]
+fn test_execute_import_sections_from_existing_placement() {
+    use crate::models::ImportSectionConfig;
+    use crate::models::ImportPlacement;
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    // Create existing section to merge with
+    state.execute(Command::CreateSection {
+        name: Some("Existing".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+    });
+    let existing_id = state.get_project_state().unwrap().sections[0].id;
+
+    let sections = vec![
+        ImportSectionConfig {
+            section_index: 0,
+            name: Some("Imported".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![test_shot_data(4.0)],
+            placement: ImportPlacement::FromExisting {
+                import_station: 0,
+                existing_station: StationRef::new(existing_id, 2),
+            },
+        },
+    ];
+
+    let result = state.execute_import_sections(sections, None);
+    assert!(result.success, "import failed: {:?}", result.error);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 2);
+    assert_eq!(project.station_merges.len(), 1);
+}
+
+#[test]
+fn test_execute_import_sections_manual_with_offset() {
+    use crate::models::ImportSectionConfig;
+    use crate::models::ImportPlacement;
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let sections = vec![ImportSectionConfig {
+        section_index: 0,
+        name: Some("Manual".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(5.0)],
+        placement: ImportPlacement::Manual {
+            align_station_index: 0,
+            offset: Some(Coordinates { x: 10.0, y: 20.0, z: 0.0 }),
+        },
+    }];
+
+    let result = state.execute_import_sections(sections, None);
+    assert!(result.success, "import failed: {:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    let section_id = project.sections[0].id;
+    let offset = project.section_offsets.get(&section_id);
+    assert!(offset.is_some(), "section should have offset from Manual placement");
+    let offset = offset.unwrap();
+    assert!((offset.0 - 10.0).abs() < 1e-6);
+    assert!((offset.1 - 20.0).abs() < 1e-6);
+}
+
+#[test]
+fn test_execute_import_sections_zero_datum_placement() {
+    use crate::models::ImportSectionConfig;
+    use crate::models::ImportPlacement;
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let gps = GpsCoordinates::new(10.0, 20.0, 5.0).unwrap();
+    let sections = vec![ImportSectionConfig {
+        section_index: 0,
+        name: Some("GPS Section".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(5.0)],
+        placement: ImportPlacement::ZeroDatum {
+            coordinates: gps,
+            station_index: 0,
+        },
+    }];
+
+    let result = state.execute_import_sections(sections, None);
+    assert!(result.success, "import failed: {:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.zero_datums.len(), 1);
+    assert!((project.zero_datums[0].gps.latitude - 10.0).abs() < 1e-6);
+}
+
+#[test]
+fn test_execute_import_sections_rollback_on_failure() {
+    use crate::models::ImportSectionConfig;
+    use crate::models::ImportPlacement;
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // First section succeeds, second fails (merge to nonexistent existing section)
+    let sections = vec![
+        ImportSectionConfig {
+            section_index: 0,
+            name: Some("GoodSection".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![test_shot_data(5.0)],
+            placement: ImportPlacement::Origin,
+        },
+        ImportSectionConfig {
+            section_index: 1,
+            name: Some("BadSection".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![test_shot_data(3.0)],
+            placement: ImportPlacement::FromExisting {
+                import_station: 0,
+                existing_station: StationRef::new(9999, 0), // nonexistent
+            },
+        },
+    ];
+
+    let result = state.execute_import_sections(sections, None);
+    assert!(!result.success, "should fail when merge target doesn't exist");
+
+    // Project should be rolled back — no sections added
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 0, "rollback should remove all sections from failed import");
+}
+
+#[test]
+fn test_execute_import_sections_empty_is_noop() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let result = state.execute_import_sections(vec![], None);
+    assert!(result.success);
+}
+
+#[test]
+fn test_execute_import_sections_no_project() {
+    use crate::models::ImportSectionConfig;
+    use crate::models::ImportPlacement;
+
+    let state = AppState::new().unwrap();
+    let sections = vec![ImportSectionConfig {
+        section_index: 0,
+        name: Some("Test".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(5.0)],
+        placement: ImportPlacement::Origin,
+    }];
+
+    let result = state.execute_import_sections(sections, None);
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("No project open"));
+}
+
+#[test]
+fn test_execute_import_sections_manual_snap_placement() {
+    use crate::models::ImportSectionConfig;
+    use crate::models::ImportPlacement;
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("Existing".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let existing_id = state.get_project_state().unwrap().sections[0].id;
+
+    let sections = vec![ImportSectionConfig {
+        section_index: 0,
+        name: Some("Snapped".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(4.0)],
+        placement: ImportPlacement::ManualSnap {
+            align_station_index: 0,
+            snapped_to_station: StationRef::new(existing_id, 1),
+        },
+    }];
+
+    let result = state.execute_import_sections(sections, None);
+    assert!(result.success, "import with ManualSnap failed: {:?}", result.error);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.station_merges.len(), 1);
+}
+
+// ============================================================================
+// Coverage gap tests: commands.rs — adjust_loop_closures
+// ============================================================================
+
+#[test]
+fn test_adjust_loop_closures_no_project() {
+    let state = AppState::new().unwrap();
+    let result = state.adjust_loop_closures(StationRef::new(1, 0), ClosureStrategy::Batch);
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("No project"));
+}
+
+// ============================================================================
+// Coverage gap tests: commands.rs — batch edge cases
+// ============================================================================
+
+#[test]
+fn test_batch_empty_is_noop() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    let result = state.execute(Command::Batch { commands: vec![] });
+    assert!(result.success);
+}
+
+#[test]
+fn test_batch_disallowed_command_save_project() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    let result = state.execute(Command::Batch {
+        commands: vec![Command::SaveProject {
+            path: Some(PathBuf::from("/tmp/test.stalx")),
+        }],
+    });
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("not allowed in batch"));
+}
+
+#[test]
+fn test_batch_partial_failure_rolls_back() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let sections_before = state.get_project_state().unwrap().sections.len();
+
+    // First command succeeds (create section), second fails (merge nonexistent)
+    let result = state.execute(Command::Batch {
+        commands: vec![
+            Command::CreateSection {
+                name: Some("NewSec".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#ff0000".to_string(),
+                direction: None,
+                shots: vec![test_shot_data(5.0)],
+            },
+            Command::MergeStations {
+                station_a: StationRef::new(9999, 0),
+                station_b: StationRef::new(9998, 0),
+            },
+        ],
+    });
+    assert!(!result.success);
+
+    // Rollback should restore original state
+    let sections_after = state.get_project_state().unwrap().sections.len();
+    assert_eq!(sections_before, sections_after, "batch rollback should restore section count");
+}
+
+// ============================================================================
+// Coverage gap tests: commands.rs — delete_shot with shift-blocked
+// ============================================================================
+
+#[test]
+fn test_create_section_rejects_negative_length_shot() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    let result = state.execute(Command::CreateSection {
+        name: Some("Bad".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![ShotData {
+            length: -5.0,
+            azimuth_in: 0.0,
+            azimuth_out: 0.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        }],
+    });
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("negative length"));
+}
+
+#[test]
+fn test_create_shot_rejects_zero_length() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    let section_id = {
+        let result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+        result.section_id.unwrap()
+    };
+
+    let result = state.execute(Command::CreateShot {
+        section_id,
+        shot: ShotData {
+            length: 0.0,
+            azimuth_in: 0.0,
+            azimuth_out: 0.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        },
+        after_shot_id: None,
+        before_shot_id: None,
+    });
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("zero length"));
+}
+
+#[test]
+fn test_update_shot_rejects_zero_resulting_length() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    let section_id = {
+        let result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+        result.section_id.unwrap()
+    };
+    let shot_id = state.get_project_state().unwrap()
+        .sections.iter().find(|s| s.id == section_id).unwrap()
+        .shots[0].id;
+
+    let result = state.execute(Command::UpdateShot {
+        section_id,
+        shot_id,
+        updates: ShotUpdates {
+            length: Some(0.0),
+            ..Default::default()
+        },
+    });
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("zero length"));
+}
+
+// ============================================================================
+// Coverage gap tests: commands.rs — auto-save
+// ============================================================================
+
+#[test]
+fn test_auto_save_triggers_on_modifying_command() {
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+
+    // Create and save project so it has a file_path
+    state.execute(Command::CreateProject {
+        name: "AutoSave".to_string(),
+        location: None,
+    });
+    let save_path = temp_dir.path().join("autosave.stalx");
+    state.save_project(Some(save_path.clone()));
+
+    // Enable auto-save
+    if let Ok(mut config) = state.config.lock() {
+        config.general.auto_save = true;
+    }
+
+    // Execute a modifying command
+    state.execute(Command::CreateSection {
+        name: Some("NewSec".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+
+    // Verify that auto-save updated the file
+    let db = Database::open_readonly(&save_path).unwrap();
+    let loaded = db.load_project().unwrap();
+    assert_eq!(loaded.sections.len(), 1, "auto-save should persist the new section");
+}
+
+// ============================================================================
+// Coverage gap tests: commands.rs — move_station edge cases
+// ============================================================================
+
+#[test]
+fn test_move_station_rejects_zero_length_result() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    let result = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 0.0,
+            length: 1.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        }],
+    });
+    let section_id = result.section_id.unwrap();
+
+    // Move station 1 backwards by exactly the shot length — should create zero-length shot
+    let result = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(section_id, 1),
+        offset: Coordinates { x: 0.0, y: -1.0, z: 0.0 },
+    });
+    assert!(!result.success, "should reject move that creates zero-length shot");
+    assert!(result.error.unwrap_or_default().contains("zero-length"));
+}
+
+#[test]
+fn test_move_station_last_station() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    let result = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+    });
+    let section_id = result.section_id.unwrap();
+
+    // Move last station (station index 2 for 2 shots)
+    let result = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(section_id, 2),
+        offset: Coordinates { x: 1.0, y: 0.0, z: 0.0 },
+    });
+    assert!(result.success, "move last station failed: {:?}", result.error);
+
+    // Verify only the previous shot was modified (not a next shot)
+    let project = state.get_project_state().unwrap();
+    let section = project.sections.iter().find(|s| s.id == section_id).unwrap();
+    assert_eq!(section.shots.len(), 2);
+}
+
+#[test]
+fn test_move_station_invalid_index() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    let result = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let section_id = result.section_id.unwrap();
+
+    let result = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(section_id, 999),
+        offset: Coordinates { x: 1.0, y: 0.0, z: 0.0 },
+    });
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("Invalid station index"));
+}
