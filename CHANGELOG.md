@@ -4,6 +4,10 @@ All notable changes to Stalagmight will be documented in this file.
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-02-06
+
+- fix(ci): add xdg-utils for AppImage bundling
+
 ## [0.0.6] - 2026-02-06
 
 - fix(build): add bundle config to tauri.conf.json for release packaging
