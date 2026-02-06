@@ -449,6 +449,9 @@ pub struct GeneralConfig {
     /// Date format override: 'locale' (follow language setting) or a locale tag (e.g., 'en-GB')
     #[serde(default = "default_format_locale")]
     pub date_format: String,
+    /// Show splash screen with branding on startup
+    #[serde(default)]
+    pub splash_screen: bool,
 }
 
 fn default_locale() -> String {

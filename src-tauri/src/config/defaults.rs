@@ -37,6 +37,7 @@ impl Default for GeneralConfig {
             locale: "system".to_string(),
             number_format: "locale".to_string(),
             date_format: "locale".to_string(),
+            splash_screen: false,
         }
     }
 }
