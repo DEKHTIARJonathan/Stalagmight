@@ -267,7 +267,7 @@ impl Command {
     /// Get a human-readable description of this command
     pub fn description(&self) -> String {
         match self {
-            Command::CreateProject { name, .. } => format!("Create project '{}'", name),
+            Command::CreateProject { name, .. } => format!("Create project '{name}'"),
             Command::OpenProject { path } => {
                 format!("Open project '{}'", path.display())
             }
@@ -280,13 +280,13 @@ impl Command {
                 format!("Create section '{}'", name.as_deref().unwrap_or("unnamed"))
             }
             Command::DeleteSection { section_id } => {
-                format!("Delete section {}", section_id)
+                format!("Delete section {section_id}")
             }
             Command::UpdateSectionMetadata { section_id, .. } => {
-                format!("Update section {} metadata", section_id)
+                format!("Update section {section_id} metadata")
             }
             Command::CreateShot { section_id, .. } => {
-                format!("Create shot in section {}", section_id)
+                format!("Create shot in section {section_id}")
             }
             Command::UpdateShot {
                 section_id,
@@ -304,41 +304,41 @@ impl Command {
             } => {
                 let pos = shot_display_position(*shot_id, *section_id);
                 if *is_virtual {
-                    format!("Mark shot {}:{} as virtual", section_id, pos)
+                    format!("Mark shot {section_id}:{pos} as virtual")
                 } else {
-                    format!("Mark shot {}:{} as real", section_id, pos)
+                    format!("Mark shot {section_id}:{pos} as real")
                 }
             }
             Command::MergeStations {
                 station_a,
                 station_b,
                 ..
-            } => format!("Merge stations {} and {}", station_a, station_b),
+            } => format!("Merge stations {station_a} and {station_b}"),
             Command::UnmergeStations { station_ref } => {
-                format!("Unmerge station {}", station_ref)
+                format!("Unmerge station {station_ref}")
             }
             Command::CreateLoopClosure {
                 station_a,
                 station_b,
                 ..
-            } => format!("Create loop closure between {} and {}", station_a, station_b),
+            } => format!("Create loop closure between {station_a} and {station_b}"),
             Command::AdjustLoopClosures { method, .. } => {
                 format!("Adjust loop closures ({})", method.as_str())
             }
             Command::SetZeroDatum { station_ref, .. } => {
-                format!("Set zero datum at {}", station_ref)
+                format!("Set zero datum at {station_ref}")
             }
             Command::RemoveZeroDatum { station_ref } => {
-                format!("Remove zero datum from {}", station_ref)
+                format!("Remove zero datum from {station_ref}")
             }
             Command::MoveSection { section_id, .. } => {
-                format!("Move section {}", section_id)
+                format!("Move section {section_id}")
             }
             Command::MoveSegment { section_id, .. } => {
-                format!("Move segment (section {})", section_id)
+                format!("Move segment (section {section_id})")
             }
             Command::MoveStation { station_ref, .. } => {
-                format!("Move station {}", station_ref)
+                format!("Move station {station_ref}")
             }
             Command::Batch { commands } => {
                 format!("Batch of {} commands", commands.len())
@@ -512,7 +512,7 @@ mod tests {
             (
                 Command::CreateShot {
                     section_id: 4,
-                    shot: shot_data.clone(),
+                    shot: shot_data,
                     after_shot_id: None,
                     before_shot_id: None,
                 },

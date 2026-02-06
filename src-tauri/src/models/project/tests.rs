@@ -631,7 +631,7 @@ fn set_zero_datum_rejects_duplicate_in_same_section() {
     let result = project.set_zero_datum(StationRef::new(section_id, 1), gps);
     assert!(result.is_err(), "Should reject duplicate datum in same section");
     let err = result.unwrap_err();
-    assert!(err.contains("already has a zero datum"), "Error should mention existing datum: {}", err);
+    assert!(err.contains("already has a zero datum"), "Error should mention existing datum: {err}");
 }
 
 #[test]
@@ -664,7 +664,7 @@ fn set_zero_datum_rejects_duplicate_in_connected_group() {
     let result = project.set_zero_datum(StationRef::new(b, 1), gps);
     assert!(result.is_err(), "Should reject duplicate datum in connected group");
     let err = result.unwrap_err();
-    assert!(err.contains("already has a zero datum"), "Error should mention existing datum: {}", err);
+    assert!(err.contains("already has a zero datum"), "Error should mention existing datum: {err}");
 }
 
 #[test]
@@ -714,7 +714,7 @@ fn set_zero_datum_error_includes_section_name() {
     let err = result.unwrap_err();
 
     // Error should include section name
-    assert!(err.contains("Main Passage"), "Error should include section name: {}", err);
+    assert!(err.contains("Main Passage"), "Error should include section name: {err}");
 }
 
 #[test]
@@ -740,8 +740,8 @@ fn set_zero_datum_error_includes_station_number() {
     let err = result.unwrap_err();
 
     // Error should reference stations with 0-indexed format (e.g., "Section 0 #2")
-    assert!(err.contains("#2"), "New station should include #2: {}", err);
-    assert!(err.contains("#0"), "Existing datum station should include #0: {}", err);
+    assert!(err.contains("#2"), "New station should include #2: {err}");
+    assert!(err.contains("#0"), "Existing datum station should include #0: {err}");
 }
 
 #[test]
@@ -1254,8 +1254,7 @@ fn closure_expands_connected_sections_with_existing_merges() {
     // A.0 -> A.1 (1m shot) -> B.0 (merge, 0) -> B.1 (1m shot) -> C.0 (closure, 0) -> C.1 (1m shot)
     assert!(
         (path - 3.0).abs() < 1e-6,
-        "Path A.0 to C.1 should be 3.0m (shots only, merge+closure are zero-distance), got {}",
-        path
+        "Path A.0 to C.1 should be 3.0m (shots only, merge+closure are zero-distance), got {path}"
     );
 
     // Merge-only path length: cannot reach C.1 from A.0 without closures
@@ -1268,8 +1267,7 @@ fn closure_expands_connected_sections_with_existing_merges() {
     // Fallback returns sum of A+B shots = 2.0
     assert!(
         (merge_only_path - 2.0).abs() < 1e-6,
-        "Merge-only path should fall back to merged section sum (2.0m), got {}",
-        merge_only_path
+        "Merge-only path should fall back to merged section sum (2.0m), got {merge_only_path}"
     );
 
     // are_stations_in_closure should detect the closure
@@ -1328,8 +1326,7 @@ fn calculate_path_length_prefers_shorter_weighted_path() {
     );
     assert!(
         (path - 2.0).abs() < 1e-6,
-        "Path should prefer length 2.0 over direct 100.0, got {}",
-        path
+        "Path should prefer length 2.0 over direct 100.0, got {path}"
     );
 }
 
@@ -1411,8 +1408,7 @@ fn new_merge_expands_existing_closure_connectivity() {
     // A.0 -> A.1 (1m) -> B.0 (closure, 0) -> B.1 (1m) -> C.0 (merge, 0) -> C.1 (1m)
     assert!(
         (path - 3.0).abs() < 1e-6,
-        "Path should be 3.0m (shots only), got {}",
-        path
+        "Path should be 3.0m (shots only), got {path}"
     );
 }
 
@@ -2860,8 +2856,7 @@ fn calculate_penetration_with_zero_datum() {
     let penetration = project.calculate_penetration(&stations);
     assert!(
         (penetration - 15.0).abs() < 1e-6,
-        "Expected penetration ~15.0, got {}",
-        penetration
+        "Expected penetration ~15.0, got {penetration}"
     );
 }
 
@@ -2879,8 +2874,7 @@ fn calculate_penetration_no_datums_returns_zero() {
     let penetration = project.calculate_penetration(&stations);
     assert!(
         (penetration - 0.0).abs() < 1e-6,
-        "Expected penetration 0.0, got {}",
-        penetration
+        "Expected penetration 0.0, got {penetration}"
     );
 }
 
@@ -3067,7 +3061,7 @@ fn distribute_closure_simple_two_section_loop() {
     let coords_b1_after = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
     let residual = coords_a3_after.distance_to(&coords_b1_after);
     assert!(residual < 0.01,
-        "Endpoints should align after distribution, residual = {}", residual);
+        "Endpoints should align after distribution, residual = {residual}");
 }
 
 #[test]
@@ -3119,7 +3113,7 @@ fn distribute_closure_with_zero_datum_at_endpoint() {
     let coords_b1_after = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
     let residual = coords_a3_after.distance_to(&coords_b1_after);
     assert!(residual < 0.01,
-        "Endpoints should align after distribution, residual = {}", residual);
+        "Endpoints should align after distribution, residual = {residual}");
 }
 
 #[test]
@@ -3171,7 +3165,7 @@ fn distribute_closure_with_zero_datum_mid_path() {
     let coords_b1_after = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
     let residual = coords_a2_after.distance_to(&coords_b1_after);
     assert!(residual < 0.01,
-        "Endpoints should align after distribution, residual = {}", residual);
+        "Endpoints should align after distribution, residual = {residual}");
 }
 
 #[test]
@@ -3246,7 +3240,7 @@ fn distribute_closure_equal_distribution() {
     let coords_b1 = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
     let residual = coords_a3.distance_to(&coords_b1);
     assert!(residual < 0.01,
-        "Endpoints should align after equal distribution, residual = {}", residual);
+        "Endpoints should align after equal distribution, residual = {residual}");
 }
 
 #[test]
@@ -3290,7 +3284,7 @@ fn distribute_closure_fallback_separate_datums() {
     let coords_b1 = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
     let residual = coords_a2.distance_to(&coords_b1);
     assert!(residual < 0.01,
-        "Endpoints should align via fallback datums, residual = {}", residual);
+        "Endpoints should align via fallback datums, residual = {residual}");
 }
 
 // Group D: apply_station_move_internal (tested indirectly)
@@ -3437,7 +3431,7 @@ fn apply_station_move_last_station_only_modifies_incoming() {
     for idx in 0..=2 {
         let c = project.compute_station_raw_coords(StationRef::new(a, idx)).unwrap();
         assert!(c.x.is_finite() && c.y.is_finite() && c.z.is_finite(),
-            "Station {} coords should be finite", idx);
+            "Station {idx} coords should be finite");
     }
 }
 
@@ -3502,7 +3496,7 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
             for idx in 0..=3 {
                 let coords = project.compute_station_raw_coords(StationRef::new(a, idx)).unwrap();
                 assert!(coords.x.is_finite() && coords.y.is_finite() && coords.z.is_finite(),
-                    "A:{} coords should be finite after adjustment", idx);
+                    "A:{idx} coords should be finite after adjustment");
             }
 
             // Zero datum should not have moved
@@ -3515,7 +3509,7 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
             // (e.g., "No eligible loop closures" or convergence failure)
             assert!(
                 e.contains("eligible") || e.contains("converge") || e.contains("datum") || e.contains("failed"),
-                "Unexpected error: {}", e
+                "Unexpected error: {e}"
             );
         }
     }
@@ -3955,8 +3949,8 @@ fn calculate_penetration_single_datum_measures_max_distance() {
     let penetration = project.calculate_penetration(&stations);
 
     // With shots going north (azimuth 0): total horizontal distance = 10 + 15 = 25
-    assert!(penetration > 24.0, "Expected penetration > 24, got {}", penetration);
-    assert!(penetration < 26.0, "Expected penetration < 26, got {}", penetration);
+    assert!(penetration > 24.0, "Expected penetration > 24, got {penetration}");
+    assert!(penetration < 26.0, "Expected penetration < 26, got {penetration}");
 }
 
 // =====================================================================
@@ -4083,7 +4077,7 @@ fn path_length_simple_linear_section() {
         StationRef::new(a, 0),
         StationRef::new(a, 3),
     );
-    assert!((path_len - 33.0).abs() < 1e-6, "Expected 10+15+8=33, got {}", path_len);
+    assert!((path_len - 33.0).abs() < 1e-6, "Expected 10+15+8=33, got {path_len}");
 }
 
 #[test]
@@ -4103,7 +4097,7 @@ fn path_length_partial_section() {
         StationRef::new(a, 1),
         StationRef::new(a, 3),
     );
-    assert!((path_len - 23.0).abs() < 1e-6, "Expected 15+8=23, got {}", path_len);
+    assert!((path_len - 23.0).abs() < 1e-6, "Expected 15+8=23, got {path_len}");
 }
 
 #[test]
@@ -4130,7 +4124,7 @@ fn path_length_through_merge() {
         StationRef::new(a, 0),
         StationRef::new(b, 1),
     );
-    assert!((path_len - 15.0).abs() < 1e-6, "Expected 10+5=15, got {}", path_len);
+    assert!((path_len - 15.0).abs() < 1e-6, "Expected 10+5=15, got {path_len}");
 }
 
 #[test]

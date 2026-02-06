@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use resvg::tiny_skia;
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
 use std::path::Path;
 use usvg::{Options, Tree};
 use ts_rs::TS;
@@ -132,7 +133,7 @@ fn export_pdf(project: &Project, path: &Path, options: &ExportImageOptions) -> R
         &tree,
         svg2pdf::ConversionOptions::default(),
         svg2pdf::PageOptions::default(),
-    ).map_err(|e| anyhow::anyhow!("Failed to convert SVG to PDF: {:?}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Failed to convert SVG to PDF: {e:?}"))?;
 
     // Write file
     std::fs::write(path, pdf).context("Failed to write PDF file")?;
@@ -142,7 +143,7 @@ fn export_pdf(project: &Project, path: &Path, options: &ExportImageOptions) -> R
 }
 
 /// Maximum dimension for PNG export to prevent out-of-memory errors.
-const MAX_PNG_DIMENSION: u32 = 16384;
+const MAX_PNG_DIMENSION: u32 = 16_384;
 
 /// Export project as PNG using resvg rasterization
 fn export_png(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
@@ -168,16 +169,13 @@ fn export_png(project: &Project, path: &Path, options: &ExportImageOptions) -> R
     // Validate size to prevent OOM
     if width > MAX_PNG_DIMENSION || height > MAX_PNG_DIMENSION {
         anyhow::bail!(
-            "Export size {}x{} exceeds maximum {}px. Reduce DPI or use SVG/PDF format.",
-            width,
-            height,
-            MAX_PNG_DIMENSION
+            "Export size {width}x{height} exceeds maximum {MAX_PNG_DIMENSION}px. Reduce DPI or use SVG/PDF format."
         );
     }
 
     // Create pixmap using resvg's re-exported tiny_skia
     let mut pixmap = tiny_skia::Pixmap::new(width, height)
-        .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap for {}x{} image", width, height))?;
+        .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap for {width}x{height} image"))?;
 
     // Render SVG to pixmap with scaling transform
     // Note: resvg 0.43's render() returns () and always succeeds if the tree was parsed.
@@ -205,6 +203,7 @@ fn export_svg(project: &Project, path: &Path, options: &ExportImageOptions) -> R
 }
 
 /// Generate SVG content as string
+#[expect(clippy::unnecessary_wraps)]
 fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Result<String> {
     let stations = project.compute_station_coordinates();
 
@@ -222,7 +221,7 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
     }
 
     // Handle empty project (MUST be before depth range calculation)
-    if min_x == f64::MAX {
+    if min_x >= f64::MAX {
         min_x = 0.0;
         max_x = 100.0;
         min_y = 0.0;
@@ -272,7 +271,8 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
     let mut svg = String::new();
     // CSS: station and zero-datum classes only define stroke (fill is inline)
     // All stroke-widths and font-sizes are scaled to achieve consistent pixel sizes
-    svg.push_str(&format!(
+    let _ = write!(
+        svg,
         r##"<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="{svg_width:.2}" height="{svg_height:.2}" viewBox="{vb_x:.1} {vb_y:.1} {vb_w:.1} {vb_h:.1}">
 <style>
@@ -294,15 +294,15 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
         station_sw = px(1.0),     // 1px station stroke-width
         label_fs = px(10.0),      // 10px label font-size
         section_fs = px(12.0),    // 12px section-name font-size
-    ));
+    );
 
     // Draw grid if enabled
     if options.include_grid {
-        svg.push_str(&format!(
-            r##"<g class="grid" stroke="#333366" stroke-width="{}">
-"##,
+        let _ = writeln!(
+            svg,
+            r##"<g class="grid" stroke="#333366" stroke-width="{}">"##,
             px(0.5) // 0.5px grid stroke-width
-        ));
+        );
         let grid_step = 10.0; // 10 meter grid
         let grid_min_x = (min_x / grid_step).floor() * grid_step;
         let grid_max_x = (max_x / grid_step).ceil() * grid_step;
@@ -311,22 +311,24 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
 
         let mut x = grid_min_x;
         while x <= grid_max_x {
-            svg.push_str(&format!(
+            let _ = write!(
+                svg,
                 r#"<line x1="{:.1}" y1="{:.1}" x2="{:.1}" y2="{:.1}"/>"#,
                 x,
                 -grid_min_y,
                 x,
                 -grid_max_y
-            ));
+            );
             x += grid_step;
         }
 
         let mut y = grid_min_y;
         while y <= grid_max_y {
-            svg.push_str(&format!(
+            let _ = write!(
+                svg,
                 r#"<line x1="{:.1}" y1="{:.1}" x2="{:.1}" y2="{:.1}"/>"#,
                 grid_min_x, -y, grid_max_x, -y
-            ));
+            );
             y += grid_step;
         }
         svg.push_str("</g>\n");
@@ -334,11 +336,11 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
 
     // Draw shots
     for section in &project.sections {
-        svg.push_str(&format!(
-            r#"<g class="section" id="section-{}">
-"#,
+        let _ = writeln!(
+            svg,
+            r#"<g class="section" id="section-{}">"#,
             section.id
-        ));
+        );
 
         // Find stations for this section
         let section_stations: Vec<_> = stations
@@ -352,7 +354,7 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
             let to = &section_stations[i + 1];
 
             let shot = section.shots.get(i);
-            let is_virtual = shot.map(|s| s.is_virtual).unwrap_or(false);
+            let is_virtual = shot.is_some_and(|s| s.is_virtual);
 
             // Virtual shots: 4px dash, 2px gap (scaled to viewBox units)
             let stroke_style = if is_virtual {
@@ -370,40 +372,40 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
             let stroke_color = match options.color_mode {
                 ColorMode::Section => sanitize_color(&section.color).to_string(),
                 ColorMode::Depth => {
-                    let avg_depth = (from.coordinates.z + to.coordinates.z) / 2.0;
+                    let avg_depth = f64::midpoint(from.coordinates.z, to.coordinates.z);
                     get_depth_color(avg_depth, min_depth, max_depth, options.depth_preset)
                 }
             };
 
-            svg.push_str(&format!(
-                r#"<line class="shot" x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" {}/>
-"#,
+            let _ = writeln!(
+                svg,
+                r#"<line class="shot" x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" {}/>"#,
                 from.coordinates.x,
                 -from.coordinates.y, // Flip Y
                 to.coordinates.x,
                 -to.coordinates.y,
                 stroke_color,
                 stroke_style
-            ));
+            );
 
             // Add shot depth label if enabled
             if options.include_shot_data {
-                let avg_depth = (from.coordinates.z + to.coordinates.z) / 2.0;
+                let avg_depth = f64::midpoint(from.coordinates.z, to.coordinates.z);
                 let depth_label =
                     format_depth_label(avg_depth, &options.depth_unit, options.decimal_precision);
                 // Position label at midpoint of shot
-                let mid_x = (from.coordinates.x + to.coordinates.x) / 2.0;
+                let mid_x = f64::midpoint(from.coordinates.x, to.coordinates.x);
                 let mid_y = -(from.coordinates.y + to.coordinates.y) / 2.0;
-                svg.push_str(&format!(
-                    r##"<text class="shot-label" x="{mid_x:.2}" y="{mid_y:.2}" dx="{dx}" dy="{dy}" font-size="{fs}" fill="#aaa">{label}</text>
-"##,
+                let _ = writeln!(
+                    svg,
+                    r##"<text class="shot-label" x="{mid_x:.2}" y="{mid_y:.2}" dx="{dx}" dy="{dy}" font-size="{fs}" fill="#aaa">{label}</text>"##,
                     mid_x = mid_x,
                     mid_y = mid_y,
                     dx = px(2.0),   // 2px offset
                     dy = px(-2.0),  // -2px offset (negative for upward)
                     fs = px(8.0),   // 8px font-size
                     label = depth_label
-                ));
+                );
             }
         }
 
@@ -432,9 +434,7 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
                     project
                         .sections
                         .iter()
-                        .find(|s| s.id == station.station_ref.section_id)
-                        .map(|s| sanitize_color(&s.color).to_string())
-                        .unwrap_or_else(|| DEFAULT_COLOR.to_string())
+                        .find(|s| s.id == station.station_ref.section_id).map_or_else(|| DEFAULT_COLOR.to_string(), |s| sanitize_color(&s.color).to_string())
                 }
                 ColorMode::Depth => {
                     get_depth_color(
@@ -448,15 +448,15 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
         };
 
         // All stations use inline style="fill:..." for consistency
-        svg.push_str(&format!(
-            r#"<circle class="{}" cx="{:.2}" cy="{:.2}" r="{}" style="fill:{}"/>
-"#,
+        let _ = writeln!(
+            svg,
+            r#"<circle class="{}" cx="{:.2}" cy="{:.2}" r="{}" style="fill:{}"/>"#,
             class,
             station.coordinates.x,
             -station.coordinates.y,
             radius,
             fill_color
-        ));
+        );
     }
     svg.push_str("</g>\n");
 
@@ -465,14 +465,14 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
         svg.push_str("<g class=\"labels\">\n");
         for station in &stations {
             if station.is_zero_datum {
-                svg.push_str(&format!(
-                    r#"<text class="label" x="{x:.2}" y="{y:.2}" dx="{dx}" dy="{dy}">ZD</text>
-"#,
+                let _ = writeln!(
+                    svg,
+                    r#"<text class="label" x="{x:.2}" y="{y:.2}" dx="{dx}" dy="{dy}">ZD</text>"#,
                     x = station.coordinates.x,
                     y = -station.coordinates.y,
                     dx = px(8.0),  // 8px offset
                     dy = px(4.0),  // 4px offset
-                ));
+                );
             }
         }
         svg.push_str("</g>\n");
@@ -492,15 +492,15 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
                 if !section_stations.is_empty() {
                     let mid = section_stations.len() / 2;
                     if let Some(station) = section_stations.get(mid) {
-                        svg.push_str(&format!(
-                            r#"<text class="section-name" x="{x:.2}" y="{y:.2}" dx="{dx}" dy="{dy}">{name}</text>
-"#,
+                        let _ = writeln!(
+                            svg,
+                            r#"<text class="section-name" x="{x:.2}" y="{y:.2}" dx="{dx}" dy="{dy}">{name}</text>"#,
                             x = station.coordinates.x,
                             y = -station.coordinates.y,
                             dx = px(5.0),   // 5px offset
                             dy = px(-5.0),  // -5px offset (upward)
                             name = escape_xml(name)
-                        ));
+                        );
                     }
                 }
             }
@@ -604,7 +604,7 @@ fn format_depth_label(depth_meters: f64, unit: &str, precision: u8) -> String {
     let clamped_precision = precision.min(MAX_DECIMAL_PRECISION) as usize;
     // XML-escape the unit to prevent markup injection
     let safe_unit = escape_xml(unit);
-    format!("{:.prec$}{}", value, safe_unit, prec = clamped_precision)
+    format!("{value:.clamped_precision$}{safe_unit}")
 }
 
 /// Number of gradient samples for legend to match backend HSL interpolation exactly.
@@ -673,7 +673,7 @@ fn generate_depth_legend(
     let max_label = format_depth_label(max_depth, depth_unit, precision);
 
     // Use unique gradient ID with preset name to avoid collisions
-    let gradient_id = format!("depth-gradient-{:?}", preset).to_lowercase();
+    let gradient_id = format!("depth-gradient-{preset:?}").to_lowercase();
 
     // Text offsets (in viewBox units, derived from pixel values)
     let text_y_offset = px(3.0); // 3px above the bar for min label
@@ -885,8 +885,8 @@ mod tests {
         let result = export_png(&project, &path, &options);
         assert!(result.is_err(), "PNG export should fail for oversized image");
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("16384"), "Error should mention size limit: {}", err);
-        assert!(err.contains("Reduce DPI"), "Error should suggest reducing DPI: {}", err);
+        assert!(err.contains("16384"), "Error should mention size limit: {err}");
+        assert!(err.contains("Reduce DPI"), "Error should suggest reducing DPI: {err}");
     }
 
     #[test]
@@ -923,7 +923,7 @@ mod tests {
         let result = export_png(&project, &path, &options);
         assert!(result.is_err(), "PNG export should fail for DPI=0");
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("DPI must be at least 1"), "Error should mention DPI requirement: {}", err);
+        assert!(err.contains("DPI must be at least 1"), "Error should mention DPI requirement: {err}");
     }
 
     // === Depth coloring tests ===
@@ -970,9 +970,9 @@ mod tests {
         let svg = generate_svg_string(&project, &options).unwrap();
 
         // Stations should have inline style with section color
-        assert!(svg.contains("style=\"fill:#4ecdc4\""), "Station should have section color: {}", svg);
+        assert!(svg.contains("style=\"fill:#4ecdc4\""), "Station should have section color: {svg}");
         // Shots should use section color
-        assert!(svg.contains("stroke=\"#4ecdc4\""), "Shot should have section color stroke: {}", svg);
+        assert!(svg.contains("stroke=\"#4ecdc4\""), "Shot should have section color stroke: {svg}");
     }
 
     #[test]
@@ -989,7 +989,7 @@ mod tests {
         // Should not contain the section color as fill or stroke
         assert!(!svg.contains("stroke=\"#ff0000\""), "Should not use section color for shots in depth mode");
         // Stations should have inline style="fill:..." (not CSS class fill)
-        assert!(svg.contains("style=\"fill:#"), "Stations should have inline fill style: {}", svg);
+        assert!(svg.contains("style=\"fill:#"), "Stations should have inline fill style: {svg}");
     }
 
     #[test]
@@ -1001,14 +1001,14 @@ mod tests {
 
         // CSS .station class should NOT have fill property (stroke-width is dynamic)
         assert!(svg.contains(".station { stroke: #000000; stroke-width:"),
-            "CSS .station should have stroke properties: {}", svg);
+            "CSS .station should have stroke properties: {svg}");
         assert!(!svg.contains(".station { fill:"),
-            "CSS .station should NOT have fill property: {}", svg);
+            "CSS .station should NOT have fill property: {svg}");
         // CSS .zero-datum class should NOT have fill property
         assert!(svg.contains(".zero-datum { stroke: #000000; stroke-width:"),
-            "CSS .zero-datum should have stroke properties: {}", svg);
+            "CSS .zero-datum should have stroke properties: {svg}");
         assert!(!svg.contains(".zero-datum { fill:"),
-            "CSS .zero-datum should NOT have fill property: {}", svg);
+            "CSS .zero-datum should NOT have fill property: {svg}");
     }
 
     #[test]
@@ -1022,8 +1022,7 @@ mod tests {
         let circle_count = svg.matches("<circle").count();
         let inline_fill_count = svg.matches("style=\"fill:").count();
         assert_eq!(circle_count, inline_fill_count,
-            "All {} circles should have inline fill style, but only {} have it",
-            circle_count, inline_fill_count);
+            "All {circle_count} circles should have inline fill style, but only {inline_fill_count} have it");
     }
 
     #[test]
@@ -1041,7 +1040,7 @@ mod tests {
         };
         let svg_section = generate_svg_string(&project, &options_section).unwrap();
         assert!(svg_section.contains("style=\"fill:#ffd700\""),
-            "Zero datum should be gold in section mode: {}", svg_section);
+            "Zero datum should be gold in section mode: {svg_section}");
 
         // Test in depth mode
         let options_depth = ExportImageOptions {
@@ -1050,7 +1049,7 @@ mod tests {
         };
         let svg_depth = generate_svg_string(&project, &options_depth).unwrap();
         assert!(svg_depth.contains("style=\"fill:#ffd700\""),
-            "Zero datum should be gold in depth mode: {}", svg_depth);
+            "Zero datum should be gold in depth mode: {svg_depth}");
     }
 
     #[test]
@@ -1251,8 +1250,8 @@ mod tests {
         // The test project has shots with depths: 0->5m (avg 2.5m) and 5->10m (avg 7.5m)
         // 2.5m * 3.28084 = 8.2ft, 7.5m * 3.28084 = 24.6ft
         assert!(svg.contains("ft</text>"), "Shot labels should show feet when depth_unit=ft");
-        assert!(svg.contains("8.2ft"), "Shot label should show 2.5m converted to 8.2ft: {}", svg);
-        assert!(svg.contains("24.6ft"), "Shot label should show 7.5m converted to 24.6ft: {}", svg);
+        assert!(svg.contains("8.2ft"), "Shot label should show 2.5m converted to 8.2ft: {svg}");
+        assert!(svg.contains("24.6ft"), "Shot label should show 7.5m converted to 24.6ft: {svg}");
     }
 
     #[test]
@@ -1270,7 +1269,7 @@ mod tests {
     #[test]
     fn test_format_depth_label_precision_clamped() {
         // Large precision should be clamped to MAX_DECIMAL_PRECISION (6)
-        let label = format_depth_label(1.123456789, "m", 255);
+        let label = format_depth_label(1.123_456_789, "m", 255);
         assert_eq!(label, "1.123457m", "Precision should be clamped to 6");
     }
 
@@ -1360,7 +1359,7 @@ mod tests {
         let svg = generate_svg_string(&project, &options).unwrap();
 
         // Should not contain infinity or NaN in legend
-        assert!(!svg.contains("inf"), "Empty project should not have infinity in legend: {}", svg);
+        assert!(!svg.contains("inf"), "Empty project should not have infinity in legend: {svg}");
         assert!(!svg.contains("NaN"), "Empty project should not have NaN in legend");
         // Should show flat (0.0m to 0.0m)
         assert!(svg.contains("(Flat)"), "Empty project should show flat indicator");
@@ -1427,7 +1426,7 @@ mod tests {
         if let Some(r) = extract_attr_value(&svg, "r=\"") {
             // Scale factor for test project is approximately 800 / (10 + 40) = 16
             // r = 3px / 16 ≈ 0.1875
-            assert!(r > 0.0 && r < 1.0, "Station radius should be scaled to viewBox units: {}", r);
+            assert!(r > 0.0 && r < 1.0, "Station radius should be scaled to viewBox units: {r}");
         } else {
             panic!("Could not find station radius in SVG");
         }
@@ -1441,7 +1440,7 @@ mod tests {
         // CSS .shot stroke-width should be scaled
         if let Some(sw) = extract_attr_value(&svg, ".shot { stroke-width: ") {
             // stroke-width = 2px / 16 ≈ 0.125 (for test project scale)
-            assert!(sw > 0.0 && sw < 1.0, "Shot stroke-width should be scaled: {}", sw);
+            assert!(sw > 0.0 && sw < 1.0, "Shot stroke-width should be scaled: {sw}");
         } else {
             panic!("Could not find shot stroke-width in SVG CSS");
         }
@@ -1458,7 +1457,7 @@ mod tests {
         // Grid stroke-width should be scaled (0.5px target)
         if let Some(sw) = extract_attr_value(&svg, "class=\"grid\" stroke=\"#333366\" stroke-width=\"") {
             // stroke-width = 0.5px / 16 ≈ 0.03125
-            assert!(sw > 0.0 && sw < 0.5, "Grid stroke-width should be scaled: {}", sw);
+            assert!(sw > 0.0 && sw < 0.5, "Grid stroke-width should be scaled: {sw}");
         } else {
             panic!("Could not find grid stroke-width in SVG");
         }
@@ -1492,7 +1491,7 @@ mod tests {
         assert!(svg.contains("stroke-dasharray=\""), "Virtual shot should have dasharray");
         // The dasharray values should be small (scaled from 4,2 pixels)
         if let Some(dash) = extract_attr_value(&svg, "stroke-dasharray=\"") {
-            assert!(dash > 0.0 && dash < 1.0, "Dash value should be scaled: {}", dash);
+            assert!(dash > 0.0 && dash < 1.0, "Dash value should be scaled: {dash}");
         }
     }
 
@@ -1504,7 +1503,7 @@ mod tests {
         // CSS .label font-size should be scaled
         if let Some(fs) = extract_attr_value(&svg, ".label { font-family: sans-serif; font-size: ") {
             // font-size = 10px / 16 ≈ 0.625
-            assert!(fs > 0.0 && fs < 2.0, "Label font-size should be scaled: {}", fs);
+            assert!(fs > 0.0 && fs < 2.0, "Label font-size should be scaled: {fs}");
         } else {
             panic!("Could not find label font-size in SVG CSS");
         }
@@ -1549,8 +1548,7 @@ mod tests {
         if let Some(r) = extract_attr_value(&svg, "r=\"") {
             let pixel_r = r * expected_scale;
             assert!((pixel_r - 3.0).abs() < tolerance,
-                "Station radius * scale should be ~3px, got {}px (r={}, scale={})",
-                pixel_r, r, expected_scale);
+                "Station radius * scale should be ~3px, got {pixel_r}px (r={r}, scale={expected_scale})");
         } else {
             panic!("Could not find station radius in SVG");
         }
@@ -1559,8 +1557,7 @@ mod tests {
         if let Some(sw) = extract_attr_value(&svg, ".shot { stroke-width: ") {
             let pixel_sw = sw * expected_scale;
             assert!((pixel_sw - 2.0).abs() < tolerance,
-                "Shot stroke-width * scale should be ~2px, got {}px",
-                pixel_sw);
+                "Shot stroke-width * scale should be ~2px, got {pixel_sw}px");
         } else {
             panic!("Could not find shot stroke-width in SVG CSS");
         }
@@ -1617,8 +1614,7 @@ mod tests {
             let pixel_value = r * scale;
             assert!(
                 (pixel_value - 3.0).abs() < tolerance,
-                "Station radius should be 3px (±{}px), got {}px (r={}, scale={})",
-                tolerance, pixel_value, r, scale
+                "Station radius should be 3px (±{tolerance}px), got {pixel_value}px (r={r}, scale={scale})"
             );
         } else {
             panic!("Could not find station radius in SVG");
@@ -1638,8 +1634,7 @@ mod tests {
             let pixel_value = sw * scale;
             assert!(
                 (pixel_value - 2.0).abs() < tolerance,
-                "Shot stroke-width should be 2px (±{}px), got {}px",
-                tolerance, pixel_value
+                "Shot stroke-width should be 2px (±{tolerance}px), got {pixel_value}px"
             );
         } else {
             panic!("Could not find shot stroke-width in SVG CSS");
@@ -1662,8 +1657,7 @@ mod tests {
             let pixel_value = sw * scale;
             assert!(
                 (pixel_value - 0.5).abs() < tolerance,
-                "Grid stroke-width should be 0.5px (±{}px), got {}px",
-                tolerance, pixel_value
+                "Grid stroke-width should be 0.5px (±{tolerance}px), got {pixel_value}px"
             );
         } else {
             panic!("Could not find grid stroke-width in SVG");
@@ -1700,15 +1694,13 @@ mod tests {
         let pixel_dash = dash * scale;
         assert!(
             (pixel_dash - 4.0).abs() < tolerance,
-            "Virtual shot dash should be 4px (±{}px), got {}px",
-            tolerance, pixel_dash
+            "Virtual shot dash should be 4px (±{tolerance}px), got {pixel_dash}px"
         );
 
         let pixel_gap = gap * scale;
         assert!(
             (pixel_gap - 2.0).abs() < tolerance,
-            "Virtual shot gap should be 2px (±{}px), got {}px",
-            tolerance, pixel_gap
+            "Virtual shot gap should be 2px (±{tolerance}px), got {pixel_gap}px"
         );
     }
 
@@ -1725,8 +1717,7 @@ mod tests {
             let pixel_value = fs * scale;
             assert!(
                 (pixel_value - 10.0).abs() < tolerance,
-                "Label font-size should be 10px (±{}px), got {}px",
-                tolerance, pixel_value
+                "Label font-size should be 10px (±{tolerance}px), got {pixel_value}px"
             );
         } else {
             panic!("Could not find label font-size in SVG CSS");
@@ -1746,8 +1737,7 @@ mod tests {
             let pixel_value = fs * scale;
             assert!(
                 (pixel_value - 12.0).abs() < tolerance,
-                "Section-name font-size should be 12px (±{}px), got {}px",
-                tolerance, pixel_value
+                "Section-name font-size should be 12px (±{tolerance}px), got {pixel_value}px"
             );
         } else {
             panic!("Could not find section-name font-size in SVG CSS");
@@ -1770,8 +1760,7 @@ mod tests {
                 let pixel_r = r * scale;
                 assert!(
                     (pixel_r - 3.0).abs() < tolerance,
-                    "Station radius at {}m extent should be 3px (±{}px), got {}px",
-                    extent, tolerance, pixel_r
+                    "Station radius at {extent}m extent should be 3px (±{tolerance}px), got {pixel_r}px"
                 );
             }
 
@@ -1780,8 +1769,7 @@ mod tests {
                 let pixel_sw = sw * scale;
                 assert!(
                     (pixel_sw - 2.0).abs() < tolerance,
-                    "Shot stroke-width at {}m extent should be 2px (±{}px), got {}px",
-                    extent, tolerance, pixel_sw
+                    "Shot stroke-width at {extent}m extent should be 2px (±{tolerance}px), got {pixel_sw}px"
                 );
             }
         }
@@ -1806,8 +1794,7 @@ mod tests {
                 let pixel_r = r * scale;
                 assert!(
                     (pixel_r - 6.0).abs() < tolerance,
-                    "Zero-datum radius should be 6px (±{}px), got {}px",
-                    tolerance, pixel_r
+                    "Zero-datum radius should be 6px (±{tolerance}px), got {pixel_r}px"
                 );
             } else {
                 panic!("Could not find radius for zero-datum circle");
@@ -1844,7 +1831,7 @@ mod tests {
 
             // Verify PNG magic bytes
             let magic = &contents[0..8];
-            assert_eq!(magic, &[137, 80, 78, 71, 13, 10, 26, 10], "Invalid PNG magic at {} DPI", dpi);
+            assert_eq!(magic, &[137, 80, 78, 71, 13, 10, 26, 10], "Invalid PNG magic at {dpi} DPI");
 
             // PNG IHDR chunk: width at bytes 16-19, height at 20-23 (big-endian)
             let width = u32::from_be_bytes([contents[16], contents[17], contents[18], contents[19]]);
@@ -1860,8 +1847,7 @@ mod tests {
             assert!(
                 larger_dim >= expected_dim.saturating_sub(dim_tolerance) &&
                 larger_dim <= expected_dim + dim_tolerance,
-                "PNG at {} DPI: expected ~{}px, got {}x{}",
-                dpi, expected_dim, width, height
+                "PNG at {dpi} DPI: expected ~{expected_dim}px, got {width}x{height}"
             );
 
             std::fs::remove_file(&path).ok();

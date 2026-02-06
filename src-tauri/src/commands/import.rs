@@ -43,14 +43,14 @@ pub fn calculate_file_hash(path: PathBuf) -> Result<String, String> {
             reason = %e,
             "Failed to read file while calculating import hash"
         );
-        format!("Failed to read file: {}", e)
+        format!("Failed to read file: {e}")
     })?;
 
     let mut hasher = Sha256::new();
     hasher.update(&contents);
     let result = hasher.finalize();
 
-    let hash = format!("{:x}", result);
+    let hash = format!("{result:x}");
     tracing::debug!(
         path = ?path,
         purpose = "detect duplicate imports",

@@ -166,7 +166,7 @@ fn format_station_with_name(
     section_names: &HashMap<SectionId, Option<String>>,
 ) -> String {
     if let Some(Some(name)) = section_names.get(&station_ref.section_id) {
-        format!("{} ({})", station_ref, name)
+        format!("{station_ref} ({name})")
     } else {
         station_ref.to_string()
     }
@@ -204,24 +204,24 @@ fn derive_command_details(
             Some(format!("Method: {}", method.as_str()))
         }
         Command::SetShotVirtual { is_virtual, .. } => {
-            Some(format!("Virtual: {}", is_virtual))
+            Some(format!("Virtual: {is_virtual}"))
         }
         Command::CreateShot { shot, .. } => {
             Some(format!("Length: {:.2}, Azimuth: {:.1}", shot.length, shot.azimuth_in))
         }
         Command::CreateSection { name, .. } => {
-            name.as_ref().map(|n| format!("Name: {}", n))
+            name.as_ref().map(|n| format!("Name: {n}"))
         }
         Command::UpdateShot { updates, .. } => {
             let mut parts = Vec::new();
             if let Some(l) = updates.length {
-                parts.push(format!("Length: {:.2}", l));
+                parts.push(format!("Length: {l:.2}"));
             }
             if let Some(a) = updates.azimuth_in {
-                parts.push(format!("Azimuth: {:.1}", a));
+                parts.push(format!("Azimuth: {a:.1}"));
             }
             if let Some(d) = updates.depth_in {
-                parts.push(format!("Depth: {:.2}", d));
+                parts.push(format!("Depth: {d:.2}"));
             }
             if parts.is_empty() { None } else { Some(parts.join(", ")) }
         }
@@ -254,12 +254,12 @@ fn derive_preview_data(
                 ];
                 for &(label, new_val, json_key, _) in f64_fields {
                     if let Some(new_v) = new_val {
-                        let old_v = prev.get(json_key).and_then(|v| v.as_f64());
+                        let old_v = prev.get(json_key).and_then(serde_json::Value::as_f64);
                         let fmt = if label.contains("Azimuth") { 1usize } else { 2 };
                         changes.push(FieldChange {
                             field: label.to_string(),
-                            old_value: old_v.map(|v| format!("{:.prec$}", v, prec = fmt)).unwrap_or_default(),
-                            new_value: format!("{:.prec$}", new_v, prec = fmt),
+                            old_value: old_v.map(|v| format!("{v:.fmt$}")).unwrap_or_default(),
+                            new_value: format!("{new_v:.fmt$}"),
                         });
                     }
                 }
@@ -275,11 +275,11 @@ fn derive_preview_data(
                 ];
                 for &(label, update_val, json_key) in opt_f64_fields {
                     if let Some(ref new_opt) = update_val {
-                        let old_v = prev.get(json_key).and_then(|v| v.as_f64());
+                        let old_v = prev.get(json_key).and_then(serde_json::Value::as_f64);
                         changes.push(FieldChange {
                             field: label.to_string(),
-                            old_value: old_v.map(|v| format!("{:.2}", v)).unwrap_or_default(),
-                            new_value: new_opt.map(|v| format!("{:.2}", v)).unwrap_or_default(),
+                            old_value: old_v.map(|v| format!("{v:.2}")).unwrap_or_default(),
+                            new_value: new_opt.map(|v| format!("{v:.2}")).unwrap_or_default(),
                         });
                     }
                 }
@@ -299,7 +299,7 @@ fn derive_preview_data(
 
                 // is_virtual
                 if let Some(new_virtual) = updates.is_virtual {
-                    let old_virtual = prev.get("is_virtual").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let old_virtual = prev.get("is_virtual").and_then(serde_json::Value::as_bool).unwrap_or(false);
                     changes.push(FieldChange {
                         field: "Virtual".to_string(),
                         old_value: old_virtual.to_string(),
@@ -309,11 +309,11 @@ fn derive_preview_data(
 
                 // Temperature (Option<Option<f64>>)
                 if let Some(ref new_temp) = updates.temperature {
-                    let old_temp = prev.get("temperature").and_then(|v| v.as_f64());
+                    let old_temp = prev.get("temperature").and_then(serde_json::Value::as_f64);
                     changes.push(FieldChange {
                         field: "Temperature".to_string(),
-                        old_value: old_temp.map(|v| format!("{:.1}", v)).unwrap_or_default(),
-                        new_value: new_temp.map(|v| format!("{:.1}", v)).unwrap_or_default(),
+                        old_value: old_temp.map(|v| format!("{v:.1}")).unwrap_or_default(),
+                        new_value: new_temp.map(|v| format!("{v:.1}")).unwrap_or_default(),
                     });
                 }
             }
@@ -323,7 +323,7 @@ fn derive_preview_data(
             } else {
                 let total = changes.len();
                 let shown: Vec<_> = changes.into_iter().take(5).collect();
-                let additional = if total > 5 { total - 5 } else { 0 };
+                let additional = total.saturating_sub(5);
                 Some(PreviewData {
                     changes: shown,
                     additional_changes: additional,
@@ -365,7 +365,7 @@ fn derive_preview_data(
                     }
                 }
                 if let Some(new_date_opt) = &updates.date {
-                    let new_date = new_date_opt.as_ref().map(|date| date.to_string()).unwrap_or_default();
+                    let new_date = new_date_opt.as_ref().map(ToString::to_string).unwrap_or_default();
                     let old_date = prev.get("date")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
@@ -404,13 +404,12 @@ fn derive_preview_data(
                     }
                 }
                 if let Some(new_quality) = updates.quality {
-                    let old_quality = prev.get("quality").and_then(|v| v.as_f64());
+                    let old_quality = prev.get("quality").and_then(serde_json::Value::as_f64);
                     let differs = old_quality
-                        .map(|old| (old - new_quality).abs() > 1e-6)
-                        .unwrap_or(true);
+                        .is_none_or(|old| (old - new_quality).abs() > 1e-6);
                     if differs {
-                        let old_value = old_quality.map(|v| format!("{:.2}", v)).unwrap_or_default();
-                        let new_value = format!("{:.2}", new_quality);
+                        let old_value = old_quality.map(|v| format!("{v:.2}")).unwrap_or_default();
+                        let new_value = format!("{new_quality:.2}");
                         changes.push(FieldChange {
                             field: "Closure Adj. Weight".to_string(),
                             old_value,
@@ -425,7 +424,7 @@ fn derive_preview_data(
             } else {
                 let total = changes.len();
                 let shown: Vec<_> = changes.into_iter().take(3).collect();
-                let additional = if total > 3 { total - 3 } else { 0 };
+                let additional = total.saturating_sub(3);
                 Some(PreviewData {
                     changes: shown,
                     additional_changes: additional,
@@ -467,8 +466,7 @@ fn derive_preview_data(
         // DeleteSection - extract section info from ProjectSnapshotPair before snapshot
         (Command::DeleteSection { section_id }, UndoData::ProjectSnapshotPair { before, .. }) => {
             if let Ok(project) = serde_json::from_str::<crate::models::Project>(before) {
-                if let Some(section) = project.get_section(*section_id) {
-                    Some(PreviewData {
+                project.get_section(*section_id).map(|section| PreviewData {
                         changes: vec![
                             FieldChange {
                                 field: "Name".to_string(),
@@ -483,9 +481,6 @@ fn derive_preview_data(
                         ],
                         additional_changes: 0,
                     })
-                } else {
-                    None
-                }
             } else {
                 None
             }
@@ -639,7 +634,7 @@ fn derive_preview_data(
                     FieldChange {
                         field: "Stations".to_string(),
                         old_value: String::new(),
-                        new_value: format!("{} \u{2194} {}", station_a, station_b),
+                        new_value: format!("{station_a} \u{2194} {station_b}"),
                     },
                     FieldChange {
                         field: "Strategy".to_string(),
@@ -916,7 +911,7 @@ mod tests {
         let entry = UndoEntry {
             command: Command::SetZeroDatum {
                 station_ref: StationRef::new(0, 0),
-                coordinates: GpsCoordinates::new(45.123456, -73.654321, 100.0).unwrap(),
+                coordinates: GpsCoordinates::new(45.123_456, -73.654_321, 100.0).unwrap(),
             },
             undo_data: UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(0, 0),
@@ -1084,7 +1079,7 @@ mod tests {
 
     #[test]
     fn test_derive_preview_update_section_metadata_name_change() {
-        use crate::models::{SectionUpdates, SurveyDirection};
+        use crate::models::SectionUpdates;
 
         let entry = UndoEntry {
             command: Command::UpdateSectionMetadata {

@@ -227,7 +227,7 @@ fn test_save_load_multiple_sections() {
     // Verify section 2 (Out direction, virtual shot)
     let s2 = &loaded.sections[1];
     assert_eq!(s2.direction, SurveyDirection::Out);
-    assert_eq!(s2.shots[0].is_virtual, true);
+    assert!(s2.shots[0].is_virtual);
     assert_eq!(s2.shots[0].marker_index, Some(42));
     assert_eq!(s2.shots[0].temperature, Some(18.5));
 
@@ -334,17 +334,17 @@ fn test_save_load_zero_datums() {
     let zd1 = ZeroDatum {
         station_ref: StationRef::new(0, 0),
         gps: GpsCoordinates {
-            latitude: 45.12345678901234,   // 14 decimal places
-            longitude: -93.98765432109876, // 14 decimal places
-            depth_reference: 123.456789,
+            latitude: 45.123_456_789_012_34,   // 14 decimal places
+            longitude: -93.987_654_321_098_76, // 14 decimal places
+            depth_reference: 123.456_789,
         },
     };
 
     let zd2 = ZeroDatum {
         station_ref: StationRef::new(0, 1),
         gps: GpsCoordinates {
-            latitude: -33.85678901234567,
-            longitude: 151.20987654321098,
+            latitude: -33.856_789_012_345_67,
+            longitude: 151.209_876_543_210_98,
             depth_reference: -15.5,
         },
     };
@@ -369,13 +369,13 @@ fn test_save_load_zero_datums() {
     assert_eq!(loaded_zd1.station_ref.section_id, 0);
     assert_eq!(loaded_zd1.station_ref.station_index, 0);
     // Check precision to 8 decimal places
-    assert!((loaded_zd1.gps.latitude - 45.12345678901234).abs() < 1e-8);
-    assert!((loaded_zd1.gps.longitude - (-93.98765432109876)).abs() < 1e-8);
-    assert!((loaded_zd1.gps.depth_reference - 123.456789).abs() < 1e-6);
+    assert!((loaded_zd1.gps.latitude - 45.123_456_789_012_34).abs() < 1e-8);
+    assert!((loaded_zd1.gps.longitude - (-93.987_654_321_098_76)).abs() < 1e-8);
+    assert!((loaded_zd1.gps.depth_reference - 123.456_789).abs() < 1e-6);
 
     let loaded_zd2 = &loaded.zero_datums[1];
-    assert!((loaded_zd2.gps.latitude - (-33.85678901234567)).abs() < 1e-8);
-    assert!((loaded_zd2.gps.longitude - 151.20987654321098).abs() < 1e-8);
+    assert!((loaded_zd2.gps.latitude - (-33.856_789_012_345_67)).abs() < 1e-8);
+    assert!((loaded_zd2.gps.longitude - 151.209_876_543_210_98).abs() < 1e-8);
     assert!((loaded_zd2.gps.depth_reference - (-15.5)).abs() < 1e-6);
 }
 
@@ -390,7 +390,7 @@ fn test_save_load_section_offsets() {
     // Create sections
     for i in 0..3 {
         let section = SectionData {
-            name: Some(format!("Section {}", i)),
+            name: Some(format!("Section {i}")),
             color: "#000000".to_string(),
             shots: vec![ShotData { azimuth_in: 0.0, azimuth_out: 180.0, length: 5.0, depth_in: 0.0, depth_out: 1.0, ..Default::default() }],
             ..Default::default()
@@ -399,7 +399,7 @@ fn test_save_load_section_offsets() {
     }
 
     // Add section offsets with varying precision
-    project.section_offsets.insert(0, (10.123456789, -20.987654321));
+    project.section_offsets.insert(0, (10.123_456_789, -20.987_654_321));
     project.section_offsets.insert(1, (0.0, 0.0));
     project.section_offsets.insert(2, (-100.5, 200.75));
 
@@ -416,8 +416,8 @@ fn test_save_load_section_offsets() {
     assert_eq!(loaded.section_offsets.len(), 3);
 
     let offset0 = loaded.section_offsets.get(&0).unwrap();
-    assert!((offset0.0 - 10.123456789).abs() < 1e-8);
-    assert!((offset0.1 - (-20.987654321)).abs() < 1e-8);
+    assert!((offset0.0 - 10.123_456_789).abs() < 1e-8);
+    assert!((offset0.1 - (-20.987_654_321)).abs() < 1e-8);
 
     let offset1 = loaded.section_offsets.get(&1).unwrap();
     assert_eq!(offset1.0, 0.0);
@@ -661,7 +661,7 @@ fn test_open_existing_vs_open_new() {
     let result = Database::open_existing(&nonexistent_path);
     assert!(result.is_err());
     let err_msg = result.err().unwrap().to_string();
-    assert!(err_msg.contains("does not exist"), "Expected 'does not exist' error, got: {}", err_msg);
+    assert!(err_msg.contains("does not exist"), "Expected 'does not exist' error, got: {err_msg}");
 
     // Test 2: open() on nonexistent file should create it
     {
@@ -675,7 +675,7 @@ fn test_open_existing_vs_open_new() {
         let result = Database::open_existing(&db_path);
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
-        assert!(err_msg.contains("valid Stalagmight project"), "Expected 'valid Stalagmight project' error, got: {}", err_msg);
+        assert!(err_msg.contains("valid Stalagmight project"), "Expected 'valid Stalagmight project' error, got: {err_msg}");
     }
 
     // Test 4: Save a project, then open_existing should succeed
@@ -788,7 +788,7 @@ fn test_undo_stack_persistence() {
         (r#"{"type":"AddShot"}"#.to_string(), r#"{"shot_id":1}"#.to_string()),
         (r#"{"type":"UpdateShot"}"#.to_string(), r#"{"old_data":{}}"#.to_string()),
     ];
-    db.save_undo_stack(entries.clone()).unwrap();
+    db.save_undo_stack(entries).unwrap();
 
     // Load undo stack
     let loaded = db.load_undo_stack().unwrap();
@@ -853,7 +853,7 @@ fn test_merged_with_from_fractal_iter2() {
         .join("fractal_plant_iter2.stalx");
 
     // Make sure the fixture exists
-    assert!(fixture_path.exists(), "Fixture file not found: {:?}", fixture_path);
+    assert!(fixture_path.exists(), "Fixture file not found: {fixture_path:?}");
 
     // Load the project
     let db = Database::open_existing(&fixture_path).unwrap();
@@ -958,7 +958,7 @@ fn test_merged_with_from_fractal_iter4() {
         .join("fractal_plant_iter4.stalx");
 
     // Make sure the fixture exists
-    assert!(fixture_path.exists(), "Fixture file not found: {:?}", fixture_path);
+    assert!(fixture_path.exists(), "Fixture file not found: {fixture_path:?}");
 
     // Load the project
     let db = Database::open_existing(&fixture_path).unwrap();
@@ -1014,7 +1014,7 @@ fn test_integrity_check_passes_on_valid_db() {
     let db = Database::open_existing(&db_path).unwrap();
     // full_integrity_check should also pass
     let errors = db.full_integrity_check().unwrap();
-    assert!(errors.is_empty(), "Expected no integrity errors, got: {:?}", errors);
+    assert!(errors.is_empty(), "Expected no integrity errors, got: {errors:?}");
 }
 
 #[test]
@@ -1173,7 +1173,7 @@ fn test_undo_stack_timestamps_round_trip() {
         ("cmd3".to_string(), "undo3".to_string(), Some("2025-01-15T12:00:00+00:00".to_string())),
     ];
 
-    db.save_undo_stack_with_timestamps(entries.clone()).unwrap();
+    db.save_undo_stack_with_timestamps(entries).unwrap();
     let loaded = db.load_undo_stack_with_timestamps().unwrap();
 
     assert_eq!(loaded.len(), 3);

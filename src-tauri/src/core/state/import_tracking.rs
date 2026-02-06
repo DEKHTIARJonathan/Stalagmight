@@ -19,9 +19,8 @@ impl AppState {
 
     /// Track an imported file hash in the project
     pub fn track_imported_file(&self, hash: String) -> CommandResult {
-        let mut proj_guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+        let Ok(mut proj_guard) = self.project.lock() else {
+            return CommandResult::failure("Failed to lock project".to_string());
         };
 
         if let Some(project) = proj_guard.as_mut() {

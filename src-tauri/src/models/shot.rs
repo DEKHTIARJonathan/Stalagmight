@@ -34,12 +34,14 @@ pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {
 }
 
 /// Convert horizontal + vertical components into slope length.
+#[expect(dead_code)]
 pub(crate) fn slope_length_from_components(horizontal: f64, dz: f64) -> f64 {
     (horizontal * horizontal + dz * dz).sqrt()
 }
 
 /// Compute pitch (degrees) from horizontal + vertical components.
 /// Positive pitch corresponds to increasing depth (downwards).
+#[expect(dead_code)]
 pub(crate) fn pitch_from_components(horizontal: f64, dz: f64) -> f64 {
     dz.atan2(horizontal).to_degrees()
 }
@@ -216,10 +218,10 @@ impl Shot {
             self.depth_out = v;
         }
         if let Some(v) = &updates.pitch_in {
-            self.pitch_in = v.clone();
+            self.pitch_in = *v;
         }
         if let Some(v) = &updates.pitch_out {
-            self.pitch_out = v.clone();
+            self.pitch_out = *v;
         }
         if let Some(v) = &updates.left {
             self.left = *v;
@@ -234,7 +236,7 @@ impl Shot {
             self.down = *v;
         }
         if let Some(v) = &updates.comment {
-            self.comment = v.clone();
+            self.comment.clone_from(v);
         }
         if let Some(v) = updates.is_virtual {
             self.is_virtual = v;
@@ -318,6 +320,7 @@ impl From<Shot> for ShotData {
 }
 
 #[cfg(test)]
+#[expect(clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -418,8 +421,8 @@ mod tests {
     fn shot_display_position_post_reload_ids() {
         // After reload: shot_id = section_id * FEATURE_ID_STRIDE + sequence_order
         assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 13 + 4, 13), 5); // section 13, seq 4 → pos 5
-        assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 1, 1), 1);       // section 1, seq 0 → pos 1
-        assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 1 + 9, 1), 10);  // section 1, seq 9 → pos 10
+        assert_eq!(shot_display_position(FEATURE_ID_STRIDE, 1), 1);       // section 1, seq 0 → pos 1
+        assert_eq!(shot_display_position(FEATURE_ID_STRIDE + 9, 1), 10);  // section 1, seq 9 → pos 10
         assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 5 + 2, 5), 3);   // section 5, seq 2 → pos 3
     }
 }

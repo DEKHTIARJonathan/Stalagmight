@@ -31,7 +31,7 @@ pub(crate) fn export_csv_impl(state: &AppState, path: PathBuf) -> Result<(), Str
         "Exporting project to CSV"
     );
     match crate::export::export_csv(&project, &path) {
-        Ok(_) => {
+        Ok(()) => {
             tracing::info!(
                 path = ?path,
                 purpose = "export project for sharing",
@@ -79,7 +79,7 @@ pub(crate) fn export_json_impl(state: &AppState, path: PathBuf) -> Result<(), St
         "Exporting project to JSON"
     );
     match crate::export::export_json(&project, &path) {
-        Ok(_) => {
+        Ok(()) => {
             tracing::info!(
                 path = ?path,
                 purpose = "export project for sharing",
@@ -184,10 +184,11 @@ pub async fn export_image(
             reason = %e,
             "Image export task panicked"
         );
-        format!("Export task panicked: {}", e)
+        format!("Export task panicked: {e}")
     })?
 }
 
+#[cfg(test)]
 pub(crate) fn export_image_impl(
     state: &AppState,
     path: PathBuf,
@@ -212,7 +213,7 @@ pub(crate) fn export_image_impl(
         "Exporting map image"
     );
     match crate::export::export_image(&project, &path, &options) {
-        Ok(_) => {
+        Ok(()) => {
             tracing::info!(
                 path = ?path,
                 purpose = "export map image for sharing",

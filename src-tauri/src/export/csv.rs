@@ -55,7 +55,7 @@ fn escape_csv(s: &str) -> String {
 
 /// Format an optional f64 value
 fn format_optional(value: Option<f64>) -> String {
-    value.map(|v| format!("{:.2}", v)).unwrap_or_default()
+    value.map(|v| format!("{v:.2}")).unwrap_or_default()
 }
 
 #[cfg(test)]

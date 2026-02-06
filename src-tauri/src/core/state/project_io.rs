@@ -43,39 +43,36 @@ impl AppState {
         }
 
         // Determine the directory to use
-        let dir = match directory {
-            Some(d) => {
-                // Validate the provided directory is a directory (or doesn't exist yet)
-                if d.exists() && !d.is_dir() {
-                    return Err(format!("Path is not a directory: {}", d.display()));
-                }
-                d.clone()
+        let dir = if let Some(d) = directory {
+            // Validate the provided directory is a directory (or doesn't exist yet)
+            if d.exists() && !d.is_dir() {
+                return Err(format!("Path is not a directory: {}", d.display()));
             }
-            None => {
-                // Default to user's documents directory, with fallbacks
-                let base_dir = directories::UserDirs::new()
-                    .and_then(|ud| ud.document_dir().map(|d| d.to_path_buf()))
-                    .or_else(|| {
-                        // Fallback to $HOME/Documents
-                        std::env::var("HOME")
-                            .ok()
-                            .map(|h| PathBuf::from(h).join("Documents"))
-                    })
-                    .ok_or_else(|| "Could not determine documents directory".to_string())?;
+            d.clone()
+        } else {
+            // Default to user's documents directory, with fallbacks
+            let base_dir = directories::UserDirs::new()
+                .and_then(|ud| ud.document_dir().map(std::path::Path::to_path_buf))
+                .or_else(|| {
+                    // Fallback to $HOME/Documents
+                    std::env::var("HOME")
+                        .ok()
+                        .map(|h| PathBuf::from(h).join("Documents"))
+                })
+                .ok_or_else(|| "Could not determine documents directory".to_string())?;
 
-                // Ensure the directory exists
-                if !base_dir.exists() {
-                    std::fs::create_dir_all(&base_dir).map_err(|e| {
-                        format!("Failed to create documents directory: {}", e)
-                    })?;
-                }
-
-                base_dir
+            // Ensure the directory exists
+            if !base_dir.exists() {
+                std::fs::create_dir_all(&base_dir).map_err(|e| {
+                    format!("Failed to create documents directory: {e}")
+                })?;
             }
+
+            base_dir
         };
 
         // Build the full path with .stalx extension
-        let filename = format!("{}.stalx", sanitized_name);
+        let filename = format!("{sanitized_name}.stalx");
         let full_path = dir.join(filename);
 
         Ok(full_path)
@@ -131,7 +128,7 @@ impl AppState {
                     reason = %e,
                     "Failed to open project database"
                 );
-                return CommandResult::failure(format!("{}", e));
+                return CommandResult::failure(format!("{e}"));
             }
         };
 
@@ -144,7 +141,7 @@ impl AppState {
                     reason = %e,
                     "Failed to load project data"
                 );
-                return CommandResult::failure(format!("Failed to load project data: {}", e));
+                return CommandResult::failure(format!("Failed to load project data: {e}"));
             }
         };
 
@@ -198,7 +195,7 @@ impl AppState {
             if let Ok(mut config) = self.config.lock() {
                 recent.truncate(config.general.recent_projects_max);
                 // Update config with recent projects and save
-                config.general.recent_projects = recent.clone();
+                config.general.recent_projects.clone_from(&recent);
                 if let Err(e) = config.save() {
                     tracing::warn!(
                         error = %e,
@@ -218,14 +215,12 @@ impl AppState {
     }
 
     pub(super) fn save_project(&self, path: Option<PathBuf>) -> CommandResult {
-        let mut proj_guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+        let Ok(mut proj_guard) = self.project.lock() else {
+            return CommandResult::failure("Failed to lock project".to_string());
         };
 
-        let project = match proj_guard.as_mut() {
-            Some(p) => p,
-            None => return CommandResult::failure("No project open".to_string()),
+        let Some(project) = proj_guard.as_mut() else {
+            return CommandResult::failure("No project open".to_string());
         };
 
         // Determine save path and ensure .stalx extension
@@ -233,7 +228,7 @@ impl AppState {
         let save_path = match save_path {
             Some(p) => {
                 // Ensure .stalx extension
-                if p.extension().map_or(true, |ext| ext != "stalx") {
+                if p.extension().is_none_or(|ext| ext != "stalx") {
                     p.with_extension("stalx")
                 } else {
                     p
@@ -279,7 +274,7 @@ impl AppState {
             Err(e) => {
                 // Clean up temp file on failure
                 let _ = std::fs::remove_file(&temp_path);
-                return CommandResult::failure(format!("Failed to create save file: {}", e));
+                return CommandResult::failure(format!("Failed to create save file: {e}"));
             }
         };
 
@@ -292,7 +287,7 @@ impl AppState {
                 purpose = "persist edits safely",
                 "Save failed; temp file cleaned up"
             );
-            return CommandResult::failure(format!("Failed to save project: {}", e));
+            return CommandResult::failure(format!("Failed to save project: {e}"));
         }
 
         // Copy display settings to the new database
@@ -319,7 +314,7 @@ impl AppState {
                 purpose = "persist edits safely",
                 "Failed to rename temp file to final destination"
             );
-            return CommandResult::failure(format!("Failed to finalize save: {}", e));
+            return CommandResult::failure(format!("Failed to finalize save: {e}"));
         }
 
         // Reopen the database at the final path
@@ -348,7 +343,7 @@ impl AppState {
         if let Ok(undo_stack) = self.undo_stack.lock() {
             let undo_entries: Vec<_> = undo_stack
                 .entries_to_persist(persist_limit)
-                .filter_map(|e| UndoStack::serialize_entry_with_timestamp(e))
+                .filter_map(UndoStack::serialize_entry_with_timestamp)
                 .collect();
 
             if let Err(e) = db.save_undo_stack_with_timestamps(undo_entries) {
@@ -361,7 +356,7 @@ impl AppState {
 
             let redo_entries: Vec<_> = undo_stack
                 .redo_entries_to_persist(persist_limit)
-                .filter_map(|e| UndoStack::serialize_entry_with_timestamp(e))
+                .filter_map(UndoStack::serialize_entry_with_timestamp)
                 .collect();
 
             if let Err(e) = db.save_redo_stack_with_timestamps(redo_entries) {
@@ -391,7 +386,7 @@ impl AppState {
             recent.insert(0, save_path.clone());
             if let Ok(mut config) = self.config.lock() {
                 recent.truncate(config.general.recent_projects_max);
-                config.general.recent_projects = recent.clone();
+                config.general.recent_projects.clone_from(&recent);
                 if let Err(e) = config.save() {
                     tracing::warn!(
                         error = %e,
@@ -509,7 +504,7 @@ impl AppState {
         }
 
         // Create a new merged project
-        let mut merged_project = Project::new(output_name.clone(), None);
+        let mut merged_project = Project::new(output_name, None);
 
         // Track section ID remapping: (old_project_idx, old_section_id) -> new_section_id
         let mut section_id_map: std::collections::HashMap<(usize, SectionId), SectionId> =
@@ -625,7 +620,7 @@ impl AppState {
         merged_project.file_path = Some(output_path.clone());
 
         // Ensure .stalx extension
-        let output_path = if output_path.extension().map_or(true, |ext| ext != "stalx") {
+        let output_path = if output_path.extension().is_none_or(|ext| ext != "stalx") {
             output_path.with_extension("stalx")
         } else {
             output_path
@@ -644,14 +639,14 @@ impl AppState {
             Ok(db) => db,
             Err(e) => {
                 let _ = std::fs::remove_file(&temp_path);
-                return CommandResult::failure(format!("Failed to create output file: {}", e));
+                return CommandResult::failure(format!("Failed to create output file: {e}"));
             }
         };
 
         if let Err(e) = db.save_project(&merged_project) {
             drop(db);
             let _ = std::fs::remove_file(&temp_path);
-            return CommandResult::failure(format!("Failed to save merged project: {}", e));
+            return CommandResult::failure(format!("Failed to save merged project: {e}"));
         }
 
         // Close database before rename
@@ -660,7 +655,7 @@ impl AppState {
         // Atomically rename temp file to final destination
         if let Err(e) = std::fs::rename(&temp_path, &output_path) {
             let _ = std::fs::remove_file(&temp_path);
-            return CommandResult::failure(format!("Failed to finalize save: {}", e));
+            return CommandResult::failure(format!("Failed to finalize save: {e}"));
         }
 
         tracing::info!(
@@ -875,10 +870,10 @@ impl AppState {
             .collect();
 
         // Commit 1: Project state mutation
-        *self.project.lock().unwrap_or_else(|e| e.into_inner()) = Some(project.clone());
+        *self.project.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
 
         // Commit 2: Database handle mutation
-        *self.database.lock().unwrap_or_else(|e| e.into_inner()) = Some(db);
+        *self.database.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
 
         // Commit 3: Display settings cache clear
         self.clear_display_settings_cache();
@@ -903,7 +898,7 @@ impl AppState {
             recent.insert(0, path.clone());
             if let Ok(mut config) = self.config.lock() {
                 recent.truncate(config.general.recent_projects_max);
-                config.general.recent_projects = recent.clone();
+                config.general.recent_projects.clone_from(&recent);
                 if let Err(e) = config.save() {
                     tracing::warn!(
                         error = %e,
@@ -1009,7 +1004,7 @@ impl AppState {
                 if let Err(e) = std::fs::create_dir_all(parent) {
                     early_return_err!(LoadError::new(
                         "IO",
-                        format!("Failed to create directory: {}", e)
+                        format!("Failed to create directory: {e}")
                     ));
                 }
             }
@@ -1019,7 +1014,7 @@ impl AppState {
         let mut db = match Database::open(&db_path) {
             Ok(db) => db,
             Err(e) => {
-                early_return_err!(LoadError::new("DATABASE", format!("Failed to create database: {}", e)));
+                early_return_err!(LoadError::new("DATABASE", format!("Failed to create database: {e}")));
             }
         };
         check_cancelled!();
@@ -1033,7 +1028,7 @@ impl AppState {
         project.file_path = Some(db_path.clone());
 
         if let Err(e) = db.save_project(&project) {
-            early_return_err!(LoadError::new("DATABASE", format!("Failed to save project: {}", e)));
+            early_return_err!(LoadError::new("DATABASE", format!("Failed to save project: {e}")));
         }
         check_cancelled!();
         progress.complete_phase(LoadingPhase::InitializingProject);
@@ -1063,7 +1058,7 @@ impl AppState {
                 // Fail the command if display settings can't be saved - this indicates a real DB error
                 early_return_err!(LoadError::new(
                     "DATABASE",
-                    format!("Failed to save display setting {}: {}", key, e)
+                    format!("Failed to save display setting {key}: {e}")
                 ));
             }
         }
@@ -1074,10 +1069,10 @@ impl AppState {
         // Allow cancellation only before any state mutation occurs.
         check_cancelled!();
         // Commit 1: Project state mutation
-        *self.project.lock().unwrap_or_else(|e| e.into_inner()) = Some(project.clone());
+        *self.project.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
 
         // Commit 2: Database handle mutation
-        *self.database.lock().unwrap_or_else(|e| e.into_inner()) = Some(db);
+        *self.database.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
 
         // Commit 3: Clear undo stack (new project)
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
@@ -1093,7 +1088,7 @@ impl AppState {
             recent.insert(0, db_path.clone());
             if let Ok(mut config) = self.config.lock() {
                 recent.truncate(config.general.recent_projects_max);
-                config.general.recent_projects = recent.clone();
+                config.general.recent_projects.clone_from(&recent);
                 if let Err(e) = config.save() {
                     tracing::warn!(
                         error = %e,
@@ -1147,8 +1142,7 @@ mod tests {
         let filename = resolved.file_name().unwrap_or_default().to_string_lossy();
         assert!(
             filename.contains("New_Project_Name"),
-            "expected sanitized filename, got {}",
-            filename
+            "expected sanitized filename, got {filename}"
         );
 
         let err = state

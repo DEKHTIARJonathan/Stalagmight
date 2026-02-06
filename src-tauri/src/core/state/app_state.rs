@@ -137,7 +137,7 @@ impl AppState {
     /// Start a new loading operation, cancelling any existing one.
     /// Returns the cancellation token for the new operation.
     pub fn start_new_load(&self) -> Arc<AtomicBool> {
-        let mut guard = self.active_loading.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.active_loading.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // Cancel any existing load
         if let Some(old_token) = guard.take() {

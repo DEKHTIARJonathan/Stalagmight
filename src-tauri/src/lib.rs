@@ -46,6 +46,12 @@ pub struct TileFetchStatsSnapshot {
     pub last_latency_ms: u64,
 }
 
+impl Default for TileFetchStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TileFetchStats {
     pub fn new() -> Self {
         Self {
@@ -137,7 +143,7 @@ fn fetch_tile_from_network(
 ) -> Result<FetchedTile, String> {
     // Look up provider in registry
     let tile_provider = tile_providers::get_provider(provider)
-        .ok_or_else(|| format!("Unknown provider: {}", provider))?;
+        .ok_or_else(|| format!("Unknown provider: {provider}"))?;
     let url = tile_providers::expand_url(tile_provider, z, y, x);
 
     tracing::debug!(url = %url, provider = %provider, "Fetching tile from network");
@@ -188,7 +194,7 @@ fn fetch_tile_from_network(
                     .headers()
                     .get("etag")
                     .and_then(|v| v.to_str().ok())
-                    .map(|v| v.to_string());
+                    .map(ToString::to_string);
 
                 let body = response
                     .into_body()
@@ -197,7 +203,7 @@ fn fetch_tile_from_network(
                         if let Some(s) = stats {
                             s.record_error();
                         }
-                        format!("Failed to read response body: {}", e)
+                        format!("Failed to read response body: {e}")
                     })?;
 
                 if let Some(s) = stats {
@@ -218,7 +224,7 @@ fn fetch_tile_from_network(
                         provider = %provider,
                         "Tile fetch failed, will retry"
                     );
-                    last_err = Some(format!("Network error: {}", e));
+                    last_err = Some(format!("Network error: {e}"));
                     continue;
                 }
 
@@ -226,7 +232,7 @@ fn fetch_tile_from_network(
                 if let Some(s) = stats {
                     s.record_error();
                 }
-                return Err(format!("Network error: {}", e));
+                return Err(format!("Network error: {e}"));
             }
         }
     }
@@ -268,15 +274,15 @@ fn fetch_tilemap(
     let response = agent
         .get(&url)
         .call()
-        .map_err(|e| format!("Tilemap network error: {}", e))?;
+        .map_err(|e| format!("Tilemap network error: {e}"))?;
 
     let body = response
         .into_body()
         .read_to_vec()
-        .map_err(|e| format!("Failed to read tilemap response: {}", e))?;
+        .map_err(|e| format!("Failed to read tilemap response: {e}"))?;
 
     let tilemap_response: TilemapResponse = serde_json::from_slice(&body)
-        .map_err(|e| format!("Failed to parse tilemap JSON: {}", e))?;
+        .map_err(|e| format!("Failed to parse tilemap JSON: {e}"))?;
 
     // Convert u8 (0/1) to bool
     let data: Vec<bool> = tilemap_response.data.into_iter().map(|v| v != 0).collect();
@@ -307,9 +313,7 @@ fn check_tile_availability(
     x: u32,
 ) -> Option<bool> {
     // Only check tilemap if provider supports it
-    if provider.tilemap_url_template.is_none() {
-        return None;
-    }
+    provider.tilemap_url_template.as_ref()?;
 
     // Check cache first
     {
@@ -739,7 +743,7 @@ where
             }
 
             TileFetchOutcome::Missing {
-                error: format!("Tile not available: {}", e),
+                error: format!("Tile not available: {e}"),
             }
         }
     }
@@ -768,7 +772,7 @@ fn derive_tile_from_parent(
         .ok_or_else(|| "Overzoom scale overflow".to_string())?;
 
     let img = image::load_from_memory(&parent_tile.data)
-        .map_err(|e| format!("Failed to decode parent tile: {}", e))?;
+        .map_err(|e| format!("Failed to decode parent tile: {e}"))?;
     let (img_w, img_h) = img.dimensions();
     let base_size = img_w.min(img_h);
     if base_size == 0 {
@@ -814,7 +818,7 @@ fn derive_tile_from_parent(
         let mut cursor = Cursor::new(&mut buffer);
         resized
             .write_to(&mut cursor, format)
-            .map_err(|e| format!("Failed to encode derived tile: {}", e))?;
+            .map_err(|e| format!("Failed to encode derived tile: {e}"))?;
     }
 
     Ok(TileFetchResult {
@@ -836,7 +840,7 @@ where
     F: Fn(&str, u32, u32, u32) -> Result<FetchedTile, String>,
 {
     let provider_info = tile_providers::get_provider(provider)
-        .ok_or_else(|| format!("Unknown provider: {}", provider))?;
+        .ok_or_else(|| format!("Unknown provider: {provider}"))?;
 
     let min_target = provider_info.min_zoom;
 
@@ -990,7 +994,7 @@ where
         tracing::warn!(provider = %provider, "Unknown tile provider requested");
         return build_error_response(
             http::StatusCode::BAD_REQUEST,
-            &format!("Unknown provider: {}", provider),
+            &format!("Unknown provider: {provider}"),
         );
     }
 
@@ -1013,7 +1017,7 @@ pub fn tile_fetch_impl(
 ) -> Result<Vec<u8>, String> {
     // Validate provider against registry
     if tile_providers::get_provider(provider).is_none() {
-        return Err(format!("Unknown provider: {}", provider));
+        return Err(format!("Unknown provider: {provider}"));
     }
 
     let stats_ref = Arc::clone(stats);
@@ -1286,6 +1290,7 @@ mod tests {
         assert_eq!(result, None);
     }
 
+    #[expect(clippy::unnecessary_wraps)]
     fn expect(provider: &str, z: u32, y: u32, x: u32) -> Option<(String, u32, u32, u32)> {
         Some((provider.to_string(), z, y, x))
     }
@@ -1354,7 +1359,7 @@ mod tests {
     parse_case!(
         test_parse_tile_uri_path_based_large_coords,
         "stalagmight-tiles://localhost/esri/4294967295/4294967295/4294967295",
-        expect("esri", 4294967295, 4294967295, 4294967295)
+        expect("esri", 4_294_967_295, 4_294_967_295, 4_294_967_295)
     );
     parse_case!(
         test_parse_tile_uri_path_based_with_port,
@@ -1484,7 +1489,7 @@ mod tests {
     parse_case!(
         test_parse_tile_uri_host_based_large_coords,
         "stalagmight-tiles://esri/4294967295/4294967295/4294967295",
-        expect("esri", 4294967295, 4294967295, 4294967295)
+        expect("esri", 4_294_967_295, 4_294_967_295, 4_294_967_295)
     );
     parse_case!(
         test_parse_tile_uri_host_based_missing_y,
@@ -1858,7 +1863,7 @@ mod tests {
         // Tile (15, 100, 200) belongs to region (0, 128) since 100/128=0, 200/128=1
         {
             let mut tc = tilemap_cache.lock().unwrap();
-            let data = vec![true; 16384]; // All tiles available
+            let data = vec![true; 16_384]; // All tiles available
             tc.insert("esri", 15, 0, 128, data);
         }
 
@@ -2061,10 +2066,10 @@ mod tests {
                 zoom_speed: 1.0,
                 invert_scroll: false,
             },
-            station: Default::default(),
-            shot: Default::default(),
-            snap: Default::default(),
-            animation: Default::default(),
+            station: config::StationConfig::default(),
+            shot: config::ShotConfig::default(),
+            snap: config::MapSnapConfig::default(),
+            animation: config::MapAnimationConfig::default(),
         };
         map_config.normalize();
         assert_eq!(map_config.satellite_provider, "esri");
@@ -2088,10 +2093,10 @@ mod tests {
                 zoom_speed: 1.0,
                 invert_scroll: false,
             },
-            station: Default::default(),
-            shot: Default::default(),
-            snap: Default::default(),
-            animation: Default::default(),
+            station: config::StationConfig::default(),
+            shot: config::ShotConfig::default(),
+            snap: config::MapSnapConfig::default(),
+            animation: config::MapAnimationConfig::default(),
         };
         map_config.normalize();
         assert_eq!(map_config.satellite_provider, "esri");

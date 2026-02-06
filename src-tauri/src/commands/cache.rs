@@ -101,22 +101,19 @@ pub(crate) fn clear_tile_cache_impl(
         return Ok(());
     };
 
-    match provider {
-        Some(p) => {
-            tracing::info!(
-                provider = %p,
-                purpose = "refresh cached map tiles",
-                "Clearing tile cache for provider"
-            );
-            cache.clear_provider(&p).map_err(|e| e.to_string())
-        }
-        None => {
-            tracing::info!(
-                purpose = "free disk space or refresh cached tiles",
-                "Clearing all tile cache"
-            );
-            cache.clear_all().map_err(|e| e.to_string())
-        }
+    if let Some(p) = provider {
+        tracing::info!(
+            provider = %p,
+            purpose = "refresh cached map tiles",
+            "Clearing tile cache for provider"
+        );
+        cache.clear_provider(&p).map_err(|e| e.to_string())
+    } else {
+        tracing::info!(
+            purpose = "free disk space or refresh cached tiles",
+            "Clearing all tile cache"
+        );
+        cache.clear_all().map_err(|e| e.to_string())
     }
 }
 
@@ -154,7 +151,7 @@ pub(crate) async fn fetch_tile_impl(
         tile_fetch_impl(&provider, z, y, x, &tile_cache, &tilemap_cache, &tile_fetch_stats)
     })
     .await
-    .map_err(|e| format!("Tile fetch task failed: {}", e))?;
+    .map_err(|e| format!("Tile fetch task failed: {e}"))?;
 
     result
 }
