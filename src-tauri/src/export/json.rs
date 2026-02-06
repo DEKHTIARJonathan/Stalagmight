@@ -108,6 +108,7 @@ impl JsonExport {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::models::{SectionData, ShotData};

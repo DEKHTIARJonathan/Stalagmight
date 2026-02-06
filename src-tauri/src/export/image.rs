@@ -574,10 +574,10 @@ fn sanitize_color(color: &str) -> &str {
 
 /// Bounds of the survey data in world coordinates.
 struct Bounds {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     min_x: f64,
     max_x: f64,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     min_y: f64,
     max_y: f64,
 }
@@ -709,6 +709,7 @@ fn generate_depth_legend(
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::models::{GpsCoordinates, SectionData, ShotData, StationRef};
@@ -979,7 +980,7 @@ mod tests {
         let project = create_test_project_with_depths();
         let options = ExportImageOptions {
             color_mode: ColorMode::Depth,
-            depth_preset: super::super::depth_colors::DepthPreset::Grayscale,
+            depth_preset: DepthPreset::Grayscale,
             ..Default::default()
         };
 
@@ -1057,7 +1058,7 @@ mod tests {
         let project = create_test_project_with_depths();
         let options = ExportImageOptions {
             color_mode: ColorMode::Depth,
-            depth_preset: super::super::depth_colors::DepthPreset::Grayscale,
+            depth_preset: DepthPreset::Grayscale,
             ..Default::default()
         };
 
@@ -1115,7 +1116,7 @@ mod tests {
         let legend = generate_depth_legend(
             0.0,
             10.0,
-            super::super::depth_colors::DepthPreset::Thermal,
+            DepthPreset::Thermal,
             "m",
             1,
             &bounds,
@@ -1139,7 +1140,7 @@ mod tests {
         let legend = generate_depth_legend(
             0.0,
             10.0,
-            super::super::depth_colors::DepthPreset::Thermal,
+            DepthPreset::Thermal,
             "m",
             1,
             &bounds,
@@ -1164,7 +1165,7 @@ mod tests {
             max_y: 100.0,
         };
         let scale = 8.0;
-        let legend = generate_depth_legend(0.0, 10.0, super::super::depth_colors::DepthPreset::Ocean, "ft", 1, &bounds, scale);
+        let legend = generate_depth_legend(0.0, 10.0, DepthPreset::Ocean, "ft", 1, &bounds, scale);
 
         // 0m = 0ft, 10m = 32.8ft
         assert!(legend.contains("0.0ft"), "Legend should show min depth in feet");
@@ -1180,7 +1181,7 @@ mod tests {
             max_y: 100.0,
         };
         let scale = 8.0;
-        let legend = generate_depth_legend(5.0, 5.0, super::super::depth_colors::DepthPreset::Ocean, "m", 1, &bounds, scale);
+        let legend = generate_depth_legend(5.0, 5.0, DepthPreset::Ocean, "m", 1, &bounds, scale);
 
         assert!(legend.contains("(Flat)"), "Legend should show flat indicator when min ≈ max");
     }

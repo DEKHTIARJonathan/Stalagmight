@@ -326,6 +326,7 @@ pub fn get_depth_preset_colors(preset: DepthPreset) -> DepthPresetColors {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
