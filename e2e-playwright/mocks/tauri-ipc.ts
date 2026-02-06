@@ -244,7 +244,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         cmd: string,
         args?: Record<string, unknown>
       ): unknown {
-        console.log(`[Mock IPC] Command: ${cmd}`, args);
+        // Skip logging for push_frontend_log to avoid infinite loop with console capture
+        if (cmd !== 'push_frontend_log') {
+          console.log(`[Mock IPC] Command: ${cmd}`, args);
+        }
 
         const overrideMap = (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
           | Record<string, unknown>
@@ -1227,14 +1230,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 auto_save: true,
                 auto_save_interval_seconds: 30,
                 recent_projects_max: 20,
+                recent_projects: [],
                 undo_history_limit: 100,
                 undo_persist_limit: 20,
+                shortcut_feedback: 'non_obvious',
+                locale: 'system',
+                number_format: 'locale',
+                date_format: 'locale',
               },
               units: {
                 length: 'meters',
                 depth: 'meters',
                 angle: 'degrees',
-                decimal_precision: 1,
+                decimal_precision: { length: 1, coordinates: 2, depth: 1, azimuth: 1, inclination: 1, gps: 6 },
               },
               display: {
                 default_background: '#1a1a2e',
@@ -1272,10 +1280,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 station: {
                   radius: 4.0,
                   hit_area: 10.0,
+                  hover_radius: 6.0,
+                  selection_radius: 5.0,
                 },
                 shot: {
                   width: 2.0,
                   hit_area: 8.0,
+                  hover_width: 4.0,
+                  selection_width: 3.0,
                 },
                 snap: {
                   threshold: 10.0,
@@ -1319,6 +1331,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // File
                 import_dmp: ['Ctrl+I'],
                 export: ['Ctrl+E'],
+                new_file: ['Ctrl+N'],
+                open_file: ['Ctrl+O'],
+                save: ['Ctrl+S'],
+                save_as: ['Ctrl+Shift+S'],
                 // Tools
                 select: ['S'],
                 pan: ['P'],
@@ -1333,7 +1349,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // Edit
                 undo: ['Ctrl+Z'],
                 redo: ['Ctrl+Y', 'Ctrl+Shift+Z'],
-                save: ['Ctrl+S'],
                 // View
                 toggle_depth_gradient: ['Shift+D'],
                 toggle_grid: ['Shift+G'],
@@ -1344,7 +1359,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 fit_to_bounds: ['F'],
                 zoom_in: ['Equal', 'Plus'],
                 zoom_out: ['Minus'],
-                // Panels
+                // Panels (tests use Ctrl+ prefix)
                 toggle_sections_panel: ['Ctrl+1'],
                 toggle_detail_panel: ['Ctrl+2'],
                 toggle_data_table: ['Ctrl+3'],
@@ -1364,6 +1379,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   show_hitboxes: false,
                   log_hit_detection: false,
                 },
+              },
+              global_view: {
+                fps_threshold: 30,
+                tolerance: 0.5,
+                throttle_tolerance: 1.0,
               },
               appearance: {
                 theme: 'dark',
@@ -1388,14 +1408,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 auto_save: true,
                 auto_save_interval_seconds: 30,
                 recent_projects_max: 20,
+                recent_projects: [],
                 undo_history_limit: 100,
                 undo_persist_limit: 20,
+                shortcut_feedback: 'non_obvious',
+                locale: 'system',
+                number_format: 'locale',
+                date_format: 'locale',
               },
               units: {
                 length: 'meters',
                 depth: 'meters',
                 angle: 'degrees',
-                decimal_precision: 1,
+                decimal_precision: { length: 1, coordinates: 2, depth: 1, azimuth: 1, inclination: 1, gps: 6 },
               },
               display: {
                 default_background: '#1a1a2e',
@@ -1433,10 +1458,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 station: {
                   radius: 4.0,
                   hit_area: mockConfigOverrides.map?.station?.hit_area ?? 10.0,
+                  hover_radius: 6.0,
+                  selection_radius: 5.0,
                 },
                 shot: {
                   width: 2.0,
                   hit_area: mockConfigOverrides.map?.shot?.hit_area ?? 8.0,
+                  hover_width: 4.0,
+                  selection_width: 3.0,
                 },
                 snap: {
                   threshold: 10.0,
@@ -1480,6 +1509,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // File
                 import_dmp: ['Ctrl+I'],
                 export: ['Ctrl+E'],
+                new_file: ['Ctrl+N'],
+                open_file: ['Ctrl+O'],
+                save: ['Ctrl+S'],
+                save_as: ['Ctrl+Shift+S'],
                 // Tools
                 select: ['S'],
                 pan: ['P'],
@@ -1494,7 +1527,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // Edit
                 undo: ['Ctrl+Z'],
                 redo: ['Ctrl+Y', 'Ctrl+Shift+Z'],
-                save: ['Ctrl+S'],
                 // View
                 toggle_depth_gradient: ['Shift+D'],
                 toggle_grid: ['Shift+G'],
@@ -1505,7 +1537,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 fit_to_bounds: ['F'],
                 zoom_in: ['Equal', 'Plus'],
                 zoom_out: ['Minus'],
-                // Panels
+                // Panels (tests use Ctrl+ prefix)
                 toggle_sections_panel: ['Ctrl+1'],
                 toggle_detail_panel: ['Ctrl+2'],
                 toggle_data_table: ['Ctrl+3'],
@@ -1525,6 +1557,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   show_hitboxes: mockConfigOverrides.debug?.map?.show_hitboxes ?? false,
                   log_hit_detection: mockConfigOverrides.debug?.map?.log_hit_detection ?? false,
                 },
+              },
+              global_view: {
+                fps_threshold: 30,
+                tolerance: 0.5,
+                throttle_tolerance: 1.0,
               },
               appearance: {
                 theme: 'dark',
@@ -1971,6 +2008,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return mockGeometry;
           }
 
+          // Silent no-ops: commands that should succeed without side-effects
+          case 'push_frontend_log':
+            return null;
+
           default:
             console.warn(`[Mock IPC] Unhandled command: ${cmd}`);
             return null;
@@ -2113,7 +2154,9 @@ export async function setupTauriMocksWithProject(
       };
 
       const mockHandler = (cmd: string, args?: Record<string, unknown>): unknown => {
-        console.log(`[Mock IPC] Command: ${cmd}`, args);
+        if (cmd !== 'push_frontend_log') {
+          console.log(`[Mock IPC] Command: ${cmd}`, args);
+        }
 
         switch (cmd) {
           case 'get_project':
@@ -2121,6 +2164,8 @@ export async function setupTauriMocksWithProject(
             return currentProject;
           case 'save_project':
             return { success: true };
+          case 'push_frontend_log':
+            return null;
           default:
             return null;
         }
