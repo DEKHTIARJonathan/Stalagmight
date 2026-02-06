@@ -9,6 +9,7 @@ mod undo;
 mod warnings;
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests;
 #[cfg(test)]
 mod tests_support;

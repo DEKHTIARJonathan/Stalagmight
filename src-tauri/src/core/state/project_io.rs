@@ -59,7 +59,7 @@ impl AppState {
                         // Fallback to $HOME/Documents
                         std::env::var("HOME")
                             .ok()
-                            .map(|h| std::path::PathBuf::from(h).join("Documents"))
+                            .map(|h| PathBuf::from(h).join("Documents"))
                     })
                     .ok_or_else(|| "Could not determine documents directory".to_string())?;
 
@@ -875,10 +875,10 @@ impl AppState {
             .collect();
 
         // Commit 1: Project state mutation
-        *self.project.lock().unwrap() = Some(project.clone());
+        *self.project.lock().unwrap_or_else(|e| e.into_inner()) = Some(project.clone());
 
         // Commit 2: Database handle mutation
-        *self.database.lock().unwrap() = Some(db);
+        *self.database.lock().unwrap_or_else(|e| e.into_inner()) = Some(db);
 
         // Commit 3: Display settings cache clear
         self.clear_display_settings_cache();
@@ -1074,10 +1074,10 @@ impl AppState {
         // Allow cancellation only before any state mutation occurs.
         check_cancelled!();
         // Commit 1: Project state mutation
-        *self.project.lock().unwrap() = Some(project.clone());
+        *self.project.lock().unwrap_or_else(|e| e.into_inner()) = Some(project.clone());
 
         // Commit 2: Database handle mutation
-        *self.database.lock().unwrap() = Some(db);
+        *self.database.lock().unwrap_or_else(|e| e.into_inner()) = Some(db);
 
         // Commit 3: Clear undo stack (new project)
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
@@ -1126,6 +1126,7 @@ impl AppState {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use tempfile::TempDir;

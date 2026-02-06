@@ -1,6 +1,7 @@
 //! Comprehensive integration tests for Stalagmight
 //!
 //! Tests are organized by category. Run `cargo test` to execute all tests.
+#![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use stalagmight_lib::config::{CacheConfig, Config, ValidationConfig};
 use stalagmight_lib::core::{Command, UndoData, UndoEntry, UndoStack, Validator};
@@ -2494,7 +2495,7 @@ fn test_merge_projects_preserves_station_merges() {
     let loaded2 = db2.load_project().unwrap();
 
     let mut merged = Project::new("Merged Stations".to_string(), None);
-    let mut section_id_map: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    let mut section_id_map: HashMap<u32, u32> = HashMap::new();
 
     // Add sections from project 1
     for section in &loaded1.sections {

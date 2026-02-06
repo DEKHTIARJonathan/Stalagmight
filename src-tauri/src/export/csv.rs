@@ -59,6 +59,7 @@ fn format_optional(value: Option<f64>) -> String {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::models::{SectionData, ShotData};

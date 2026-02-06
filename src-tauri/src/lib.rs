@@ -546,13 +546,9 @@ fn build_ok_response(data: Vec<u8>, content_type: &str) -> http::Response<Vec<u8
         .header(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(data)
         .unwrap_or_else(|_| {
-            // Fallback response if builder fails
-            http::Response::builder()
-                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                .header(http::header::CONTENT_TYPE, "text/plain")
-                .header(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .body(b"Internal error building response".to_vec())
-                .unwrap()
+            let mut resp = http::Response::new(b"Internal error building response".to_vec());
+            *resp.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
+            resp
         })
 }
 
@@ -564,12 +560,9 @@ fn build_error_response(status: http::StatusCode, message: &str) -> http::Respon
         .header(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(message.as_bytes().to_vec())
         .unwrap_or_else(|_| {
-            http::Response::builder()
-                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                .header(http::header::CONTENT_TYPE, "text/plain")
-                .header(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .body(b"Internal error".to_vec())
-                .unwrap()
+            let mut resp = http::Response::new(b"Internal error".to_vec());
+            *resp.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
+            resp
         })
 }
 
@@ -1224,10 +1217,13 @@ pub fn run() {
             commands::logging::push_frontend_log,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|e| {
+            tracing::error!(error = %e, "Fatal: Tauri application failed to start");
+        });
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
