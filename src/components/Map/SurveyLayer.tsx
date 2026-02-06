@@ -8,7 +8,7 @@ import type {
   Station,
   StationRef,
 } from '../../types/project';
-import type { Config, GpsOrigin } from '../../types/config';
+import type { Config, GpsOrigin, DecimalPrecision } from '../../types/config';
 import { isNonInteractiveTool } from '../../utils/toolUtils';
 import type { ToolType } from '../../store/uiStore';
 import { hasLiveStyle } from './mapUtils';
@@ -177,6 +177,7 @@ export default class SurveyLayer {
   private cachedSections: Section[] = [];
   private cachedStations: Station[] = [];
   private cachedLoopClosures: LoopClosure[] | undefined;
+  private cachedPrecision: DecimalPrecision | undefined;
 
   // Bound event handlers stored for proper cleanup in destroy()
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
@@ -2366,7 +2367,7 @@ export default class SurveyLayer {
           toCoord,
           movingEnd: fromIsMoving && toIsMoving ? 'both' : fromIsMoving ? 'from' : 'to',
           shotLabelProperties: {
-            label: `${formatFixed(shot.azimuth_in, undefined, 0)}° ${formatFixed(shot.length, undefined, 1)}m`,
+            label: `${formatFixed(shot.azimuth_in, undefined, this.cachedPrecision?.azimuth ?? 0)}° ${formatFixed(shot.length, undefined, this.cachedPrecision?.length ?? 1)}m`,
             sectionId: section.id,
             shotId: shot.id,
             color: section.color,
@@ -2864,7 +2865,8 @@ export default class SurveyLayer {
     loopClosures?: LoopClosure[],
     gpsOrigin?: GpsOrigin | null,
     showDepthGradient: boolean = false,
-    depthRange: DepthRange = { min: 0, max: 50 }
+    depthRange: DepthRange = { min: 0, max: 50 },
+    precision?: DecimalPrecision
   ) {
     // Store gpsOrigin for coordinate transforms
     this.gpsOrigin = gpsOrigin ?? null;
@@ -2876,6 +2878,7 @@ export default class SurveyLayer {
     this.cachedSections = sections;
     this.cachedStations = stations;
     this.cachedLoopClosures = loopClosures;
+    if (precision !== undefined) this.cachedPrecision = precision;
 
     const {
       shotFeatures,
@@ -2891,7 +2894,8 @@ export default class SurveyLayer {
       this.gpsOrigin,
       this.showDepthGradient,
       this.depthRange,
-      this.themeColors
+      this.themeColors,
+      this.cachedPrecision
     );
 
     // Update sources

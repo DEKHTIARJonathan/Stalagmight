@@ -7,6 +7,7 @@ import { DialogWrapper } from './DialogWrapper';
 import type { ProjectMetadata } from '../../types/project';
 import { ensureExtension, projectSaveFilters, PROJECT_EXTENSION } from '../../utils/fileDialogs';
 import { formatFixed } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 
 /**
  * MergeProjectsDialog allows users to merge multiple projects into a single new project.
@@ -15,6 +16,7 @@ import { formatFixed } from '../../i18n/format';
 export default function MergeProjectsDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const { mergeProjects, loadProject } = useProjectStore();
+  const precision = useDecimalPrecision();
 
   const selectedProjects = dialogData.selectedProjects as ProjectMetadata[] | undefined;
 
@@ -47,9 +49,9 @@ export default function MergeProjectsDialog() {
   // Format length for display
   const formatLength = (meters: number): string => {
     if (meters >= 1000) {
-      return `${formatFixed(meters / 1000, undefined, 2)} km`;
+      return `${formatFixed(meters / 1000, undefined, precision.length)} km`;
     }
-    return `${formatFixed(meters, undefined, 1)} m`;
+    return `${formatFixed(meters, undefined, precision.length)} m`;
   };
 
   const handleClose = useCallback(() => {

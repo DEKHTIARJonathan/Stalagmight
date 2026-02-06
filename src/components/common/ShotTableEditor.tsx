@@ -4,6 +4,7 @@ import type { TFunction } from 'i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import type { Shot } from '../../types/project';
 import { defaultConfig } from '../../types/config';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { hasAzimuthDiscrepancy, hasPitchDiscrepancy, validateEditableShot } from '../../utils/validation';
 import { applyAzimuthEdit, getAzimuthAverage } from '../../utils/shotTable';
 
@@ -181,6 +182,7 @@ export function ShotTableEditor({
   frozenShotIndices,
 }: ShotTableEditorProps) {
   const { t } = useTranslation();
+  const precision = useDecimalPrecision();
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -523,8 +525,8 @@ export function ShotTableEditor({
                       disabled={geoDisabled}
                       data-testid={`shot-azimuth-${visibleIdx}`}
                       title={t('shotTable.azimuthTitle', {
-                        inValue: `${formatFixed(shot.azimuth_in, undefined, 1)}°`,
-                        outValue: `${formatFixed(shot.azimuth_out, undefined, 1)}°`,
+                        inValue: `${formatFixed(shot.azimuth_in, undefined, precision.azimuth)}°`,
+                        outValue: `${formatFixed(shot.azimuth_out, undefined, precision.azimuth)}°`,
                       })}
                     />
                       );

@@ -4,6 +4,7 @@ import type { Config, DisplayConfig, SectionColorsConfig } from './ipc.generated
 export type {
   LengthUnit,
   AngleUnit,
+  DecimalPrecision,
   ShortcutFeedback,
   ThemeMode,
   AppearanceConfig,
@@ -49,7 +50,7 @@ export const defaultConfig: Config = {
     length: 'meters',
     depth: 'meters',
     angle: 'degrees',
-    decimal_precision: 1,
+    decimal_precision: { length: 1, coordinates: 2, depth: 1, azimuth: 1, inclination: 1, gps: 6 },
   },
   display: {
     default_background: themeTokens.dark['--cc-map-background'],

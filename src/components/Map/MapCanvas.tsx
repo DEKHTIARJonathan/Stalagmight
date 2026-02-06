@@ -20,6 +20,7 @@ import { DepthLegend } from './DepthLegend';
 import { MapDevStats } from './MapDevStats';
 import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 
 // Tools that support Ctrl+drag for panning
@@ -48,6 +49,7 @@ const stationRefToId = (ref: { section_id: number; station_index: number } | nul
 };
 
 export default function MapCanvas() {
+  const precision = useDecimalPrecision();
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const surveyLayerRef = useRef<SurveyLayer | null>(null);
@@ -1283,10 +1285,11 @@ export default function MapCanvas() {
         project.loop_closures,
         gpsOrigin,
         showDepthGradient,
-        { min: stats?.min_depth ?? 0, max: stats?.max_depth ?? 50 }
+        { min: stats?.min_depth ?? 0, max: stats?.max_depth ?? 50 },
+        precision
       );
     }
-  }, [project, stations, mapLoaded, gpsOrigin, showDepthGradient, stats?.min_depth, stats?.max_depth]);
+  }, [project, stations, mapLoaded, gpsOrigin, showDepthGradient, stats?.min_depth, stats?.max_depth, precision]);
 
   // Update callbacks when they change
   useEffect(() => {
@@ -2735,10 +2738,10 @@ export default function MapCanvas() {
       {measureResult && !placementMode && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-border rounded px-3 py-2 text-sm">
           <span className="font-medium">{t('map.measure.distance')}:</span>{' '}
-          {formatFixed(measureResult.distance, undefined, 2)}{t('common.units.meters')}
+          {formatFixed(measureResult.distance, undefined, precision.length)}{t('common.units.meters')}
           <span className="mx-2">|</span>
           <span className="font-medium">{t('map.measure.depthDiff')}:</span>{' '}
-          {formatFixed(measureResult.depthDiff, undefined, 2)}{t('common.units.meters')}
+          {formatFixed(measureResult.depthDiff, undefined, precision.depth)}{t('common.units.meters')}
         </div>
       )}
 

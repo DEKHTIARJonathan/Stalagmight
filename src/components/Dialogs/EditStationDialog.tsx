@@ -4,9 +4,11 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { formatFixed } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import type { StationRef } from '../../types/project';
 
 export default function EditStationDialog() {
+  const precision = useDecimalPrecision();
   const { closeDialog, dialogData } = useUIStore();
   const { stations, project, setZeroDatum, removeZeroDatum } = useProjectStore();
 
@@ -156,9 +158,9 @@ export default function EditStationDialog() {
             label="Section"
             value={section?.name ?? `Section ${stationRef.section_id}`}
           />
-          <DetailRow label="X" value={`${formatFixed(station.coordinates.x, undefined, 2)} m`} />
-          <DetailRow label="Y" value={`${formatFixed(station.coordinates.y, undefined, 2)} m`} />
-          <DetailRow label="Depth" value={`${formatFixed(station.coordinates.z, undefined, 1)} m`} />
+          <DetailRow label="X" value={`${formatFixed(station.coordinates.x, undefined, precision.coordinates)} m`} />
+          <DetailRow label="Y" value={`${formatFixed(station.coordinates.y, undefined, precision.coordinates)} m`} />
+          <DetailRow label="Depth" value={`${formatFixed(station.coordinates.z, undefined, precision.depth)} m`} />
         </div>
 
         {station.merged_with.length > 0 && (

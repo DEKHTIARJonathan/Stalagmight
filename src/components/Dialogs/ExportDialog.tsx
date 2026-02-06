@@ -104,13 +104,13 @@ export default function ExportDialog() {
   // This ensures preview matches the actual export output
   const previewOptions = useMemo<ExportImageOptions>(() => {
     const resolvedDepthUnit = config?.units?.depth === 'feet' ? 'ft' : 'm';
-    const resolvedDecimalPrecision = config?.units?.decimal_precision ?? 1;
+    const resolvedDecimalPrecision = config?.units?.decimal_precision?.depth ?? 1;
     return {
       ...imageOptions,
       depth_unit: resolvedDepthUnit,
       decimal_precision: resolvedDecimalPrecision,
     };
-  }, [imageOptions, config?.units?.depth, config?.units?.decimal_precision]);
+  }, [imageOptions, config?.units?.depth, config?.units?.decimal_precision?.depth]);
 
   const handleExport = async () => {
     try {
@@ -176,7 +176,7 @@ export default function ExportDialog() {
             // Override depth_unit and decimal_precision with current config values at export time
             // to ensure they reflect the latest config, even if config loaded after dialog opened
             const currentDepthUnit = config?.units?.depth === 'feet' ? 'ft' : 'm';
-            const currentDecimalPrecision = config?.units?.decimal_precision ?? 1;
+            const currentDecimalPrecision = config?.units?.decimal_precision?.depth ?? 1;
             await exportImage(finalPath, {
               ...imageOptions,
               format: imageFormat,

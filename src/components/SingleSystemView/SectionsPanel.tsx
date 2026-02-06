@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { type Section, type SectionId } from '../../types/project';
 import { useUIStore } from '../../store/uiStore';
 import { formatFixed, formatNumber } from '../../i18n/format';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { IconButton } from '../common/Button';
 import { CloseIcon, PlusIcon } from '../common/icons';
 
@@ -12,6 +13,7 @@ interface SectionsPanelProps {
 
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { t } = useTranslation();
+  const precision = useDecimalPrecision();
   const { selection, setSelection, clearSelection, hoveredSectionId, setHoveredSectionId, openDialog, triggerZoomToSection } = useUIStore();
 
   // Track the last hovered section ID set by this panel (for cleanup on unmount)
@@ -264,7 +266,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                   <div className="text-xs text-text-secondary mt-1 ml-5">
                     {t('sections.stats', {
                       shots: formatNumber(stats.shotCount),
-                      length: `${formatFixed(stats.length, undefined, 1)}${t('common.units.meters')}`,
+                      length: `${formatFixed(stats.length, undefined, precision.length)}${t('common.units.meters')}`,
                     })}
                   </div>
                 </li>
