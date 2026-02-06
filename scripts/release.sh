@@ -95,10 +95,10 @@ fi
 
 # Insert new section after [Unreleased] line using awk (sed can't handle special chars in git log)
 CHANGELOG="$PROJECT_ROOT/CHANGELOG.md"
-awk -v ver="$NEW_VERSION" -v date="$TODAY" -v log="$GIT_LOG" '
+awk -v ver="$NEW_VERSION" -v date="$TODAY" -v changes="$GIT_LOG" '
   /^## \[Unreleased\]/ {
     print
-    printf "\n## [%s] - %s\n\n%s\n", ver, date, log
+    printf "\n## [%s] - %s\n\n%s\n", ver, date, changes
     next
   }
   { print }
