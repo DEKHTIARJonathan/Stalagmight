@@ -1,7 +1,7 @@
 {
   "name": "stalagmight",
   "private": true,
-  "version": "1.0.0",
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -19,7 +19,8 @@
     "coverage:e2e": "E2E_COVERAGE=1 VITE_COVERAGE=1 pnpm test:e2e",
     "coverage:merge": "node scripts/merge-coverage.mjs",
     "gen:ipc-types": "cargo run --manifest-path src-tauri/Cargo.toml --bin gen_ipc_types",
-    "test:all": "pnpm test && pnpm test:ui"
+    "test:all": "pnpm test && pnpm test:ui",
+    "release": "./scripts/release.sh"
   },
   "dependencies": {
     "@deck.gl/core": "^9.0.35",
