@@ -248,4 +248,70 @@ mod tests {
         };
         assert!(!available);
     }
+
+    // === expand_tilemap_url tests ===
+
+    #[test]
+    fn test_expand_tilemap_url_with_template() {
+        let provider = get_provider("esri").unwrap();
+        let url = expand_tilemap_url(provider, 10, 500, 250);
+        assert!(url.is_some());
+        let url = url.unwrap();
+        assert!(url.contains("/10/"));
+        assert!(url.contains("/500/"));
+        assert!(url.contains("/250/"));
+        assert!(!url.contains("{z}"));
+        assert!(!url.contains("{y}"));
+        assert!(!url.contains("{x}"));
+    }
+
+    #[test]
+    fn test_expand_tilemap_url_without_template_returns_none() {
+        let provider = TileProvider {
+            name: "test".to_string(),
+            display_label: "Test".to_string(),
+            url_template: "https://example.com/{z}/{y}/{x}".to_string(),
+            attribution: "".to_string(),
+            tile_size: 256,
+            min_zoom: 0,
+            max_zoom: 18,
+            content_type_hint: "image/jpeg".to_string(),
+            api_key_env: None,
+            auth_header: None,
+            tilemap_url_template: None,
+        };
+        assert!(expand_tilemap_url(&provider, 5, 10, 20).is_none());
+    }
+
+    #[test]
+    fn test_expand_tilemap_url_custom_template() {
+        let provider = TileProvider {
+            name: "custom".to_string(),
+            display_label: "Custom".to_string(),
+            url_template: "".to_string(),
+            attribution: "".to_string(),
+            tile_size: 256,
+            min_zoom: 0,
+            max_zoom: 18,
+            content_type_hint: "image/png".to_string(),
+            api_key_env: None,
+            auth_header: None,
+            tilemap_url_template: Some("https://example.com/tilemap/{z}/{y}/{x}/128/128".to_string()),
+        };
+        let url = expand_tilemap_url(&provider, 3, 4, 5).unwrap();
+        assert_eq!(url, "https://example.com/tilemap/3/4/5/128/128");
+    }
+
+    // === ESRI provider field validation ===
+
+    #[test]
+    fn test_esri_provider_has_tilemap_url_template() {
+        let provider = get_provider("esri").unwrap();
+        assert!(provider.tilemap_url_template.is_some());
+        let template = provider.tilemap_url_template.as_ref().unwrap();
+        assert!(template.contains("{z}"));
+        assert!(template.contains("{y}"));
+        assert!(template.contains("{x}"));
+        assert!(template.contains("tilemap"));
+    }
 }
