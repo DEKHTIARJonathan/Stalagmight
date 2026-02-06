@@ -1214,6 +1214,11 @@ pub fn run() {
             // Survey geometry
             commands::survey_geometry::get_survey_geometry,
             commands::survey_geometry::get_survey_geometry_for_file,
+            // Recovery (SPEC 14.4)
+            commands::recovery::attempt_repair,
+            commands::recovery::list_backups,
+            commands::recovery::restore_from_backup,
+            commands::recovery::export_salvageable_data,
             // Logging
             commands::logging::get_recent_logs,
             commands::logging::push_frontend_log,

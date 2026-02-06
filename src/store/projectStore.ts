@@ -412,6 +412,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         return { success: true };
       }
 
+      // Handle CORRUPT - open recovery dialog instead of generic error
+      if (error.code === 'CORRUPT' && error.details) {
+        get().resetLoading();
+        useUIStore.getState().openDialog('corruption-recovery', {
+          corruptPath: error.details,
+          errorMessage: error.message,
+        });
+        return { success: false };
+      }
+
       // Only set error if this is still the current load operation
       if (get().loading.clientOpId === clientOpId) {
         get().setLoadingError(error.message, error.details);
