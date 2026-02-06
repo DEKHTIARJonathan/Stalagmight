@@ -146,7 +146,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 7 done, ❌ 0 not started
 
-### Performance & Stability (6/10 done)
+### Performance & Stability (7/10 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
