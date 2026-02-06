@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { useUIStore, type Selection } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
+import { useShallow } from 'zustand/react/shallow';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import type { SectionId, ShotId, StationRef, Coordinates } from '../types/project';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
@@ -24,6 +25,8 @@ interface MapToolsOptions {
 }
 
 export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks {
+  // Performance: exclude hover values from subscription — this hook is called
+  // from MapCanvas and would cause full re-renders on every mousemove.
   const {
     activeTool,
     setSelection,
@@ -46,7 +49,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     showStations,
     showShots,
     showToast,
-  } = useUIStore();
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  } = useUIStore(useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, ...rest }) => rest));
 
   const { stations, project, checkMergeConnectivity } = useProjectStore();
 

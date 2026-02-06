@@ -126,11 +126,24 @@ export function buildSurveyFeatures(
   const stationLabelFeatures: GeoJSON.Feature[] = [];
   const loopClosureFeatures: GeoJSON.Feature[] = [];
 
+  // Pre-build lookup maps: O(n+m) instead of O(n*m) for .filter()/.find() in loops
+  const stationsBySection = new Map<number, Station[]>();
+  const sectionById = new Map<number, Section>();
+  for (const station of stations) {
+    const sid = station.station_ref.section_id;
+    const arr = stationsBySection.get(sid);
+    if (arr) arr.push(station);
+    else stationsBySection.set(sid, [station]);
+  }
+  for (const section of sections) {
+    sectionById.set(section.id, section);
+  }
+
   let globalShotIndex = 0;
 
   for (const section of sections) {
-    const sectionStations = stations
-      .filter((s) => s.station_ref.section_id === section.id)
+    const sectionStations = (stationsBySection.get(section.id) ?? [])
+      .slice() // avoid mutating the cached array
       .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index);
 
     for (let i = 0; i < section.shots.length; i++) {
@@ -199,7 +212,7 @@ export function buildSurveyFeatures(
   }
 
   for (const station of stations) {
-    const section = sections.find((s) => s.id === station.station_ref.section_id);
+    const section = sectionById.get(station.station_ref.section_id);
     const sectionColor = section?.color ?? sectionDefault;
 
     const isZeroDatum = station.is_zero_datum;
@@ -241,18 +254,18 @@ export function buildSurveyFeatures(
     });
   }
 
+  // Station lookup by composite key for O(1) closure coordinate resolution
+  const stationByRef = new Map<string, Station>();
+  for (const s of stations) {
+    stationByRef.set(`${s.station_ref.section_id}:${s.station_ref.station_index}`, s);
+  }
   const findStationCoords = (ref: StationRef) => {
-    const station = stations.find(
-      (s) =>
-        s.station_ref.section_id === ref.section_id &&
-        s.station_ref.station_index === ref.station_index
-    );
-    return station?.coordinates;
+    return stationByRef.get(`${ref.section_id}:${ref.station_index}`)?.coordinates;
   };
 
   for (const section of sections) {
-    const sectionStations = stations.filter((s) => s.station_ref.section_id === section.id);
-    if (sectionStations.length > 0) {
+    const sectionStations = stationsBySection.get(section.id);
+    if (sectionStations && sectionStations.length > 0) {
       const firstStation = sectionStations.reduce((min, s) =>
         s.station_ref.station_index < min.station_ref.station_index ? s : min
       );
