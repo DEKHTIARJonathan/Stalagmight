@@ -32,7 +32,7 @@ jobs:
         run: |
           mkdir -p release-artifacts
           echo "=== All bundle output ==="
-          find src-tauri/target/release/bundle -type f | head -50
+          find src-tauri/target/release/bundle -maxdepth 2 -type f
           echo "=== Copying artifacts ==="
           cp src-tauri/target/release/bundle/deb/*.deb release-artifacts/ 2>/dev/null || true
           cp src-tauri/target/release/bundle/rpm/*.rpm release-artifacts/ 2>/dev/null || true
