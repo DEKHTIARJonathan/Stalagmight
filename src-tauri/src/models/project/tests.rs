@@ -513,6 +513,42 @@ fn merge_stations_propagates_datum_positioning_b_into_a() {
 }
 
 #[test]
+fn merge_stations_without_datum_aligns_first_section_to_second() {
+    // Test: No datum present; the first section should move to align with the second.
+    let mut project = Project::new("MergeNoDatum".to_string(), None);
+
+    let a = project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+    let b = project.add_section(SectionData {
+        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+
+    let a1_before = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
+    let b0_before = project.compute_station_raw_coords(StationRef::new(b, 0)).unwrap();
+    assert!((a1_before.y - 10.0).abs() < 1e-6);
+    assert!((b0_before.x).abs() < 1e-6);
+    assert!((b0_before.y).abs() < 1e-6);
+
+    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+
+    let a1_after = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
+    let b0_after = project.compute_station_raw_coords(StationRef::new(b, 0)).unwrap();
+    assert!((a1_after.x - b0_after.x).abs() < 1e-6);
+    assert!((a1_after.y - b0_after.y).abs() < 1e-6);
+
+    let offset_a = project.section_offsets.get(&a).copied().unwrap_or((0.0, 0.0));
+    assert!((offset_a.0).abs() < 1e-6);
+    assert!((offset_a.1 + 10.0).abs() < 1e-6);
+
+    let offset_b = project.section_offsets.get(&b).copied().unwrap_or((0.0, 0.0));
+    assert!((offset_b.0).abs() < 1e-6);
+    assert!((offset_b.1).abs() < 1e-6);
+}
+
+#[test]
 fn merge_stations_transitive_datum_propagation() {
     // Test: Merge into a section that's connected to a datum group through another merge
     // C merges into B, which is already merged with datum-holding A
@@ -2269,6 +2305,33 @@ fn test_cleanup_guarded_by_existence() {
 }
 
 #[test]
+fn test_cleanup_preserves_unrelated_relationships() {
+    let (mut project, a, b, c) = build_project_with_relationships();
+
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(b, 1),
+        station_b: StationRef::new(c, 0),
+        merged_at: Utc::now(),
+    });
+
+    assert_eq!(project.station_merges.len(), 2);
+    assert_eq!(project.loop_closures.len(), 1);
+
+    project.cleanup_section_references(a);
+
+    assert_eq!(project.station_merges.len(), 1);
+    assert!(project.station_merges.iter().any(|m| {
+        (m.station_a.section_id == b && m.station_b.section_id == c)
+            || (m.station_a.section_id == c && m.station_b.section_id == b)
+    }));
+
+    assert_eq!(project.loop_closures.len(), 1);
+    let closure = &project.loop_closures[0];
+    assert_eq!(closure.station_a.section_id, b);
+    assert_eq!(closure.station_b.section_id, c);
+}
+
+#[test]
 fn test_get_section_relationships() {
     let (project, a, b, _c) = build_project_with_relationships();
 
@@ -2285,4 +2348,538 @@ fn test_get_section_relationships() {
     assert!(!rel_b.has_section_offset, "Section B has no section offset");
     assert_eq!(rel_b.station_offset_count, 0, "Section B has no station offsets");
     assert_eq!(rel_b.zero_datum_count, 0, "Section B has no zero datums");
+}
+
+#[test]
+fn shift_station_refs_updates_related_collections() {
+    let mut project = Project::new("Shift".to_string(), None);
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+                shot(90.0, 90.0, 1.0, 0.0, 0.0),
+                shot(180.0, 180.0, 1.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    project
+        .station_offsets
+        .insert(StationRef::new(section_id, 1), (1.0, 1.0, 1.0));
+    project
+        .station_offsets
+        .insert(StationRef::new(section_id, 3), (3.0, 3.0, 3.0));
+
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(section_id, 2),
+        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    });
+
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(section_id, 2),
+        station_b: StationRef::new(section_id, 3),
+        merged_at: Utc::now(),
+    });
+
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(section_id, 1),
+        station_b: StationRef::new(section_id, 3),
+        path_length: 2.0,
+        misclosure_distance: 0.1,
+        error_percentage: 5.0,
+        horizontal_misclosure: 0.1,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+
+    project.shift_station_refs(section_id, 2, -1);
+
+    assert!(project
+        .station_offsets
+        .contains_key(&StationRef::new(section_id, 1)));
+    assert!(!project
+        .station_offsets
+        .contains_key(&StationRef::new(section_id, 3)));
+    assert_eq!(
+        project
+            .station_offsets
+            .get(&StationRef::new(section_id, 2)),
+        Some(&(3.0, 3.0, 3.0))
+    );
+
+    assert_eq!(
+        project.zero_datums[0].station_ref,
+        StationRef::new(section_id, 1)
+    );
+
+    let merge = &project.station_merges[0];
+    assert_eq!(merge.station_a, StationRef::new(section_id, 1));
+    assert_eq!(merge.station_b, StationRef::new(section_id, 2));
+
+    let closure = &project.loop_closures[0];
+    assert_eq!(closure.station_a, StationRef::new(section_id, 1));
+    assert_eq!(closure.station_b, StationRef::new(section_id, 2));
+}
+
+#[test]
+fn preview_delete_shot_basic() {
+    let mut project = Project::new("PreviewDelete".to_string(), None);
+    let section_a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let section_b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    // Merge station_a:1 with station_b:0
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(section_a, 1),
+        station_b: StationRef::new(section_b, 0),
+        merged_at: Utc::now(),
+    });
+
+    // Preview deleting section_a shot at position 1 (second shot)
+    // removed_station = (section_a, 2)
+    let shot1_id = project.get_section(section_a).unwrap().shots[1].id;
+    let impact = project.preview_delete_shot(section_a, shot1_id).unwrap();
+    assert_eq!(impact.removed_station, StationRef::new(section_a, 2));
+    // Merge is at station_a:1, not station_a:2 => removed_merges empty
+    assert!(impact.removed_merges.is_empty());
+
+    // Preview deleting section_a shot at position 0 (first shot)
+    // removed_station = (section_a, 0)
+    let shot0_id = project.get_section(section_a).unwrap().shots[0].id;
+    let impact = project.preview_delete_shot(section_a, shot0_id).unwrap();
+    assert_eq!(impact.removed_station, StationRef::new(section_a, 0));
+    // Merge is at station_a:1, not station_a:0 => removed_merges empty
+    assert!(impact.removed_merges.is_empty());
+
+    // Add a merge at station_a:2 with station_b:1
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(section_a, 2),
+        station_b: StationRef::new(section_b, 1),
+        merged_at: Utc::now(),
+    });
+
+    // Preview deleting section_a's second shot again
+    // removed_station = (section_a, 2), which matches the new merge
+    let impact = project.preview_delete_shot(section_a, shot1_id).unwrap();
+    assert_eq!(impact.removed_station, StationRef::new(section_a, 2));
+    assert_eq!(impact.removed_merges.len(), 1);
+    assert_eq!(impact.removed_merges[0].station_a, StationRef::new(section_a, 2));
+    assert_eq!(impact.removed_merges[0].station_b, StationRef::new(section_b, 1));
+}
+
+#[test]
+fn preview_delete_shot_with_closure_rewire() {
+    let mut project = Project::new("ClosureRewire".to_string(), None);
+    let section_a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let section_b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    // Merge section_a:1 with section_b:0
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(section_a, 1),
+        station_b: StationRef::new(section_b, 0),
+        merged_at: Utc::now(),
+    });
+
+    // Add a loop closure between section_a:1 and section_b:1
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(section_a, 1),
+        station_b: StationRef::new(section_b, 1),
+        path_length: 2.0,
+        misclosure_distance: 0.1,
+        error_percentage: 5.0,
+        horizontal_misclosure: 0.1,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+
+    // Preview deleting section_a's second shot (position 1)
+    // removed_station = (section_a, 2), but closure is on station_a:1 which is NOT removed
+    let shot1_id = project.get_section(section_a).unwrap().shots[1].id;
+    let impact = project.preview_delete_shot(section_a, shot1_id).unwrap();
+    assert_eq!(impact.removed_station, StationRef::new(section_a, 2));
+    assert!(impact.removed_closures.is_empty());
+
+    // Now add a closure with section_a:2 and section_b:1
+    project.loop_closures.push(LoopClosure {
+        id: 2,
+        station_a: StationRef::new(section_a, 2),
+        station_b: StationRef::new(section_b, 1),
+        path_length: 3.0,
+        misclosure_distance: 0.2,
+        error_percentage: 6.7,
+        horizontal_misclosure: 0.2,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+
+    // Preview delete of section_a's second shot => removed_station = (section_a, 2)
+    // The closure IS on the removed station
+    let impact = project.preview_delete_shot(section_a, shot1_id).unwrap();
+    assert_eq!(impact.removed_station, StationRef::new(section_a, 2));
+    assert_eq!(impact.removed_closures.len(), 1);
+    assert_eq!(impact.removed_closures[0].closure_id, 2);
+
+    // The merge group of station_a:2 is just {station_a:2} (not merged with anything)
+    // So merge_group_without is empty => no replacement candidate => closure_rewire_skipped
+    assert!(impact.closure_rewire_skipped);
+    assert!(impact.replacement_closure_updates.is_empty());
+}
+
+#[test]
+fn preview_delete_shot_mid_shot_loop_blocks_shift() {
+    let mut project = Project::new("MidShotLoop".to_string(), None);
+
+    // Section A with 3 shots: stations 0,1,2,3
+    let section_a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    // Section B with 1 shot: stations 0,1
+    let section_b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+
+    // Merge A:0 with B:0
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(section_a, 0),
+        station_b: StationRef::new(section_b, 0),
+        merged_at: Utc::now(),
+    });
+
+    // Merge A:3 with B:1
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(section_a, 3),
+        station_b: StationRef::new(section_b, 1),
+        merged_at: Utc::now(),
+    });
+
+    // Delete middle shot of A (position 1). This is a mid-shot (pos > 0 && pos < len-1).
+    // station_before = A:1, station_after = A:2
+    // Path: A:1 -> (shot 0 backward) -> A:0 -> (merge) -> B:0 -> (shot 0) -> B:1
+    //   -> (merge) -> A:3 -> (shot 2 backward) -> A:2
+    // This connects them excluding shot at pos 1, so shift_blocked should be true.
+    let mid_shot_id = project.get_section(section_a).unwrap().shots[1].id;
+    let impact = project.preview_delete_shot(section_a, mid_shot_id).unwrap();
+    assert!(impact.shift_blocked, "Expected shift_blocked to be true for loop");
+    assert!(
+        !impact.shift_blocked_reasons.is_empty(),
+        "Expected at least one shift_blocked reason"
+    );
+    assert!(
+        impact.shift_blocked_reasons[0].contains("loop"),
+        "Expected loop-related reason, got: {}",
+        impact.shift_blocked_reasons[0]
+    );
+}
+
+#[test]
+fn remove_shot_with_rewire_first_shot_adjusts_offset() {
+    let mut project = Project::new("OffsetAdjust".to_string(), None);
+
+    // First shot going east (azimuth 90), second shot going north
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    let first_shot_id = project.get_section(section_id).unwrap().shots[0].id;
+
+    // Offset before should be (0, 0) by default
+    let offset_before = project.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+    assert!((offset_before.0).abs() < 1e-6);
+    assert!((offset_before.1).abs() < 1e-6);
+
+    // Remove the first shot
+    let result = project.remove_shot_with_rewire(section_id, first_shot_id);
+    assert!(result.is_ok());
+
+    // Displacement of shot going east at 90°:
+    // horizontal_length * sin(90°) = 10.0 * 1.0 = 10.0  (x)
+    // horizontal_length * cos(90°) = 10.0 * 0.0 = ~0.0   (y)
+    // After removing, offset = (0.0 + 10.0, 0.0 + ~0.0) = (~10.0, ~0.0)
+    let offset_after = project.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+    assert!(
+        (offset_after.0 - 10.0).abs() < 1e-6,
+        "Expected x offset ~10.0, got {}",
+        offset_after.0
+    );
+    assert!(
+        (offset_after.1).abs() < 1e-6,
+        "Expected y offset ~0.0, got {}",
+        offset_after.1
+    );
+}
+
+#[test]
+fn remove_shot_with_rewire_replaces_merges() {
+    let mut project = Project::new("ReplaceMerges".to_string(), None);
+
+    let section_a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let section_b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let section_c = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+
+    // Merge section_a:1 with section_b:0
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(section_a, 1),
+        station_b: StationRef::new(section_b, 0),
+        merged_at: Utc::now(),
+    });
+
+    // Merge section_b:0 with section_c:0
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(section_b, 0),
+        station_b: StationRef::new(section_c, 0),
+        merged_at: Utc::now(),
+    });
+
+    // Delete section_b's first shot (pos=0) => removed_station = section_b:0
+    let shot_id = project.get_section(section_b).unwrap().shots[0].id;
+    let (_, impact) = project.remove_shot_with_rewire(section_b, shot_id).unwrap();
+
+    // removed_merges should include both merges involving section_b:0
+    assert_eq!(impact.removed_merges.len(), 2);
+
+    // After removal, there should be a replacement merge between section_a:1 and section_c:0
+    let has_replacement = project.station_merges.iter().any(|m| {
+        (m.station_a == StationRef::new(section_a, 1)
+            && m.station_b == StationRef::new(section_c, 0))
+            || (m.station_a == StationRef::new(section_c, 0)
+                && m.station_b == StationRef::new(section_a, 1))
+    });
+    assert!(
+        has_replacement,
+        "Expected replacement merge between section_a:1 and section_c:0"
+    );
+}
+
+#[test]
+fn insert_shot_before_at_position_zero_adjusts_offset() {
+    let mut project = Project::new("InsertBefore".to_string(), None);
+
+    // Section with 1 shot going north
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+
+    let first_shot_id = project.get_section(section_id).unwrap().shots[0].id;
+
+    // Insert a shot going east before the first shot
+    let inserted = project.insert_shot_before(
+        section_id,
+        first_shot_id,
+        shot(90.0, 90.0, 5.0, 0.0, 0.0),
+    );
+    assert!(inserted.is_some());
+
+    // Displacement of inserted shot going east at 90°:
+    // (horizontal * sin(90°), horizontal * cos(90°)) = (5.0, ~0.0)
+    // Offset adjusted by (-5.0, ~0.0) to keep existing stations in place
+    let offset = project.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+    assert!(
+        (offset.0 - (-5.0)).abs() < 1e-6,
+        "Expected x offset ~-5.0, got {}",
+        offset.0
+    );
+    assert!(
+        (offset.1).abs() < 1e-6,
+        "Expected y offset ~0.0, got {}",
+        offset.1
+    );
+}
+
+#[test]
+fn insert_shot_after_shifts_station_refs() {
+    let mut project = Project::new("InsertAfterShift".to_string(), None);
+
+    let section_a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let section_b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    // Add a merge between section_a:2 (after second shot) and section_b:0
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(section_a, 2),
+        station_b: StationRef::new(section_b, 0),
+        merged_at: Utc::now(),
+    });
+
+    // Add a loop closure between section_a:2 and section_b:1
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(section_a, 2),
+        station_b: StationRef::new(section_b, 1),
+        path_length: 2.0,
+        misclosure_distance: 0.1,
+        error_percentage: 5.0,
+        horizontal_misclosure: 0.1,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+    project.next_closure_id = 2;
+
+    // Insert a shot after section_a's first shot (position 0)
+    let first_shot_id = project.get_section(section_a).unwrap().shots[0].id;
+    let inserted = project.insert_shot_after(
+        section_a,
+        first_shot_id,
+        shot(0.0, 0.0, 1.0, 0.0, 0.0),
+    );
+    assert!(inserted.is_some());
+
+    // The new shot goes at position 1. Old stations at index >= 2 shift to index+1.
+    // So section_a:2 becomes section_a:3.
+    // The merge should now reference section_a:3.
+    let merge = &project.station_merges[0];
+    assert_eq!(
+        merge.station_a,
+        StationRef::new(section_a, 3),
+        "Merge station_a should have shifted from 2 to 3"
+    );
+    assert_eq!(merge.station_b, StationRef::new(section_b, 0));
+
+    // The closure should reference section_a:3 (was section_a:2).
+    let closure = &project.loop_closures[0];
+    assert_eq!(
+        closure.station_a,
+        StationRef::new(section_a, 3),
+        "Closure station_a should have shifted from 2 to 3"
+    );
+    assert_eq!(closure.station_b, StationRef::new(section_b, 1));
+}
+
+#[test]
+fn calculate_penetration_with_zero_datum() {
+    let mut project = Project::new("Penetration".to_string(), None);
+
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    // Set a zero datum on station 0
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(section_id, 0),
+        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    });
+
+    // Compute stations
+    let stations = project.compute_station_coordinates();
+
+    // Station 0 at origin, station 1 at (0, 10, 0), station 2 at (0, 15, 0)
+    // Penetration = max distance from datum station to any station = 15.0
+    let penetration = project.calculate_penetration(&stations);
+    assert!(
+        (penetration - 15.0).abs() < 1e-6,
+        "Expected penetration ~15.0, got {}",
+        penetration
+    );
+}
+
+#[test]
+fn calculate_penetration_no_datums_returns_zero() {
+    let mut project = Project::new("NoDatums".to_string(), None);
+
+    project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+        ..Default::default()
+    });
+
+    // No zero datums set
+    let stations = project.compute_station_coordinates();
+    let penetration = project.calculate_penetration(&stations);
+    assert!(
+        (penetration - 0.0).abs() < 1e-6,
+        "Expected penetration 0.0, got {}",
+        penetration
+    );
 }

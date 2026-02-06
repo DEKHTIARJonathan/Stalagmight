@@ -6,9 +6,11 @@ use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
     ShotUpdates, StationRef, SurveyDirection,
 };
+use crate::persistence::Database;
 use crate::test_helpers::TestDb;
 use chrono::NaiveDate;
 use std::path::PathBuf;
+use std::{env, fs};
 use std::sync::{Mutex, OnceLock};
 use tauri::test::{mock_app, MockRuntime};
 use tauri::{Manager, State};
@@ -47,6 +49,32 @@ fn with_restored_config<T>(app: &tauri::App<MockRuntime>, f: impl FnOnce() -> T)
     result
 }
 
+struct EnvVarGuard {
+    key: String,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &str, value: &str) -> Self {
+        let original = env::var(key).ok();
+        env::set_var(key, value);
+        Self {
+            key: key.to_string(),
+            original,
+        }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(value) = &self.original {
+            env::set_var(&self.key, value);
+        } else {
+            env::remove_var(&self.key);
+        }
+    }
+}
+
 fn assert_success(result: &CommandResult) {
     assert!(result.success, "expected success, got error: {:?}", result.error);
     assert!(result.error.is_none());
@@ -79,6 +107,17 @@ fn shot_data_with_depth(length: f64, depth_in: f64, depth_out: f64) -> ShotData 
         length,
         depth_in,
         depth_out,
+        ..Default::default()
+    }
+}
+
+fn shot_data_with_azimuth(length: f64, azimuth: f64) -> ShotData {
+    ShotData {
+        azimuth_in: azimuth,
+        azimuth_out: azimuth,
+        length,
+        depth_in: 0.0,
+        depth_out: 0.0,
         ..Default::default()
     }
 }
@@ -581,6 +620,153 @@ fn test_open_project_loads_saved_project() {
 }
 
 #[test]
+fn test_project_lifecycle_persists_undo_and_state() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        create_project(&app);
+        let section_a = create_section_with_shots(&app, vec![shot_data(10.0), shot_data(5.0)]);
+        let section_b = create_section_with_shots(&app, vec![shot_data(7.0)]);
+
+        let merge_result = station::merge_stations(
+            state(&app),
+            StationRef::new(section_a, 0),
+            StationRef::new(section_b, 0),
+        );
+        assert_success(&merge_result);
+
+        let gps = GpsCoordinates::new(10.0, 20.0, 0.0).unwrap();
+        let datum_result = station::set_zero_datum(state(&app), StationRef::new(section_a, 0), gps);
+        assert_success(&datum_result);
+
+        let updates = ShotUpdates {
+            length: Some(12.5),
+            comment: Some(Some("recalc".to_string())),
+            ..Default::default()
+        };
+        let update_result = shot::update_shot(state(&app), section_a, 0, updates);
+        assert_success(&update_result);
+
+        let undo_before = history::get_undo_stack(state(&app));
+        assert!(!undo_before.is_empty());
+        assert_eq!(undo_before[0].command_type, "update_shot");
+
+        let dir = TempDir::new().unwrap();
+        let saved_path = save_project_to_temp(&app, &dir);
+
+        assert_success(&project::close_project(state(&app)));
+        let open_result = project::open_project(state(&app), saved_path.clone());
+        assert_success(&open_result);
+
+        let project_state = project::get_project_state(state(&app)).expect("project state");
+        assert_eq!(project_state.project.sections.len(), 2);
+        assert_eq!(project_state.project.station_merges.len(), 1);
+        assert_eq!(project_state.project.zero_datums.len(), 1);
+
+        let section = project_state
+            .project
+            .get_section(section_a)
+            .expect("section a");
+        assert!((section.shots[0].length - 12.5).abs() < f64::EPSILON);
+        assert_eq!(section.shots[0].comment.as_deref(), Some("recalc"));
+
+        let undo_after = history::get_undo_stack(state(&app));
+        assert_eq!(undo_after.len(), undo_before.len());
+        assert_eq!(undo_after[0].command_type, "update_shot");
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn test_open_project_updates_recent_projects_when_config_save_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    with_config_lock(|| {
+        let readonly_dir = TempDir::new().unwrap();
+        let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
+        perms.set_mode(0o555);
+        fs::set_permissions(readonly_dir.path(), perms).unwrap();
+
+        let _env_guard = EnvVarGuard::set(
+            "XDG_CONFIG_HOME",
+            readonly_dir.path().to_str().unwrap(),
+        );
+
+        let app = app_with_state();
+        let project_dir = TempDir::new().unwrap();
+        let project_path = project_dir.path().join("config-fail.stalx");
+
+        let mut project = Project::new("Config Fail".to_string(), None);
+        project.add_section(SectionData {
+            shots: vec![shot_data(1.0)],
+            ..Default::default()
+        });
+        let mut db = Database::open(&project_path).unwrap();
+        db.save_project(&project).unwrap();
+        drop(db);
+
+        let result = project::open_project(state(&app), project_path.clone());
+        assert_success(&result);
+
+        let cfg = config::get_config(state(&app));
+        assert_eq!(cfg.general.recent_projects.first(), Some(&project_path));
+
+        let config_path = crate::config::Config::config_path().unwrap();
+        assert!(
+            !config_path.exists(),
+            "config file should not be written when config dir is read-only"
+        );
+
+        // Reset permissions so TempDir can clean up.
+        let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(readonly_dir.path(), perms).unwrap();
+    });
+}
+
+#[test]
+fn test_open_project_updates_recent_projects_order_and_truncates() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            let mut cfg = config::get_config(state(&app));
+            cfg.general.recent_projects_max = 2;
+            cfg.general.recent_projects = Vec::new();
+            config::update_config(state(&app), cfg).expect("update config");
+
+            let dir = TempDir::new().unwrap();
+            let path_a = dir.path().join("a.stalx");
+            let path_b = dir.path().join("b.stalx");
+            let path_c = dir.path().join("c.stalx");
+
+            for (path, name) in [
+                (&path_a, "A"),
+                (&path_b, "B"),
+                (&path_c, "C"),
+            ] {
+                let mut project = Project::new(name.to_string(), None);
+                project.add_section(SectionData {
+                    shots: vec![shot_data(1.0)],
+                    ..Default::default()
+                });
+                let mut db = Database::open(path).unwrap();
+                db.save_project(&project).unwrap();
+            }
+
+            assert_success(&project::open_project(state(&app), path_a.clone()));
+            assert_success(&project::open_project(state(&app), path_b.clone()));
+            assert_success(&project::open_project(state(&app), path_c.clone()));
+
+            let cfg = config::get_config(state(&app));
+            assert_eq!(cfg.general.recent_projects, vec![path_c.clone(), path_b.clone()]);
+
+            assert_success(&project::open_project(state(&app), path_b.clone()));
+            let cfg = config::get_config(state(&app));
+            assert_eq!(cfg.general.recent_projects, vec![path_b, path_c]);
+        });
+    });
+}
+
+#[test]
 fn test_save_project_persists_sections() {
     with_config_lock(|| {
         let app = app_with_state();
@@ -593,6 +779,28 @@ fn test_save_project_persists_sections() {
         let _ = project::open_project(state(&app2), saved_path);
         let project_state = project::get_project_state(state(&app2)).expect("project state");
         assert_eq!(project_state.project.sections.len(), 1);
+    });
+}
+
+#[test]
+fn test_save_project_fails_when_output_is_directory() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let blocked = dir.path().join("blocked.stalx");
+            std::fs::create_dir_all(&blocked).unwrap();
+
+            let result = project::save_project(state(&app), Some(blocked.clone()));
+            assert_failure_contains(&result, "Failed to finalize save");
+
+            let temp_path = blocked.with_extension("stalx.tmp");
+            assert!(!temp_path.exists());
+
+            let project_state = state(&app).inner().get_project_state().unwrap();
+            assert!(project_state.file_path.is_none());
+        });
     });
 }
 
@@ -636,6 +844,41 @@ fn test_remove_from_recent_projects_success() {
             assert!(!recent.iter().any(|p| p.file_path == saved_path));
         });
     });
+}
+
+#[test]
+fn test_save_project_fails_when_directory_missing() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        create_project(&app);
+        let dir = TempDir::new().unwrap();
+        let missing_dir = dir.path().join("missing");
+        let path = missing_dir.join("project");
+
+        let result = project::save_project(state(&app), Some(path));
+        assert_failure_contains(&result, "Failed to create save file");
+        assert!(!missing_dir.exists());
+    });
+}
+
+#[test]
+fn test_merge_projects_fails_when_source_missing() {
+    let app = app_with_state();
+    let project = project_with_section(vec![shot_data(1.0)]);
+    let (db_a, _database_a) = TestDb::with_project(&project).unwrap();
+    let missing_path = db_a.path().with_file_name("missing.stalx");
+    let output_dir = TempDir::new().unwrap();
+    let output_path = output_dir.path().join("merged.stalx");
+
+    let result = project::merge_projects(
+        state(&app),
+        vec![db_a.path().to_path_buf(), missing_path],
+        output_path,
+        "Merged".to_string(),
+        false,
+    );
+
+    assert_failure_contains(&result, "Source file not found");
 }
 
 // === Section commands ===
@@ -768,6 +1011,56 @@ fn test_move_section_success() {
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
     let result = section::move_section(state(&app), id, Coordinates::new(2.0, -3.0, 0.0));
     assert_success(&result);
+}
+
+#[test]
+fn test_move_segment_moves_connected_sections() {
+    let app = app_with_state();
+    create_project(&app);
+    let section_a = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let section_b = create_section_with_shots(&app, vec![shot_data(1.0)]);
+
+    assert_success(&station::merge_stations(
+        state(&app),
+        StationRef::new(section_a, 1),
+        StationRef::new(section_b, 0),
+    ));
+
+    let before = project::get_project_state(state(&app)).expect("project state");
+    let offset_a_before = before
+        .project
+        .section_offsets
+        .get(&section_a)
+        .copied()
+        .unwrap_or((0.0, 0.0));
+    let offset_b_before = before
+        .project
+        .section_offsets
+        .get(&section_b)
+        .copied()
+        .unwrap_or((0.0, 0.0));
+
+    let delta = Coordinates::new(3.0, -2.0, 0.0);
+    assert_success(&section::move_segment(state(&app), section_a, delta));
+
+    let after = project::get_project_state(state(&app)).expect("project state");
+    let offset_a_after = after
+        .project
+        .section_offsets
+        .get(&section_a)
+        .copied()
+        .unwrap_or((0.0, 0.0));
+    let offset_b_after = after
+        .project
+        .section_offsets
+        .get(&section_b)
+        .copied()
+        .unwrap_or((0.0, 0.0));
+
+    assert!((offset_a_after.0 - (offset_a_before.0 + delta.x)).abs() < 1e-6);
+    assert!((offset_a_after.1 - (offset_a_before.1 + delta.y)).abs() < 1e-6);
+    assert!((offset_b_after.0 - (offset_b_before.0 + delta.x)).abs() < 1e-6);
+    assert!((offset_b_after.1 - (offset_b_before.1 + delta.y)).abs() < 1e-6);
 }
 
 #[test]
@@ -921,6 +1214,48 @@ fn test_delete_shot_removes_shot() {
 }
 
 #[test]
+fn test_delete_shot_and_split_creates_new_section() {
+    let app = app_with_state();
+    create_project(&app);
+    let id = create_section_with_shots(
+        &app,
+        vec![shot_data(1.0), shot_data(2.0), shot_data(3.0)],
+    );
+    let section_state = section::get_section(state(&app), id).unwrap();
+    let shot_id = section_state.shots[1].id;
+
+    let result = shot::delete_shot_and_split(
+        state(&app),
+        id,
+        shot_id,
+        "Section A".to_string(),
+        "Section B".to_string(),
+    );
+    assert_success(&result);
+    let new_id = result.section_id.expect("new section id");
+
+    let section_a = section::get_section(state(&app), id).unwrap();
+    let section_b = section::get_section(state(&app), new_id).unwrap();
+    assert_eq!(section_a.name, Some("Section A".to_string()));
+    assert_eq!(section_b.name, Some("Section B".to_string()));
+    assert_eq!(section_a.shots.len(), 1);
+    assert_eq!(section_b.shots.len(), 1);
+}
+
+#[test]
+fn test_delete_last_shot_and_section_removes_section() {
+    let app = app_with_state();
+    create_project(&app);
+    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let section_state = section::get_section(state(&app), id).unwrap();
+    let shot_id = section_state.shots[0].id;
+
+    let result = shot::delete_last_shot_and_section(state(&app), id, shot_id);
+    assert_success(&result);
+    assert!(section::get_section(state(&app), id).is_none());
+}
+
+#[test]
 fn test_set_shot_virtual_fails_missing() {
     let app = app_with_state();
     create_project(&app);
@@ -1013,6 +1348,59 @@ fn test_unmerge_stations_removes_merge() {
     );
     let result = station::unmerge_stations(state(&app), StationRef::new(0, 1));
     assert_success(&result);
+}
+
+#[test]
+fn test_adjust_loop_closures_fails_without_closures() {
+    let app = app_with_state();
+    create_project(&app);
+    let section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+
+    let result = station::adjust_loop_closures(
+        state(&app),
+        StationRef::new(section_id, 0),
+        ClosureStrategy::LeastSquaresWeighted,
+    );
+    assert_failure_contains(&result, "No eligible loop closures");
+}
+
+#[test]
+fn test_adjust_loop_closures_aligns_closure() {
+    let app = app_with_state();
+    create_project(&app);
+    let section_a = create_section_with_shots(&app, vec![shot_data_with_azimuth(10.0, 90.0)]);
+    let section_b = create_section_with_shots(&app, vec![shot_data_with_azimuth(10.0, 0.0)]);
+
+    assert_success(&station::merge_stations(
+        state(&app),
+        StationRef::new(section_a, 0),
+        StationRef::new(section_b, 0),
+    ));
+
+    let closure_result = station::create_loop_closure(
+        state(&app),
+        StationRef::new(section_a, 1),
+        StationRef::new(section_b, 1),
+        ClosureStrategy::Batch,
+    );
+    assert_success(&closure_result);
+
+    let before = project::get_project_state(state(&app)).expect("project state");
+    let closure_before = before.project.loop_closures.first().unwrap();
+    let misclosure_before = closure_before.misclosure_distance;
+
+    let adjust_result = station::adjust_loop_closures(
+        state(&app),
+        StationRef::new(section_a, 0),
+        ClosureStrategy::LeastSquaresWeighted,
+    );
+    assert_success(&adjust_result);
+
+    let after = project::get_project_state(state(&app)).expect("project state");
+    let closure_after = after.project.loop_closures.first().unwrap();
+    assert!(closure_after.is_aligned);
+    assert!(closure_after.misclosure_distance <= misclosure_before + 1e-6);
+    assert!(closure_after.misclosure_distance < 1e-3);
 }
 
 #[test]
@@ -1213,6 +1601,76 @@ fn test_export_image_fails_no_project() {
 }
 
 #[test]
+fn test_export_csv_fails_when_directory_missing() {
+    let app = app_with_state();
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let dir = TempDir::new().unwrap();
+    let missing_dir = dir.path().join("missing");
+    let path = missing_dir.join("out.csv");
+    let result = export::export_csv(state(&app), path.clone());
+    assert!(result.is_err());
+    assert!(!path.exists());
+}
+
+#[test]
+fn test_export_json_fails_when_directory_missing() {
+    let app = app_with_state();
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let dir = TempDir::new().unwrap();
+    let missing_dir = dir.path().join("missing");
+    let path = missing_dir.join("out.json");
+    let result = export::export_json(state(&app), path.clone());
+    assert!(result.is_err());
+    assert!(!path.exists());
+}
+
+#[test]
+fn test_export_image_fails_when_directory_missing() {
+    let app = app_with_state();
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let dir = TempDir::new().unwrap();
+    let missing_dir = dir.path().join("missing");
+    let path = missing_dir.join("out.svg");
+    let mut options = crate::export::ExportImageOptions::default();
+    options.format = crate::export::ImageFormat::Svg;
+    let result = export::export_image_impl(state(&app).inner(), path.clone(), options);
+    assert!(result.is_err());
+    assert!(!path.exists());
+}
+
+#[test]
+fn test_export_image_rejects_zero_dpi() {
+    let app = app_with_state();
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("out.png");
+    let mut options = crate::export::ExportImageOptions::default();
+    options.format = crate::export::ImageFormat::Png;
+    options.dpi = 0;
+    let result = export::export_image_impl(state(&app).inner(), path.clone(), options);
+    assert!(result.is_err());
+    assert!(!path.exists());
+}
+
+#[test]
+fn test_export_json_overwrites_existing_file() {
+    let app = app_with_state();
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("out.json");
+    std::fs::write(&path, "sentinel").unwrap();
+    export::export_json(state(&app), path.clone()).unwrap();
+    let contents = std::fs::read_to_string(&path).unwrap();
+    assert!(contents.contains("\"project\""));
+    assert!(!contents.contains("sentinel"));
+}
+
+#[test]
 fn test_export_csv_success_creates_file() {
     let app = app_with_state();
     create_project(&app);
@@ -1245,6 +1703,46 @@ fn test_export_image_success_creates_file() {
     options.format = crate::export::ImageFormat::Svg;
     export::export_image_impl(state(&app).inner(), path.clone(), options).unwrap();
     assert!(path.exists());
+}
+
+#[test]
+fn test_export_roundtrip_includes_virtual_and_comment() {
+    let app = app_with_state();
+    create_project(&app);
+    let shot = ShotData {
+        azimuth_in: 12.0,
+        azimuth_out: 15.0,
+        length: 8.25,
+        depth_in: 1.0,
+        depth_out: 2.0,
+        left: Some(0.3),
+        right: Some(0.4),
+        up: Some(0.5),
+        down: Some(0.6),
+        comment: Some("note,with comma".to_string()),
+        ..Default::default()
+    };
+    let section_id = create_section_with_shots(&app, vec![shot]);
+    assert_success(&shot::set_shot_virtual(state(&app), section_id, 0, true));
+
+    let dir = TempDir::new().unwrap();
+    let csv_path = dir.path().join("export.csv");
+    let json_path = dir.path().join("export.json");
+
+    export::export_csv(state(&app), csv_path.clone()).unwrap();
+    export::export_json(state(&app), json_path.clone()).unwrap();
+
+    let csv_contents = fs::read_to_string(&csv_path).unwrap();
+    assert!(csv_contents.contains("section_id,section_name"));
+    assert!(csv_contents.contains("\"note,with comma\""));
+    assert!(csv_contents.contains("true"));
+
+    let json_contents = fs::read_to_string(&json_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json_contents).unwrap();
+    let shot_json = &parsed["sections"][0]["shots"][0];
+    assert_eq!(shot_json["is_virtual"], true);
+    assert_eq!(shot_json["comment"], "note,with comma");
+    assert!(shot_json["lrud"].is_array());
 }
 
 // === Cache commands ===
@@ -1719,4 +2217,42 @@ fn test_merge_projects_success_creates_output() {
 
     assert_success(&result);
     assert!(output_path.exists());
+}
+
+#[test]
+fn test_update_config_persists_and_reload_restores() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            let mut cfg = config::get_config(state(&app));
+            let original_auto_save = cfg.general.auto_save;
+            cfg.general.auto_save = !original_auto_save;
+            config::update_config(state(&app), cfg).expect("update config");
+
+            let updated = config::get_config(state(&app));
+            assert_eq!(updated.general.auto_save, !original_auto_save);
+
+            let reloaded = config::reload_config(state(&app)).expect("reload config");
+            assert_eq!(reloaded.general.auto_save, !original_auto_save);
+        });
+    });
+}
+
+#[test]
+fn test_reload_config_syncs_undo_history_limit() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            let mut cfg = config::get_config(state(&app));
+            cfg.general.undo_history_limit = 42;
+            config::update_config(state(&app), cfg).expect("update config");
+
+            let reloaded = config::reload_config(state(&app)).expect("reload config");
+            assert_eq!(reloaded.general.undo_history_limit, 42);
+
+            // Verify the in-memory config also reflects the reloaded limit
+            let current = config::get_config(state(&app));
+            assert_eq!(current.general.undo_history_limit, 42);
+        });
+    });
 }
