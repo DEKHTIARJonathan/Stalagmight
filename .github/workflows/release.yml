@@ -31,32 +31,64 @@ jobs:
       - name: Collect release artifacts
         run: |
           mkdir -p release-artifacts
+          echo "=== All bundle output ==="
+          find src-tauri/target/release/bundle -type f | head -50
+          echo "=== Copying artifacts ==="
           cp src-tauri/target/release/bundle/deb/*.deb release-artifacts/ 2>/dev/null || true
           cp src-tauri/target/release/bundle/rpm/*.rpm release-artifacts/ 2>/dev/null || true
           cp src-tauri/target/release/bundle/appimage/*.AppImage release-artifacts/ 2>/dev/null || true
+          echo "=== Collected ==="
           ls -lh release-artifacts/
+          FILE_COUNT=$(find release-artifacts -type f | wc -l)
+          if [ "$FILE_COUNT" -eq 0 ]; then
+            echo "::error::No artifacts found in bundle output"
+            exit 1
+          fi
+      # Extract changelog section for this version
+      - name: Extract changelog
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          # Extract the section between this version header and the next version header
+          BODY=$(awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md)
+          # Fall back if empty
+          if [ -z "$BODY" ]; then
+            BODY="Release ${TAG}"
+          fi
+          # Write to file for safe multi-line handling
+          echo "$BODY" > /tmp/release-body.md
       # Create release and upload assets
-      - name: Create release
+      - name: Create release and upload artifacts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          BODY=$(cat /tmp/release-body.md)
+          # Escape JSON special characters
+          BODY_JSON=$(python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))" <<< "$BODY")
           # Create release via API (works on both GitHub and Gitea)
-          RELEASE_ID=$(curl -s -X POST \
+          RESPONSE=$(curl -sf -X POST \
             -H "Authorization: token ${GITHUB_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "{\"tag_name\":\"${TAG}\",\"name\":\"Stalagmight ${TAG}\",\"body\":\"See CHANGELOG.md for details.\",\"draft\":true}" \
-            "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases" \
-            | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"Stalagmight ${TAG}\",\"body\":${BODY_JSON},\"draft\":false}" \
+            "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases")
+          RELEASE_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
           echo "Created release ID: ${RELEASE_ID}"
           # Upload each artifact
           for file in release-artifacts/*; do
             [ -f "$file" ] || continue
             filename=$(basename "$file")
-            echo "Uploading: ${filename}"
-            curl -s -X POST \
+            echo "Uploading: ${filename} ($(stat -c%s "$file") bytes)"
+            curl -sf -X POST \
               -H "Authorization: token ${GITHUB_TOKEN}" \
               -H "Content-Type: application/octet-stream" \
               --data-binary "@${file}" \
-              "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${filename}"
+              "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${filename}" \
+              && echo "  OK" \
+              || echo "::error::Failed to upload ${filename}"
           done
