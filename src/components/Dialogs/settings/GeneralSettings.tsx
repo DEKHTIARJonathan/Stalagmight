@@ -137,6 +137,24 @@ export function GeneralSettings({
     });
   };
 
+  const handleNumberFormatChange = (value: string) => {
+    onChange({
+      general: {
+        ...config.general,
+        number_format: value,
+      },
+    });
+  };
+
+  const handleDateFormatChange = (value: string) => {
+    onChange({
+      general: {
+        ...config.general,
+        date_format: value,
+      },
+    });
+  };
+
   return (
     <div
       role="tabpanel"
@@ -163,6 +181,48 @@ export function GeneralSettings({
             className="w-48"
             aria-label={t('settings.general.language.aria')}
             data-testid="select-language"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t('settings.general.numberFormat.label')}
+          helpText={t('settings.general.numberFormat.help')}
+          isChanged={isFieldChanged(changedFields, 'general.number_format')}
+          data-testid="setting-number-format"
+        >
+          <Select
+            value={config.general.number_format || 'locale'}
+            onChange={handleNumberFormatChange}
+            options={[
+              { value: 'locale', label: t('settings.general.numberFormat.options.locale') },
+              { value: 'en-US', label: t('settings.general.numberFormat.options.period') },
+              { value: 'de-DE', label: t('settings.general.numberFormat.options.comma') },
+              { value: 'fr-FR', label: t('settings.general.numberFormat.options.space') },
+            ]}
+            className="w-48"
+            aria-label={t('settings.general.numberFormat.aria')}
+            data-testid="select-number-format"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t('settings.general.dateFormat.label')}
+          helpText={t('settings.general.dateFormat.help')}
+          isChanged={isFieldChanged(changedFields, 'general.date_format')}
+          data-testid="setting-date-format"
+        >
+          <Select
+            value={config.general.date_format || 'locale'}
+            onChange={handleDateFormatChange}
+            options={[
+              { value: 'locale', label: t('settings.general.dateFormat.options.locale') },
+              { value: 'en-US', label: t('settings.general.dateFormat.options.mdy') },
+              { value: 'en-GB', label: t('settings.general.dateFormat.options.dmy') },
+              { value: 'en-CA', label: t('settings.general.dateFormat.options.ymd') },
+            ]}
+            className="w-48"
+            aria-label={t('settings.general.dateFormat.aria')}
+            data-testid="select-date-format"
           />
         </SettingRow>
       </SettingsSection>

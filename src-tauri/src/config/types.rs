@@ -443,10 +443,20 @@ pub struct GeneralConfig {
     /// Locale setting: 'system' or a specific locale tag (e.g., 'en-US')
     #[serde(default = "default_locale")]
     pub locale: String,
+    /// Number format override: 'locale' (follow language setting) or a locale tag (e.g., 'de-DE')
+    #[serde(default = "default_format_locale")]
+    pub number_format: String,
+    /// Date format override: 'locale' (follow language setting) or a locale tag (e.g., 'en-GB')
+    #[serde(default = "default_format_locale")]
+    pub date_format: String,
 }
 
 fn default_locale() -> String {
     "system".to_string()
+}
+
+fn default_format_locale() -> String {
+    "locale".to_string()
 }
 
 fn default_undo_history_limit() -> usize {

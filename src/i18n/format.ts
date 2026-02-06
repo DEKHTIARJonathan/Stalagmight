@@ -2,6 +2,18 @@ import i18n from './index';
 
 type RelativeUnit = 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'year';
 
+// Module-level format locale overrides (default: follow language setting)
+let numberFormatLocale = 'locale';
+let dateFormatLocale = 'locale';
+
+export function setNumberFormatLocale(locale: string): void {
+  numberFormatLocale = locale;
+}
+
+export function setDateFormatLocale(locale: string): void {
+  dateFormatLocale = locale;
+}
+
 export function getCurrentLocale(explicitLocale?: string): string {
   if (explicitLocale && explicitLocale !== 'system') {
     return explicitLocale;
@@ -9,12 +21,26 @@ export function getCurrentLocale(explicitLocale?: string): string {
   return i18n.resolvedLanguage || i18n.language || 'en';
 }
 
+/** Resolve the effective locale for number formatting. */
+function getNumberLocale(explicitLocale?: string): string {
+  if (explicitLocale) return getCurrentLocale(explicitLocale);
+  if (numberFormatLocale !== 'locale') return numberFormatLocale;
+  return getCurrentLocale();
+}
+
+/** Resolve the effective locale for date formatting. */
+function getDateLocale(explicitLocale?: string): string {
+  if (explicitLocale) return getCurrentLocale(explicitLocale);
+  if (dateFormatLocale !== 'locale') return dateFormatLocale;
+  return getCurrentLocale();
+}
+
 export function formatNumber(
   value: number,
   locale?: string,
   options?: Intl.NumberFormatOptions
 ): string {
-  const resolvedLocale = getCurrentLocale(locale);
+  const resolvedLocale = getNumberLocale(locale);
   return new Intl.NumberFormat(resolvedLocale, options).format(value);
 }
 
@@ -23,7 +49,7 @@ export function formatFixed(
   locale?: string,
   precision: number = 1
 ): string {
-  const resolvedLocale = getCurrentLocale(locale);
+  const resolvedLocale = getNumberLocale(locale);
   const clampedPrecision = Math.max(0, Math.min(6, Math.floor(precision)));
   return new Intl.NumberFormat(resolvedLocale, {
     minimumFractionDigits: clampedPrecision,
@@ -36,7 +62,7 @@ export function formatPercent(
   locale?: string,
   precision: number = 1
 ): string {
-  const resolvedLocale = getCurrentLocale(locale);
+  const resolvedLocale = getNumberLocale(locale);
   const clampedPrecision = Math.max(0, Math.min(6, Math.floor(precision)));
   const formatted = new Intl.NumberFormat(resolvedLocale, {
     minimumFractionDigits: clampedPrecision,
@@ -50,7 +76,7 @@ export function formatDate(
   locale?: string,
   options?: Intl.DateTimeFormatOptions
 ): string {
-  const resolvedLocale = getCurrentLocale(locale);
+  const resolvedLocale = getDateLocale(locale);
   return new Intl.DateTimeFormat(resolvedLocale, options).format(date);
 }
 

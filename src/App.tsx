@@ -6,6 +6,7 @@ import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import { useBeforeUnload, useLoadingProgress, useTheme } from './hooks';
 import i18n from './i18n';
+import { setNumberFormatLocale, setDateFormatLocale } from './i18n/format';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, DebugDialog } from './components/Dialogs';
@@ -226,6 +227,16 @@ function App() {
       void i18n.changeLanguage(locale);
     }
   }, [config?.general?.locale]);
+
+  // Sync number format locale with config
+  useEffect(() => {
+    setNumberFormatLocale(config?.general?.number_format ?? 'locale');
+  }, [config?.general?.number_format]);
+
+  // Sync date format locale with config
+  useEffect(() => {
+    setDateFormatLocale(config?.general?.date_format ?? 'locale');
+  }, [config?.general?.date_format]);
 
   // Initialize panel sizes from config
   useEffect(() => {

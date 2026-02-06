@@ -79,7 +79,7 @@
     "general": {
       "title": "General",
       "sections": {
-        "language": "Language",
+        "language": "Language & Formats",
         "saving": "Saving",
         "recentProjects": "Recent Projects",
         "undoHistory": "Undo History",
@@ -87,11 +87,33 @@
       },
       "language": {
         "label": "Language / Locale",
-        "help": "Controls number and date formatting",
+        "help": "Controls the app language and default formatting",
         "aria": "Language or locale preference",
         "options": {
           "system": "System Default",
           "enUS": "English (US)"
+        }
+      },
+      "numberFormat": {
+        "label": "Number format",
+        "help": "Override how numbers are displayed (decimal and thousands separators)",
+        "aria": "Number format preference",
+        "options": {
+          "locale": "Use language setting",
+          "period": "1,234.56",
+          "comma": "1.234,56",
+          "space": "1 234,56"
+        }
+      },
+      "dateFormat": {
+        "label": "Date format",
+        "help": "Override how dates are displayed",
+        "aria": "Date format preference",
+        "options": {
+          "locale": "Use language setting",
+          "mdy": "1/15/2026",
+          "dmy": "15/01/2026",
+          "ymd": "2026-01-15"
         }
       },
       "autoSave": {

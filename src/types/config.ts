@@ -42,6 +42,8 @@ export const defaultConfig: Config = {
     undo_persist_limit: 20,
     shortcut_feedback: 'non_obvious',
     locale: 'system',
+    number_format: 'locale',
+    date_format: 'locale',
   },
   units: {
     length: 'meters',
