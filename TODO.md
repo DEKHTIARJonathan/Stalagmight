@@ -15,10 +15,10 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Data & Editing | 4 | 5 | 80% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
-| Performance & Stability | 5 | 10 | 50% |
+| Performance & Stability | 6 | 10 | 60% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **44** | **65** | **68%** |
+| **Total** | **45** | **65** | **69%** |
 
 ---
 
@@ -146,21 +146,21 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 7 done, ❌ 0 not started
 
-### Performance & Stability (3/10 done)
+### Performance & Stability (6/10 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
 | Loading States | ✅ | LoadingProgress component with aria-live |
 | Network Error Stats | ✅ | Real tile fetch stats via Rust atomic counters + IPC |
 | Debounced Auto-Save | ❌ | Backend config exists, needs frontend 2-second debounce timer (SPEC 2.11) |
-| SQLite Integrity Checks | ❌ | PRAGMA integrity_check on project open (SPEC 2.11) |
+| SQLite Integrity Checks | ✅ | PRAGMA quick_check on open + full integrity_check on-demand (SPEC 14.4) |
 | Error Boundary Wrapper | ✅ | Wraps Sections, Map, Data Table, Details panels |
 | Network Retry Logic | ✅ | Max 2 retries with 200ms/500ms backoff on transport errors |
 | Improve Algorithm/Workflow Tracing | ✅ | Warnings on recoverable errors, debug prints in all major algorithms |
 | File Corruption Recovery | ❌ | |
 | Validation Error Recovery | ❌ | |
 
-**Subtotals**: ✅ 5 done, ❌ 5 not started
+**Subtotals**: ✅ 6 done, ❌ 4 not started
 
 ### Integrations (0/1 done)
 
@@ -189,12 +189,12 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Data & Editing | 5 | 4 | 0 | 1 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
-| Performance & Stability | 10 | 5 | 0 | 5 |
+| Performance & Stability | 10 | 6 | 0 | 4 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **65** | **44** | **0** | **21** |
+| **Total** | **65** | **45** | **0** | **20** |
 
-**Overall Progress**: 44 done = ~68% complete
+**Overall Progress**: 45 done = ~69% complete
 
 ---
 

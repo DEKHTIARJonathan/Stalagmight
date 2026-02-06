@@ -73,6 +73,9 @@ impl Database {
         let mut db = Self { conn };
         db.enable_foreign_keys()?;
 
+        // Run quick integrity check before reading any data (SPEC 14.4)
+        db.validate_integrity().context("Database file may be corrupted")?;
+
         // Check if the project table exists and has data
         let has_data = db.has_project_data()?;
         tracing::info!("has_project_data returned: {}", has_data);
@@ -114,6 +117,9 @@ impl Database {
 
         let db = Self { conn };
         db.enable_foreign_keys()?;
+
+        // Run quick integrity check before reading any data (SPEC 14.4)
+        db.validate_integrity().context("Database file may be corrupted")?;
 
         if let Ok(version) = db.get_user_version() {
             if version > SCHEMA_VERSION {
@@ -360,6 +366,47 @@ impl Database {
             .conn
             .query_row("SELECT schema_version FROM project LIMIT 1", [], |row| row.get(0))?;
         Ok(Some(version))
+    }
+
+    /// Run PRAGMA quick_check to detect database corruption.
+    /// This is a fast subset of integrity_check that skips index verification.
+    /// Called automatically on project open per SPEC 14.4.
+    fn validate_integrity(&self) -> Result<()> {
+        tracing::debug!("Running PRAGMA quick_check");
+        let result: String = self
+            .conn
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+        if result != "ok" {
+            tracing::error!(result = %result, "Database integrity check failed");
+            anyhow::bail!("Database integrity check failed: {}", result);
+        }
+        tracing::debug!("PRAGMA quick_check passed");
+        Ok(())
+    }
+
+    /// Run full PRAGMA integrity_check for on-demand deep validation.
+    /// This is slower than quick_check but also verifies index consistency.
+    /// Returns a list of error messages, or empty vec if database is healthy.
+    pub fn full_integrity_check(&self) -> Result<Vec<String>> {
+        tracing::info!("Running PRAGMA integrity_check (full)");
+        let mut stmt = self.conn.prepare("PRAGMA integrity_check")?;
+        let mut rows = stmt.query([])?;
+        let mut errors = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            let msg: String = row.get(0)?;
+            if msg != "ok" {
+                errors.push(msg);
+            }
+        }
+
+        if errors.is_empty() {
+            tracing::info!("Full integrity check passed");
+        } else {
+            tracing::error!(error_count = errors.len(), "Full integrity check found errors");
+        }
+
+        Ok(errors)
     }
 
     /// Verify there are no foreign key violations.
