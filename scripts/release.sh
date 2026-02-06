@@ -93,15 +93,16 @@ if [ -z "$GIT_LOG" ]; then
   GIT_LOG="- No changes recorded"
 fi
 
-# Build the new changelog section
-CHANGELOG_ENTRY="## [$NEW_VERSION] - $TODAY
-
-$GIT_LOG"
-
-# Insert after [Unreleased] line
-sed -i "/^## \[Unreleased\]/a\\
-\\
-$CHANGELOG_ENTRY" "$PROJECT_ROOT/CHANGELOG.md"
+# Insert new section after [Unreleased] line using awk (sed can't handle special chars in git log)
+CHANGELOG="$PROJECT_ROOT/CHANGELOG.md"
+awk -v ver="$NEW_VERSION" -v date="$TODAY" -v log="$GIT_LOG" '
+  /^## \[Unreleased\]/ {
+    print
+    printf "\n## [%s] - %s\n\n%s\n", ver, date, log
+    next
+  }
+  { print }
+' "$CHANGELOG" > "$CHANGELOG.tmp" && mv "$CHANGELOG.tmp" "$CHANGELOG"
 
 # --- Open editor for changelog review ---
 if [ "$NO_EDIT" = false ]; then
