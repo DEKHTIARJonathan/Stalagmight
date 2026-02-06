@@ -177,6 +177,7 @@ interface ProjectStore {
   isShotFrozen: (sectionId: number, shotIndex: number) => boolean;
   refreshWarnings: () => Promise<void>;
   resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<void>;
+  resolveAllWarnings: () => Promise<number>;
   unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandResult>;
@@ -617,6 +618,21 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       await get().refreshWarnings();
     } catch (e) {
       console.error('Failed to resolve warning:', e);
+    }
+  },
+
+  resolveAllWarnings: async () => {
+    try {
+      const count = await invokeIpc<number>(
+        'resolve_all_warnings',
+        {},
+        { purpose: 'bulk acknowledge all validation warnings' }
+      );
+      await get().refreshWarnings();
+      return count;
+    } catch (e) {
+      console.error('Failed to resolve all warnings:', e);
+      return 0;
     }
   },
 

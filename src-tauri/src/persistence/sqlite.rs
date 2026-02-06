@@ -1819,6 +1819,28 @@ impl Database {
         Ok(())
     }
 
+    /// Save multiple resolved warnings to database in a single transaction
+    pub fn save_resolved_warnings_bulk(&self, warnings: &[ResolvedWarning]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for warning in warnings {
+                stmt.execute(params![
+                    warning.section_id,
+                    warning.shot_id,
+                    warning.warning_code,
+                    warning.resolved_at.to_rfc3339(),
+                    warning.resolved_comment,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Load all display settings from database
     pub fn load_display_settings(&self) -> Result<HashMap<String, String>> {
         let mut stmt = self.conn.prepare("SELECT key, value FROM display_settings")?;

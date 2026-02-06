@@ -113,4 +113,11 @@ impl AppState {
         let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
         db.delete_resolved_warning(section_id, shot_id, warning_code)
     }
+
+    /// Save multiple resolved warnings to database in bulk
+    pub fn save_resolved_warnings_bulk(&self, warnings: &[crate::persistence::ResolvedWarning]) -> Result<()> {
+        let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
+        let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
+        db.save_resolved_warnings_bulk(warnings)
+    }
 }

@@ -273,3 +273,184 @@ test.describe('Warning Click Navigation', () => {
     await expect(shotHeading).toBeVisible();
   });
 });
+
+test.describe('Validation Error Recovery (SPEC 14.5)', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupMockedPage(page);
+  });
+
+  test('X dismiss button is rendered for unresolved warnings', async ({ page }) => {
+    await createProject(page, 'Dismiss Warning Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionIds = await getSectionIds(page);
+    const sectionId = sectionIds[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+
+    // Inject two unresolved warnings
+    await injectWarnings(page, [
+      {
+        sectionId,
+        shotId: shotIds[0]!,
+        shotIndex: 0,
+        code: 'LENGTH_SHORT',
+        message: 'Shot length below minimum',
+        severity: 'warning',
+        isResolved: false,
+      },
+      {
+        sectionId,
+        shotId: shotIds[1]!,
+        shotIndex: 1,
+        code: 'AZIMUTH_DIFF',
+        message: 'Azimuth difference exceeds threshold',
+        severity: 'warning',
+        isResolved: false,
+      },
+    ]);
+
+    // Switch to Warnings tab
+    await page.getByTestId('detail-tab-warnings').click();
+
+    // Both warnings visible
+    await expect(page.locator('text=Shot length below minimum')).toBeVisible();
+    await expect(page.locator('text=Azimuth difference exceeds threshold')).toBeVisible();
+
+    // X dismiss buttons rendered for each unresolved warning
+    const dismissButtons = page.getByTestId('dismiss-warning');
+    await expect(dismissButtons).toHaveCount(2);
+
+    // Verify dismiss buttons have proper aria-label
+    await expect(dismissButtons.first()).toHaveAttribute('aria-label', 'Mark resolved');
+  });
+
+  test('Clear All button is visible when unresolved warnings exist', async ({ page }) => {
+    await createProject(page, 'Clear All Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionIds = await getSectionIds(page);
+    const sectionId = sectionIds[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+
+    // Inject warnings
+    await injectWarnings(page, [
+      {
+        sectionId,
+        shotId: shotIds[0]!,
+        shotIndex: 0,
+        code: 'LENGTH_ZERO',
+        message: 'Shot has zero length',
+        severity: 'error',
+        isResolved: false,
+      },
+      {
+        sectionId,
+        shotId: shotIds[1]!,
+        shotIndex: 1,
+        code: 'AZIMUTH_DIFF',
+        message: 'Azimuth difference too large',
+        severity: 'warning',
+        isResolved: false,
+      },
+    ]);
+
+    await page.getByTestId('detail-tab-warnings').click();
+
+    // Clear All button should be visible
+    const clearAllBtn = page.getByTestId('clear-all-warnings');
+    await expect(clearAllBtn).toBeVisible();
+    await expect(clearAllBtn).toHaveText('Clear All');
+  });
+
+  test('badge only counts unresolved warnings', async ({ page }) => {
+    await createProject(page, 'Badge Count Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionIds = await getSectionIds(page);
+    const sectionId = sectionIds[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+
+    // Inject 3 warnings: 2 unresolved, 1 resolved
+    await injectWarnings(page, [
+      {
+        sectionId,
+        shotId: shotIds[0]!,
+        shotIndex: 0,
+        code: 'LENGTH_SHORT',
+        message: 'Shot length below minimum',
+        severity: 'warning',
+        isResolved: false,
+      },
+      {
+        sectionId,
+        shotId: shotIds[1]!,
+        shotIndex: 1,
+        code: 'AZIMUTH_DIFF',
+        message: 'Azimuth difference too large',
+        severity: 'warning',
+        isResolved: false,
+      },
+      {
+        sectionId,
+        shotId: shotIds[2]!,
+        shotIndex: 2,
+        code: 'LENGTH_LONG',
+        message: 'Shot length above maximum',
+        severity: 'warning',
+        isResolved: true,
+      },
+    ]);
+
+    // Badge should show 2 (only unresolved), not 3
+    const badge = page.getByTestId('detail-tab-warnings').locator('span.rounded-full');
+    await expect(badge).toHaveText('2');
+  });
+
+  test('resolved warnings hidden by default, shown with toggle', async ({ page }) => {
+    await createProject(page, 'Resolved Toggle Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionIds = await getSectionIds(page);
+    const sectionId = sectionIds[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+
+    // Inject one unresolved and one resolved warning
+    await injectWarnings(page, [
+      {
+        sectionId,
+        shotId: shotIds[0]!,
+        shotIndex: 0,
+        code: 'LENGTH_SHORT',
+        message: 'Shot length below minimum',
+        severity: 'warning',
+        isResolved: false,
+      },
+      {
+        sectionId,
+        shotId: shotIds[1]!,
+        shotIndex: 1,
+        code: 'AZIMUTH_DIFF',
+        message: 'Azimuth difference too large',
+        severity: 'warning',
+        isResolved: true,
+      },
+    ]);
+
+    await page.getByTestId('detail-tab-warnings').click();
+
+    // Unresolved warning visible
+    await expect(page.locator('text=Shot length below minimum')).toBeVisible();
+    // Resolved warning hidden by default
+    await expect(page.locator('text=Azimuth difference too large')).toBeHidden();
+
+    // Click "Show resolved" toggle
+    await page.locator('text=Show resolved').click();
+
+    // Now resolved warning is visible with line-through
+    await expect(page.locator('text=Azimuth difference too large')).toBeVisible();
+  });
+});
