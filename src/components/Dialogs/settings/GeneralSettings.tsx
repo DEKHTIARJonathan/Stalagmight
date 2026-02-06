@@ -7,6 +7,7 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
+import { defaultConfig } from '../../../types/config';
 import type { ShortcutFeedback } from '../../../types/config';
 
 /**
@@ -169,6 +170,8 @@ export function GeneralSettings({
           label={t('settings.general.language.label')}
           helpText={t('settings.general.language.help')}
           isChanged={isFieldChanged(changedFields, 'general.locale')}
+          onReset={() => onChange({ general: { ...config.general, locale: defaultConfig.general.locale } })}
+          isDefault={config.general.locale === defaultConfig.general.locale}
           data-testid="setting-language"
         >
           <Select
@@ -188,6 +191,8 @@ export function GeneralSettings({
           label={t('settings.general.numberFormat.label')}
           helpText={t('settings.general.numberFormat.help')}
           isChanged={isFieldChanged(changedFields, 'general.number_format')}
+          onReset={() => onChange({ general: { ...config.general, number_format: defaultConfig.general.number_format } })}
+          isDefault={config.general.number_format === defaultConfig.general.number_format}
           data-testid="setting-number-format"
         >
           <Select
@@ -209,6 +214,8 @@ export function GeneralSettings({
           label={t('settings.general.dateFormat.label')}
           helpText={t('settings.general.dateFormat.help')}
           isChanged={isFieldChanged(changedFields, 'general.date_format')}
+          onReset={() => onChange({ general: { ...config.general, date_format: defaultConfig.general.date_format } })}
+          isDefault={config.general.date_format === defaultConfig.general.date_format}
           data-testid="setting-date-format"
         >
           <Select
@@ -232,6 +239,8 @@ export function GeneralSettings({
           label={t('settings.general.autoSave.label')}
           helpText={t('settings.general.autoSave.help')}
           isChanged={isFieldChanged(changedFields, 'general.auto_save')}
+          onReset={() => onChange({ general: { ...config.general, auto_save: defaultConfig.general.auto_save } })}
+          isDefault={config.general.auto_save === defaultConfig.general.auto_save}
           data-testid="setting-auto-save"
         >
           <Toggle
@@ -246,6 +255,8 @@ export function GeneralSettings({
           label={t('settings.general.autoSaveInterval.label')}
           helpText={t('settings.general.autoSaveInterval.help')}
           isChanged={isFieldChanged(changedFields, 'general.auto_save_interval_seconds')}
+          onReset={() => onChange({ general: { ...config.general, auto_save_interval_seconds: defaultConfig.general.auto_save_interval_seconds } })}
+          isDefault={config.general.auto_save_interval_seconds === defaultConfig.general.auto_save_interval_seconds}
           data-testid="setting-auto-save-interval"
         >
           <input
@@ -266,6 +277,8 @@ export function GeneralSettings({
           label={t('settings.general.recentProjectsMax.label')}
           helpText={t('settings.general.recentProjectsMax.help')}
           isChanged={isFieldChanged(changedFields, 'general.recent_projects_max')}
+          onReset={() => onChange({ general: { ...config.general, recent_projects_max: defaultConfig.general.recent_projects_max } })}
+          isDefault={config.general.recent_projects_max === defaultConfig.general.recent_projects_max}
           data-testid="setting-recent-max"
         >
           <input
@@ -286,6 +299,8 @@ export function GeneralSettings({
           label={t('settings.general.undoHistoryLimit.label')}
           helpText={t('settings.general.undoHistoryLimit.help')}
           isChanged={isFieldChanged(changedFields, 'general.undo_history_limit')}
+          onReset={() => onChange({ general: { ...config.general, undo_history_limit: defaultConfig.general.undo_history_limit } })}
+          isDefault={config.general.undo_history_limit === defaultConfig.general.undo_history_limit}
           data-testid="setting-undo-limit"
         >
           <input
@@ -304,6 +319,8 @@ export function GeneralSettings({
           label={t('settings.general.undoPersistLimit.label')}
           helpText={t('settings.general.undoPersistLimit.help')}
           isChanged={isFieldChanged(changedFields, 'general.undo_persist_limit')}
+          onReset={() => onChange({ general: { ...config.general, undo_persist_limit: defaultConfig.general.undo_persist_limit } })}
+          isDefault={config.general.undo_persist_limit === defaultConfig.general.undo_persist_limit}
           data-testid="setting-undo-persist"
         >
           <input
@@ -324,6 +341,8 @@ export function GeneralSettings({
           label={t('settings.general.shortcutFeedback.label')}
           helpText={t('settings.general.shortcutFeedback.help')}
           isChanged={isFieldChanged(changedFields, 'general.shortcut_feedback')}
+          onReset={() => onChange({ general: { ...config.general, shortcut_feedback: defaultConfig.general.shortcut_feedback } })}
+          isDefault={config.general.shortcut_feedback === defaultConfig.general.shortcut_feedback}
           data-testid="setting-shortcut-feedback"
         >
           <Select

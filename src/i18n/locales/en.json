@@ -74,7 +74,8 @@
     },
     "common": {
       "restartBadge": "Restart",
-      "restartTitle": "Requires app restart to take effect"
+      "restartTitle": "Requires app restart to take effect",
+      "resetToDefault": "Reset to default"
     },
     "general": {
       "title": "General",

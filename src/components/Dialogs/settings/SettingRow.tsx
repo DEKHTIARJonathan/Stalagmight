@@ -14,6 +14,10 @@ interface SettingRowProps {
   children: ReactNode;
   /** Test ID for E2E tests */
   'data-testid'?: string;
+  /** Callback to reset this setting to its default value */
+  onReset?: () => void;
+  /** Whether the setting is currently at its default value (disables reset button) */
+  isDefault?: boolean;
 }
 
 /**
@@ -27,6 +31,8 @@ export function SettingRow({
   isChanged = false,
   children,
   'data-testid': dataTestId,
+  onReset,
+  isDefault = true,
 }: SettingRowProps) {
   const { t } = useTranslation();
   const labelId = useId();
@@ -57,9 +63,37 @@ export function SettingRow({
           )}
         </div>
 
-        {/* Control */}
-        <div className="flex-shrink-0" aria-labelledby={labelId}>
+        {/* Control + Reset button */}
+        <div className="flex items-center gap-2 flex-shrink-0" aria-labelledby={labelId}>
           {children}
+          {onReset && (
+            <button
+              type="button"
+              onClick={onReset}
+              disabled={isDefault}
+              className={`p-1 rounded hover:bg-panel transition-colors ${
+                !isDefault
+                  ? 'text-text-secondary hover:text-text-primary'
+                  : 'text-border cursor-not-allowed'
+              }`}
+              title={t('settings.common.resetToDefault')}
+              data-testid={dataTestId ? `${dataTestId}-reset` : undefined}
+            >
+              <svg
+                className="w-3.5 h-3.5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
     </div>

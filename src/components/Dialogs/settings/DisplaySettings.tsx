@@ -7,6 +7,8 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
+import { getThemedDisplayDefaults, getThemedSectionColorDefaults } from '../../../types/config';
+import { useUIStore } from '../../../store/uiStore';
 
 /**
  * Display settings category content.
@@ -21,6 +23,9 @@ export function DisplaySettings({
   panelIdBase,
 }: SettingsCategoryProps) {
   const { t } = useTranslation();
+  const resolvedTheme = useUIStore((s) => s.resolvedTheme);
+  const displayDefaults = getThemedDisplayDefaults(resolvedTheme);
+  const sectionColorDefaults = getThemedSectionColorDefaults(resolvedTheme);
   // Validation state
   const hasErrorRef = useRef(false);
 
@@ -185,6 +190,8 @@ export function DisplaySettings({
           helpText={t('settings.display.background.help')}
           isChanged={isFieldChanged(changedFields, 'display.default_background')}
           data-testid="setting-background-color"
+          onReset={() => onChange({ display: { ...config.display, default_background: displayDefaults.default_background } })}
+          isDefault={config.display.default_background === displayDefaults.default_background}
         >
           <input
             type="color"
@@ -203,6 +210,8 @@ export function DisplaySettings({
           helpText={t('settings.display.grid.color.help')}
           isChanged={isFieldChanged(changedFields, 'display.grid_color')}
           data-testid="setting-grid-color"
+          onReset={() => onChange({ display: { ...config.display, grid_color: displayDefaults.grid_color } })}
+          isDefault={config.display.grid_color === displayDefaults.grid_color}
         >
           <input
             type="color"
@@ -219,6 +228,8 @@ export function DisplaySettings({
           helpText={t('settings.display.grid.spacing.help')}
           isChanged={isFieldChanged(changedFields, 'display.grid_spacing')}
           data-testid="setting-grid-spacing"
+          onReset={() => onChange({ display: { ...config.display, grid_spacing: displayDefaults.grid_spacing } })}
+          isDefault={config.display.grid_spacing === displayDefaults.grid_spacing}
         >
           <Select
             value={String(config.display.grid_spacing)}
@@ -237,6 +248,8 @@ export function DisplaySettings({
           helpText={t('settings.display.font.size.help')}
           isChanged={isFieldChanged(changedFields, 'display.font_size')}
           data-testid="setting-font-size"
+          onReset={() => onChange({ display: { ...config.display, font_size: displayDefaults.font_size } })}
+          isDefault={config.display.font_size === displayDefaults.font_size}
         >
           <input
             type="number"
@@ -255,6 +268,8 @@ export function DisplaySettings({
           helpText={t('settings.display.font.color.help')}
           isChanged={isFieldChanged(changedFields, 'display.font_color')}
           data-testid="setting-font-color"
+          onReset={() => onChange({ display: { ...config.display, font_color: displayDefaults.font_color } })}
+          isDefault={config.display.font_color === displayDefaults.font_color}
         >
           <input
             type="color"
@@ -273,6 +288,8 @@ export function DisplaySettings({
           helpText={t('settings.display.depthGradient.enabled.help')}
           isChanged={isFieldChanged(changedFields, 'display.depth_gradient.enabled')}
           data-testid="setting-depth-gradient-enabled"
+          onReset={() => onChange({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, enabled: displayDefaults.depth_gradient.enabled } } })}
+          isDefault={config.display.depth_gradient.enabled === displayDefaults.depth_gradient.enabled}
         >
           <Toggle
             checked={config.display.depth_gradient.enabled}
@@ -287,6 +304,8 @@ export function DisplaySettings({
           helpText={t('settings.display.depthGradient.shallowColor.help')}
           isChanged={isFieldChanged(changedFields, 'display.depth_gradient.shallow_color')}
           data-testid="setting-shallow-color"
+          onReset={() => onChange({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, shallow_color: displayDefaults.depth_gradient.shallow_color } } })}
+          isDefault={config.display.depth_gradient.shallow_color === displayDefaults.depth_gradient.shallow_color}
         >
           <input
             type="color"
@@ -303,6 +322,8 @@ export function DisplaySettings({
           helpText={t('settings.display.depthGradient.deepColor.help')}
           isChanged={isFieldChanged(changedFields, 'display.depth_gradient.deep_color')}
           data-testid="setting-deep-color"
+          onReset={() => onChange({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, deep_color: displayDefaults.depth_gradient.deep_color } } })}
+          isDefault={config.display.depth_gradient.deep_color === displayDefaults.depth_gradient.deep_color}
         >
           <input
             type="color"
@@ -319,6 +340,8 @@ export function DisplaySettings({
           helpText={t('settings.display.depthGradient.shallowDepth.help')}
           isChanged={isFieldChanged(changedFields, 'display.depth_gradient.shallow_depth')}
           data-testid="setting-shallow-depth"
+          onReset={() => onChange({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, shallow_depth: displayDefaults.depth_gradient.shallow_depth } } })}
+          isDefault={config.display.depth_gradient.shallow_depth === displayDefaults.depth_gradient.shallow_depth}
         >
           <input
             type="number"
@@ -336,6 +359,8 @@ export function DisplaySettings({
           helpText={t('settings.display.depthGradient.deepDepth.help')}
           isChanged={isFieldChanged(changedFields, 'display.depth_gradient.deep_depth')}
           data-testid="setting-deep-depth"
+          onReset={() => onChange({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, deep_depth: displayDefaults.depth_gradient.deep_depth } } })}
+          isDefault={config.display.depth_gradient.deep_depth === displayDefaults.depth_gradient.deep_depth}
         >
           <input
             type="number"
@@ -355,6 +380,8 @@ export function DisplaySettings({
           helpText={t('settings.display.sectionColors.help')}
           isChanged={isFieldChanged(changedFields, 'section_colors.palette')}
           data-testid="setting-color-palette"
+          onReset={() => onChange({ section_colors: { palette: [...sectionColorDefaults.palette] } })}
+          isDefault={JSON.stringify(config.section_colors.palette) === JSON.stringify(sectionColorDefaults.palette)}
         >
           <div className="flex gap-1">
             {config.section_colors.palette.map((color, index) => (

@@ -9,6 +9,7 @@ import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
 import type { TileProviderInfo } from '../../../types/tile';
+import { defaultConfig } from '../../../types/config';
 
 /** Fallback provider option shown when IPC call fails */
 const FALLBACK_PROVIDER_OPTION = { value: 'esri', label: 'ESRI World Imagery' };
@@ -439,6 +440,8 @@ export function MapSettings({
           helpText={t('settings.map.satellite.provider.help')}
           isChanged={isFieldChanged(changedFields, 'map.satellite_provider')}
           data-testid="setting-satellite-provider"
+          onReset={() => onChange({ map: { ...config.map, satellite_provider: defaultConfig.map.satellite_provider } })}
+          isDefault={config.map.satellite_provider === defaultConfig.map.satellite_provider}
         >
           <Select
             value={config.map.satellite_provider}
@@ -456,6 +459,8 @@ export function MapSettings({
           helpText={t('settings.map.satellite.enabled.help')}
           isChanged={isFieldChanged(changedFields, 'map.satellite_enabled')}
           data-testid="setting-satellite-enabled"
+          onReset={() => onChange({ map: { ...config.map, satellite_enabled: defaultConfig.map.satellite_enabled } })}
+          isDefault={config.map.satellite_enabled === defaultConfig.map.satellite_enabled}
         >
           <Toggle
             checked={config.map.satellite_enabled}
@@ -470,6 +475,8 @@ export function MapSettings({
           helpText={t('settings.map.satellite.latitude.help')}
           isChanged={isFieldChanged(changedFields, 'map.satellite_gps_origin.latitude')}
           data-testid="setting-gps-latitude"
+          onReset={() => onChange({ map: { ...config.map, satellite_gps_origin: { ...config.map.satellite_gps_origin, latitude: defaultConfig.map.satellite_gps_origin.latitude } } })}
+          isDefault={config.map.satellite_gps_origin.latitude === defaultConfig.map.satellite_gps_origin.latitude}
         >
           <input
             type="number"
@@ -489,6 +496,8 @@ export function MapSettings({
           helpText={t('settings.map.satellite.longitude.help')}
           isChanged={isFieldChanged(changedFields, 'map.satellite_gps_origin.longitude')}
           data-testid="setting-gps-longitude"
+          onReset={() => onChange({ map: { ...config.map, satellite_gps_origin: { ...config.map.satellite_gps_origin, longitude: defaultConfig.map.satellite_gps_origin.longitude } } })}
+          isDefault={config.map.satellite_gps_origin.longitude === defaultConfig.map.satellite_gps_origin.longitude}
         >
           <input
             type="number"
@@ -510,6 +519,8 @@ export function MapSettings({
           helpText={t('settings.map.zoom.default.help')}
           isChanged={isFieldChanged(changedFields, 'map.zoom_default')}
           data-testid="setting-zoom-default"
+          onReset={() => onChange({ map: { ...config.map, zoom_default: defaultConfig.map.zoom_default } })}
+          isDefault={config.map.zoom_default === defaultConfig.map.zoom_default}
         >
           <input
             type="number"
@@ -528,6 +539,8 @@ export function MapSettings({
           helpText={t('settings.map.zoom.min.help')}
           isChanged={isFieldChanged(changedFields, 'map.zoom_min')}
           data-testid="setting-zoom-min"
+          onReset={() => onChange({ map: { ...config.map, zoom_min: defaultConfig.map.zoom_min } })}
+          isDefault={config.map.zoom_min === defaultConfig.map.zoom_min}
         >
           <input
             type="number"
@@ -546,6 +559,8 @@ export function MapSettings({
           helpText={t('settings.map.zoom.max.help')}
           isChanged={isFieldChanged(changedFields, 'map.zoom_max')}
           data-testid="setting-zoom-max"
+          onReset={() => onChange({ map: { ...config.map, zoom_max: defaultConfig.map.zoom_max } })}
+          isDefault={config.map.zoom_max === defaultConfig.map.zoom_max}
         >
           <input
             type="number"
@@ -564,6 +579,8 @@ export function MapSettings({
           helpText={t('settings.map.zoom.step.help')}
           isChanged={isFieldChanged(changedFields, 'map.zoom_step')}
           data-testid="setting-zoom-step"
+          onReset={() => onChange({ map: { ...config.map, zoom_step: defaultConfig.map.zoom_step } })}
+          isDefault={config.map.zoom_step === defaultConfig.map.zoom_step}
         >
           <input
             type="number"
@@ -585,6 +602,8 @@ export function MapSettings({
           helpText={t('settings.map.controls.panSpeed.help')}
           isChanged={isFieldChanged(changedFields, 'map.controls.pan_speed')}
           data-testid="setting-pan-speed"
+          onReset={() => onChange({ map: { ...config.map, controls: { ...config.map.controls, pan_speed: defaultConfig.map.controls.pan_speed } } })}
+          isDefault={config.map.controls.pan_speed === defaultConfig.map.controls.pan_speed}
         >
           <input
             type="number"
@@ -604,6 +623,8 @@ export function MapSettings({
           helpText={t('settings.map.controls.zoomSpeed.help')}
           isChanged={isFieldChanged(changedFields, 'map.controls.zoom_speed')}
           data-testid="setting-zoom-speed"
+          onReset={() => onChange({ map: { ...config.map, controls: { ...config.map.controls, zoom_speed: defaultConfig.map.controls.zoom_speed } } })}
+          isDefault={config.map.controls.zoom_speed === defaultConfig.map.controls.zoom_speed}
         >
           <input
             type="number"
@@ -623,6 +644,8 @@ export function MapSettings({
           helpText={t('settings.map.controls.invertScroll.help')}
           isChanged={isFieldChanged(changedFields, 'map.controls.invert_scroll')}
           data-testid="setting-invert-scroll"
+          onReset={() => onChange({ map: { ...config.map, controls: { ...config.map.controls, invert_scroll: defaultConfig.map.controls.invert_scroll } } })}
+          isDefault={config.map.controls.invert_scroll === defaultConfig.map.controls.invert_scroll}
         >
           <Toggle
             checked={config.map.controls.invert_scroll}
@@ -639,6 +662,8 @@ export function MapSettings({
           helpText={t('settings.map.station.radius.help')}
           isChanged={isFieldChanged(changedFields, 'map.station.radius')}
           data-testid="setting-station-radius"
+          onReset={() => onChange({ map: { ...config.map, station: { ...config.map.station, radius: defaultConfig.map.station.radius } } })}
+          isDefault={config.map.station.radius === defaultConfig.map.station.radius}
         >
           <input
             type="number"
@@ -658,6 +683,8 @@ export function MapSettings({
           helpText={t('settings.map.station.hitArea.help')}
           isChanged={isFieldChanged(changedFields, 'map.station.hit_area')}
           data-testid="setting-station-hit-area"
+          onReset={() => onChange({ map: { ...config.map, station: { ...config.map.station, hit_area: defaultConfig.map.station.hit_area } } })}
+          isDefault={config.map.station.hit_area === defaultConfig.map.station.hit_area}
         >
           <input
             type="number"
@@ -677,6 +704,8 @@ export function MapSettings({
           helpText={t('settings.map.station.hoverRadius.help')}
           isChanged={isFieldChanged(changedFields, 'map.station.hover_radius')}
           data-testid="setting-station-hover-radius"
+          onReset={() => onChange({ map: { ...config.map, station: { ...config.map.station, hover_radius: defaultConfig.map.station.hover_radius } } })}
+          isDefault={config.map.station.hover_radius === defaultConfig.map.station.hover_radius}
         >
           <input
             type="number"
@@ -696,6 +725,8 @@ export function MapSettings({
           helpText={t('settings.map.station.selectionRadius.help')}
           isChanged={isFieldChanged(changedFields, 'map.station.selection_radius')}
           data-testid="setting-station-selection-radius"
+          onReset={() => onChange({ map: { ...config.map, station: { ...config.map.station, selection_radius: defaultConfig.map.station.selection_radius } } })}
+          isDefault={config.map.station.selection_radius === defaultConfig.map.station.selection_radius}
         >
           <input
             type="number"
@@ -717,6 +748,8 @@ export function MapSettings({
           helpText={t('settings.map.shot.width.help')}
           isChanged={isFieldChanged(changedFields, 'map.shot.width')}
           data-testid="setting-shot-width"
+          onReset={() => onChange({ map: { ...config.map, shot: { ...config.map.shot, width: defaultConfig.map.shot.width } } })}
+          isDefault={config.map.shot.width === defaultConfig.map.shot.width}
         >
           <input
             type="number"
@@ -736,6 +769,8 @@ export function MapSettings({
           helpText={t('settings.map.shot.hitArea.help')}
           isChanged={isFieldChanged(changedFields, 'map.shot.hit_area')}
           data-testid="setting-shot-hit-area"
+          onReset={() => onChange({ map: { ...config.map, shot: { ...config.map.shot, hit_area: defaultConfig.map.shot.hit_area } } })}
+          isDefault={config.map.shot.hit_area === defaultConfig.map.shot.hit_area}
         >
           <input
             type="number"
@@ -755,6 +790,8 @@ export function MapSettings({
           helpText={t('settings.map.shot.hoverWidth.help')}
           isChanged={isFieldChanged(changedFields, 'map.shot.hover_width')}
           data-testid="setting-shot-hover-width"
+          onReset={() => onChange({ map: { ...config.map, shot: { ...config.map.shot, hover_width: defaultConfig.map.shot.hover_width } } })}
+          isDefault={config.map.shot.hover_width === defaultConfig.map.shot.hover_width}
         >
           <input
             type="number"
@@ -774,6 +811,8 @@ export function MapSettings({
           helpText={t('settings.map.shot.selectionWidth.help')}
           isChanged={isFieldChanged(changedFields, 'map.shot.selection_width')}
           data-testid="setting-shot-selection-width"
+          onReset={() => onChange({ map: { ...config.map, shot: { ...config.map.shot, selection_width: defaultConfig.map.shot.selection_width } } })}
+          isDefault={config.map.shot.selection_width === defaultConfig.map.shot.selection_width}
         >
           <input
             type="number"
@@ -795,6 +834,8 @@ export function MapSettings({
           helpText={t('settings.map.snap.threshold.help')}
           isChanged={isFieldChanged(changedFields, 'map.snap.threshold')}
           data-testid="setting-snap-threshold"
+          onReset={() => onChange({ map: { ...config.map, snap: { ...config.map.snap, threshold: defaultConfig.map.snap.threshold } } })}
+          isDefault={config.map.snap.threshold === defaultConfig.map.snap.threshold}
         >
           <input
             type="number"
@@ -814,6 +855,8 @@ export function MapSettings({
           helpText={t('settings.map.snap.draw.help')}
           isChanged={isFieldChanged(changedFields, 'map.snap.enabled_draw')}
           data-testid="setting-snap-draw"
+          onReset={() => onChange({ map: { ...config.map, snap: { ...config.map.snap, enabled_draw: defaultConfig.map.snap.enabled_draw } } })}
+          isDefault={config.map.snap.enabled_draw === defaultConfig.map.snap.enabled_draw}
         >
           <Toggle
             checked={config.map.snap.enabled_draw}
@@ -828,6 +871,8 @@ export function MapSettings({
           helpText={t('settings.map.snap.merge.help')}
           isChanged={isFieldChanged(changedFields, 'map.snap.enabled_merge')}
           data-testid="setting-snap-merge"
+          onReset={() => onChange({ map: { ...config.map, snap: { ...config.map.snap, enabled_merge: defaultConfig.map.snap.enabled_merge } } })}
+          isDefault={config.map.snap.enabled_merge === defaultConfig.map.snap.enabled_merge}
         >
           <Toggle
             checked={config.map.snap.enabled_merge}
@@ -842,6 +887,8 @@ export function MapSettings({
           helpText={t('settings.map.snap.measure.help')}
           isChanged={isFieldChanged(changedFields, 'map.snap.enabled_measure')}
           data-testid="setting-snap-measure"
+          onReset={() => onChange({ map: { ...config.map, snap: { ...config.map.snap, enabled_measure: defaultConfig.map.snap.enabled_measure } } })}
+          isDefault={config.map.snap.enabled_measure === defaultConfig.map.snap.enabled_measure}
         >
           <Toggle
             checked={config.map.snap.enabled_measure}
@@ -858,6 +905,8 @@ export function MapSettings({
           helpText={t('settings.map.animation.enabled.help')}
           isChanged={isFieldChanged(changedFields, 'map.animation.enabled')}
           data-testid="setting-animation-enabled"
+          onReset={() => onChange({ map: { ...config.map, animation: { ...config.map.animation, enabled: defaultConfig.map.animation.enabled } } })}
+          isDefault={config.map.animation.enabled === defaultConfig.map.animation.enabled}
         >
           <Toggle
             checked={config.map.animation.enabled}
@@ -872,6 +921,8 @@ export function MapSettings({
           helpText={t('settings.map.animation.duration.help')}
           isChanged={isFieldChanged(changedFields, 'map.animation.duration')}
           data-testid="setting-animation-duration"
+          onReset={() => onChange({ map: { ...config.map, animation: { ...config.map.animation, duration: defaultConfig.map.animation.duration } } })}
+          isDefault={config.map.animation.duration === defaultConfig.map.animation.duration}
         >
           <input
             type="number"
@@ -891,6 +942,8 @@ export function MapSettings({
           helpText={t('settings.map.animation.pointZoom.help')}
           isChanged={isFieldChanged(changedFields, 'map.animation.point_zoom')}
           data-testid="setting-point-zoom"
+          onReset={() => onChange({ map: { ...config.map, animation: { ...config.map.animation, point_zoom: defaultConfig.map.animation.point_zoom } } })}
+          isDefault={config.map.animation.point_zoom === defaultConfig.map.animation.point_zoom}
         >
           <input
             type="number"

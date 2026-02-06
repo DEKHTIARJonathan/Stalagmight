@@ -24,3 +24,15 @@ export function isFieldChanged(changedFields: Set<string>, ...paths: string[]): 
   return paths.some((path) => changedFields.has(path));
 }
 
+/**
+ * Read a nested value from an object by dot-separated path.
+ * e.g. getByPath(config, 'general.auto_save') => config.general.auto_save
+ */
+export function getByPath(obj: unknown, path: string): unknown {
+  let current = obj;
+  for (const key of path.split('.')) {
+    if (current == null || typeof current !== 'object') return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}

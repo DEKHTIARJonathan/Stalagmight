@@ -9,6 +9,7 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
+import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
 import { useProjectStore } from '../../../store/projectStore';
 
@@ -338,6 +339,8 @@ export function AdvancedSettings({
           label={t('settings.advanced.debug.showHitboxes.label')}
           helpText={t('settings.advanced.debug.showHitboxes.help')}
           isChanged={isFieldChanged(changedFields, 'debug.map.show_hitboxes')}
+          onReset={() => onChange({ debug: { ...config.debug, map: { ...config.debug.map, show_hitboxes: defaultConfig.debug.map.show_hitboxes } } })}
+          isDefault={config.debug.map.show_hitboxes === defaultConfig.debug.map.show_hitboxes}
           data-testid="setting-show-hitboxes"
         >
           <Toggle
@@ -352,6 +355,8 @@ export function AdvancedSettings({
           label={t('settings.advanced.debug.logHitDetection.label')}
           helpText={t('settings.advanced.debug.logHitDetection.help')}
           isChanged={isFieldChanged(changedFields, 'debug.map.log_hit_detection')}
+          onReset={() => onChange({ debug: { ...config.debug, map: { ...config.debug.map, log_hit_detection: defaultConfig.debug.map.log_hit_detection } } })}
+          isDefault={config.debug.map.log_hit_detection === defaultConfig.debug.map.log_hit_detection}
           data-testid="setting-log-hit-detection"
         >
           <Toggle
@@ -368,6 +373,8 @@ export function AdvancedSettings({
           label={t('settings.advanced.logging.level.label')}
           helpText={t('settings.advanced.logging.level.help')}
           isChanged={isFieldChanged(changedFields, 'logging.level')}
+          onReset={() => onChange({ logging: { ...config.logging, level: defaultConfig.logging.level } })}
+          isDefault={config.logging.level === defaultConfig.logging.level}
           requiresRestart
           data-testid="setting-log-level"
         >
@@ -385,6 +392,8 @@ export function AdvancedSettings({
           label={t('settings.advanced.logging.maxSize.label')}
           helpText={t('settings.advanced.logging.maxSize.help')}
           isChanged={isFieldChanged(changedFields, 'logging.max_directory_size_mb')}
+          onReset={() => onChange({ logging: { ...config.logging, max_directory_size_mb: defaultConfig.logging.max_directory_size_mb } })}
+          isDefault={config.logging.max_directory_size_mb === defaultConfig.logging.max_directory_size_mb}
           data-testid="setting-max-log-size"
         >
           <div className="flex items-center gap-2">
@@ -408,6 +417,8 @@ export function AdvancedSettings({
           label={t('settings.advanced.closureAdjustment.sigmaLength.label')}
           helpText={t('settings.advanced.closureAdjustment.sigmaLength.help')}
           isChanged={isFieldChanged(changedFields, 'closure_adjustment.base_sigma_length_m')}
+          onReset={() => onChange({ closure_adjustment: { ...config.closure_adjustment, base_sigma_length_m: defaultConfig.closure_adjustment.base_sigma_length_m } })}
+          isDefault={config.closure_adjustment.base_sigma_length_m === defaultConfig.closure_adjustment.base_sigma_length_m}
           data-testid="setting-closure-sigma-length"
         >
           <input
@@ -426,6 +437,8 @@ export function AdvancedSettings({
           label={t('settings.advanced.closureAdjustment.sigmaAzimuth.label')}
           helpText={t('settings.advanced.closureAdjustment.sigmaAzimuth.help')}
           isChanged={isFieldChanged(changedFields, 'closure_adjustment.base_sigma_azimuth_deg')}
+          onReset={() => onChange({ closure_adjustment: { ...config.closure_adjustment, base_sigma_azimuth_deg: defaultConfig.closure_adjustment.base_sigma_azimuth_deg } })}
+          isDefault={config.closure_adjustment.base_sigma_azimuth_deg === defaultConfig.closure_adjustment.base_sigma_azimuth_deg}
           data-testid="setting-closure-sigma-azimuth"
         >
           <input
@@ -444,6 +457,8 @@ export function AdvancedSettings({
           label={t('settings.advanced.closureAdjustment.sigmaDepth.label')}
           helpText={t('settings.advanced.closureAdjustment.sigmaDepth.help')}
           isChanged={isFieldChanged(changedFields, 'closure_adjustment.base_sigma_depth_m')}
+          onReset={() => onChange({ closure_adjustment: { ...config.closure_adjustment, base_sigma_depth_m: defaultConfig.closure_adjustment.base_sigma_depth_m } })}
+          isDefault={config.closure_adjustment.base_sigma_depth_m === defaultConfig.closure_adjustment.base_sigma_depth_m}
           data-testid="setting-closure-sigma-depth"
         >
           <input
@@ -465,6 +480,8 @@ export function AdvancedSettings({
           label={t('settings.advanced.panels.sectionsWidth.label')}
           helpText={t('settings.advanced.panels.sectionsWidth.help')}
           isChanged={isFieldChanged(changedFields, 'panels.sections_panel_width')}
+          onReset={() => onChange({ panels: { ...config.panels, sections_panel_width: defaultConfig.panels.sections_panel_width } })}
+          isDefault={config.panels.sections_panel_width === defaultConfig.panels.sections_panel_width}
           data-testid="setting-sections-panel-width"
         >
           <div className="flex items-center gap-2">
@@ -486,6 +503,8 @@ export function AdvancedSettings({
           label={t('settings.advanced.panels.detailWidth.label')}
           helpText={t('settings.advanced.panels.detailWidth.help')}
           isChanged={isFieldChanged(changedFields, 'panels.detail_panel_width')}
+          onReset={() => onChange({ panels: { ...config.panels, detail_panel_width: defaultConfig.panels.detail_panel_width } })}
+          isDefault={config.panels.detail_panel_width === defaultConfig.panels.detail_panel_width}
           data-testid="setting-detail-panel-width"
         >
           <div className="flex items-center gap-2">
@@ -507,6 +526,8 @@ export function AdvancedSettings({
           label={t('settings.advanced.panels.dataTableHeight.label')}
           helpText={t('settings.advanced.panels.dataTableHeight.help')}
           isChanged={isFieldChanged(changedFields, 'panels.data_table_height')}
+          onReset={() => onChange({ panels: { ...config.panels, data_table_height: defaultConfig.panels.data_table_height } })}
+          isDefault={config.panels.data_table_height === defaultConfig.panels.data_table_height}
           data-testid="setting-data-table-height"
         >
           <div className="flex items-center gap-2">

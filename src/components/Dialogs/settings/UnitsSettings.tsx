@@ -6,7 +6,7 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
-import type { LengthUnit, AngleUnit, DecimalPrecision } from '../../../types/config';
+import { defaultConfig, type LengthUnit, type AngleUnit, type DecimalPrecision } from '../../../types/config';
 
 const precisionFields: Array<{ key: keyof DecimalPrecision; i18nKey: string }> = [
   { key: 'length', i18nKey: 'length' },
@@ -100,6 +100,8 @@ export function UnitsSettings({
           label={t('settings.units.length.label')}
           helpText={t('settings.units.length.help')}
           isChanged={isFieldChanged(changedFields, 'units.length')}
+          onReset={() => onChange({ units: { ...config.units, length: defaultConfig.units.length } })}
+          isDefault={config.units.length === defaultConfig.units.length}
           data-testid="setting-length-unit"
         >
           <Select
@@ -119,6 +121,8 @@ export function UnitsSettings({
           label={t('settings.units.depth.label')}
           helpText={t('settings.units.depth.help')}
           isChanged={isFieldChanged(changedFields, 'units.depth')}
+          onReset={() => onChange({ units: { ...config.units, depth: defaultConfig.units.depth } })}
+          isDefault={config.units.depth === defaultConfig.units.depth}
           data-testid="setting-depth-unit"
         >
           <Select
@@ -138,6 +142,8 @@ export function UnitsSettings({
           label={t('settings.units.angle.label')}
           helpText={t('settings.units.angle.help')}
           isChanged={isFieldChanged(changedFields, 'units.angle')}
+          onReset={() => onChange({ units: { ...config.units, angle: defaultConfig.units.angle } })}
+          isDefault={config.units.angle === defaultConfig.units.angle}
           data-testid="setting-angle-unit"
         >
           <Select
@@ -161,6 +167,8 @@ export function UnitsSettings({
             label={t(`settings.units.precision.${i18nKey}.label`)}
             helpText={t(`settings.units.precision.${i18nKey}.help`)}
             isChanged={isFieldChanged(changedFields, `units.decimal_precision.${key}`)}
+            onReset={() => onChange({ units: { ...config.units, decimal_precision: { ...config.units.decimal_precision, [key]: defaultConfig.units.decimal_precision[key] } } })}
+            isDefault={config.units.decimal_precision[key] === defaultConfig.units.decimal_precision[key]}
             data-testid={`setting-precision-${key}`}
           >
             <input

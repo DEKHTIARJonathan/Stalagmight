@@ -9,6 +9,7 @@ import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
 import type { CacheStats } from '../../../types/cache';
+import { defaultConfig } from '../../../types/config';
 import { formatFixed, formatNumber } from '../../../i18n/format';
 
 const MIN_CACHE_SIZE_MB = 100;
@@ -264,6 +265,8 @@ export function CacheSettings({
           label={t('settings.cache.enabled.label')}
           helpText={t('settings.cache.enabled.help')}
           isChanged={isFieldChanged(changedFields, 'cache.tile_cache_enabled')}
+          onReset={() => onChange({ cache: { ...config.cache, tile_cache_enabled: defaultConfig.cache.tile_cache_enabled } })}
+          isDefault={config.cache.tile_cache_enabled === defaultConfig.cache.tile_cache_enabled}
           data-testid="setting-cache-enabled"
         >
           <Toggle
@@ -281,6 +284,8 @@ export function CacheSettings({
             max: MAX_CACHE_SIZE_MB,
           })}
           isChanged={isFieldChanged(changedFields, 'cache.tile_cache_max_mb')}
+          onReset={() => onChange({ cache: { ...config.cache, tile_cache_max_mb: defaultConfig.cache.tile_cache_max_mb } })}
+          isDefault={config.cache.tile_cache_max_mb === defaultConfig.cache.tile_cache_max_mb}
           data-testid="setting-cache-max-size"
         >
           <div className="flex items-center gap-2">
@@ -304,6 +309,8 @@ export function CacheSettings({
           label={t('settings.cache.ttl.label')}
           helpText={t('settings.cache.ttl.help')}
           isChanged={isFieldChanged(changedFields, 'cache.tile_ttl_days')}
+          onReset={() => onChange({ cache: { ...config.cache, tile_ttl_days: defaultConfig.cache.tile_ttl_days } })}
+          isDefault={config.cache.tile_ttl_days === defaultConfig.cache.tile_ttl_days}
           data-testid="setting-cache-ttl"
         >
           <div className="flex items-center gap-2">
