@@ -4,6 +4,10 @@ All notable changes to Stalagmight will be documented in this file.
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-02-06
+
+- fix(release): replace tauri-action with direct build and Gitea API
+
 ## [0.0.3] - 2026-02-06
 
 - chore: update Cargo.lock
