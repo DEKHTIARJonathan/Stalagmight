@@ -210,6 +210,8 @@ function EditableCell({
 interface EditableTableProps<T> extends Omit<TableProps<T>, 'onRowClick'> {
   onCellEdit?: (item: T, key: string, value: unknown, index: number) => void;
   editableColumns?: string[];
+  /** Return false to render all cells as read-only text for this row */
+  isRowEditable?: (item: T, index: number) => boolean;
   // Row interaction props
   onRowClick?: (item: T, index: number) => void;
   onRowDoubleClick?: (item: T, index: number) => void;
@@ -226,6 +228,7 @@ export function EditableTable<T extends object>({
   keyField,
   onCellEdit,
   editableColumns = [],
+  isRowEditable,
   selectedKey,
   className = '',
   emptyMessage = 'No data',
@@ -449,7 +452,8 @@ export function EditableTable<T extends object>({
                   data-selected={isSelected ? 'true' : undefined}
                 >
                   {columns.map((column, columnIndex) => {
-                    const isEditable = editableColumns.includes(column.key);
+                    const rowEditable = isRowEditable ? isRowEditable(item, index) : true;
+                    const isEditable = rowEditable && editableColumns.includes(column.key);
                     // Use getValue for virtual columns, otherwise access property directly
                     const value = column.getValue
                       ? column.getValue(item)
@@ -479,7 +483,7 @@ export function EditableTable<T extends object>({
                             onKeyDown={(e) => handleCellKeyDown(e, index, columnIndex)}
                           />
                         ) : (
-                          <span className="px-2 py-1 inline-block">
+                          <span className="px-2 py-1 inline-block select-text">
                             {displayValue}
                           </span>
                         )}

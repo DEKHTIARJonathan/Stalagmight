@@ -13,10 +13,22 @@ import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 
 export default function EditSectionDialog() {
   const { closeDialog, dialogData, openDialog } = useUIStore();
-  const { updateSection, createShot, updateShot, deleteShot, project, config } = useProjectStore();
+  const { updateSection, createShot, updateShot, deleteShot, project, config, isShotFrozen } = useProjectStore();
 
   const sectionId = dialogData.sectionId as number | undefined;
   const section = project?.sections.find((s) => s.id === sectionId);
+
+  // Compute frozen shot indices for the ShotTableEditor
+  const frozenShotIndices = useMemo(() => {
+    if (sectionId === undefined || !section) return undefined;
+    const frozen = new Set<number>();
+    for (let i = 0; i < section.shots.length; i++) {
+      if (isShotFrozen(sectionId, i)) {
+        frozen.add(i);
+      }
+    }
+    return frozen.size > 0 ? frozen : undefined;
+  }, [sectionId, section, isShotFrozen]);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -417,6 +429,7 @@ export default function EditSectionDialog() {
               }
               setSelectedShotKey(getShotKey(shot));
             }}
+            {...(frozenShotIndices ? { frozenShotIndices } : {})}
             maxHeight="16rem"
           />
         </div>
