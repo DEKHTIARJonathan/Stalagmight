@@ -294,4 +294,46 @@ test.describe('Export Dialog', () => {
     await expect(depthPresetSelect).not.toBeVisible();
     await expect(includeLegendCheckbox).not.toBeVisible();
   });
+
+  test('should show progress for image export and disable cancel', async ({ page }) => {
+    await createProject(page, 'Export Dialog Progress Project');
+
+    await page.keyboard.press('Control+e');
+    const exportDialog = page.locator('[data-testid="export-dialog"]');
+    await expect(exportDialog).toBeVisible({ timeout: 5000 });
+
+    await page.click('[data-testid="export-type-image"]');
+    await page.click('[data-testid="color-mode-depth"]');
+
+    const exportButton = page.getByTestId('export-button');
+    await exportButton.click();
+
+    const progress = page.getByTestId('loading-progress');
+    await expect(progress).toBeVisible({ timeout: 5000 });
+
+    const cancelButton = exportDialog.getByRole('button', { name: 'Cancel' });
+    await expect(cancelButton).toBeDisabled();
+
+    await expect(exportDialog).not.toBeVisible({ timeout: 10000 });
+  });
+
+  test('should close dialog when save is canceled', async ({ page }) => {
+    await createProject(page, 'Export Dialog Save Cancel');
+
+    await page.keyboard.press('Control+e');
+    const exportDialog = page.locator('[data-testid="export-dialog"]');
+    await expect(exportDialog).toBeVisible({ timeout: 5000 });
+
+    await page.evaluate(() => {
+      const dialogMock = (window as unknown as Record<string, unknown>).__TAURI_DIALOG_MOCK__ as {
+        save?: () => Promise<string | null>;
+      } | undefined;
+      if (dialogMock) {
+        dialogMock.save = async () => null;
+      }
+    });
+
+    await page.getByTestId('export-button').click();
+    await expect(exportDialog).not.toBeVisible({ timeout: 5000 });
+  });
 });

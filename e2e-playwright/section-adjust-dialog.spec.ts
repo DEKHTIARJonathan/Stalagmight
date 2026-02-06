@@ -186,4 +186,73 @@ test.describe('Section Adjust Dialog', () => {
     await expect(applyButton).toBeVisible();
     await expect(cancelButton).toBeVisible();
   });
+
+  test('applies preview when values change and reverts on cancel', async ({ page }) => {
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    await sectionItem.click({ button: 'right' });
+    await page.click('button:has-text("Adjust Position...")');
+
+    const dialog = page.locator('[data-testid="section-adjust-dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 3000 });
+
+    const dxInput = dialog.locator('[data-testid="dx-input"]');
+    await dxInput.fill('2');
+
+    await expect(dialog.locator('text=Preview applied. Press Apply to confirm or Cancel to revert.')).toBeVisible({ timeout: 3000 });
+
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 3000 });
+  });
+
+  test('shows section not found when opened with invalid section id', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { openDialog: (name: string, data: Record<string, unknown>) => void } } } }).__E2E_TEST__?.uiStore.getState().openDialog('section-adjust', { sectionId: 999999 });
+    });
+
+    const dialog = page.locator('[data-testid="section-adjust-dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 3000 });
+    await expect(dialog.locator('text=Section not found')).toBeVisible();
+
+    await page.evaluate(() => {
+      (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { closeDialog: () => void } } } }).__E2E_TEST__?.uiStore.getState().closeDialog();
+    });
+  });
+
+  test('shows error when apply fails without preview', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ = {
+        move_section: { success: false, error: 'Move failed' },
+      };
+    });
+
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    await sectionItem.click({ button: 'right' });
+    await page.click('button:has-text("Adjust Position...")');
+
+    const dialog = page.locator('[data-testid="section-adjust-dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 3000 });
+
+    const dxInput = dialog.locator('[data-testid="dx-input"]');
+    await dxInput.fill('3');
+
+    await dialog.getByRole('button', { name: 'Apply' }).click();
+    await expect(dialog.locator('text=Move failed')).toBeVisible();
+  });
+
+  test('applies delta when preview already applied', async ({ page }) => {
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    await sectionItem.click({ button: 'right' });
+    await page.click('button:has-text("Adjust Position...")');
+
+    const dialog = page.locator('[data-testid="section-adjust-dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 3000 });
+
+    const dxInput = dialog.locator('[data-testid="dx-input"]');
+    await dxInput.fill('2');
+    await expect(dialog.locator('text=Preview applied')).toBeVisible({ timeout: 3000 });
+
+    await dxInput.fill('3');
+    await dialog.getByRole('button', { name: 'Apply' }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 3000 });
+  });
 });
