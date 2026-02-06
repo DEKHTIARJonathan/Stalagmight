@@ -5,52 +5,54 @@
  * registered in src-tauri/src/lib.rs via register_asynchronous_uri_scheme_protocol.
  * This returns binary data directly without JSON serialization overhead.
  *
- * The previous JS-side protocol handler (maplibregl.addProtocol) was removed
- * because it caused severe performance issues:
- * - Tauri IPC serializes Vec<u8> as JSON array of numbers
- * - A 50KB tile = 50,000 JSON numbers to parse
- * - Multiple tiles arriving = 1+ second frame hiccups
- *
- * Stats tracking is no longer available on the frontend since requests
- * go directly through WebView → Tauri protocol → binary response.
+ * Stats are tracked in Rust via atomic counters and exposed via the
+ * `get_tile_fetch_stats` IPC command.
  */
 
+import { invoke } from '@tauri-apps/api/core';
+
 /**
- * Tile fetch statistics interface (kept for API compatibility).
- * Note: Stats are no longer tracked since tiles go through native protocol.
+ * Tile fetch statistics from the Rust native protocol handler.
  */
 export interface TileFetchStats {
   /** Number of tile requests currently in flight */
   inFlight: number;
-  /** Average latency of recent tile fetches in ms */
+  /** Average latency of completed tile fetches in ms */
   avgLatencyMs: number;
   /** Last tile fetch latency in ms */
   lastLatencyMs: number;
-  /** Total tiles fetched since registration */
+  /** Total tiles fetched since app start */
   totalFetched: number;
-  /** Total fetch errors since registration */
+  /** Total fetch errors (after retries exhausted) */
   totalErrors: number;
 }
 
 /**
- * Get current tile fetch statistics.
- * Returns zeros since stats are no longer tracked (native protocol handles tiles).
+ * Get current tile fetch statistics from the Rust backend.
+ * Returns real-time metrics from the native tile protocol handler.
  */
-export function getTileFetchStats(): TileFetchStats {
+export async function getTileFetchStats(): Promise<TileFetchStats> {
+  const stats = await invoke<{
+    in_flight: number;
+    avg_latency_ms: number;
+    last_latency_ms: number;
+    total_fetched: number;
+    total_errors: number;
+  }>('get_tile_fetch_stats');
   return {
-    inFlight: 0,
-    avgLatencyMs: 0,
-    lastLatencyMs: 0,
-    totalFetched: 0,
-    totalErrors: 0,
+    inFlight: stats.in_flight,
+    avgLatencyMs: stats.avg_latency_ms,
+    lastLatencyMs: stats.last_latency_ms,
+    totalFetched: stats.total_fetched,
+    totalErrors: stats.total_errors,
   };
 }
 
 /**
- * Reset tile fetch statistics (no-op, kept for API compatibility).
+ * Reset tile fetch statistics (no-op — Rust counters are cumulative).
  */
 export function resetTileFetchStats(): void {
-  // No-op - stats not tracked with native protocol
+  // No-op - Rust atomic counters are cumulative and don't support reset
 }
 
 /**

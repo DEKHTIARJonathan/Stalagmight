@@ -315,17 +315,22 @@ export function MapDevStats({ map }: MapDevStatsProps) {
     };
   }, [map]);
 
-  // Poll tile fetch stats periodically
+  // Poll tile fetch stats periodically via IPC
   useEffect(() => {
-    const updateTileStats = () => {
-      setTileFetchStats(getTileFetchStats());
+    const fetchTileStats = async () => {
+      try {
+        const stats = await getTileFetchStats();
+        setTileFetchStats(stats);
+      } catch (e) {
+        console.debug('[MapDevStats] Failed to fetch tile stats:', e);
+      }
     };
 
     // Initial fetch
-    updateTileStats();
+    fetchTileStats();
 
-    // Poll every 500ms (balances responsiveness vs re-render overhead)
-    const interval = setInterval(updateTileStats, 500);
+    // Refresh every 2 seconds (matches cache stats cadence, avoids IPC overhead)
+    const interval = setInterval(fetchTileStats, 2000);
 
     return () => clearInterval(interval);
   }, []);

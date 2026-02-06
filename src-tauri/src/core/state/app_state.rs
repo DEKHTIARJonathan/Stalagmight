@@ -10,6 +10,7 @@ use crate::config::Config;
 use crate::models::Project;
 use crate::persistence::Database;
 use crate::tilemap_cache::TilemapCache;
+use crate::TileFetchStats;
 
 use crate::core::UndoStack;
 
@@ -44,6 +45,9 @@ pub struct AppState {
     /// In-memory cache for ArcGIS tilemap API responses.
     /// Used to efficiently check tile availability before fetching.
     pub(super) tilemap_cache: Arc<Mutex<TilemapCache>>,
+    /// Lock-free tile fetch statistics (in-flight count, latency, errors).
+    /// Uses Arc because the protocol handler needs a cloneable reference.
+    pub(super) tile_fetch_stats: Arc<TileFetchStats>,
     /// Tauri app handle for emitting events (set during app setup)
     pub(super) app_handle: Mutex<Option<AppHandle>>,
     /// Active loading cancellation token (if any load operation is in progress)
@@ -89,6 +93,7 @@ impl AppState {
             command_lock: Mutex::new(()),
             tile_cache: Arc::new(Mutex::new(tile_cache)),
             tilemap_cache: Arc::new(Mutex::new(TilemapCache::new())),
+            tile_fetch_stats: Arc::new(TileFetchStats::new()),
             app_handle: Mutex::new(None),
             active_loading: Mutex::new(None),
         })
@@ -110,6 +115,11 @@ impl AppState {
     /// Get a clone of the tilemap cache Arc for sharing across threads
     pub fn tilemap_cache(&self) -> Arc<Mutex<TilemapCache>> {
         Arc::clone(&self.tilemap_cache)
+    }
+
+    /// Get a clone of the tile fetch stats Arc for sharing across threads
+    pub fn tile_fetch_stats(&self) -> Arc<TileFetchStats> {
+        Arc::clone(&self.tile_fetch_stats)
     }
 
     /// Set the app handle (called during app setup)

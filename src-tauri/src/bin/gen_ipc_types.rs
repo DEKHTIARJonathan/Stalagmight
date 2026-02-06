@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use ts_rs::TS;
 
-use stalagmight_lib::commands::cache::{CacheStats, ProviderStats};
+use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStatsResponse};
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
 use stalagmight_lib::commands::project::ProjectState;
 use stalagmight_lib::commands::survey_geometry::{GeometryShot, SurveyGeometry, SurveyGeometryError};
@@ -114,6 +114,7 @@ fn main() {
     // Cache + tiles
     export::<ProviderStats>(&out_dir);
     export::<CacheStats>(&out_dir);
+    export::<TileFetchStatsResponse>(&out_dir);
     export::<TileProviderInfo>(&out_dir);
 
     // Survey geometry
@@ -209,6 +210,7 @@ fn main() {
         "ColorStop",
         "ProviderStats",
         "CacheStats",
+        "TileFetchStatsResponse",
         "TileProviderInfo",
         "GeometryShot",
         "SurveyGeometry",
