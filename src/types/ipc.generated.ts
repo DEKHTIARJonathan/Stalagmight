@@ -38,6 +38,7 @@ export * from './ipc/DeleteShotImpact';
 export * from './ipc/ConnectivityResult';
 export * from './ipc/ClosurePreview';
 export * from './ipc/ProjectWarning';
+export * from './ipc/FrozenShotRef';
 export * from './ipc/ProjectState';
 export * from './ipc/UndoHistoryItem';
 export * from './ipc/PreviewData';

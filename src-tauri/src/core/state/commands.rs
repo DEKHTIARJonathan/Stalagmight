@@ -813,7 +813,7 @@ impl AppState {
 
         // Validate resulting length (disallow zero/negative)
         if let Some(section) = project.sections.iter().find(|s| s.id == section_id) {
-            if let Some(existing) = section.shots.iter().find(|s| s.id == shot_id) {
+            if let Some((shot_index, existing)) = section.shots.iter().enumerate().find(|(_, s)| s.id == shot_id) {
                 let new_length = updates.length.unwrap_or(existing.length);
                 if new_length == 0.0 {
                     return CommandResult::failure(format!(
@@ -829,6 +829,27 @@ impl AppState {
                         shot_display_position(shot_id, section_id),
                         new_length
                     ));
+                }
+
+                // Reject geometry edits on frozen shots
+                if updates.touches_geometry() {
+                    let section_lookup = project.build_section_lookup();
+                    let merge_adj = project.build_merge_adjacency(&section_lookup);
+                    let closure_adj = project.build_aligned_closure_adjacency(&section_lookup);
+                    let datum_stations: std::collections::HashSet<_> =
+                        project.zero_datums.iter().map(|d| d.station_ref).collect();
+                    if project.is_shot_frozen(
+                        section_id,
+                        shot_index,
+                        &section_lookup,
+                        &merge_adj,
+                        &closure_adj,
+                        &datum_stations,
+                    ) {
+                        return CommandResult::failure(
+                            "Cannot edit geometry of a frozen shot. This shot is part of an adjusted survey network.".to_string()
+                        );
+                    }
                 }
             }
         }

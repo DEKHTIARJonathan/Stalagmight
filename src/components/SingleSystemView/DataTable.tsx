@@ -25,7 +25,7 @@ export default function DataTable({ sections }: DataTableProps) {
   // Track previous selection to only react to actual selection changes
   const prevSelectionRef = useRef<Selection | null>(null);
 
-  const { updateShot, warnings } = useProjectStore();
+  const { updateShot, warnings, isShotFrozen } = useProjectStore();
   const {
     selection,
     setSelection,
@@ -221,11 +221,13 @@ export default function DataTable({ sections }: DataTableProps) {
     prevAnnouncedSelectionRef.current = { sectionId: selection.sectionId, shotId: selection.shotId };
   }, [selection, sections, announceSelection, t]);
 
+  const GEOMETRY_COLUMNS = ['length', '_azimuth_avg', 'depth_in', 'depth_out'];
+
   const handleCellEdit = async (
     shot: Shot,
     key: string,
     value: unknown,
-    _index: number
+    index: number
   ) => {
     if (!selectedSection) return;
 
@@ -235,6 +237,11 @@ export default function DataTable({ sections }: DataTableProps) {
       sectionId: selectedSection.id,
       shotId: shot.id,
     });
+
+    // Block geometry edits on frozen shots
+    if (GEOMETRY_COLUMNS.includes(key) && isShotFrozen(selectedSection.id, index)) {
+      return;
+    }
 
     // Handle virtual azimuth column with delta-offset behavior
     if (key === '_azimuth_avg') {

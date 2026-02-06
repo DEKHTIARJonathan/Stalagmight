@@ -23,10 +23,10 @@ use stalagmight_lib::export::{
 };
 use stalagmight_lib::models::{
     ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, ConnectivityResult,
-    Coordinates, DeleteShotImpact, GpsBounds, GpsCoordinates, ImportPlacement, ImportSectionConfig,
-    LoopClosure, Project, ProjectMetadata, ProjectStats, ProjectWarning, Section, SectionData,
-    SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData, ShotUpdates, Station,
-    StationMerge, StationPair, StationRef, SurveyDirection, ZeroDatum,
+    Coordinates, DeleteShotImpact, FrozenShotRef, GpsBounds, GpsCoordinates, ImportPlacement,
+    ImportSectionConfig, LoopClosure, Project, ProjectMetadata, ProjectStats, ProjectWarning,
+    Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData,
+    ShotUpdates, Station, StationMerge, StationPair, StationRef, SurveyDirection, ZeroDatum,
 };
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -88,6 +88,7 @@ fn main() {
     export::<ConnectivityResult>(&out_dir);
     export::<ClosurePreview>(&out_dir);
     export::<ProjectWarning>(&out_dir);
+    export::<FrozenShotRef>(&out_dir);
     export::<ProjectState>(&out_dir);
 
     // Undo history
@@ -190,6 +191,7 @@ fn main() {
         "ConnectivityResult",
         "ClosurePreview",
         "ProjectWarning",
+        "FrozenShotRef",
         "ProjectState",
         "UndoHistoryItem",
         "PreviewData",

@@ -4,7 +4,7 @@ use ts_rs::TS;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
-use crate::models::{Project, ProjectMetadata, ProjectStats, Station};
+use crate::models::{FrozenShotRef, Project, ProjectMetadata, ProjectStats, Station};
 
 /// Create a new in-memory project (no database file created).
 ///
@@ -77,10 +77,13 @@ pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
     // Calculate penetration distance with computed stations
     stats.penetration_distance = project.calculate_penetration(&stations);
 
+    let frozen_shots = project.compute_frozen_shots();
+
     Some(ProjectState {
         project,
         stations,
         stats,
+        frozen_shots,
     })
 }
 
@@ -142,6 +145,7 @@ pub struct ProjectState {
     pub project: Project,
     pub stations: Vec<Station>,
     pub stats: ProjectStats,
+    pub frozen_shots: Vec<FrozenShotRef>,
 }
 
 /// Load project with full progress reporting.
