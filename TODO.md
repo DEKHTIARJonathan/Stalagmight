@@ -12,13 +12,13 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 |----------|------|-------|----------|
 | Import/Export | 13 | 19 | 68% |
 | UI & Polish | 11 | 17 | 65% |
-| Data & Editing | 4 | 5 | 80% |
+| Data & Editing | 5 | 5 | 100% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
-| Performance & Stability | 7 | 10 | 70% |
+| Performance & Stability | 7 | 9 | 78% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **46** | **65** | **71%** |
+| **Total** | **48** | **64** | **75%** |
 
 ---
 
@@ -58,7 +58,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 ## 🚧 v1.0 Remaining Tasks
 
-### Import/Export (22/28 done)
+### Import/Export (13/19 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -84,7 +84,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 13 done, ❌ 6 not started
 
-### UI & Polish (10/17 done)
+### UI & Polish (11/17 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -116,9 +116,9 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Add Row | ✅ | Context menu, DrawShotDialog, prepend mode |
 | Delete Row with Split | ✅ | |
 | Row Highlighting Sync | ✅ | |
-| Virtual Scrolling | ❌ | For large data tables |
+| Virtual Scrolling | ✅ | @tanstack/react-virtual in EditableTable |
 
-**Subtotals**: ✅ 4 done, ❌ 1 not started
+**Subtotals**: ✅ 5 done, ❌ 0 not started
 
 ### Loop Closure (5/5 done)
 
@@ -146,7 +146,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 7 done, ❌ 0 not started
 
-### Performance & Stability (7/10 done)
+### Performance & Stability (7/9 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -160,7 +160,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | File Corruption Recovery | ❌ | |
 | Validation Error Recovery | ❌ | |
 
-**Subtotals**: ✅ 7 done, ❌ 3 not started
+**Subtotals**: ✅ 7 done, ❌ 2 not started
 
 ### Integrations (0/1 done)
 
@@ -186,15 +186,15 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 |----------|-------|------|---------|-----------|
 | Import/Export | 19 | 13 | 0 | 6 |
 | UI & Polish | 17 | 11 | 0 | 6 |
-| Data & Editing | 5 | 4 | 0 | 1 |
+| Data & Editing | 5 | 5 | 0 | 0 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
-| Performance & Stability | 10 | 7 | 0 | 3 |
+| Performance & Stability | 9 | 7 | 0 | 2 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **65** | **46** | **0** | **19** |
+| **Total** | **64** | **48** | **0** | **16** |
 
-**Overall Progress**: 46 done = ~71% complete
+**Overall Progress**: 48 done = ~75% complete
 
 ---
 
@@ -258,7 +258,7 @@ Wrap each major panel (map, sections, detail, data table) with its own error bou
 - ✅ Depth gradient rendering in `SurveyLayer.tsx`
 - ✅ ErrorBoundary wraps all major panels
 - ✅ i18n via react-i18next with locale-aware number/date formatting
-- ❌ No virtual scrolling
+- ✅ Virtual scrolling via @tanstack/react-virtual
 - ✅ Auto-save with debounced 2-second timer and status bar indicator
 - ✅ About dialog in Settings footer
 - ❌ No Splash screen
