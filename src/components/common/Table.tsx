@@ -122,6 +122,8 @@ export function Table<T extends object>({
  */
 interface EditableCellProps {
   value: string;
+  /** Raw (unformatted) value shown when editing. When omitted, value is used. */
+  rawValue?: string;
   onCommit: (value: string) => void;
   inputType?: 'text' | 'number' | undefined;
   inputStep?: string | undefined;
@@ -132,6 +134,7 @@ interface EditableCellProps {
 
 function EditableCell({
   value,
+  rawValue,
   onCommit,
   inputType = 'text',
   inputStep,
@@ -139,22 +142,24 @@ function EditableCell({
   testId,
   onKeyDown,
 }: EditableCellProps) {
-  const [localValue, setLocalValue] = useState(value);
+  const editValue = rawValue ?? value;
+  const [localValue, setLocalValue] = useState(editValue);
+  const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   // Track if we just committed (to prevent double commit on Enter then blur)
   const justCommittedRef = useRef(false);
-  // Track the last committed value to detect external changes (undo/redo)
-  const lastCommittedValueRef = useRef(value);
+  // Track the last raw value to detect external changes (undo/redo)
+  const lastEditValueRef = useRef(editValue);
 
   // Sync local state when external value changes (e.g., undo/redo)
-  // This detects when value prop changes from outside (not from our own commit)
   useEffect(() => {
-    // If the value changed from outside (not from our commit), sync local state
-    if (value !== lastCommittedValueRef.current) {
-      setLocalValue(value);
-      lastCommittedValueRef.current = value;
+    if (editValue !== lastEditValueRef.current) {
+      if (focused) {
+        setLocalValue(editValue);
+      }
+      lastEditValueRef.current = editValue;
     }
-  }, [value]);
+  }, [editValue, focused]);
 
   const alignmentClasses = {
     left: 'text-left',
@@ -162,15 +167,21 @@ function EditableCell({
     right: 'text-right',
   };
 
+  const handleFocus = useCallback(() => {
+    setFocused(true);
+    setLocalValue(editValue);
+  }, [editValue]);
+
   const handleBlur = useCallback(() => {
+    setFocused(false);
     // Skip if we just committed via Enter (prevents double commit)
     if (justCommittedRef.current) {
       justCommittedRef.current = false;
       return;
     }
     // Only commit if value actually changed from original
-    if (localValue !== lastCommittedValueRef.current) {
-      lastCommittedValueRef.current = localValue;
+    if (localValue !== lastEditValueRef.current) {
+      lastEditValueRef.current = localValue;
       onCommit(localValue);
     }
   }, [localValue, onCommit]);
@@ -178,27 +189,31 @@ function EditableCell({
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       // Commit on Enter if value changed
-      if (localValue !== lastCommittedValueRef.current) {
+      if (localValue !== lastEditValueRef.current) {
         justCommittedRef.current = true;
-        lastCommittedValueRef.current = localValue;
+        lastEditValueRef.current = localValue;
         onCommit(localValue);
       }
     } else if (e.key === 'Escape') {
       // Revert on Escape
-      setLocalValue(lastCommittedValueRef.current);
+      setLocalValue(lastEditValueRef.current);
       inputRef.current?.blur();
     }
     // Pass to parent handler for navigation
     onKeyDown?.(e);
   }, [localValue, onCommit, onKeyDown]);
 
+  // Show formatted value when blurred, local edit value when focused
+  const displayedValue = focused ? localValue : value;
+
   return (
     <input
       ref={inputRef}
       type={inputType}
       step={inputStep}
-      value={localValue}
+      value={displayedValue}
       onChange={(e) => setLocalValue(e.target.value)}
+      onFocus={handleFocus}
       onBlur={handleBlur}
       onKeyDown={handleKeyDown}
       className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel ${alignmentClasses[align]} ${inputType === 'number' ? 'tabular-nums' : ''}`}
@@ -475,6 +490,7 @@ export function EditableTable<T extends object>({
                         ) : isEditable ? (
                           <EditableCell
                             value={displayValue}
+                            {...(column.formatValue ? { rawValue: String(value ?? '') } : {})}
                             onCommit={(value) => handleInputChange(item, column.key, value, index)}
                             inputType={column.inputType}
                             inputStep={column.inputStep}

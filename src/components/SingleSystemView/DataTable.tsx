@@ -445,6 +445,12 @@ export default function DataTable({ sections }: DataTableProps) {
       header: t('dataTable.columns.length', { unit: t('common.units.meters') }),
       width: '100px',
       align: 'right' as const,
+      formatValue: (value: unknown) =>
+        typeof value === 'number' && Number.isFinite(value)
+          ? formatFixed(value, undefined, precision.length)
+          : '',
+      inputType: 'number' as const,
+      inputStep: '0.01',
     },
     {
       key: '_azimuth_avg',
@@ -460,12 +466,78 @@ export default function DataTable({ sections }: DataTableProps) {
       inputType: 'number' as const,
       inputStep: '0.1',
     },
-    { key: 'depth_in', header: t('dataTable.columns.depthIn'), width: '80px', align: 'right' as const },
-    { key: 'depth_out', header: t('dataTable.columns.depthOut'), width: '95px', align: 'right' as const },
-    { key: 'left', header: t('dataTable.columns.leftShort'), width: '50px', align: 'right' as const },
-    { key: 'right', header: t('dataTable.columns.rightShort'), width: '50px', align: 'right' as const },
-    { key: 'up', header: t('dataTable.columns.upShort'), width: '50px', align: 'right' as const },
-    { key: 'down', header: t('dataTable.columns.downShort'), width: '50px', align: 'right' as const },
+    {
+      key: 'depth_in',
+      header: t('dataTable.columns.depthIn'),
+      width: '80px',
+      align: 'right' as const,
+      formatValue: (value: unknown) =>
+        typeof value === 'number' && Number.isFinite(value)
+          ? formatFixed(value, undefined, precision.depth)
+          : '',
+      inputType: 'number' as const,
+      inputStep: '0.1',
+    },
+    {
+      key: 'depth_out',
+      header: t('dataTable.columns.depthOut'),
+      width: '95px',
+      align: 'right' as const,
+      formatValue: (value: unknown) =>
+        typeof value === 'number' && Number.isFinite(value)
+          ? formatFixed(value, undefined, precision.depth)
+          : '',
+      inputType: 'number' as const,
+      inputStep: '0.1',
+    },
+    {
+      key: 'left',
+      header: t('dataTable.columns.leftShort'),
+      width: '50px',
+      align: 'right' as const,
+      formatValue: (value: unknown) =>
+        typeof value === 'number' && Number.isFinite(value)
+          ? formatFixed(value, undefined, precision.length)
+          : '',
+      inputType: 'number' as const,
+      inputStep: '0.1',
+    },
+    {
+      key: 'right',
+      header: t('dataTable.columns.rightShort'),
+      width: '50px',
+      align: 'right' as const,
+      formatValue: (value: unknown) =>
+        typeof value === 'number' && Number.isFinite(value)
+          ? formatFixed(value, undefined, precision.length)
+          : '',
+      inputType: 'number' as const,
+      inputStep: '0.1',
+    },
+    {
+      key: 'up',
+      header: t('dataTable.columns.upShort'),
+      width: '50px',
+      align: 'right' as const,
+      formatValue: (value: unknown) =>
+        typeof value === 'number' && Number.isFinite(value)
+          ? formatFixed(value, undefined, precision.length)
+          : '',
+      inputType: 'number' as const,
+      inputStep: '0.1',
+    },
+    {
+      key: 'down',
+      header: t('dataTable.columns.downShort'),
+      width: '50px',
+      align: 'right' as const,
+      formatValue: (value: unknown) =>
+        typeof value === 'number' && Number.isFinite(value)
+          ? formatFixed(value, undefined, precision.length)
+          : '',
+      inputType: 'number' as const,
+      inputStep: '0.1',
+    },
     {
       key: 'is_virtual',
       header: t('dataTable.columns.virtualShort'),
