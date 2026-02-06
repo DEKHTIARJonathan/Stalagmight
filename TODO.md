@@ -2,7 +2,7 @@
 
 This document tracks functionality specified in `docs/SPEC.md` and implementation status based on codebase analysis.
 
-**Last Updated**: 2026-02-05
+**Last Updated**: 2026-02-06
 
 ---
 
@@ -11,14 +11,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
 | Import/Export | 13 | 19 | 68% |
-| UI & Polish | 10 | 17 | 59% |
+| UI & Polish | 11 | 17 | 65% |
 | Data & Editing | 4 | 5 | 80% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
 | Performance & Stability | 3 | 10 | 30% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **41** | **65** | **63%** |
+| **Total** | **42** | **65** | **65%** |
 
 ---
 
@@ -104,9 +104,9 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Bug Reporter Dialog | ✅ | Debug log dialog with ring buffer, level filtering, colored output |
 | Release Automation | ❌ | |
 | Add Comment Tool | ❌ | Text annotations on stations/map |
-| Use Best Available Tile Resolution | ❌ | Show best available tile resolution instead of "Map not yet available" for very zoomed in tiles |
+| Use Best Available Tile Resolution | ✅ | ArcGIS tilemap API + parent tile fallback with upscaling |
 
-**Subtotals**: ✅ 10 done, ❌ 7 not started
+**Subtotals**: ✅ 11 done, ❌ 6 not started
 
 ### Data & Editing (4/5 done)
 
@@ -185,16 +185,16 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
 | Import/Export | 19 | 13 | 0 | 6 |
-| UI & Polish | 17 | 10 | 0 | 7 |
+| UI & Polish | 17 | 11 | 0 | 6 |
 | Data & Editing | 5 | 4 | 0 | 1 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
 | Performance & Stability | 10 | 3 | 1 | 6 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **65** | **41** | **1** | **23** |
+| **Total** | **65** | **42** | **1** | **22** |
 
-**Overall Progress**: 41 done + 1 partial = ~65% complete
+**Overall Progress**: 42 done + 1 partial = ~66% complete
 
 ---
 
