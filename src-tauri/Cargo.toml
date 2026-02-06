@@ -44,6 +44,59 @@ lto = true
 opt-level = "s"
 strip = true
 
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+# Panic safety - AI loves .unwrap()
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+# Cast safety - AI is bad at numeric reasoning (warn not deny, false positives)
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_precision_loss = "warn"
+cast_possible_wrap = "warn"
+
+# Prevent AI from silencing lints instead of fixing them
+allow_attributes = "deny"
+
+# No debug artifacts or stubs
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+# Force proper logging
+print_stdout = "deny"
+print_stderr = "deny"
+
+# Visibility hygiene - AI over-uses pub
+wildcard_imports = "deny"
+
+# String nonsense AI generates
+inefficient_to_string = "deny"
+
+# Clone-spam - AI appeases the borrow checker with .clone()
+cloned_instead_of_copied = "warn"
+redundant_clone = "warn"
+implicit_clone = "warn"
+
+# Async footguns
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+large_futures = "warn"
+
+# General AI sloppiness
+explicit_into_iter_loop = "deny"
+semicolon_if_nothing_returned = "deny"
+
+[lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+missing_debug_implementations = "warn"
+unused_qualifications = "deny"
+unreachable_pub = "deny"
+
 [dev-dependencies]
 tempfile = "3.24.0"
 tauri = { version = "2", features = ["test"] }

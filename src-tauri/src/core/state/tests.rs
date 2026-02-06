@@ -3782,7 +3782,7 @@ fn test_undo_create_loop_closure() {
     let closure_result = state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(section_a, 0),
         station_b: StationRef::new(section_b, 1),
-        closure_strategy: crate::models::ClosureStrategy::Batch,
+        closure_strategy: ClosureStrategy::Batch,
     });
     assert!(closure_result.success, "CreateLoopClosure should succeed");
 
@@ -3848,7 +3848,7 @@ fn test_undo_create_loop_closure_has_closure_info() {
     state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(section_a, 0),
         station_b: StationRef::new(section_b, 1),
-        closure_strategy: crate::models::ClosureStrategy::Batch,
+        closure_strategy: ClosureStrategy::Batch,
     });
 
     // Check undo stack has ClosureInfo data
@@ -3954,7 +3954,7 @@ fn test_undo_unmerge_restores_removed_closures() {
     {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
-        project.loop_closures.push(crate::models::LoopClosure {
+        project.loop_closures.push(LoopClosure {
             id: 1,
             station_a: merge_station_a,
             station_b: merge_station_b,
@@ -5308,7 +5308,7 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
     {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
-        project.loop_closures.push(crate::models::LoopClosure {
+        project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
             station_a: StationRef::new(c, 1),
             station_b: StationRef::new(b, 0),
@@ -5430,7 +5430,7 @@ fn test_transitive_closures_in_computed_stations() {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
         let closure_id = project.next_closure_id;
-        project.loop_closures.push(crate::models::LoopClosure {
+        project.loop_closures.push(LoopClosure {
             id: closure_id,
             station_a: StationRef::new(a, 2), // A.2 (merged with B.0)
             station_b: StationRef::new(c, 1), // C.1 (not merged with anything)
@@ -5559,7 +5559,7 @@ fn test_transitive_closures_serialization_preserves_data() {
     {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
-        project.loop_closures.push(crate::models::LoopClosure {
+        project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
             station_a: StationRef::new(a, 1),
             station_b: StationRef::new(c, 1),
@@ -5842,7 +5842,7 @@ fn test_move_segment_unaligned_closure_independent() {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
         let closure_id = project.next_closure_id;
-        project.loop_closures.push(crate::models::LoopClosure {
+        project.loop_closures.push(LoopClosure {
             id: closure_id,
             station_a: StationRef::new(sid_a, 1),
             station_b: StationRef::new(sid_b, 0),
@@ -5926,7 +5926,7 @@ fn test_move_segment_aligned_closure_connectivity() {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
         let closure_id = project.next_closure_id;
-        project.loop_closures.push(crate::models::LoopClosure {
+        project.loop_closures.push(LoopClosure {
             id: closure_id,
             station_a: StationRef::new(sid_a, 1),
             station_b: StationRef::new(sid_b, 0),
@@ -6203,7 +6203,7 @@ fn test_batch_disallowed_command() {
     // Try to open a project inside a batch (should be rejected by whitelist)
     let result = state.execute(Command::Batch {
         commands: vec![Command::OpenProject {
-            path: std::path::PathBuf::from("/nonexistent"),
+            path: PathBuf::from("/nonexistent"),
         }],
     });
     assert!(!result.success, "Batch should reject non-whitelisted commands");
@@ -6480,7 +6480,7 @@ fn test_split_remaps_closures() {
     let closure_result = state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(sec_a_id, 4),
         station_b: StationRef::new(sec_b_id, 1),
-        closure_strategy: crate::models::ClosureStrategy::Batch,
+        closure_strategy: ClosureStrategy::Batch,
     });
     assert!(closure_result.success, "Closure should succeed: {:?}", closure_result.error);
 
@@ -6971,7 +6971,7 @@ fn test_delete_last_shot_cleans_up_closures() {
     {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
-        project.loop_closures.push(crate::models::LoopClosure {
+        project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
             station_a: StationRef::new(section_a_id, 0),
             station_b: StationRef::new(section_b_id, 1),
@@ -7045,7 +7045,7 @@ fn test_delete_last_shot_undo_restores_references() {
         // Note: merge already sets section_offsets, so add station offset
         project.station_offsets.insert(StationRef::new(section_a_id, 0), (1.0, 2.0, 3.0));
         // Add a closure referencing section A
-        project.loop_closures.push(crate::models::LoopClosure {
+        project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
             station_a: StationRef::new(section_a_id, 0),
             station_b: StationRef::new(section_b_id, 1),
@@ -7151,7 +7151,7 @@ fn test_delete_section_undo_restores_relationships() {
     // Set a zero datum on sec_a:0 so cleanup removes it
     let datum_result = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(sec_a, 0),
-        coordinates: crate::models::GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
     });
     assert!(datum_result.success, "SetZeroDatum should succeed");
 

@@ -3810,7 +3810,7 @@ fn update_shot_rejects_frozen_geometry() {
     let section_lookup = project.build_section_lookup();
     let merge_adj = project.build_merge_adjacency(&section_lookup);
     let closure_adj = project.build_aligned_closure_adjacency(&section_lookup);
-    let datum_stations: std::collections::HashSet<StationRef> =
+    let datum_stations: HashSet<StationRef> =
         project.zero_datums.iter().map(|d| d.station_ref).collect();
     assert!(project.is_shot_frozen(a, 0, &section_lookup, &merge_adj, &closure_adj, &datum_stations));
 

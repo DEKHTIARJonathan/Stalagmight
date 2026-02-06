@@ -731,6 +731,7 @@ pub fn entry_to_history_item(
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::models::{

@@ -264,6 +264,7 @@ pub(crate) fn get_network_status_impl() -> bool {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -307,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_get_tile_providers_command() {
-        let providers = super::get_tile_providers();
+        let providers = get_tile_providers();
         assert!(!providers.is_empty());
         let esri = providers.iter().find(|p| p.name == "esri");
         assert!(esri.is_some());
@@ -316,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_get_tile_providers_serializes_correctly() {
-        let providers = super::get_tile_providers();
+        let providers = get_tile_providers();
         let json = serde_json::to_value(&providers).unwrap();
         let arr = json.as_array().unwrap();
         assert!(!arr.is_empty());
