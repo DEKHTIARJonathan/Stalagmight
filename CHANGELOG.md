@@ -4,6 +4,10 @@ All notable changes to Stalagmight will be documented in this file.
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-02-06
+
+- fix(ci): avoid SIGPIPE in artifact collection step
+
 ## [0.0.7] - 2026-02-06
 
 - fix(ci): add xdg-utils for AppImage bundling
