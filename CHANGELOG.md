@@ -4,6 +4,8 @@ All notable changes to Stalagmight will be documented in this file.
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-02-06
+
 - fix: realign merge group offsets after shot geometry edits (keeps locked stations pinned)
 - fix: widen DMP import year range from 2016-2099 to 2000-2099
 
