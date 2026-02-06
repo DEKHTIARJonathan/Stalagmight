@@ -1050,3 +1050,419 @@ fn test_full_integrity_check_on_in_memory() {
     let errors = db.full_integrity_check().unwrap();
     assert!(errors.is_empty(), "In-memory DB should pass integrity check");
 }
+
+// === Open Existing edge cases ===
+
+#[test]
+fn test_open_existing_fails_on_nonexistent_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("does_not_exist.stalx");
+
+    let result = Database::open_existing(&db_path);
+    assert!(result.is_err(), "Expected error for nonexistent file");
+}
+
+#[test]
+fn test_open_existing_fails_on_empty_database() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("empty.stalx");
+
+    // Create an empty SQLite database (no project tables)
+    {
+        let _conn = Connection::open(&db_path).unwrap();
+        // Close without creating tables
+    }
+
+    let result = Database::open_existing(&db_path);
+    assert!(result.is_err(), "Empty database should fail open_existing");
+}
+
+#[test]
+fn test_open_readonly_fails_on_nonexistent_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("gone.stalx");
+
+    let result = Database::open_readonly(&db_path);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_open_readonly_fails_on_non_stalx_extension() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("project.sqlite");
+
+    // Create a valid SQLite database with wrong extension
+    {
+        let mut db = Database::open(&db_path).unwrap();
+        let project = Project::new("Wrong Ext".to_string(), None);
+        db.save_project(&project).unwrap();
+    }
+
+    let result = Database::open_readonly(&db_path);
+    assert!(result.is_err(), "Non-.stalx extension should be rejected");
+}
+
+// === Round-trip with station offsets (individual station moves) ===
+
+#[test]
+fn test_save_load_station_offsets_individual() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("station_offsets.stalx");
+
+    let mut project = Project::new("Station Offsets".to_string(), None);
+    let section_data = SectionData {
+        shots: vec![
+            ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                length: 10.0,
+                depth_in: 0.0,
+                depth_out: 1.0,
+                ..Default::default()
+            },
+            ShotData {
+                azimuth_in: 90.0,
+                azimuth_out: 90.0,
+                length: 5.0,
+                depth_in: 1.0,
+                depth_out: 2.0,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let section_id = project.add_section(section_data).id;
+
+    // Add individual station offsets
+    let ref_a = StationRef::new(section_id, 0);
+    let ref_b = StationRef::new(section_id, 1);
+    project.station_offsets.insert(ref_a, (1.5, -2.3, 0.1));
+    project.station_offsets.insert(ref_b, (-0.5, 0.8, -0.3));
+
+    // Save
+    {
+        let mut db = Database::open(&db_path).unwrap();
+        db.save_project(&project).unwrap();
+    }
+
+    // Load and verify
+    let db = Database::open_existing(&db_path).unwrap();
+    let loaded = db.load_project().unwrap();
+
+    assert_eq!(loaded.station_offsets.len(), 2);
+    let offset_a = loaded.station_offsets.get(&ref_a).unwrap();
+    assert!((offset_a.0 - 1.5).abs() < 1e-10);
+    assert!((offset_a.1 - (-2.3)).abs() < 1e-10);
+    assert!((offset_a.2 - 0.1).abs() < 1e-10);
+
+    let offset_b = loaded.station_offsets.get(&ref_b).unwrap();
+    assert!((offset_b.0 - (-0.5)).abs() < 1e-10);
+    assert!((offset_b.1 - 0.8).abs() < 1e-10);
+    assert!((offset_b.2 - (-0.3)).abs() < 1e-10);
+}
+
+// === Undo/Redo stack persistence with timestamps ===
+
+#[test]
+fn test_undo_stack_timestamps_round_trip() {
+    let db = Database::in_memory().unwrap();
+
+    let entries = vec![
+        ("cmd1".to_string(), "undo1".to_string(), Some("2025-01-15T10:00:00+00:00".to_string())),
+        ("cmd2".to_string(), "undo2".to_string(), None),
+        ("cmd3".to_string(), "undo3".to_string(), Some("2025-01-15T12:00:00+00:00".to_string())),
+    ];
+
+    db.save_undo_stack_with_timestamps(entries.clone()).unwrap();
+    let loaded = db.load_undo_stack_with_timestamps().unwrap();
+
+    assert_eq!(loaded.len(), 3);
+
+    // Entry 0: explicit timestamp
+    assert_eq!(loaded[0].0, 0); // sequence
+    assert_eq!(loaded[0].1, "cmd1");
+    assert_eq!(loaded[0].2, "undo1");
+    assert_eq!(loaded[0].3.as_deref(), Some("2025-01-15T10:00:00+00:00"));
+
+    // Entry 1: generated timestamp (should exist, not None)
+    assert_eq!(loaded[1].1, "cmd2");
+    assert!(loaded[1].3.is_some(), "Auto-generated timestamp should be present");
+
+    // Entry 2: explicit timestamp
+    assert_eq!(loaded[2].3.as_deref(), Some("2025-01-15T12:00:00+00:00"));
+}
+
+#[test]
+fn test_redo_stack_timestamps_round_trip() {
+    let db = Database::in_memory().unwrap();
+
+    let entries = vec![
+        ("redo_cmd1".to_string(), "redo_undo1".to_string(), Some("2025-02-01T08:00:00+00:00".to_string())),
+        ("redo_cmd2".to_string(), "redo_undo2".to_string(), None),
+    ];
+
+    db.save_redo_stack_with_timestamps(entries).unwrap();
+    let loaded = db.load_redo_stack_with_timestamps().unwrap();
+
+    assert_eq!(loaded.len(), 2);
+    assert_eq!(loaded[0].1, "redo_cmd1");
+    assert_eq!(loaded[0].3.as_deref(), Some("2025-02-01T08:00:00+00:00"));
+    assert!(loaded[1].3.is_some());
+}
+
+#[test]
+fn test_clear_undo_after_sequence() {
+    let db = Database::in_memory().unwrap();
+
+    // Save 5 entries
+    let entries: Vec<(String, String)> = (0..5)
+        .map(|i| (format!("cmd{i}"), format!("undo{i}")))
+        .collect();
+    db.save_undo_stack(entries).unwrap();
+
+    // Clear everything after sequence 2 (keep 0, 1, 2)
+    db.clear_undo_after(2).unwrap();
+
+    let loaded = db.load_undo_stack().unwrap();
+    assert_eq!(loaded.len(), 3);
+    assert_eq!(loaded[2].0, 2); // sequence = 2
+}
+
+// === Schema migration idempotency ===
+
+#[test]
+fn test_migrate_schema_is_idempotent() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("migrate_idem.stalx");
+
+    // Open creates schema
+    {
+        let mut db = Database::open(&db_path).unwrap();
+        let project = Project::new("Migration".to_string(), None);
+        db.save_project(&project).unwrap();
+    }
+
+    // Opening again re-runs migrations — should not error
+    let db = Database::open_existing(&db_path).unwrap();
+    let loaded = db.load_project().unwrap();
+    assert_eq!(loaded.name, "Migration");
+}
+
+// === Display settings persistence ===
+
+#[test]
+fn test_display_settings_round_trip() {
+    let db = Database::in_memory().unwrap();
+
+    db.save_display_setting("show_grid", "true").unwrap();
+    db.save_display_setting("grid_spacing", "10").unwrap();
+
+    let settings = db.load_display_settings().unwrap();
+    assert_eq!(settings.get("show_grid"), Some(&"true".to_string()));
+    assert_eq!(settings.get("grid_spacing"), Some(&"10".to_string()));
+
+    // Overwrite existing setting
+    db.save_display_setting("show_grid", "false").unwrap();
+    let updated = db.load_display_settings().unwrap();
+    assert_eq!(updated.get("show_grid"), Some(&"false".to_string()));
+
+    // Get individual setting
+    let val = db.get_display_setting("grid_spacing").unwrap();
+    assert_eq!(val, Some("10".to_string()));
+
+    let missing = db.get_display_setting("nonexistent").unwrap();
+    assert!(missing.is_none());
+}
+
+// === Resolved warnings persistence ===
+
+#[test]
+fn test_resolved_warnings_round_trip() {
+    let mut db = Database::in_memory().unwrap();
+
+    // Create a project with a section and shot so FK constraints are satisfied
+    let mut project = Project::new("Warnings Test".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 0.0,
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    db.save_project(&project).unwrap();
+
+    // Get the actual section and shot IDs from saved project
+    let loaded_project = db.load_project().unwrap();
+    let section_id = loaded_project.sections[0].id;
+    let shot_id = loaded_project.sections[0].shots[0].id;
+
+    let warning = ResolvedWarning {
+        section_id,
+        shot_id,
+        warning_code: "azimuth_deviation".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: Some("Verified in field".to_string()),
+    };
+
+    db.save_resolved_warning(&warning).unwrap();
+
+    let loaded = db.load_resolved_warnings().unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].section_id, section_id);
+    assert_eq!(loaded[0].shot_id, shot_id);
+    assert_eq!(loaded[0].warning_code, "azimuth_deviation");
+    assert_eq!(loaded[0].resolved_comment.as_deref(), Some("Verified in field"));
+
+    // Delete it
+    db.delete_resolved_warning(section_id, shot_id, "azimuth_deviation").unwrap();
+    let remaining = db.load_resolved_warnings().unwrap();
+    assert!(remaining.is_empty());
+}
+
+// === Save-load round-trip with all complex fields ===
+
+#[test]
+fn test_save_load_complex_project_round_trip() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("complex_roundtrip.stalx");
+
+    let mut project = Project::new("Complex Cave".to_string(), Some("Deep Location".to_string()));
+
+    // Add section with detailed shots
+    let section_a = project.add_section(SectionData {
+        name: Some("North Passage".to_string()),
+        surveyor: Some("Alice".to_string()),
+        date: NaiveDate::from_ymd_opt(2025, 6, 15),
+        color: "#ff0000".to_string(),
+        direction: Some(SurveyDirection::In),
+        quality: 0.8,
+        shots: vec![
+            ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                length: 10.0,
+                depth_in: 0.0,
+                depth_out: 2.0,
+                left: Some(1.0),
+                right: Some(2.0),
+                up: Some(3.0),
+                down: Some(0.5),
+                pitch_in: Some(5.0),
+                pitch_out: Some(-3.0),
+                comment: Some("Good visibility".to_string()),
+                ..Default::default()
+            },
+            ShotData {
+                azimuth_in: 45.0,
+                azimuth_out: 45.0,
+                length: 8.0,
+                depth_in: 2.0,
+                depth_out: 4.0,
+                ..Default::default()
+            },
+        ],
+    }).id;
+
+    let section_b = project.add_section(SectionData {
+        name: Some("East Branch".to_string()),
+        color: "#00ff00".to_string(),
+        direction: Some(SurveyDirection::Out),
+        quality: 1.0,
+        shots: vec![
+            ShotData {
+                azimuth_in: 90.0,
+                azimuth_out: 90.0,
+                length: 5.0,
+                depth_in: 0.0,
+                depth_out: 1.0,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }).id;
+
+    // Add section offsets
+    project.section_offsets.insert(section_a, (10.0, -5.0));
+
+    // Add station merge
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(section_a, 2),
+        station_b: StationRef::new(section_b, 0),
+        merged_at: Utc::now(),
+    });
+
+    // Add zero datum
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(section_a, 0),
+        gps: GpsCoordinates::new(45.5, -90.3, 0.0).unwrap(),
+    });
+
+    // Add loop closure
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(section_a, 1),
+        station_b: StationRef::new(section_b, 0),
+        strategy: ClosureStrategy::Move,
+        is_aligned: false,
+        path_length: 15.0,
+        misclosure_distance: 0.3,
+        horizontal_misclosure: 0.2,
+        vertical_misclosure: 0.15,
+        error_percentage: 2.0,
+    });
+
+    // Add station offset
+    project.station_offsets.insert(StationRef::new(section_a, 1), (0.1, -0.2, 0.05));
+
+    // Save
+    {
+        let mut db = Database::open(&db_path).unwrap();
+        db.save_project(&project).unwrap();
+    }
+
+    // Load and verify everything
+    let db = Database::open_existing(&db_path).unwrap();
+    let loaded = db.load_project().unwrap();
+
+    assert_eq!(loaded.name, "Complex Cave");
+    assert_eq!(loaded.location, Some("Deep Location".to_string()));
+    assert_eq!(loaded.sections.len(), 2);
+
+    // Verify section A
+    let s_a = loaded.sections.iter().find(|s| s.name == Some("North Passage".to_string())).unwrap();
+    assert_eq!(s_a.direction, SurveyDirection::In);
+    assert!((s_a.quality - 0.8).abs() < 1e-6);
+    assert_eq!(s_a.shots.len(), 2);
+    assert_eq!(s_a.shots[0].comment, Some("Good visibility".to_string()));
+    assert_eq!(s_a.shots[0].left, Some(1.0));
+    assert_eq!(s_a.shots[0].pitch_in, Some(5.0));
+
+    // Verify section offsets
+    let s_a_id = s_a.id;
+    let offset = loaded.section_offsets.get(&s_a_id).unwrap();
+    assert!((offset.0 - 10.0).abs() < 1e-10);
+    assert!((offset.1 - (-5.0)).abs() < 1e-10);
+
+    // Verify merges
+    assert_eq!(loaded.station_merges.len(), 1);
+    assert_eq!(loaded.station_merges[0].station_a.station_index, 2);
+
+    // Verify zero datums
+    assert_eq!(loaded.zero_datums.len(), 1);
+    assert!((loaded.zero_datums[0].gps.latitude - 45.5).abs() < 1e-6);
+
+    // Verify loop closures
+    assert_eq!(loaded.loop_closures.len(), 1);
+    assert!((loaded.loop_closures[0].path_length - 15.0).abs() < 1e-6);
+    assert_eq!(loaded.loop_closures[0].strategy, ClosureStrategy::Move);
+
+    // Verify station offsets
+    let st_offset = loaded.station_offsets.get(&StationRef::new(s_a_id, 1)).unwrap();
+    assert!((st_offset.0 - 0.1).abs() < 1e-10);
+    assert!((st_offset.1 - (-0.2)).abs() < 1e-10);
+    assert!((st_offset.2 - 0.05).abs() < 1e-10);
+}
