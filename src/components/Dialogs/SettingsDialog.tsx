@@ -700,7 +700,7 @@ export default function SettingsDialog() {
         }
       >
         <div className="space-y-2">
-          <p className="font-medium">{t('dialogs.about.version', { version: '1.0.0' })}</p>
+          <p className="font-medium">{t('dialogs.about.version', { version: __APP_VERSION__ })}</p>
           <p className="text-sm text-text-secondary">{t('dialogs.about.description')}</p>
           <p>
             <a

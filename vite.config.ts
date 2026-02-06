@@ -1,6 +1,7 @@
 import { defineConfig, type PluginOption } from 'vite';
 import react from '@vitejs/plugin-react';
 import istanbul from 'vite-plugin-istanbul';
+import pkg from './package.json';
 
 const coverageEnabled = process.env.VITE_COVERAGE === '1';
 const plugins: PluginOption[] = [
@@ -28,6 +29,9 @@ const plugins: PluginOption[] = [
 ].filter(Boolean) as PluginOption[];
 
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins,
   clearScreen: false,
   build: coverageEnabled ? { sourcemap: true } : undefined,
