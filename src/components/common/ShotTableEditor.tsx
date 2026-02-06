@@ -63,6 +63,8 @@ export interface ShotTableEditorProps {
   selectedRowIndex?: number | null;
   /** Callback when a row is selected */
   onRowSelect?: (index: number) => void;
+  /** Set of shot indices whose geometry fields should be disabled (frozen shots) */
+  frozenShotIndices?: Set<number>;
 }
 
 /**
@@ -176,6 +178,7 @@ export function ShotTableEditor({
   maxHeight = '16rem',
   selectedRowIndex,
   onRowSelect,
+  frozenShotIndices,
 }: ShotTableEditorProps) {
   const { t } = useTranslation();
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -433,6 +436,7 @@ export function ShotTableEditor({
               const tooltipText = [...errors, ...warningMessages].join('\n');
               const isSelected = selectedRowIndex === actualIndex;
               const avgAzimuth = getAzimuthAverage(shot.azimuth_in, shot.azimuth_out);
+              const geoDisabled = readOnly || (frozenShotIndices?.has(actualIndex) ?? false);
               const rowClassName = `border-b border-border last:border-0 hover:bg-background-50 ${
                 isSelected ? 'bg-accent-10' : hasErrors ? 'bg-error-5' : ''
               } ${shot.isNew && !hasErrors ? 'bg-success-5' : ''}`;
@@ -476,7 +480,7 @@ export function ShotTableEditor({
                       )}
                       className={`w-12 text-xs px-1 py-0.5 text-right tabular-nums min-w-0 ${isInvalid ? 'border border-error' : ''}`}
                       step="0.1"
-                      disabled={readOnly}
+                      disabled={geoDisabled}
                       data-testid={`shot-length-${visibleIdx}`}
                     />
                       );
@@ -516,7 +520,7 @@ export function ShotTableEditor({
                       step="0.1"
                       min="0"
                       max="360"
-                      disabled={readOnly}
+                      disabled={geoDisabled}
                       data-testid={`shot-azimuth-${visibleIdx}`}
                       title={t('shotTable.azimuthTitle', {
                         inValue: `${formatFixed(shot.azimuth_in, undefined, 1)}°`,
@@ -554,7 +558,7 @@ export function ShotTableEditor({
                       )}
                       className={`w-12 text-xs px-1 py-0.5 text-right tabular-nums min-w-0 ${isInvalid ? 'border border-error' : ''}`}
                       step="0.1"
-                      disabled={readOnly}
+                      disabled={geoDisabled}
                       data-testid={`shot-depth-in-${visibleIdx}`}
                     />
                       );
@@ -588,7 +592,7 @@ export function ShotTableEditor({
                       )}
                       className={`w-12 text-xs px-1 py-0.5 text-right tabular-nums min-w-0 ${isInvalid ? 'border border-error' : ''}`}
                       step="0.1"
-                      disabled={readOnly}
+                      disabled={geoDisabled}
                       data-testid={`shot-depth-out-${visibleIdx}`}
                     />
                       );

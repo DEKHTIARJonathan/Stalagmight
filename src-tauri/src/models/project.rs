@@ -9,9 +9,9 @@ use ts_rs::TS;
 use crate::config::ClosureAdjustmentConfig;
 
 use super::{
-    gps_to_local, ClosurePreview, ClosureRef, ClosureStrategy, Coordinates, GpsBounds,
-    GpsCoordinates, LoopClosure, Section, SectionData, SectionId, SectionUpdates, Shot, ShotData,
-    ShotId, ShotUpdates, Station, StationMerge, StationRef, ZeroDatum, FEATURE_ID_STRIDE,
+    gps_to_local, ClosurePreview, ClosureRef, ClosureStrategy, Coordinates, FrozenShotRef,
+    GpsBounds, GpsCoordinates, LoopClosure, Section, SectionData, SectionId, SectionUpdates, Shot,
+    ShotData, ShotId, ShotUpdates, Station, StationMerge, StationRef, ZeroDatum, FEATURE_ID_STRIDE,
 };
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).
@@ -2085,11 +2085,11 @@ impl Project {
         }
     }
 
-    fn build_section_lookup(&self) -> HashMap<SectionId, &Section> {
+    pub(crate) fn build_section_lookup(&self) -> HashMap<SectionId, &Section> {
         self.sections.iter().map(|s| (s.id, s)).collect()
     }
 
-    fn build_merge_adjacency(
+    pub(crate) fn build_merge_adjacency(
         &self,
         section_lookup: &HashMap<SectionId, &Section>,
     ) -> HashMap<StationRef, Vec<StationRef>> {
@@ -3904,6 +3904,193 @@ impl Project {
         let east = sorted[east_idx];
 
         (west, east)
+    }
+
+    // ── Frozen shots ─────────────────────────────────────────────────
+
+    /// Build adjacency from aligned loop closures (bidirectional).
+    pub(crate) fn build_aligned_closure_adjacency(
+        &self,
+        section_lookup: &HashMap<SectionId, &Section>,
+    ) -> HashMap<StationRef, Vec<StationRef>> {
+        let mut adjacency: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for closure in &self.loop_closures {
+            if !closure.is_aligned {
+                continue;
+            }
+            if !section_lookup.contains_key(&closure.station_a.section_id)
+                || !section_lookup.contains_key(&closure.station_b.section_id)
+            {
+                continue;
+            }
+            adjacency
+                .entry(closure.station_a)
+                .or_default()
+                .push(closure.station_b);
+            adjacency
+                .entry(closure.station_b)
+                .or_default()
+                .push(closure.station_a);
+        }
+        adjacency
+    }
+
+    /// BFS reachability check: can `start` reach any zero datum station,
+    /// traversing shots + merges + aligned closures, but excluding one specific shot edge?
+    fn can_reach_datum_excluding_shot(
+        &self,
+        start: StationRef,
+        exclude_section_id: SectionId,
+        exclude_shot_index: usize,
+        section_lookup: &HashMap<SectionId, &Section>,
+        merge_adj: &HashMap<StationRef, Vec<StationRef>>,
+        closure_adj: &HashMap<StationRef, Vec<StationRef>>,
+        datum_stations: &HashSet<StationRef>,
+    ) -> bool {
+        if datum_stations.contains(&start) {
+            return true;
+        }
+
+        let mut visited: HashSet<StationRef> = HashSet::new();
+        let mut queue: VecDeque<StationRef> = VecDeque::new();
+        visited.insert(start);
+        queue.push_back(start);
+
+        while let Some(node) = queue.pop_front() {
+            let section = match section_lookup.get(&node.section_id) {
+                Some(s) => s,
+                None => continue,
+            };
+
+            // Adjacent stations via shots (backward: station_index - 1 via shot index-1)
+            if node.station_index > 0 {
+                let shot_idx = (node.station_index - 1) as usize;
+                let is_excluded =
+                    node.section_id == exclude_section_id && shot_idx == exclude_shot_index;
+                if !is_excluded && shot_idx < section.shots.len() {
+                    let neighbor = StationRef::new(node.section_id, node.station_index - 1);
+                    if visited.insert(neighbor) {
+                        if datum_stations.contains(&neighbor) {
+                            return true;
+                        }
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+
+            // Adjacent stations via shots (forward: station_index + 1 via shot at station_index)
+            if (node.station_index as usize) < section.shots.len() {
+                let shot_idx = node.station_index as usize;
+                let is_excluded =
+                    node.section_id == exclude_section_id && shot_idx == exclude_shot_index;
+                if !is_excluded {
+                    let neighbor = StationRef::new(node.section_id, node.station_index + 1);
+                    if visited.insert(neighbor) {
+                        if datum_stations.contains(&neighbor) {
+                            return true;
+                        }
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+
+            // Merge neighbors
+            if let Some(neighbors) = merge_adj.get(&node) {
+                for &neighbor in neighbors {
+                    if visited.insert(neighbor) {
+                        if datum_stations.contains(&neighbor) {
+                            return true;
+                        }
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+
+            // Aligned closure neighbors
+            if let Some(neighbors) = closure_adj.get(&node) {
+                for &neighbor in neighbors {
+                    if visited.insert(neighbor) {
+                        if datum_stations.contains(&neighbor) {
+                            return true;
+                        }
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Check if a specific shot is frozen.
+    /// A shot is frozen when both its endpoints can reach a zero datum station
+    /// (excluding the shot itself) via shots, merges, and aligned closures.
+    pub(crate) fn is_shot_frozen(
+        &self,
+        section_id: SectionId,
+        shot_index: usize,
+        section_lookup: &HashMap<SectionId, &Section>,
+        merge_adj: &HashMap<StationRef, Vec<StationRef>>,
+        closure_adj: &HashMap<StationRef, Vec<StationRef>>,
+        datum_stations: &HashSet<StationRef>,
+    ) -> bool {
+        if datum_stations.is_empty() {
+            return false;
+        }
+
+        let station_a = StationRef::new(section_id, shot_index as u32);
+        let station_b = StationRef::new(section_id, (shot_index + 1) as u32);
+
+        self.can_reach_datum_excluding_shot(
+            station_a,
+            section_id,
+            shot_index,
+            section_lookup,
+            merge_adj,
+            closure_adj,
+            datum_stations,
+        ) && self.can_reach_datum_excluding_shot(
+            station_b,
+            section_id,
+            shot_index,
+            section_lookup,
+            merge_adj,
+            closure_adj,
+            datum_stations,
+        )
+    }
+
+    /// Compute all frozen shots for the project.
+    pub fn compute_frozen_shots(&self) -> Vec<FrozenShotRef> {
+        if self.zero_datums.is_empty() {
+            return Vec::new();
+        }
+
+        let section_lookup = self.build_section_lookup();
+        let merge_adj = self.build_merge_adjacency(&section_lookup);
+        let closure_adj = self.build_aligned_closure_adjacency(&section_lookup);
+        let datum_stations: HashSet<StationRef> =
+            self.zero_datums.iter().map(|d| d.station_ref).collect();
+
+        let mut frozen = Vec::new();
+        for section in &self.sections {
+            for shot_index in 0..section.shots.len() {
+                if self.is_shot_frozen(
+                    section.id,
+                    shot_index,
+                    &section_lookup,
+                    &merge_adj,
+                    &closure_adj,
+                    &datum_stations,
+                ) {
+                    frozen.push(FrozenShotRef {
+                        section_id: section.id,
+                        shot_index: shot_index as u32,
+                    });
+                }
+            }
+        }
+        frozen
     }
 }
 

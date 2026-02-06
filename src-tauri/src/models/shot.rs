@@ -161,6 +161,20 @@ pub struct ShotUpdates {
     pub temperature: Option<Option<f64>>,
 }
 
+impl ShotUpdates {
+    /// Returns true if this update touches any geometry fields
+    /// (azimuth, length, depth, pitch).
+    pub fn touches_geometry(&self) -> bool {
+        self.azimuth_in.is_some()
+            || self.azimuth_out.is_some()
+            || self.length.is_some()
+            || self.depth_in.is_some()
+            || self.depth_out.is_some()
+            || self.pitch_in.is_some()
+            || self.pitch_out.is_some()
+    }
+}
+
 impl Shot {
     /// Create a new shot from shot data
     pub fn new(id: ShotId, data: ShotData) -> Self {

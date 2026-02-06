@@ -18,6 +18,7 @@ import type {
   GpsCoordinates,
   ClosureStrategy,
   Coordinates,
+  FrozenShotRef,
 } from '../types/project';
 import type { Config } from '../types/config';
 import type { CommandResult, ConnectivityResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig } from '../types/commands';
@@ -129,6 +130,7 @@ interface ProjectStore {
   project: Project | null;
   stations: Station[];
   stats: ProjectStats | null;
+  frozenShots: FrozenShotRef[];
   warnings: ProjectWarning[];
   recentProjects: ProjectMetadata[];
   config: Config | null;
@@ -171,6 +173,8 @@ interface ProjectStore {
   saveProject: (path?: string) => Promise<CommandResult>;
   closeProject: () => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
+  /** Check if a shot (by section_id + shot index) is frozen */
+  isShotFrozen: (sectionId: number, shotIndex: number) => boolean;
   refreshWarnings: () => Promise<void>;
   resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<void>;
   unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
@@ -249,6 +253,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   project: null,
   stations: [],
   stats: null,
+  frozenShots: [],
   warnings: [],
   recentProjects: [],
   config: null,
@@ -430,6 +435,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         project: result.project,
         stations: [],
         stats: null,
+        frozenShots: [],
         warnings: [],
         isDirty: false,
       });
@@ -518,12 +524,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     try {
       const result = await invoke<CommandResult>('close_project');
       if (result.success) {
-        set({ project: null, stations: [], stats: null, isDirty: false });
+        set({ project: null, stations: [], stats: null, frozenShots: [], isDirty: false });
       }
       return result;
     } finally {
       set({ isClosing: false });
     }
+  },
+
+  isShotFrozen: (sectionId: number, shotIndex: number) => {
+    return get().frozenShots.some(
+      (f) => f.section_id === sectionId && f.shot_index === shotIndex
+    );
   },
 
   refreshProjectState: async () => {
@@ -536,6 +548,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
           project: state.project,
           stations: state.stations,
           stats: state.stats,
+          frozenShots: state.frozen_shots,
         });
       }
       console.log('[projectStore] refreshProjectState: calling refreshUndoState...');

@@ -379,6 +379,14 @@ mod tests {
     }
 }
 
+/// Reference to a frozen shot (part of an adjusted survey network).
+/// Frozen shots cannot have their geometry fields edited.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct FrozenShotRef {
+    pub section_id: SectionId,
+    pub shot_index: u32,
+}
+
 /// A detected loop closure in the survey
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct LoopClosure {

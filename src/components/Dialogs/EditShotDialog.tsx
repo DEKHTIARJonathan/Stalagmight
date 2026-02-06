@@ -6,13 +6,15 @@ import { DialogWrapper } from './DialogWrapper';
 
 export default function EditShotDialog() {
   const { closeDialog, dialogData } = useUIStore();
-  const { updateShot, project } = useProjectStore();
+  const { updateShot, project, isShotFrozen } = useProjectStore();
 
   const sectionId = dialogData.sectionId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
 
   const section = project?.sections.find((s) => s.id === sectionId);
   const shot = section?.shots.find((s) => s.id === shotId);
+  const shotIndex = section?.shots.findIndex((s) => s.id === shotId) ?? -1;
+  const frozen = sectionId !== undefined && shotIndex >= 0 && isShotFrozen(sectionId, shotIndex);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -154,6 +156,12 @@ export default function EditShotDialog() {
           Section: {section?.name ?? `Section ${sectionId}`} | Shot ID: {shotId}
         </div>
 
+        {frozen && (
+          <div className="p-2 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
+            Geometry fields are locked — this shot is part of an adjusted survey network.
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-sm text-text-secondary mb-1">Azimuth In (°)</label>
@@ -163,6 +171,7 @@ export default function EditShotDialog() {
               onChange={(e) => setAzimuthIn(e.target.value)}
               className="w-full"
               step="0.1"
+              disabled={frozen}
             />
           </div>
           <div>
@@ -173,6 +182,7 @@ export default function EditShotDialog() {
               onChange={(e) => setAzimuthOut(e.target.value)}
               className="w-full"
               step="0.1"
+              disabled={frozen}
             />
           </div>
         </div>
@@ -186,6 +196,7 @@ export default function EditShotDialog() {
             className="w-full"
             step="0.01"
             min="0"
+            disabled={frozen}
           />
         </div>
 
@@ -198,6 +209,7 @@ export default function EditShotDialog() {
               onChange={(e) => setDepthIn(e.target.value)}
               className="w-full"
               step="0.1"
+              disabled={frozen}
             />
           </div>
           <div>
@@ -208,6 +220,7 @@ export default function EditShotDialog() {
               onChange={(e) => setDepthOut(e.target.value)}
               className="w-full"
               step="0.1"
+              disabled={frozen}
             />
           </div>
         </div>
@@ -222,6 +235,7 @@ export default function EditShotDialog() {
               className="w-full"
               step="0.1"
               placeholder="Optional"
+              disabled={frozen}
             />
           </div>
           <div>
@@ -233,6 +247,7 @@ export default function EditShotDialog() {
               className="w-full"
               step="0.1"
               placeholder="Optional"
+              disabled={frozen}
             />
           </div>
         </div>

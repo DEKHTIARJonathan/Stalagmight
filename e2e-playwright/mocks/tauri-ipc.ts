@@ -246,6 +246,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       ): unknown {
         console.log(`[Mock IPC] Command: ${cmd}`, args);
 
+        const overrideMap = (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
+          | Record<string, unknown>
+          | undefined;
+        if (overrideMap && Object.prototype.hasOwnProperty.call(overrideMap, cmd)) {
+          const override = overrideMap[cmd];
+          if (override && typeof override === 'object' && '__throw' in override) {
+            throw new Error(String((override as { __throw?: unknown }).__throw ?? 'Mock error'));
+          }
+          return override as unknown;
+        }
+
         switch (cmd) {
           case 'create_project': {
             const name = (args?.name as string) ?? 'Untitled Project';
@@ -636,6 +647,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 loop_count: 0,
                 penetration_distance: totalLength,
               },
+              frozen_shots: [],
             };
           }
 
@@ -1073,6 +1085,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] merge_stations called with:', args);
             return { success: true };
 
+          case 'execute_batch': {
+            // Mock execute batch - track calls for assertions and return success
+            console.log('[Mock IPC] execute_batch called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_EXECUTE_BATCH_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args?.commands ?? null);
+            win.__MOCK_EXECUTE_BATCH_CALLS__ = calls;
+            return { success: true };
+          }
+
           case 'check_merge_connectivity': {
             // Mock connectivity check
             // Default: not connected but merge allowed (opens merge dialog)
@@ -1091,6 +1114,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'create_loop_closure':
             // Mock create loop closure - return success
             console.log('[Mock IPC] create_loop_closure called with:', args);
+            return { success: true };
+
+          case 'adjust_loop_closures':
+            // Mock adjust loop closures - return success
+            console.log('[Mock IPC] adjust_loop_closures called with:', args);
             return { success: true };
 
           case 'unmerge_stations':

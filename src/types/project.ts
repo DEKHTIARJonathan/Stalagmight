@@ -26,4 +26,5 @@ export type {
   ProjectStats,
   ProjectMetadata,
   ProjectState,
+  FrozenShotRef,
 } from './ipc.generated';
