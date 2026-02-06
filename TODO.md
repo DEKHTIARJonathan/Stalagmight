@@ -15,10 +15,10 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Data & Editing | 4 | 5 | 80% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
-| Performance & Stability | 6 | 10 | 60% |
+| Performance & Stability | 7 | 10 | 70% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **45** | **65** | **69%** |
+| **Total** | **46** | **65** | **71%** |
 
 ---
 
@@ -152,7 +152,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 |------|--------|-------|
 | Loading States | ✅ | LoadingProgress component with aria-live |
 | Network Error Stats | ✅ | Real tile fetch stats via Rust atomic counters + IPC |
-| Debounced Auto-Save | ❌ | Backend config exists, needs frontend 2-second debounce timer (SPEC 2.11) |
+| Debounced Auto-Save | ✅ | 2-second debounce timer with status bar indicator |
 | SQLite Integrity Checks | ✅ | PRAGMA quick_check on open + full integrity_check on-demand (SPEC 14.4) |
 | Error Boundary Wrapper | ✅ | Wraps Sections, Map, Data Table, Details panels |
 | Network Retry Logic | ✅ | Max 2 retries with 200ms/500ms backoff on transport errors |
@@ -160,7 +160,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | File Corruption Recovery | ❌ | |
 | Validation Error Recovery | ❌ | |
 
-**Subtotals**: ✅ 6 done, ❌ 4 not started
+**Subtotals**: ✅ 7 done, ❌ 3 not started
 
 ### Integrations (0/1 done)
 
@@ -189,12 +189,12 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Data & Editing | 5 | 4 | 0 | 1 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
-| Performance & Stability | 10 | 6 | 0 | 4 |
+| Performance & Stability | 10 | 7 | 0 | 3 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **65** | **45** | **0** | **20** |
+| **Total** | **65** | **46** | **0** | **19** |
 
-**Overall Progress**: 45 done = ~69% complete
+**Overall Progress**: 46 done = ~71% complete
 
 ---
 
@@ -257,9 +257,9 @@ Wrap each major panel (map, sections, detail, data table) with its own error bou
 - ✅ DMP import refactored into two dialogs
 - ✅ Depth gradient rendering in `SurveyLayer.tsx`
 - ✅ ErrorBoundary wraps all major panels
-- ❌ No i18n libraries
+- ✅ i18n via react-i18next with locale-aware number/date formatting
 - ❌ No virtual scrolling
-- ❌ No auto-save implementation
+- ✅ Auto-save with debounced 2-second timer and status bar indicator
 - ✅ About dialog in Settings footer
 - ❌ No Splash screen
 - ✅ Bug/debug log dialog with in-memory ring buffer
