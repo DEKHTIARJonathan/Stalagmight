@@ -5,6 +5,7 @@ import type { SectionId, ShotId, StationRef } from '../../types/project';
 import type { BatchCommand } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
+import { useShallow } from 'zustand/react/shallow';
 import {
   getEffectiveShowVirtualShots,
   getEffectiveShowShotData,
@@ -47,6 +48,116 @@ const stationRefToId = (ref: { section_id: number; station_index: number } | nul
   if (!ref) return null;
   return `${ref.section_id}:${ref.station_index}`;
 };
+
+/**
+ * Lightweight child component that subscribes to hover state and syncs it to
+ * SurveyLayer. Extracted from MapCanvas so that hover changes (~60/sec during
+ * mouse movement) only re-render this tiny component instead of the entire
+ * 2700-line MapCanvas with ~50 hooks.
+ */
+function MapHoverSync({
+  surveyLayerRef,
+  mapLoaded,
+  anchoredSectionIds,
+  getConnectedSectionIds,
+  logMapInteractions,
+}: {
+  surveyLayerRef: React.RefObject<SurveyLayer | null>;
+  mapLoaded: boolean;
+  anchoredSectionIds: Set<number>;
+  getConnectedSectionIds: (id: number) => Promise<number[]>;
+  logMapInteractions: boolean;
+}) {
+  const hoveredStation = useUIStore((s) => s.hoveredStation);
+  const hoveredShot = useUIStore((s) => s.hoveredShot);
+  const hoveredSectionId = useUIStore((s) => s.hoveredSectionId);
+  const activeTool = useUIStore((s) => s.activeTool);
+
+  // Sync hoveredSectionId to SurveyLayer
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setHoveredSection(hoveredSectionId);
+  }, [hoveredSectionId, mapLoaded, surveyLayerRef]);
+
+  // Sync hoveredShot to SurveyLayer (for DataTable row hover)
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setHoveredShot(
+      hoveredShot?.sectionId ?? null,
+      hoveredShot?.shotId ?? null
+    );
+  }, [hoveredShot, mapLoaded, surveyLayerRef]);
+
+  // Sync hoveredStation to SurveyLayer (for DetailLink hover)
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setHoveredStation(hoveredStation);
+  }, [hoveredStation, mapLoaded, surveyLayerRef]);
+
+  // Resolve connected segment on hover when Move Segment tool is active.
+  const segmentHoverTokenRef = useRef(0);
+  useEffect(() => {
+    if (!surveyLayerRef.current) return undefined;
+
+    if (activeTool !== 'move_segment') {
+      if (logMapInteractions) {
+        console.debug('[Highlight] Segment hover cleared (tool inactive)', {
+          activeTool,
+        });
+      }
+      surveyLayerRef.current.setHoveredSegment([]);
+      return undefined;
+    }
+
+    const sectionId = hoveredStation?.section_id ?? hoveredShot?.sectionId ?? null;
+
+    if (sectionId === null) {
+      segmentHoverTokenRef.current++;
+      if (logMapInteractions) {
+        console.debug('[Highlight] Segment hover pending clear (no hovered feature)', {});
+      }
+      const timer = setTimeout(() => {
+        surveyLayerRef.current?.setHoveredSegment([]);
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+
+    if (anchoredSectionIds.has(sectionId)) {
+      if (logMapInteractions) {
+        console.debug('[Highlight] Segment hover suppressed (anchored section)', {
+          sectionId,
+        });
+      }
+      surveyLayerRef.current.setHoveredSegment([]);
+      return undefined;
+    }
+
+    const token = ++segmentHoverTokenRef.current;
+    getConnectedSectionIds(sectionId).then((ids) => {
+      if (segmentHoverTokenRef.current !== token) return;
+      const movable = ids.filter((id) => !anchoredSectionIds.has(id));
+      if (logMapInteractions) {
+        console.debug('[Highlight] Segment hover resolved', {
+          sectionId,
+          connectedCount: ids.length,
+          movableCount: movable.length,
+        });
+      }
+      surveyLayerRef.current?.setHoveredSegment(movable);
+    }).catch(() => {
+      if (segmentHoverTokenRef.current !== token) return;
+      if (logMapInteractions) {
+        console.debug('[Highlight] Segment hover fallback (IPC failed)', {
+          sectionId,
+        });
+      }
+      surveyLayerRef.current?.setHoveredSegment([sectionId]);
+    });
+    return undefined;
+  }, [activeTool, hoveredStation, hoveredShot, anchoredSectionIds, getConnectedSectionIds, mapLoaded, logMapInteractions, surveyLayerRef]);
+
+  return null;
+}
 
 export default function MapCanvas() {
   const precision = useDecimalPrecision();
@@ -123,6 +234,10 @@ export default function MapCanvas() {
   const zoomMin = config?.map.zoom_min ?? 0;
   const zoomMax = config?.map.zoom_max ?? 22;
 
+  // Performance: exclude hover values (hoveredStation, hoveredShot, hoveredSectionId)
+  // from the store subscription. These change ~60 times/sec during mouse movement
+  // and would cause this 2700-line component to re-render every frame.
+  // Hover sync is handled by <MapHoverSync> child component instead.
   const {
     mapZoom,
     setMapCenter,
@@ -153,11 +268,8 @@ export default function MapCanvas() {
     clearFitToBoundsRequest,
     snappedStation,
     setSnappedStation,
-    hoveredStation,
     setHoveredStation,
     setHoveredShot,
-    hoveredShot,
-    hoveredSectionId,
     placementMode,
     updatePlacementCursor,
     updatePlacementSnap,
@@ -177,7 +289,10 @@ export default function MapCanvas() {
     requestCenterOnShot,
     clearCenterOnShotRequest,
     resolvedTheme,
-  } = useUIStore();
+  } = useUIStore(
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, ...rest }) => rest)
+  );
 
   const alignedClosureIds = useMemo(() => {
     if (!project?.loop_closures) return new Set<bigint>();
@@ -1348,103 +1463,8 @@ export default function MapCanvas() {
     surveyLayerRef.current.setSnappedStation(snappedStation);
   }, [snappedStation]);
 
-  // Sync hoveredSectionId from uiStore to SurveyLayer
-  // Depends on mapLoaded to re-run when SurveyLayer becomes available
-  useEffect(() => {
-    if (!surveyLayerRef.current) return;
-    surveyLayerRef.current.setHoveredSection(hoveredSectionId);
-  }, [hoveredSectionId, mapLoaded]);
-
-  // Sync hoveredShot from uiStore to SurveyLayer (for DataTable row hover)
-  // Depends on mapLoaded to re-run when SurveyLayer becomes available
-  useEffect(() => {
-    if (!surveyLayerRef.current) return;
-    surveyLayerRef.current.setHoveredShot(
-      hoveredShot?.sectionId ?? null,
-      hoveredShot?.shotId ?? null
-    );
-  }, [hoveredShot, mapLoaded]);
-
-  // Sync hoveredStation from uiStore to SurveyLayer (for DetailLink hover)
-  // Depends on mapLoaded to re-run when SurveyLayer becomes available
-  useEffect(() => {
-    if (!surveyLayerRef.current) return;
-    surveyLayerRef.current.setHoveredStation(hoveredStation);
-  }, [hoveredStation, mapLoaded]);
-
-  // Resolve connected segment on hover when Move Segment tool is active.
-  // Extracts section ID from hovered station/shot, fetches connected sections,
-  // and highlights the entire segment via setHoveredSegment().
-  const segmentHoverTokenRef = useRef(0);
-  useEffect(() => {
-    if (!surveyLayerRef.current) return undefined;
-
-    // Only resolve segment hover when move_segment tool is active
-    if (activeTool !== 'move_segment') {
-      if (logMapInteractions) {
-        console.debug('[Highlight] Segment hover cleared (tool inactive)', {
-          activeTool,
-        });
-      }
-      surveyLayerRef.current.setHoveredSegment([]);
-      return undefined;
-    }
-
-    // Extract section ID from whichever feature is hovered (station or shot)
-    const sectionId = hoveredStation?.section_id ?? hoveredShot?.sectionId ?? null;
-
-    if (sectionId === null) {
-      // Debounce clearing: when mouse transitions between shot↔station, hover
-      // briefly passes through "no feature" territory. Without debounce, the
-      // segment highlight flickers off because the async IPC re-resolution
-      // hasn't completed yet when the mouse reaches the next feature.
-      segmentHoverTokenRef.current++; // Cancel any pending async results
-      if (logMapInteractions) {
-        console.debug('[Highlight] Segment hover pending clear (no hovered feature)', {});
-      }
-      const timer = setTimeout(() => {
-        surveyLayerRef.current?.setHoveredSegment([]);
-      }, 150);
-      return () => clearTimeout(timer);
-    }
-
-    // Don't highlight anchored sections
-    if (anchoredSectionIds.has(sectionId)) {
-      if (logMapInteractions) {
-        console.debug('[Highlight] Segment hover suppressed (anchored section)', {
-          sectionId,
-        });
-      }
-      surveyLayerRef.current.setHoveredSegment([]);
-      return undefined;
-    }
-
-    // Fetch connected sections (async IPC) — use token to discard stale results
-    const token = ++segmentHoverTokenRef.current;
-    getConnectedSectionIds(sectionId).then((ids) => {
-      if (segmentHoverTokenRef.current !== token) return;
-      // Filter out anchored sections
-      const movable = ids.filter((id) => !anchoredSectionIds.has(id));
-      if (logMapInteractions) {
-        console.debug('[Highlight] Segment hover resolved', {
-          sectionId,
-          connectedCount: ids.length,
-          movableCount: movable.length,
-        });
-      }
-      surveyLayerRef.current?.setHoveredSegment(movable);
-    }).catch(() => {
-      if (segmentHoverTokenRef.current !== token) return;
-      // On failure, highlight just the single section
-      if (logMapInteractions) {
-        console.debug('[Highlight] Segment hover fallback (IPC failed)', {
-          sectionId,
-        });
-      }
-      surveyLayerRef.current?.setHoveredSegment([sectionId]);
-    });
-    return undefined;
-  }, [activeTool, hoveredStation, hoveredShot, anchoredSectionIds, getConnectedSectionIds, mapLoaded, logMapInteractions]);
+  // Hover sync effects moved to <MapHoverSync> child component to avoid
+  // re-rendering this large component on every mousemove (~60fps).
 
   // Sync highlight layer with snap/draw/merge state
   // Shows snapped/origin stations even when stations layer is hidden
@@ -2759,6 +2779,15 @@ export default function MapCanvas() {
           {t('map.move.instructions')}
         </div>
       )}
+
+      {/* Hover sync - lightweight child to avoid re-rendering MapCanvas on every mousemove */}
+      <MapHoverSync
+        surveyLayerRef={surveyLayerRef}
+        mapLoaded={mapLoaded}
+        anchoredSectionIds={anchoredSectionIds}
+        getConnectedSectionIds={getConnectedSectionIds}
+        logMapInteractions={logMapInteractions}
+      />
     </div>
   );
 }
