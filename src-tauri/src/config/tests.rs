@@ -1570,3 +1570,457 @@ fn test_map_config_normalize_empty_provider_to_esri() {
     config.normalize();
     assert_eq!(config.satellite_provider, "esri");
 }
+
+// ========================================================================
+// DecimalPrecision Deserialization Tests (backward-compatibility)
+// ========================================================================
+
+#[test]
+fn test_decimal_precision_deserialize_bare_u8() {
+    // Old format: decimal_precision = 2  →  all fields set to 2
+    let toml_str = r#"
+length = "meters"
+depth = "meters"
+angle = "degrees"
+decimal_precision = 2
+"#;
+    let config: UnitsConfig = toml::from_str(toml_str).expect("Bare u8 should parse");
+    assert_eq!(config.decimal_precision.length, 2);
+    assert_eq!(config.decimal_precision.coordinates, 2);
+    assert_eq!(config.decimal_precision.depth, 2);
+    assert_eq!(config.decimal_precision.azimuth, 2);
+    assert_eq!(config.decimal_precision.inclination, 2);
+    assert_eq!(config.decimal_precision.gps, 2);
+}
+
+#[test]
+fn test_decimal_precision_deserialize_bare_u8_zero() {
+    let toml_str = r#"
+length = "meters"
+depth = "meters"
+angle = "degrees"
+decimal_precision = 0
+"#;
+    let config: UnitsConfig = toml::from_str(toml_str).expect("Bare u8 zero should parse");
+    assert_eq!(config.decimal_precision.length, 0);
+    assert_eq!(config.decimal_precision.gps, 0);
+}
+
+#[test]
+fn test_decimal_precision_deserialize_struct_format() {
+    // New format: individual fields
+    let toml_str = r#"
+length = "meters"
+depth = "meters"
+angle = "degrees"
+
+[decimal_precision]
+length = 1
+coordinates = 2
+depth = 1
+azimuth = 1
+inclination = 1
+gps = 6
+"#;
+    let config: UnitsConfig = toml::from_str(toml_str).expect("Struct format should parse");
+    assert_eq!(config.decimal_precision.length, 1);
+    assert_eq!(config.decimal_precision.coordinates, 2);
+    assert_eq!(config.decimal_precision.depth, 1);
+    assert_eq!(config.decimal_precision.gps, 6);
+}
+
+#[test]
+fn test_decimal_precision_deserialize_struct_partial_uses_field_defaults() {
+    // New struct format with only some fields → missing ones use serde defaults
+    let toml_str = r#"
+length = "meters"
+depth = "meters"
+angle = "degrees"
+
+[decimal_precision]
+length = 3
+gps = 4
+"#;
+    let config: UnitsConfig = toml::from_str(toml_str).expect("Partial struct should parse");
+    assert_eq!(config.decimal_precision.length, 3);
+    assert_eq!(config.decimal_precision.coordinates, 2); // default
+    assert_eq!(config.decimal_precision.depth, 1); // default
+    assert_eq!(config.decimal_precision.azimuth, 1); // default
+    assert_eq!(config.decimal_precision.inclination, 1); // default
+    assert_eq!(config.decimal_precision.gps, 4);
+}
+
+#[test]
+fn test_decimal_precision_roundtrip_struct_format() {
+    let original = UnitsConfig {
+        length: LengthUnit::Meters,
+        depth: LengthUnit::Meters,
+        angle: AngleUnit::Degrees,
+        decimal_precision: DecimalPrecision {
+            length: 3,
+            coordinates: 4,
+            depth: 2,
+            azimuth: 1,
+            inclination: 0,
+            gps: 5,
+        },
+    };
+    let serialized = toml::to_string_pretty(&original).expect("Should serialize");
+    let deserialized: UnitsConfig = toml::from_str(&serialized).expect("Should deserialize");
+    assert_eq!(deserialized.decimal_precision.length, 3);
+    assert_eq!(deserialized.decimal_precision.coordinates, 4);
+    assert_eq!(deserialized.decimal_precision.depth, 2);
+    assert_eq!(deserialized.decimal_precision.azimuth, 1);
+    assert_eq!(deserialized.decimal_precision.inclination, 0);
+    assert_eq!(deserialized.decimal_precision.gps, 5);
+}
+
+// ========================================================================
+// DecimalPrecision Normalize Tests
+// ========================================================================
+
+#[test]
+fn test_decimal_precision_normalize_clamps_to_six() {
+    let mut dp = DecimalPrecision {
+        length: 10,
+        coordinates: 7,
+        depth: 255,
+        azimuth: 8,
+        inclination: 100,
+        gps: 6,
+    };
+    dp.normalize();
+    assert_eq!(dp.length, 6);
+    assert_eq!(dp.coordinates, 6);
+    assert_eq!(dp.depth, 6);
+    assert_eq!(dp.azimuth, 6);
+    assert_eq!(dp.inclination, 6);
+    assert_eq!(dp.gps, 6); // already at max, unchanged
+}
+
+#[test]
+fn test_decimal_precision_normalize_preserves_valid_values() {
+    let mut dp = DecimalPrecision {
+        length: 0,
+        coordinates: 3,
+        depth: 6,
+        azimuth: 1,
+        inclination: 2,
+        gps: 5,
+    };
+    dp.normalize();
+    assert_eq!(dp.length, 0);
+    assert_eq!(dp.coordinates, 3);
+    assert_eq!(dp.depth, 6);
+    assert_eq!(dp.azimuth, 1);
+    assert_eq!(dp.inclination, 2);
+    assert_eq!(dp.gps, 5);
+}
+
+#[test]
+fn test_decimal_precision_normalize_is_idempotent() {
+    let mut dp = DecimalPrecision {
+        length: 10,
+        coordinates: 3,
+        depth: 0,
+        azimuth: 6,
+        inclination: 255,
+        gps: 4,
+    };
+    dp.normalize();
+    let first = dp.clone();
+    dp.normalize();
+    assert_eq!(dp.length, first.length);
+    assert_eq!(dp.coordinates, first.coordinates);
+    assert_eq!(dp.depth, first.depth);
+    assert_eq!(dp.azimuth, first.azimuth);
+    assert_eq!(dp.inclination, first.inclination);
+    assert_eq!(dp.gps, first.gps);
+}
+
+// ========================================================================
+// GlobalViewConfig Normalize Tests
+// ========================================================================
+
+#[test]
+fn test_global_view_normalize_nan_tolerance_resets_to_default() {
+    let mut config = GlobalViewConfig {
+        tolerance: f64::NAN,
+        throttle_tolerance: f64::NAN,
+        ..Default::default()
+    };
+    config.normalize();
+    assert_eq!(config.tolerance, 0.5); // default
+    assert_eq!(config.throttle_tolerance, 1.0); // default
+}
+
+#[test]
+fn test_global_view_normalize_infinity_resets_to_default() {
+    let mut config = GlobalViewConfig {
+        tolerance: f64::INFINITY,
+        throttle_tolerance: f64::NEG_INFINITY,
+        ..Default::default()
+    };
+    config.normalize();
+    assert_eq!(config.tolerance, 0.5);
+    assert_eq!(config.throttle_tolerance, 1.0);
+}
+
+#[test]
+fn test_global_view_normalize_negative_clamped_to_zero() {
+    let mut config = GlobalViewConfig {
+        tolerance: -1.0,
+        throttle_tolerance: -5.0,
+        ..Default::default()
+    };
+    config.normalize();
+    assert_eq!(config.tolerance, 0.0);
+    assert_eq!(config.throttle_tolerance, 0.0);
+}
+
+#[test]
+fn test_global_view_normalize_throttle_bumped_to_tolerance() {
+    let mut config = GlobalViewConfig {
+        tolerance: 2.0,
+        throttle_tolerance: 0.5,
+        ..Default::default()
+    };
+    config.normalize();
+    assert_eq!(config.tolerance, 2.0);
+    assert_eq!(config.throttle_tolerance, 2.0); // bumped to match tolerance
+}
+
+#[test]
+fn test_global_view_normalize_valid_values_unchanged() {
+    let mut config = GlobalViewConfig {
+        fps_threshold: 60,
+        tolerance: 0.3,
+        throttle_tolerance: 0.8,
+    };
+    config.normalize();
+    assert_eq!(config.tolerance, 0.3);
+    assert_eq!(config.throttle_tolerance, 0.8);
+}
+
+#[test]
+fn test_global_view_normalize_throttle_larger_ok() {
+    let mut config = GlobalViewConfig {
+        tolerance: 1.0,
+        throttle_tolerance: 5.0,
+        ..Default::default()
+    };
+    config.normalize();
+    assert_eq!(config.tolerance, 1.0);
+    assert_eq!(config.throttle_tolerance, 5.0); // larger is fine
+}
+
+// ========================================================================
+// ClosureAdjustmentConfig Normalize Tests
+// ========================================================================
+
+#[test]
+fn test_closure_adjustment_normalize_nan_resets_to_default() {
+    let mut config = ClosureAdjustmentConfig {
+        base_sigma_length_m: f64::NAN,
+        base_sigma_azimuth_deg: f64::NAN,
+        base_sigma_depth_m: f64::NAN,
+    };
+    config.normalize();
+    assert_eq!(config.base_sigma_length_m, 0.05);
+    assert_eq!(config.base_sigma_azimuth_deg, 1.0);
+    assert_eq!(config.base_sigma_depth_m, 0.05);
+}
+
+#[test]
+fn test_closure_adjustment_normalize_infinity_resets_to_default() {
+    let mut config = ClosureAdjustmentConfig {
+        base_sigma_length_m: f64::INFINITY,
+        base_sigma_azimuth_deg: f64::NEG_INFINITY,
+        base_sigma_depth_m: f64::INFINITY,
+    };
+    config.normalize();
+    assert_eq!(config.base_sigma_length_m, 0.05);
+    assert_eq!(config.base_sigma_azimuth_deg, 1.0);
+    assert_eq!(config.base_sigma_depth_m, 0.05);
+}
+
+#[test]
+fn test_closure_adjustment_normalize_zero_resets_to_default() {
+    let mut config = ClosureAdjustmentConfig {
+        base_sigma_length_m: 0.0,
+        base_sigma_azimuth_deg: 0.0,
+        base_sigma_depth_m: 0.0,
+    };
+    config.normalize();
+    assert_eq!(config.base_sigma_length_m, 0.05);
+    assert_eq!(config.base_sigma_azimuth_deg, 1.0);
+    assert_eq!(config.base_sigma_depth_m, 0.05);
+}
+
+#[test]
+fn test_closure_adjustment_normalize_negative_resets_to_default() {
+    let mut config = ClosureAdjustmentConfig {
+        base_sigma_length_m: -0.1,
+        base_sigma_azimuth_deg: -5.0,
+        base_sigma_depth_m: -1.0,
+    };
+    config.normalize();
+    assert_eq!(config.base_sigma_length_m, 0.05);
+    assert_eq!(config.base_sigma_azimuth_deg, 1.0);
+    assert_eq!(config.base_sigma_depth_m, 0.05);
+}
+
+#[test]
+fn test_closure_adjustment_normalize_valid_values_unchanged() {
+    let mut config = ClosureAdjustmentConfig {
+        base_sigma_length_m: 0.1,
+        base_sigma_azimuth_deg: 2.5,
+        base_sigma_depth_m: 0.01,
+    };
+    config.normalize();
+    assert_eq!(config.base_sigma_length_m, 0.1);
+    assert_eq!(config.base_sigma_azimuth_deg, 2.5);
+    assert_eq!(config.base_sigma_depth_m, 0.01);
+}
+
+#[test]
+fn test_closure_adjustment_normalize_very_small_positive_accepted() {
+    let mut config = ClosureAdjustmentConfig {
+        base_sigma_length_m: 0.00001,
+        base_sigma_azimuth_deg: 0.001,
+        base_sigma_depth_m: 0.00001,
+    };
+    config.normalize();
+    assert_eq!(config.base_sigma_length_m, 0.00001);
+    assert_eq!(config.base_sigma_azimuth_deg, 0.001);
+    assert_eq!(config.base_sigma_depth_m, 0.00001);
+}
+
+// ========================================================================
+// MapConfig Normalize Tests (zoom_step edge cases)
+// ========================================================================
+
+#[test]
+fn test_map_config_normalize_zoom_step_nan_resets_to_default() {
+    let mut config = MapConfig {
+        zoom_step: f64::NAN,
+        ..Default::default()
+    };
+    config.normalize();
+    assert_eq!(config.zoom_step, 1.0);
+}
+
+#[test]
+fn test_map_config_normalize_zoom_step_infinity_resets_to_default() {
+    let mut config = MapConfig {
+        zoom_step: f64::INFINITY,
+        ..Default::default()
+    };
+    config.normalize();
+    assert_eq!(config.zoom_step, 1.0);
+}
+
+#[test]
+fn test_map_config_normalize_zoom_step_below_min_clamped() {
+    let mut config = MapConfig {
+        zoom_step: 0.05,
+        ..Default::default()
+    };
+    config.normalize();
+    assert_eq!(config.zoom_step, 0.1);
+}
+
+#[test]
+fn test_map_config_normalize_zoom_step_above_max_clamped() {
+    let mut config = MapConfig {
+        zoom_step: 6.0,
+        ..Default::default()
+    };
+    config.normalize();
+    assert_eq!(config.zoom_step, 5.0);
+}
+
+#[test]
+fn test_map_config_normalize_zoom_step_at_bounds_unchanged() {
+    let mut min_config = MapConfig {
+        zoom_step: 0.1,
+        ..Default::default()
+    };
+    min_config.normalize();
+    assert_eq!(min_config.zoom_step, 0.1);
+
+    let mut max_config = MapConfig {
+        zoom_step: 5.0,
+        ..Default::default()
+    };
+    max_config.normalize();
+    assert_eq!(max_config.zoom_step, 5.0);
+}
+
+// ========================================================================
+// Config.next_section_color Tests
+// ========================================================================
+
+#[test]
+fn test_next_section_color_returns_first_unused() {
+    let mut config = Config::default();
+    config.section_colors.palette = vec![
+        "#ff0000".to_string(),
+        "#00ff00".to_string(),
+        "#0000ff".to_string(),
+    ];
+    let used = vec!["#ff0000".to_string()];
+    assert_eq!(config.next_section_color(&used), "#00ff00");
+}
+
+#[test]
+fn test_next_section_color_skips_multiple_used() {
+    let mut config = Config::default();
+    config.section_colors.palette = vec![
+        "#ff0000".to_string(),
+        "#00ff00".to_string(),
+        "#0000ff".to_string(),
+    ];
+    let used = vec!["#ff0000".to_string(), "#00ff00".to_string()];
+    assert_eq!(config.next_section_color(&used), "#0000ff");
+}
+
+#[test]
+fn test_next_section_color_all_used_wraps_to_first() {
+    let mut config = Config::default();
+    config.section_colors.palette = vec![
+        "#ff0000".to_string(),
+        "#00ff00".to_string(),
+    ];
+    let used = vec!["#ff0000".to_string(), "#00ff00".to_string()];
+    // All used → returns first color
+    assert_eq!(config.next_section_color(&used), "#ff0000");
+}
+
+#[test]
+fn test_next_section_color_empty_palette_returns_hardcoded() {
+    let mut config = Config::default();
+    config.section_colors.palette = vec![];
+    assert_eq!(config.next_section_color(&[]), "#4ecdc4");
+}
+
+#[test]
+fn test_next_section_color_no_used_returns_first() {
+    let mut config = Config::default();
+    config.section_colors.palette = vec![
+        "#aabbcc".to_string(),
+        "#ddeeff".to_string(),
+    ];
+    assert_eq!(config.next_section_color(&[]), "#aabbcc");
+}
+
+#[test]
+fn test_next_section_color_used_colors_not_in_palette_ignored() {
+    let mut config = Config::default();
+    config.section_colors.palette = vec![
+        "#ff0000".to_string(),
+        "#00ff00".to_string(),
+    ];
+    let used = vec!["#999999".to_string()]; // not in palette
+    assert_eq!(config.next_section_color(&used), "#ff0000");
+}
