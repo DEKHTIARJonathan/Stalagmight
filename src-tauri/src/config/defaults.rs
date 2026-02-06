@@ -35,6 +35,8 @@ impl Default for GeneralConfig {
             undo_persist_limit: 20,
             shortcut_feedback: ShortcutFeedback::default(),
             locale: "system".to_string(),
+            number_format: "locale".to_string(),
+            date_format: "locale".to_string(),
         }
     }
 }
