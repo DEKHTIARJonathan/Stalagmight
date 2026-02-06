@@ -389,7 +389,7 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
     let minute = buffer.read()? as u32;
 
     // Validate date components
-    if !(2016..2100).contains(&year) {
+    if !(2000..2100).contains(&year) {
         bail!("Invalid year: {}", year);
     }
     if !(1..=12).contains(&month) {
@@ -1172,9 +1172,8 @@ mod tests {
 
         assert!(result3.is_err(), "Should fail with Feb 30");
 
-        // Test case 4: Year 0 (year offset of -200 would be year 1800, but we validate 2016-2100)
-        // Using year offset 10 = year 2010, which is outside 2016-2100 range
-        let content4 = make_section_with_date(10, 6, 15, 10, 30); // year 2010 - before 2016
+        // Test case 4: Year offset 200 = year 2200, which is outside 2000-2100 range
+        let content4 = make_section_with_date(200, 6, 15, 10, 30); // year 2200 - after 2099
         let (_file4, path4) = create_dmp_file(&content4);
         let result4 = parse_dmp(&path4);
         std::fs::remove_file(&path4).ok();
