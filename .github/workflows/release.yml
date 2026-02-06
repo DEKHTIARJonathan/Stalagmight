@@ -26,12 +26,37 @@ jobs:
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
       # Build
-      - uses: tauri-apps/tauri-action@v0
+      - run: pnpm tauri build
+      # Collect artifacts
+      - name: Collect release artifacts
+        run: |
+          mkdir -p release-artifacts
+          cp src-tauri/target/release/bundle/deb/*.deb release-artifacts/ 2>/dev/null || true
+          cp src-tauri/target/release/bundle/rpm/*.rpm release-artifacts/ 2>/dev/null || true
+          cp src-tauri/target/release/bundle/appimage/*.AppImage release-artifacts/ 2>/dev/null || true
+          ls -lh release-artifacts/
+      # Create release and upload assets
+      - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Stalagmight ${{ github.ref_name }}'
-          releaseBody: 'See CHANGELOG.md for details.'
-          releaseDraft: true
-          prerelease: false
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # Create release via API (works on both GitHub and Gitea)
+          RELEASE_ID=$(curl -s -X POST \
+            -H "Authorization: token ${GITHUB_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"Stalagmight ${TAG}\",\"body\":\"See CHANGELOG.md for details.\",\"draft\":true}" \
+            "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          echo "Created release ID: ${RELEASE_ID}"
+          # Upload each artifact
+          for file in release-artifacts/*; do
+            [ -f "$file" ] || continue
+            filename=$(basename "$file")
+            echo "Uploading: ${filename}"
+            curl -s -X POST \
+              -H "Authorization: token ${GITHUB_TOKEN}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@${file}" \
+              "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${filename}"
+          done
