@@ -37,6 +37,7 @@ sha2 = "0.10"
 ureq = "3"
 http = "1"
 nalgebra = "0.33"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [profile.release]
 lto = true

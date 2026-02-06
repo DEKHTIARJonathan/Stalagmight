@@ -2010,6 +2010,8 @@ export default function MapCanvas() {
           tiles: tileConfig.tiles,
           tileSize: tileConfig.tileSize,
           attribution: tileConfig.attribution,
+          minzoom: tileConfig.minZoom,
+          maxzoom: tileConfig.maxZoom,
         });
 
         // Add satellite layer below survey layers but above background

@@ -3976,6 +3976,7 @@ dependencies = [
  "chrono",
  "directories",
  "http",
+ "image",
  "nalgebra",
  "resvg",
  "rusqlite",

@@ -42,6 +42,10 @@ pub struct TileProvider {
     /// HTTP header name used for authentication, if required
     #[serde(default)]
     pub auth_header: Option<String>,
+    /// Optional tilemap API URL template for checking tile availability.
+    /// Uses `{z}`, `{y}`, `{x}` placeholders for the region origin.
+    #[serde(default)]
+    pub tilemap_url_template: Option<String>,
 }
 
 /// Response DTO returned by IPC commands — includes all `TileProvider` fields
@@ -68,6 +72,8 @@ pub struct TileProviderInfo {
     pub api_key_env: Option<String>,
     #[serde(default)]
     pub auth_header: Option<String>,
+    #[serde(default)]
+    pub tilemap_url_template: Option<String>,
     /// `true` when no API key is required, or the required env var is set.
     #[serde(default)]
     pub available: bool,
@@ -94,6 +100,10 @@ fn init_registry() -> HashMap<String, TileProvider> {
             content_type_hint: "image/jpeg".to_string(),
             api_key_env: None,
             auth_header: None,
+            tilemap_url_template: Some(
+                "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tilemap/{z}/{y}/{x}/128/128?f=json"
+                    .to_string(),
+            ),
         },
     );
     map
@@ -129,6 +139,7 @@ pub fn get_all_provider_info() -> Vec<TileProviderInfo> {
                 content_type_hint: p.content_type_hint.clone(),
                 api_key_env: p.api_key_env.clone(),
                 auth_header: p.auth_header.clone(),
+                tilemap_url_template: p.tilemap_url_template.clone(),
                 available,
             }
         })
@@ -142,6 +153,17 @@ pub fn expand_url(provider: &TileProvider, z: u32, y: u32, x: u32) -> String {
         .replace("{z}", &z.to_string())
         .replace("{y}", &y.to_string())
         .replace("{x}", &x.to_string())
+}
+
+/// Expand `{z}`, `{y}`, `{x}` placeholders in a provider's tilemap URL template.
+/// Returns None if the provider has no tilemap URL configured.
+pub fn expand_tilemap_url(provider: &TileProvider, z: u32, y: u32, x: u32) -> Option<String> {
+    provider.tilemap_url_template.as_ref().map(|template| {
+        template
+            .replace("{z}", &z.to_string())
+            .replace("{y}", &y.to_string())
+            .replace("{x}", &x.to_string())
+    })
 }
 
 #[cfg(test)]
@@ -216,6 +238,7 @@ mod tests {
             content_type_hint: "image/png".to_string(),
             api_key_env: Some("STALAGMIGHT_TEST_MISSING_KEY_12345".to_string()),
             auth_header: None,
+            tilemap_url_template: None,
         };
 
         // Env var should not be set, so available should be false
