@@ -23,6 +23,8 @@ jobs:
       # Tests
       - run: pnpm tsc --noEmit
       - run: cargo test --manifest-path src-tauri/Cargo.toml
+        env:
+          HOME: ${{ runner.temp }}/home
       # Build
       - uses: tauri-apps/tauri-action@v0
         env:

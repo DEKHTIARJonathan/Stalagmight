@@ -22,3 +22,5 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm tsc --noEmit
       - run: cargo test --manifest-path src-tauri/Cargo.toml
+        env:
+          HOME: ${{ runner.temp }}/home
