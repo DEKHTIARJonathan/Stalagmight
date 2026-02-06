@@ -5,6 +5,7 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
+import { defaultConfig } from '../../../types/config';
 
 /**
  * Validation settings category content.
@@ -128,6 +129,8 @@ export function ValidationSettings({
           label={t('settings.validation.shotLength.min.label')}
           helpText={t('settings.validation.shotLength.min.help')}
           isChanged={isFieldChanged(changedFields, 'validation.warn_shot_length_min')}
+          onReset={() => onChange({ validation: { ...config.validation, warn_shot_length_min: defaultConfig.validation.warn_shot_length_min } })}
+          isDefault={config.validation.warn_shot_length_min === defaultConfig.validation.warn_shot_length_min}
           data-testid="setting-shot-length-min"
         >
           <input
@@ -146,6 +149,8 @@ export function ValidationSettings({
           label={t('settings.validation.shotLength.max.label')}
           helpText={t('settings.validation.shotLength.max.help')}
           isChanged={isFieldChanged(changedFields, 'validation.warn_shot_length_max')}
+          onReset={() => onChange({ validation: { ...config.validation, warn_shot_length_max: defaultConfig.validation.warn_shot_length_max } })}
+          isDefault={config.validation.warn_shot_length_max === defaultConfig.validation.warn_shot_length_max}
           data-testid="setting-shot-length-max"
         >
           <input
@@ -166,6 +171,8 @@ export function ValidationSettings({
           label={t('settings.validation.depth.max.label')}
           helpText={t('settings.validation.depth.max.help')}
           isChanged={isFieldChanged(changedFields, 'validation.warn_depth_change_per_shot_max')}
+          onReset={() => onChange({ validation: { ...config.validation, warn_depth_change_per_shot_max: defaultConfig.validation.warn_depth_change_per_shot_max } })}
+          isDefault={config.validation.warn_depth_change_per_shot_max === defaultConfig.validation.warn_depth_change_per_shot_max}
           data-testid="setting-depth-change-max"
         >
           <input
@@ -186,6 +193,8 @@ export function ValidationSettings({
           label={t('settings.validation.azimuthDiff.label')}
           helpText={t('settings.validation.azimuthDiff.help')}
           isChanged={isFieldChanged(changedFields, 'validation.azimuth_diff_threshold')}
+          onReset={() => onChange({ validation: { ...config.validation, azimuth_diff_threshold: defaultConfig.validation.azimuth_diff_threshold } })}
+          isDefault={config.validation.azimuth_diff_threshold === defaultConfig.validation.azimuth_diff_threshold}
           data-testid="setting-azimuth-diff"
         >
           <input
@@ -205,6 +214,8 @@ export function ValidationSettings({
           label={t('settings.validation.pitchDiff.label')}
           helpText={t('settings.validation.pitchDiff.help')}
           isChanged={isFieldChanged(changedFields, 'validation.pitch_diff_threshold')}
+          onReset={() => onChange({ validation: { ...config.validation, pitch_diff_threshold: defaultConfig.validation.pitch_diff_threshold } })}
+          isDefault={config.validation.pitch_diff_threshold === defaultConfig.validation.pitch_diff_threshold}
           data-testid="setting-pitch-diff"
         >
           <input

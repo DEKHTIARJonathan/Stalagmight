@@ -5,6 +5,7 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
+import { defaultConfig } from '../../../types/config';
 import type { ThemeMode } from '../../../types/config';
 
 /**
@@ -71,6 +72,8 @@ export function AppearanceSettings({
           label={t('settings.appearance.theme.label')}
           helpText={t('settings.appearance.theme.help')}
           isChanged={isFieldChanged(changedFields, 'appearance.theme')}
+          onReset={() => onChange({ appearance: { ...config.appearance, theme: defaultConfig.appearance.theme } })}
+          isDefault={config.appearance.theme === defaultConfig.appearance.theme}
           data-testid="setting-theme"
         >
           <div

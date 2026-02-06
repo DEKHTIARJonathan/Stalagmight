@@ -7,6 +7,7 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
+import { defaultConfig } from '../../../types/config';
 
 /**
  * Export settings category content.
@@ -115,6 +116,8 @@ export function ExportSettings({
           label={t('settings.export.format.label')}
           helpText={t('settings.export.format.help')}
           isChanged={isFieldChanged(changedFields, 'export.default_image_format')}
+          onReset={() => onChange({ export: { ...config.export, default_image_format: defaultConfig.export.default_image_format } })}
+          isDefault={config.export.default_image_format === defaultConfig.export.default_image_format}
           data-testid="setting-image-format"
         >
           <Select
@@ -131,6 +134,8 @@ export function ExportSettings({
           label={t('settings.export.dpi.label')}
           helpText={t('settings.export.dpi.help')}
           isChanged={isFieldChanged(changedFields, 'export.default_dpi')}
+          onReset={() => onChange({ export: { ...config.export, default_dpi: defaultConfig.export.default_dpi } })}
+          isDefault={config.export.default_dpi === defaultConfig.export.default_dpi}
           data-testid="setting-dpi"
         >
           <Select
@@ -149,6 +154,8 @@ export function ExportSettings({
           label={t('settings.export.layers.satellite.label')}
           helpText={t('settings.export.layers.satellite.help')}
           isChanged={isFieldChanged(changedFields, 'export.default_include_satellite')}
+          onReset={() => onChange({ export: { ...config.export, default_include_satellite: defaultConfig.export.default_include_satellite } })}
+          isDefault={config.export.default_include_satellite === defaultConfig.export.default_include_satellite}
           data-testid="setting-include-satellite"
         >
           <Toggle
@@ -163,6 +170,8 @@ export function ExportSettings({
           label={t('settings.export.layers.grid.label')}
           helpText={t('settings.export.layers.grid.help')}
           isChanged={isFieldChanged(changedFields, 'export.default_include_grid')}
+          onReset={() => onChange({ export: { ...config.export, default_include_grid: defaultConfig.export.default_include_grid } })}
+          isDefault={config.export.default_include_grid === defaultConfig.export.default_include_grid}
           data-testid="setting-include-grid"
         >
           <Toggle
@@ -177,6 +186,8 @@ export function ExportSettings({
           label={t('settings.export.layers.labels.label')}
           helpText={t('settings.export.layers.labels.help')}
           isChanged={isFieldChanged(changedFields, 'export.default_include_labels')}
+          onReset={() => onChange({ export: { ...config.export, default_include_labels: defaultConfig.export.default_include_labels } })}
+          isDefault={config.export.default_include_labels === defaultConfig.export.default_include_labels}
           data-testid="setting-include-labels"
         >
           <Toggle
