@@ -1156,4 +1156,56 @@ mod tests {
             .expect_err("file path should be rejected");
         assert!(err.contains("Path is not a directory"));
     }
+
+    #[test]
+    fn resolve_project_path_whitespace_only_name() {
+        let state = AppState::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let err = state
+            .resolve_project_path("   ", Some(&temp_dir.path().to_path_buf()))
+            .expect_err("whitespace-only name should fail");
+        assert!(err.contains("cannot be empty"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_project_path_non_alphanumeric_only() {
+        let state = AppState::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        // Non-alphanumeric chars get replaced with '_', but '_' passes sanitization.
+        // The sanitizer only rejects empty-after-trim. Characters like '@' → '_' survive.
+        let resolved = state
+            .resolve_project_path("@#$%^&", Some(&temp_dir.path().to_path_buf()))
+            .unwrap();
+        let filename = resolved.file_name().unwrap().to_str().unwrap();
+        assert_eq!(filename, "______.stalx", "special chars should be replaced with underscores");
+    }
+
+    #[test]
+    fn resolve_project_path_default_directory() {
+        let state = AppState::new().unwrap();
+        let result = state.resolve_project_path("TestProject", None);
+        assert!(result.is_ok(), "should resolve with default dir: {:?}", result.err());
+        let path = result.unwrap();
+        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "TestProject.stalx");
+    }
+
+    #[test]
+    fn resolve_project_path_preserves_spaces_and_hyphens() {
+        let state = AppState::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let resolved = state
+            .resolve_project_path("My Cave-2024", Some(&temp_dir.path().to_path_buf()))
+            .unwrap();
+        let filename = resolved.file_name().unwrap().to_str().unwrap();
+        assert_eq!(filename, "My Cave-2024.stalx");
+    }
+
+    #[test]
+    fn resolve_project_path_creates_nonexistent_default_dir() {
+        let state = AppState::new().unwrap();
+        // Use the default directory path (None) — should succeed even if
+        // the documents directory needs to be created
+        let result = state.resolve_project_path("CreateDirTest", None);
+        assert!(result.is_ok());
+    }
 }
