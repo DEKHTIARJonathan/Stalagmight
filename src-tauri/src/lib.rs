@@ -2128,4 +2128,225 @@ mod tests {
         assert!(esri.get("url_template").is_some());
         assert!(esri.get("tile_size").is_some());
     }
+
+    // === TileFetchStats tests ===
+
+    #[test]
+    fn test_tile_fetch_stats_new_all_zeros() {
+        let stats = TileFetchStats::new();
+        let snap = stats.snapshot();
+        assert_eq!(snap.in_flight, 0);
+        assert_eq!(snap.total_fetched, 0);
+        assert_eq!(snap.total_errors, 0);
+        assert_eq!(snap.total_latency_ms, 0);
+        assert_eq!(snap.last_latency_ms, 0);
+    }
+
+    #[test]
+    fn test_tile_fetch_stats_record_start_increments_in_flight() {
+        let stats = TileFetchStats::new();
+        stats.record_start();
+        assert_eq!(stats.snapshot().in_flight, 1);
+        stats.record_start();
+        assert_eq!(stats.snapshot().in_flight, 2);
+    }
+
+    #[test]
+    fn test_tile_fetch_stats_record_success() {
+        let stats = TileFetchStats::new();
+        stats.record_start();
+        stats.record_success(150);
+        let snap = stats.snapshot();
+        assert_eq!(snap.in_flight, 0);
+        assert_eq!(snap.total_fetched, 1);
+        assert_eq!(snap.total_latency_ms, 150);
+        assert_eq!(snap.last_latency_ms, 150);
+    }
+
+    #[test]
+    fn test_tile_fetch_stats_record_success_accumulates_latency() {
+        let stats = TileFetchStats::new();
+        stats.record_start();
+        stats.record_success(100);
+        stats.record_start();
+        stats.record_success(200);
+        let snap = stats.snapshot();
+        assert_eq!(snap.total_fetched, 2);
+        assert_eq!(snap.total_latency_ms, 300);
+        assert_eq!(snap.last_latency_ms, 200); // last overwrites
+    }
+
+    #[test]
+    fn test_tile_fetch_stats_record_error() {
+        let stats = TileFetchStats::new();
+        stats.record_start();
+        stats.record_error();
+        let snap = stats.snapshot();
+        assert_eq!(snap.in_flight, 0);
+        assert_eq!(snap.total_errors, 1);
+        assert_eq!(snap.total_fetched, 0); // not counted as fetched
+    }
+
+    #[test]
+    fn test_tile_fetch_stats_mixed_operations() {
+        let stats = TileFetchStats::new();
+        // 3 starts
+        stats.record_start();
+        stats.record_start();
+        stats.record_start();
+        assert_eq!(stats.snapshot().in_flight, 3);
+        // 1 success, 1 error
+        stats.record_success(50);
+        stats.record_error();
+        let snap = stats.snapshot();
+        assert_eq!(snap.in_flight, 1); // 3 - 1 - 1
+        assert_eq!(snap.total_fetched, 1);
+        assert_eq!(snap.total_errors, 1);
+        assert_eq!(snap.total_latency_ms, 50);
+    }
+
+    // === detect_image_format tests ===
+
+    #[test]
+    fn test_detect_image_format_jpeg() {
+        let jpeg_header = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        assert_eq!(detect_image_format(&jpeg_header), Some(ImageFormat::Jpeg));
+    }
+
+    #[test]
+    fn test_detect_image_format_png() {
+        let png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00];
+        assert_eq!(detect_image_format(&png_header), Some(ImageFormat::Png));
+    }
+
+    #[test]
+    fn test_detect_image_format_empty_data() {
+        assert_eq!(detect_image_format(&[]), None);
+    }
+
+    #[test]
+    fn test_detect_image_format_too_short_for_jpeg() {
+        assert_eq!(detect_image_format(&[0xFF, 0xD8]), None);
+    }
+
+    #[test]
+    fn test_detect_image_format_too_short_for_png() {
+        assert_eq!(detect_image_format(&[0x89, 0x50, 0x4E]), None);
+    }
+
+    #[test]
+    fn test_detect_image_format_unknown_format() {
+        assert_eq!(detect_image_format(&[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]), None);
+    }
+
+    // === normalize_content_type tests ===
+
+    #[test]
+    fn test_normalize_content_type_jpg_to_jpeg() {
+        assert_eq!(normalize_content_type("image/jpg"), "image/jpeg");
+    }
+
+    #[test]
+    fn test_normalize_content_type_jpeg_passthrough() {
+        assert_eq!(normalize_content_type("image/jpeg"), "image/jpeg");
+    }
+
+    #[test]
+    fn test_normalize_content_type_png_passthrough() {
+        assert_eq!(normalize_content_type("image/png"), "image/png");
+    }
+
+    #[test]
+    fn test_normalize_content_type_other_passthrough() {
+        assert_eq!(normalize_content_type("text/html"), "text/html");
+    }
+
+    // === output_format_from_hint / output_content_type_for_format tests ===
+
+    #[test]
+    fn test_output_format_from_hint_png() {
+        assert_eq!(output_format_from_hint("image/png"), ImageFormat::Png);
+    }
+
+    #[test]
+    fn test_output_format_from_hint_jpeg_default() {
+        assert_eq!(output_format_from_hint("image/jpeg"), ImageFormat::Jpeg);
+    }
+
+    #[test]
+    fn test_output_format_from_hint_jpg_normalizes_to_jpeg() {
+        // "image/jpg" normalizes to "image/jpeg" which maps to Jpeg
+        assert_eq!(output_format_from_hint("image/jpg"), ImageFormat::Jpeg);
+    }
+
+    #[test]
+    fn test_output_format_from_hint_unknown_defaults_to_jpeg() {
+        assert_eq!(output_format_from_hint("text/html"), ImageFormat::Jpeg);
+    }
+
+    #[test]
+    fn test_output_content_type_for_format_png() {
+        assert_eq!(output_content_type_for_format(ImageFormat::Png), "image/png");
+    }
+
+    #[test]
+    fn test_output_content_type_for_format_jpeg() {
+        assert_eq!(output_content_type_for_format(ImageFormat::Jpeg), "image/jpeg");
+    }
+
+    // === is_low_detail_tile tests ===
+
+    #[test]
+    fn test_is_low_detail_solid_color_tile() {
+        // Create a 64x64 solid gray image
+        let img = DynamicImage::ImageLuma8(image::GrayImage::from_pixel(64, 64, image::Luma([128])));
+        assert!(is_low_detail_tile(&img), "Solid color tile should be low detail");
+    }
+
+    #[test]
+    fn test_is_low_detail_varied_tile() {
+        // Create a 256x256 gradient image where each column has a distinct value.
+        // Step=8, so 32 sampled x values, each producing a unique bin with equal frequency.
+        // dominant_bins=32 (>4) and max dominance=3.1% (<90%), so NOT low detail.
+        let mut gray = image::GrayImage::new(256, 256);
+        for y in 0..256 {
+            for x in 0..256 {
+                gray.put_pixel(x, y, image::Luma([x as u8]));
+            }
+        }
+        let img = DynamicImage::ImageLuma8(gray);
+        assert!(!is_low_detail_tile(&img), "Varied gradient should not be low detail");
+    }
+
+    #[test]
+    fn test_is_low_detail_nearly_solid_tile() {
+        // Create tile with 95% one color and 5% another → dominance > 0.9
+        let mut gray = image::GrayImage::from_pixel(100, 100, image::Luma([50]));
+        // Change 5% of pixels
+        for y in 0..5 {
+            for x in 0..100 {
+                gray.put_pixel(x, y, image::Luma([200]));
+            }
+        }
+        let img = DynamicImage::ImageLuma8(gray);
+        assert!(is_low_detail_tile(&img), "95% single-color tile should be low detail");
+    }
+
+    // === is_retryable_error tests ===
+
+    #[test]
+    fn test_is_retryable_error_status_code_not_retryable() {
+        // HTTP status codes should NOT be retried
+        let err = ureq::Error::StatusCode(404);
+        assert!(!is_retryable_error(&err));
+        let err = ureq::Error::StatusCode(500);
+        assert!(!is_retryable_error(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_error_transport_is_retryable() {
+        // Transport errors (connection issues) SHOULD be retried
+        let err = ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset"));
+        assert!(is_retryable_error(&err));
+    }
 }
