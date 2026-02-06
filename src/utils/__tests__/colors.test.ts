@@ -1,10 +1,21 @@
 /**
- * Unit tests for color utilities, specifically HSL interpolation for depth gradient.
+ * Unit tests for color utilities.
  */
 
 import { describe, it, expect } from 'vitest';
 import {
+  getErrorColor,
+  hexToRgb,
+  rgbToHex,
+  interpolateColor,
   getDepthColor,
+  hexToRgba,
+  lightenColor,
+  darkenColor,
+  isLightColor,
+  getContrastColor,
+  getNextSectionColor,
+  SECTION_COLORS,
   hexToHSL,
   hslToHex,
   interpolateHue,
@@ -335,5 +346,210 @@ describe('interpolateHue', () => {
     // 0 to 100, quarter points
     expect(interpolateHue(0, 100, 0.25)).toBeCloseTo(25, 5);
     expect(interpolateHue(0, 100, 0.75)).toBeCloseTo(75, 5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getErrorColor
+// ---------------------------------------------------------------------------
+
+describe('getErrorColor', () => {
+  it('returns green for < 1% error', () => {
+    expect(getErrorColor(0)).toBe('#22c55e');
+    expect(getErrorColor(0.5)).toBe('#22c55e');
+    expect(getErrorColor(0.99)).toBe('#22c55e');
+  });
+
+  it('returns yellow for 1-3% error', () => {
+    expect(getErrorColor(1)).toBe('#eab308');
+    expect(getErrorColor(2.5)).toBe('#eab308');
+  });
+
+  it('returns orange for 3-5% error', () => {
+    expect(getErrorColor(3)).toBe('#f97316');
+    expect(getErrorColor(4.99)).toBe('#f97316');
+  });
+
+  it('returns red for >= 5% error', () => {
+    expect(getErrorColor(5)).toBe('#ef4444');
+    expect(getErrorColor(100)).toBe('#ef4444');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hexToRgb
+// ---------------------------------------------------------------------------
+
+describe('hexToRgb', () => {
+  it('parses primary colors', () => {
+    expect(hexToRgb('#ff0000')).toEqual([255, 0, 0]);
+    expect(hexToRgb('#00ff00')).toEqual([0, 255, 0]);
+    expect(hexToRgb('#0000ff')).toEqual([0, 0, 255]);
+  });
+
+  it('parses without # prefix', () => {
+    expect(hexToRgb('ff8800')).toEqual([255, 136, 0]);
+  });
+
+  it('parses black and white', () => {
+    expect(hexToRgb('#000000')).toEqual([0, 0, 0]);
+    expect(hexToRgb('#ffffff')).toEqual([255, 255, 255]);
+  });
+
+  it('returns [0,0,0] for invalid input', () => {
+    expect(hexToRgb('invalid')).toEqual([0, 0, 0]);
+    expect(hexToRgb('#fff')).toEqual([0, 0, 0]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rgbToHex
+// ---------------------------------------------------------------------------
+
+describe('rgbToHex', () => {
+  it('converts primary colors', () => {
+    expect(rgbToHex(255, 0, 0)).toBe('#ff0000');
+    expect(rgbToHex(0, 255, 0)).toBe('#00ff00');
+    expect(rgbToHex(0, 0, 255)).toBe('#0000ff');
+  });
+
+  it('pads single-digit hex values', () => {
+    expect(rgbToHex(0, 0, 0)).toBe('#000000');
+    expect(rgbToHex(1, 2, 3)).toBe('#010203');
+  });
+
+  it('rounds fractional values', () => {
+    expect(rgbToHex(127.6, 0, 0)).toBe('#800000');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// interpolateColor
+// ---------------------------------------------------------------------------
+
+describe('interpolateColor', () => {
+  it('returns first color at t=0', () => {
+    expect(interpolateColor('#ff0000', '#0000ff', 0)).toBe('#ff0000');
+  });
+
+  it('returns second color at t=1', () => {
+    expect(interpolateColor('#ff0000', '#0000ff', 1)).toBe('#0000ff');
+  });
+
+  it('returns midpoint at t=0.5', () => {
+    const mid = interpolateColor('#000000', '#ffffff', 0.5);
+    // Expect ~128 for each channel: #808080
+    expect(mid).toBe(rgbToHex(128, 128, 128));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hexToRgba
+// ---------------------------------------------------------------------------
+
+describe('hexToRgba', () => {
+  it('converts with alpha', () => {
+    expect(hexToRgba('#ff0000', 0.5)).toBe('rgba(255, 0, 0, 0.5)');
+  });
+
+  it('handles alpha 0 and 1', () => {
+    expect(hexToRgba('#000000', 0)).toBe('rgba(0, 0, 0, 0)');
+    expect(hexToRgba('#ffffff', 1)).toBe('rgba(255, 255, 255, 1)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// lightenColor / darkenColor
+// ---------------------------------------------------------------------------
+
+describe('lightenColor', () => {
+  it('returns white at 100%', () => {
+    expect(lightenColor('#000000', 100)).toBe('#ffffff');
+  });
+
+  it('returns same color at 0%', () => {
+    expect(lightenColor('#ff0000', 0)).toBe('#ff0000');
+  });
+
+  it('lightens by 50%', () => {
+    const result = lightenColor('#000000', 50);
+    // 0 + (255-0)*0.5 = 127.5 -> #808080
+    expect(result).toBe(rgbToHex(128, 128, 128));
+  });
+});
+
+describe('darkenColor', () => {
+  it('returns black at 100%', () => {
+    expect(darkenColor('#ffffff', 100)).toBe('#000000');
+  });
+
+  it('returns same color at 0%', () => {
+    expect(darkenColor('#ff0000', 0)).toBe('#ff0000');
+  });
+
+  it('darkens by 50%', () => {
+    const result = darkenColor('#ffffff', 50);
+    // 255 * 0.5 = 127.5 -> #808080
+    expect(result).toBe(rgbToHex(128, 128, 128));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isLightColor / getContrastColor
+// ---------------------------------------------------------------------------
+
+describe('isLightColor', () => {
+  it('white is light', () => {
+    expect(isLightColor('#ffffff')).toBe(true);
+  });
+
+  it('black is not light', () => {
+    expect(isLightColor('#000000')).toBe(false);
+  });
+
+  it('yellow is light (high perceived luminance)', () => {
+    expect(isLightColor('#ffff00')).toBe(true);
+  });
+
+  it('dark blue is not light', () => {
+    expect(isLightColor('#000080')).toBe(false);
+  });
+});
+
+describe('getContrastColor', () => {
+  it('returns black for light backgrounds', () => {
+    expect(getContrastColor('#ffffff')).toBe('#000000');
+    expect(getContrastColor('#ffff00')).toBe('#000000');
+  });
+
+  it('returns white for dark backgrounds', () => {
+    expect(getContrastColor('#000000')).toBe('#ffffff');
+    expect(getContrastColor('#000080')).toBe('#ffffff');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getNextSectionColor
+// ---------------------------------------------------------------------------
+
+describe('getNextSectionColor', () => {
+  it('returns first palette color when none used', () => {
+    expect(getNextSectionColor([])).toBe(SECTION_COLORS[0]);
+  });
+
+  it('returns second palette color when first is used', () => {
+    expect(getNextSectionColor([SECTION_COLORS[0]!])).toBe(SECTION_COLORS[1]);
+  });
+
+  it('skips used colors', () => {
+    const used = [SECTION_COLORS[0]!, SECTION_COLORS[1]!];
+    expect(getNextSectionColor(used)).toBe(SECTION_COLORS[2]);
+  });
+
+  it('generates random color when all palette colors exhausted', () => {
+    const allUsed = [...SECTION_COLORS];
+    const result = getNextSectionColor(allUsed);
+    expect(result).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(SECTION_COLORS).not.toContain(result);
   });
 });
