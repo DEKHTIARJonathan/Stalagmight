@@ -3635,6 +3635,117 @@ impl Project {
         self.zero_datums.first()
     }
 
+    /// After a geometry-changing shot edit in `edited_section_id`, realign the
+    /// merge group's section offsets so that anchored stations (zero datums,
+    /// merge points to pinned sections) remain at their correct positions.
+    ///
+    /// Stations upstream of the edit absorb the length change; stations downstream
+    /// (including merge points and closure endpoints) remain stationary.
+    ///
+    /// Algorithm:
+    /// 1. Find the zero datum anchoring this merge group (if any)
+    /// 2. Reanchor the datum section (adjust offset to keep datum at GPS target)
+    /// 3. BFS through merges: adjust each partner section's offset so merge
+    ///    points stay aligned
+    ///
+    /// Idempotent: calling multiple times produces the same result.
+    pub(crate) fn realign_after_shot_edit(&mut self, edited_section_id: SectionId) {
+        // Find the merge group containing the edited section
+        let merge_group = self.get_merged_section_ids(edited_section_id);
+
+        // Find the zero datum for this merge group (if any)
+        let datum = self
+            .zero_datums
+            .iter()
+            .find(|d| merge_group.contains(&d.station_ref.section_id))
+            .cloned();
+
+        let datum = match datum {
+            Some(d) => d,
+            None => return, // No anchor in this group, nothing to realign
+        };
+
+        // Determine the datum's target position
+        let is_first = self
+            .zero_datums
+            .first()
+            .map(|d| d.station_ref == datum.station_ref)
+            .unwrap_or(false);
+
+        let (target_x, target_y) = if is_first {
+            (0.0, 0.0)
+        } else if let Some(first) = self.zero_datums.first() {
+            gps_to_local(&datum.gps, &first.gps)
+        } else {
+            return;
+        };
+
+        // Step 1: Reanchor the datum section's offset to keep datum at target
+        let datum_section_id = datum.station_ref.section_id;
+        if let Some(current) = self.compute_station_raw_coords(datum.station_ref) {
+            let delta_x = target_x - current.x;
+            let delta_y = target_y - current.y;
+            if delta_x.abs() > 1e-12 || delta_y.abs() > 1e-12 {
+                let old = self
+                    .section_offsets
+                    .get(&datum_section_id)
+                    .copied()
+                    .unwrap_or((0.0, 0.0));
+                self.section_offsets
+                    .insert(datum_section_id, (old.0 + delta_x, old.1 + delta_y));
+            }
+        }
+
+        // Step 2: BFS through merges from the datum section, adjusting each
+        // partner section's offset so its merge station matches the already-
+        // aligned station on the other side.
+        let merges = self.station_merges.clone();
+        let mut visited = HashSet::new();
+        visited.insert(datum_section_id);
+        let mut queue = VecDeque::new();
+        queue.push_back(datum_section_id);
+
+        while let Some(current_section) = queue.pop_front() {
+            for merge in &merges {
+                let (this_station, partner_station) =
+                    if merge.station_a.section_id == current_section
+                        && !visited.contains(&merge.station_b.section_id)
+                    {
+                        (merge.station_a, merge.station_b)
+                    } else if merge.station_b.section_id == current_section
+                        && !visited.contains(&merge.station_a.section_id)
+                    {
+                        (merge.station_b, merge.station_a)
+                    } else {
+                        continue;
+                    };
+
+                let partner_section = partner_station.section_id;
+                visited.insert(partner_section);
+
+                // this_station's section is already aligned; partner needs adjustment
+                if let (Some(this_pos), Some(partner_pos)) = (
+                    self.compute_station_raw_coords(this_station),
+                    self.compute_station_raw_coords(partner_station),
+                ) {
+                    let delta_x = this_pos.x - partner_pos.x;
+                    let delta_y = this_pos.y - partner_pos.y;
+                    if delta_x.abs() > 1e-12 || delta_y.abs() > 1e-12 {
+                        let old = self
+                            .section_offsets
+                            .get(&partner_section)
+                            .copied()
+                            .unwrap_or((0.0, 0.0));
+                        self.section_offsets
+                            .insert(partner_section, (old.0 + delta_x, old.1 + delta_y));
+                    }
+                }
+
+                queue.push_back(partner_section);
+            }
+        }
+    }
+
     // === Coordinate computation ===
 
     /// Compute all station coordinates from shots.

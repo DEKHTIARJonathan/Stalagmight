@@ -941,6 +941,11 @@ impl AppState {
         }
 
         if project.update_shot(section_id, shot_id, &updates).is_some() {
+            // Realign merge group offsets if geometry changed (keeps locked
+            // stations pinned: merge points, zero datums)
+            if updates.touches_geometry() {
+                project.realign_after_shot_edit(section_id);
+            }
             tracing::info!(
                 section_id,
                 shot_id,
