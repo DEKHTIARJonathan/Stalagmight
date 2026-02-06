@@ -3977,6 +3977,7 @@ dependencies = [
  "directories",
  "http",
  "image",
+ "libc",
  "nalgebra",
  "resvg",
  "rusqlite",

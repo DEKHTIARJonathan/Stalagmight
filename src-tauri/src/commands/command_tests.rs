@@ -38,7 +38,9 @@ fn config_lock() -> &'static Mutex<()> {
 }
 
 fn with_config_lock<T>(f: impl FnOnce() -> T) -> T {
-    let _guard = config_lock().lock().expect("config lock");
+    // Use unwrap_or_else to recover from a poisoned mutex (e.g. a prior test panicked
+    // while holding the lock). This prevents cascading failures across tests.
+    let _guard = config_lock().lock().unwrap_or_else(|e| e.into_inner());
     f()
 }
 
@@ -679,6 +681,12 @@ fn test_project_lifecycle_persists_undo_and_state() {
 #[cfg(unix)]
 fn test_open_project_updates_recent_projects_when_config_save_fails() {
     use std::os::unix::fs::PermissionsExt;
+
+    // Skip when running as root — file permission restrictions don't apply to UID 0
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
+        return;
+    }
 
     with_config_lock(|| {
         let readonly_dir = TempDir::new().unwrap();
