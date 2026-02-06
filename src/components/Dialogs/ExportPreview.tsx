@@ -10,6 +10,7 @@ import {
   type DepthPresetColors,
 } from '../../utils/export-colors';
 import type { ExportImageOptions } from '../../types/commands';
+import { formatFixed } from '../../i18n/format';
 
 /** Theme mode for the export preview */
 export type ExportTheme = 'dark' | 'light';
@@ -357,8 +358,8 @@ export default function ExportPreview({ options, theme, presetColors }: ExportPr
             const avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
             // Format with proper units and precision
             const depthLabel = formatDepth(avgDepth, depthUnit, decimalPrecision);
-            const lengthLabel = `${shot.length.toFixed(decimalPrecision)}m`;
-            const label = `${shot.azimuth_in.toFixed(0)}° ${lengthLabel} ${depthLabel}`;
+            const lengthLabel = `${formatFixed(shot.length, undefined, decimalPrecision)}m`;
+            const label = `${formatFixed(shot.azimuth_in, undefined, 0)}° ${lengthLabel} ${depthLabel}`;
 
             shotLabelFeatures.push({
               type: 'Feature',
