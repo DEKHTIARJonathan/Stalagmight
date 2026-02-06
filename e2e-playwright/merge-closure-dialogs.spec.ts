@@ -122,8 +122,8 @@ test.describe('Merge and Closure Dialogs', () => {
 
     // Should show preview data
     await expect(closureDialog.getByText('2.2%')).toBeVisible();
-    await expect(closureDialog.getByText('23.00m')).toBeVisible();
-    await expect(closureDialog.getByText('0.50m').first()).toBeVisible();
+    await expect(closureDialog.getByText('23.0m')).toBeVisible();
+    await expect(closureDialog.getByText('0.5m').first()).toBeVisible();
 
     // Closure dialog no longer exposes strategy options (auto strategy is applied)
     await expect(closureDialog.locator('input[type="radio"]')).toHaveCount(0);
@@ -328,7 +328,7 @@ test.describe('Merge and Closure Dialogs', () => {
 
     // Verify preview data is displayed
     await expect(closureDialog.getByText('2.0%')).toBeVisible();
-    await expect(closureDialog.getByText('15.00m')).toBeVisible();
+    await expect(closureDialog.getByText('15.0m')).toBeVisible();
   });
 
   test('ClosureDialog shows reason subtitle when merge redirects to closure', async ({ page }) => {

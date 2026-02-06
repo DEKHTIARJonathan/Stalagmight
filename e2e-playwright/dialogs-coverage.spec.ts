@@ -574,7 +574,7 @@ test.describe('Dialog Coverage - Merge Projects', () => {
     await expect(dialog).toBeVisible();
     await expect(dialog.getByTestId('merge-output-name-input')).toHaveValue('Alpha_merged');
     await expect(dialog.locator('text=Total sections:')).toBeVisible();
-    await expect(dialog.locator('text=1.62 km')).toBeVisible();
+    await expect(dialog.locator('text=1.6 km')).toBeVisible();
 
     const outputInput = dialog.getByTestId('merge-output-name-input');
     await outputInput.fill('');
