@@ -1,13 +1,14 @@
 use super::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
 use crate::core::undo::{UndoData, UndoEntry};
-use crate::core::Command;
+use crate::core::{Command, UndoStack};
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
-    ShotUpdates, StationRef, SurveyDirection,
+    ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure, Project, SectionData, SectionUpdates,
+    ShotData, ShotUpdates, StationRef, SurveyDirection,
 };
 use crate::persistence::Database;
 use tempfile::TempDir;
@@ -131,6 +132,299 @@ fn test_merge_projects_archives_sources_and_adds_extension() {
 
     assert!(!archived_entries.is_empty());
     assert!(temp_dir.path().join("b.stalx.archived").exists());
+}
+
+#[test]
+fn test_start_new_load_cancels_previous_and_clear_is_identity_safe() {
+    let state = AppState::new().unwrap();
+
+    let first = state.start_new_load();
+    assert!(!first.load(Ordering::SeqCst));
+
+    let second = state.start_new_load();
+    assert!(first.load(Ordering::SeqCst));
+    assert!(!second.load(Ordering::SeqCst));
+
+    state.clear_active_load(&first);
+    let guard = state.active_loading.lock().unwrap();
+    assert!(guard.as_ref().is_some());
+    assert!(Arc::ptr_eq(guard.as_ref().unwrap(), &second));
+    drop(guard);
+
+    state.clear_active_load(&second);
+    assert!(state.active_loading.lock().unwrap().is_none());
+}
+
+#[test]
+fn test_close_project_succeeds_with_poisoned_database_lock() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    poison_mutex(&state.database);
+
+    let result = state.close_project();
+    assert!(result.success);
+    assert!(state.get_project_state().is_none());
+}
+
+#[test]
+fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
+    let temp_dir = TempDir::new().unwrap();
+    let project_path = temp_dir.path().join("restore.stalx");
+
+    let mut project = Project::new("Restore".to_string(), None);
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+
+    project.loop_closures.push(LoopClosure {
+        id: 0,
+        station_a: StationRef::new(section_id, 0),
+        station_b: StationRef::new(section_id, 1),
+        path_length: 2.0,
+        misclosure_distance: 0.1,
+        error_percentage: 5.0,
+        horizontal_misclosure: 0.1,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+
+    let mut db = Database::open(&project_path).unwrap();
+    db.save_project(&project).unwrap();
+
+    let undo_entry = UndoEntry {
+        command: Command::CreateProject {
+            name: "Undo Project".to_string(),
+            location: None,
+        },
+        undo_data: UndoData::None,
+        timestamp: None,
+    };
+    let redo_entry = UndoEntry {
+        command: Command::CloseProject,
+        undo_data: UndoData::None,
+        timestamp: None,
+    };
+
+    let undo_persist = UndoStack::serialize_entry_with_timestamp(&undo_entry).unwrap();
+    let redo_persist = UndoStack::serialize_entry_with_timestamp(&redo_entry).unwrap();
+    db.save_undo_stack_with_timestamps(vec![undo_persist]).unwrap();
+    db.save_redo_stack_with_timestamps(vec![redo_persist]).unwrap();
+    drop(db);
+
+    let state = AppState::new().unwrap();
+    let result = state.open_project(project_path.clone());
+    assert!(result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.loop_closures.len(), 1);
+    assert_ne!(project.loop_closures[0].id, 0);
+
+    let undo_stack = state.undo_stack.lock().unwrap();
+    assert_eq!(undo_stack.len(), 1);
+    assert_eq!(undo_stack.redo_len(), 1);
+
+    let undo_entry = undo_stack.undo_entries().next().unwrap();
+    match &undo_entry.command {
+        Command::CreateProject { name, location } => {
+            assert_eq!(name, "Undo Project");
+            assert!(location.is_none());
+        }
+        other => panic!("Unexpected undo entry: {:?}", other),
+    }
+
+    let redo_entry = undo_stack.redo_entries().next().unwrap();
+    match &redo_entry.command {
+        Command::CloseProject => {}
+        other => panic!("Unexpected redo entry: {:?}", other),
+    }
+}
+
+#[test]
+fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut project_a = Project::new("A".to_string(), None);
+    let section_a = project_a
+        .add_section(SectionData {
+            name: Some("Section A".to_string()),
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .id;
+    project_a.section_offsets.insert(section_a, (1.0, 2.0));
+    project_a
+        .station_offsets
+        .insert(StationRef::new(section_a, 0), (0.5, -0.5, 1.0));
+    let gps_a = GpsCoordinates::new(10.0, 20.0, 0.0).unwrap();
+    project_a
+        .store_zero_datum_without_repositioning(StationRef::new(section_a, 0), gps_a)
+        .unwrap();
+    project_a.loop_closures.push(LoopClosure {
+        id: 0,
+        station_a: StationRef::new(section_a, 0),
+        station_b: StationRef::new(section_a, 1),
+        path_length: 1.0,
+        misclosure_distance: 0.1,
+        error_percentage: 10.0,
+        horizontal_misclosure: 0.1,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+
+    let mut project_b = Project::new("B".to_string(), None);
+    let section_b = project_b
+        .add_section(SectionData {
+            name: Some("Section B".to_string()),
+            shots: vec![test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+    project_b.section_offsets.insert(section_b, (3.0, 4.0));
+    project_b
+        .station_offsets
+        .insert(StationRef::new(section_b, 0), (-1.0, 1.5, 0.0));
+    let gps_b = GpsCoordinates::new(-5.0, 40.0, 2.0).unwrap();
+    project_b
+        .store_zero_datum_without_repositioning(StationRef::new(section_b, 0), gps_b)
+        .unwrap();
+    project_b.loop_closures.push(LoopClosure {
+        id: 0,
+        station_a: StationRef::new(section_b, 0),
+        station_b: StationRef::new(section_b, 1),
+        path_length: 2.0,
+        misclosure_distance: 0.2,
+        error_percentage: 10.0,
+        horizontal_misclosure: 0.2,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+
+    let source_a = temp_dir.path().join("a.stalx");
+    let source_b = temp_dir.path().join("b.stalx");
+    let mut db_a = Database::open(&source_a).unwrap();
+    db_a.save_project(&project_a).unwrap();
+    let mut db_b = Database::open(&source_b).unwrap();
+    db_b.save_project(&project_b).unwrap();
+    drop(db_a);
+    drop(db_b);
+
+    let state = AppState::new().unwrap();
+    let output_path = temp_dir.path().join("merged-output.stalx");
+    let result = state.execute(Command::MergeProjects {
+        source_paths: vec![source_a.clone(), source_b.clone()],
+        output_path: output_path.clone(),
+        output_name: "Merged".to_string(),
+        archive_originals: false,
+    });
+    assert!(result.success);
+
+    let db = Database::open_existing(&output_path).unwrap();
+    let merged = db.load_project().unwrap();
+
+    let merged_section_a = merged
+        .sections
+        .iter()
+        .find(|s| s.name.as_deref() == Some("Section A"))
+        .unwrap()
+        .id;
+    let merged_section_b = merged
+        .sections
+        .iter()
+        .find(|s| s.name.as_deref() == Some("Section B"))
+        .unwrap()
+        .id;
+
+    assert_eq!(merged.section_offsets.get(&merged_section_a), Some(&(1.0, 2.0)));
+    assert_eq!(merged.section_offsets.get(&merged_section_b), Some(&(3.0, 4.0)));
+
+    assert_eq!(
+        merged
+            .station_offsets
+            .get(&StationRef::new(merged_section_a, 0)),
+        Some(&(0.5, -0.5, 1.0))
+    );
+    assert_eq!(
+        merged
+            .station_offsets
+            .get(&StationRef::new(merged_section_b, 0)),
+        Some(&(-1.0, 1.5, 0.0))
+    );
+
+    assert!(merged
+        .zero_datums
+        .iter()
+        .any(|zd| zd.station_ref.section_id == merged_section_a && zd.gps.latitude == 10.0));
+    assert!(merged
+        .zero_datums
+        .iter()
+        .any(|zd| zd.station_ref.section_id == merged_section_b && zd.gps.latitude == -5.0));
+
+    let mut closure_ids = HashSet::new();
+    for closure in &merged.loop_closures {
+        assert_ne!(closure.id, 0, "closure IDs should be reassigned");
+        closure_ids.insert(closure.id);
+    }
+    assert_eq!(closure_ids.len(), merged.loop_closures.len());
+
+    assert!(merged.loop_closures.iter().any(|c| {
+        c.station_a.section_id == merged_section_a && c.station_b.section_id == merged_section_a
+    }));
+    assert!(merged.loop_closures.iter().any(|c| {
+        c.station_a.section_id == merged_section_b && c.station_b.section_id == merged_section_b
+    }));
+}
+
+#[test]
+fn test_open_project_fails_on_invalid_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let invalid_path = temp_dir.path().join("invalid.stalx");
+    std::fs::write(&invalid_path, b"not a database").unwrap();
+
+    let state = AppState::new().unwrap();
+    let result = state.open_project(invalid_path);
+    assert!(!result.success);
+    let err = result.error.unwrap_or_default();
+    assert!(
+        err.contains("database"),
+        "Expected database error, got: {err}"
+    );
+}
+
+#[test]
+fn test_save_project_persists_display_settings_cache() {
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+
+    state.execute(Command::CreateProject {
+        name: "Cache Save".to_string(),
+        location: None,
+    });
+
+    state
+        .save_display_setting("showStations", "false")
+        .unwrap();
+
+    let save_path = temp_dir.path().join("cache-save");
+    let result = state.save_project(Some(save_path.clone()));
+    assert!(result.success);
+
+    let saved_path = save_path.with_extension("stalx");
+    let db = Database::open_readonly(&saved_path).unwrap();
+    let settings = db.load_display_settings().unwrap();
+    assert_eq!(settings.get("showStations"), Some(&"false".to_string()));
+
+    let cache = state.display_settings_cache.lock().unwrap();
+    assert!(cache.is_empty());
 }
 
 #[test]
@@ -1213,6 +1507,81 @@ fn test_display_settings_cache() {
     // Load all settings
     let settings = state.load_display_settings().unwrap();
     assert_eq!(settings.get("test_key"), Some(&"test_value".to_string()));
+}
+
+#[test]
+fn test_save_project_prefers_database_display_settings_over_cache() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("source.stalx");
+    let mut project = Project::new("Display Settings".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+
+    let mut db = Database::open(&db_path).unwrap();
+    db.save_project(&project).unwrap();
+    db.save_display_setting("showStations", "false").unwrap();
+    drop(db);
+
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+    let db = Database::open_existing(&db_path).unwrap();
+    state.set_database_for_tests(db);
+
+    {
+        let mut cache = state.display_settings_cache.lock().unwrap();
+        cache.insert("showStations".to_string(), "true".to_string());
+    }
+
+    let save_path = temp_dir.path().join("dest");
+    let result = state.save_project(Some(save_path.clone()));
+    assert!(result.success);
+
+    let saved_path = save_path.with_extension("stalx");
+    let saved_db = Database::open_readonly(&saved_path).unwrap();
+    let settings = saved_db.load_display_settings().unwrap();
+    assert_eq!(settings.get("showStations"), Some(&"false".to_string()));
+}
+
+#[test]
+fn test_save_project_failure_does_not_change_existing_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let original_path = temp_dir.path().join("original.stalx");
+
+    let mut project = Project::new("Original".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+
+    let mut db = Database::open(&original_path).unwrap();
+    db.save_project(&project).unwrap();
+    drop(db);
+
+    project.file_path = Some(original_path.clone());
+
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project.clone());
+
+    let blocked_path = temp_dir.path().join("blocked.stalx");
+    std::fs::create_dir_all(&blocked_path).unwrap();
+
+    let result = state.save_project(Some(blocked_path.clone()));
+    assert!(!result.success);
+
+    let reloaded = Database::open_existing(&original_path)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    assert_eq!(reloaded.name, project.name);
+    assert_eq!(reloaded.sections.len(), project.sections.len());
+
+    let project_after = state.get_project_state().unwrap();
+    assert_eq!(project_after.file_path, Some(original_path));
+
+    let temp_path = blocked_path.with_extension("stalx.tmp");
+    assert!(!temp_path.exists());
 }
 
 #[test]

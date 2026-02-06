@@ -1080,4 +1080,100 @@ mod tests {
         assert_eq!(preview.changes[0].field, "Action");
         assert!(preview.changes[0].new_value.contains("Delete shot"));
     }
+
+    #[test]
+    fn test_derive_preview_update_section_metadata_name_change() {
+        use crate::models::{SectionUpdates, SurveyDirection};
+
+        let entry = UndoEntry {
+            command: Command::UpdateSectionMetadata {
+                section_id: 1,
+                updates: SectionUpdates {
+                    name: Some(Some("New Name".to_string())),
+                    ..Default::default()
+                },
+            },
+            undo_data: UndoData::PreviousValues {
+                section_id: 1,
+                shot_id: None,
+                values_json: r#"{"name":"Old Name"}"#.to_string(),
+            },
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        assert_eq!(preview.changes.len(), 1);
+        assert_eq!(preview.changes[0].field, "Name");
+        assert_eq!(preview.changes[0].old_value, "Old Name");
+        assert_eq!(preview.changes[0].new_value, "New Name");
+        assert_eq!(preview.additional_changes, 0);
+    }
+
+    #[test]
+    fn test_derive_preview_update_section_metadata_multiple_fields() {
+        use crate::models::{SectionUpdates, SurveyDirection};
+
+        let entry = UndoEntry {
+            command: Command::UpdateSectionMetadata {
+                section_id: 1,
+                updates: SectionUpdates {
+                    name: Some(Some("Updated".to_string())),
+                    color: Some("#00ff00".to_string()),
+                    direction: Some(SurveyDirection::Out),
+                    ..Default::default()
+                },
+            },
+            undo_data: UndoData::PreviousValues {
+                section_id: 1,
+                shot_id: None,
+                values_json: r##"{"name":"Original","color":"#ff0000","direction":"in"}"##.to_string(),
+            },
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        assert_eq!(preview.changes.len(), 3);
+        assert_eq!(preview.additional_changes, 0);
+
+        assert_eq!(preview.changes[0].field, "Name");
+        assert_eq!(preview.changes[0].old_value, "Original");
+        assert_eq!(preview.changes[0].new_value, "Updated");
+
+        assert_eq!(preview.changes[1].field, "Color");
+        assert_eq!(preview.changes[1].old_value, "#ff0000");
+        assert_eq!(preview.changes[1].new_value, "#00ff00");
+
+        assert_eq!(preview.changes[2].field, "Direction");
+        assert_eq!(preview.changes[2].old_value, "in");
+        assert_eq!(preview.changes[2].new_value, "out");
+    }
+
+    #[test]
+    fn test_derive_preview_update_section_metadata_truncation() {
+        use crate::models::{SectionUpdates, SurveyDirection};
+
+        let entry = UndoEntry {
+            command: Command::UpdateSectionMetadata {
+                section_id: 1,
+                updates: SectionUpdates {
+                    name: Some(Some("New".to_string())),
+                    surveyor: Some(Some("Alice".to_string())),
+                    date: Some(None),
+                    color: Some("#0000ff".to_string()),
+                    direction: Some(SurveyDirection::Out),
+                    quality: Some(2.0),
+                },
+            },
+            undo_data: UndoData::PreviousValues {
+                section_id: 1,
+                shot_id: None,
+                values_json: r##"{"name":"Old","surveyor":"Bob","date":"2025-01-01","color":"#ff0000","direction":"in","quality":1.0}"##.to_string(),
+            },
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        assert_eq!(preview.changes.len(), 3, "Should show only 3 changes");
+        assert_eq!(preview.additional_changes, 3, "Should have 3 additional changes");
+    }
 }
