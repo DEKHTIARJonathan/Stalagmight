@@ -1002,3 +1002,41 @@ impl AppState {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn resolve_project_path_sanitizes_and_validates() {
+        let state = AppState::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+
+        let resolved = state
+            .resolve_project_path("New/Project?Name", Some(&temp_dir.path().to_path_buf()))
+            .expect("resolve path");
+        assert_eq!(resolved.parent(), Some(temp_dir.path()));
+        assert_eq!(
+            resolved.extension().and_then(|ext| ext.to_str()),
+            Some("stalx")
+        );
+        let filename = resolved.file_name().unwrap_or_default().to_string_lossy();
+        assert!(
+            filename.contains("New_Project_Name"),
+            "expected sanitized filename, got {}",
+            filename
+        );
+
+        let err = state
+            .resolve_project_path("", Some(&temp_dir.path().to_path_buf()))
+            .expect_err("empty name should fail");
+        assert!(err.contains("Project name cannot be empty"));
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let err = state
+            .resolve_project_path("Valid", Some(&file.path().to_path_buf()))
+            .expect_err("file path should be rejected");
+        assert!(err.contains("Path is not a directory"));
+    }
+}

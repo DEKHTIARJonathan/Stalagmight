@@ -240,7 +240,11 @@ pub(crate) fn get_survey_geometry_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::AppState;
     use crate::models::gps_to_local;
+    use crate::models::{Project, SectionData, ShotData, StationRef, ZeroDatum};
+    use crate::persistence::Database;
+    use tempfile::TempDir;
 
     // Test vector data from coordinate_transform_vectors.json
     // These tests verify the local_to_gps function matches expected values
@@ -385,5 +389,179 @@ mod tests {
         let high_lat = GpsCoordinates::new(89.0, 0.0, 0.0).unwrap();
         let result = local_to_gps(1000.0, 0.0, &high_lat);
         assert!(result.is_ok(), "89° latitude should be acceptable");
+    }
+
+    #[test]
+    fn test_get_survey_geometry_impl_requires_project() {
+        let state = AppState::new().unwrap();
+        let result = get_survey_geometry_impl(&state);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .message
+                .contains("No project loaded")
+        );
+    }
+
+    #[test]
+    fn test_get_survey_geometry_requires_zero_datum() {
+        let mut project = Project::new("No Datum".to_string(), None);
+        project.add_section(SectionData {
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                length: 10.0,
+                depth_in: 0.0,
+                depth_out: 0.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let result = get_survey_geometry_for_project(&project);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .message
+                .contains("no GPS reference")
+        );
+    }
+
+    #[test]
+    fn test_get_survey_geometry_errors_for_missing_datum_station() {
+        let mut project = Project::new("Missing Station".to_string(), None);
+        let section_id = project
+            .add_section(SectionData {
+                shots: vec![ShotData {
+                    azimuth_in: 0.0,
+                    azimuth_out: 0.0,
+                    length: 5.0,
+                    depth_in: 0.0,
+                    depth_out: 0.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .id;
+
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef::new(section_id, 3),
+            gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        });
+
+        let result = get_survey_geometry_for_project(&project);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .message
+                .contains("Zero datum station")
+        );
+    }
+
+    #[test]
+    fn test_get_survey_geometry_includes_virtual_shots_and_origin() {
+        let mut project = Project::new("Geometry".to_string(), None);
+        let shot = ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 0.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            is_virtual: true,
+            ..Default::default()
+        };
+        let section_id = project
+            .add_section(SectionData {
+                shots: vec![shot.clone()],
+                ..Default::default()
+            })
+            .id;
+
+        let gps = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
+        project
+            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .unwrap();
+
+        let geometry = get_survey_geometry_for_project(&project).unwrap();
+        assert_eq!(geometry.origin, [0.0, 0.0]);
+        assert_eq!(geometry.shots.len(), 1);
+
+        let geom_shot = &geometry.shots[0];
+        assert!(geom_shot.is_virtual);
+        assert_eq!(geom_shot.section_id, section_id);
+        assert!((geom_shot.from[0]).abs() < 1e-9);
+        assert!((geom_shot.from[1]).abs() < 1e-9);
+
+        let (east, north) = Project::shot_displacement(&shot);
+        let (lng, lat) = local_to_gps(east, north, &gps).unwrap();
+        assert!((geom_shot.to[0] - lng).abs() < 1e-6);
+        assert!((geom_shot.to[1] - lat).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_get_survey_geometry_for_file_missing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing = temp_dir.path().join("missing.stalx");
+
+        let result = get_survey_geometry_for_file_impl(&missing);
+        assert!(result.is_err());
+        let message = result.unwrap_err().message;
+        assert!(message.contains("Failed to open project"));
+        assert!(message.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_get_survey_geometry_for_file_rejects_corrupted_database() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("corrupted.stalx");
+        std::fs::write(&path, b"not a sqlite database").unwrap();
+
+        let result = get_survey_geometry_for_file_impl(&path);
+        assert!(result.is_err());
+        let message = result.unwrap_err().message;
+        assert!(message.contains("Failed to open project"));
+    }
+
+    #[test]
+    fn test_get_survey_geometry_for_file_rejects_wrong_extension() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("not-a-project.txt");
+        std::fs::write(&path, "nope").unwrap();
+
+        let result = get_survey_geometry_for_file_impl(&path);
+        assert!(result.is_err());
+        let message = result.unwrap_err().message;
+        assert!(message.contains("Failed to open project"));
+        assert!(message.contains("Not a Stalagmight project file"));
+    }
+
+    #[test]
+    fn test_get_survey_geometry_for_file_requires_zero_datum() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("no-datum.stalx");
+
+        let mut project = Project::new("No Datum".to_string(), None);
+        project.add_section(SectionData {
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                length: 10.0,
+                depth_in: 0.0,
+                depth_out: 0.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        drop(db);
+
+        let result = get_survey_geometry_for_file_impl(&path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("no GPS reference"));
     }
 }

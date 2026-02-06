@@ -371,4 +371,112 @@ test.describe('Merge and Closure Dialogs', () => {
       closureDialog.getByText('These stations are already connected. Creating a loop closure instead.')
     ).toBeVisible();
   });
+
+  test('MergeDialog batches preCommands and calls onBeforeConfirm', async ({ page }) => {
+    const sectionIds = await page.evaluate(() => {
+      const e2e = (window as any).__E2E_TEST__;
+      if (!e2e) return [];
+      const project = e2e.projectStore.getState().project;
+      if (!project) return [];
+      return project.sections.map((s: any) => s.id);
+    });
+
+    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+
+    await page.evaluate(() => {
+      (window as any).__MOCK_EXECUTE_BATCH_CALLS__ = [];
+      (window as any).__E2E_CALLBACKS__ = { beforeConfirm: 0 };
+    });
+
+    await page.evaluate(
+      ({ sectionA, sectionB }) => {
+        const e2e = (window as any).__E2E_TEST__;
+        if (!e2e) return;
+        const callbacks = (window as any).__E2E_CALLBACKS__;
+        e2e.uiStore.getState().openDialog('merge', {
+          stationA: { section_id: sectionA, station_index: 1 },
+          stationB: { section_id: sectionB, station_index: 0 },
+          preCommands: [
+            { type: 'move_section', section_id: sectionA, offset: { x: 1, y: 0, z: 0 } },
+          ],
+          onBeforeConfirm: async () => {
+            callbacks.beforeConfirm += 1;
+          },
+        });
+      },
+      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+    );
+
+    const mergeDialog = page.getByTestId('merge-dialog');
+    await expect(mergeDialog).toBeVisible({ timeout: 5000 });
+
+    await mergeDialog.getByRole('button', { name: /Merge/i }).click();
+    await expect(mergeDialog).toBeHidden({ timeout: 5000 });
+
+    const beforeConfirmCalls = await page.evaluate(() => (window as any).__E2E_CALLBACKS__?.beforeConfirm ?? 0);
+    expect(beforeConfirmCalls).toBe(1);
+
+    const batchCalls = await page.evaluate(() => (window as any).__MOCK_EXECUTE_BATCH_CALLS__ ?? []);
+    expect(batchCalls.length).toBe(1);
+    const commands = batchCalls[0] ?? [];
+    expect(commands.some((cmd: { type?: string }) => cmd.type === 'merge_stations')).toBe(true);
+  });
+
+  test('ClosureDialog batches preCommands with Move strategy', async ({ page }) => {
+    const sectionIds = await page.evaluate(() => {
+      const e2e = (window as any).__E2E_TEST__;
+      if (!e2e) return [];
+      const project = e2e.projectStore.getState().project;
+      if (!project) return [];
+      return project.sections.map((s: any) => s.id);
+    });
+
+    expect(sectionIds.length).toBeGreaterThanOrEqual(2);
+
+    await page.evaluate(() => {
+      (window as any).__MOCK_EXECUTE_BATCH_CALLS__ = [];
+      (window as any).__E2E_CALLBACKS__ = { beforeConfirm: 0 };
+    });
+
+    await page.evaluate(
+      ({ sectionA, sectionB }) => {
+        const e2e = (window as any).__E2E_TEST__;
+        if (!e2e) return;
+        const callbacks = (window as any).__E2E_CALLBACKS__;
+        e2e.uiStore.getState().openDialog('closure', {
+          stationA: { section_id: sectionA, station_index: 0 },
+          stationB: { section_id: sectionB, station_index: 1 },
+          preview: {
+            path_length: 12.0,
+            misclosure_distance: 0.4,
+            error_percentage: 1.8,
+            horizontal_misclosure: 0.3,
+            vertical_misclosure: 0.2,
+          },
+          preCommands: [
+            { type: 'move_section', section_id: sectionA, offset: { x: 0.5, y: 0.5, z: 0 } },
+          ],
+          onBeforeConfirm: async () => {
+            callbacks.beforeConfirm += 1;
+          },
+        });
+      },
+      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+    );
+
+    const closureDialog = page.getByTestId('closure-dialog');
+    await expect(closureDialog).toBeVisible({ timeout: 5000 });
+
+    await closureDialog.getByRole('button', { name: /Create Closure/i }).click();
+    await expect(closureDialog).toBeHidden({ timeout: 5000 });
+
+    const beforeConfirmCalls = await page.evaluate(() => (window as any).__E2E_CALLBACKS__?.beforeConfirm ?? 0);
+    expect(beforeConfirmCalls).toBe(1);
+
+    const batchCalls = await page.evaluate(() => (window as any).__MOCK_EXECUTE_BATCH_CALLS__ ?? []);
+    expect(batchCalls.length).toBe(1);
+    const commands = batchCalls[0] ?? [];
+    const closureCommand = commands.find((cmd: { type?: string }) => cmd.type === 'create_loop_closure');
+    expect(closureCommand?.closure_strategy).toBe('Move');
+  });
 });
