@@ -4,6 +4,10 @@ All notable changes to Stalagmight will be documented in this file.
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-02-06
+
+- fix(release): extract changelog for body, fix artifact upload, add debug output
+
 ## [0.0.4] - 2026-02-06
 
 - fix(release): replace tauri-action with direct build and Gitea API
