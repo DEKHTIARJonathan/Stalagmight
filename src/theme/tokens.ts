@@ -85,6 +85,7 @@ export const themeTokens = {
     '--cc-error-90': 'rgba(255, 107, 107, 0.9)',
 
     // Opacity Variants: warning
+    '--cc-warning-5': 'rgba(255, 203, 119, 0.05)',
     '--cc-warning-10': 'rgba(255, 203, 119, 0.1)',
     '--cc-warning-20': 'rgba(255, 203, 119, 0.2)',
     '--cc-warning-30': 'rgba(255, 203, 119, 0.3)',
@@ -157,6 +158,7 @@ export const themeTokens = {
     '--cc-error-90': 'rgba(192, 57, 43, 0.9)',
 
     // Opacity Variants: warning
+    '--cc-warning-5': 'rgba(184, 134, 11, 0.05)',
     '--cc-warning-10': 'rgba(184, 134, 11, 0.1)',
     '--cc-warning-20': 'rgba(184, 134, 11, 0.2)',
     '--cc-warning-30': 'rgba(184, 134, 11, 0.3)',

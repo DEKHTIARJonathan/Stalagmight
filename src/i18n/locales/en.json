@@ -796,6 +796,7 @@
       "comment": "Comment"
     },
     "empty": "No shots in this section.",
+    "frozen": "Geometry locked — part of adjusted network",
     "selectSection": "Select a section to view shots.",
     "shotCount": "{{countFormatted}} shots",
     "announcement": {

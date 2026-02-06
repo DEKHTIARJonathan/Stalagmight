@@ -5,7 +5,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { EditableTable } from '../common/Table';
 import { Select, type SelectOption } from '../common/Select';
-import { AlertCircleIcon, AlertTriangleIcon, ChevronDownIcon, DotIcon } from '../common/icons';
+import { AlertCircleIcon, AlertTriangleIcon, ChevronDownIcon, DotIcon, LockIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
 import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
 import { formatShotId } from '../../utils/formatters';
@@ -408,19 +408,25 @@ export default function DataTable({ sections }: DataTableProps) {
       header: t('dataTable.columns.warningsShort'),
       width: '30px',
       align: 'center' as const,
-      render: (shot: Shot) => {
+      render: (shot: Shot, index: number) => {
         if (selectedSectionId === null) return null;
+        const frozen = isShotFrozen(selectedSectionId, index);
         const shotWarnings = getShotWarnings(selectedSectionId, shot.id);
-        if (shotWarnings.length === 0) return null;
+        if (shotWarnings.length === 0 && !frozen) return null;
         const hasError = shotWarnings.some((w) => w.severity === 'error');
-        const tooltipText = shotWarnings.map((w) => w.message).join('\n');
+        const tooltipText = [
+          ...(frozen ? [t('dataTable.frozen')] : []),
+          ...shotWarnings.map((w) => w.message),
+        ].join('\n');
         return (
           <span
-            data-testid={`warning-${selectedSectionId}-${shot.id}`}
-            className={hasError ? 'text-error' : 'text-warning'}
+            data-testid={frozen ? `frozen-${selectedSectionId}-${shot.id}` : `warning-${selectedSectionId}-${shot.id}`}
+            className={hasError ? 'text-error' : frozen && shotWarnings.length === 0 ? 'text-text-secondary' : 'text-warning'}
             title={tooltipText}
           >
-            {hasError ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />}
+            {frozen && shotWarnings.length === 0
+              ? <LockIcon size={13} />
+              : hasError ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />}
           </span>
         );
       },
@@ -549,6 +555,20 @@ export default function DataTable({ sections }: DataTableProps) {
               onRowContextMenu={handleRowContextMenu}
               onRowHover={handleRowHover}
               emptyMessage={t('dataTable.empty')}
+              rowClassName={(shot: Shot, isSelected, isHovered) => {
+                const index = selectedSection?.shots.indexOf(shot) ?? -1;
+                const frozen = selectedSectionId !== null && index >= 0 && isShotFrozen(selectedSectionId, index);
+                const classes: string[] = [];
+                if (isSelected) {
+                  classes.push('bg-accent-20');
+                } else if (isHovered) {
+                  classes.push('bg-accent-10');
+                } else if (frozen) {
+                  classes.push('bg-warning-5');
+                }
+                classes.push('cursor-pointer');
+                return classes.join(' ');
+              }}
             />
           ) : (
             <div className="flex items-center justify-center h-full text-text-secondary">
