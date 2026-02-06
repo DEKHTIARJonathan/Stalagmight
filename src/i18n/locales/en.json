@@ -1304,7 +1304,12 @@
     "empty": "No project open.",
     "status": {
       "depthRange": "Depth range: {{min}} - {{max}}",
-      "summary": "Sections: {{sections}} | Shots: {{shots}} | Length: {{length}}"
+      "summary": "Sections: {{sections}} | Shots: {{shots}} | Length: {{length}}",
+      "saved": "Saved",
+      "saving": "Saving...",
+      "unsavedChanges": "Unsaved changes",
+      "autoSaveCountdown": "Auto-save in {{seconds}}s",
+      "saveError": "Save error"
     }
   },
   "toolbar": {
