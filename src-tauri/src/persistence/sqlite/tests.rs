@@ -999,3 +999,54 @@ fn test_merged_with_from_fractal_iter4() {
         s1_st0.merged_with
     );
 }
+
+#[test]
+fn test_integrity_check_passes_on_valid_db() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("integrity_valid.stalx");
+
+    let mut db = Database::open(&db_path).unwrap();
+    let project = Project::new("Integrity Test".to_string(), None);
+    db.save_project(&project).unwrap();
+    drop(db);
+
+    // open_existing runs validate_integrity internally — should succeed
+    let db = Database::open_existing(&db_path).unwrap();
+    // full_integrity_check should also pass
+    let errors = db.full_integrity_check().unwrap();
+    assert!(errors.is_empty(), "Expected no integrity errors, got: {:?}", errors);
+}
+
+#[test]
+fn test_integrity_check_passes_on_readonly() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("integrity_readonly.stalx");
+
+    let mut db = Database::open(&db_path).unwrap();
+    let project = Project::new("Readonly Integrity".to_string(), None);
+    db.save_project(&project).unwrap();
+    drop(db);
+
+    // open_readonly runs validate_integrity internally — should succeed
+    let _db = Database::open_readonly(&db_path).unwrap();
+}
+
+#[test]
+fn test_integrity_check_fails_on_corrupt_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("corrupt.stalx");
+
+    // Write garbage data to simulate a corrupt database file
+    std::fs::write(&db_path, b"This is not a valid SQLite database").unwrap();
+
+    // open_existing should fail (either at connection open or integrity check)
+    let result = Database::open_existing(&db_path);
+    assert!(result.is_err(), "Expected error for corrupt database");
+}
+
+#[test]
+fn test_full_integrity_check_on_in_memory() {
+    let db = Database::in_memory().unwrap();
+    let errors = db.full_integrity_check().unwrap();
+    assert!(errors.is_empty(), "In-memory DB should pass integrity check");
+}
