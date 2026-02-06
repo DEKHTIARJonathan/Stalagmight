@@ -1,5 +1,8 @@
+import { useCallback } from 'react';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useProject } from '../../hooks/useProject';
+import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
+import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { ResizablePanel } from '../common/Panel';
 import { ErrorBoundary } from '../common/ErrorBoundary';
@@ -19,7 +22,7 @@ export default function SingleSystemView() {
   const {
     project,
     stats,
-    handleSaveProject,
+    handleSaveProject: rawSave,
     handleCloseProject,
     handleImportDmp,
     canUndo,
@@ -27,6 +30,14 @@ export default function SingleSystemView() {
     undo,
     redo,
   } = useProject();
+
+  const isDirty = useProjectStore((s) => s.isDirty);
+  const autoSave = useAutoSave();
+
+  const handleSaveProject = useCallback(async () => {
+    autoSave.cancelPending();
+    return rawSave();
+  }, [autoSave, rawSave]);
 
   const {
     sectionsPanelOpen,
@@ -139,14 +150,53 @@ export default function SingleSystemView() {
             length: formatLength(stats?.total_length ?? 0),
           })}
         </span>
-        <span>
-          {t('singleView.status.depthRange', {
-            min: formatDepth(stats?.min_depth ?? 0),
-            max: formatDepth(stats?.max_depth ?? 0),
-          })}
-        </span>
+        <SaveStatus status={autoSave.status} countdown={autoSave.countdown} isDirty={isDirty} />
       </footer>
     </div>
+  );
+}
+
+function SaveStatus({
+  status,
+  countdown,
+  isDirty,
+}: {
+  status: AutoSaveStatus;
+  countdown: number;
+  isDirty: boolean;
+}) {
+  const { t } = useTranslation();
+
+  let text: string;
+  let className = '';
+
+  switch (status) {
+    case 'saving':
+      text = t('singleView.status.saving');
+      break;
+    case 'saved':
+      text = t('singleView.status.saved');
+      break;
+    case 'pending':
+      text = t('singleView.status.autoSaveCountdown', { seconds: countdown });
+      break;
+    case 'error':
+      text = t('singleView.status.saveError');
+      className = 'text-red-400';
+      break;
+    case 'idle':
+    default:
+      text = isDirty
+        ? t('singleView.status.unsavedChanges')
+        : t('singleView.status.saved');
+      if (isDirty) className = 'text-yellow-400';
+      break;
+  }
+
+  return (
+    <span data-testid="save-status" className={className}>
+      {text}
+    </span>
   );
 }
 
@@ -157,6 +207,3 @@ function formatLength(meters: number): string {
   return `${formatFixed(meters, undefined, 1)} m`;
 }
 
-function formatDepth(meters: number): string {
-  return `${formatFixed(meters, undefined, 1)} m`;
-}
