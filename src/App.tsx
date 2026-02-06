@@ -9,6 +9,7 @@ import i18n from './i18n';
 import { setNumberFormatLocale, setDateFormatLocale } from './i18n/format';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
+import SplashScreen from './components/SplashScreen/SplashScreen';
 import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
@@ -74,6 +75,10 @@ function App() {
 
   // Listen for loading progress events from backend
   useLoadingProgress();
+
+  // Splash screen state - visible until config loads, then fades out and unmounts
+  const [showSplash, setShowSplash] = useState(true);
+  const [splashMounted, setSplashMounted] = useState(true);
 
   // Track whether we're hovering with a valid DMP file
   const [isDraggingDmp, setIsDraggingDmp] = useState(false);
@@ -214,6 +219,19 @@ function App() {
     // Load config on startup
     loadConfig();
   }, [loadConfig]);
+
+  // Hide splash once config has loaded (or immediately if splash is disabled)
+  useEffect(() => {
+    if (config != null) {
+      if (!config.general.splash_screen) {
+        // Splash disabled: skip animation, unmount immediately
+        setShowSplash(false);
+        setSplashMounted(false);
+      } else {
+        setShowSplash(false);
+      }
+    }
+  }, [config]);
 
   // Sync i18n language with config locale setting
   useEffect(() => {
@@ -369,6 +387,14 @@ function App() {
 
   return (
     <div className="h-full bg-background text-text-primary flex flex-col relative">
+      {/* Splash screen overlay */}
+      {splashMounted && (
+        <SplashScreen
+          visible={showSplash}
+          onTransitionEnd={() => setSplashMounted(false)}
+        />
+      )}
+
       {/* Drop indicator overlay */}
       {isDraggingDmp && (
         <div

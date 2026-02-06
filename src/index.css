@@ -528,3 +528,18 @@ tr[data-selected="true"]:hover {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* Splash screen loading dots */
+@keyframes splash-pulse {
+  0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+.splash-dot {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--cc-accent);
+  animation: splash-pulse 1.2s ease-in-out infinite;
+}

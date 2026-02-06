@@ -120,6 +120,15 @@ export function GeneralSettings({
     }
   };
 
+  const handleSplashScreenToggle = (checked: boolean) => {
+    onChange({
+      general: {
+        ...config.general,
+        splash_screen: checked,
+      },
+    });
+  };
+
   const handleShortcutFeedbackChange = (value: string) => {
     onChange({
       general: {
@@ -356,6 +365,24 @@ export function GeneralSettings({
             className="w-40"
             aria-label={t('settings.general.shortcutFeedback.aria')}
             data-testid="select-shortcut-feedback"
+          />
+        </SettingRow>
+      </SettingsSection>
+
+      <SettingsSection title={t('settings.general.sections.startup')} data-testid="section-startup">
+        <SettingRow
+          label={t('settings.general.splashScreen.label')}
+          helpText={t('settings.general.splashScreen.help')}
+          isChanged={isFieldChanged(changedFields, 'general.splash_screen')}
+          onReset={() => onChange({ general: { ...config.general, splash_screen: defaultConfig.general.splash_screen } })}
+          isDefault={config.general.splash_screen === defaultConfig.general.splash_screen}
+          data-testid="setting-splash-screen"
+        >
+          <Toggle
+            checked={config.general.splash_screen}
+            onChange={handleSplashScreenToggle}
+            aria-label={t('settings.general.splashScreen.aria')}
+            data-testid="toggle-splash-screen"
           />
         </SettingRow>
       </SettingsSection>

@@ -11,14 +11,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
 | Import/Export | 13 | 19 | 68% |
-| UI & Polish | 13 | 17 | 76% |
+| UI & Polish | 14 | 17 | 82% |
 | Data & Editing | 5 | 5 | 100% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
 | Performance & Stability | 8 | 9 | 89% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **51** | **64** | **80%** |
+| **Total** | **52** | **64** | **81%** |
 
 ---
 
@@ -98,7 +98,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Automatic Reference Shot Alignment Settings | ❌ | Configure auto-alignment behavior in Settings |
 | Fix Undo Stack Section Modification Details | ✅ | Only shows changed fields; includes closure adjustment weight |
 | Fix Section Hyperlink Highlighting Not Clearing | ✅ | Highlight persists after navigating away from section link |
-| Splash Screen | ❌ | |
+| Splash Screen | ✅ | React overlay with branding; opt-in via Settings > General > Startup |
 | About Dialog | ✅ | AlertDialog in Settings footer |
 | Keyboard Shortcuts Overlay | ❌ | Help overlay showing all shortcuts |
 | Bug Reporter Dialog | ✅ | Debug log dialog with ring buffer, level filtering, colored output |
@@ -106,7 +106,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Add Comment Tool | ❌ | Text annotations on stations/map |
 | Use Best Available Tile Resolution | ✅ | ArcGIS tilemap API + parent tile fallback with upscaling |
 
-**Subtotals**: ✅ 13 done, ❌ 4 not started
+**Subtotals**: ✅ 14 done, ❌ 3 not started
 
 ### Data & Editing (4/5 done)
 
@@ -185,16 +185,16 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
 | Import/Export | 19 | 13 | 0 | 6 |
-| UI & Polish | 17 | 13 | 0 | 4 |
+| UI & Polish | 17 | 14 | 0 | 3 |
 | Data & Editing | 5 | 5 | 0 | 0 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
 | Performance & Stability | 9 | 8 | 0 | 1 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **64** | **51** | **0** | **13** |
+| **Total** | **64** | **52** | **0** | **12** |
 
-**Overall Progress**: 51 done = ~80% complete
+**Overall Progress**: 52 done = ~81% complete
 
 ---
 
@@ -261,5 +261,5 @@ Wrap each major panel (map, sections, detail, data table) with its own error bou
 - ✅ Virtual scrolling via @tanstack/react-virtual
 - ✅ Auto-save with debounced 2-second timer and status bar indicator
 - ✅ About dialog in Settings footer
-- ❌ No Splash screen
+- ✅ Splash screen with branding (opt-in via settings)
 - ✅ Bug/debug log dialog with in-memory ring buffer

@@ -84,7 +84,8 @@
         "saving": "Saving",
         "recentProjects": "Recent Projects",
         "undoHistory": "Undo History",
-        "feedback": "Feedback"
+        "feedback": "Feedback",
+        "startup": "Startup"
       },
       "language": {
         "label": "Language / Locale",
@@ -151,6 +152,11 @@
           "nonObvious": "Non-obvious only",
           "all": "All"
         }
+      },
+      "splashScreen": {
+        "label": "Splash screen",
+        "help": "Show branding splash screen during startup",
+        "aria": "Splash screen on startup"
       },
       "validation": {
         "autoSaveInterval": "Auto-save interval must be between 10 and 3600 seconds",
