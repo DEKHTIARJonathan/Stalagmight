@@ -11,14 +11,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
 | Import/Export | 13 | 19 | 68% |
-| UI & Polish | 12 | 17 | 71% |
+| UI & Polish | 13 | 17 | 76% |
 | Data & Editing | 5 | 5 | 100% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
 | Performance & Stability | 8 | 9 | 89% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **50** | **64** | **78%** |
+| **Total** | **51** | **64** | **80%** |
 
 ---
 
@@ -102,11 +102,11 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | About Dialog | ✅ | AlertDialog in Settings footer |
 | Keyboard Shortcuts Overlay | ❌ | Help overlay showing all shortcuts |
 | Bug Reporter Dialog | ✅ | Debug log dialog with ring buffer, level filtering, colored output |
-| Release Automation | ❌ | |
+| Release Automation | ✅ | |
 | Add Comment Tool | ❌ | Text annotations on stations/map |
 | Use Best Available Tile Resolution | ✅ | ArcGIS tilemap API + parent tile fallback with upscaling |
 
-**Subtotals**: ✅ 12 done, ❌ 5 not started
+**Subtotals**: ✅ 13 done, ❌ 4 not started
 
 ### Data & Editing (4/5 done)
 
@@ -185,16 +185,16 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
 | Import/Export | 19 | 13 | 0 | 6 |
-| UI & Polish | 17 | 12 | 0 | 5 |
+| UI & Polish | 17 | 13 | 0 | 4 |
 | Data & Editing | 5 | 5 | 0 | 0 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
 | Performance & Stability | 9 | 8 | 0 | 1 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **64** | **50** | **0** | **14** |
+| **Total** | **64** | **51** | **0** | **13** |
 
-**Overall Progress**: 50 done = ~78% complete
+**Overall Progress**: 51 done = ~80% complete
 
 ---
 
