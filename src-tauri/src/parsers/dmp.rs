@@ -612,6 +612,7 @@ impl DmpSection {
 // ============================================================================
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod tests {
     use super::*;
     use chrono::Datelike;

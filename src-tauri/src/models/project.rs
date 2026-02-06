@@ -276,7 +276,8 @@ impl Project {
         self.next_section_id += 1;
         self.sections.push(section);
         self.touch();
-        self.sections.last().unwrap()
+        let idx = self.sections.len() - 1;
+        &self.sections[idx]
     }
 
     /// Get a section by ID
@@ -1142,7 +1143,6 @@ impl Project {
 
     /// Calculate path length through shots and merges only (no closures).
     /// Use this when only rigid-group survey path length is needed.
-    #[allow(dead_code)]
     pub(crate) fn calculate_merge_only_path_length(&self, station_a: StationRef, station_b: StationRef) -> f64 {
         self.calculate_path_length_impl(station_a, station_b, false)
     }
@@ -2514,7 +2514,6 @@ impl Project {
     }
 
     // Deferred: create-time distribution algorithms are disabled; retained for potential future use.
-    #[allow(dead_code)]
     fn distribute_closure_error_internal(
         &mut self,
         station_a: StationRef,
@@ -2969,7 +2968,7 @@ impl Project {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn distribute_closure_error(
         &mut self,
         station_a: StationRef,
@@ -3292,8 +3291,8 @@ impl Project {
         // Check transitive merge equivalence using BFS through merge graph.
         // Two stations are "merged" if there's any chain of merges connecting them
         // (i.e., they're in the same merge group).
-        let mut visited = std::collections::HashSet::new();
-        let mut queue = std::collections::VecDeque::new();
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
         visited.insert(a);
         queue.push_back(a);
 
@@ -3727,7 +3726,7 @@ impl Project {
 
         // Mark merged stations - build merge groups (transitive closure)
         // First, build a map of station_ref -> group_id using Union-Find logic
-        let mut station_to_group: std::collections::HashMap<StationRef, usize> = std::collections::HashMap::new();
+        let mut station_to_group: HashMap<StationRef, usize> = HashMap::new();
         let mut groups: Vec<Vec<StationRef>> = Vec::new();
 
         for merge in &self.station_merges {
@@ -3872,8 +3871,8 @@ impl Project {
         // so the metrics displayed correspond to that specific loop closure.
         {
             // Collect direct (non-transitive) closure refs for each station
-            let mut direct_closures: std::collections::HashMap<StationRef, Vec<(u64, StationRef)>> =
-                std::collections::HashMap::new();
+            let mut direct_closures: HashMap<StationRef, Vec<(u64, StationRef)>> =
+                HashMap::new();
             for station in stations.iter() {
                 for cr in &station.closures_with {
                     if !cr.is_transitive {
@@ -4103,7 +4102,7 @@ impl Project {
 
         // Sort longitudes
         let mut sorted = longitudes.to_vec();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
         // Find the largest gap between consecutive longitudes (including wrap-around)
         let mut max_gap = 0.0f64;
@@ -4322,4 +4321,5 @@ impl Project {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::expect_used)]
 mod tests;

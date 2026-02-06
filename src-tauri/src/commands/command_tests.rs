@@ -798,7 +798,7 @@ fn test_save_project_fails_when_output_is_directory() {
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let blocked = dir.path().join("blocked.stalx");
-            std::fs::create_dir_all(&blocked).unwrap();
+            fs::create_dir_all(&blocked).unwrap();
 
             let result = project::save_project(state(&app), Some(blocked.clone()));
             assert_failure_contains(&result, "Failed to finalize save");
@@ -1530,7 +1530,7 @@ fn test_calculate_file_hash_empty() {
 #[test]
 fn test_calculate_file_hash_known_abc() {
     let file = NamedTempFile::new().unwrap();
-    std::fs::write(file.path(), b"abc").unwrap();
+    fs::write(file.path(), b"abc").unwrap();
     let hash = import::calculate_file_hash(file.path().to_path_buf()).unwrap();
     assert_eq!(hash, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
 }
@@ -1538,7 +1538,7 @@ fn test_calculate_file_hash_known_abc() {
 #[test]
 fn test_calculate_file_hash_known_linebreak() {
     let file = NamedTempFile::new().unwrap();
-    std::fs::write(file.path(), b"line1\n").unwrap();
+    fs::write(file.path(), b"line1\n").unwrap();
     let hash = import::calculate_file_hash(file.path().to_path_buf()).unwrap();
     assert_eq!(hash, "cd205f1f8b8ab1bf7da554fd3460b5d377c587eb7fa4f394c3f403af3a787a1b");
 }
@@ -1671,9 +1671,9 @@ fn test_export_json_overwrites_existing_file() {
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("out.json");
-    std::fs::write(&path, "sentinel").unwrap();
+    fs::write(&path, "sentinel").unwrap();
     export::export_json(state(&app), path.clone()).unwrap();
-    let contents = std::fs::read_to_string(&path).unwrap();
+    let contents = fs::read_to_string(&path).unwrap();
     assert!(contents.contains("\"project\""));
     assert!(!contents.contains("sentinel"));
 }
@@ -2192,7 +2192,7 @@ fn test_merge_projects_fails_when_output_exists() {
     let (db_b, _database_b) = TestDb::with_project(&project).unwrap();
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.stalx");
-    std::fs::write(&output_path, b"exists").unwrap();
+    fs::write(&output_path, b"exists").unwrap();
 
     let result = project::merge_projects(
         state(&app),

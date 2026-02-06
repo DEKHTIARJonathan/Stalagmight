@@ -167,6 +167,7 @@ pub fn expand_tilemap_url(provider: &TileProvider, z: u32, y: u32, x: u32) -> Op
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

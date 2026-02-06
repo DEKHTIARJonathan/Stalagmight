@@ -114,7 +114,7 @@ fn test_save_load_multiple_sections() {
     let section1 = SectionData {
         name: Some("Main Passage".to_string()),
         surveyor: Some("John Doe".to_string()),
-        date: chrono::NaiveDate::from_ymd_opt(2024, 6, 15),
+        date: NaiveDate::from_ymd_opt(2024, 6, 15),
         color: "#ff5733".to_string(),
         direction: Some(SurveyDirection::In),
         quality: 1.0,
@@ -149,7 +149,7 @@ fn test_save_load_multiple_sections() {
     let section2 = SectionData {
         name: Some("Side Passage".to_string()),
         surveyor: Some("Jane Smith".to_string()),
-        date: chrono::NaiveDate::from_ymd_opt(2024, 6, 16),
+        date: NaiveDate::from_ymd_opt(2024, 6, 16),
         color: "#33ff57".to_string(),
         direction: Some(SurveyDirection::Out),
         quality: 1.0,
@@ -202,7 +202,7 @@ fn test_save_load_multiple_sections() {
     let s1 = &loaded.sections[0];
     assert_eq!(s1.name, Some("Main Passage".to_string()));
     assert_eq!(s1.surveyor, Some("John Doe".to_string()));
-    assert_eq!(s1.date, chrono::NaiveDate::from_ymd_opt(2024, 6, 15));
+    assert_eq!(s1.date, NaiveDate::from_ymd_opt(2024, 6, 15));
     assert_eq!(s1.color, "#ff5733");
     assert_eq!(s1.direction, SurveyDirection::In);
     assert_eq!(s1.shots.len(), 2);
@@ -1599,7 +1599,7 @@ fn test_list_backups_no_parent_returns_empty() {
 
 #[test]
 fn test_open_for_recovery_nonexistent_file_fails() {
-    let result = Database::open_for_recovery(std::path::Path::new("/nonexistent/db.stalx"));
+    let result = Database::open_for_recovery(Path::new("/nonexistent/db.stalx"));
     assert!(result.is_err());
 }
 
@@ -1678,7 +1678,7 @@ fn test_export_salvageable_from_healthy_db() {
 
 #[test]
 fn test_export_salvageable_nonexistent_file_fails() {
-    let result = Database::export_salvageable(std::path::Path::new("/nonexistent/db.stalx"));
+    let result = Database::export_salvageable(Path::new("/nonexistent/db.stalx"));
     assert!(result.is_err());
 }
 

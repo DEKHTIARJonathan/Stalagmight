@@ -238,6 +238,7 @@ pub(crate) fn get_survey_geometry_impl(
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::core::AppState;

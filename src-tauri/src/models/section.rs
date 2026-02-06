@@ -238,7 +238,8 @@ impl Section {
         let shot = Shot::new(self.next_shot_id, data);
         self.next_shot_id += 1;
         self.shots.push(shot);
-        self.shots.last().unwrap()
+        let idx = self.shots.len() - 1;
+        &self.shots[idx]
     }
 
     /// Insert a shot after a specific shot ID
@@ -355,6 +356,7 @@ impl Section {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::models::ShotData;

@@ -221,6 +221,7 @@ pub fn cleanup_logs(max_size_mb: u32) -> Result<()> {
 }
 
 #[cfg(test)]
+#[expect(clippy::expect_used)]
 mod tests {
     use super::*;
     use std::env;

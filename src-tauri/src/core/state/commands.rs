@@ -1711,8 +1711,10 @@ impl AppState {
                 _ => {}
             }
 
-            // Get split data (safe to unwrap after pre-checks)
-            let (pos, shots_before, shots_after) = section.split_shots_at(shot_id).unwrap();
+            // Get split data (safe after pre-checks above)
+            let Some((pos, shots_before, shots_after)) = section.split_shots_at(shot_id) else {
+                return CommandResult::failure(format!("Failed to split at shot {shot_id}"));
+            };
 
             // Capture deleted shot data for offset calculation
             let deleted_shot_data = section.shots[pos].to_shot_data();
@@ -1726,7 +1728,9 @@ impl AppState {
 
             // Step 3: Modify original section -> section A
             // Truncate in-place to preserve existing Shot IDs and next_shot_id
-            let section_mut = project.get_section_mut(section_id).unwrap();
+            let Some(section_mut) = project.get_section_mut(section_id) else {
+                return CommandResult::failure(format!("Section {section_id} not found"));
+            };
             section_mut.name = Some(name_a);
             section_mut.shots.truncate(pos); // keep shots[0..pos], drop deleted + after
 

@@ -1993,7 +1993,7 @@ impl Database {
                                 .modified()
                                 .ok()
                                 .and_then(|t| {
-                                    let dt: chrono::DateTime<chrono::Utc> = t.into();
+                                    let dt: chrono::DateTime<Utc> = t.into();
                                     Some(dt.to_rfc3339())
                                 })
                                 .unwrap_or_default(),
@@ -2142,4 +2142,5 @@ pub struct ResolvedWarning {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
 mod tests;
