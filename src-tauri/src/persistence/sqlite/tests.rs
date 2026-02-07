@@ -1772,3 +1772,350 @@ fn test_has_project_data_with_project() {
     db.save_project(&project).unwrap();
     assert!(db.has_project_data().unwrap());
 }
+
+// ============================================================================
+// Schema migration tests
+// ============================================================================
+
+#[test]
+fn test_migrate_schema_adds_direction_column() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("migrate_direction.stalx");
+
+    // Create a minimal DB without the direction column
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute_batch(
+        r"
+        CREATE TABLE project (id INTEGER PRIMARY KEY, name TEXT, location TEXT, created_at TEXT, modified_at TEXT, schema_version INTEGER);
+        CREATE TABLE sections (id INTEGER PRIMARY KEY, name TEXT, surveyor TEXT, date TEXT, color TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE shots (id INTEGER PRIMARY KEY, section_id INTEGER NOT NULL, sequence_order INTEGER NOT NULL, azimuth_in REAL, azimuth_out REAL, length REAL, depth_in REAL, depth_out REAL, pitch_in REAL, pitch_out REAL, left_distance REAL, right_distance REAL, up_distance REAL, down_distance REAL, comment TEXT, is_virtual INTEGER DEFAULT 0, marker_index INTEGER, temperature REAL);
+        CREATE TABLE station_merges (id INTEGER PRIMARY KEY, station_a_section INTEGER, station_a_index INTEGER, station_b_section INTEGER, station_b_index INTEGER, merged_at TEXT);
+        CREATE TABLE zero_datums (id INTEGER PRIMARY KEY, section_id INTEGER, station_index INTEGER, latitude REAL, longitude REAL, depth_reference REAL);
+        CREATE TABLE section_offsets (section_id INTEGER PRIMARY KEY, offset_x REAL, offset_y REAL);
+        CREATE TABLE loop_closures (id INTEGER PRIMARY KEY, station_a_section INTEGER, station_a_index INTEGER, station_b_section INTEGER, station_b_index INTEGER, path_length REAL, misclosure_distance REAL, error_percentage REAL, horizontal_misclosure REAL, vertical_misclosure REAL);
+        INSERT INTO project VALUES (1, 'Test', NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 1);
+        INSERT INTO sections VALUES (0, 'Sec1', NULL, NULL, '#ff0000', '2024-01-01T00:00:00Z');
+        ",
+    ).unwrap();
+    drop(conn);
+
+    // Open with Database::open_existing which runs migrations
+    let db = Database::open_existing(&db_path).unwrap();
+    let project = db.load_project().unwrap();
+    assert_eq!(project.sections.len(), 1);
+    // Direction should default to 'in' after migration
+    assert_eq!(project.sections[0].direction.to_string(), "in");
+}
+
+#[test]
+fn test_migrate_schema_adds_quality_column() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("migrate_quality.stalx");
+
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute_batch(
+        r"
+        CREATE TABLE project (id INTEGER PRIMARY KEY, name TEXT, location TEXT, created_at TEXT, modified_at TEXT, schema_version INTEGER);
+        CREATE TABLE sections (id INTEGER PRIMARY KEY, name TEXT, surveyor TEXT, date TEXT, color TEXT NOT NULL, direction TEXT DEFAULT 'in', created_at TEXT NOT NULL);
+        CREATE TABLE shots (id INTEGER PRIMARY KEY, section_id INTEGER NOT NULL, sequence_order INTEGER NOT NULL, azimuth_in REAL, azimuth_out REAL, length REAL, depth_in REAL, depth_out REAL, pitch_in REAL, pitch_out REAL, left_distance REAL, right_distance REAL, up_distance REAL, down_distance REAL, comment TEXT, is_virtual INTEGER DEFAULT 0, marker_index INTEGER, temperature REAL);
+        CREATE TABLE station_merges (id INTEGER PRIMARY KEY, station_a_section INTEGER, station_a_index INTEGER, station_b_section INTEGER, station_b_index INTEGER, merged_at TEXT);
+        CREATE TABLE zero_datums (id INTEGER PRIMARY KEY, section_id INTEGER, station_index INTEGER, latitude REAL, longitude REAL, depth_reference REAL);
+        CREATE TABLE section_offsets (section_id INTEGER PRIMARY KEY, offset_x REAL, offset_y REAL);
+        CREATE TABLE loop_closures (id INTEGER PRIMARY KEY, station_a_section INTEGER, station_a_index INTEGER, station_b_section INTEGER, station_b_index INTEGER, path_length REAL, misclosure_distance REAL, error_percentage REAL, horizontal_misclosure REAL, vertical_misclosure REAL);
+        INSERT INTO project VALUES (1, 'QualityTest', NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 1);
+        INSERT INTO sections VALUES (0, 'Sec1', NULL, NULL, '#00ff00', 'out', '2024-01-01T00:00:00Z');
+        ",
+    ).unwrap();
+    drop(conn);
+
+    let db = Database::open_existing(&db_path).unwrap();
+    let project = db.load_project().unwrap();
+    // Quality should default to 1.0 after migration
+    assert!((project.sections[0].quality - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn test_migrate_schema_adds_closure_columns() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("migrate_closure.stalx");
+
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute_batch(
+        r"
+        CREATE TABLE project (id INTEGER PRIMARY KEY, name TEXT, location TEXT, created_at TEXT, modified_at TEXT, schema_version INTEGER);
+        CREATE TABLE sections (id INTEGER PRIMARY KEY, name TEXT, surveyor TEXT, date TEXT, color TEXT NOT NULL, direction TEXT DEFAULT 'in', quality REAL DEFAULT 1.0, created_at TEXT NOT NULL);
+        CREATE TABLE shots (id INTEGER PRIMARY KEY, section_id INTEGER NOT NULL, sequence_order INTEGER NOT NULL, azimuth_in REAL, azimuth_out REAL, length REAL, depth_in REAL, depth_out REAL, pitch_in REAL, pitch_out REAL, left_distance REAL, right_distance REAL, up_distance REAL, down_distance REAL, comment TEXT, is_virtual INTEGER DEFAULT 0, marker_index INTEGER, temperature REAL);
+        CREATE TABLE station_merges (id INTEGER PRIMARY KEY, station_a_section INTEGER, station_a_index INTEGER, station_b_section INTEGER, station_b_index INTEGER, merged_at TEXT);
+        CREATE TABLE zero_datums (id INTEGER PRIMARY KEY, section_id INTEGER, station_index INTEGER, latitude REAL, longitude REAL, depth_reference REAL);
+        CREATE TABLE section_offsets (section_id INTEGER PRIMARY KEY, offset_x REAL, offset_y REAL);
+        CREATE TABLE loop_closures (id INTEGER PRIMARY KEY, station_a_section INTEGER, station_a_index INTEGER, station_b_section INTEGER, station_b_index INTEGER, path_length REAL, misclosure_distance REAL, error_percentage REAL, horizontal_misclosure REAL, vertical_misclosure REAL);
+        INSERT INTO project VALUES (1, 'ClosureTest', NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 1);
+        INSERT INTO sections VALUES (0, 'Sec1', NULL, NULL, '#ff0000', 'in', 1.0, '2024-01-01T00:00:00Z');
+        INSERT INTO loop_closures VALUES (1, 0, 0, 0, 1, 100.0, 0.5, 0.5, 0.3, 0.2);
+        ",
+    ).unwrap();
+    drop(conn);
+
+    let db = Database::open_existing(&db_path).unwrap();
+    // Verify migration added closure_id, strategy, and is_aligned columns
+    let has_closure_id: bool = db.conn
+        .query_row("SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='closure_id'", [], |row| row.get::<_, i64>(0))
+        .map(|c| c > 0).unwrap();
+    let has_strategy: bool = db.conn
+        .query_row("SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='strategy'", [], |row| row.get::<_, i64>(0))
+        .map(|c| c > 0).unwrap();
+    let has_is_aligned: bool = db.conn
+        .query_row("SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='is_aligned'", [], |row| row.get::<_, i64>(0))
+        .map(|c| c > 0).unwrap();
+
+    assert!(has_closure_id, "migration should add closure_id column");
+    assert!(has_strategy, "migration should add strategy column");
+    assert!(has_is_aligned, "migration should add is_aligned column");
+}
+
+#[test]
+fn test_migrate_schema_idempotent() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("idempotent.stalx");
+
+    // Create and save a full project
+    let mut db = Database::open(&db_path).unwrap();
+    let project = Project::new("Idempotent".to_string(), None);
+    db.save_project(&project).unwrap();
+    drop(db);
+
+    // Open it twice — migration runs both times, second should be a no-op
+    let db1 = Database::open_existing(&db_path).unwrap();
+    let p1 = db1.load_project().unwrap();
+    drop(db1);
+
+    let db2 = Database::open_existing(&db_path).unwrap();
+    let p2 = db2.load_project().unwrap();
+    drop(db2);
+
+    assert_eq!(p1.name, p2.name);
+    assert_eq!(p1.sections.len(), p2.sections.len());
+}
+
+// ============================================================================
+// Special float values in save/load round-trips
+// ============================================================================
+
+#[test]
+fn test_save_load_round_trip_extreme_coordinates() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("extreme_coords.stalx");
+
+    let mut db = Database::open(&db_path).unwrap();
+    let mut project = Project::new("Extreme".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("Deep".to_string()),
+        color: "#ff0000".to_string(),
+        shots: vec![ShotData {
+            azimuth_in: 359.9,
+            azimuth_out: 0.1,
+            length: 999.99,
+            depth_in: 0.0,
+            depth_out: 999.99,
+            pitch_in: Some(-89.9),
+            pitch_out: Some(89.9),
+            left: Some(0.01),
+            right: Some(999.0),
+            up: Some(0.0),
+            down: Some(0.0),
+            temperature: Some(-2.0),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    db.save_project(&project).unwrap();
+    let loaded = db.load_project().unwrap();
+
+    let shot = &loaded.sections[0].shots[0];
+    assert!((shot.azimuth_in - 359.9).abs() < 1e-6);
+    assert!((shot.azimuth_out - 0.1).abs() < 1e-6);
+    assert!((shot.length - 999.99).abs() < 1e-6);
+    assert!((shot.depth_out - 999.99).abs() < 1e-6);
+    assert!((shot.pitch_in.unwrap() - (-89.9)).abs() < 1e-6);
+    assert!((shot.temperature.unwrap() - (-2.0)).abs() < 1e-6);
+}
+
+#[test]
+fn test_save_load_round_trip_zero_values() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("zeros.stalx");
+
+    let mut db = Database::open(&db_path).unwrap();
+    let mut project = Project::new("Zeros".to_string(), None);
+    project.add_section(SectionData {
+        name: None, // no name
+        color: "#000000".to_string(),
+        shots: vec![ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 0.0,
+            length: 0.01, // smallest valid length
+            depth_in: 0.0,
+            depth_out: 0.0,
+            pitch_in: None,
+            pitch_out: None,
+            left: None,
+            right: None,
+            up: None,
+            down: None,
+            comment: None,
+            is_virtual: false,
+            marker_index: None,
+            temperature: None,
+        }],
+        ..Default::default()
+    });
+
+    db.save_project(&project).unwrap();
+    let loaded = db.load_project().unwrap();
+
+    assert!(loaded.sections[0].name.is_none());
+    let shot = &loaded.sections[0].shots[0];
+    assert!(shot.pitch_in.is_none());
+    assert!(shot.left.is_none());
+    assert!(shot.comment.is_none());
+    assert!(shot.temperature.is_none());
+}
+
+#[test]
+fn test_save_load_round_trip_all_metadata() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("all_meta.stalx");
+
+    let mut db = Database::open(&db_path).unwrap();
+    let mut project = Project::new("FullMeta".to_string(), Some("Underwater Cave".to_string()));
+    project.add_section(SectionData {
+        name: Some("Section A".to_string()),
+        surveyor: Some("Diver One".to_string()),
+        date: Some(NaiveDate::from_ymd_opt(2025, 12, 25).unwrap()),
+        color: "#abcdef".to_string(),
+        direction: Some(SurveyDirection::Out),
+        quality: 0.75,
+        shots: vec![ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 270.0,
+            length: 5.0,
+            depth_in: 10.0,
+            depth_out: 12.0,
+            comment: Some("Test shot".to_string()),
+            is_virtual: true,
+            marker_index: Some(42),
+            ..Default::default()
+        }],
+    });
+
+    // Add station merge, zero datum, section offset, station offset
+    let section_id = project.sections[0].id;
+    project.add_section(SectionData {
+        name: Some("Section B".to_string()),
+        color: "#fedcba".to_string(),
+        shots: vec![ShotData {
+            azimuth_in: 45.0,
+            azimuth_out: 225.0,
+            length: 3.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let section_b_id = project.sections[1].id;
+
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(section_id, 1),
+        station_b: StationRef::new(section_b_id, 0),
+        merged_at: Utc::now(),
+    });
+
+    let gps = GpsCoordinates::new(48.8566, 2.3522, 5.0).unwrap();
+    project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
+
+    // set_zero_datum creates section offsets for all connected sections (A and B are merged),
+    // so we don't add a manual section_offset — we just verify the ones set_zero_datum created.
+    project.station_offsets.insert(StationRef::new(section_id, 1), (1.0, 2.0, 3.0));
+    project.imported_file_hashes.push("abc123def456".to_string());
+    project.next_closure_id = 42;
+
+    db.save_project(&project).unwrap();
+    let loaded = db.load_project().unwrap();
+
+    assert_eq!(loaded.name, "FullMeta");
+    assert_eq!(loaded.location.as_deref(), Some("Underwater Cave"));
+    assert_eq!(loaded.sections.len(), 2);
+    assert_eq!(loaded.sections[0].surveyor.as_deref(), Some("Diver One"));
+    assert_eq!(loaded.sections[0].direction.to_string(), "out");
+    assert!((loaded.sections[0].quality - 0.75).abs() < 1e-6);
+    assert!(loaded.sections[0].shots[0].is_virtual);
+    assert_eq!(loaded.sections[0].shots[0].marker_index, Some(42));
+    assert_eq!(loaded.station_merges.len(), 1);
+    assert_eq!(loaded.zero_datums.len(), 1);
+    assert!((loaded.zero_datums[0].gps.latitude - 48.8566).abs() < 1e-6);
+    // Both sections get offsets from set_zero_datum (they're merged)
+    assert_eq!(loaded.section_offsets.len(), 2);
+    assert_eq!(loaded.station_offsets.len(), 1);
+    assert_eq!(loaded.imported_file_hashes.len(), 1);
+    assert_eq!(loaded.imported_file_hashes[0], "abc123def456");
+    assert_eq!(loaded.next_closure_id, 42);
+}
+
+#[test]
+fn test_save_load_round_trip_loop_closures_with_strategy() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("closure_strategy.stalx");
+
+    let mut db = Database::open(&db_path).unwrap();
+    let mut project = Project::new("Closures".to_string(), None);
+    project.add_section(SectionData {
+        color: "#ff0000".to_string(),
+        shots: vec![ShotData { length: 5.0, ..Default::default() }],
+        ..Default::default()
+    });
+    let sec_id = project.sections[0].id;
+
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(sec_id, 0),
+        station_b: StationRef::new(sec_id, 1),
+        path_length: 50.0,
+        misclosure_distance: 0.1,
+        error_percentage: 0.2,
+        horizontal_misclosure: 0.05,
+        vertical_misclosure: 0.08,
+        strategy: ClosureStrategy::Move,
+        is_aligned: true,
+    });
+    project.loop_closures.push(LoopClosure {
+        id: 2,
+        station_a: StationRef::new(sec_id, 0),
+        station_b: StationRef::new(sec_id, 1),
+        path_length: 100.0,
+        misclosure_distance: 0.5,
+        error_percentage: 0.5,
+        horizontal_misclosure: 0.3,
+        vertical_misclosure: 0.2,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+    project.next_closure_id = 3;
+
+    db.save_project(&project).unwrap();
+    let loaded = db.load_project().unwrap();
+
+    assert_eq!(loaded.loop_closures.len(), 2);
+    let lc1 = &loaded.loop_closures[0];
+    assert_eq!(lc1.id, 1);
+    assert_eq!(lc1.strategy, ClosureStrategy::Move);
+    assert!(lc1.is_aligned);
+    assert!((lc1.path_length - 50.0).abs() < 1e-6);
+
+    let lc2 = &loaded.loop_closures[1];
+    assert_eq!(lc2.id, 2);
+    assert_eq!(lc2.strategy, ClosureStrategy::Batch);
+    assert!(!lc2.is_aligned);
+    assert_eq!(loaded.next_closure_id, 3);
+}

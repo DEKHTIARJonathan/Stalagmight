@@ -425,4 +425,122 @@ mod tests {
         assert_eq!(shot_display_position(FEATURE_ID_STRIDE + 9, 1), 10);  // section 1, seq 9 → pos 10
         assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 5 + 2, 5), 3);   // section 5, seq 2 → pos 3
     }
+
+    // ========================================================================
+    // Geometry edge cases
+    // ========================================================================
+
+    #[test]
+    fn vertical_shot_has_zero_horizontal_length() {
+        // Pure vertical shot: dz == length → horizontal = 0
+        let shot = Shot::new(1, ShotData {
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 10.0, // dz == length
+            azimuth_in: 45.0,
+            azimuth_out: 225.0,
+            ..Default::default()
+        });
+        assert_eq!(shot.horizontal_length(), 0.0);
+    }
+
+    #[test]
+    fn nearly_vertical_shot_small_horizontal_length() {
+        // dz almost equals length — should produce small positive horizontal
+        let shot = Shot::new(1, ShotData {
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 9.99,
+            azimuth_in: 0.0,
+            azimuth_out: 0.0,
+            ..Default::default()
+        });
+        let h = shot.horizontal_length();
+        assert!(h > 0.0 && h < 0.5, "nearly vertical shot h={h}");
+    }
+
+    #[test]
+    fn horizontal_length_with_dz_greater_than_length() {
+        // Invalid: |dz| > length — should return 0.0 (not NaN/panic)
+        let h = horizontal_length_from_slope(5.0, 10.0);
+        assert_eq!(h, 0.0);
+    }
+
+    #[test]
+    fn horizontal_length_zero_length_zero_dz() {
+        assert_eq!(horizontal_length_from_slope(0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn average_azimuth_same_in_out() {
+        let shot = Shot::new(1, ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 1.0,
+            ..Default::default()
+        });
+        assert!((shot.average_azimuth() - 90.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn average_azimuth_wraps_around_north() {
+        // 350° and 10° should average to 0° (or 360°)
+        let shot = Shot::new(1, ShotData {
+            azimuth_in: 350.0,
+            azimuth_out: 10.0,
+            length: 1.0,
+            ..Default::default()
+        });
+        let avg = shot.average_azimuth();
+        assert!(avg < 1.0 || avg > 359.0,
+            "350-10 wrap should give ~0/360, got {avg}");
+    }
+
+    #[test]
+    fn average_azimuth_wraps_around_south() {
+        // 170° and 190° should average to 180°
+        let shot = Shot::new(1, ShotData {
+            azimuth_in: 170.0,
+            azimuth_out: 190.0,
+            length: 1.0,
+            ..Default::default()
+        });
+        assert!((shot.average_azimuth() - 180.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn average_azimuth_opposite_direction() {
+        // in=0, out=180 → diff = (180+540)%360-180 = -180 → avg = (0 + -90 + 360)%360 = 270
+        let shot = Shot::new(1, ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 180.0,
+            length: 1.0,
+            ..Default::default()
+        });
+        assert!((shot.average_azimuth() - 270.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn slope_length_from_components_pythagorean() {
+        let s = slope_length_from_components(3.0, 4.0);
+        assert!((s - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pitch_from_components_45_degrees() {
+        let p = pitch_from_components(1.0, 1.0);
+        assert!((p - 45.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pitch_from_components_pure_vertical() {
+        let p = pitch_from_components(0.0, 1.0);
+        assert!((p - 90.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pitch_from_components_pure_horizontal() {
+        let p = pitch_from_components(1.0, 0.0);
+        assert!(p.abs() < 1e-6);
+    }
 }
