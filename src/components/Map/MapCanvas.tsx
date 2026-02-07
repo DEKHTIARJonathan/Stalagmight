@@ -388,7 +388,7 @@ export default function MapCanvas() {
   const checkSnapToStation = useCallback(
     (screenX: number, screenY: number) => {
       if (!map.current || !config) {
-        setSnappedStation(null);
+        if (snappedStation) setSnappedStation(null);
         return;
       }
 
@@ -401,7 +401,7 @@ export default function MapCanvas() {
         (activeTool === 'measure' && snapConfig.enabled_measure);
 
       if (!shouldSnap) {
-        setSnappedStation(null);
+        if (snappedStation) setSnappedStation(null);
         return;
       }
 

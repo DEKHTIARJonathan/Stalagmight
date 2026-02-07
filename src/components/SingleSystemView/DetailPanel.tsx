@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type Selection } from '../../store/uiStore';
+import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
@@ -15,7 +16,9 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 
 export default function DetailPanel() {
   const { t } = useTranslation();
-  const { selection, detailPanelTab, setDetailPanelTab, setSelection } = useUIStore();
+  const { selection, detailPanelTab, setDetailPanelTab, setSelection } = useUIStore(
+    useShallow((s) => ({ selection: s.selection, detailPanelTab: s.detailPanelTab, setDetailPanelTab: s.setDetailPanelTab, setSelection: s.setSelection }))
+  );
   const { project, stations, warnings } = useProjectStore();
 
   const unresolvedWarnings = warnings.filter((w) => !w.isResolved);
@@ -305,7 +308,9 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
 function StationDetail({ station }: { station: Station }) {
   const { t } = useTranslation();
   const { project, stations } = useProjectStore();
-  const { openDialog, setSelection, triggerCenterOnStation, announceSelection, setHoveredStation, setHoveredShot, setHoveredSectionId } = useUIStore();
+  const { openDialog, setSelection, triggerCenterOnStation, announceSelection, setHoveredStation, setHoveredShot, setHoveredSectionId } = useUIStore(
+    useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnStation: s.triggerCenterOnStation, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredShot: s.setHoveredShot, setHoveredSectionId: s.setHoveredSectionId }))
+  );
   const precision = useDecimalPrecision();
   const section = project?.sections.find(
     (s) => s.id === station.station_ref.section_id
@@ -552,7 +557,9 @@ function computeInclination(depthIn: number, depthOut: number, length: number): 
 function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
   const { t } = useTranslation();
   const { setShotVirtual } = useProjectStore();
-  const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore();
+  const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore(
+    useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnShot: s.triggerCenterOnShot, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredSectionId: s.setHoveredSectionId }))
+  );
   const precision = useDecimalPrecision();
 
   // Calculate shot index (0-indexed) and positions (1-indexed for display)
@@ -767,7 +774,9 @@ interface SectionDetailProps {
 
 function SectionDetail({ section, stations, totalProjectLength }: SectionDetailProps) {
   const { t } = useTranslation();
-  const { openDialog, setSelection, triggerZoomToSection, announceSelection, setHoveredStation } = useUIStore();
+  const { openDialog, setSelection, triggerZoomToSection, announceSelection, setHoveredStation } = useUIStore(
+    useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerZoomToSection: s.triggerZoomToSection, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation }))
+  );
   const precision = useDecimalPrecision();
 
   // Calculate section statistics
@@ -1108,7 +1117,7 @@ function ClosuresSection({
   onHoverEnd,
 }: ClosuresSectionProps) {
   const { t } = useTranslation();
-  const { openDialog } = useUIStore();
+  const openDialog = useUIStore((s) => s.openDialog);
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
   const contentId = 'closures-section-content';

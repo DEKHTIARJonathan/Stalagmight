@@ -4,6 +4,7 @@ import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { useShallow } from 'zustand/react/shallow';
 import { ResizablePanel } from '../common/Panel';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 import { OfflineIndicator } from '../common/OfflineIndicator';
@@ -52,7 +53,18 @@ export default function SingleSystemView() {
     setDetailPanelWidth,
     setDataTableHeight,
     savePanelSizes,
-  } = useUIStore();
+  } = useUIStore(useShallow((s) => ({
+    sectionsPanelOpen: s.sectionsPanelOpen,
+    sectionsPanelWidth: s.sectionsPanelWidth,
+    detailPanelOpen: s.detailPanelOpen,
+    detailPanelWidth: s.detailPanelWidth,
+    dataTableOpen: s.dataTableOpen,
+    dataTableHeight: s.dataTableHeight,
+    setSectionsPanelWidth: s.setSectionsPanelWidth,
+    setDetailPanelWidth: s.setDetailPanelWidth,
+    setDataTableHeight: s.setDataTableHeight,
+    savePanelSizes: s.savePanelSizes,
+  })));
 
   if (!project) {
     return (

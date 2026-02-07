@@ -6,6 +6,25 @@ type RelativeUnit = 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'y
 let numberFormatLocale = 'locale';
 let dateFormatLocale = 'locale';
 
+// Cache for Intl.NumberFormat instances — construction is expensive (~0.05ms each in WebKit).
+// With hundreds of sections rendering per frame, this adds up to 20-40ms.
+const numberFormatCache = new Map<string, Intl.NumberFormat>();
+
+function getCachedNumberFormat(locale: string, options?: Intl.NumberFormatOptions): Intl.NumberFormat {
+  const key = options ? `${locale}|${JSON.stringify(options)}` : locale;
+  let fmt = numberFormatCache.get(key);
+  if (!fmt) {
+    fmt = new Intl.NumberFormat(locale, options);
+    numberFormatCache.set(key, fmt);
+    // Evict if cache grows too large (unlikely in practice)
+    if (numberFormatCache.size > 100) {
+      const first = numberFormatCache.keys().next().value;
+      if (first !== undefined) numberFormatCache.delete(first);
+    }
+  }
+  return fmt;
+}
+
 export function setNumberFormatLocale(locale: string): void {
   numberFormatLocale = locale;
 }
@@ -41,7 +60,7 @@ export function formatNumber(
   options?: Intl.NumberFormatOptions
 ): string {
   const resolvedLocale = getNumberLocale(locale);
-  return new Intl.NumberFormat(resolvedLocale, options).format(value);
+  return getCachedNumberFormat(resolvedLocale, options).format(value);
 }
 
 export function formatFixed(
@@ -51,7 +70,7 @@ export function formatFixed(
 ): string {
   const resolvedLocale = getNumberLocale(locale);
   const clampedPrecision = Math.max(0, Math.min(6, Math.floor(precision)));
-  return new Intl.NumberFormat(resolvedLocale, {
+  return getCachedNumberFormat(resolvedLocale, {
     minimumFractionDigits: clampedPrecision,
     maximumFractionDigits: clampedPrecision,
   }).format(value);
@@ -64,7 +83,7 @@ export function formatPercent(
 ): string {
   const resolvedLocale = getNumberLocale(locale);
   const clampedPrecision = Math.max(0, Math.min(6, Math.floor(precision)));
-  const formatted = new Intl.NumberFormat(resolvedLocale, {
+  const formatted = getCachedNumberFormat(resolvedLocale, {
     minimumFractionDigits: clampedPrecision,
     maximumFractionDigits: clampedPrecision,
   }).format(value);

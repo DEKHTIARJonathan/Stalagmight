@@ -15,6 +15,89 @@ interface MapDevStatsProps {
   map: maplibregl.Map;
 }
 
+interface RenderProfile {
+  drawCalls: number;
+  triangles: number;
+  lines: number;
+  points: number;
+  renderMs: number;
+  layers: { total: number; visible: number; byType: Record<string, number> };
+  sources: Array<{ name: string; features: number }>;
+}
+
+/**
+ * Instruments WebGL draw calls by wrapping drawArrays/drawElements on the context.
+ * Returns a controller to read per-frame counters and clean up.
+ */
+function createDrawCallCounter(canvas: HTMLCanvasElement) {
+  const gl = (canvas.getContext('webgl2') || canvas.getContext('webgl')) as WebGL2RenderingContext | null;
+  if (!gl) return null;
+
+  let drawCalls = 0;
+  let triangles = 0;
+  let lines = 0;
+  let points = 0;
+
+  // Save originals
+  const origDrawArrays = gl.drawArrays.bind(gl);
+  const origDrawElements = gl.drawElements.bind(gl);
+  const origDrawArraysInstanced = gl.drawArraysInstanced?.bind(gl);
+  const origDrawElementsInstanced = gl.drawElementsInstanced?.bind(gl);
+
+  const countPrimitives = (mode: number, count: number, instances = 1) => {
+    drawCalls++;
+    const total = count * instances;
+    if (mode === gl.TRIANGLES) triangles += total / 3;
+    else if (mode === gl.TRIANGLE_STRIP || mode === gl.TRIANGLE_FAN) triangles += Math.max(0, total - 2);
+    else if (mode === gl.LINES) lines += total / 2;
+    else if (mode === gl.LINE_STRIP) lines += Math.max(0, total - 1);
+    else if (mode === gl.POINTS) points += total;
+  };
+
+  gl.drawArrays = function (mode: number, first: number, count: number) {
+    countPrimitives(mode, count);
+    return origDrawArrays(mode, first, count);
+  };
+
+  gl.drawElements = function (mode: number, count: number, type: number, offset: number) {
+    countPrimitives(mode, count);
+    return origDrawElements(mode, count, type, offset);
+  };
+
+  if (origDrawArraysInstanced) {
+    gl.drawArraysInstanced = function (mode: number, first: number, count: number, instanceCount: number) {
+      countPrimitives(mode, count, instanceCount);
+      return origDrawArraysInstanced(mode, first, count, instanceCount);
+    };
+  }
+
+  if (origDrawElementsInstanced) {
+    gl.drawElementsInstanced = function (mode: number, count: number, type: number, offset: number, instanceCount: number) {
+      countPrimitives(mode, count, instanceCount);
+      return origDrawElementsInstanced(mode, count, type, offset, instanceCount);
+    };
+  }
+
+  return {
+    /** Read and reset counters (call once per frame) */
+    flush: () => {
+      const result = { drawCalls, triangles: Math.round(triangles), lines: Math.round(lines), points: Math.round(points) };
+      drawCalls = 0;
+      triangles = 0;
+      lines = 0;
+      points = 0;
+      return result;
+    },
+    /** Restore original WebGL methods */
+    dispose: () => {
+      gl.drawArrays = origDrawArrays;
+      gl.drawElements = origDrawElements;
+      if (origDrawArraysInstanced) gl.drawArraysInstanced = origDrawArraysInstanced;
+      if (origDrawElementsInstanced) gl.drawElementsInstanced = origDrawElementsInstanced;
+    },
+  };
+}
+
 interface WebGLInfo {
   renderer: string;
   vendor: string;
@@ -47,7 +130,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   const [frameTime, setFrameTime] = useState(0);
   const frameTimesRef = useRef<number[]>([]);
   const lastFrameTimeRef = useRef(performance.now());
-  const animationFrameRef = useRef<number | null>(null);
+
 
   // Cache and network stats
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
@@ -80,6 +163,105 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   const zoomStartLevelRef = useRef<number | null>(null);
   const zoomFrameTimesRef = useRef<number[]>([]);
   const worstFrameRef = useRef<number>(0);
+
+  // Render profiling
+  const [renderProfile, setRenderProfile] = useState<RenderProfile | null>(null);
+  const drawCounterRef = useRef<ReturnType<typeof createDrawCallCounter>>(null);
+  // Accumulate draw stats across sub-frames; flush to React state periodically
+  const pendingDrawsRef = useRef({ drawCalls: 0, triangles: 0, lines: 0, points: 0 });
+
+  // Install WebGL draw call counter on mount
+  // NOTE: Disabled by default — wrapping WebGL draw calls can deopt the GPU pipeline
+  // in some WebView implementations. Enable only when actively profiling draw calls.
+  useEffect(() => {
+    // const counter = createDrawCallCounter(map.getCanvas());
+    // drawCounterRef.current = counter;
+    return () => {
+      drawCounterRef.current?.dispose();
+      drawCounterRef.current = null;
+    };
+  }, [map]);
+
+  // Collect draw calls and render stats; update React state at ~2 Hz to avoid churn
+  // PERF NOTE: querySourceFeatures is expensive (20-40ms) — only run on idle, not on render.
+  // The render event handler only flushes draw call counters (cheap).
+  useEffect(() => {
+    let lastProfileUpdate = 0;
+    const PROFILE_INTERVAL = 500; // ms — match the FPS update cadence
+
+    const handleRender = () => {
+      // Flush per-frame draw call counters (accumulated since last flush)
+      const counter = drawCounterRef.current;
+      if (counter) {
+        const draws = counter.flush();
+        pendingDrawsRef.current = draws; // Overwrite with latest frame's counts
+      }
+    };
+
+    // Collect stats on idle only (NOT on every render — avoids feedback loop)
+    let idleRafId = 0;
+    const scheduleIdleUpdate = () => {
+      cancelAnimationFrame(idleRafId);
+      idleRafId = requestAnimationFrame(() => {
+        const now = performance.now();
+        if (now - lastProfileUpdate < PROFILE_INTERVAL) return;
+        lastProfileUpdate = now;
+
+        const draws = pendingDrawsRef.current;
+
+        // Collect layer stats
+        const style = map.getStyle();
+        const allLayers = style?.layers ?? [];
+        let visible = 0;
+        const byType: Record<string, number> = {};
+        for (const layer of allLayers) {
+          const vis = map.getLayoutProperty(layer.id, 'visibility');
+          if (vis !== 'none') visible++;
+          byType[layer.type] = (byType[layer.type] ?? 0) + 1;
+        }
+
+        // Collect source feature counts — uses cached GeoJSON data length
+        // instead of expensive querySourceFeatures() which takes 20-40ms
+        const sources: Array<{ name: string; features: number }> = [];
+        if (style?.sources) {
+          for (const [name, spec] of Object.entries(style.sources)) {
+            const s = spec as { type: string; data?: { features?: unknown[] } };
+            if (s.type === 'geojson') {
+              // Try to read feature count from the source's internal data
+              // (getSource returns the source object with _data for GeoJSON sources)
+              try {
+                const src = map.getSource(name) as maplibregl.GeoJSONSource | undefined;
+                // GeoJSON sources track their data internally
+                const data = (src as unknown as { _data?: { features?: unknown[] } })?._data;
+                const count = Array.isArray(data?.features) ? data.features.length : 0;
+                sources.push({ name: name.replace('survey-', ''), features: count });
+              } catch {
+                // Source may not be loaded yet
+              }
+            }
+          }
+        }
+
+        setRenderProfile({
+          ...draws,
+          renderMs: frameTimesRef.current.length > 0
+            ? Math.round((frameTimesRef.current.reduce((a, b) => a + b, 0) / frameTimesRef.current.length) * 100) / 100
+            : 0,
+          layers: { total: allLayers.length, visible, byType },
+          sources,
+        });
+      });
+    };
+
+    map.on('render', handleRender);
+    map.on('idle', scheduleIdleUpdate);
+
+    return () => {
+      map.off('render', handleRender);
+      map.off('idle', scheduleIdleUpdate);
+      cancelAnimationFrame(idleRafId);
+    };
+  }, [map]);
 
   // Get WebGL info on mount (cached - these don't change)
   useEffect(() => {
@@ -139,6 +321,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   const lastStateUpdateRef = useRef(performance.now());
   const STATE_UPDATE_INTERVAL = 500; // ms
   const isZoomingRef = useRef(false); // Non-reactive ref for frame loop
+  const animationFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     const measureFrame = () => {
@@ -147,9 +330,11 @@ export function MapDevStats({ map }: MapDevStatsProps) {
       lastFrameTimeRef.current = now;
 
       // Store frame times for averaging
-      frameTimesRef.current.push(delta);
-      if (frameTimesRef.current.length > 60) {
-        frameTimesRef.current.shift();
+      if (delta < 2000) {
+        frameTimesRef.current.push(delta);
+        if (frameTimesRef.current.length > 60) {
+          frameTimesRef.current.shift();
+        }
       }
 
       // Track frame times during zoom
@@ -160,14 +345,15 @@ export function MapDevStats({ map }: MapDevStatsProps) {
         }
       }
 
-
       // Only update React state periodically to avoid re-render every frame
       if (now - lastStateUpdateRef.current >= STATE_UPDATE_INTERVAL) {
         lastStateUpdateRef.current = now;
-        const avgFrameTime =
-          frameTimesRef.current.reduce((a, b) => a + b, 0) / frameTimesRef.current.length;
-        setFrameTime(Math.round(avgFrameTime * 100) / 100);
-        setFps(Math.round(1000 / avgFrameTime));
+        if (frameTimesRef.current.length > 0) {
+          const avgFrameTime =
+            frameTimesRef.current.reduce((a, b) => a + b, 0) / frameTimesRef.current.length;
+          setFrameTime(Math.round(avgFrameTime * 100) / 100);
+          setFps(Math.round(1000 / avgFrameTime));
+        }
       }
 
       animationFrameRef.current = requestAnimationFrame(measureFrame);
@@ -476,6 +662,56 @@ export function MapDevStats({ map }: MapDevStatsProps) {
             <span className={`ml-1 ${worstFrameTime > 50 ? 'text-error' : 'text-warning'}`}>
               {t('map.devStats.worstFrame', { ms: formatNumber(worstFrameTime) })}
             </span>
+          )}
+        </div>
+      )}
+
+      {/* Render pipeline profile */}
+      {renderProfile && (
+        <div className="border-t border-border pt-1 mt-1">
+          <div className="text-text-secondary mb-0.5">Render:</div>
+          <div className="pl-2 text-[10px]">
+            <span className="text-text-secondary opacity-80">Draw calls:</span>{' '}
+            <span className={renderProfile.drawCalls > 100 ? 'text-warning' : 'text-text-primary'}>
+              {formatNumber(renderProfile.drawCalls)}
+            </span>
+            <span className="text-text-secondary opacity-80 ml-2">Render:</span>{' '}
+            <span className={renderProfile.renderMs > 16 ? 'text-error' : renderProfile.renderMs > 8 ? 'text-warning' : 'text-text-primary'}>
+              {formatFixed(renderProfile.renderMs, undefined, 1)}ms
+            </span>
+          </div>
+          <div className="pl-2 text-[10px]">
+            <span className="text-text-secondary opacity-80">Tris:</span>{' '}
+            <span className="text-text-primary">{formatNumber(renderProfile.triangles)}</span>
+            <span className="text-text-secondary opacity-80 ml-2">Lines:</span>{' '}
+            <span className="text-text-primary">{formatNumber(renderProfile.lines)}</span>
+            <span className="text-text-secondary opacity-80 ml-2">Pts:</span>{' '}
+            <span className="text-text-primary">{formatNumber(renderProfile.points)}</span>
+          </div>
+          <div className="pl-2 text-[10px]">
+            <span className="text-text-secondary opacity-80">Layers:</span>{' '}
+            <span className="text-text-primary">
+              {formatNumber(renderProfile.layers.visible)}/{formatNumber(renderProfile.layers.total)}
+            </span>
+            <span className="text-text-secondary opacity-80 ml-2">
+              ({Object.entries(renderProfile.layers.byType)
+                .map(([type, count]) => `${count}${type[0]}`)
+                .join(' ')})
+            </span>
+          </div>
+          {renderProfile.sources.length > 0 && (
+            <div className="pl-2 text-[10px]">
+              <span className="text-text-secondary opacity-80">Features:</span>{' '}
+              <span className="text-text-primary">
+                {formatNumber(renderProfile.sources.reduce((sum, s) => sum + s.features, 0))}
+              </span>
+              <span className="text-text-secondary opacity-80 ml-1">
+                ({renderProfile.sources
+                  .filter((s) => s.features > 0)
+                  .map((s) => `${s.name}:${s.features}`)
+                  .join(' ')})
+              </span>
+            </div>
           )}
         </div>
       )}
