@@ -220,8 +220,11 @@ pub(crate) fn get_tile_fetch_stats_impl(state: &AppState) -> TileFetchStatsRespo
 /// Note: This is a blocking operation with a short timeout. It's designed for
 /// periodic status checks, not high-frequency polling.
 #[tauri::command]
-pub fn get_network_status() -> bool {
-    get_network_status_impl()
+pub async fn get_network_status() -> bool {
+    // Run blocking HTTP check off the main thread
+    tauri::async_runtime::spawn_blocking(get_network_status_impl)
+        .await
+        .unwrap_or(false)
 }
 
 pub(crate) fn get_network_status_impl() -> bool {
