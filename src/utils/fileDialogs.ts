@@ -37,6 +37,24 @@ export function dmpOpenFilters() {
   ];
 }
 
+export const TML_EXTENSIONS = ['tml', 'tmlu'];
+
+export function tmlOpenFilters() {
+  return [
+    { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+}
+
+export function importOpenFilters() {
+  return [
+    { name: 'Survey Files', extensions: [DMP_EXTENSION, ...TML_EXTENSIONS] },
+    { name: 'mNemo DMP', extensions: [DMP_EXTENSION] },
+    { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+}
+
 export function exportSaveFilters(label: string, extension: string) {
   const normalizedExt = extension.startsWith('.') ? extension.slice(1) : extension;
   return [{ name: label, extensions: [normalizedExt] }];

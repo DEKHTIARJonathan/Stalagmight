@@ -34,6 +34,9 @@ use stalagmight_lib::models::{
     ShotUpdates, Station, StationMerge, StationPair, StationRef, SurveyDirection, ZeroDatum,
 };
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
+use stalagmight_lib::parsers::tml::{
+    TmlClosure, TmlFile, TmlGeoCoding, TmlSection, TmlShot, TmlShotType, TmlUnit,
+};
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
 fn export<T: TS + 'static>(out_dir: &Path) {
@@ -107,6 +110,15 @@ fn main() {
     export::<DmpShot>(&out_dir);
     export::<DmpDirection>(&out_dir);
     export::<DmpShotType>(&out_dir);
+
+    // TML/TMLU import
+    export::<TmlFile>(&out_dir);
+    export::<TmlSection>(&out_dir);
+    export::<TmlShot>(&out_dir);
+    export::<TmlShotType>(&out_dir);
+    export::<TmlUnit>(&out_dir);
+    export::<TmlGeoCoding>(&out_dir);
+    export::<TmlClosure>(&out_dir);
 
     // Export/image types
     export::<ExportImageOptions>(&out_dir);
@@ -213,6 +225,13 @@ fn main() {
         "DmpShot",
         "DmpDirection",
         "DmpShotType",
+        "TmlFile",
+        "TmlSection",
+        "TmlShot",
+        "TmlShotType",
+        "TmlUnit",
+        "TmlGeoCoding",
+        "TmlClosure",
         "ExportImageOptions",
         "ImageFormat",
         "ColorMode",

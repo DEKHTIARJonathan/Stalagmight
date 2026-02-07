@@ -7,6 +7,7 @@ use tauri::State;
 use crate::core::state::AppState;
 use crate::core::CommandResult;
 use crate::parsers::DmpFile;
+use crate::parsers::tml::TmlFile;
 
 /// Import a DMP file and return parsed data
 #[tauri::command]
@@ -98,5 +99,74 @@ pub fn import_sections(
     sections: Vec<crate::models::ImportSectionConfig>,
     file_hash: Option<String>,
 ) -> CommandResult {
+    state.execute_import_sections(sections, file_hash)
+}
+
+/// Parse a TML/TMLU file and return preview data for the import dialog.
+#[tauri::command]
+pub fn parse_tml(path: PathBuf) -> Result<TmlFile, String> {
+    tracing::info!(
+        path = ?path,
+        purpose = "prepare TML import preview",
+        "Parsing Ariane TML/TMLU file for import preview"
+    );
+    let result = crate::parsers::tml::parse_tml(&path);
+    if let Err(ref e) = result {
+        tracing::error!(
+            path = ?path,
+            purpose = "prepare TML import preview",
+            reason = %e,
+            "Failed to parse TML/TMLU file for import preview"
+        );
+    }
+    result.map_err(|e| e.to_string())
+}
+
+/// Parse a TML/TMLU file, convert to import configs, and execute the import.
+#[tauri::command]
+pub fn execute_tml_import(
+    state: State<'_, AppState>,
+    path: PathBuf,
+    file_hash: Option<String>,
+) -> CommandResult {
+    tracing::info!(
+        path = ?path,
+        purpose = "import Ariane TML/TMLU",
+        "Executing TML import"
+    );
+
+    let tml = match crate::parsers::tml::parse_tml(&path) {
+        Ok(tml) => tml,
+        Err(e) => {
+            tracing::error!(
+                path = ?path,
+                purpose = "import Ariane TML/TMLU",
+                reason = %e,
+                "Failed to parse TML/TMLU file for import"
+            );
+            return CommandResult::failure(format!("Failed to parse TML file: {e}"));
+        }
+    };
+
+    let sections = match crate::parsers::tml::convert_tml_to_import_configs(&tml) {
+        Ok(configs) => configs,
+        Err(e) => {
+            tracing::error!(
+                path = ?path,
+                purpose = "import Ariane TML/TMLU",
+                reason = %e,
+                "Failed to convert TML data to import configs"
+            );
+            return CommandResult::failure(format!("Failed to convert TML data: {e}"));
+        }
+    };
+
+    tracing::info!(
+        path = ?path,
+        section_count = sections.len(),
+        purpose = "import Ariane TML/TMLU",
+        "Converted TML to import configs, executing import"
+    );
+
     state.execute_import_sections(sections, file_hash)
 }

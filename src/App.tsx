@@ -10,7 +10,7 @@ import { setNumberFormatLocale, setDateFormatLocale } from './i18n/format';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, TmlImportDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
@@ -67,7 +67,7 @@ function calculateStationPositions(shots: ImportedSectionConfig['shots']): Array
 }
 
 function App() {
-  const { project, stations, loadConfig, config, isDirty, importDmp, importSections } = useProjectStore();
+  const { project, stations, loadConfig, config, isDirty, importDmp, parseTml, importSections } = useProjectStore();
   const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, triggerFitToBounds, toast, selectionAnnouncement } = useUIStore();
 
   // Apply theme from config (resolves auto mode, sets data-theme attribute)
@@ -80,8 +80,8 @@ function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [splashMounted, setSplashMounted] = useState(true);
 
-  // Track whether we're hovering with a valid DMP file
-  const [isDraggingDmp, setIsDraggingDmp] = useState(false);
+  // Track whether we're hovering with a valid import file (DMP/TML/TMLU)
+  const [isDraggingImport, setIsDraggingImport] = useState(false);
 
   // Determine if import dialog is open and has placed sections
   // This is used to show a confirmation when closing the app
@@ -103,7 +103,7 @@ function App() {
       return true;
     }
     // Block during new project for import dialog
-    if (activeDialog === 'new-project-for-import' && dialogData.dmpFile) {
+    if (activeDialog === 'new-project-for-import' && (dialogData.dmpFile || dialogData.tmlFile)) {
       return true;
     }
     return false;
@@ -290,59 +290,80 @@ function App() {
   }, [project, project?.file_path, project?.name, isDirty]);
 
   /**
-   * Handle file drop events for DMP file import.
+   * Handle file drop events for DMP/TML/TMLU file import.
    * - From home screen (no project): Creates new project, then opens import dialog
    * - From existing project: Opens import dialog directly
    */
-  const handleDmpFileDrop = useCallback(async (filePath: string) => {
-    // Determine context: are we creating a new project or adding to existing?
+  const handleImportFileDrop = useCallback(async (filePath: string) => {
+    const lowerPath = filePath.toLowerCase();
+    const isTml = lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu');
     const currentProject = useProjectStore.getState().project;
 
-    if (currentProject) {
-      // Existing project: parse DMP and open Step 1 (selection) directly
-      setImportContext('existing-project');
-
+    if (isTml) {
       try {
-        const dmpFile = await importDmp(filePath);
-        if (dmpFile) {
-          openDialog('dmp-selection', {
-            dmpFile,
+        const tmlFile = await parseTml(filePath);
+        if (!tmlFile) return;
+
+        if (currentProject) {
+          openDialog('tml-import', { tmlFile, filePath });
+        } else {
+          const fileName = filePath.split(/[/\\]/).pop()?.replace(/\.tmlu?$/i, '') ?? 'Imported';
+          openDialog('new-project-for-import', {
+            tmlFile,
             filePath,
+            defaultName: fileName,
+            importType: 'tml',
           });
         }
       } catch (e) {
         openDialog('error', {
           title: 'Import Failed',
-          message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+          message: e instanceof Error ? e.message : 'Failed to parse TML file',
         });
       }
     } else {
-      // No project: parse DMP first, then show NewProjectDialog for import
-      setImportContext('new-project');
+      // DMP file
+      if (currentProject) {
+        setImportContext('existing-project');
 
-      try {
-        const dmpFile = await importDmp(filePath);
-        if (dmpFile) {
-          // Extract filename for default project name
-          const fileName = filePath.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
-          openDialog('new-project-for-import', {
-            dmpFile,
-            filePath,
-            defaultName: fileName,
+        try {
+          const dmpFile = await importDmp(filePath);
+          if (dmpFile) {
+            openDialog('dmp-selection', { dmpFile, filePath });
+          }
+        } catch (e) {
+          openDialog('error', {
+            title: 'Import Failed',
+            message: e instanceof Error ? e.message : 'Failed to parse DMP file',
           });
         }
-      } catch (e) {
-        openDialog('error', {
-          title: 'Import Failed',
-          message: e instanceof Error ? e.message : 'Failed to parse DMP file',
-        });
+      } else {
+        setImportContext('new-project');
+
+        try {
+          const dmpFile = await importDmp(filePath);
+          if (dmpFile) {
+            const fileName = filePath.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
+            openDialog('new-project-for-import', {
+              dmpFile,
+              filePath,
+              defaultName: fileName,
+            });
+          }
+        } catch (e) {
+          openDialog('error', {
+            title: 'Import Failed',
+            message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+          });
+        }
       }
     }
-  }, [importDmp, openDialog, setImportContext]);
+  }, [importDmp, parseTml, openDialog, setImportContext]);
 
-  // Set up drag-drop event listener for DMP files
+  // Set up drag-drop event listener for importable files (DMP/TML/TMLU)
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    const importExts = ['.dmp', '.tml', '.tmlu'];
 
     const setupDragDrop = async () => {
       try {
@@ -351,27 +372,23 @@ function App() {
           const payload = event.payload as DragDropEvent;
 
           if (payload.type === 'enter') {
-            // User started hovering with files - check if any is a DMP file
-            const hasDmpFile = payload.paths?.some((path: string) =>
-              path.toLowerCase().endsWith('.dmp')
+            const hasImportFile = payload.paths?.some((path: string) =>
+              importExts.some((ext) => path.toLowerCase().endsWith(ext))
             );
-            setIsDraggingDmp(hasDmpFile ?? false);
+            setIsDraggingImport(hasImportFile ?? false);
           } else if (payload.type === 'drop') {
-            setIsDraggingDmp(false);
-            // Find the first DMP file in the dropped paths
-            const dmpPath = payload.paths?.find((path: string) =>
-              path.toLowerCase().endsWith('.dmp')
+            setIsDraggingImport(false);
+            const importPath = payload.paths?.find((path: string) =>
+              importExts.some((ext) => path.toLowerCase().endsWith(ext))
             );
-            if (dmpPath) {
-              handleDmpFileDrop(dmpPath);
+            if (importPath) {
+              handleImportFileDrop(importPath);
             }
           } else if (payload.type === 'leave') {
-            setIsDraggingDmp(false);
+            setIsDraggingImport(false);
           }
-          // 'over' events just update position, we don't need to handle them
         });
       } catch (e) {
-        // Drag-drop not available (dev mode without Tauri)
         console.warn('Drag-drop not available:', e);
       }
     };
@@ -383,7 +400,7 @@ function App() {
         unlisten();
       }
     };
-  }, [handleDmpFileDrop]);
+  }, [handleImportFileDrop]);
 
   return (
     <div className="h-full bg-background text-text-primary flex flex-col relative">
@@ -396,14 +413,14 @@ function App() {
       )}
 
       {/* Drop indicator overlay */}
-      {isDraggingDmp && (
+      {isDraggingImport && (
         <div
           className="absolute inset-0 z-50 bg-accent-20 border-4 border-dashed border-accent flex items-center justify-center pointer-events-none"
-          data-testid="dmp-drop-indicator"
+          data-testid="import-drop-indicator"
         >
           <div className="bg-panel p-6 rounded-lg shadow-xl text-center">
             <div className="text-4xl mb-2">📥</div>
-            <div className="text-lg font-semibold">Drop DMP file to import</div>
+            <div className="text-lg font-semibold">Drop file to import</div>
             <div className="text-sm text-text-secondary mt-1">
               {project ? 'Add sections to current project' : 'Create new project'}
             </div>
@@ -456,6 +473,12 @@ function App() {
             const hash = (dialogData.selectionConfig as DmpSelectionConfig)?.fileHash;
             await handleImportSections(sections, hash);
           }}
+        />
+      ) : null}
+      {activeDialog === 'tml-import' && dialogData.tmlFile ? (
+        <TmlImportDialog
+          tmlFile={dialogData.tmlFile as import('./types/commands').TmlFile}
+          filePath={dialogData.filePath as string}
         />
       ) : null}
       {activeDialog === 'confirm-delete' && <ConfirmDialog />}

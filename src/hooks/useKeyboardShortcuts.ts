@@ -9,7 +9,7 @@ import {
   ensureExtension,
   projectOpenFilters,
   projectSaveFilters,
-  dmpOpenFilters,
+  importOpenFilters,
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
 import type { ToolType, Selection, DisplayToggleKey } from '../store/uiStore';
@@ -279,7 +279,7 @@ export function useKeyboardShortcuts() {
     showStations,
     showToast,
   } = useUIStore();
-  const { undo, redo, saveProject, project, stations, importDmp, config } = useProjectStore();
+  const { undo, redo, saveProject, project, stations, importDmp, parseTml, executeTmlImport, config } = useProjectStore();
   const { setImportContext } = useUIStore();
 
   // Ref for shortcut map - uses ref to avoid stale closures in event handlers
@@ -628,44 +628,65 @@ export function useKeyboardShortcuts() {
 
         case 'import_dmp': {
           event.preventDefault();
-          // Context-aware DMP import
+          // Context-aware import (DMP + TML/TMLU)
           (async () => {
             try {
               const selected = await open({
                 multiple: false,
-                filters: dmpOpenFilters(),
+                filters: importOpenFilters(),
               });
 
               if (!selected || typeof selected !== 'string') {
                 return;
               }
 
-              const dmpFile = await importDmp(selected);
-              if (!dmpFile) return;
-
-              // Determine context: are we creating a new project or adding to existing?
-              const currentProject = useProjectStore.getState().project;
-              if (currentProject) {
-                // Existing project: open Step 1 (selection) directly
-                setImportContext('existing-project');
-                openDialog('dmp-selection', {
-                  dmpFile,
-                  filePath: selected,
-                });
+              const lowerPath = selected.toLowerCase();
+              if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
+                // TML/TMLU import
+                const currentProject = useProjectStore.getState().project;
+                if (currentProject) {
+                  const tmlFile = await parseTml(selected);
+                  if (tmlFile) {
+                    openDialog('tml-import', { tmlFile, filePath: selected });
+                  }
+                } else {
+                  const tmlFile = await parseTml(selected);
+                  if (tmlFile) {
+                    const fileName = selected.split(/[/\\]/).pop()?.replace(/\.tmlu?$/i, '') ?? 'Imported';
+                    openDialog('new-project-for-import', {
+                      tmlFile,
+                      filePath: selected,
+                      defaultName: fileName,
+                      importType: 'tml',
+                    });
+                  }
+                }
               } else {
-                // No project: show NewProjectDialog for import
-                setImportContext('new-project');
-                const fileName = selected.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
-                openDialog('new-project-for-import', {
-                  dmpFile,
-                  filePath: selected,
-                  defaultName: fileName,
-                });
+                // DMP import
+                const dmpFile = await importDmp(selected);
+                if (!dmpFile) return;
+
+                const currentProject = useProjectStore.getState().project;
+                if (currentProject) {
+                  setImportContext('existing-project');
+                  openDialog('dmp-selection', {
+                    dmpFile,
+                    filePath: selected,
+                  });
+                } else {
+                  setImportContext('new-project');
+                  const fileName = selected.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
+                  openDialog('new-project-for-import', {
+                    dmpFile,
+                    filePath: selected,
+                    defaultName: fileName,
+                  });
+                }
               }
             } catch (e) {
               openDialog('error', {
                 title: 'Import Failed',
-                message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+                message: e instanceof Error ? e.message : 'Failed to import file',
               });
             }
           })();
@@ -691,6 +712,8 @@ export function useKeyboardShortcuts() {
       openDialog,
       project,
       importDmp,
+      parseTml,
+      executeTmlImport,
       setImportContext,
       showStations,
       showToast,
