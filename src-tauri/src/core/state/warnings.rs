@@ -78,7 +78,7 @@ impl AppState {
 
         // Sort by resolved (unresolved first), then severity (errors first), then by section and shot
         all_warnings.sort_by(|a, b| {
-            let resolved_order = |r: bool| if r { 1 } else { 0 };
+            let resolved_order = |r: bool| i32::from(r);
             let severity_order = |s: &WarningSeverity| match s {
                 WarningSeverity::Error => 0,
                 WarningSeverity::Warning => 1,

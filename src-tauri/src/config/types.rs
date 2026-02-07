@@ -374,6 +374,7 @@ pub enum ThemeMode {
 
 /// Appearance configuration
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Default)]
 pub struct AppearanceConfig {
     #[serde(default)]
     pub theme: ThemeMode,
@@ -389,13 +390,6 @@ impl AppearanceConfig {
     }
 }
 
-impl Default for AppearanceConfig {
-    fn default() -> Self {
-        Self {
-            theme: ThemeMode::default(),
-        }
-    }
-}
 
 fn default_fps_threshold() -> u32 {
     30
@@ -650,10 +644,10 @@ impl MapConfig {
             self.satellite_provider = "esri".to_string();
         }
 
-        if !self.zoom_step.is_finite() {
-            self.zoom_step = default_zoom_step();
-        } else {
+        if self.zoom_step.is_finite() {
             self.zoom_step = self.zoom_step.clamp(0.1, 5.0);
+        } else {
+            self.zoom_step = default_zoom_step();
         }
         self.station.normalize();
         self.shot.normalize();
@@ -966,17 +960,14 @@ fn normalize_shortcut_field(field: &mut Vec<String>, defaults: &[String], field_
     // Normalize each shortcut
     let mut normalized: Vec<String> = Vec::with_capacity(field.len());
     for shortcut in field.iter() {
-        match normalize_shortcut(shortcut) {
-            Some(n) => normalized.push(n),
-            None => {
-                tracing::warn!(
-                    "Invalid shortcut '{}' for '{}', falling back to default",
-                    shortcut,
-                    field_name
-                );
-                *field = defaults.to_vec();
-                return;
-            }
+        if let Some(n) = normalize_shortcut(shortcut) { normalized.push(n) } else {
+            tracing::warn!(
+                "Invalid shortcut '{}' for '{}', falling back to default",
+                shortcut,
+                field_name
+            );
+            *field = defaults.to_vec();
+            return;
         }
     }
     *field = normalized;
@@ -1012,7 +1003,7 @@ pub(super) fn normalize_shortcut(shortcut: &str) -> Option<String> {
 
     // Split by + to get modifiers and key
     // Handle "Ctrl++" (Ctrl+Plus) by counting consecutive + at end
-    let parts: Vec<&str> = shortcut.split('+').map(|s| s.trim()).collect();
+    let parts: Vec<&str> = shortcut.split('+').map(str::trim).collect();
     if parts.is_empty() {
         return None;
     }
@@ -1120,7 +1111,7 @@ fn normalize_key_name(key: &str) -> String {
             format!("F{}", &k[1..])
         }
         // Single letter keys - UPPERCASE (matches KeyboardEvent.key)
-        k if k.len() == 1 && k.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) => {
+        k if k.len() == 1 && k.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) => {
             k.to_uppercase()
         }
         // Numbers and other keys - preserve as-is
@@ -1239,7 +1230,8 @@ impl Config {
         if let Some(legacy) = self.legacy_snap.take() {
             // Only migrate if map.snap appears to be at defaults (not explicitly set)
             // Limitation: Cannot distinguish explicit defaults from missing section
-            let snap_is_default = self.map.snap.threshold == default_snap_threshold()
+            let snap_is_default = (self.map.snap.threshold - default_snap_threshold()).abs()
+                < f64::EPSILON
                 && self.map.snap.enabled_draw
                 && self.map.snap.enabled_merge
                 && self.map.snap.enabled_measure;

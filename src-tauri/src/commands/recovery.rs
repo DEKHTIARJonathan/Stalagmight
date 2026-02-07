@@ -27,7 +27,7 @@ pub fn attempt_repair(path: PathBuf) -> Result<RepairResult, String> {
         }
         Err(e) => {
             tracing::error!(error = %e, "Repair failed");
-            Err(format!("Repair failed: {}", e))
+            Err(format!("Repair failed: {e}"))
         }
     }
 }
@@ -62,7 +62,7 @@ pub fn restore_from_backup(project_path: PathBuf, backup_path: PathBuf) -> Resul
 
     // Copy backup over the project file
     std::fs::copy(&backup_path, &project_path)
-        .map_err(|e| format!("Failed to restore backup: {}", e))?;
+        .map_err(|e| format!("Failed to restore backup: {e}"))?;
 
     Ok(format!("Restored from {}", backup_path.display()))
 }
@@ -74,5 +74,5 @@ pub fn restore_from_backup(project_path: PathBuf, backup_path: PathBuf) -> Resul
 pub fn export_salvageable_data(path: PathBuf) -> Result<SalvagedData, String> {
     tracing::info!(path = ?path, "IPC: export_salvageable_data");
 
-    Database::export_salvageable(&path).map_err(|e| format!("Salvage failed: {}", e))
+    Database::export_salvageable(&path).map_err(|e| format!("Salvage failed: {e}"))
 }

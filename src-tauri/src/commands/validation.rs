@@ -15,9 +15,8 @@ pub fn get_project_warnings(state: State<AppState>) -> Vec<ProjectWarning> {
 }
 
 pub(crate) fn get_project_warnings_impl(state: &AppState) -> Vec<ProjectWarning> {
-    let project = match state.get_project_state() {
-        Some(p) => p,
-        None => return Vec::new(),
+    let Some(project) = state.get_project_state() else {
+        return Vec::new();
     };
 
     // Delegate to AppState method (uses self.database since project is already loaded)

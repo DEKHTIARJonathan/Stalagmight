@@ -9,14 +9,12 @@ use super::AppState;
 impl AppState {
     /// Generate undo data before executing a command
     pub(super) fn generate_undo_data(&self, cmd: &Command) -> UndoData {
-        let proj_guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(_) => return UndoData::None,
+        let Ok(proj_guard) = self.project.lock() else {
+            return UndoData::None;
         };
 
-        let project = match proj_guard.as_ref() {
-            Some(p) => p,
-            None => return UndoData::None,
+        let Some(project) = proj_guard.as_ref() else {
+            return UndoData::None;
         };
 
         match cmd {
@@ -345,14 +343,12 @@ impl AppState {
 
     /// Finalize undo data after command execution (for commands that create new entities)
     pub(super) fn finalize_undo_data(&self, cmd: &Command, undo_data: UndoData) -> UndoData {
-        let proj_guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(_) => return undo_data,
+        let Ok(proj_guard) = self.project.lock() else {
+            return undo_data;
         };
 
-        let project = match proj_guard.as_ref() {
-            Some(p) => p,
-            None => return undo_data,
+        let Some(project) = proj_guard.as_ref() else {
+            return undo_data;
         };
 
         match cmd {
@@ -504,9 +500,8 @@ impl AppState {
     /// Perform undo - restore previous state based on undo data
     pub fn undo(&self) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let _cmd_guard = match self.command_lock.lock() {
-            Ok(g) => g,
-            Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
         };
         self.undo_inner()
     }
@@ -515,15 +510,14 @@ impl AppState {
     fn undo_inner(&self) -> CommandResult {
         // Pop from undo stack
         let entry = {
-            let mut stack = match self.undo_stack.lock() {
-                Ok(s) => s,
-                Err(_) => return CommandResult::failure("Failed to lock undo stack".to_string()),
+            let Ok(mut stack) = self.undo_stack.lock() else {
+                return CommandResult::failure("Failed to lock undo stack".to_string());
             };
 
-            match stack.pop_undo() {
-                Some(e) => e,
-                None => return CommandResult::failure("Nothing to undo".to_string()),
-            }
+            let Some(e) = stack.pop_undo() else {
+                return CommandResult::failure("Nothing to undo".to_string());
+            };
+            e
         };
 
         // Apply undo based on undo_data type
@@ -632,7 +626,21 @@ impl AppState {
             } => {
                 // Re-merge the stations to undo the unmerge
                 let merge_result = self.merge_stations(*station_a, *station_b);
-                if !merge_result.success {
+                if merge_result.success {
+                    // Merge succeeded, now restore removed closures
+                    if !removed_closures.is_empty() {
+                        if let Ok(mut proj_guard) = self.project.lock() {
+                            if let Some(project) = proj_guard.as_mut() {
+                                for closure in removed_closures {
+                                    project.next_closure_id = project.next_closure_id.max(closure.id + 1);
+                                    project.loop_closures.push(closure.clone());
+                                }
+                                project.touch();
+                            }
+                        }
+                    }
+                    merge_result
+                } else {
                     // If re-merge fails (e.g., stations now connected), try direct restoration
                     match self.project.lock() {
                         Ok(mut proj_guard) => match proj_guard.as_mut() {
@@ -654,23 +662,6 @@ impl AppState {
                         },
                         Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                     }
-                } else {
-                    // Merge succeeded, now restore removed closures
-                    if !removed_closures.is_empty() {
-                        match self.project.lock() {
-                            Ok(mut proj_guard) => {
-                                if let Some(project) = proj_guard.as_mut() {
-                                    for closure in removed_closures {
-                                        project.next_closure_id = project.next_closure_id.max(closure.id + 1);
-                                        project.loop_closures.push(closure.clone());
-                                    }
-                                    project.touch();
-                                }
-                            }
-                            Err(_) => {}
-                        }
-                    }
-                    merge_result
                 }
             }
 
@@ -901,9 +892,8 @@ impl AppState {
     /// Perform redo - re-execute the command or restore snapshot
     pub fn redo(&self) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let _cmd_guard = match self.command_lock.lock() {
-            Ok(g) => g,
-            Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
         };
         self.redo_inner()
     }
@@ -912,15 +902,14 @@ impl AppState {
     fn redo_inner(&self) -> CommandResult {
         // Pop from redo stack
         let entry = {
-            let mut stack = match self.undo_stack.lock() {
-                Ok(s) => s,
-                Err(_) => return CommandResult::failure("Failed to lock undo stack".to_string()),
+            let Ok(mut stack) = self.undo_stack.lock() else {
+                return CommandResult::failure("Failed to lock undo stack".to_string());
             };
 
-            match stack.pop_redo() {
-                Some(e) => e,
-                None => return CommandResult::failure("Nothing to redo".to_string()),
-            }
+            let Some(e) = stack.pop_redo() else {
+                return CommandResult::failure("Nothing to redo".to_string());
+            };
+            e
         };
 
         // For snapshot-based undo data, restore from snapshot instead of re-executing.
@@ -1122,14 +1111,12 @@ impl AppState {
 
     /// Restore a deleted section with its original ID
     fn restore_section(&self, original_id: SectionId, data: SectionData) -> CommandResult {
-        let mut proj_guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+        let Ok(mut proj_guard) = self.project.lock() else {
+            return CommandResult::failure("Failed to lock project".to_string());
         };
 
-        let project = match proj_guard.as_mut() {
-            Some(p) => p,
-            None => return CommandResult::failure("No project open".to_string()),
+        let Some(project) = proj_guard.as_mut() else {
+            return CommandResult::failure("No project open".to_string());
         };
 
         // Create section with original ID
@@ -1154,19 +1141,16 @@ impl AppState {
         data: ShotData,
         position: usize,
     ) -> CommandResult {
-        let mut proj_guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(_) => return CommandResult::failure("Failed to lock project".to_string()),
+        let Ok(mut proj_guard) = self.project.lock() else {
+            return CommandResult::failure("Failed to lock project".to_string());
         };
 
-        let project = match proj_guard.as_mut() {
-            Some(p) => p,
-            None => return CommandResult::failure("No project open".to_string()),
+        let Some(project) = proj_guard.as_mut() else {
+            return CommandResult::failure("No project open".to_string());
         };
 
-        let section = match project.get_section_mut(section_id) {
-            Some(s) => s,
-            None => return CommandResult::failure(format!("Section {} not found", section_id)),
+        let Some(section) = project.get_section_mut(section_id) else {
+            return CommandResult::failure(format!("Section {section_id} not found"));
         };
 
         // Create shot with original ID
@@ -1275,16 +1259,14 @@ impl AppState {
     /// Index 0 = most recent action, so undo_to(N) executes (N+1) undos
     pub fn undo_to(&self, index: usize) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let _cmd_guard = match self.command_lock.lock() {
-            Ok(g) => g,
-            Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
         };
 
         // Validate index first
         {
-            let stack = match self.undo_stack.lock() {
-                Ok(s) => s,
-                Err(_) => return CommandResult::failure("Failed to lock undo stack".to_string()),
+            let Ok(stack) = self.undo_stack.lock() else {
+                return CommandResult::failure("Failed to lock undo stack".to_string());
             };
             if index >= stack.len() {
                 return CommandResult::failure(format!(
@@ -1317,16 +1299,14 @@ impl AppState {
     /// Index 0 = most recent undone action, so redo_to(N) executes (N+1) redos
     pub fn redo_to(&self, index: usize) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let _cmd_guard = match self.command_lock.lock() {
-            Ok(g) => g,
-            Err(_) => return CommandResult::failure("Failed to acquire command lock".to_string()),
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
         };
 
         // Validate index first
         {
-            let stack = match self.undo_stack.lock() {
-                Ok(s) => s,
-                Err(_) => return CommandResult::failure("Failed to lock undo stack".to_string()),
+            let Ok(stack) = self.undo_stack.lock() else {
+                return CommandResult::failure("Failed to lock undo stack".to_string());
             };
             if index >= stack.redo_len() {
                 return CommandResult::failure(format!(

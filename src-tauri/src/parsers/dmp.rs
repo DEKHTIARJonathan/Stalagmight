@@ -106,8 +106,8 @@ impl IntBuffer {
     /// Read big-endian signed 16-bit integer (matches Python readInt16BE)
     /// Format: first byte is LSB * 256, second byte is MSB masked
     fn read_int16_be(&mut self) -> Result<i32> {
-        let lsb = self.read()? as i32;
-        let msb = self.read()? as i32;
+        let lsb = i32::from(self.read()?);
+        let msb = i32::from(self.read()?);
         // Matches Python: (lsb * 2**8) + (msb & 0xFF)
         Ok((lsb << 8) + (msb & 0xFF))
     }
@@ -163,7 +163,7 @@ impl TryFrom<u8> for DmpDirection {
         match value {
             0 => Ok(DmpDirection::In),
             1 => Ok(DmpDirection::Out),
-            _ => bail!("Invalid direction value: {}", value),
+            _ => bail!("Invalid direction value: {value}"),
         }
     }
 }
@@ -190,7 +190,7 @@ impl TryFrom<u8> for DmpShotType {
             1 => Ok(DmpShotType::CsB),
             2 => Ok(DmpShotType::Standard),
             3 => Ok(DmpShotType::EndOfSurvey),
-            _ => bail!("Invalid shot type value: {}", value),
+            _ => bail!("Invalid shot type value: {value}"),
         }
     }
 }
@@ -279,9 +279,7 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
         let magic = buffer.read_n(3)?;
         if magic != SHOT_START_MAGIC {
             bail!(
-                "Invalid shot start magic: {:?}, expected {:?}",
-                magic,
-                SHOT_START_MAGIC
+                "Invalid shot start magic: {magic:?}, expected {SHOT_START_MAGIC:?}"
             );
         }
     }
@@ -290,21 +288,21 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
     let shot_type = DmpShotType::try_from(buffer.read()?)?;
 
     // Core shot data (all versions)
-    let heading_in = buffer.read_int16_be()? as f64 / 10.0;
-    let heading_out = buffer.read_int16_be()? as f64 / 10.0;
-    let length = (buffer.read_int16_be()? as f64 / 100.0).max(0.0);
-    let depth_in = (buffer.read_int16_be()? as f64 / 100.0).max(0.0);
-    let depth_out = (buffer.read_int16_be()? as f64 / 100.0).max(0.0);
-    let pitch_in = buffer.read_int16_be()? as f64 / 10.0;
-    let pitch_out = buffer.read_int16_be()? as f64 / 10.0;
+    let heading_in = f64::from(buffer.read_int16_be()?) / 10.0;
+    let heading_out = f64::from(buffer.read_int16_be()?) / 10.0;
+    let length = (f64::from(buffer.read_int16_be()?) / 100.0).max(0.0);
+    let depth_in = (f64::from(buffer.read_int16_be()?) / 100.0).max(0.0);
+    let depth_out = (f64::from(buffer.read_int16_be()?) / 100.0).max(0.0);
+    let pitch_in = f64::from(buffer.read_int16_be()?) / 10.0;
+    let pitch_out = f64::from(buffer.read_int16_be()?) / 10.0;
 
     // LRUD (version >= 4)
     let (left, right, up, down) = if version >= 4 {
         (
-            buffer.read_int16_be()? as f64 / 100.0,
-            buffer.read_int16_be()? as f64 / 100.0,
-            buffer.read_int16_be()? as f64 / 100.0,
-            buffer.read_int16_be()? as f64 / 100.0,
+            f64::from(buffer.read_int16_be()?) / 100.0,
+            f64::from(buffer.read_int16_be()?) / 100.0,
+            f64::from(buffer.read_int16_be()?) / 100.0,
+            f64::from(buffer.read_int16_be()?) / 100.0,
         )
     } else {
         (0.0, 0.0, 0.0, 0.0)
@@ -313,7 +311,7 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
     // Temperature and time (version >= 4 for time, >= 3 for temp in _generate but >= 4 in from_dmp)
     let (temperature, hour, minute, second) = if version >= 4 {
         (
-            buffer.read_int16_be()? as f64 / 10.0,
+            f64::from(buffer.read_int16_be()?) / 10.0,
             buffer.read()?,
             buffer.read()?,
             buffer.read()?,
@@ -330,9 +328,7 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
         let magic = buffer.read_n(3)?;
         if magic != SHOT_END_MAGIC {
             bail!(
-                "Invalid shot end magic: {:?}, expected {:?}",
-                magic,
-                SHOT_END_MAGIC
+                "Invalid shot end magic: {magic:?}, expected {SHOT_END_MAGIC:?}"
             );
         }
     }
@@ -366,7 +362,7 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
     // Version byte
     let version = buffer.read()?;
     if !SUPPORTED_VERSIONS.contains(&version) {
-        bail!("Unsupported DMP version: {}", version);
+        bail!("Unsupported DMP version: {version}");
     }
 
     // Magic values (version > 2)
@@ -374,41 +370,39 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
         let magic = buffer.read_n(3)?;
         if magic != SECTION_MAGIC {
             bail!(
-                "Invalid section magic: {:?}, expected {:?}",
-                magic,
-                SECTION_MAGIC
+                "Invalid section magic: {magic:?}, expected {SECTION_MAGIC:?}"
             );
         }
     }
 
     // Date: year (offset from 2000), month, day, hour, minute
-    let year = buffer.read()? as i32 + 2000;
-    let month = buffer.read()? as u32;
-    let day = buffer.read()? as u32;
-    let hour = buffer.read()? as u32;
-    let minute = buffer.read()? as u32;
+    let year = i32::from(buffer.read()?) + 2000;
+    let month = u32::from(buffer.read()?);
+    let day = u32::from(buffer.read()?);
+    let hour = u32::from(buffer.read()?);
+    let minute = u32::from(buffer.read()?);
 
     // Validate date components
-    if !(2000..2100).contains(&year) {
-        bail!("Invalid year: {}", year);
+    if !(2016..2100).contains(&year) {
+        bail!("Invalid year: {year}");
     }
     if !(1..=12).contains(&month) {
-        bail!("Invalid month: {}", month);
+        bail!("Invalid month: {month}");
     }
     if !(1..=31).contains(&day) {
-        bail!("Invalid day: {}", day);
+        bail!("Invalid day: {day}");
     }
     if hour >= 24 {
-        bail!("Invalid hour: {}", hour);
+        bail!("Invalid hour: {hour}");
     }
     if minute >= 60 {
-        bail!("Invalid minute: {}", minute);
+        bail!("Invalid minute: {minute}");
     }
 
     let date = NaiveDate::from_ymd_opt(year, month, day)
-        .ok_or_else(|| anyhow!("Invalid date: {}-{}-{}", year, month, day))?
+        .ok_or_else(|| anyhow!("Invalid date: {year}-{month}-{day}"))?
         .and_hms_opt(hour, minute, 0)
-        .ok_or_else(|| anyhow!("Invalid time: {}:{}", hour, minute))?;
+        .ok_or_else(|| anyhow!("Invalid time: {hour}:{minute}"))?;
 
     // Name: 3 ASCII characters
     let name_bytes = buffer.read_n(3)?;
@@ -480,7 +474,7 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
             s.trim()
                 .parse::<i32>()
                 .map(|v| v as u8)
-                .with_context(|| format!("Invalid integer in DMP file: '{}'", s))
+                .with_context(|| format!("Invalid integer in DMP file: '{s}'"))
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -492,9 +486,7 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
     let version = data[0];
     if !SUPPORTED_VERSIONS.contains(&version) {
         bail!(
-            "Unsupported DMP version: {}. Supported: {:?}",
-            version,
-            SUPPORTED_VERSIONS
+            "Unsupported DMP version: {version}. Supported: {SUPPORTED_VERSIONS:?}"
         );
     }
 
@@ -571,7 +563,7 @@ impl DmpShot {
             down: Some(self.down),
             comment: self.comment.clone(),
             is_virtual: false,
-            marker_index: Some(self.marker_index as u32),
+            marker_index: Some(u32::from(self.marker_index)),
             temperature: Some(self.temperature),
         }
     }
@@ -601,7 +593,7 @@ impl DmpSection {
                 .shots
                 .iter()
                 .filter(|s| s.shot_type == DmpShotType::Standard)
-                .map(|s| s.to_shot_data())
+                .map(DmpShot::to_shot_data)
                 .collect(),
         }
     }
@@ -612,7 +604,7 @@ impl DmpSection {
 // ============================================================================
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::print_stdout)]
+#[expect(clippy::unwrap_used, clippy::print_stdout, clippy::float_cmp)]
 mod tests {
     use super::*;
     use chrono::Datelike;
@@ -729,7 +721,7 @@ mod tests {
         // Test that Some comment is serialized
         let shot_with_comment = DmpShot {
             comment: Some("Test comment".to_string()),
-            ..shot_no_comment.clone()
+            ..shot_no_comment
         };
 
         let json = serde_json::to_string(&shot_with_comment).unwrap();
@@ -861,7 +853,7 @@ mod tests {
         values.push(3); // EOS type
         values.extend(vec![0; 20]); // zeros to complete 21-byte shot
 
-        values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";")
+        values.iter().map(ToString::to_string).collect::<Vec<_>>().join(";")
     }
 
     /// Helper to build v4 format section data as semicolon-separated string
@@ -922,7 +914,7 @@ mod tests {
         values.push(3); // EOS type
         values.extend(vec![0; 28]); // zeros to complete 29-byte shot
 
-        values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";")
+        values.iter().map(ToString::to_string).collect::<Vec<_>>().join(";")
     }
 
     /// Test 4.1: Verify DMP version 3 files (21-byte shots) are correctly parsed without LRUD data
@@ -1025,7 +1017,7 @@ mod tests {
         values.extend(&[24, 6, 15, 10, 30]); // Valid date
         values.extend(&[84, 83, 84]); // Name "TST"
         values.push(0); // Direction
-        let content = values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";");
+        let content = values.iter().map(ToString::to_string).collect::<Vec<_>>().join(";");
 
         let (_file1, path1) = create_dmp_file(&content);
         let result1 = parse_dmp(&path1);
@@ -1036,8 +1028,7 @@ mod tests {
         let err_msg = result1.unwrap_err().to_string();
         assert!(
             err_msg.contains("magic") || err_msg.contains("section"),
-            "Error should mention magic or section issue: {}",
-            err_msg
+            "Error should mention magic or section issue: {err_msg}"
         );
 
         // Test case 2: Truncated magic (not enough bytes)
@@ -1058,8 +1049,7 @@ mod tests {
         let err_msg3 = result3.unwrap_err().to_string();
         assert!(
             err_msg3.contains("version") || err_msg3.contains("Unsupported"),
-            "Error should mention version issue: {}",
-            err_msg3
+            "Error should mention version issue: {err_msg3}"
         );
 
         // Test case 4: Version 0 (completely invalid)
@@ -1090,7 +1080,7 @@ mod tests {
         values2.extend(&[84, 83, 84]); // Name "TST"
         values2.push(0); // Direction
         // No shots, no EOS marker
-        let content2 = values2.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";");
+        let content2 = values2.iter().map(ToString::to_string).collect::<Vec<_>>().join(";");
 
         let (_file2, path2) = create_dmp_file(&content2);
         let result2 = parse_dmp(&path2);
@@ -1111,7 +1101,7 @@ mod tests {
         values3.extend(&[1, 194]); // heading_in
         values3.extend(&[1, 204]); // heading_out
         // Missing the rest of shot data and EOS marker
-        let content3 = values3.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";");
+        let content3 = values3.iter().map(ToString::to_string).collect::<Vec<_>>().join(";");
 
         let (_file3, path3) = create_dmp_file(&content3);
         let result3 = parse_dmp(&path3);
@@ -1143,7 +1133,7 @@ mod tests {
             // EOS marker
             values.push(3);
             values.extend(vec![0; 20]);
-            values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";")
+            values.iter().map(ToString::to_string).collect::<Vec<_>>().join(";")
         }
 
         // Test case 1: Month 13 (invalid)
@@ -1198,5 +1188,233 @@ mod tests {
 
         // All tests completed without panicking - that's the key requirement
         println!("All invalid date tests completed without panicking");
+    }
+
+    // ========================================================================
+    // Additional robustness tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_dmp_wrong_extension() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"3;68;89;101").unwrap();
+        let path = file.path().with_extension("txt");
+        std::fs::copy(file.path(), &path).unwrap();
+
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a DMP file"));
+    }
+
+    #[test]
+    fn test_parse_dmp_non_integer_content() {
+        let content = "3;68;89;hello;24;6;15;10;30";
+        let (_file, path) = create_dmp_file(content);
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+        assert!(result.is_err(), "non-integer content should fail");
+    }
+
+    #[test]
+    fn test_parse_dmp_single_byte() {
+        let content = "3"; // Just a version byte, nothing else
+        let (_file, path) = create_dmp_file(content);
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+        assert!(result.is_err(), "single byte should fail (no sections)");
+    }
+
+    #[test]
+    fn test_parse_dmp_only_semicolons() {
+        let content = ";;;;;;;";
+        let (_file, path) = create_dmp_file(content);
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+        assert!(result.is_err(), "only semicolons = empty data");
+    }
+
+    #[test]
+    fn test_int_buffer_has_remaining() {
+        let buffer = IntBuffer::new(vec![1, 2, 3]);
+        assert!(buffer.has_remaining(3));
+        assert!(!buffer.has_remaining(4));
+        assert!(buffer.has_remaining(0));
+    }
+
+    #[test]
+    fn test_int_buffer_read_n_beyond_end() {
+        let mut buffer = IntBuffer::new(vec![1, 2]);
+        assert!(buffer.read_n(3).is_err());
+    }
+
+    #[test]
+    fn test_split_into_sections_empty_data() {
+        let sections = split_into_sections(&[], 2);
+        assert!(sections.is_empty());
+    }
+
+    #[test]
+    fn test_split_into_sections_data_shorter_than_pattern() {
+        let sections = split_into_sections(&[2, 0, 0], 2);
+        assert!(sections.is_empty(), "data shorter than pattern = no sections");
+    }
+
+    #[test]
+    fn test_split_into_sections_unsupported_version() {
+        let sections = split_into_sections(&[1, 0, 0, 0, 0], 99);
+        assert!(sections.is_empty(), "unsupported version = no patterns");
+    }
+
+    #[test]
+    fn test_dmp_direction_to_survey_direction() {
+        let d_in = DmpDirection::In;
+        let d_out = DmpDirection::Out;
+        assert_eq!(d_in.to_survey_direction(), crate::models::SurveyDirection::In);
+        assert_eq!(d_out.to_survey_direction(), crate::models::SurveyDirection::Out);
+    }
+
+    #[test]
+    fn test_dmp_shot_to_shot_data() {
+        let dmp_shot = DmpShot {
+            shot_type: DmpShotType::Standard,
+            heading_in: 90.0,
+            heading_out: 270.0,
+            length: 10.0,
+            depth_in: 2.0,
+            depth_out: 3.0,
+            pitch_in: 5.0,
+            pitch_out: -5.0,
+            left: 1.5,
+            right: 2.0,
+            up: 3.0,
+            down: 0.5,
+            temperature: 18.0,
+            hour: 14,
+            minute: 30,
+            second: 0,
+            marker_index: 7,
+            comment: Some("test".to_string()),
+        };
+
+        let shot_data = dmp_shot.to_shot_data();
+        assert_eq!(shot_data.azimuth_in, 90.0);
+        assert_eq!(shot_data.azimuth_out, 270.0);
+        assert_eq!(shot_data.length, 10.0);
+        assert_eq!(shot_data.depth_in, 2.0);
+        assert_eq!(shot_data.depth_out, 3.0);
+        assert_eq!(shot_data.pitch_in, Some(5.0));
+        assert_eq!(shot_data.pitch_out, Some(-5.0));
+        assert_eq!(shot_data.left, Some(1.5));
+        assert_eq!(shot_data.right, Some(2.0));
+        assert_eq!(shot_data.up, Some(3.0));
+        assert_eq!(shot_data.down, Some(0.5));
+        assert_eq!(shot_data.temperature, Some(18.0));
+        assert_eq!(shot_data.marker_index, Some(7));
+        assert_eq!(shot_data.comment.as_deref(), Some("test"));
+        assert!(!shot_data.is_virtual);
+    }
+
+    #[test]
+    fn test_dmp_section_to_section_data_filters_non_standard_shots() {
+        let section = DmpSection {
+            version: 4,
+            name: "TST".to_string(),
+            direction: DmpDirection::Out,
+            date: NaiveDate::from_ymd_opt(2024, 6, 15).unwrap().and_hms_opt(10, 30, 0).unwrap(),
+            shots: vec![
+                DmpShot {
+                    shot_type: DmpShotType::CsA,
+                    heading_in: 0.0, heading_out: 0.0, length: 1.0,
+                    depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
+                    left: 0.0, right: 0.0, up: 0.0, down: 0.0,
+                    temperature: 0.0, hour: 0, minute: 0, second: 0,
+                    marker_index: 0, comment: None,
+                },
+                DmpShot {
+                    shot_type: DmpShotType::Standard,
+                    heading_in: 90.0, heading_out: 270.0, length: 5.0,
+                    depth_in: 0.0, depth_out: 1.0, pitch_in: 0.0, pitch_out: 0.0,
+                    left: 1.0, right: 1.0, up: 2.0, down: 0.5,
+                    temperature: 18.0, hour: 10, minute: 30, second: 0,
+                    marker_index: 1, comment: None,
+                },
+                DmpShot {
+                    shot_type: DmpShotType::EndOfSurvey,
+                    heading_in: 0.0, heading_out: 0.0, length: 0.0,
+                    depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
+                    left: 0.0, right: 0.0, up: 0.0, down: 0.0,
+                    temperature: 0.0, hour: 0, minute: 0, second: 0,
+                    marker_index: 0, comment: None,
+                },
+            ],
+        };
+
+        let section_data = section.to_section_data("#ff0000".to_string());
+        // Only Standard shots should be included
+        assert_eq!(section_data.shots.len(), 1, "only Standard shots should be included");
+        assert_eq!(section_data.shots[0].length, 5.0);
+        assert_eq!(section_data.name.as_deref(), Some("TST"));
+        assert_eq!(section_data.direction, Some(crate::models::SurveyDirection::Out));
+    }
+
+    #[test]
+    fn test_end_of_section_patterns_all_versions() {
+        // V2 has one pattern of 16 bytes
+        let v2 = end_of_section_patterns(2);
+        assert_eq!(v2.len(), 1);
+        assert_eq!(v2[0].len(), 16);
+
+        // V3 has one pattern of 21 bytes
+        let v3 = end_of_section_patterns(3);
+        assert_eq!(v3.len(), 1);
+        assert_eq!(v3[0].len(), 21);
+
+        // V4 has one pattern of 29 bytes
+        let v4 = end_of_section_patterns(4);
+        assert_eq!(v4.len(), 1);
+        assert_eq!(v4[0].len(), 29);
+
+        // V5 has two patterns of 35 bytes
+        let v5 = end_of_section_patterns(5);
+        assert_eq!(v5.len(), 2);
+        assert_eq!(v5[0].len(), 35);
+        assert_eq!(v5[1].len(), 35);
+
+        // Invalid version has no patterns
+        let invalid = end_of_section_patterns(99);
+        assert!(invalid.is_empty());
+    }
+
+    #[test]
+    fn test_section_data_filters_non_standard_shots_via_to_section_data() {
+        // A DmpSection with only EOS/CsA shots should produce empty shot list in SectionData
+        let section = DmpSection {
+            version: 3,
+            name: "TST".to_string(),
+            direction: DmpDirection::In,
+            date: NaiveDate::from_ymd_opt(2024, 6, 15).unwrap().and_hms_opt(10, 30, 0).unwrap(),
+            shots: vec![
+                DmpShot {
+                    shot_type: DmpShotType::EndOfSurvey,
+                    heading_in: 0.0, heading_out: 0.0, length: 0.0,
+                    depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
+                    left: 0.0, right: 0.0, up: 0.0, down: 0.0,
+                    temperature: 0.0, hour: 0, minute: 0, second: 0,
+                    marker_index: 0, comment: None,
+                },
+                DmpShot {
+                    shot_type: DmpShotType::CsA,
+                    heading_in: 0.0, heading_out: 0.0, length: 1.0,
+                    depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
+                    left: 0.0, right: 0.0, up: 0.0, down: 0.0,
+                    temperature: 0.0, hour: 0, minute: 0, second: 0,
+                    marker_index: 0, comment: None,
+                },
+            ],
+        };
+
+        let section_data = section.to_section_data("#ff0000".to_string());
+        assert!(section_data.shots.is_empty(), "only non-Standard shots → empty shot list");
     }
 }

@@ -36,9 +36,8 @@ impl AppState {
 
     /// Remove a project from the recent projects list
     pub fn remove_from_recent_projects(&self, path: PathBuf) -> CommandResult {
-        let mut recent = match self.recent_projects.lock() {
-            Ok(r) => r,
-            Err(_) => return CommandResult::failure("Failed to lock recent projects".to_string()),
+        let Ok(mut recent) = self.recent_projects.lock() else {
+            return CommandResult::failure("Failed to lock recent projects".to_string());
         };
 
         // Remove the path from the list
@@ -51,10 +50,10 @@ impl AppState {
 
         // Update config and save
         if let Ok(mut config) = self.config.lock() {
-            config.general.recent_projects = recent.clone();
+            config.general.recent_projects.clone_from(&recent);
             if let Err(e) = config.save() {
                 tracing::warn!("Failed to save config after removing from recent: {}", e);
-                return CommandResult::failure(format!("Failed to save config: {}", e));
+                return CommandResult::failure(format!("Failed to save config: {e}"));
             }
         }
 

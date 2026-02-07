@@ -6,7 +6,7 @@
 //! Also provides `get_survey_geometry_for_file` for lazy loading geometry
 //! from arbitrary project files (used by GlobalView for on-demand loading).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -65,7 +65,7 @@ pub fn local_to_gps(
     north: f64,
     origin: &GpsCoordinates,
 ) -> Result<(f64, f64), SurveyGeometryError> {
-    const METERS_PER_DEGREE_LAT: f64 = 111320.0;
+    const METERS_PER_DEGREE_LAT: f64 = 111_320.0;
 
     let origin_lat_rad = origin.latitude.to_radians();
     let cos_lat = origin_lat_rad.cos();
@@ -110,7 +110,7 @@ pub async fn get_survey_geometry(
     match result {
         Ok(inner) => inner,
         Err(e) => Err(SurveyGeometryError {
-            message: format!("Internal error: {}", e),
+            message: format!("Internal error: {e}"),
         }),
     }
 }
@@ -131,20 +131,20 @@ pub async fn get_survey_geometry_for_file(
     tauri::async_runtime::spawn_blocking(move || get_survey_geometry_for_file_impl(&path))
         .await
         .map_err(|e| SurveyGeometryError {
-            message: format!("Internal error: {}", e),
+            message: format!("Internal error: {e}"),
         })?
 }
 
 /// Internal implementation for file-based geometry loading.
-fn get_survey_geometry_for_file_impl(path: &PathBuf) -> Result<SurveyGeometry, SurveyGeometryError> {
+fn get_survey_geometry_for_file_impl(path: &Path) -> Result<SurveyGeometry, SurveyGeometryError> {
     // Open database in read-only mode - never create or modify files
     let db = Database::open_readonly(path).map_err(|e| SurveyGeometryError {
-        message: format!("Failed to open project: {}", e),
+        message: format!("Failed to open project: {e}"),
     })?;
 
     // Load project from database
     let mut project = db.load_project().map_err(|e| SurveyGeometryError {
-        message: format!("Failed to load project: {}", e),
+        message: format!("Failed to load project: {e}"),
     })?;
 
     // Assign IDs to any legacy closures with id=0 (in-memory only, read-only DB)
@@ -197,10 +197,10 @@ fn get_survey_geometry_for_project(project: &Project) -> Result<SurveyGeometry, 
             let to_ref = StationRef::new(section.id, (shot_idx + 1) as u32);
 
             let from_station = station_map.get(&from_ref).ok_or_else(|| SurveyGeometryError {
-                message: format!("Station {} not found in computed stations", from_ref),
+                message: format!("Station {from_ref} not found in computed stations"),
             })?;
             let to_station = station_map.get(&to_ref).ok_or_else(|| SurveyGeometryError {
-                message: format!("Station {} not found in computed stations", to_ref),
+                message: format!("Station {to_ref} not found in computed stations"),
             })?;
 
             // Compute coordinates relative to zero-datum station (x0, y0)
@@ -238,7 +238,7 @@ pub(crate) fn get_survey_geometry_impl(
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::core::AppState;
@@ -257,24 +257,20 @@ mod tests {
 
         // 1000m east at equator
         let (lng, lat) = local_to_gps(1000.0, 0.0, &origin).unwrap();
-        let expected_lng_delta = 1000.0 / 111320.0;
+        let expected_lng_delta = 1000.0 / 111_320.0;
         assert!(
             (lng - expected_lng_delta).abs() < 1e-6,
-            "lng: {} expected: {}",
-            lng,
-            expected_lng_delta
+            "lng: {lng} expected: {expected_lng_delta}"
         );
         assert!(lat.abs() < 1e-9, "lat should be ~0");
 
         // 1000m north at equator
         let (lng, lat) = local_to_gps(0.0, 1000.0, &origin).unwrap();
-        let expected_lat_delta = 1000.0 / 111320.0;
+        let expected_lat_delta = 1000.0 / 111_320.0;
         assert!(lng.abs() < 1e-9, "lng should be ~0");
         assert!(
             (lat - expected_lat_delta).abs() < 1e-6,
-            "lat: {} expected: {}",
-            lat,
-            expected_lat_delta
+            "lat: {lat} expected: {expected_lat_delta}"
         );
     }
 
@@ -285,25 +281,21 @@ mod tests {
 
         // 1000m east at 45°N
         let (lng, lat) = local_to_gps(1000.0, 0.0, &origin).unwrap();
-        let meters_per_deg_lng = 111320.0 * (45.0_f64.to_radians().cos());
+        let meters_per_deg_lng = 111_320.0 * (45.0_f64.to_radians().cos());
         let expected_lng = -90.0 + (1000.0 / meters_per_deg_lng);
         assert!(
             (lng - expected_lng).abs() < 1e-6,
-            "lng: {} expected: {}",
-            lng,
-            expected_lng
+            "lng: {lng} expected: {expected_lng}"
         );
         assert!((lat - 45.0).abs() < 1e-9, "lat should be ~45.0");
 
         // 1000m north at 45°N
         let (lng, lat) = local_to_gps(0.0, 1000.0, &origin).unwrap();
-        let expected_lat = 45.0 + (1000.0 / 111320.0);
+        let expected_lat = 45.0 + (1000.0 / 111_320.0);
         assert!((lng - (-90.0)).abs() < 1e-9, "lng should be ~-90.0");
         assert!(
             (lat - expected_lat).abs() < 1e-6,
-            "lat: {} expected: {}",
-            lat,
-            expected_lat
+            "lat: {lat} expected: {expected_lat}"
         );
     }
 
@@ -343,8 +335,8 @@ mod tests {
         let north = 1000.0 * (45.0_f64.to_radians().cos());
         let (lng, lat) = local_to_gps(east, north, &origin).unwrap();
 
-        let expected_lng = east / 111320.0;
-        let expected_lat = north / 111320.0;
+        let expected_lng = east / 111_320.0;
+        let expected_lat = north / 111_320.0;
 
         assert!((lng - expected_lng).abs() < 1e-6);
         assert!((lat - expected_lat).abs() < 1e-6);
@@ -356,13 +348,13 @@ mod tests {
 
         // 1000m west (negative east)
         let (lng, lat) = local_to_gps(-1000.0, 0.0, &origin).unwrap();
-        let expected_lng = -1000.0 / 111320.0;
+        let expected_lng = -1000.0 / 111_320.0;
         assert!((lng - expected_lng).abs() < 1e-6);
         assert!(lat.abs() < 1e-9);
 
         // 1000m south (negative north)
         let (lng, lat) = local_to_gps(0.0, -1000.0, &origin).unwrap();
-        let expected_lat = -1000.0 / 111320.0;
+        let expected_lat = -1000.0 / 111_320.0;
         assert!(lng.abs() < 1e-9);
         assert!((lat - expected_lat).abs() < 1e-6);
     }

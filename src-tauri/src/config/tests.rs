@@ -1063,7 +1063,7 @@ fn test_shortcut_config_normalize_truncates() {
 #[test]
 fn test_shortcut_config_normalize_removes_empty() {
     let mut config = ShortcutsConfig::default();
-    config.select = vec!["".to_string(), "S".to_string(), "  ".to_string()];
+    config.select = vec![String::new(), "S".to_string(), "  ".to_string()];
     config.normalize();
     // Should remove empty and only keep "S"
     assert_eq!(config.select, vec!["S".to_string()]);
@@ -1236,11 +1236,11 @@ fn test_shortcut_feedback_deserialize_all() {
 #[test]
 fn test_general_config_shortcut_feedback_default() {
     // When shortcut_feedback is missing from TOML, should use default
-    let toml_str = r#"
+    let toml_str = r"
 auto_save = true
 auto_save_interval_seconds = 30
 recent_projects_max = 20
-"#;
+";
     let config: GeneralConfig = toml::from_str(toml_str).expect("Should deserialize");
     assert_eq!(config.shortcut_feedback, ShortcutFeedback::NonObvious);
     assert_eq!(config.locale, "system");
@@ -1564,7 +1564,7 @@ fn test_map_config_normalize_valid_provider_unchanged() {
 #[test]
 fn test_map_config_normalize_empty_provider_to_esri() {
     let mut config = MapConfig {
-        satellite_provider: "".to_string(),
+        satellite_provider: String::new(),
         ..Default::default()
     };
     config.normalize();
