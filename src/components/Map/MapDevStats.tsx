@@ -18,8 +18,6 @@ interface MapDevStatsProps {
 interface RenderProfile {
   drawCalls: number;
   triangles: number;
-  lines: number;
-  points: number;
   renderMs: number;
   layers: { total: number; visible: number; byType: Record<string, number> };
   sources: Array<{ name: string; features: number }>;
@@ -137,9 +135,12 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   const [networkStatus, setNetworkStatus] = useState<boolean | null>(null);
   const [tileFetchStats, setTileFetchStats] = useState<TileFetchStats | null>(null);
 
-  // Map state
+  // Map state — zoom/center stored in refs and flushed to React state periodically
+  // to avoid triggering expensive re-renders on every pan frame
   const [zoom, setZoom] = useState(map.getZoom());
   const [center, setCenter] = useState(map.getCenter());
+  const zoomRef = useRef(map.getZoom());
+  const centerRef = useRef(map.getCenter());
   const [mapLoaded, setMapLoaded] = useState(map.loaded());
   const [tilesLoaded, setTilesLoaded] = useState(map.areTilesLoaded());
 
@@ -168,14 +169,12 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   const [renderProfile, setRenderProfile] = useState<RenderProfile | null>(null);
   const drawCounterRef = useRef<ReturnType<typeof createDrawCallCounter>>(null);
   // Accumulate draw stats across sub-frames; flush to React state periodically
-  const pendingDrawsRef = useRef({ drawCalls: 0, triangles: 0, lines: 0, points: 0 });
+  const pendingDrawsRef = useRef({ drawCalls: 0, triangles: 0 });
 
   // Install WebGL draw call counter on mount
-  // NOTE: Disabled by default — wrapping WebGL draw calls can deopt the GPU pipeline
-  // in some WebView implementations. Enable only when actively profiling draw calls.
   useEffect(() => {
-    // const counter = createDrawCallCounter(map.getCanvas());
-    // drawCounterRef.current = counter;
+    const counter = createDrawCallCounter(map.getCanvas());
+    drawCounterRef.current = counter;
     return () => {
       drawCounterRef.current?.dispose();
       drawCounterRef.current = null;
@@ -220,21 +219,16 @@ export function MapDevStats({ map }: MapDevStatsProps) {
           byType[layer.type] = (byType[layer.type] ?? 0) + 1;
         }
 
-        // Collect source feature counts — uses cached GeoJSON data length
-        // instead of expensive querySourceFeatures() which takes 20-40ms
+        // Collect source feature counts via querySourceFeatures (official API).
+        // This can be expensive (~20-40ms) but we only run on idle with 500ms throttle.
         const sources: Array<{ name: string; features: number }> = [];
         if (style?.sources) {
           for (const [name, spec] of Object.entries(style.sources)) {
-            const s = spec as { type: string; data?: { features?: unknown[] } };
+            const s = spec as { type: string };
             if (s.type === 'geojson') {
-              // Try to read feature count from the source's internal data
-              // (getSource returns the source object with _data for GeoJSON sources)
               try {
-                const src = map.getSource(name) as maplibregl.GeoJSONSource | undefined;
-                // GeoJSON sources track their data internally
-                const data = (src as unknown as { _data?: { features?: unknown[] } })?._data;
-                const count = Array.isArray(data?.features) ? data.features.length : 0;
-                sources.push({ name: name.replace('survey-', ''), features: count });
+                const features = map.querySourceFeatures(name);
+                sources.push({ name: name.replace('survey-', ''), features: features.length });
               } catch {
                 // Source may not be loaded yet
               }
@@ -354,6 +348,9 @@ export function MapDevStats({ map }: MapDevStatsProps) {
           setFrameTime(Math.round(avgFrameTime * 100) / 100);
           setFps(Math.round(1000 / avgFrameTime));
         }
+        // Flush zoom/center from refs (written by move handler every frame)
+        setZoom(zoomRef.current);
+        setCenter(centerRef.current);
       }
 
       animationFrameRef.current = requestAnimationFrame(measureFrame);
@@ -412,8 +409,9 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   // Track map state changes
   useEffect(() => {
     const handleMove = () => {
-      setZoom(map.getZoom());
-      setCenter(map.getCenter());
+      // Write to refs only — flushed to React state in the periodic update loop
+      zoomRef.current = map.getZoom();
+      centerRef.current = map.getCenter();
     };
 
     const handleLoad = () => {
@@ -683,10 +681,6 @@ export function MapDevStats({ map }: MapDevStatsProps) {
           <div className="pl-2 text-[10px]">
             <span className="text-text-secondary opacity-80">Tris:</span>{' '}
             <span className="text-text-primary">{formatNumber(renderProfile.triangles)}</span>
-            <span className="text-text-secondary opacity-80 ml-2">Lines:</span>{' '}
-            <span className="text-text-primary">{formatNumber(renderProfile.lines)}</span>
-            <span className="text-text-secondary opacity-80 ml-2">Pts:</span>{' '}
-            <span className="text-text-primary">{formatNumber(renderProfile.points)}</span>
           </div>
           <div className="pl-2 text-[10px]">
             <span className="text-text-secondary opacity-80">Layers:</span>{' '}
