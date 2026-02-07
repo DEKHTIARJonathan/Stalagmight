@@ -376,10 +376,12 @@ fn build_raw_shot(fields: &HashMap<&str, String>) -> Result<RawShot> {
         None => TmlShotType::Real,
     };
 
-    let section = fields
-        .get("section")
-        .cloned()
-        .unwrap_or_default();
+    let section = strip_section_description(
+        fields
+            .get("section")
+            .map(String::as_str)
+            .unwrap_or_default(),
+    );
 
     let color = convert_ariane_color(fields.get("color").map(String::as_str));
 
@@ -387,8 +389,26 @@ fn build_raw_shot(fields: &HashMap<&str, String>) -> Result<RawShot> {
         .get("date")
         .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
 
-    let comment = fields.get("comment").filter(|c| !c.is_empty()).cloned();
-    let explorer = fields.get("explorer").filter(|e| !e.is_empty()).cloned();
+    let comment = fields
+        .get("comment")
+        .filter(|c| !c.is_empty() && *c != "None")
+        .cloned();
+    // Explorer field may contain entity-escaped XML like
+    // "<Explorer>name</Explorer><Surveyor>...</Surveyor>".
+    // Extract just the explorer name if present.
+    let explorer = fields.get("explorer").and_then(|e| {
+        if e.is_empty() {
+            return None;
+        }
+        if let Some(rest) = e.strip_prefix("<Explorer>") {
+            rest.split("</Explorer>")
+                .next()
+                .filter(|s| !s.is_empty() && *s != "unknown")
+                .map(String::from)
+        } else {
+            Some(e.clone()).filter(|s| s != "None" && s != "unknown")
+        }
+    });
 
     Ok(RawShot {
         id,
@@ -435,6 +455,24 @@ fn parse_i64(fields: &HashMap<&str, String>, key: &str) -> Result<i64> {
         .ok_or_else(|| anyhow!("Missing field '{key}'"))?
         .parse::<i64>()
         .map_err(|e| anyhow!("Invalid integer for '{key}': {e}"))
+}
+
+// ============================================================================
+// Section name cleanup
+// ============================================================================
+
+/// Strip `<SectionDescription>...</SectionDescription>` suffixes from section names.
+///
+/// Ariane encodes section descriptions as entity-escaped XML appended to the
+/// section name (e.g. `"Mainline<SectionDescription>notes</SectionDescription>"`).
+/// After XML unescaping this becomes part of the text content. We strip it so
+/// that START shots (which carry the description) group with their REAL shots.
+fn strip_section_description(section: &str) -> String {
+    if let Some(idx) = section.find("<SectionDescription>") {
+        section[..idx].trim_end().to_string()
+    } else {
+        section.to_string()
+    }
 }
 
 // ============================================================================
@@ -1839,5 +1877,62 @@ mod tests {
         // azimuth_out should match azimuth_in
         let data = convert_shots_to_shot_data(&[make_shot(-124.0)]);
         assert!((data[0].azimuth_out - data[0].azimuth_in).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_strip_section_description() {
+        assert_eq!(
+            strip_section_description("Mainline"),
+            "Mainline"
+        );
+        assert_eq!(
+            strip_section_description(
+                "Reel to Mainline Cx<SectionDescription>reel to mainline connection</SectionDescription>"
+            ),
+            "Reel to Mainline Cx"
+        );
+        assert_eq!(
+            strip_section_description("Eastern Bypass Cavern-side<SectionDescription>notes</SectionDescription>"),
+            "Eastern Bypass Cavern-side"
+        );
+        assert_eq!(strip_section_description(""), "");
+    }
+
+    #[test]
+    fn test_section_description_grouping() {
+        // START shot has SectionDescription suffix, REAL shots don't.
+        // After stripping, they should group into the same section.
+        let xml = wrap_xml(&format!(
+            "{}\n{}\n{}",
+            r#"<SurveyData><ID>0</ID><FromID>-1</FromID><Type>START</Type>
+                <Section>MySec&lt;SectionDescription&gt;notes&lt;/SectionDescription&gt;</Section>
+                <Azimut>0</Azimut><Length>0</Length><Depth>0</Depth><DepthIn>0</DepthIn>
+                <Inclination>0</Inclination><Left>0</Left><Right>0</Right><Up>0</Up><Down>0</Down>
+                <Color>0x000000ff</Color><Excluded>false</Excluded><Latitude>0</Latitude>
+                <Longitude>0</Longitude><ClosureToID>-1</ClosureToID></SurveyData>"#,
+            r#"<SurveyData><ID>1</ID><FromID>0</FromID><Type>REAL</Type>
+                <Section>MySec</Section>
+                <Azimut>90</Azimut><Length>10</Length><Depth>5</Depth><DepthIn>-1</DepthIn>
+                <Inclination>0</Inclination><Left>1</Left><Right>2</Right><Up>3</Up><Down>4</Down>
+                <Color>0x000000ff</Color><Excluded>false</Excluded><Latitude>0</Latitude>
+                <Longitude>0</Longitude><ClosureToID>-1</ClosureToID></SurveyData>"#,
+            r#"<SurveyData><ID>2</ID><FromID>1</FromID><Type>REAL</Type>
+                <Section>MySec</Section>
+                <Azimut>180</Azimut><Length>15</Length><Depth>8</Depth><DepthIn>-1</DepthIn>
+                <Inclination>0</Inclination><Left>1</Left><Right>2</Right><Up>3</Up><Down>4</Down>
+                <Color>0x000000ff</Color><Excluded>false</Excluded><Latitude>0</Latitude>
+                <Longitude>0</Longitude><ClosureToID>-1</ClosureToID></SurveyData>"#,
+        ));
+
+        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
+            (Vec::new(), FileMetadata::default())
+        });
+        let (sections, _) = build_sections(raw_shots);
+
+        // Should be 1 section (MySec) with 2 shots (START excluded)
+        assert_eq!(sections.len(), 1, "Expected 1 section, got {}: {:?}",
+            sections.len(), sections.iter().map(|s| &s.name).collect::<Vec<_>>());
+        assert_eq!(sections[0].name, "MySec");
+        assert_eq!(sections[0].shots.len(), 2);
     }
 }
