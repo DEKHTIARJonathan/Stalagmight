@@ -3,22 +3,25 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import type { DmpFile } from '../../types/commands';
+import type { DmpFile, TmlFile } from '../../types/commands';
 
 /**
- * New Project dialog variant used during the DMP import flow.
+ * New Project dialog variant used during the DMP/TML import flow.
  *
- * This dialog is shown when importing a DMP file from the home screen (no project open).
- * After creating the project, it automatically opens the DmpSelectionDialog to continue
- * the import flow.
+ * This dialog is shown when importing a file from the home screen (no project open).
+ * After creating the project, it automatically opens the appropriate import dialog
+ * to continue the import flow.
  */
 export default function NewProjectForImportDialog() {
   const { closeDialog, dialogData, openDialog, setImportContext } = useUIStore();
   const { createProject } = useProjectStore();
 
   const dmpFile = dialogData.dmpFile as DmpFile | undefined;
+  const tmlFile = dialogData.tmlFile as TmlFile | undefined;
   const filePath = dialogData.filePath as string | undefined;
+  const importType = dialogData.importType as string | undefined;
   const defaultName = (dialogData.defaultName as string) || '';
+  const isTml = importType === 'tml' || !!tmlFile;
 
   const [name, setName] = useState(defaultName);
   const [location, setLocation] = useState('');
@@ -31,8 +34,8 @@ export default function NewProjectForImportDialog() {
       return;
     }
 
-    if (!dmpFile || !filePath) {
-      setError('DMP file data is missing');
+    if (!filePath || (!dmpFile && !tmlFile)) {
+      setError('Import file data is missing');
       return;
     }
 
@@ -43,12 +46,14 @@ export default function NewProjectForImportDialog() {
       const result = await createProject(name.trim(), location.trim() || undefined);
 
       if (result.success) {
-        // Close this dialog and open the DmpSelectionDialog
         closeDialog();
-        openDialog('dmp-selection', {
-          dmpFile,
-          filePath,
-        });
+        if (isTml && tmlFile) {
+          // Open TML import dialog
+          openDialog('tml-import', { tmlFile, filePath });
+        } else if (dmpFile) {
+          // Open DMP selection dialog
+          openDialog('dmp-selection', { dmpFile, filePath });
+        }
       } else {
         setError(result.error ?? 'Failed to create project');
       }
@@ -77,7 +82,7 @@ export default function NewProjectForImportDialog() {
       data-testid="new-project-for-import-dialog"
     >
       <div className="space-y-4">
-        {/* Show info about the DMP file being imported */}
+        {/* Show info about the file being imported */}
         {dmpFile && (
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
             <div className="font-medium mb-1">Importing from DMP file:</div>
@@ -88,6 +93,16 @@ export default function NewProjectForImportDialog() {
                 0
               )}{' '}
               shots
+            </div>
+          </div>
+        )}
+        {tmlFile && (
+          <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
+            <div className="font-medium mb-1">Importing from Ariane survey:</div>
+            <div className="text-text-secondary">
+              {tmlFile.sections.length} sections •{' '}
+              {tmlFile.sections.reduce((acc, s) => acc + s.shots.length, 0)} shots
+              {tmlFile.cave_name ? ` • ${tmlFile.cave_name}` : ''}
             </div>
           </div>
         )}
