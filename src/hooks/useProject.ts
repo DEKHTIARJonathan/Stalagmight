@@ -8,6 +8,7 @@ import {
   projectOpenFilters,
   projectSaveFilters,
   dmpOpenFilters,
+  tmlOpenFilters,
   exportSaveFilters,
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
@@ -180,6 +181,57 @@ export function useProject() {
     }
   }, [store, openDialog, setImportContext]);
 
+  /**
+   * Handle TML/TMLU file import with context-aware dialog flow.
+   * - From existing project: Opens file picker, parses TML, then shows TmlImportDialog.
+   * - From home screen (no project): Opens file picker, parses TML, then shows NewProjectDialog,
+   *   which on completion opens TmlImportDialog.
+   */
+  const handleImportTml = useCallback(async (skipFilePicker = false, filePath?: string) => {
+    let selectedPath = filePath;
+
+    if (!skipFilePicker) {
+      const selected = await open({
+        multiple: false,
+        filters: tmlOpenFilters(),
+      });
+
+      if (!selected || typeof selected !== 'string') {
+        return;
+      }
+      selectedPath = selected;
+    }
+
+    if (!selectedPath) return;
+
+    const hasProject = !!store.project;
+
+    try {
+      const tmlFile = await store.parseTml(selectedPath);
+      if (!tmlFile) return;
+
+      if (hasProject) {
+        openDialog('tml-import', {
+          tmlFile,
+          filePath: selectedPath,
+        });
+      } else {
+        const fileName = selectedPath.split(/[/\\]/).pop()?.replace(/\.tmlu?$/i, '') ?? 'Imported';
+        openDialog('new-project-for-import', {
+          tmlFile,
+          filePath: selectedPath,
+          defaultName: fileName,
+          importType: 'tml',
+        });
+      }
+    } catch (e) {
+      openDialog('error', {
+        title: 'Import Failed',
+        message: e instanceof Error ? e.message : 'Failed to parse TML file',
+      });
+    }
+  }, [store, openDialog]);
+
   const handleExportCsv = useCallback(async () => {
     const selected = await save({
       filters: exportSaveFilters('CSV', 'csv'),
@@ -225,6 +277,7 @@ export function useProject() {
     handleSaveProjectAs,
     handleCloseProject,
     handleImportDmp,
+    handleImportTml,
     handleExportCsv,
     handleExportJson,
 

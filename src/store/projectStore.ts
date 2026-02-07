@@ -21,7 +21,7 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, ConnectivityResult, DmpFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig } from '../types/commands';
+import type { CommandResult, ConnectivityResult, DmpFile, TmlFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -228,6 +228,8 @@ interface ProjectStore {
   executeBatch: (commands: BatchCommand[]) => Promise<CommandResult>;
 
   importDmp: (path: string) => Promise<DmpFile>;
+  parseTml: (path: string) => Promise<TmlFile>;
+  executeTmlImport: (path: string, fileHash?: string | null) => Promise<CommandResult>;
   calculateFileHash: (path: string) => Promise<string>;
   checkDuplicateImport: (hash: string) => Promise<boolean>;
   trackImportedFile: (hash: string) => Promise<void>;
@@ -1141,6 +1143,29 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       purpose: 'parse DMP for import preview',
       fields: { path },
     });
+  },
+
+  parseTml: async (path: string) => {
+    return await invokeIpc<TmlFile>('parse_tml', { path }, {
+      purpose: 'parse TML for import preview',
+      fields: { path },
+    });
+  },
+
+  executeTmlImport: async (path: string, fileHash?: string | null) => {
+    const result = await invokeIpc<CommandResult>(
+      'execute_tml_import',
+      {
+        path,
+        fileHash: fileHash ?? null,
+      },
+      { purpose: 'import Ariane TML/TMLU', fields: { path } }
+    );
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
   },
 
   calculateFileHash: async (path: string) => {

@@ -21,7 +21,7 @@ import { useGlobalViewStore } from '../store/globalViewStore';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { parseKeyEvent, normalizeShortcut } from '../utils/shortcuts';
-import { dmpOpenFilters, projectOpenFilters } from '../utils/fileDialogs';
+import { importOpenFilters, projectOpenFilters } from '../utils/fileDialogs';
 import { defaultConfig } from '../types/config';
 import type { ShortcutsConfig } from '../types/config';
 import type { ProjectMetadata } from '../types/project';
@@ -97,7 +97,7 @@ export function useGlobalViewShortcuts({
 }: UseGlobalViewShortcutsOptions): void {
   const { clearSelection, selectSystem, setSelectedSystems } = useGlobalViewStore();
   const { openDialog, setImportContext } = useUIStore();
-  const { importDmp, config } = useProjectStore();
+  const { importDmp, parseTml, config } = useProjectStore();
 
   // File shortcut map - config-aware, updated when config changes
   const fileShortcutMapRef = useRef(buildFileShortcutMap(defaultConfig.shortcuts));
@@ -372,36 +372,55 @@ export function useGlobalViewShortcuts({
             try {
               const selected = await open({
                 multiple: false,
-                filters: dmpOpenFilters(),
+                filters: importOpenFilters(),
               });
 
               if (!selected || typeof selected !== 'string') {
                 return;
               }
 
-              const dmpFile = await importDmp(selected);
-              if (!dmpFile) return;
+              const lowerPath = selected.toLowerCase();
+              if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
+                const tmlFile = await parseTml(selected);
+                if (!tmlFile) return;
 
-              const currentProject = useProjectStore.getState().project;
-              if (currentProject) {
-                setImportContext('existing-project');
-                openDialog('dmp-selection', {
-                  dmpFile,
-                  filePath: selected,
-                });
+                const currentProject = useProjectStore.getState().project;
+                if (currentProject) {
+                  openDialog('tml-import', { tmlFile, filePath: selected });
+                } else {
+                  const fileName = selected.split(/[/\\]/).pop()?.replace(/\.tmlu?$/i, '') ?? 'Imported';
+                  openDialog('new-project-for-import', {
+                    tmlFile,
+                    filePath: selected,
+                    defaultName: fileName,
+                    importType: 'tml',
+                  });
+                }
               } else {
-                setImportContext('new-project');
-                const fileName = selected.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
-                openDialog('new-project-for-import', {
-                  dmpFile,
-                  filePath: selected,
-                  defaultName: fileName,
-                });
+                const dmpFile = await importDmp(selected);
+                if (!dmpFile) return;
+
+                const currentProject = useProjectStore.getState().project;
+                if (currentProject) {
+                  setImportContext('existing-project');
+                  openDialog('dmp-selection', {
+                    dmpFile,
+                    filePath: selected,
+                  });
+                } else {
+                  setImportContext('new-project');
+                  const fileName = selected.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
+                  openDialog('new-project-for-import', {
+                    dmpFile,
+                    filePath: selected,
+                    defaultName: fileName,
+                  });
+                }
               }
             } catch (err) {
               useUIStore.getState().openDialog('error', {
                 title: 'Import Failed',
-                message: err instanceof Error ? err.message : 'Failed to parse DMP file',
+                message: err instanceof Error ? err.message : 'Failed to import file',
               });
             }
           })();
@@ -410,7 +429,7 @@ export function useGlobalViewShortcuts({
       }
     },
     [clearSelection, selectSystem, setContextMenu, setMultiSelectedIds, setSelectedProjectId, mapRef,
-     openDialog, setImportContext, importDmp]
+     openDialog, setImportContext, importDmp, parseTml]
   );
 
   // Register single keyboard event listener
