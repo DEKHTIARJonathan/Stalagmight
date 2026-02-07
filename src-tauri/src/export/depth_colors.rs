@@ -213,13 +213,13 @@ fn hex_to_rgb(hex: &str) -> (u8, u8, u8) {
 /// Convert RGB to HSL color space.
 /// Returns (hue: 0-360, saturation: 0-1, lightness: 0-1)
 fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f64, f64, f64) {
-    let r = r as f64 / 255.0;
-    let g = g as f64 / 255.0;
-    let b = b as f64 / 255.0;
+    let r = f64::from(r) / 255.0;
+    let g = f64::from(g) / 255.0;
+    let b = f64::from(b) / 255.0;
 
     let max = r.max(g).max(b);
     let min = r.min(g).min(b);
-    let l = (max + min) / 2.0;
+    let l = f64::midpoint(max, min);
 
     if (max - min).abs() < f64::EPSILON {
         // Achromatic (gray)
@@ -317,7 +317,7 @@ fn interpolate_hsl(color1: &str, color2: &str, t: f64) -> String {
     let l = l1 + (l2 - l1) * t;
 
     let (r, g, b) = hsl_to_rgb(h, s, l);
-    format!("#{:02x}{:02x}{:02x}", r, g, b)
+    format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 /// Get preset colors for a depth preset.
@@ -326,7 +326,7 @@ pub fn get_depth_preset_colors(preset: DepthPreset) -> DepthPresetColors {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -396,9 +396,9 @@ mod tests {
         // Grayscale: white (#ffffff) to black (#000000)
         // At 50%, should be gray (#808080 or close)
         let (r, g, b) = hex_to_rgb(&color);
-        assert!(r >= 127 && r <= 129, "r={}", r); // Allow for rounding
-        assert!(g >= 127 && g <= 129, "g={}", g);
-        assert!(b >= 127 && b <= 129, "b={}", b);
+        assert!((127..=129).contains(&r), "r={r}"); // Allow for rounding
+        assert!((127..=129).contains(&g), "g={g}");
+        assert!((127..=129).contains(&b), "b={b}");
     }
 
     #[test]
@@ -523,25 +523,25 @@ mod tests {
     #[test]
     fn test_rgb_to_hsl_red() {
         let (h, s, l) = rgb_to_hsl(255, 0, 0);
-        assert!((h - 0.0).abs() < 1.0, "h={}", h);
-        assert!((s - 1.0).abs() < 0.01, "s={}", s);
-        assert!((l - 0.5).abs() < 0.01, "l={}", l);
+        assert!((h - 0.0).abs() < 1.0, "h={h}");
+        assert!((s - 1.0).abs() < 0.01, "s={s}");
+        assert!((l - 0.5).abs() < 0.01, "l={l}");
     }
 
     #[test]
     fn test_rgb_to_hsl_green() {
         let (h, s, l) = rgb_to_hsl(0, 255, 0);
-        assert!((h - 120.0).abs() < 1.0, "h={}", h);
-        assert!((s - 1.0).abs() < 0.01, "s={}", s);
-        assert!((l - 0.5).abs() < 0.01, "l={}", l);
+        assert!((h - 120.0).abs() < 1.0, "h={h}");
+        assert!((s - 1.0).abs() < 0.01, "s={s}");
+        assert!((l - 0.5).abs() < 0.01, "l={l}");
     }
 
     #[test]
     fn test_rgb_to_hsl_blue() {
         let (h, s, l) = rgb_to_hsl(0, 0, 255);
-        assert!((h - 240.0).abs() < 1.0, "h={}", h);
-        assert!((s - 1.0).abs() < 0.01, "s={}", s);
-        assert!((l - 0.5).abs() < 0.01, "l={}", l);
+        assert!((h - 240.0).abs() < 1.0, "h={h}");
+        assert!((s - 1.0).abs() < 0.01, "s={s}");
+        assert!((l - 0.5).abs() < 0.01, "l={l}");
     }
 
     #[test]
@@ -549,7 +549,7 @@ mod tests {
         let (h, s, l) = rgb_to_hsl(128, 128, 128);
         assert_eq!(h, 0.0); // Achromatic
         assert_eq!(s, 0.0); // Achromatic
-        assert!((l - 0.502).abs() < 0.01, "l={}", l);
+        assert!((l - 0.502).abs() < 0.01, "l={l}");
     }
 
     #[test]
@@ -563,9 +563,9 @@ mod tests {
     #[test]
     fn test_hsl_to_rgb_gray() {
         let (r, g, b) = hsl_to_rgb(0.0, 0.0, 0.5);
-        assert!(r >= 127 && r <= 128, "r={}", r);
-        assert!(g >= 127 && g <= 128, "g={}", g);
-        assert!(b >= 127 && b <= 128, "b={}", b);
+        assert!((127..=128).contains(&r), "r={r}");
+        assert!((127..=128).contains(&g), "g={g}");
+        assert!((127..=128).contains(&b), "b={b}");
     }
 
     // === HSL interpolation tests ===
@@ -589,9 +589,9 @@ mod tests {
         let (r, g, b) = hex_to_rgb(&color);
         // At midpoint between red (0 deg) and blue (240 deg), shortest path goes through magenta
         // Midpoint hue should be around 300 deg (magenta area)
-        assert!(r > 100, "r={} should be high (magenta)", r);
-        assert!(g < 50, "g={} should be low (magenta)", g);
-        assert!(b > 100, "b={} should be high (magenta)", b);
+        assert!(r > 100, "r={r} should be high (magenta)");
+        assert!(g < 50, "g={g} should be low (magenta)");
+        assert!(b > 100, "b={b} should be high (magenta)");
     }
 
     #[test]
@@ -599,9 +599,9 @@ mod tests {
         let color = interpolate_hsl("#000000", "#ffffff", 0.5);
         let (r, g, b) = hex_to_rgb(&color);
         // Should be gray
-        assert!(r >= 127 && r <= 129, "r={}", r);
-        assert!(g >= 127 && g <= 129, "g={}", g);
-        assert!(b >= 127 && b <= 129, "b={}", b);
+        assert!((127..=129).contains(&r), "r={r}");
+        assert!((127..=129).contains(&g), "g={g}");
+        assert!((127..=129).contains(&b), "b={b}");
     }
 
     // === Tauri command test ===
@@ -629,11 +629,11 @@ mod tests {
         for preset in presets {
             for depth in [0.0, 25.0, 50.0, 75.0, 100.0] {
                 let color = get_depth_color(depth, 0.0, 100.0, preset);
-                assert!(color.starts_with('#'), "Preset {:?} at depth {} should produce hex color starting with #", preset, depth);
-                assert_eq!(color.len(), 7, "Preset {:?} at depth {} should produce #RRGGBB format, got {}", preset, depth, color);
+                assert!(color.starts_with('#'), "Preset {preset:?} at depth {depth} should produce hex color starting with #");
+                assert_eq!(color.len(), 7, "Preset {preset:?} at depth {depth} should produce #RRGGBB format, got {color}");
                 // Verify all characters after # are valid hex
                 assert!(color[1..].chars().all(|c| c.is_ascii_hexdigit()),
-                    "Preset {:?} at depth {} produced invalid hex: {}", preset, depth, color);
+                    "Preset {preset:?} at depth {depth} produced invalid hex: {color}");
             }
         }
     }
@@ -673,29 +673,29 @@ mod tests {
         let color_12 = get_depth_color(12.5, 0.0, 100.0, DepthPreset::Thermal);
         let (_r12, g12, b12) = hex_to_rgb(&color_12);
         // Should be cyan-ish (high green and blue, low red)
-        assert!(g12 > 200, "At 12.5%, green should be high (cyan area): g={}", g12);
-        assert!(b12 > 100, "At 12.5%, blue should be present: b={}", b12);
+        assert!(g12 > 200, "At 12.5%, green should be high (cyan area): g={g12}");
+        assert!(b12 > 100, "At 12.5%, blue should be present: b={b12}");
 
         // At 37.5% (between stop 1 and 2), should be in green range
         let color_37 = get_depth_color(37.5, 0.0, 100.0, DepthPreset::Thermal);
         let (r37, g37, _b37) = hex_to_rgb(&color_37);
         // Should be greenish (high green)
-        assert!(g37 > 200, "At 37.5%, green should be high: g={}", g37);
-        assert!(r37 < 100, "At 37.5%, red should be low: r={}", r37);
+        assert!(g37 > 200, "At 37.5%, green should be high: g={g37}");
+        assert!(r37 < 100, "At 37.5%, red should be low: r={r37}");
 
         // At 62.5% (between stop 2 and 3), should be in yellow-green range
         let color_62 = get_depth_color(62.5, 0.0, 100.0, DepthPreset::Thermal);
         let (_r62, g62, b62) = hex_to_rgb(&color_62);
         // Should be moving toward yellow (high green, increasing red, low blue)
-        assert!(g62 > 200, "At 62.5%, green should still be high: g={}", g62);
-        assert!(b62 < 50, "At 62.5%, blue should be low: b={}", b62);
+        assert!(g62 > 200, "At 62.5%, green should still be high: g={g62}");
+        assert!(b62 < 50, "At 62.5%, blue should be low: b={b62}");
 
         // At 87.5% (between stop 3 and 4), should be in orange-red range
         let color_87 = get_depth_color(87.5, 0.0, 100.0, DepthPreset::Thermal);
         let (r87, _g87, b87) = hex_to_rgb(&color_87);
         // Should be orange/red-ish
-        assert!(r87 > 200, "At 87.5%, red should be high: r={}", r87);
-        assert!(b87 < 100, "At 87.5%, blue should be low (not purple): b={}", b87);
+        assert!(r87 > 200, "At 87.5%, red should be high: r={r87}");
+        assert!(b87 < 100, "At 87.5%, blue should be low (not purple): b={b87}");
 
         // Critically: none of the intermediate colors should be purple (high red AND blue, low green)
         for depth in [12.5, 25.0, 37.5, 50.0, 62.5, 75.0, 87.5] {
@@ -703,8 +703,7 @@ mod tests {
             let (r, g, b) = hex_to_rgb(&color);
             // Purple would be: r > 100 AND b > 100 AND g < 100
             let is_purple = r > 100 && b > 100 && g < 100;
-            assert!(!is_purple, "At depth {}, color {} should NOT be purple (r={}, g={}, b={})",
-                depth, color, r, g, b);
+            assert!(!is_purple, "At depth {depth}, color {color} should NOT be purple (r={r}, g={g}, b={b})");
         }
     }
 

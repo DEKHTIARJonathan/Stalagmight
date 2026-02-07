@@ -21,8 +21,7 @@ impl AppState {
             .config
             .lock()
             .ok()
-            .map(|c| c.cache.tile_cache_enabled)
-            .unwrap_or(true);
+            .is_none_or(|c| c.cache.tile_cache_enabled);
         let new_cache_enabled = config.cache.tile_cache_enabled;
 
         if let Err(e) = config.save() {
@@ -85,7 +84,7 @@ impl AppState {
 
         // Sync recent_projects from config
         if let Ok(mut recent) = self.recent_projects.lock() {
-            *recent = new_config.general.recent_projects.clone();
+            recent.clone_from(&new_config.general.recent_projects);
         }
 
         // Sync undo_stack history limit from config

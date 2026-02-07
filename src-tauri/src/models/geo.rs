@@ -10,7 +10,7 @@ const WGS84_A: f64 = 6_378_137.0;
 
 /// WGS84 ellipsoid eccentricity squared
 /// e^2 = (a^2 - b^2) / a^2 where b = 6_356_752.314245 (polar radius)
-const WGS84_E2: f64 = 0.00669437999014;
+const WGS84_E2: f64 = 0.006_694_379_990_14;
 
 /// Convert geodetic coordinates (lat, lon, alt) to ECEF (Earth-Centered, Earth-Fixed).
 ///
@@ -109,13 +109,11 @@ mod tests {
         let (east, north) = gps_to_local(&gps, &gps);
         assert!(
             east.abs() < 1e-9,
-            "East should be ~0 for same point, got {}",
-            east
+            "East should be ~0 for same point, got {east}"
         );
         assert!(
             north.abs() < 1e-9,
-            "North should be ~0 for same point, got {}",
-            north
+            "North should be ~0 for same point, got {north}"
         );
     }
 
@@ -131,14 +129,12 @@ mod tests {
         // North should be approximately 1105.7 meters (within tolerance)
         assert!(
             (north - 1105.7).abs() < 5.0,
-            "North should be ~1105.7m for 0.01 deg lat, got {}",
-            north
+            "North should be ~1105.7m for 0.01 deg lat, got {north}"
         );
         // East should be nearly zero
         assert!(
             east.abs() < 1.0,
-            "East should be ~0 for lat-only change, got {}",
-            east
+            "East should be ~0 for lat-only change, got {east}"
         );
     }
 
@@ -154,14 +150,12 @@ mod tests {
         // East should be approximately 1113.2 meters (within tolerance)
         assert!(
             (east - 1113.2).abs() < 5.0,
-            "East should be ~1113.2m for 0.01 deg lon, got {}",
-            east
+            "East should be ~1113.2m for 0.01 deg lon, got {east}"
         );
         // North should be nearly zero
         assert!(
             north.abs() < 1.0,
-            "North should be ~0 for lon-only change, got {}",
-            north
+            "North should be ~0 for lon-only change, got {north}"
         );
     }
 
@@ -211,13 +205,11 @@ mod tests {
         // East should be approximately 788.5 meters at 45 deg lat
         assert!(
             (east - 788.5).abs() < 5.0,
-            "East should be ~788.5m for 0.01 deg lon at 45 deg lat, got {}",
-            east
+            "East should be ~788.5m for 0.01 deg lon at 45 deg lat, got {east}"
         );
         assert!(
             north.abs() < 1.0,
-            "North should be ~0 for lon-only change, got {}",
-            north
+            "North should be ~0 for lon-only change, got {north}"
         );
     }
 
@@ -237,9 +229,7 @@ mod tests {
         let expected_z = WGS84_A * (1.0 - WGS84_E2).sqrt();
         assert!(
             (z - expected_z).abs() < 1.0,
-            "Z at north pole should be ~{}, got {}",
-            expected_z,
-            z
+            "Z at north pole should be ~{expected_z}, got {z}"
         );
     }
 }

@@ -221,7 +221,7 @@ pub(crate) fn get_section_relationships_impl(
     let project = state.get_project_state().ok_or_else(|| "No project open".to_string())?;
 
     if project.get_section(section_id).is_none() {
-        return Err(format!("Section {} not found", section_id));
+        return Err(format!("Section {section_id} not found"));
     }
 
     Ok(project.get_section_relationships(section_id))

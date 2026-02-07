@@ -51,19 +51,19 @@ impl GpsCoordinates {
     /// All values must be finite (not NaN or ±infinity)
     pub fn validate(latitude: f64, longitude: f64, depth_reference: f64) -> Result<(), String> {
         if !latitude.is_finite() {
-            return Err(format!("Latitude must be finite, got {}", latitude));
+            return Err(format!("Latitude must be finite, got {latitude}"));
         }
         if !longitude.is_finite() {
-            return Err(format!("Longitude must be finite, got {}", longitude));
+            return Err(format!("Longitude must be finite, got {longitude}"));
         }
         if !depth_reference.is_finite() {
-            return Err(format!("Depth reference must be finite, got {}", depth_reference));
+            return Err(format!("Depth reference must be finite, got {depth_reference}"));
         }
         if !(-90.0..=90.0).contains(&latitude) {
-            return Err(format!("Latitude must be in [-90, 90], got {}", latitude));
+            return Err(format!("Latitude must be in [-90, 90], got {latitude}"));
         }
         if !(-180.0..=180.0).contains(&longitude) {
-            return Err(format!("Longitude must be in [-180, 180], got {}", longitude));
+            return Err(format!("Longitude must be in [-180, 180], got {longitude}"));
         }
         Ok(())
     }
@@ -163,7 +163,7 @@ impl Coordinates {
 
         if has_vert {
             let direction = if self.z > 0.0 { "down" } else { "up" };
-            parts.push(format!("{:.1}m {}", vert_abs, direction));
+            parts.push(format!("{vert_abs:.1}m {direction}"));
         }
 
         parts.join(", ")
@@ -351,20 +351,20 @@ mod tests {
     fn display_offset_intercardinal_directions() {
         // NE (equal x and y positive)
         let d = Coordinates::new(5.0, 5.0, 0.0).display_offset();
-        assert!(d.contains("NE"), "expected NE in '{}'", d);
+        assert!(d.contains("NE"), "expected NE in '{d}'");
         // SW (equal x and y negative)
         let d = Coordinates::new(-5.0, -5.0, 0.0).display_offset();
-        assert!(d.contains("SW"), "expected SW in '{}'", d);
+        assert!(d.contains("SW"), "expected SW in '{d}'");
     }
 
     #[test]
     fn display_offset_16_point_compass() {
         // NNE: bearing ~22.5° (small east, large north)
         let d = Coordinates::new(1.0, 2.5, 0.0).display_offset();
-        assert!(d.contains("NNE"), "expected NNE in '{}'", d);
+        assert!(d.contains("NNE"), "expected NNE in '{d}'");
         // SSW: bearing ~202.5° (small west, large south)
         let d = Coordinates::new(-1.0, -2.5, 0.0).display_offset();
-        assert!(d.contains("SSW"), "expected SSW in '{}'", d);
+        assert!(d.contains("SSW"), "expected SSW in '{d}'");
     }
 
     #[test]

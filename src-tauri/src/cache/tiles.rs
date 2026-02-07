@@ -73,8 +73,8 @@ impl TileCache {
 
         let cache = Self {
             conn,
-            max_bytes: (max_mb as u64) * 1024 * 1024,
-            ttl_seconds: (ttl_days as i64) * 24 * 60 * 60,
+            max_bytes: u64::from(max_mb) * 1024 * 1024,
+            ttl_seconds: i64::from(ttl_days) * 24 * 60 * 60,
         };
 
         cache.init_schema()?;
@@ -87,8 +87,8 @@ impl TileCache {
         let conn = Connection::open_in_memory().context("Failed to create in-memory cache")?;
         let cache = Self {
             conn,
-            max_bytes: (max_mb as u64) * 1024 * 1024,
-            ttl_seconds: (ttl_days as i64) * 24 * 60 * 60,
+            max_bytes: u64::from(max_mb) * 1024 * 1024,
+            ttl_seconds: i64::from(ttl_days) * 24 * 60 * 60,
         };
         cache.init_schema()?;
         Ok(cache)
@@ -97,7 +97,7 @@ impl TileCache {
     /// Initialize the database schema
     fn init_schema(&self) -> Result<()> {
         self.conn.execute_batch(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS tiles (
                 id INTEGER PRIMARY KEY,
                 provider TEXT NOT NULL,
@@ -112,7 +112,7 @@ impl TileCache {
                 UNIQUE(provider, z, y, x)
             );
             CREATE INDEX IF NOT EXISTS idx_tiles_accessed ON tiles(accessed_at);
-            "#,
+            ",
         )?;
         Ok(())
     }

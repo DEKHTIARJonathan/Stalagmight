@@ -36,7 +36,7 @@ where
 
         impl Visit for FieldVisitor {
             fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-                let s = format!("{:?}", value);
+                let s = format!("{value:?}");
                 if field.name() == "message" {
                     self.message = s;
                 } else {
@@ -90,7 +90,7 @@ where
                 if i > 0 {
                     line.push_str(", ");
                 }
-                write!(&mut line, "{}={}", key, val).ok();
+                write!(&mut line, "{key}={val}").ok();
             }
             line.push('}');
         }
@@ -183,10 +183,10 @@ pub fn cleanup_logs(max_size_mb: u32) -> Result<()> {
         return Ok(());
     }
 
-    let max_size_bytes = (max_size_mb as u64) * 1024 * 1024;
+    let max_size_bytes = u64::from(max_size_mb) * 1024 * 1024;
     let mut entries: Vec<_> = std::fs::read_dir(&log_dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|ext| ext == "log").unwrap_or(false))
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "log"))
         .collect();
 
     // Sort by modification time, oldest first

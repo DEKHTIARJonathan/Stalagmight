@@ -40,7 +40,7 @@ fn config_lock() -> &'static Mutex<()> {
 fn with_config_lock<T>(f: impl FnOnce() -> T) -> T {
     // Use unwrap_or_else to recover from a poisoned mutex (e.g. a prior test panicked
     // while holding the lock). This prevents cascading failures across tests.
-    let _guard = config_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = config_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     f()
 }
 
@@ -614,7 +614,7 @@ fn test_open_project_loads_saved_project() {
         let saved_path = save_project_to_temp(&app, &dir);
 
         let app2 = app_with_state();
-        let result = project::open_project(state(&app2), saved_path.clone());
+        let result = project::open_project(state(&app2), saved_path);
         assert_success(&result);
         let project_state = project::get_project_state(state(&app2)).expect("project state");
         assert_eq!(project_state.project.name, "Test Cave");
@@ -656,7 +656,7 @@ fn test_project_lifecycle_persists_undo_and_state() {
         let saved_path = save_project_to_temp(&app, &dir);
 
         assert_success(&project::close_project(state(&app)));
-        let open_result = project::open_project(state(&app), saved_path.clone());
+        let open_result = project::open_project(state(&app), saved_path);
         assert_success(&open_result);
 
         let project_state = project::get_project_state(state(&app)).expect("project state");
@@ -760,7 +760,7 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
                 db.save_project(&project).unwrap();
             }
 
-            assert_success(&project::open_project(state(&app), path_a.clone()));
+            assert_success(&project::open_project(state(&app), path_a));
             assert_success(&project::open_project(state(&app), path_b.clone()));
             assert_success(&project::open_project(state(&app), path_c.clone()));
 
@@ -2031,7 +2031,7 @@ fn test_unresolve_warning_clears_resolved_flag() {
         state(&app),
         warning.section_id,
         warning.shot_id,
-        warning.code.clone(),
+        warning.code,
     )
     .unwrap();
 

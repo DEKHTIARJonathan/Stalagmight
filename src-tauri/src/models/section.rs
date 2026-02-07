@@ -35,7 +35,7 @@ impl FromStr for SurveyDirection {
         match s.to_lowercase().as_str() {
             "in" => Ok(SurveyDirection::In),
             "out" => Ok(SurveyDirection::Out),
-            _ => Err(format!("Invalid direction: {}", s)),
+            _ => Err(format!("Invalid direction: {s}")),
         }
     }
 }
@@ -229,7 +229,7 @@ impl Section {
             color: self.color.clone(),
             direction: Some(self.direction),
             quality: self.quality,
-            shots: self.shots.iter().map(|s| s.to_shot_data()).collect(),
+            shots: self.shots.iter().map(Shot::to_shot_data).collect(),
         }
     }
 
@@ -279,16 +279,16 @@ impl Section {
     /// Apply partial updates to this section
     pub fn apply_updates(&mut self, updates: &SectionUpdates) {
         if let Some(v) = &updates.name {
-            self.name = v.clone();
+            self.name.clone_from(v);
         }
         if let Some(v) = &updates.surveyor {
-            self.surveyor = v.clone();
+            self.surveyor.clone_from(v);
         }
         if let Some(v) = &updates.date {
             self.date = *v;
         }
         if let Some(v) = &updates.color {
-            self.color = v.clone();
+            self.color.clone_from(v);
         }
         if let Some(v) = updates.direction {
             self.direction = v;
@@ -314,8 +314,8 @@ impl Section {
             return None;
         }
 
-        let shots_before: Vec<ShotData> = self.shots[..pos].iter().map(|s| s.to_shot_data()).collect();
-        let shots_after: Vec<ShotData> = self.shots[pos + 1..].iter().map(|s| s.to_shot_data()).collect();
+        let shots_before: Vec<ShotData> = self.shots[..pos].iter().map(Shot::to_shot_data).collect();
+        let shots_after: Vec<ShotData> = self.shots[pos + 1..].iter().map(Shot::to_shot_data).collect();
 
         Some((pos, shots_before, shots_after))
     }
@@ -356,7 +356,7 @@ impl Section {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::models::ShotData;
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_survey_direction_default() {
-        let direction: SurveyDirection = Default::default();
+        let direction: SurveyDirection = SurveyDirection::default();
         assert_eq!(direction, SurveyDirection::In);
     }
 
@@ -879,7 +879,7 @@ mod tests {
             ],
         };
 
-        let section = Section::new(0, original_data.clone());
+        let section = Section::new(0, original_data);
         let converted = section.to_section_data();
         let restored = Section::new(0, converted);
 

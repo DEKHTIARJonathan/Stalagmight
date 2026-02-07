@@ -99,13 +99,13 @@ impl Database {
         tracing::debug!("Opening database read-only at: {:?}", path);
 
         if !path.exists() {
-            anyhow::bail!("File does not exist: {:?}", path);
+            anyhow::bail!("File does not exist: {}", path.display());
         }
 
         // Validate it's a Stalagmight project file by extension
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
         if extension != "stalx" {
-            anyhow::bail!("Not a Stalagmight project file: {:?}", path);
+            anyhow::bail!("Not a Stalagmight project file: {}", path.display());
         }
 
         // Open in read-only mode - no writes possible
@@ -378,7 +378,7 @@ impl Database {
             .query_row("PRAGMA quick_check", [], |row| row.get(0))?;
         if result != "ok" {
             tracing::error!(result = %result, "Database integrity check failed");
-            anyhow::bail!("Database integrity check failed: {}", result);
+            anyhow::bail!("Database integrity check failed: {result}");
         }
         tracing::debug!("PRAGMA quick_check passed");
         Ok(())
@@ -423,7 +423,7 @@ impl Database {
                 let rowid: i64 = row.get(1)?;
                 let parent: String = row.get(2)?;
                 let fkid: i64 = row.get(3)?;
-                samples.push(format!("{} rowid={} parent={} fkid={}", table, rowid, parent, fkid));
+                samples.push(format!("{table} rowid={rowid} parent={parent} fkid={fkid}"));
             }
         }
 
@@ -484,7 +484,7 @@ impl Database {
 
         // Recreate tables with FK constraints
         tx.execute_batch(
-            r#"
+            r"
             CREATE TABLE sections (
                 id INTEGER PRIMARY KEY,
                 name TEXT,
@@ -586,7 +586,7 @@ impl Database {
                 UNIQUE(section_id, shot_id, warning_code),
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
-            "#,
+            ",
         )?;
 
         // Copy data
@@ -713,7 +713,7 @@ impl Database {
 
     /// Persist the schema version to PRAGMA user_version.
     fn set_user_version(&self, version: i32) -> Result<()> {
-        self.conn.execute(&format!("PRAGMA user_version = {}", version), [])?;
+        self.conn.execute(&format!("PRAGMA user_version = {version}"), [])?;
         Ok(())
     }
 
@@ -791,7 +791,7 @@ impl Database {
     /// Initialize the database schema
     fn init_schema(&self) -> Result<()> {
         self.conn.execute_batch(
-            r#"
+            r"
             -- Project metadata
             CREATE TABLE IF NOT EXISTS project (
                 id INTEGER PRIMARY KEY,
@@ -944,7 +944,7 @@ impl Database {
             -- Indexes
             CREATE INDEX IF NOT EXISTS idx_shots_section ON shots(section_id);
             CREATE INDEX IF NOT EXISTS idx_undo_sequence ON undo_stack(sequence);
-            "#,
+            ",
         )?;
 
         Ok(())
@@ -968,7 +968,7 @@ impl Database {
 
         // Clear existing data (delete children before parents for foreign key compliance)
         tx.execute_batch(
-            r#"
+            r"
             DELETE FROM shots;
             DELETE FROM sections;
             DELETE FROM station_merges;
@@ -978,7 +978,7 @@ impl Database {
             DELETE FROM loop_closures;
             DELETE FROM imported_file_hashes;
             DELETE FROM project;
-            "#,
+            ",
         )?;
         tracing::info!("Existing data cleared");
 
@@ -1018,12 +1018,12 @@ impl Database {
                 // Note: We don't store shot.id - it's regenerated on load based on sequence_order
                 // The database uses auto-increment for the id column
                 tx.execute(
-                    r#"INSERT INTO shots (
+                    r"INSERT INTO shots (
                         section_id, sequence_order,
                         azimuth_in, azimuth_out, length, depth_in, depth_out,
                         pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
                         comment, is_virtual, marker_index, temperature
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)"#,
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                     params![
                         section.id,
                         seq as i64,
@@ -1039,7 +1039,7 @@ impl Database {
                         shot.up,
                         shot.down,
                         shot.comment,
-                        shot.is_virtual as i32,
+                        i32::from(shot.is_virtual),
                         shot.marker_index,
                         shot.temperature
                     ],
@@ -1157,7 +1157,7 @@ impl Database {
                     lc.vertical_misclosure,
                     closure_id_i64,
                     lc.strategy.as_str(),
-                    if lc.is_aligned { 1 } else { 0 }
+                    i32::from(lc.is_aligned)
                 ],
             )?;
         }
@@ -1314,10 +1314,10 @@ impl Database {
                 // Load shots for this section
                 // Note: Shot IDs are generated from section_id and sequence_order
                 let mut shot_stmt = self.conn.prepare(
-                    r#"SELECT sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out,
+                    r"SELECT sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out,
                               pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
                               comment, is_virtual, marker_index, temperature
-                       FROM shots WHERE section_id = ?1 ORDER BY sequence_order"#,
+                       FROM shots WHERE section_id = ?1 ORDER BY sequence_order",
                 )?;
 
                 let section_id_for_shots = id;
@@ -1325,7 +1325,7 @@ impl Database {
                     let seq: i64 = row.get(0)?;
                     Ok(Shot {
                         // Generate globally unique shot ID from section_id and sequence
-                        id: (section_id_for_shots as u32) * FEATURE_ID_STRIDE + (seq as u32),
+                        id: section_id_for_shots * FEATURE_ID_STRIDE + (seq as u32),
                         azimuth_in: row.get(1)?,
                         azimuth_out: row.get(2)?,
                         length: row.get(3)?,
@@ -1641,9 +1641,8 @@ impl Database {
         }
         let query = format!(
             "SELECT station_a_section, station_a_index, station_b_section, station_b_index, \
-             path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure{} \
-             FROM loop_closures",
-            extra_cols
+             path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure{extra_cols} \
+             FROM loop_closures"
         );
 
         let mut stmt = self.conn.prepare(&query)?;
@@ -1775,9 +1774,7 @@ impl Database {
 
         let rows = stmt.query_map([], |row| {
             let resolved_at_str: String = row.get(3)?;
-            let resolved_at = chrono::DateTime::parse_from_rfc3339(&resolved_at_str)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now());
+            let resolved_at = chrono::DateTime::parse_from_rfc3339(&resolved_at_str).map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc));
             Ok(ResolvedWarning {
                 section_id: row.get(0)?,
                 shot_id: row.get(1)?,
@@ -1956,7 +1953,7 @@ impl Database {
                 salvaged.project_location = location;
             }
             Ok(None) => salvaged.errors.push("Project table is empty".into()),
-            Err(e) => salvaged.errors.push(format!("Failed to read project metadata: {}", e)),
+            Err(e) => salvaged.errors.push(format!("Failed to read project metadata: {e}")),
         }
 
         // Sections
@@ -1965,19 +1962,19 @@ impl Database {
                 salvaged.section_count = sections.len();
                 salvaged.sections_json = serde_json::to_string(&sections).ok();
             }
-            Err(e) => salvaged.errors.push(format!("Failed to read sections: {}", e)),
+            Err(e) => salvaged.errors.push(format!("Failed to read sections: {e}")),
         }
 
         // Shots
         match db.try_read_shot_count() {
             Ok(count) => salvaged.shot_count = count,
-            Err(e) => salvaged.errors.push(format!("Failed to read shots: {}", e)),
+            Err(e) => salvaged.errors.push(format!("Failed to read shots: {e}")),
         }
 
         // Station merges
         match db.try_read_merge_count() {
             Ok(count) => salvaged.merge_count = count,
-            Err(e) => salvaged.errors.push(format!("Failed to read station merges: {}", e)),
+            Err(e) => salvaged.errors.push(format!("Failed to read station merges: {e}")),
         }
 
         // Full project (best-effort)
@@ -1985,7 +1982,7 @@ impl Database {
             Ok(project) => {
                 salvaged.full_project_json = serde_json::to_string(&project).ok();
             }
-            Err(e) => salvaged.errors.push(format!("Failed to load full project: {}", e)),
+            Err(e) => salvaged.errors.push(format!("Failed to load full project: {e}")),
         }
 
         Ok(salvaged)
@@ -1994,9 +1991,8 @@ impl Database {
     /// List backup files for a given project path.
     pub fn list_backups(path: &Path) -> Vec<BackupInfo> {
         let mut backups = Vec::new();
-        let parent = match path.parent() {
-            Some(p) => p,
-            None => return backups,
+        let Some(parent) = path.parent() else {
+            return backups;
         };
         let stem = path.file_name().unwrap_or_default().to_string_lossy();
 
@@ -2005,7 +2001,7 @@ impl Database {
                 let name = entry.file_name().to_string_lossy().to_string();
                 // Match patterns: file.stalx.backup, file.stalx.backup.1, file.stalx.tmp
                 let is_backup = name.starts_with(&*stem)
-                    && (name.contains(".backup") || name.ends_with(".tmp"));
+                    && (name.contains(".backup") || name.to_ascii_lowercase().ends_with(".tmp"));
                 if is_backup {
                     if let Ok(meta) = entry.metadata() {
                         backups.push(BackupInfo {
@@ -2014,9 +2010,9 @@ impl Database {
                             modified_at: meta
                                 .modified()
                                 .ok()
-                                .and_then(|t| {
+                                .map(|t| {
                                     let dt: chrono::DateTime<Utc> = t.into();
-                                    Some(dt.to_rfc3339())
+                                    dt.to_rfc3339()
                                 })
                                 .unwrap_or_default(),
                         });
@@ -2038,7 +2034,7 @@ impl Database {
             return Ok(base);
         }
         for i in 1..100 {
-            let numbered = path.with_extension(format!("stalx.backup.{}", i));
+            let numbered = path.with_extension(format!("stalx.backup.{i}"));
             if !numbered.exists() {
                 std::fs::copy(path, &numbered)?;
                 return Ok(numbered);
@@ -2164,5 +2160,5 @@ pub struct ResolvedWarning {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout, clippy::float_cmp)]
 mod tests;

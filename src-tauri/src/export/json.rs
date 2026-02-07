@@ -147,4 +147,79 @@ mod tests {
         assert_eq!(parsed["project"]["name"], "Test");
         assert_eq!(parsed["sections"][0]["name"], "Main");
     }
+
+    #[test]
+    fn test_export_json_empty_project() {
+        let project = Project::new("Empty".to_string(), None);
+        let file = NamedTempFile::new().unwrap();
+        let result = export_json(&project, file.path());
+        assert!(result.is_ok(), "empty project JSON export should succeed");
+
+        let contents = std::fs::read_to_string(file.path()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(parsed["project"]["name"], "Empty");
+        assert!(parsed["sections"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_export_json_unicode_names() {
+        let mut project = Project::new("日本語テスト".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Grotte de l'Ours".to_string()),
+            surveyor: Some("Ñoño".to_string()),
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![ShotData {
+                azimuth_in: 45.0,
+                azimuth_out: 225.0,
+                length: 5.0,
+                depth_in: 0.0,
+                depth_out: 1.0,
+                comment: Some("特殊なコメント".to_string()),
+                ..Default::default()
+            }],
+        });
+
+        let file = NamedTempFile::new().unwrap();
+        let result = export_json(&project, file.path());
+        assert!(result.is_ok());
+
+        let contents = std::fs::read_to_string(file.path()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(parsed["project"]["name"], "日本語テスト");
+        assert_eq!(parsed["sections"][0]["name"], "Grotte de l'Ours");
+    }
+
+    #[test]
+    fn test_export_json_virtual_shots_and_optional_fields() {
+        let mut project = Project::new("Virtual".to_string(), None);
+        project.add_section(SectionData {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#000000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                length: 1.0,
+                depth_in: 0.0,
+                depth_out: 0.0,
+                is_virtual: true,
+                ..Default::default()
+            }],
+        });
+
+        let file = NamedTempFile::new().unwrap();
+        let result = export_json(&project, file.path());
+        assert!(result.is_ok());
+
+        let contents = std::fs::read_to_string(file.path()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        let shot = &parsed["sections"][0]["shots"][0];
+        assert_eq!(shot["is_virtual"], true);
+    }
 }
