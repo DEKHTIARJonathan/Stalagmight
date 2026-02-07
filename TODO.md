@@ -15,10 +15,10 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Data & Editing | 5 | 5 | 100% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
-| Performance & Stability | 8 | 9 | 89% |
+| Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **52** | **64** | **81%** |
+| **Total** | **53** | **64** | **83%** |
 
 ---
 
@@ -146,7 +146,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 7 done, ❌ 0 not started
 
-### Performance & Stability (7/9 done)
+### Performance & Stability (9/9 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -158,9 +158,9 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Network Retry Logic | ✅ | Max 2 retries with 200ms/500ms backoff on transport errors |
 | Improve Algorithm/Workflow Tracing | ✅ | Warnings on recoverable errors, debug prints in all major algorithms |
 | File Corruption Recovery | ✅ | Recovery dialog with repair, backup restore, data salvage (SPEC 14.4) |
-| Validation Error Recovery | ❌ | |
+| Validation Error Recovery | ✅ | X dismiss per warning, Clear All bulk resolve, auto-clear on fix, persistent (SPEC 14.5) |
 
-**Subtotals**: ✅ 8 done, ❌ 1 not started
+**Subtotals**: ✅ 9 done
 
 ### Integrations (0/1 done)
 
@@ -189,12 +189,12 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Data & Editing | 5 | 5 | 0 | 0 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
-| Performance & Stability | 9 | 8 | 0 | 1 |
+| Performance & Stability | 9 | 9 | 0 | 0 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **64** | **52** | **0** | **12** |
+| **Total** | **64** | **53** | **0** | **11** |
 
-**Overall Progress**: 52 done = ~81% complete
+**Overall Progress**: 53 done = ~83% complete
 
 ---
 

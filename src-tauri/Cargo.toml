@@ -44,6 +44,11 @@ lto = true
 opt-level = "s"
 strip = true
 
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = 1
+
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 
